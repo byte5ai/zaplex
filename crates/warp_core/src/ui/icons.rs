@@ -318,6 +318,10 @@ pub enum Icon {
     HeartHand,
     MessageChatSquare,
     Server01,
+    /// Connected host control used by the Connections sidebar.
+    PlugConnected,
+    /// Disconnected host control used by the Connections sidebar.
+    PlugDisconnected,
 }
 
 impl From<Icon> for &'static str {
@@ -631,6 +635,8 @@ impl From<Icon> for &'static str {
             Icon::HeartHand => "bundled/svg/heart-hand.svg",
             Icon::MessageChatSquare => "bundled/svg/message-chat-square.svg",
             Icon::Server01 => "bundled/svg/server-01.svg",
+            Icon::PlugConnected => "bundled/svg/plug-connected.svg",
+            Icon::PlugDisconnected => "bundled/svg/plug-disconnected.svg",
         }
     }
 }

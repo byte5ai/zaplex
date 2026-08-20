@@ -3,13 +3,14 @@
 //!
 //! These are the parts of the Conductor that carry a *rule* rather than a
 //! layout, extracted here so they can be unit-tested without a GPUI harness and
-//! shared verbatim between the roomy pane and the compact sidebar (one
-//! consistent glyph language, one collapse law, one waiting-cycle order):
+//! shared by the roomy pane and the compact sidebar where their behavior is
+//! meant to match (one consistent glyph language and one waiting-cycle order):
 //!
 //! - [`session_glyph`] — the single glyph vocabulary every surface renders.
-//! - [`fleet_is_large`] / [`host_auto_collapsed`] — the *inverse-complexity*
-//!   law: more hosts/agents ⇒ **calmer**. Above a threshold, hosts with nothing
-//!   waiting fold to a one-line [`host_summary`]; hosts that need you stay open.
+//! - [`fleet_is_large`] / [`host_auto_collapsed`] — the roomy pane's
+//!   *inverse-complexity* law: above a threshold, hosts with nothing waiting
+//!   fold to a one-line [`host_summary`]; explicit sidebar expansion is kept
+//!   separate.
 //! - [`next_waiting`] — the `w`-jump order: cycle to the next Waiting agent
 //!   across the whole fleet, in the tree's already-sorted (waiting-first) order.
 //!
@@ -18,6 +19,7 @@
 use crate::fleet::{FleetTree, HostNode};
 use crate::format::{context_fill, model_family};
 use crate::types::{Provider, SessionSnapshot, SessionState};
+use std::collections::BTreeMap;
 
 // Premium status dots: one uniform shape, meaning is carried by COLOR (the
 // renderers color each glyph by state — green working · amber waiting · faint
@@ -86,7 +88,8 @@ pub fn state_word(state: SessionState) -> &'static str {
 ///
 /// E.g. `("claude-opus-4-8", Some("high"))` -> `"Opus·High"`;
 /// `("claude-opus-4-8", None)` -> `"Opus"`; `("gpt-5.5", Some("high"))` ->
-/// `"gpt-5.5·High"`; `("", _)` -> `""`.
+/// `"gpt-5.5·High"`; a legacy estimate prefixed with `~` stays visibly
+/// approximate (`"~high"` -> `"~High"`); `("", _)` -> `""`.
 pub fn model_effort_label(model: &str, effort: Option<&str>) -> String {
     if model.trim().is_empty() {
         return String::new();
@@ -100,7 +103,13 @@ pub fn model_effort_label(model: &str, effort: Option<&str>) -> String {
         fam.to_string()
     };
     match effort {
-        Some(e) if !e.trim().is_empty() => format!("{model_disp}·{}", title_case(e)),
+        Some(e) if !e.trim().is_empty() => {
+            let effort = e
+                .strip_prefix('~')
+                .map(|estimated| format!("~{}", title_case(estimated)))
+                .unwrap_or_else(|| title_case(e));
+            format!("{model_disp}·{effort}")
+        }
         _ => model_disp,
     }
 }
@@ -174,6 +183,23 @@ pub fn host_session_count(host: &HostNode) -> usize {
 /// Agent-sessions across the whole fleet.
 pub fn fleet_session_count(tree: &FleetTree) -> usize {
     tree.hosts.iter().map(host_session_count).sum()
+}
+
+/// User-facing Session containers across the four-level Conductor tree.
+/// Several Claude/Codex agents sharing one PTY generation count as one Session,
+/// while agents without a PTY identity remain separate resumable sessions.
+pub fn fleet_conductor_session_count(tree: &FleetTree) -> usize {
+    tree.hosts.iter().map(host_conductor_session_count).sum()
+}
+
+/// User-facing PTY Session containers below one host in the four-level tree.
+pub fn host_conductor_session_count(host: &HostNode) -> usize {
+    host.projects
+        .iter()
+        .map(|project| {
+            group_project_sessions(host.is_local, host.host_id.as_deref(), &project.sessions).len()
+        })
+        .sum()
 }
 
 /// Above this many total agents (or more than this many hosts) the fleet counts
@@ -262,13 +288,35 @@ pub fn session_identity_key(
     account_email: Option<&str>,
     session_id: &str,
 ) -> String {
-    let account = match account_email {
-        Some(email) => format!("email:{email}"),
-        None => "unknown".to_string(),
+    session_identity_key_with_account_id(
+        is_local,
+        host_id,
+        provider,
+        config_dir,
+        account_email,
+        None,
+        session_id,
+    )
+}
+
+pub fn session_identity_key_with_account_id(
+    is_local: bool,
+    host_id: Option<&str>,
+    provider: Provider,
+    config_dir: Option<&str>,
+    account_email: Option<&str>,
+    account_id: Option<&str>,
+    session_id: &str,
+) -> String {
+    let account = match (account_id, account_email) {
+        (Some(account_id), _) => format!("opaque:{account_id}"),
+        (None, Some(email)) => format!("email:{email}"),
+        (None, None) => "unknown".to_string(),
     };
-    let config = match config_dir {
-        Some(config_dir) => format!("config:{config_dir}"),
-        None => "default".to_string(),
+    let config = match (account_id, config_dir) {
+        (Some(_), _) => "opaque".to_string(),
+        (None, Some(config_dir)) => format!("config:{config_dir}"),
+        (None, None) => "default".to_string(),
     };
     format!(
         "{}\u{0}{}\u{0}{account}\u{0}{config}\u{0}{session_id}",
@@ -279,14 +327,141 @@ pub fn session_identity_key(
 
 /// Complete identity key for an observed session snapshot.
 pub fn session_key(is_local: bool, host_id: Option<&str>, session: &SessionSnapshot) -> String {
-    session_identity_key(
+    session_identity_key_with_account_id(
         is_local,
         host_id,
         session.provider,
         session.config_dir.as_deref(),
         session.account_email.as_deref(),
+        session.account_id.as_deref(),
         &session.session_id,
     )
+}
+
+/// One terminal/PTY session in the four-level Conductor presentation. The
+/// authoritative inventory remains the flat agent list on `ProjectNode`; this
+/// borrowed projection supplies the missing Session container without copying
+/// or independently mutating agent state.
+#[derive(Clone, Debug)]
+pub struct ConductorSession<'a> {
+    /// Stable, host-scoped key for expansion state.
+    pub key: String,
+    /// Foreground agent when known, otherwise the most recently active child.
+    pub representative: &'a SessionSnapshot,
+    /// Waiting-first, then most-recent child agents.
+    pub agents: Vec<&'a SessionSnapshot>,
+    /// Aggregate state for the Session row.
+    pub state: SessionState,
+    /// Number of child agents waiting for the user.
+    pub needs_me: usize,
+}
+
+fn aggregate_session_state(agents: &[&SessionSnapshot]) -> SessionState {
+    if agents
+        .iter()
+        .any(|agent| agent.state == SessionState::Waiting)
+    {
+        SessionState::Waiting
+    } else if agents
+        .iter()
+        .any(|agent| agent.state == SessionState::Monitor)
+    {
+        SessionState::Monitor
+    } else if agents
+        .iter()
+        .any(|agent| agent.state == SessionState::Active)
+    {
+        SessionState::Active
+    } else {
+        SessionState::Idle
+    }
+}
+
+/// Group a project's agent conversations into terminal/PTY sessions.
+///
+/// PTY id + generation is the authoritative container identity when the daemon
+/// negotiated it. A conversation without PTY metadata gets its own fallback
+/// container keyed by the complete agent identity, so unrelated conversations
+/// can never collapse merely because they share a project or display label.
+pub fn group_project_sessions<'a>(
+    is_local: bool,
+    host_id: Option<&str>,
+    agents: &'a [SessionSnapshot],
+) -> Vec<ConductorSession<'a>> {
+    let mut grouped: BTreeMap<String, Vec<&SessionSnapshot>> = BTreeMap::new();
+    for agent in agents {
+        let key = match agent.pty_session_id.as_deref() {
+            Some(pty_id) => format!(
+                "{}\0pty\0{pty_id}\0{}",
+                host_ident(is_local, host_id),
+                agent
+                    .pty_session_generation
+                    .map(|generation| generation.to_string())
+                    .unwrap_or_else(|| "legacy".to_string())
+            ),
+            None => format!("agent\0{}", session_key(is_local, host_id, agent)),
+        };
+        grouped.entry(key).or_default().push(agent);
+    }
+
+    let mut sessions: Vec<ConductorSession<'a>> = grouped
+        .into_iter()
+        .map(|(key, mut agents)| {
+            agents.sort_by(|a, b| {
+                (b.state == SessionState::Waiting)
+                    .cmp(&(a.state == SessionState::Waiting))
+                    .then_with(|| b.last_activity.cmp(&a.last_activity))
+                    .then_with(|| {
+                        session_key(is_local, host_id, a).cmp(&session_key(is_local, host_id, b))
+                    })
+            });
+            let representative = agents
+                .iter()
+                .copied()
+                .min_by(|a, b| {
+                    b.pty_foreground
+                        .cmp(&a.pty_foreground)
+                        .then_with(|| b.last_activity.cmp(&a.last_activity))
+                        .then_with(|| {
+                            session_key(is_local, host_id, a)
+                                .cmp(&session_key(is_local, host_id, b))
+                        })
+                })
+                .expect("a grouped Conductor session always has an agent");
+            let state = aggregate_session_state(&agents);
+            let needs_me = agents
+                .iter()
+                .filter(|agent| agent.state == SessionState::Waiting)
+                .count();
+            ConductorSession {
+                key,
+                representative,
+                agents,
+                state,
+                needs_me,
+            }
+        })
+        .collect();
+    sessions.sort_by(|a, b| {
+        (b.state == SessionState::Waiting)
+            .cmp(&(a.state == SessionState::Waiting))
+            .then_with(|| {
+                b.agents
+                    .iter()
+                    .map(|agent| &agent.last_activity)
+                    .max()
+                    .expect("a grouped Conductor session always has an agent")
+                    .cmp(
+                        a.agents
+                            .iter()
+                            .map(|agent| &agent.last_activity)
+                            .max()
+                            .expect("a grouped Conductor session always has an agent"),
+                    )
+            })
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    sessions
 }
 
 /// Inverse of [`host_key`]: split a key back into `(host_ident, id)`. The
@@ -306,7 +481,7 @@ pub fn host_key_is_local(key: &str) -> bool {
 /// A stable, host-identity-carrying pointer to one Waiting agent — the `w`-jump
 /// target and cursor. It keeps the display `host_label` for the attach dispatch,
 /// but **identity** is the stable `(is_local, host_id)` pair plus provider,
-/// account email, config route, and `session_id`, never the label. This also
+/// opaque/legacy account route and `session_id`, never the label. This also
 /// keeps two local accounts carrying a copied conversation id distinct.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WaitingTarget {
@@ -320,10 +495,11 @@ pub struct WaitingTarget {
     pub is_local: bool,
     /// The host-scoped session id (unique only within one host).
     pub session_id: String,
-    /// Provider, account email, and config route complete the identity within a
-    /// host: session ids can survive a copy between accounts.
+    /// Provider plus opaque (or legacy email/config) account identity complete
+    /// the identity within a host: session ids can survive a copy between accounts.
     pub provider: Provider,
     pub account_email: Option<String>,
+    pub account_id: Option<String>,
     /// Host-local launch route carried for the eventual attach dispatch and
     /// included in the exact routing identity.
     pub config_dir: Option<String>,
@@ -331,16 +507,17 @@ pub struct WaitingTarget {
 
 impl WaitingTarget {
     /// Same waiting agent? Compared by **stable** host identity `(is_local,
-    /// host_id)` plus provider, account email, config route, and `session_id` —
+    /// host_id)` plus provider, account route, and `session_id` —
     /// never the display label.
     fn same_agent(&self, host: &HostNode, session: &SessionSnapshot) -> bool {
         session_key(host.is_local, host.host_id.as_deref(), session)
-            == session_identity_key(
+            == session_identity_key_with_account_id(
                 self.is_local,
                 self.host_id.as_deref(),
                 self.provider,
                 self.config_dir.as_deref(),
                 self.account_email.as_deref(),
+                self.account_id.as_deref(),
                 &self.session_id,
             )
     }
@@ -369,7 +546,7 @@ pub fn waiting_sessions(tree: &FleetTree) -> Vec<(&HostNode, &SessionSnapshot)> 
 /// no longer waiting / no longer present, starts at the first waiting agent.
 ///
 /// `current` and the returned [`WaitingTarget`] key on the **stable** host
-/// identity `(is_local, host_id)` plus provider, account email, config route,
+/// identity `(is_local, host_id)` plus provider, account route,
 /// and session id, never the display label. Host-label and account collisions
 /// therefore stay distinct. `None` when nothing is waiting.
 pub fn next_waiting(tree: &FleetTree, current: Option<&WaitingTarget>) -> Option<WaitingTarget> {
@@ -390,6 +567,7 @@ pub fn next_waiting(tree: &FleetTree, current: Option<&WaitingTarget>) -> Option
         session_id: s.session_id.clone(),
         provider: s.provider,
         account_email: s.account_email.clone(),
+        account_id: s.account_id.clone(),
         config_dir: s.config_dir.clone(),
     })
 }

@@ -117,6 +117,9 @@ pub enum CodeSource {
     },
     /// Opened from an active AI agent conversation.
     AIAction { id: AIAgentActionId },
+    /// Ephemeral, in-memory text generated for display. It is selectable but
+    /// never editable or persisted across application restarts.
+    GeneratedReadOnly { title: String },
     /// Opened from project rules (WARP.md) file.
     ProjectRules { path: PathBuf },
     /// Opened from file tree.
@@ -145,6 +148,7 @@ impl CodeSource {
             } => default_directory.as_ref(),
             Self::Link { .. }
             | Self::AIAction { .. }
+            | Self::GeneratedReadOnly { .. }
             | Self::ProjectRules { .. }
             | Self::FileTree { .. }
             | Self::RemoteFileTree { .. }
@@ -157,7 +161,10 @@ impl CodeSource {
     /// [`Self::location`] for unified identity.
     pub fn path(&self) -> Option<PathBuf> {
         match self {
-            Self::New { .. } | Self::AIAction { .. } | Self::RemoteFileTree { .. } => None,
+            Self::New { .. }
+            | Self::AIAction { .. }
+            | Self::GeneratedReadOnly { .. }
+            | Self::RemoteFileTree { .. } => None,
             Self::Link { path, .. }
             | Self::ProjectRules { path }
             | Self::FileTree { path }
@@ -172,7 +179,7 @@ impl CodeSource {
     /// both use [`BufferLocation`] as key.
     pub fn location(&self) -> Option<BufferLocation> {
         match self {
-            Self::New { .. } | Self::AIAction { .. } => None,
+            Self::New { .. } | Self::AIAction { .. } | Self::GeneratedReadOnly { .. } => None,
             Self::RemoteFileTree { remote_path } => {
                 Some(BufferLocation::Remote(remote_path.clone()))
             }
@@ -195,6 +202,10 @@ impl CodeSource {
         )
     }
 
+    pub fn is_generated_read_only(&self) -> bool {
+        matches!(self, Self::GeneratedReadOnly { .. })
+    }
+
     pub fn omit_line_col(&self) -> CodeSource {
         if let CodeSource::Link { path, .. } = self {
             CodeSource::Link {
@@ -213,6 +224,7 @@ impl CodeSource {
             Self::New { .. } => "new",
             Self::Link { .. } => "link",
             Self::AIAction { .. } => "ai_action",
+            Self::GeneratedReadOnly { .. } => "generated_read_only",
             Self::ProjectRules { .. } => "project_rules",
             Self::FileTree { .. } => "file_tree",
             Self::RemoteFileTree { .. } => "remote_file_tree",
@@ -223,10 +235,13 @@ impl CodeSource {
 
     /// Returns `true` if this source should be restored across app restarts.
     ///
-    /// `AIAction` is ephemeral (tied to a live conversation) and should not
-    /// be restored. `RemoteFileTree` depends on active SSH connection, also not restored.
+    /// `AIAction` and generated documents are ephemeral. `RemoteFileTree`
+    /// depends on an active SSH connection. None can be restored safely.
     pub fn is_restorable(&self) -> bool {
-        !matches!(self, Self::AIAction { .. } | Self::RemoteFileTree { .. })
+        !matches!(
+            self,
+            Self::AIAction { .. } | Self::GeneratedReadOnly { .. } | Self::RemoteFileTree { .. }
+        )
     }
 }
 
@@ -314,3 +329,7 @@ impl Entity for CodeManager {
 }
 
 impl SingletonEntity for CodeManager {}
+
+#[cfg(test)]
+#[path = "editor_management_tests.rs"]
+mod tests;

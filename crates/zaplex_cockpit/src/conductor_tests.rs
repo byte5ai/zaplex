@@ -33,6 +33,7 @@ fn session(id: &str, cwd: &str, state: SessionState, activity: i64) -> SessionSn
         worktree: None,
         config_dir: None,
         account_email: None,
+        account_id: None,
         process_fingerprint: None,
         pty_session_id: None,
         pty_session_generation: None,
@@ -97,6 +98,14 @@ fn model_effort_label_shows_codex_model_verbatim() {
     // A non-Claude id (Codex) is shown as-is; its effort still title-cases.
     assert_eq!(model_effort_label("gpt-5.5", Some("high")), "gpt-5.5·High");
     assert_eq!(model_effort_label("gpt-5.5", None), "gpt-5.5");
+}
+
+#[test]
+fn model_effort_label_marks_legacy_estimates_compactly() {
+    assert_eq!(
+        model_effort_label("claude-opus-4-8", Some("~high")),
+        "Opus·~High"
+    );
 }
 
 #[test]
@@ -326,6 +335,7 @@ fn next_waiting_from_stale_cursor_restarts_at_first() {
         session_id: "gone".to_string(),
         provider: Provider::Claude,
         account_email: None,
+        account_id: None,
         config_dir: None,
     };
     let got = next_waiting(&tree, Some(&stale)).expect("restarts at first");
@@ -446,5 +456,163 @@ fn session_key_never_crosses_account_config_boundaries() {
         session_key(true, None, &first),
         session_key(true, None, &second),
         "the exact host-local account route is part of session identity"
+    );
+}
+
+#[test]
+fn session_key_uses_opaque_identity_without_email_or_config_path() {
+    let mut first = session("copied", "/p/first", SessionState::Waiting, 1);
+    first.account_id = Some("opaque-a".to_string());
+    let mut second = first.clone();
+    second.account_id = Some("opaque-b".to_string());
+
+    assert_ne!(
+        session_key(false, Some("daemon"), &first),
+        session_key(false, Some("daemon"), &second)
+    );
+}
+
+#[test]
+fn tree_hierarchy_is_host_project_pty_agent() {
+    let mut claude = session("claude", "/p/project", SessionState::Active, 10);
+    claude.pty_session_id = Some("pty-1".to_string());
+    claude.pty_session_generation = Some(4);
+    let mut codex = session("codex", "/p/project", SessionState::Waiting, 20);
+    codex.provider = Provider::Codex;
+    codex.pty_session_id = Some("pty-1".to_string());
+    codex.pty_session_generation = Some(4);
+    let mut replacement = session("replacement", "/p/project", SessionState::Idle, 30);
+    replacement.pty_session_id = Some("pty-1".to_string());
+    replacement.pty_session_generation = Some(5);
+
+    let agents = [claude, codex, replacement];
+    let sessions = group_project_sessions(true, None, &agents);
+
+    assert_eq!(sessions.len(), 2, "a new PTY generation is a new session");
+    assert_eq!(sessions[0].agents.len(), 2);
+    assert_eq!(sessions[0].state, SessionState::Waiting);
+    assert_eq!(sessions[0].needs_me, 1);
+    assert_eq!(sessions[0].agents[0].session_id, "codex");
+}
+
+#[test]
+fn project_sessions_sort_waiting_then_by_latest_child_activity() {
+    let mut foreground = session("foreground", "/p/project", SessionState::Active, 10);
+    foreground.pty_session_id = Some("pty-a".to_string());
+    foreground.pty_session_generation = Some(1);
+    foreground.pty_foreground = true;
+    let mut recent_child = session("recent-child", "/p/project", SessionState::Idle, 100);
+    recent_child.pty_session_id = Some("pty-a".to_string());
+    recent_child.pty_session_generation = Some(1);
+    let mut middle = session("middle", "/p/project", SessionState::Active, 50);
+    middle.pty_session_id = Some("pty-b".to_string());
+    middle.pty_session_generation = Some(1);
+    let mut waiting = session("waiting", "/p/project", SessionState::Waiting, 1);
+    waiting.pty_session_id = Some("pty-c".to_string());
+    waiting.pty_session_generation = Some(1);
+
+    let agents = [foreground, recent_child, middle, waiting];
+    let sessions = group_project_sessions(true, None, &agents);
+
+    assert_eq!(sessions[0].representative.session_id, "waiting");
+    assert_eq!(sessions[1].representative.session_id, "foreground");
+    assert_eq!(sessions[2].representative.session_id, "middle");
+}
+
+#[test]
+fn project_session_children_have_stable_waiting_first_order() {
+    let mut waiting = session("same", "/p/project", SessionState::Waiting, 10);
+    waiting.account_email = Some("waiting@example.com".to_string());
+    waiting.pty_session_id = Some("pty".to_string());
+    let mut first = session("same", "/p/project", SessionState::Active, 20);
+    first.account_email = Some("first@example.com".to_string());
+    first.pty_session_id = Some("pty".to_string());
+    let mut second = session("same", "/p/project", SessionState::Active, 20);
+    second.account_email = Some("second@example.com".to_string());
+    second.pty_session_id = Some("pty".to_string());
+
+    let agents = [second.clone(), waiting.clone(), first.clone()];
+    let ordered: Vec<String> = group_project_sessions(true, None, &agents)[0]
+        .agents
+        .iter()
+        .map(|agent| agent.account_email.clone().expect("test account"))
+        .collect();
+    let reversed = [first, waiting, second];
+    let reordered: Vec<String> = group_project_sessions(true, None, &reversed)[0]
+        .agents
+        .iter()
+        .map(|agent| agent.account_email.clone().expect("test account"))
+        .collect();
+
+    assert_eq!(ordered[0], "waiting@example.com");
+    assert_eq!(ordered, reordered, "input order cannot change tree order");
+}
+
+#[test]
+fn fleet_conductor_count_counts_session_containers_not_agent_leaves() {
+    let mut claude = session("claude", "/p/project", SessionState::Active, 10);
+    claude.pty_session_id = Some("pty-1".to_string());
+    claude.pty_session_generation = Some(4);
+    let mut codex = session("codex", "/p/project", SessionState::Waiting, 20);
+    codex.provider = Provider::Codex;
+    codex.pty_session_id = Some("pty-1".to_string());
+    codex.pty_session_generation = Some(4);
+    let standalone = session("standalone", "/p/project", SessionState::Idle, 30);
+    let tree = build_fleet_tree(vec![host("local", vec![claude, codex, standalone])]);
+
+    assert_eq!(fleet_session_count(&tree), 3);
+    assert_eq!(host_conductor_session_count(&tree.hosts[0]), 2);
+    assert_eq!(fleet_conductor_session_count(&tree), 2);
+}
+
+#[test]
+fn project_sessions_keep_agents_without_pty_identity_isolated() {
+    let mut first = session("copied", "/p/project", SessionState::Active, 10);
+    first.account_email = Some("one@example.com".to_string());
+    let mut second = first.clone();
+    second.account_email = Some("two@example.com".to_string());
+
+    let agents = [first, second];
+    let sessions = group_project_sessions(true, None, &agents);
+
+    assert_eq!(sessions.len(), 2);
+    assert_ne!(sessions[0].key, sessions[1].key);
+
+    let reversed = [agents[1].clone(), agents[0].clone()];
+    let mut original_keys: Vec<String> =
+        sessions.iter().map(|session| session.key.clone()).collect();
+    let mut reversed_keys: Vec<String> = group_project_sessions(true, None, &reversed)
+        .iter()
+        .map(|session| session.key.clone())
+        .collect();
+    original_keys.sort_unstable();
+    reversed_keys.sort_unstable();
+    assert_eq!(original_keys, reversed_keys, "fallback keys are stable");
+}
+
+#[test]
+fn project_session_representative_prefers_foreground_then_recency() {
+    let mut older_foreground = session("foreground", "/p/project", SessionState::Active, 10);
+    older_foreground.pty_session_id = Some("pty".to_string());
+    older_foreground.pty_foreground = true;
+    let mut newer = session("newer", "/p/project", SessionState::Idle, 20);
+    newer.pty_session_id = Some("pty".to_string());
+
+    let agents = [older_foreground, newer];
+    let sessions = group_project_sessions(false, Some("host-a"), &agents);
+
+    assert_eq!(sessions[0].representative.session_id, "foreground");
+    let reversed = [agents[1].clone(), agents[0].clone()];
+    assert_eq!(
+        sessions[0].key,
+        group_project_sessions(false, Some("host-a"), &reversed)[0].key,
+        "the expansion key is stable"
+    );
+    assert_eq!(
+        group_project_sessions(false, Some("host-a"), &reversed)[0]
+            .representative
+            .session_id,
+        "foreground",
+        "input order cannot change the representative"
     );
 }

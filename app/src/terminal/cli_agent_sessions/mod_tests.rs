@@ -754,6 +754,40 @@ fn known_default_account_identity_is_not_unknown() {
 }
 
 #[test]
+fn opaque_account_identity_is_exact_even_without_email() {
+    let terminal_view_id = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    model.bind_account_identity_with_id(
+        terminal_view_id,
+        CLIAgent::Claude,
+        Some("/must/not/cross-the-wire".to_string()),
+        None,
+        Some("opaque-a".to_string()),
+    );
+
+    assert!(model.account_identity_matches_with_id(
+        terminal_view_id,
+        CLIAgent::Claude,
+        None,
+        None,
+        Some("opaque-a")
+    ));
+    assert!(!model.account_identity_matches_with_id(
+        terminal_view_id,
+        CLIAgent::Claude,
+        None,
+        None,
+        Some("opaque-b")
+    ));
+    assert_eq!(
+        model
+            .account_identity(terminal_view_id)
+            .and_then(|identity| identity.config_dir.as_deref()),
+        None
+    );
+}
+
+#[test]
 fn account_binding_before_later_detection_is_preserved() {
     App::test((), |mut app| async move {
         let terminal_view_id = EntityId::new();

@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use pathfinder_color::ColorU;
-use warp_core::ui::theme::{Fill, phenomenon::PhenomenonStyle};
+use warp_core::ui::theme::{phenomenon::PhenomenonStyle, Fill};
 use warpui::elements::{
     ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable, MainAxisSize,
@@ -32,14 +32,14 @@ use warpui::platform::Cursor;
 use warpui::{
     AppContext, Entity, SingletonEntity as _, TypedActionView, View, ViewContext, ViewHandle,
 };
-use zaplex_cockpit::{SessionState, session_key};
+use zaplex_cockpit::{session_key, SessionState};
 
-use crate::WorkspaceAction;
 use crate::appearance::Appearance;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{attention_coloru, glyph_cell};
 use crate::ui_components::modal_frame;
 use crate::view_components::action_button::ActionButton;
+use crate::WorkspaceAction;
 
 const MODAL_MAX_LIST_HEIGHT: f32 = 420.;
 
@@ -208,6 +208,7 @@ impl AttentionInbox {
             provider: session.provider,
             config_dir: session.config_dir.clone(),
             account_email: session.account_email.clone(),
+            account_id: session.account_id.clone(),
             is_local,
         };
         Hoverable::new(state, move |mouse| {

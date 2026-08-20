@@ -1,5 +1,14 @@
 # Cockpit-Redesign v3 — verbindliche Spec (ersetzt v2)
 
+> **Amendment 2026-08-19:** `specs/GH-160/{PRODUCT,TECH}.md` supersedes
+> this document for the sidebar's host source, hierarchy, expansion, and connection controls.
+> Connections owns the complete registry and host favorites; the tab menu projects favorite hosts;
+> the Cockpit renders `Host ▸ Project ▸ Session ▸ Agent`, with local always present and remote roots
+> only while Zaplex has an open connection to them. Earlier clauses that add offline registry hosts,
+> favorite stars, a settings gear, or host-management actions to the Cockpit no longer apply.
+> Dedicated account panes keep generic pane chrome and use the provider as the detail-card headline,
+> with the account identity once below it; this supersedes repeated provider/account strips described below.
+
 > **Ersetzt** `2026-07-14-cockpit-redesign-v2-spec.md` vollständig. v2 wurde adversarial
 > gegen den Code reviewt (codex + grok, 2026-07-15) und enthielt Faktenfehler, innere
 > Widersprüche und beschrieb an mehreren Stellen Daten/APIs, die nicht existieren — oder

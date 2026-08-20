@@ -57,6 +57,16 @@ pub struct AccountOption {
     pub provider: zaplex_cockpit::Provider,
 }
 
+#[derive(Clone, Debug)]
+struct RemoteAccountOption {
+    route: remote_server::proto::AgentLaunchRoute,
+    label: String,
+    email: Option<String>,
+    capacity_5h: f64,
+    capacity_week: f64,
+    capacity_known: bool,
+}
+
 /// The account options for one provider, plus its precomputed freest pick.
 #[derive(Clone, Debug, Default)]
 pub struct ProviderOptions {
@@ -75,6 +85,10 @@ pub struct ProviderOptions {
     models: Vec<ModelCapability>,
     model_discovery: ModelDiscoveryState,
     model_discovery_generation: u64,
+    remote_accounts: Vec<RemoteAccountOption>,
+    remote_account_discovery: RemoteAccountDiscoveryState,
+    remote_account_generation: u64,
+    remote_account_node_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -83,6 +97,17 @@ enum ModelDiscoveryState {
     NotRequested,
     Loading,
     Ready,
+    Error(String),
+}
+
+#[derive(Clone, Debug, Default)]
+enum RemoteAccountDiscoveryState {
+    #[default]
+    NotRequested,
+    Loading,
+    Ready {
+        auto_routing_available: bool,
+    },
     Error(String),
 }
 
@@ -392,6 +417,7 @@ impl SpawnCard {
         }
 
         self.request_model_discovery(ctx);
+        self.request_remote_account_discovery(ctx);
 
         // Invalidate THIS view so the freshly-applied config actually repaints.
         // Mutating a child view via `ViewHandle::update` does not mark it dirty —
@@ -557,6 +583,242 @@ impl SpawnCard {
         chips
     }
 
+    fn remote_account_controls(&self, appearance: &Appearance) -> Vec<Box<dyn Element>> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let Some(options) = self.provider_options() else {
+            return vec![Container::new(
+                Text::new_inline(
+                    crate::t!("cockpit-spawn-card-cli-default-login"),
+                    family,
+                    12.,
+                )
+                .with_color(muted)
+                .finish(),
+            )
+            .finish()];
+        };
+        match &options.remote_account_discovery {
+            RemoteAccountDiscoveryState::NotRequested | RemoteAccountDiscoveryState::Loading => {
+                return vec![Container::new(
+                    Text::new_inline("Discovering host accounts…", family, 12.)
+                        .with_color(muted)
+                        .finish(),
+                )
+                .finish()];
+            }
+            RemoteAccountDiscoveryState::Error(error) => {
+                return vec![Container::new(
+                    Text::new_inline(error.clone(), family, 12.)
+                        .with_color(muted)
+                        .finish(),
+                )
+                .finish()];
+            }
+            RemoteAccountDiscoveryState::Ready { .. } => {}
+        }
+
+        let selected = self.selected_remote_account();
+        if !self.show_accounts {
+            let label = selected
+                .map(|account| account.label.clone())
+                .unwrap_or_else(|| "Select an account".to_string());
+            return vec![
+                Container::new(
+                    Text::new_inline(label, family, 12.)
+                        .with_color(muted)
+                        .finish(),
+                )
+                .finish(),
+                self.chip(
+                    "remote-acct-change",
+                    crate::t!("cockpit-spawn-card-change"),
+                    false,
+                    SpawnCardAction::ToggleAccountList,
+                    appearance,
+                ),
+            ];
+        }
+
+        let mut chips = Vec::new();
+        if self.freest_remote_account().is_some() {
+            chips.push(self.chip(
+                "remote-acct-freest",
+                crate::t!("cockpit-spawn-card-freest"),
+                self.account == AccountChoice::Freest,
+                SpawnCardAction::SetAccountFreest,
+                appearance,
+            ));
+        }
+        for (index, account) in options.remote_accounts.iter().enumerate() {
+            let label = if account.capacity_known {
+                format!(
+                    "{} ({:.0}% free)",
+                    account.label,
+                    account.capacity_5h * 100.0
+                )
+            } else {
+                account.label.clone()
+            };
+            chips.push(self.chip(
+                &format!("remote-acct-{index}"),
+                label,
+                self.account == AccountChoice::Specific(index),
+                SpawnCardAction::SetAccount(index),
+                appearance,
+            ));
+        }
+        chips
+    }
+
+    fn selected_remote_account(&self) -> Option<&RemoteAccountOption> {
+        let options = self.provider_options()?;
+        match self.account {
+            AccountChoice::Freest => self.freest_remote_account(),
+            AccountChoice::Specific(index) => options.remote_accounts.get(index),
+        }
+    }
+
+    fn freest_remote_account(&self) -> Option<&RemoteAccountOption> {
+        let options = self.provider_options()?;
+        let RemoteAccountDiscoveryState::Ready {
+            auto_routing_available: true,
+        } = &options.remote_account_discovery
+        else {
+            return None;
+        };
+        options
+            .remote_accounts
+            .iter()
+            .filter(|account| account.capacity_known)
+            .max_by(|left, right| {
+                left.capacity_5h
+                    .total_cmp(&right.capacity_5h)
+                    .then_with(|| left.capacity_week.total_cmp(&right.capacity_week))
+            })
+    }
+
+    fn remote_account_is_ready(&self) -> bool {
+        !matches!(self.host, HostChoice::Remote(_))
+            || !matches!(self.agent, CLIAgent::Claude | CLIAgent::Codex)
+            || self.selected_remote_account().is_some()
+    }
+
+    fn request_remote_account_discovery(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(node_id) = self.resolved_node_id() else {
+            return;
+        };
+        let Some(options) = self.provider_options_mut() else {
+            return;
+        };
+        options.remote_accounts.clear();
+        options.remote_account_discovery = RemoteAccountDiscoveryState::Loading;
+        options.remote_account_generation += 1;
+        options.remote_account_node_id = Some(node_id.clone());
+        let generation = options.remote_account_generation;
+        ctx.emit(SpawnCardEvent::DiscoverRemoteAccounts {
+            generation,
+            agent: self.agent,
+            node_id,
+        });
+        ctx.notify();
+    }
+
+    pub fn apply_remote_accounts(
+        &mut self,
+        agent: CLIAgent,
+        node_id: &str,
+        generation: u64,
+        result: Result<remote_server::proto::AgentAccountInventory, String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let provider = match agent {
+            CLIAgent::Claude => "claude",
+            CLIAgent::Codex => "codex",
+            CLIAgent::Gemini
+            | CLIAgent::Amp
+            | CLIAgent::Droid
+            | CLIAgent::OpenCode
+            | CLIAgent::Copilot
+            | CLIAgent::Pi
+            | CLIAgent::Auggie
+            | CLIAgent::CursorCli
+            | CLIAgent::Goose
+            | CLIAgent::DeepSeek
+            | CLIAgent::Antigravity
+            | CLIAgent::Grok
+            | CLIAgent::Unknown => return,
+        };
+        let options = match agent {
+            CLIAgent::Claude => &mut self.cfg.claude,
+            CLIAgent::Codex => &mut self.cfg.codex,
+            CLIAgent::Gemini
+            | CLIAgent::Amp
+            | CLIAgent::Droid
+            | CLIAgent::OpenCode
+            | CLIAgent::Copilot
+            | CLIAgent::Pi
+            | CLIAgent::Auggie
+            | CLIAgent::CursorCli
+            | CLIAgent::Goose
+            | CLIAgent::DeepSeek
+            | CLIAgent::Antigravity
+            | CLIAgent::Grok
+            | CLIAgent::Unknown => return,
+        };
+        if options.remote_account_generation != generation
+            || options.remote_account_node_id.as_deref() != Some(node_id)
+        {
+            return;
+        }
+        match result {
+            Ok(inventory) => {
+                if inventory.schema_version != 1 {
+                    options.remote_accounts.clear();
+                    options.remote_account_discovery = RemoteAccountDiscoveryState::Error(
+                        "This host returned an unsupported AI-account inventory version."
+                            .to_string(),
+                    );
+                    ctx.notify();
+                    return;
+                }
+                let auto_routing_available = inventory.health == "loaded";
+                options.remote_accounts = inventory
+                    .accounts
+                    .into_iter()
+                    .filter(|account| {
+                        account.provider == provider && !account.account_id.is_empty()
+                    })
+                    .map(|account| RemoteAccountOption {
+                        route: remote_server::proto::AgentLaunchRoute {
+                            schema_version: 1,
+                            provider: account.provider,
+                            account_id: account.account_id,
+                        },
+                        label: if account.plan_tier.is_empty() {
+                            account.display_label
+                        } else {
+                            format!("{} · {}", account.display_label, account.plan_tier)
+                        },
+                        email: (!account.email.is_empty()).then_some(account.email),
+                        capacity_5h: account.capacity_5h,
+                        capacity_week: account.capacity_week,
+                        capacity_known: account.capacity_known,
+                    })
+                    .collect();
+                options.remote_account_discovery = RemoteAccountDiscoveryState::Ready {
+                    auto_routing_available,
+                };
+            }
+            Err(error) => {
+                options.remote_accounts.clear();
+                options.remote_account_discovery = RemoteAccountDiscoveryState::Error(error);
+            }
+        }
+        ctx.notify();
+    }
+
     fn provider_options(&self) -> Option<&ProviderOptions> {
         match self.agent {
             CLIAgent::Claude => Some(&self.cfg.claude),
@@ -608,7 +870,8 @@ impl SpawnCard {
         match self.agent {
             CLIAgent::Claude | CLIAgent::Codex => {
                 matches!(
-                    self.provider_options().map(|options| &options.model_discovery),
+                    self.provider_options()
+                        .map(|options| &options.model_discovery),
                     Some(ModelDiscoveryState::Ready)
                 ) && self.selected_model_capability().is_some()
             }
@@ -711,8 +974,8 @@ impl SpawnCard {
         match result {
             Ok(models) => {
                 let default_id = unique_default(&models).map(|model| model.id.clone());
-                let default_effort = unique_default(&models)
-                    .and_then(|model| model.default_effort.clone());
+                let default_effort =
+                    unique_default(&models).and_then(|model| model.default_effort.clone());
                 options.models = models;
                 options.model_discovery = ModelDiscoveryState::Ready;
                 self.model = default_id.unwrap_or_default();
@@ -779,15 +1042,28 @@ impl SpawnCard {
     /// `ViewContext`) so the confirm payload — the model/effort/account/host/
     /// project the launch actually carries — is unit-testable.
     fn launch_payload(&self) -> Option<SpawnCardEvent> {
-        (self.any_agent_installed() && self.model_is_ready()).then(|| SpawnCardEvent::Launch {
-            agent: self.agent,
-            config_dir: self.resolved_config_dir(),
-            cwd: self.project.clone(),
-            node_id: self.resolved_node_id(),
-            model: (!self.model.is_empty()).then(|| self.model.clone()),
-            effort: matches!(self.agent, CLIAgent::Codex).then(|| self.effort.clone()),
-            prompt: self.prompt.clone(),
-        })
+        (self.any_agent_installed() && self.model_is_ready() && self.remote_account_is_ready())
+            .then(|| SpawnCardEvent::Launch {
+                agent: self.agent,
+                config_dir: self.resolved_config_dir(),
+                agent_launch_route: matches!(self.host, HostChoice::Remote(_))
+                    .then(|| {
+                        self.selected_remote_account()
+                            .map(|account| account.route.clone())
+                    })
+                    .flatten(),
+                remote_account_email: matches!(self.host, HostChoice::Remote(_))
+                    .then(|| {
+                        self.selected_remote_account()
+                            .and_then(|account| account.email.clone())
+                    })
+                    .flatten(),
+                cwd: self.project.clone(),
+                node_id: self.resolved_node_id(),
+                model: (!self.model.is_empty()).then(|| self.model.clone()),
+                effort: matches!(self.agent, CLIAgent::Codex).then(|| self.effort.clone()),
+                prompt: self.prompt.clone(),
+            })
     }
 
     fn launch_payload_for_remote_input(&self, raw: Option<&str>) -> Option<SpawnCardEvent> {
@@ -917,7 +1193,10 @@ impl SpawnCard {
     /// `self.project` (the folder-picker result), unchanged.
     fn summary(&self, app: &AppContext) -> String {
         let account = match self.host {
-            HostChoice::Remote(_) => crate::t!("cockpit-spawn-card-sum-host-account"),
+            HostChoice::Remote(_) => self
+                .selected_remote_account()
+                .map(|account| account.label.clone())
+                .unwrap_or_else(|| "account not selected".to_string()),
             HostChoice::Local => match (self.provider_options(), self.account) {
                 (Some(_), AccountChoice::Freest) => {
                     crate::t!("cockpit-spawn-card-sum-freest")
@@ -1165,24 +1444,12 @@ impl SpawnCard {
             appearance,
         ));
 
-        // Account row — freest + explicit accounts, unless a remote host owns it.
-        // On a remote host there is no local account routing: the agent runs under
-        // that host's own CLI login, so we say so explicitly (rather than letting
-        // the local "freest"/per-account choice silently apply and mislead).
+        // Account row — local config identities stay local; remote identities are
+        // opaque daemon account ids discovered for the selected host.
         if matches!(self.host, HostChoice::Remote(_)) {
-            let host = self.remote_host_name().unwrap_or("the host");
             col = col.with_child(self.row(
                 &crate::t!("cockpit-spawn-card-account"),
-                vec![Container::new(
-                    Text::new_inline(
-                        crate::t!("cockpit-spawn-card-remote-login", host = host),
-                        family,
-                        12.,
-                    )
-                    .with_color(muted)
-                    .finish(),
-                )
-                .finish()],
+                self.remote_account_controls(appearance),
                 appearance,
             ));
         } else {
@@ -1299,6 +1566,7 @@ impl SpawnCard {
         // no supported agent CLI is installed — there is nothing it could launch.
         let can_launch = self.any_agent_installed()
             && self.model_is_ready()
+            && self.remote_account_is_ready()
             && self.selected_remote_cwd(app).is_ok();
         let confirm: Box<dyn Element> = if can_launch {
             self.chip(
@@ -1380,6 +1648,7 @@ impl TypedActionView for SpawnCard {
                     // Account indices are provider-specific; fall back to freest.
                     self.account = AccountChoice::Freest;
                     self.request_model_discovery(ctx);
+                    self.request_remote_account_discovery(ctx);
                 }
             }
             SpawnCardAction::SetModel(m) => {
@@ -1403,23 +1672,30 @@ impl TypedActionView for SpawnCard {
                 // Chosen — fold back to the calm line. Leaving the list open
                 // after a pick would keep asking a question already answered.
                 self.show_accounts = false;
-                self.request_model_discovery(ctx);
+                if matches!(self.host, HostChoice::Local) {
+                    self.request_model_discovery(ctx);
+                }
             }
             SpawnCardAction::SetAccount(i) => {
                 self.account = AccountChoice::Specific(*i);
                 self.show_accounts = false;
-                self.request_model_discovery(ctx);
+                if matches!(self.host, HostChoice::Local) {
+                    self.request_model_discovery(ctx);
+                }
             }
             SpawnCardAction::SetHostLocal => {
                 if self.host != HostChoice::Local {
                     self.host = HostChoice::Local;
+                    self.account = AccountChoice::Freest;
                     self.request_model_discovery(ctx);
                 }
             }
             SpawnCardAction::SetHost(i) => {
                 if self.host != HostChoice::Remote(*i) {
                     self.host = HostChoice::Remote(*i);
+                    self.account = AccountChoice::Freest;
                     self.request_model_discovery(ctx);
+                    self.request_remote_account_discovery(ctx);
                 }
             }
             SpawnCardAction::OpenDirectoryPicker => {
@@ -1491,6 +1767,11 @@ impl TypedActionView for SpawnCard {
 #[derive(Clone, Debug)]
 pub enum SpawnCardEvent {
     Close,
+    DiscoverRemoteAccounts {
+        generation: u64,
+        agent: CLIAgent,
+        node_id: String,
+    },
     DiscoverModels {
         generation: u64,
         agent: CLIAgent,
@@ -1510,6 +1791,8 @@ pub enum SpawnCardEvent {
     Launch {
         agent: CLIAgent,
         config_dir: Option<PathBuf>,
+        agent_launch_route: Option<remote_server::proto::AgentLaunchRoute>,
+        remote_account_email: Option<String>,
         cwd: Option<PathBuf>,
         node_id: Option<String>,
         model: Option<String>,

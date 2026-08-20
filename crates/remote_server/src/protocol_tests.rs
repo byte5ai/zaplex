@@ -136,6 +136,7 @@ fn older_daemon_without_pty_binding_decodes_safely() {
     assert!(session.pty_session_id.is_empty());
     assert_eq!(session.pty_session_generation, 0);
     assert!(!session.pty_foreground);
+    assert!(session.account_id.is_empty());
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -185,6 +186,20 @@ fn older_client_ignores_new_pty_binding_field() {
         pty_session_id: "pty-7".to_string(),
         pty_session_generation: 42,
         pty_foreground: true,
+        ..Default::default()
+    };
+
+    let legacy = LegacyAgentSessionInfo::decode(current.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(legacy.session_id, "agent-1");
+}
+
+#[test]
+fn older_client_ignores_opaque_account_identity() {
+    let current = AgentSessionInfo {
+        session_id: "agent-1".to_string(),
+        account_id: "opaque-account".to_string(),
+        config_dir: String::new(),
         ..Default::default()
     };
 

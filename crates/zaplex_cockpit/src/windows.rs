@@ -144,7 +144,10 @@ fn today_by_session_in<Tz: TimeZone>(
         .iter()
         .filter(|e| e.ts.with_timezone(tz).date_naive() == today)
     {
-        by_session.entry(e.session_id.clone()).or_default().add(e, pricing);
+        by_session
+            .entry(e.session_id.clone())
+            .or_default()
+            .add(e, pricing);
     }
     by_session
 }

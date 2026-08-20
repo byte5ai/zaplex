@@ -24,6 +24,7 @@ fn sample(state: SessionState, provider: Provider, effort: Option<String>) -> Se
         worktree: Some("wt-rc".to_string()),
         config_dir: Some("/home/me/.codex-work".to_string()),
         account_email: Some("me@example.de".to_string()),
+        account_id: None,
         process_fingerprint: Some("linux-v1:boot-id:12345".to_string()),
         pty_session_id: Some("pty-7".to_string()),
         pty_session_generation: Some(42),
@@ -118,6 +119,22 @@ fn agent_row_attach_identity_keeps_all_routing_dimensions() {
         original.account_email.unwrap_or_default()
     );
     assert_eq!(identity.config_dir, original.config_dir.unwrap_or_default());
+}
+
+#[test]
+fn opaque_attach_identity_never_carries_the_host_config_path() {
+    let mut original = sample(SessionState::Active, Provider::Codex, None);
+    original.account_email = None;
+    original.account_id = Some("opaque-work".to_string());
+
+    let identity = snapshot_agent_identity(&original);
+
+    assert_eq!(identity.account_id, "opaque-work");
+    assert!(identity.config_dir.is_empty());
+    let wire = snapshot_to_proto(&original);
+    assert!(wire.config_dir.is_empty());
+    let decoded = proto_to_snapshot(&wire);
+    assert_eq!(decoded.account_id.as_deref(), Some("opaque-work"));
 }
 
 /// All four states map to their lowercase strings and back.

@@ -15007,16 +15007,19 @@ dependencies = [
  "clap",
  "clap_complete",
  "color-print",
+ "dirs 6.0.0",
  "humantime",
  "ipc",
  "jaq-all",
  "serde",
+ "serde_json",
  "serial_test",
  "url",
  "uuid",
  "warp_core",
  "warp_util",
  "windows 0.62.2",
+ "zaplex_cockpit",
 ]
 
 [[package]]

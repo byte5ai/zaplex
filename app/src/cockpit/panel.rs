@@ -1,41 +1,47 @@
-//! `CockpitPanel` — the cockpit **sidebar** (left toolbelt tab): a compact, glanceable
-//! list of account cards over the `zaplex_cockpit` data spine. Read-only in C2; the
-//! live-session quick-list + quick-launch land in later increments (see the cockpit
-//! native-integration design doc). The roomy full dashboard is the main-area pane (C2b).
+//! `CockpitPanel` — the compact Cockpit sidebar: a live
+//! `Host → Project → PTY Session → Agent` tree followed by provider-explicit
+//! account cards. The roomy full dashboard remains the main-area pane.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
+use instant::Instant;
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
+use pathfinder_geometry::{
+    rect::RectF,
+    vector::{vec2f, Vector2F},
+};
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    Border, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Radius, Rect, SavePosition, ScrollbarWidth, Shrinkable,
-    Stack, Text,
+    ParentElement, ParentOffsetBounds, Point, Radius, Rect, ScrollbarWidth, Shrinkable, Stack,
+    Text,
 };
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use warpui::{
+    AfterLayoutContext, AppContext, Entity, EventContext, LayoutContext, PaintContext,
+    SingletonEntity, SizeConstraint, TypedActionView, View, ViewContext,
+};
 use zaplex_cockpit::{
-    fleet_is_large, format_cost, format_relative, heat_fill, heat_pct_label_with_provenance,
-    host_auto_collapsed, host_ident, host_session_count, session_glyph, session_key, AccountUsage,
-    Favorite, FavoriteKind, FleetTree, HostAvailability, HostNode, SessionSnapshot, SessionState,
-    TaskItem, TaskState, TaskStatus, UsageProvenance,
+    fleet_conductor_session_count, format_cost, format_relative, group_project_sessions, heat_fill,
+    heat_pct_label_with_provenance, host_conductor_session_count, host_ident, session_glyph,
+    session_key, AccountUsage, AgentInventoryStatus, ConductorSession, FleetTree, HostAvailability,
+    HostNode, Provider, SessionSnapshot, SessionState, TaskState, TaskStatus, UsageProvenance,
 };
 
+use crate::cockpit::account_identity;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    attention_coloru, ctx_pct_element, glyph_cell, hover_row, icon_verb_button_tooltip,
-    provider_color_on, provider_label, session_metric_column_width, status_dot_coloru,
-    utilisation_coloru, verb_button_colored, zone_card, BLOCK_RADIUS, CONTROL_RADIUS,
-    GLYPH_COL_WIDTH,
+    attention_coloru, glyph_cell, hover_row, provider_color_on, provider_label, status_dot_coloru,
+    utilisation_coloru, verb_button_colored, zone_card, BLOCK_RADIUS, GLYPH_COL_WIDTH,
 };
-use crate::ui_components::compact_row_action::CompactRowAction;
+use crate::settings::AccessibilitySettings;
 use crate::ui_components::icons;
 use crate::WorkspaceAction;
 
@@ -45,50 +51,134 @@ const HEAT_BAR_WIDTH: f32 = 90.0;
 const HEAT_BAR_HEIGHT: f32 = 6.0;
 const TASK_PEEK_WIDTH: f32 = 390.0;
 pub(super) const TASK_PEEK_DELAY: Duration = Duration::from_millis(350);
+const WAITING_PULSE_PERIOD: Duration = Duration::from_millis(1600);
+const WAITING_GLYPH_FOOTPRINT: f32 = GLYPH_COL_WIDTH;
+const WAITING_GLYPH_CORE_DIAMETER: f32 = 6.0;
+const WAITING_PULSE_REPAINT: Duration = Duration::from_millis(32);
 
-fn open_registered_host_action(node_id: &str) -> WorkspaceAction {
-    WorkspaceAction::OpenSshTerminalByNode {
-        node_id: node_id.to_string(),
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ContainerCountPresentation {
+    count: usize,
+    attention: bool,
+}
+
+fn container_count_presentation(
+    expanded: bool,
+    count: usize,
+    hidden_attention: usize,
+) -> Option<ContainerCountPresentation> {
+    (!expanded).then_some(ContainerCountPresentation {
+        count,
+        attention: hidden_attention > 0,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WaitingPulseFrame {
+    core_opacity: u8,
+    ring_diameter: f32,
+    ring_opacity: u8,
+    repaint: bool,
+}
+
+fn waiting_pulse_frame(elapsed: Duration, reduce_motion: bool) -> WaitingPulseFrame {
+    if reduce_motion {
+        return WaitingPulseFrame {
+            core_opacity: 100,
+            ring_diameter: WAITING_GLYPH_CORE_DIAMETER * 1.45,
+            ring_opacity: 36,
+            repaint: false,
+        };
+    }
+
+    let phase = (elapsed.as_secs_f32() / WAITING_PULSE_PERIOD.as_secs_f32()).fract();
+    let emphasis = ((phase * std::f32::consts::TAU).sin() + 1.0) * 0.5;
+    WaitingPulseFrame {
+        core_opacity: (88.0 + emphasis * 12.0).round() as u8,
+        ring_diameter: WAITING_GLYPH_CORE_DIAMETER * (1.0 + phase),
+        ring_opacity: ((1.0 - phase) * 58.0).round() as u8,
+        repaint: true,
     }
 }
 
-fn toggle_host_favorite_action(node_id: &str, label: &str) -> WorkspaceAction {
-    WorkspaceAction::ToggleFavorite {
-        kind: FavoriteKind::Host,
-        target: node_id.to_string(),
-        label: label.to_string(),
+struct WaitingPulseElement {
+    color: ColorU,
+    reduce_motion: bool,
+    started_at: Instant,
+    size: Option<Vector2F>,
+    origin: Option<Point>,
+}
+
+impl WaitingPulseElement {
+    fn new(color: ColorU, reduce_motion: bool) -> Self {
+        Self {
+            color,
+            reduce_motion,
+            started_at: Instant::now(),
+            size: None,
+            origin: None,
+        }
     }
 }
 
-fn manage_registered_host_action(node_id: &str) -> WorkspaceAction {
-    WorkspaceAction::ManageSshHost {
-        node_id: node_id.to_string(),
+impl Element for WaitingPulseElement {
+    fn layout(
+        &mut self,
+        _constraint: SizeConstraint,
+        _ctx: &mut LayoutContext,
+        _app: &AppContext,
+    ) -> Vector2F {
+        let size = vec2f(WAITING_GLYPH_FOOTPRINT, WAITING_GLYPH_FOOTPRINT);
+        self.size = Some(size);
+        size
     }
-}
 
-fn open_registered_host_agent_action(node_id: &str, host: &str) -> WorkspaceAction {
-    WorkspaceAction::OpenSpawnCard {
-        registry_node_id: Some(node_id.to_string()),
-        host_id: None,
-        host: Some(host.to_string()),
-        project: None,
+    fn after_layout(&mut self, _ctx: &mut AfterLayoutContext, _app: &AppContext) {}
+
+    fn paint(&mut self, origin: Vector2F, ctx: &mut PaintContext, _app: &AppContext) {
+        self.origin = Some(Point::from_vec2f(origin, ctx.scene.z_index()));
+        let frame = waiting_pulse_frame(self.started_at.elapsed(), self.reduce_motion);
+        if frame.repaint {
+            ctx.repaint_after(WAITING_PULSE_REPAINT);
+        }
+
+        let ring_offset = (WAITING_GLYPH_FOOTPRINT - frame.ring_diameter) * 0.5;
+        ctx.scene
+            .draw_rect_with_hit_recording(RectF::new(
+                origin + vec2f(ring_offset, ring_offset),
+                vec2f(frame.ring_diameter, frame.ring_diameter),
+            ))
+            .with_border(
+                Border::all(1.0)
+                    .with_border_color(coloru_with_opacity(self.color, frame.ring_opacity)),
+            )
+            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.0)));
+
+        let core_offset = (WAITING_GLYPH_FOOTPRINT - WAITING_GLYPH_CORE_DIAMETER) * 0.5;
+        ctx.scene
+            .draw_rect_with_hit_recording(RectF::new(
+                origin + vec2f(core_offset, core_offset),
+                vec2f(WAITING_GLYPH_CORE_DIAMETER, WAITING_GLYPH_CORE_DIAMETER),
+            ))
+            .with_background(coloru_with_opacity(self.color, frame.core_opacity))
+            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.0)));
     }
-}
 
-fn open_registered_host_files_action(node_id: &str) -> WorkspaceAction {
-    WorkspaceAction::OpenSftpPaneByNode {
-        node_id: node_id.to_string(),
+    fn size(&self) -> Option<Vector2F> {
+        self.size
     }
-}
 
-fn open_removed_host_repair_action() -> WorkspaceAction {
-    WorkspaceAction::OpenSshManager
-}
+    fn origin(&self) -> Option<Point> {
+        self.origin
+    }
 
-fn available_registry_node_id(host: &HostNode) -> Option<&str> {
-    match host.availability {
-        HostAvailability::Available => host.registry_node_id.as_deref(),
-        HostAvailability::Removed => None,
+    fn dispatch_event(
+        &mut self,
+        _event: &warpui::event::DispatchedEvent,
+        _ctx: &mut EventContext,
+        _app: &AppContext,
+    ) -> bool {
+        false
     }
 }
 
@@ -97,46 +187,6 @@ fn host_display_label(host: &HostNode, removed_label: &str) -> String {
         HostAvailability::Available => host.host.clone(),
         HostAvailability::Removed => format!("{} — {removed_label}", host.host),
     }
-}
-
-fn available_registered_host<'a>(tree: &'a FleetTree, node_id: &str) -> Option<&'a HostNode> {
-    tree.hosts
-        .iter()
-        .find(|host| available_registry_node_id(host) == Some(node_id))
-}
-
-fn registered_host_click_target(
-    node_id: &str,
-    content: Box<dyn Element>,
-    state: MouseStateHandle,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let action = open_registered_host_action(node_id);
-    let position_id = format!("cockpit_host:{node_id}");
-    let target = Hoverable::new(state, move |mouse| {
-        hover_row(content, mouse.is_hovered(), appearance)
-    })
-    .with_cursor(Cursor::PointingHand)
-    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-    .finish();
-    SavePosition::new(target, &position_id).finish()
-}
-
-fn removed_host_click_target(
-    host_ident: &str,
-    content: Box<dyn Element>,
-    state: MouseStateHandle,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let action = open_removed_host_repair_action();
-    let position_id = format!("cockpit_removed_host:{host_ident}");
-    let target = Hoverable::new(state, move |mouse| {
-        hover_row(content, mouse.is_hovered(), appearance)
-    })
-    .with_cursor(Cursor::PointingHand)
-    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-    .finish();
-    SavePosition::new(target, &position_id).finish()
 }
 
 /// Events the sidebar emits toward the workspace (via the left panel).
@@ -160,27 +210,10 @@ pub struct CockpitPanel {
     /// Hover state per account card (key = account `key`). The whole card is a
     /// click target that opens the roomy dashboard pane.
     card_states: HashMap<String, MouseStateHandle>,
-    /// Hover/click state per registered-host spine row, keyed by its registry
-    /// `node_id`. Clicking a registered host row (with no live agent) opens a
-    /// terminal on that host.
+    /// Hover/click state per connected host root, keyed by stable host identity.
     conductor_host_states: HashMap<String, MouseStateHandle>,
-    /// Stable repair-click state for removed daemon roots, keyed by stable
-    /// daemon identity rather than their display label.
-    removed_host_states: HashMap<String, MouseStateHandle>,
-    /// Fixed-width ☆ actions for adding a host favorite.
-    conductor_host_favorite_actions: HashMap<String, CompactRowAction>,
-    /// Fixed-width ★ actions for removing a host favorite.
-    conductor_host_unfavorite_actions: HashMap<String, CompactRowAction>,
-    /// Fixed-width icon actions for host management, keyed by registry
-    /// `node_id`. Compact rows never spend identity width on repeated labels.
-    conductor_host_manage_actions: HashMap<String, CompactRowAction>,
-    /// Fixed-width icon actions for opening an agent on each registered host.
-    conductor_host_agent_actions: HashMap<String, CompactRowAction>,
-    /// Fixed-width icon actions for opening files on each registered host.
-    conductor_host_files_actions: HashMap<String, CompactRowAction>,
-    /// Hover state of the „VERBINDUNGEN" zone-header gear (opens the SSH manager,
-    /// which owns host add/edit — spec v3 §S1/§S2).
-    zone_gear_btn: MouseStateHandle,
+    /// Explicit host expansion overrides. Absent means expanded.
+    expanded_hosts: HashMap<String, bool>,
     /// Hover state of the „KI-KONTEN" header's fleet total — the cross-account
     /// spend figure doubles as the entry point to the fleet pane (spec v3 §S1).
     fleet_total_btn: MouseStateHandle,
@@ -197,6 +230,9 @@ pub struct CockpitPanel {
     /// means the user collapsed it. Retained across the 45s reconcile like the
     /// hover maps, so toggling doesn't flicker.
     expanded_projects: HashMap<String, bool>,
+    /// Hover/click state and expansion overrides for the PTY Session level.
+    conductor_session_states: HashMap<String, MouseStateHandle>,
+    expanded_sessions: HashMap<String, bool>,
 }
 
 /// Stable identity of a project group within the tree: the host identity plus
@@ -235,26 +271,17 @@ fn session_identity_label(session: &SessionSnapshot, project_name: &str) -> Stri
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct TaskGlance<'a> {
-    completed: usize,
-    total: usize,
-    current: Option<&'a str>,
-    tasks: &'a [TaskItem],
+fn agent_leaf_label(provider: Provider, model: &str) -> String {
+    let provider = provider_label(provider);
+    if model.trim().is_empty() {
+        provider.to_string()
+    } else {
+        format!("{provider} · {model}")
+    }
 }
 
-fn task_glance(session: &SessionSnapshot) -> Option<TaskGlance<'_>> {
-    let state = session.task_state.as_ref()?;
-    Some(task_glance_from_state(state))
-}
-
-fn task_glance_from_state(state: &TaskState) -> TaskGlance<'_> {
-    let completed = state
-        .tasks
-        .iter()
-        .filter(|task| task.status == TaskStatus::Completed)
-        .count();
-    let current = state
+fn current_task_title(state: &TaskState) -> Option<&str> {
+    state
         .tasks
         .iter()
         .find(|task| task.status == TaskStatus::InProgress)
@@ -264,57 +291,42 @@ fn task_glance_from_state(state: &TaskState) -> TaskGlance<'_> {
                 .iter()
                 .find(|task| task.status == TaskStatus::Pending)
         })
-        .map(|task| task.title.as_str());
-    TaskGlance {
-        completed,
-        total: state.tasks.len(),
-        current,
-        tasks: &state.tasks,
-    }
+        .map(|task| task.title.as_str())
 }
 
 pub(super) fn task_activity_label(task_state: Option<&TaskState>, relative: &str) -> String {
-    task_state
-        .map(task_glance_from_state)
-        .and_then(|task| task.current)
-        .map_or_else(
-            || relative.to_owned(),
-            |current| format!("{current} · {relative}"),
-        )
+    task_state.and_then(current_task_title).map_or_else(
+        || relative.to_owned(),
+        |current| format!("{current} · {relative}"),
+    )
 }
 
 impl CockpitPanel {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         // Re-render on theme change and whenever the snapshot updates.
         ctx.subscribe_to_model(&Appearance::handle(ctx), |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&AccessibilitySettings::handle(ctx), |_, _, _, ctx| {
+            ctx.notify()
+        });
         ctx.subscribe_to_model(&CockpitModel::handle(ctx), |me, _, event, ctx| {
             if matches!(event, CockpitEvent::Updated) {
                 me.sync_conductor_states(ctx);
                 ctx.notify();
             }
         });
-        // Re-render when favorites change so the ★ fill state updates at once.
-        ctx.subscribe_to_model(
-            &crate::cockpit::favorites::FavoritesStore::handle(ctx),
-            |_, _, _, ctx| ctx.notify(),
-        );
         let mut me = Self {
             scroll_state: ClippedScrollStateHandle::default(),
             conductor_row_states: HashMap::new(),
             conductor_peek_states: HashMap::new(),
             card_states: HashMap::new(),
             conductor_host_states: HashMap::new(),
-            removed_host_states: HashMap::new(),
-            conductor_host_favorite_actions: HashMap::new(),
-            conductor_host_unfavorite_actions: HashMap::new(),
-            conductor_host_manage_actions: HashMap::new(),
-            conductor_host_agent_actions: HashMap::new(),
-            conductor_host_files_actions: HashMap::new(),
-            zone_gear_btn: MouseStateHandle::default(),
+            expanded_hosts: HashMap::new(),
             fleet_total_btn: MouseStateHandle::default(),
             rescan_btn: MouseStateHandle::default(),
             conductor_project_states: HashMap::new(),
             expanded_projects: HashMap::new(),
+            conductor_session_states: HashMap::new(),
+            expanded_sessions: HashMap::new(),
         };
         me.sync_conductor_states(ctx);
         me
@@ -323,7 +335,7 @@ impl CockpitPanel {
     /// Keep one stable row handle per live fleet session (hover needs a stable
     /// handle across renders); drop handles of sessions that disappeared.
     fn sync_conductor_states(&mut self, ctx: &mut ViewContext<Self>) {
-        let (routable, visible, host_nodes, removed_hosts, project_keys) = {
+        let (routable, visible, host_keys, project_keys, session_keys) = {
             let inv = CockpitModel::as_ref(ctx).inventory();
             let routable: std::collections::HashSet<String> = inv
                 .hosts
@@ -348,16 +360,10 @@ impl CockpitPanel {
                     })
                 })
                 .collect();
-            let host_nodes: std::collections::HashSet<String> = inv
+            let host_keys: std::collections::HashSet<String> = inv
                 .hosts
                 .iter()
-                .filter_map(|h| available_registry_node_id(h).map(str::to_string))
-                .collect();
-            let removed_hosts: std::collections::HashSet<String> = inv
-                .hosts
-                .iter()
-                .filter(|h| h.availability == HostAvailability::Removed)
-                .map(|h| host_ident(h.is_local, h.host_id.as_deref()))
+                .map(|host| host_ident(host.is_local, host.host_id.as_deref()))
                 .collect();
             let project_keys: std::collections::HashSet<String> = inv
                 .hosts
@@ -367,7 +373,22 @@ impl CockpitPanel {
                     h.projects.iter().map(move |p| project_key(&ident, &p.root))
                 })
                 .collect();
-            (routable, visible, host_nodes, removed_hosts, project_keys)
+            let session_keys: std::collections::HashSet<String> = inv
+                .hosts
+                .iter()
+                .flat_map(|host| {
+                    host.projects.iter().flat_map(move |project| {
+                        group_project_sessions(
+                            host.is_local,
+                            host.host_id.as_deref(),
+                            &project.sessions,
+                        )
+                        .into_iter()
+                        .map(|session| session.key)
+                    })
+                })
+                .collect();
+            (routable, visible, host_keys, project_keys, session_keys)
         };
         self.conductor_row_states
             .retain(|k, _| routable.contains(k));
@@ -391,90 +412,15 @@ impl CockpitPanel {
         for key in acct_keys {
             self.card_states.entry(key).or_default();
         }
-        // Registered-host row handles, keyed by registry `node_id` (one stable
-        // handle per clickable host header); drop handles of hosts that vanished.
+        // Connected host handles and explicit expansion overrides.
         self.conductor_host_states
-            .retain(|k, _| host_nodes.contains(k));
-        self.removed_host_states
-            .retain(|k, _| removed_hosts.contains(k));
-        self.conductor_host_favorite_actions
-            .retain(|k, _| host_nodes.contains(k));
-        self.conductor_host_unfavorite_actions
-            .retain(|k, _| host_nodes.contains(k));
-        self.conductor_host_manage_actions
-            .retain(|k, _| host_nodes.contains(k));
-        self.conductor_host_agent_actions
-            .retain(|k, _| host_nodes.contains(k));
-        self.conductor_host_files_actions
-            .retain(|k, _| host_nodes.contains(k));
-        for node_id in host_nodes {
-            self.conductor_host_states
-                .entry(node_id.clone())
-                .or_default();
-            if !self.conductor_host_favorite_actions.contains_key(&node_id) {
-                self.conductor_host_favorite_actions.insert(
-                    node_id.clone(),
-                    CompactRowAction::new(
-                        icons::Icon::Star,
-                        crate::t!("cockpit-tt-favorite-add"),
-                        CockpitPanelAction::ToggleHostFavorite(node_id.clone()),
-                        ctx,
-                    ),
-                );
-            }
-            if !self
-                .conductor_host_unfavorite_actions
-                .contains_key(&node_id)
-            {
-                self.conductor_host_unfavorite_actions.insert(
-                    node_id.clone(),
-                    CompactRowAction::new(
-                        icons::Icon::StarFilled,
-                        crate::t!("cockpit-tt-favorite-remove"),
-                        CockpitPanelAction::ToggleHostFavorite(node_id.clone()),
-                        ctx,
-                    ),
-                );
-            }
-            if !self.conductor_host_agent_actions.contains_key(&node_id) {
-                self.conductor_host_agent_actions.insert(
-                    node_id.clone(),
-                    CompactRowAction::new(
-                        icons::Icon::AiAssistant,
-                        crate::t!("cockpit-host-action-agent"),
-                        CockpitPanelAction::OpenHostAgent(node_id.clone()),
-                        ctx,
-                    ),
-                );
-            }
-            if !self.conductor_host_files_actions.contains_key(&node_id) {
-                self.conductor_host_files_actions.insert(
-                    node_id.clone(),
-                    CompactRowAction::new(
-                        icons::Icon::Folder,
-                        crate::t!("cockpit-host-action-files"),
-                        CockpitPanelAction::OpenHostFiles(node_id.clone()),
-                        ctx,
-                    ),
-                );
-            }
-            if !self.conductor_host_manage_actions.contains_key(&node_id) {
-                self.conductor_host_manage_actions.insert(
-                    node_id.clone(),
-                    CompactRowAction::new(
-                        icons::Icon::DotsHorizontal,
-                        crate::t!("cockpit-tt-manage-host"),
-                        CockpitPanelAction::ManageHost(node_id),
-                        ctx,
-                    ),
-                );
-            }
-        }
-        for host_ident in removed_hosts {
-            self.removed_host_states.entry(host_ident).or_default();
+            .retain(|key, _| host_keys.contains(key));
+        self.expanded_hosts.retain(|key, _| host_keys.contains(key));
+        for key in host_keys {
+            self.conductor_host_states.entry(key).or_default();
         }
         // Project-group header handles + collapse overrides, keyed by
-        // `project_key` (host identity + project name — never the label alone).
+        // `project_key` (host identity + repository root — never the label alone).
         // Drop projects that vanished so the maps don't grow unbounded; the
         // collapse map keeps only live keys, so absent still means "expanded".
         self.conductor_project_states
@@ -483,6 +429,13 @@ impl CockpitPanel {
             .retain(|k, _| project_keys.contains(k));
         for key in project_keys {
             self.conductor_project_states.entry(key).or_default();
+        }
+        self.conductor_session_states
+            .retain(|key, _| session_keys.contains(key));
+        self.expanded_sessions
+            .retain(|key, _| session_keys.contains(key));
+        for key in session_keys {
+            self.conductor_session_states.entry(key).or_default();
         }
     }
 
@@ -505,6 +458,23 @@ impl CockpitPanel {
             .with_color(color)
             .with_clip(ClipConfig::ellipsis())
             .finish()
+    }
+
+    fn state_glyph(
+        state: SessionState,
+        pulse_waiting: bool,
+        reduce_motion: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        if state == SessionState::Waiting && pulse_waiting {
+            WaitingPulseElement::new(attention_coloru(appearance), reduce_motion).finish()
+        } else {
+            glyph_cell(
+                session_glyph(state),
+                status_dot_coloru(state, appearance),
+                appearance,
+            )
+        }
     }
 
     /// The account-zone placeholder, disambiguated by scan health so an empty
@@ -625,10 +595,10 @@ impl CockpitPanel {
         let sub = appearance.ui_font_subheading();
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
+        let identity = account_identity(&acct.account);
 
-        // Header: a provider-colour swatch leads (spec §1 — this is the ONE place
-        // provider colour appears: Claude clay / Codex blue), then the account
-        // label (alias/email — which account, not which plan).
+        // Provider is the stable headline on every account surface. The colour
+        // mark is supplementary; the provider name remains visible in text.
         let header = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
@@ -650,77 +620,33 @@ impl CockpitPanel {
             .with_child(
                 Shrinkable::new(
                     1.0,
-                    Self::text(acct.account.label.clone(), family, sub, main),
+                    Self::text(identity.provider.to_string(), family, sub, main),
                 )
                 .finish(),
-            );
-
-        // Provider and Plan are two **separate slots**, not one string (spec v3
-        // §S3): the provider is a quiet word, the plan a small badge. Flattening
-        // them into "Claude · Max" made the plan read as part of the provider name
-        // and gave the two different things one weight. The badge only appears when
-        // a plan is actually known — an empty "—" chip is chrome for nothing.
-        let mut provider_row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(6.0)
-            .with_child(Self::text(
-                provider_label(acct.account.provider).to_string(),
-                family,
-                body,
-                muted,
-            ));
-        if let Some(plan) = acct.account.plan_tier.clone() {
-            provider_row = provider_row.with_child(
-                Container::new(Self::text(plan, family, body, main))
-                    .with_background(internal_colors::fg_overlay_1(theme))
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CONTROL_RADIUS)))
-                    .with_padding_left(5.0)
-                    .with_padding_right(5.0)
-                    .finish(),
-            );
-        }
-        let provider_plan = provider_row.with_main_axis_size(MainAxisSize::Min).finish();
-
-        // The card carries ONE live-session line: „N laufende Sessions" (running
-        // = active + waiting + monitor; idle is not counted). Waiting is
-        // attention, so the count goes amber when any session waits, else muted.
-        // The spend/token breakdown moved to the pane (spec §2.2: the card's one
-        // metric signal is the 5h meter).
-        let waiting = acct
-            .sessions
-            .iter()
-            .filter(|s| s.state == SessionState::Waiting)
-            .count();
-        let running = acct
-            .sessions
-            .iter()
-            .filter(|s| !matches!(s.state, SessionState::Idle))
-            .count();
-        let session_line = (running > 0)
-            .then(|| crate::t!("cockpit-card-sessions-count", count = (running as i64)));
+            )
+            .finish();
 
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(CARD_SPACING)
-            .with_child(header.finish())
-            .with_child(provider_plan)
-            // ONE metric signal on the card: the rolling 5h block (spec §2.2). The
-            // week meter, spend and tokens live in the pane, where there is room.
-            .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance));
-        if let Some(session_line) = session_line {
-            // Amber here is the attention signal (someone waits on this account),
-            // not a heat level — name the intent so it can never drift into the
-            // utilisation palette (spec v3 §1.3).
-            let color = if waiting > 0 {
-                attention_coloru(appearance)
-            } else {
-                muted
-            };
-            col = col.with_child(Self::text(session_line, family, body, color));
+            .with_child(header);
+        if !identity.subline.is_empty() {
+            col = col.with_child(Self::identity_text(identity.subline, family, body, muted));
         }
-        // (Reset countdowns intentionally live only in the dashboard pane now —
-        // WS4 S5: the sidebar stays a glance surface, the pane carries detail.)
+        col = col
+            .with_child(self.heat_bar(
+                &crate::t!("cockpit-meter-5h"),
+                acct.heat,
+                acct.provenance,
+                appearance,
+            ))
+            .with_child(self.heat_bar(
+                &crate::t!("cockpit-meter-week"),
+                acct.heat_week,
+                acct.provenance,
+                appearance,
+            ));
 
         // A flat account block inside the AI-Accounts zone-card — no per-card
         // container chrome (emphasis via content + spacing, spec §2.1). The whole
@@ -754,22 +680,15 @@ impl CockpitPanel {
     }
 
     /// The glanceable **Conductor** for the sidebar: the unified cross-host
-    /// inventory as a flat Hosts zone, waiting-first, collapsing under scale two
-    /// ways — a calm host in a large fleet folds to a one-line [`host_summary`]
-    /// (inverse-complexity), and within an open host the calm running/idle rows
-    /// fold behind a per-host summary (D1+C2) while waiting rows always show.
-    /// Each session is one fixed line whose right metric column never shifts.
-    /// Rows are clickable — a session attaches on click via
-    /// [`WorkspaceAction::AttachFleetSession`], the same path as the roomy pane
-    /// and the `w`-jump. Always `Some`: an empty inventory still renders the
-    /// Hosts card (a calm empty-state hint + the "+ Add host" root), so the
-    /// surface guides a fresh user instead of vanishing.
-    /// The **one** zone header both sidebar zones use (spec v3 §S1), so they can
-    /// never drift apart again: a quiet uppercase label, the count as a trailing
-    /// muted number, and **at most one** trailing element — the connections
-    /// zone's gear, or the accounts zone's fleet total (which doubles as the
-    /// fleet-pane entry point). The old Maximize icon is gone; the fleet spend it
-    /// used to sit beside is now that single trailing element, not a second one.
+    /// inventory as `Host → Project → Session → Agent`. Local is always present;
+    /// remote roots are supplied only by live daemon connections. Every level
+    /// starts expanded and uses explicit, stable expansion state rather than
+    /// scale-dependent auto-collapse. Agent leaves attach through
+    /// [`WorkspaceAction::AttachFleetSession`], the same route as the roomy pane
+    /// and the `w`-jump.
+    /// Shared quiet zone header: uppercase label, muted total, and at most one
+    /// trailing aggregate or affordance. The Sessions header uses that slot for
+    /// glyph + needs-attention count, never a repeated status word.
     fn render_zone_header(
         label: String,
         count: usize,
@@ -800,23 +719,173 @@ impl CockpitPanel {
         row.with_main_axis_size(MainAxisSize::Max).finish()
     }
 
-    fn render_conductor(
+    fn render_host_header(
         &self,
-        tree: &FleetTree,
-        favorites: &[Favorite],
+        host: &HostNode,
+        key: &str,
+        expanded: bool,
         appearance: &Appearance,
-    ) -> Option<Box<dyn Element>> {
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
         let main = theme.main_text_color(theme.background()).into_solid();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-        // Same faint as the project header's count — the two read as one level.
         let faint = theme
             .sub_text_color(theme.background())
             .with_opacity(55)
             .into_solid();
-        let fleet_large = fleet_is_large(tree);
+        let chevron = if expanded {
+            icons::Icon::ChevronDown
+        } else {
+            icons::Icon::ChevronRight
+        };
+        let label = host_display_label(host, &crate::t!("cockpit-host-removed"));
+        let count = host_conductor_session_count(host);
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.0)
+            .with_child(
+                ConstrainedBox::new(
+                    chevron
+                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .finish(),
+                )
+                .with_width(GLYPH_COL_WIDTH)
+                .with_height(GLYPH_COL_WIDTH)
+                .finish(),
+            )
+            .with_child(Self::host_status_dot(host, appearance))
+            .with_child(
+                Shrinkable::new(1.0, Self::identity_text(label, family, body, main)).finish(),
+            );
+        if let Some(count) = container_count_presentation(expanded, count, host.needs_me) {
+            let color = if count.attention {
+                attention_coloru(appearance)
+            } else {
+                faint
+            };
+            row = row.with_child(Self::text(count.count.to_string(), family, body, color));
+        }
+        let row = row.with_main_axis_size(MainAxisSize::Max).finish();
+        let handle = self
+            .conductor_host_states
+            .get(key)
+            .cloned()
+            .unwrap_or_default();
+        let key = key.to_string();
+        Hoverable::new(handle, move |mouse| {
+            hover_row(row, mouse.is_hovered(), appearance)
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(CockpitPanelAction::ToggleHost(key.clone()))
+        })
+        .finish()
+    }
+
+    fn render_session_header(
+        &self,
+        session: &ConductorSession<'_>,
+        project_name: &str,
+        expanded: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let faint = theme
+            .sub_text_color(theme.background())
+            .with_opacity(55)
+            .into_solid();
+        let chevron = if expanded {
+            icons::Icon::ChevronDown
+        } else {
+            icons::Icon::ChevronRight
+        };
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.0)
+            .with_child(
+                ConstrainedBox::new(
+                    chevron
+                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .finish(),
+                )
+                .with_width(GLYPH_COL_WIDTH)
+                .with_height(GLYPH_COL_WIDTH)
+                .finish(),
+            )
+            .with_child(
+                Shrinkable::new(
+                    1.0,
+                    Self::identity_text(
+                        session_identity_label(session.representative, project_name),
+                        family,
+                        body,
+                        main,
+                    ),
+                )
+                .finish(),
+            );
+        if let Some(count) =
+            container_count_presentation(expanded, session.agents.len(), session.needs_me)
+        {
+            let color = if count.attention {
+                attention_coloru(appearance)
+            } else {
+                faint
+            };
+            row = row.with_child(Self::text(count.count.to_string(), family, body, color));
+        }
+        let row = row.with_main_axis_size(MainAxisSize::Max).finish();
+        let handle = self
+            .conductor_session_states
+            .get(&session.key)
+            .cloned()
+            .unwrap_or_default();
+        let key = session.key.clone();
+        Hoverable::new(handle, move |mouse| {
+            hover_row(row, mouse.is_hovered(), appearance)
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(CockpitPanelAction::ToggleSession(key.clone()))
+        })
+        .finish()
+    }
+
+    fn render_conductor(
+        &self,
+        tree: &FleetTree,
+        reduce_motion: bool,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let muted = appearance
+            .theme()
+            .sub_text_color(appearance.theme().background())
+            .into_solid();
+        let attention = (tree.needs_me > 0).then(|| {
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(4.0)
+                .with_child(Self::state_glyph(
+                    SessionState::Waiting,
+                    true,
+                    reduce_motion,
+                    appearance,
+                ))
+                .with_child(Self::text(
+                    tree.needs_me.to_string(),
+                    family,
+                    body,
+                    attention_coloru(appearance),
+                ))
+                .with_main_axis_size(MainAxisSize::Min)
+                .finish()
+        });
 
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -825,20 +894,9 @@ impl CockpitPanel {
             .with_spacing(3.0)
             .with_child(
                 Container::new(Self::render_zone_header(
-                    crate::t!("cockpit-zone-connections").to_string(),
-                    tree.hosts.len(),
-                    // The gear is this zone's ONE affordance: it opens the SSH
-                    // manager, which owns host add/edit — that is why the spine's
-                    // „＋ Host hinzufügen" root is gone (spec v3 §S2).
-                    Some(icon_verb_button_tooltip(
-                        self.zone_gear_btn.clone(),
-                        icons::Icon::Gear,
-                        theme.sub_text_color(theme.background()),
-                        theme.accent(),
-                        crate::t!("cockpit-zone-connections-settings"),
-                        appearance,
-                        WorkspaceAction::OpenSshManager,
-                    )),
+                    crate::t!("cockpit-zone-sessions").to_string(),
+                    fleet_conductor_session_count(tree),
+                    attention,
                     appearance,
                 ))
                 .with_margin_bottom(2.0)
@@ -846,137 +904,27 @@ impl CockpitPanel {
             );
 
         for host in &tree.hosts {
-            // Inverse-complexity: a calm host in a large fleet folds away its
-            // children. Only its children — the header row itself stays exactly
-            // as interactive as any other host's (spec v3 §2 F8).
-            //
-            // It used to fold to a bare line of text, which meant the ★, the ⋯,
-            // the open-a-terminal click and the status dot all disappeared the
-            // moment the fleet grew past two hosts. Interaction died precisely at
-            // the scale this tool exists for.
-            let collapsed = host_auto_collapsed(host, fleet_large);
-            // Locality from the inventory's explicit marker, not a label match.
             let is_local = host.is_local;
-            // Stable host identity keys the density-fold state (never the label).
             let ident = host_ident(is_local, host.host_id.as_deref());
-            // The row's GLANCE span: worst-child status dot (the host reads
-            // amber when any child is waiting, without opening it — spec §3),
-            // the name, and — only when folded — how much is behind the fold.
-            // The fold count is faint and never amber: a host only auto-folds
-            // when nothing on it is waiting (`host_auto_collapsed`), so the
-            // fold can only ever hide calm work. NO needs-me badge beside the
-            // name: the dot already carries "wartet" (spec v3 §1.3 „Nichts
-            // codiert doppelt").
-            let mut head = Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(6.0)
-                .with_child(Self::host_status_dot(host, appearance))
-                .with_child(
-                    Shrinkable::new(
-                        1.0,
-                        Self::identity_text(
-                            host_display_label(host, &crate::t!("cockpit-host-removed")),
-                            family,
-                            body,
-                            main,
-                        ),
-                    )
-                    .finish(),
-                );
-            if collapsed {
-                head = head.with_child(Self::text(
-                    host_session_count(host).to_string(),
-                    family,
-                    body,
-                    faint,
-                ));
-            }
-            let head_el = head.with_main_axis_size(MainAxisSize::Max).finish();
-            // A registered host (no live agent, re-added by the registry merge)
-            // is a click target that opens a terminal on it. The hover surface
-            // is the WHOLE glance span via the shared row grammar (`hover_row`)
-            // — not a text-width sliver around the word (audit P0.2). Live-only
-            // hosts get the same geometry, hover-less, so the column aligns.
-            let label_el: Box<dyn Element> = match host.availability {
-                HostAvailability::Available => match available_registry_node_id(host) {
-                    Some(node_id) => {
-                        let handle = self
-                            .conductor_host_states
-                            .get(node_id)
-                            .cloned()
-                            .unwrap_or_default();
-                        registered_host_click_target(node_id, head_el, handle, appearance)
-                    }
-                    None => hover_row(head_el, false, appearance),
-                },
-                HostAvailability::Removed => {
-                    let handle = self
-                        .removed_host_states
-                        .get(&ident)
-                        .cloned()
-                        .unwrap_or_default();
-                    removed_host_click_target(&ident, head_el, handle, appearance)
-                }
-            };
-            // Compose the header: identity takes every flexible pixel; repeated
-            // secondary actions occupy fixed icon squares. Keeping the actions
-            // outside the click target also prevents click collisions.
-            // ui-contract: compact-row-actions:start
-            let mut header_row = Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(6.0)
-                .with_child(Shrinkable::new(1.0, label_el).finish());
-            if let Some(node_id) = available_registry_node_id(host).map(str::to_string) {
-                let is_fav = favorites
-                    .iter()
-                    .any(|f| f.same_target(FavoriteKind::Host, &node_id));
-                let favorite_action = if is_fav {
-                    self.conductor_host_unfavorite_actions.get(&node_id)
-                } else {
-                    self.conductor_host_favorite_actions.get(&node_id)
-                };
-                debug_assert!(favorite_action.is_some());
-                if let Some(action) = favorite_action {
-                    header_row = header_row.with_child(action.render());
-                }
-                debug_assert!(self.conductor_host_agent_actions.contains_key(&node_id));
-                if let Some(action) = self.conductor_host_agent_actions.get(&node_id) {
-                    header_row = header_row.with_child(action.render());
-                }
-                debug_assert!(self.conductor_host_files_actions.contains_key(&node_id));
-                if let Some(action) = self.conductor_host_files_actions.get(&node_id) {
-                    header_row = header_row.with_child(action.render());
-                }
-                debug_assert!(self.conductor_host_manage_actions.contains_key(&node_id));
-                if let Some(action) = self.conductor_host_manage_actions.get(&node_id) {
-                    header_row = header_row.with_child(action.render());
-                }
-            }
-            // ui-contract: compact-row-actions:end
-            col = col.with_child(header_row.with_main_axis_size(MainAxisSize::Max).finish());
-
-            // Sessions grouped by project — the Host → Projekt → Session tree
-            // (spec §2.1). Each project is a collapsible group header (its own
-            // typographic level, no dot); its sessions are shown waiting-first.
-            // Projects default to expanded (absent in `expanded_projects`).
-            //
-            // A folded host contributes none of this: the fold is what keeps a
-            // large fleet calm. Its header above stays whole either way.
-            if collapsed {
+            let host_expanded = self.expanded_hosts.get(&ident).copied().unwrap_or(true);
+            col = col.with_child(self.render_host_header(host, &ident, host_expanded, appearance));
+            if !host_expanded {
                 continue;
             }
             for project in &host.projects {
                 let pkey = project_key(&ident, &project.root);
                 let expanded = self.expanded_projects.get(&pkey).copied().unwrap_or(true);
-                let has_waiting = project
-                    .sessions
-                    .iter()
-                    .any(|s| s.state == SessionState::Waiting);
+                let sessions = group_project_sessions(
+                    host.is_local,
+                    host.host_id.as_deref(),
+                    &project.sessions,
+                );
+                let has_waiting = sessions.iter().any(|session| session.needs_me > 0);
                 col = col.with_child(
                     Container::new(self.render_project_header(
                         &pkey,
                         &project.name,
-                        project.sessions.len(),
+                        sessions.len(),
                         has_waiting,
                         expanded,
                         appearance,
@@ -988,46 +936,68 @@ impl CockpitPanel {
                     .finish(),
                 );
                 if expanded {
-                    // Waiting-first within the project (stable sort): the
-                    // attention rows lead, the calm ones follow, none hidden.
-                    let mut sessions: Vec<&SessionSnapshot> = project.sessions.iter().collect();
-                    sessions.sort_by_key(|s| s.state != SessionState::Waiting);
                     for session in sessions {
                         col = col.with_child(
-                            Container::new(self.render_conductor_row(
-                                &host.host,
-                                host.host_id.as_deref(),
-                                session,
-                                is_local,
-                                host.is_available(),
-                                appearance,
-                            ))
+                            Container::new(
+                                self.render_session_header(
+                                    &session,
+                                    &project.name,
+                                    self.expanded_sessions
+                                        .get(&session.key)
+                                        .copied()
+                                        .unwrap_or(true),
+                                    appearance,
+                                ),
+                            )
                             .with_padding_left(22.0)
                             .finish(),
                         );
+                        if self
+                            .expanded_sessions
+                            .get(&session.key)
+                            .copied()
+                            .unwrap_or(true)
+                        {
+                            for agent in session.agents {
+                                col = col.with_child(
+                                    Container::new(self.render_conductor_row(
+                                        &host.host,
+                                        host.host_id.as_deref(),
+                                        agent,
+                                        is_local,
+                                        host.is_available(),
+                                        reduce_motion,
+                                        appearance,
+                                    ))
+                                    .with_padding_left(34.0)
+                                    .finish(),
+                                );
+                            }
+                        }
                     }
                 }
             }
             if host.projects.is_empty() {
-                // A registered host with no live session — shown as a spine root
-                // so it stays navigable/launchable, with a calm hint that it is
-                // idle (build_fleet_tree drops agentless hosts; the registry merge
-                // re-adds them, see CockpitModel).
+                let message = if host.is_local {
+                    crate::t!("cockpit-host-no-local-agents")
+                } else {
+                    match host.inventory_status {
+                        AgentInventoryStatus::Ready => crate::t!("cockpit-host-no-agents"),
+                        AgentInventoryStatus::Unsupported => {
+                            crate::t!("cockpit-host-inventory-unsupported")
+                        }
+                        AgentInventoryStatus::Unavailable => {
+                            crate::t!("cockpit-host-inventory-unavailable")
+                        }
+                    }
+                };
                 col = col.with_child(
-                    Container::new(Self::text(
-                        crate::t!("cockpit-host-no-agents"),
-                        family,
-                        body,
-                        muted,
-                    ))
-                    .with_padding_left(22.0)
-                    .finish(),
+                    Container::new(Self::text(message, family, body, muted))
+                        .with_padding_left(22.0)
+                        .finish(),
                 );
             }
         }
-        // Empty state (S6): a fresh sidebar with no live agents and no registered
-        // hosts still shows the Hosts card — a calm hint above the always-present
-        // "+ Add host" root, so the surface guides the user instead of vanishing.
         if tree.hosts.is_empty() {
             col = col.with_child(
                 Container::new(Self::text(
@@ -1040,16 +1010,12 @@ impl CockpitPanel {
                 .finish(),
             );
         }
-        // NO "＋ Add host" root here (spec v3 §S2): host add/edit belongs to the
-        // SSH manager, which the zone-header gear opens. A second entry point in
-        // the spine made the zone's last row read as data ("a fourth host") and
-        // duplicated a flow the manager already owns.
         Some(col.finish())
     }
 
-    /// One calm Conductor row. Structured task state adds only progress and the
-    /// current step below the established session identity; without a plan the
-    /// row remains unchanged.
+    /// One compact agent leaf: state glyph, provider, and optional model only.
+    /// The delayed fixed-size peek retains activity/task detail without adding a
+    /// task subrow or changing the tree's geometry.
     fn render_conductor_row(
         &self,
         host_label: &str,
@@ -1057,47 +1023,29 @@ impl CockpitPanel {
         session: &SessionSnapshot,
         is_local: bool,
         can_attach: bool,
+        reduce_motion: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
         let main = theme.main_text_color(theme.background()).into_solid();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-
-        let task_glance = task_glance(session);
-        let label = session_identity_label(session, "");
-        let metric_width = session_metric_column_width(&label);
+        let label = agent_leaf_label(session.provider, &session.model);
 
         let glance = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0)
-            .with_child(glyph_cell(
-                session_glyph(session.state),
-                status_dot_coloru(session.state, appearance),
+            .with_child(Self::state_glyph(
+                session.state,
+                true,
+                reduce_motion,
                 appearance,
             ))
-            .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish())
-            .with_child(self.metric_column(session, is_local, host_id, metric_width, appearance))
+            .with_child(
+                Shrinkable::new(1.0, Self::identity_text(label, family, body, main)).finish(),
+            )
             .with_main_axis_size(MainAxisSize::Max)
             .finish();
-        let glance = if let Some(task) = task_glance.as_ref() {
-            let progress = task.current.map_or_else(
-                || format!("{}/{}", task.completed, task.total),
-                |current| format!("{}/{} · {current}", task.completed, task.total),
-            );
-            Flex::column()
-                .with_spacing(2.0)
-                .with_child(glance)
-                .with_child(
-                    Container::new(Self::text(progress, family, body - 1.0, muted))
-                        .with_padding_left(GLYPH_COL_WIDTH + 6.0)
-                        .finish(),
-                )
-                .finish()
-        } else {
-            glance
-        };
 
         // The whole glance line attaches on click — BOTH local and remote (remote
         // in-place adopt is wired via `attach_fleet_session`).
@@ -1112,6 +1060,7 @@ impl CockpitPanel {
                         provider: session.provider,
                         config_dir: session.config_dir.clone(),
                         account_email: session.account_email.clone(),
+                        account_id: session.account_id.clone(),
                         is_local,
                     };
                     // Same full-span hover grammar as the host rows (`hover_row`).
@@ -1290,42 +1239,6 @@ impl CockpitPanel {
         .finish()
     }
 
-    /// The fixed-width **right metric column** of a session line:
-    /// `[provider-icon] Model·effort ctx%`, right-aligned inside a constant-width
-    /// box so the metrics never move horizontally as the branch label changes
-    /// (spec §2.3 — the horizontal-jump defect the owner vetoed). The provider
-    /// icon leads (spec §2.3), muted; model rests in accent; ctx% is heat-colored.
-    fn metric_column(
-        &self,
-        session: &SessionSnapshot,
-        is_local: bool,
-        host_id: Option<&str>,
-        width: f32,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let effort = crate::cockpit::session_effort(session, is_local, host_id);
-        let attrs = zaplex_cockpit::session_attrs(
-            &session.model,
-            effort.as_deref(),
-            session.ctx_tokens,
-            session.state,
-        );
-        // Glance surface: ONLY the context-fill readout, right-aligned in a fixed
-        // column. No provider mark in the tree — provider (account) colour lives
-        // in the KI-Konten cards + the pane table, never the spine (spec §1:
-        // provider colours never appear in the tree). Model·effort is pane detail.
-        let mut row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_alignment(MainAxisAlignment::End)
-            .with_spacing(4.0);
-        if let Some(pct) = attrs.ctx_pct {
-            row = row.with_child(ctx_pct_element(pct, attrs.ctx_fill, false, appearance));
-        }
-        ConstrainedBox::new(row.with_main_axis_size(MainAxisSize::Max).finish())
-            .with_width(width)
-            .finish()
-    }
-
     /// The leading worst-child status dot for a host header: waiting if any child
     /// waits (the whole host reads amber), else working if any child works, else
     /// idle — so attention bubbles up without opening the host (spec §3).
@@ -1351,12 +1264,10 @@ impl CockpitPanel {
 
     /// A **project group header** — the collapsible middle level of the tree
     /// (Host → Projekt → Session, spec §2.1). It reads as a group label, never a
-    /// session: a disclosure chevron (`▾` open / `▸` collapsed) + the project name
-    /// (muted, brightening on hover) + the session count, with **no status dot**
-    /// (the user vetoed a dot before the project). Attention still reaches the
-    /// eye: a *collapsed* project that hides a waiting session tints its **count**
-    /// amber — the chevron stays a pure affordance, so nothing is encoded twice
-    /// (spec v3 §1.3). Clicking anywhere folds/unfolds.
+    /// session: a disclosure chevron (`▾` open / `▸` collapsed) + the project name,
+    /// with no status dot. The count is absent while expanded and appears only
+    /// when collapsed; it turns amber when it hides waiting attention. Clicking
+    /// anywhere folds/unfolds.
     fn render_project_header(
         &self,
         pkey: &str,
@@ -1384,15 +1295,7 @@ impl CockpitPanel {
             icons::Icon::ChevronRight
         };
         let chevron_fill = theme.sub_text_color(bg);
-        // Attention for a hidden waiting session rides the COUNT instead: when a
-        // project is collapsed and hides someone who waits, its session count goes
-        // amber. One signal, at the place that does the hiding — expanded projects
-        // never need it, because the waiting session's own dot is then visible.
-        let count_c = if !expanded && has_waiting {
-            attention_coloru(appearance)
-        } else {
-            faint_c
-        };
+        let count = container_count_presentation(expanded, count, if has_waiting { 1 } else { 0 });
         let handle = self
             .conductor_project_states
             .get(pkey)
@@ -1400,10 +1303,9 @@ impl CockpitPanel {
             .unwrap_or_default();
         let pkey_owned = pkey.to_string();
         let name_s = name.to_string();
-        let count_s = count.to_string();
         Hoverable::new(handle, move |mouse| {
             let name_color = if mouse.is_hovered() { main_c } else { muted_c };
-            Flex::row()
+            let mut row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
                 .with_child(
@@ -1420,14 +1322,20 @@ impl CockpitPanel {
                             .finish(),
                     )
                     .finish(),
-                )
-                .with_child(
-                    Text::new_inline(count_s.clone(), family, body)
-                        .with_color(count_c)
+                );
+            if let Some(count) = count {
+                let count_color = if count.attention {
+                    attention_coloru(appearance)
+                } else {
+                    faint_c
+                };
+                row = row.with_child(
+                    Text::new_inline(count.count.to_string(), family, body)
+                        .with_color(count_color)
                         .finish(),
-                )
-                .with_main_axis_size(MainAxisSize::Max)
-                .finish()
+                );
+            }
+            row.with_main_axis_size(MainAxisSize::Max).finish()
         })
         .with_cursor(warpui::platform::Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
@@ -1490,24 +1398,18 @@ impl View for CockpitPanel {
         // A disabled cockpit clears its snapshot to empty; the placeholder must say
         // "disabled", not "no accounts" (spec: the empty state is only for the real one).
         let enabled = *crate::cockpit::settings::CockpitSettings::as_ref(app).enabled;
+        let reduce_motion = *AccessibilitySettings::as_ref(app).reduce_motion;
 
         let snapshot = CockpitModel::as_ref(app).snapshot().clone();
         let inventory = CockpitModel::as_ref(app).inventory().clone();
-        // Favorites drive the ★ fill state on host + session rows (design §10).
-        let favorites = crate::cockpit::favorites::FavoritesStore::handle(app)
-            .as_ref(app)
-            .items()
-            .to_vec();
-
         let mut cards = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min);
 
-        // ── Hosts zone-card (leads, spec §2.1) — the object tree, rendered
-        // whenever the inventory has hosts, crucially even with **no** AI
-        // account so registered SSH hosts still appear as roots (#100). One flat
-        // `surface_1` card, no heavy chrome.
-        if let Some(conductor) = self.render_conductor(&inventory, &favorites, appearance) {
+        // The live object tree remains independent of account discovery: local
+        // is always supplied by the model, while remote roots exist only for
+        // currently open connections. One flat surface, no registry controls.
+        if let Some(conductor) = self.render_conductor(&inventory, reduce_motion, appearance) {
             cards = cards.with_child(
                 zone_card(conductor, appearance)
                     .with_uniform_padding(CARD_PADDING)
@@ -1610,14 +1512,14 @@ impl Entity for CockpitPanel {
 #[derive(Clone, Debug)]
 pub enum CockpitPanelAction {
     OpenDashboardPane,
-    ToggleHostFavorite(String),
-    OpenHostAgent(String),
-    OpenHostFiles(String),
-    ManageHost(String),
+    /// Collapse/expand a connected host root. Absent means expanded.
+    ToggleHost(String),
     /// Collapse/expand a project group in the Host → Projekt → Session tree,
     /// keyed by `project_key`. Toggles between absent/`true` (expanded, the
     /// default) and `false` (collapsed).
     ToggleProject(String),
+    /// Collapse/expand a terminal/PTY Session container. Absent means expanded.
+    ToggleSession(String),
     /// Select an account (its `account.key`) → open (or focus) that account's
     /// own pane and carry a stable highlight in the sidebar. A second click
     /// focuses the pane; it does not de-select.
@@ -1635,48 +1537,20 @@ impl TypedActionView for CockpitPanel {
             CockpitPanelAction::OpenDashboardPane => {
                 ctx.emit(CockpitPanelEvent::OpenCockpitPane(None));
             }
-            CockpitPanelAction::ToggleHostFavorite(node_id) => {
-                let host =
-                    available_registered_host(CockpitModel::as_ref(ctx).inventory(), node_id)
-                        .map(|host| host.host.clone());
-                if let Some(host) = host {
-                    ctx.dispatch_typed_action(&toggle_host_favorite_action(node_id, &host));
-                } else {
-                    log::warn!("favorite action ignored for missing host node {node_id}");
-                }
-            }
-            CockpitPanelAction::OpenHostAgent(node_id) => {
-                let host =
-                    available_registered_host(CockpitModel::as_ref(ctx).inventory(), node_id)
-                        .map(|host| host.host.clone());
-                if let Some(host) = host {
-                    ctx.dispatch_typed_action(&open_registered_host_agent_action(node_id, &host));
-                } else {
-                    log::warn!("agent action ignored for missing host node {node_id}");
-                }
-            }
-            CockpitPanelAction::OpenHostFiles(node_id) => {
-                if available_registered_host(CockpitModel::as_ref(ctx).inventory(), node_id)
-                    .is_some()
-                {
-                    ctx.dispatch_typed_action(&open_registered_host_files_action(node_id));
-                } else {
-                    log::warn!("files action ignored for unavailable host node {node_id}");
-                }
-            }
-            CockpitPanelAction::ManageHost(node_id) => {
-                if available_registered_host(CockpitModel::as_ref(ctx).inventory(), node_id)
-                    .is_some()
-                {
-                    ctx.dispatch_typed_action(&manage_registered_host_action(node_id));
-                } else {
-                    log::warn!("manage action ignored for unavailable host node {node_id}");
-                }
+            CockpitPanelAction::ToggleHost(key) => {
+                let current = self.expanded_hosts.get(key).copied().unwrap_or(true);
+                self.expanded_hosts.insert(key.clone(), !current);
+                ctx.notify();
             }
             CockpitPanelAction::ToggleProject(key) => {
                 // Absent = expanded (default); the first toggle collapses to false.
                 let cur = self.expanded_projects.get(key).copied().unwrap_or(true);
                 self.expanded_projects.insert(key.clone(), !cur);
+                ctx.notify();
+            }
+            CockpitPanelAction::ToggleSession(key) => {
+                let current = self.expanded_sessions.get(key).copied().unwrap_or(true);
+                self.expanded_sessions.insert(key.clone(), !current);
                 ctx.notify();
             }
             CockpitPanelAction::SelectAccount(key) => {

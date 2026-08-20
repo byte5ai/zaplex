@@ -17,6 +17,7 @@ pub mod scope;
 pub mod skill;
 
 pub mod agent;
+pub mod cockpit;
 pub mod completions;
 pub mod config_file;
 pub mod control;
@@ -247,6 +248,8 @@ impl Args {
 
   <dim>$</dim> <bold>{bin_name} agent run --prompt "Build anything"</bold>
 
+  <dim>$</dim> <bold>{bin_name} cockpit snapshot --json</bold>
+
   <dim>$</dim> <bold>{bin_name} mcp list</bold>
 
 <bold><underline>Learn more:</underline></bold>
@@ -393,6 +396,10 @@ pub enum Command {
     #[clap(flatten)]
     CommandLine(Box<CliCommand>),
 
+    /// Inspect the Cockpit inventory as machine-readable data.
+    #[command(subcommand)]
+    Cockpit(crate::cockpit::CockpitCommand),
+
     /// Generate shell completions for your shell to stdout.
     ///
     ///
@@ -426,7 +433,7 @@ impl Command {
     pub fn prints_to_stdout(&self) -> bool {
         match self {
             Command::Worker(_) => false,
-            Command::CommandLine(_) | Command::DumpDebugInfo => true,
+            Command::CommandLine(_) | Command::Cockpit(_) | Command::DumpDebugInfo => true,
             Command::Completions { .. } => true,
         }
     }

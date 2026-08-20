@@ -3,8 +3,16 @@
 //! Mirrors `claudeplex` `discover.ts`/`collect.ts`. Reads only account metadata
 //! (`oauthAccount`) and per-message token counts — never tokens or message content.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[cfg(target_os = "linux")]
+use std::ffi::OsString;
+#[cfg(target_os = "linux")]
+use std::io;
+#[cfg(target_os = "linux")]
+use std::os::unix::ffi::OsStringExt;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -16,32 +24,329 @@ use crate::types::{Account, Provider, UsageEntry};
 /// a real account (mirrors `claudeplex` discover.ts exclusions).
 const EXCLUDE_FRAGMENTS: &[&str] = &["mem", "backup", "bak", "old", "tmp", "temp", "observer"];
 
+/// Result of account-root discovery before transcript/session scanning.
+#[derive(Debug, Default)]
+pub struct AccountDiscovery {
+    pub accounts: Vec<Account>,
+    pub issues: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct ProcessAccountDiscovery {
+    roots: Vec<PathBuf>,
+    issues: Vec<String>,
+}
+
+#[cfg(target_os = "linux")]
+const PROCESS_DISCOVERY_PERMISSION_DENIED: &str =
+    "Claude process account discovery was denied by the operating system";
+#[cfg(target_os = "linux")]
+const PROCESS_DISCOVERY_INCOMPLETE: &str =
+    "Claude process account discovery could not inspect every process";
+#[cfg(target_os = "linux")]
+const PROCESS_DISCOVERY_UNAVAILABLE: &str = "Claude process account discovery is unavailable";
+#[cfg(not(target_os = "linux"))]
+const PROCESS_DISCOVERY_UNSUPPORTED: &str =
+    "Claude process account discovery is unsupported on this platform";
+
+fn push_unique_issue(issues: &mut Vec<String>, issue: impl Into<String>) {
+    let issue = issue.into();
+    if !issues.contains(&issue) {
+        issues.push(issue);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn effective_uid(status: &[u8]) -> Option<u32> {
+    let status = std::str::from_utf8(status).ok()?;
+    let uid = status.lines().find_map(|line| line.strip_prefix("Uid:"))?;
+    uid.split_whitespace().nth(1)?.parse().ok()
+}
+
+#[cfg(target_os = "linux")]
+fn process_arg_basename(argument: &[u8]) -> &[u8] {
+    argument
+        .rsplit(|byte| *byte == b'/')
+        .next()
+        .unwrap_or(argument)
+}
+
+#[cfg(target_os = "linux")]
+fn process_start_time(stat: &[u8]) -> Option<u64> {
+    let command_end = stat.iter().rposition(|byte| *byte == b')')?;
+    std::str::from_utf8(stat.get(command_end + 1..)?)
+        .ok()?
+        .split_whitespace()
+        // `/proc/<pid>/stat` field 3 starts after the command; starttime is 22.
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
+#[cfg(target_os = "linux")]
+fn is_claude_process(cmdline: &[u8]) -> bool {
+    let mut arguments = cmdline
+        .split(|byte| *byte == 0)
+        .filter(|argument| !argument.is_empty());
+    let Some(executable) = arguments.next() else {
+        return false;
+    };
+    let executable = process_arg_basename(executable);
+    if executable == b"claude" || executable == b"claude-code" {
+        return true;
+    }
+    if executable != b"node"
+        && executable != b"nodejs"
+        && executable != b"bun"
+        && executable != b"deno"
+    {
+        return false;
+    }
+    let Some(script) = arguments.next() else {
+        return false;
+    };
+    process_arg_basename(script) == b"claude"
+        || process_arg_basename(script) == b"claude-code"
+        || script
+            .split(|byte| *byte == b'/')
+            .any(|component| component == b"claude-code")
+}
+
+#[cfg(target_os = "linux")]
+fn config_dir_from_environment(environ: &[u8]) -> Option<PathBuf> {
+    const PREFIX: &[u8] = b"CLAUDE_CONFIG_DIR=";
+    let value = environ
+        .split(|byte| *byte == 0)
+        .find_map(|entry| entry.strip_prefix(PREFIX))?;
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(OsString::from_vec(value.to_vec())))
+}
+
+#[cfg(target_os = "linux")]
+fn read_process_file(
+    path: &Path,
+    read: &impl Fn(&Path) -> io::Result<Vec<u8>>,
+    issues: &mut Vec<String>,
+) -> Option<Vec<u8>> {
+    match read(path) {
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            push_unique_issue(issues, PROCESS_DISCOVERY_PERMISSION_DENIED);
+            None
+        }
+        Err(_) => {
+            push_unique_issue(issues, PROCESS_DISCOVERY_INCOMPLETE);
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_process_bytes(path: &Path) -> io::Result<Vec<u8>> {
+    fs::read(path)
+}
+
+#[cfg(target_os = "linux")]
+fn running_claude_config_dirs_from_proc_with_reader(
+    proc_root: &Path,
+    read: &impl Fn(&Path) -> io::Result<Vec<u8>>,
+) -> ProcessAccountDiscovery {
+    let mut discovery = ProcessAccountDiscovery::default();
+    let own_status = match read(&proc_root.join("self/status")) {
+        Ok(status) => status,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            discovery
+                .issues
+                .push(PROCESS_DISCOVERY_PERMISSION_DENIED.to_string());
+            return discovery;
+        }
+        Err(_) => {
+            discovery
+                .issues
+                .push(PROCESS_DISCOVERY_UNAVAILABLE.to_string());
+            return discovery;
+        }
+    };
+    let Some(own_uid) = effective_uid(&own_status) else {
+        discovery
+            .issues
+            .push(PROCESS_DISCOVERY_UNAVAILABLE.to_string());
+        return discovery;
+    };
+
+    let entries = match fs::read_dir(proc_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            discovery
+                .issues
+                .push(PROCESS_DISCOVERY_PERMISSION_DENIED.to_string());
+            return discovery;
+        }
+        Err(_) => {
+            discovery
+                .issues
+                .push(PROCESS_DISCOVERY_UNAVAILABLE.to_string());
+            return discovery;
+        }
+    };
+
+    let mut process_roots = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                push_unique_issue(&mut discovery.issues, PROCESS_DISCOVERY_PERMISSION_DENIED);
+                continue;
+            }
+            Err(_) => {
+                push_unique_issue(&mut discovery.issues, PROCESS_DISCOVERY_INCOMPLETE);
+                continue;
+            }
+        };
+        let Some(pid) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if pid.is_empty() || !pid.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+
+        let process_root = entry.path();
+        let Some(status) =
+            read_process_file(&process_root.join("status"), read, &mut discovery.issues)
+        else {
+            continue;
+        };
+        let Some(uid) = effective_uid(&status) else {
+            push_unique_issue(&mut discovery.issues, PROCESS_DISCOVERY_INCOMPLETE);
+            continue;
+        };
+        if uid != own_uid {
+            continue;
+        }
+
+        let Some(stat) = read_process_file(&process_root.join("stat"), read, &mut discovery.issues)
+        else {
+            continue;
+        };
+        let Some(start_time) = process_start_time(&stat) else {
+            push_unique_issue(&mut discovery.issues, PROCESS_DISCOVERY_INCOMPLETE);
+            continue;
+        };
+
+        let Some(cmdline) =
+            read_process_file(&process_root.join("cmdline"), read, &mut discovery.issues)
+        else {
+            continue;
+        };
+        if !is_claude_process(&cmdline) {
+            continue;
+        }
+
+        let Some(environ) =
+            read_process_file(&process_root.join("environ"), read, &mut discovery.issues)
+        else {
+            continue;
+        };
+        let Some(rechecked_status) =
+            read_process_file(&process_root.join("status"), read, &mut discovery.issues)
+        else {
+            continue;
+        };
+        let Some(rechecked_stat) =
+            read_process_file(&process_root.join("stat"), read, &mut discovery.issues)
+        else {
+            continue;
+        };
+        let Some(rechecked_cmdline) =
+            read_process_file(&process_root.join("cmdline"), read, &mut discovery.issues)
+        else {
+            continue;
+        };
+        if effective_uid(&rechecked_status) != Some(own_uid)
+            || process_start_time(&rechecked_stat) != Some(start_time)
+            || rechecked_cmdline != cmdline
+        {
+            continue;
+        }
+        let Some(mut config_dir) = config_dir_from_environment(&environ) else {
+            continue;
+        };
+        if config_dir.is_relative() {
+            config_dir = match fs::read_link(process_root.join("cwd")) {
+                Ok(cwd) => cwd.join(config_dir),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                    push_unique_issue(&mut discovery.issues, PROCESS_DISCOVERY_PERMISSION_DENIED);
+                    continue;
+                }
+                Err(_) => {
+                    push_unique_issue(&mut discovery.issues, PROCESS_DISCOVERY_INCOMPLETE);
+                    continue;
+                }
+            };
+        }
+        process_roots.push(config_dir);
+    }
+    process_roots.sort();
+    process_roots.dedup();
+    discovery.roots = process_roots;
+    discovery
+}
+
+#[cfg(target_os = "linux")]
+fn running_claude_config_dirs() -> ProcessAccountDiscovery {
+    running_claude_config_dirs_from_proc_with_reader(Path::new("/proc"), &read_process_bytes)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn running_claude_config_dirs() -> ProcessAccountDiscovery {
+    ProcessAccountDiscovery {
+        roots: Vec::new(),
+        issues: vec![PROCESS_DISCOVERY_UNSUPPORTED.to_string()],
+    }
+}
+
 fn is_excluded(dir_name: &str) -> bool {
-    EXCLUDE_FRAGMENTS.iter().any(|f| dir_name.contains(f))
+    dir_name
+        .strip_prefix(".claude-")
+        .unwrap_or(dir_name)
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|token| EXCLUDE_FRAGMENTS.contains(&token) || token == "memory")
 }
 
 /// Resolve the `.claude.json` identity file for a config dir: prefer `<dir>/.claude.json`,
 /// and for the default `~/.claude` fall back to `~/.claude.json` (the CLI's home file).
-fn identity_json(config_dir: &Path, home: &Path, is_default: bool) -> Option<PathBuf> {
+fn identity_json(
+    config_dir: &Path,
+    home: &Path,
+    is_default: bool,
+) -> Result<Option<PathBuf>, String> {
     let inside = config_dir.join(".claude.json");
-    if inside.is_file() {
-        return Some(inside);
+    match inside.try_exists() {
+        Ok(true) => return Ok(Some(inside)),
+        Ok(false) => {}
+        Err(_) => return Err("Claude account identity is unreadable".to_string()),
     }
     if is_default {
         let home_file = home.join(".claude.json");
-        if home_file.is_file() {
-            return Some(home_file);
+        match home_file.try_exists() {
+            Ok(true) => return Ok(Some(home_file)),
+            Ok(false) => {}
+            Err(_) => return Err("Claude default account identity is unreadable".to_string()),
         }
     }
-    None
+    Ok(None)
 }
 
-/// A config dir qualifies as an account if it has an identity file or a
-/// `projects/`/`sessions/` subdir.
-fn dir_qualifies(config_dir: &Path, home: &Path, is_default: bool) -> bool {
-    identity_json(config_dir, home, is_default).is_some()
-        || config_dir.join("projects").is_dir()
-        || config_dir.join("sessions").is_dir()
+fn store_exists(config_dir: &Path, name: &str) -> Result<bool, String> {
+    match fs::metadata(config_dir.join(name)) {
+        Ok(metadata) => Ok(metadata.is_dir()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err("Claude account store is unreadable".to_string()),
+    }
 }
 
 /// Stable account key from the config dir, e.g. `claude:default`, `claude:work`.
@@ -77,15 +382,38 @@ fn plan_label(rate_tier: Option<&str>, org_type: Option<&str>) -> Option<String>
 }
 
 /// Build an [`Account`] from a config dir + its identity JSON. Returns `None` if the
-/// dir does not represent a real account (no `oauthAccount` and no transcripts).
-fn account_from_dir(config_dir: &Path, home: &Path, is_default: bool) -> Option<Account> {
-    if !dir_qualifies(config_dir, home, is_default) {
-        return None;
+/// dir has neither an identity file nor a provider-owned session store.
+fn account_from_dir(
+    config_dir: &Path,
+    home: &Path,
+    is_default: bool,
+) -> Result<Option<(Account, Option<String>)>, String> {
+    let identity_path = identity_json(config_dir, home, is_default)?;
+    let has_store = store_exists(config_dir, "projects")? || store_exists(config_dir, "sessions")?;
+    if identity_path.is_none() && !has_store {
+        return Ok(None);
     }
-    let oauth = identity_json(config_dir, home, is_default)
-        .and_then(|p| fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| v.get("oauthAccount").cloned());
+
+    let oauth = match identity_path {
+        Some(path) => {
+            let raw = fs::read_to_string(path)
+                .map_err(|_| "Claude account identity is unreadable".to_string())?;
+            let identity = serde_json::from_str::<Value>(&raw)
+                .map_err(|_| "Claude account identity is malformed".to_string())?;
+            match identity.get("oauthAccount") {
+                Some(Value::Object(_)) => identity.get("oauthAccount").cloned(),
+                Some(_) => return Err("Claude account identity is malformed".to_string()),
+                None => None,
+            }
+        }
+        None => None,
+    };
+    // The default data directory exists for every Claude installation, including
+    // logged-out ones. Only its home-level OAuth identity makes it a real account;
+    // otherwise a historical store would invent a noisy `claude:default` card.
+    if is_default && oauth.is_none() {
+        return Ok(None);
+    }
 
     let s = |v: &Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(|x| x.to_string());
     let (email, display, org, role, plan) = match &oauth {
@@ -108,60 +436,158 @@ fn account_from_dir(config_dir: &Path, home: &Path, is_default: bool) -> Option<
         .or_else(|| org.clone())
         .unwrap_or_else(|| account_key(config_dir, is_default));
 
-    Some(Account {
-        provider: Provider::Claude,
-        key: account_key(config_dir, is_default),
-        config_dir: config_dir.to_path_buf(),
-        label,
-        email,
-        org,
-        role,
-        plan_tier: plan,
-        is_default,
-    })
+    let stable_identity = oauth.as_ref().and_then(|o| {
+        s(o, "accountUuid")
+            .map(|id| id.to_ascii_lowercase())
+            .or_else(|| {
+                let email = o
+                    .get("emailAddress")
+                    .or_else(|| o.get("email"))
+                    .and_then(Value::as_str)?;
+                let organization = o.get("organizationUuid").and_then(Value::as_str)?;
+                Some(format!(
+                    "{}:{}",
+                    email.to_ascii_lowercase(),
+                    organization.to_ascii_lowercase()
+                ))
+            })
+    });
+
+    Ok(Some((
+        Account {
+            provider: Provider::Claude,
+            key: account_key(config_dir, is_default),
+            config_dir: config_dir.to_path_buf(),
+            label,
+            email,
+            org,
+            role,
+            plan_tier: plan,
+            is_default,
+        },
+        stable_identity,
+    )))
 }
 
-/// Discover Claude accounts: the default `~/.claude`, any `~/.claude-*` config dirs,
-/// and `$CLAUDE_CONFIG_DIR`. (A process scan for live non-default dirs — discover.ts —
-/// is deferred; see the design doc.)
-pub fn discover_accounts(home: &Path, config_dir_env: Option<&str>) -> Vec<Account> {
-    let mut candidates: Vec<(PathBuf, bool)> = Vec::new();
-    candidates.push((home.join(".claude"), true));
+/// Discover Claude accounts and retain root/identity failures for snapshot health.
+///
+/// Sources are the documented default `~/.claude`, sorted `~/.claude-*` siblings,
+/// same-UID live Claude processes, and the root pinned by `$CLAUDE_CONFIG_DIR`.
+/// Existing roots are canonicalized so aliases across sources do not create
+/// duplicate accounts.
+fn discover_accounts_with_process_roots(
+    home: &Path,
+    config_dir_env: Option<&str>,
+    process_discovery: ProcessAccountDiscovery,
+) -> AccountDiscovery {
+    let mut candidates: Vec<(PathBuf, bool, bool)> = Vec::new();
+    candidates.push((home.join(".claude"), true, false));
 
-    if let Ok(read) = fs::read_dir(home) {
-        for entry in read.flatten() {
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else { continue };
-            if name == ".claude" || !name.starts_with(".claude") {
-                continue;
+    let mut issues = Vec::new();
+    match fs::read_dir(home) {
+        Ok(read) => {
+            let mut siblings = Vec::new();
+            for entry in read {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(_) => {
+                        issues.push("Claude account directory entry is unreadable".to_string());
+                        continue;
+                    }
+                };
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else { continue };
+                if name == ".claude" || !name.starts_with(".claude-") {
+                    continue;
+                }
+                if is_excluded(name) {
+                    continue;
+                }
+                match entry.file_type() {
+                    Ok(kind) if kind.is_dir() || kind.is_symlink() => siblings.push(entry.path()),
+                    Ok(_) => {}
+                    Err(_) => {
+                        issues.push("Claude account root is unreadable".to_string());
+                    }
+                }
             }
-            // .claude-* dirs (skip the plain-file ~/.claude.json and excluded copies).
-            if is_excluded(name) || !entry.path().is_dir() {
-                continue;
-            }
-            candidates.push((entry.path(), false));
+            siblings.sort();
+            candidates.extend(siblings.into_iter().map(|path| (path, false, false)));
         }
+        Err(_) if !matches!(home.try_exists(), Ok(false)) => {
+            issues.push("Claude accounts: home directory unreadable".to_string());
+        }
+        Err(_) => {}
+    }
+
+    for root in process_discovery.roots {
+        let is_default = root == home.join(".claude");
+        candidates.push((root, is_default, false));
+    }
+    for issue in process_discovery.issues {
+        push_unique_issue(&mut issues, issue);
     }
 
     if let Some(env_dir) = config_dir_env.filter(|d| !d.is_empty()) {
         let p = PathBuf::from(env_dir);
         let is_default = p == home.join(".claude");
-        if !candidates.iter().any(|(c, _)| *c == p) {
-            candidates.push((p, is_default));
-        }
+        candidates.push((p, is_default, true));
     }
 
     let mut accounts = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for (dir, is_default) in candidates {
-        if !seen.insert(dir.clone()) {
+    let mut seen_roots = HashSet::new();
+    let mut seen_identities = HashSet::new();
+    for (dir, is_default, is_pinned) in candidates {
+        let root = match fs::canonicalize(&dir) {
+            Ok(root) => root,
+            Err(_) if fs::symlink_metadata(&dir).is_ok() => {
+                issues.push("Claude account root is unreadable".to_string());
+                continue;
+            }
+            Err(_) if matches!(dir.try_exists(), Ok(false)) => dir.clone(),
+            Err(_) => {
+                issues.push("Claude account root is unreadable".to_string());
+                continue;
+            }
+        };
+        if !seen_roots.insert(root.clone()) {
+            if is_pinned && matches!(dir.try_exists(), Ok(false)) {
+                issues.push("Claude pinned account root is unavailable".to_string());
+            }
             continue;
         }
-        if let Some(acct) = account_from_dir(&dir, home, is_default) {
-            accounts.push(acct);
+        match account_from_dir(&root, home, is_default) {
+            Ok(Some((account, stable_identity))) => {
+                if stable_identity
+                    .as_ref()
+                    .is_some_and(|identity| !seen_identities.insert(identity.clone()))
+                {
+                    continue;
+                }
+                accounts.push(account);
+            }
+            Ok(None) => {
+                if is_pinned && matches!(dir.try_exists(), Ok(false)) {
+                    issues.push("Claude pinned account root is unavailable".to_string());
+                }
+            }
+            Err(issue) => issues.push(issue),
         }
     }
-    accounts
+    AccountDiscovery { accounts, issues }
+}
+
+/// Discover Claude accounts and retain root/identity/process failures for health.
+pub fn discover_accounts_with_health(
+    home: &Path,
+    config_dir_env: Option<&str>,
+) -> AccountDiscovery {
+    discover_accounts_with_process_roots(home, config_dir_env, running_claude_config_dirs())
+}
+
+/// Compatibility helper for callers that only need the discovered accounts.
+pub fn discover_accounts(home: &Path, config_dir_env: Option<&str>) -> Vec<Account> {
+    discover_accounts_with_health(home, config_dir_env).accounts
 }
 
 /// Extract a [`UsageEntry`] from one parsed transcript line, or `None` if the line
@@ -244,8 +670,7 @@ pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> (Vec<UsageE
                 // (permission on a subdir, etc.), means the walk was truncated and the
                 // numbers may be incomplete.
                 let missing_root = e.depth() == 0
-                    && e.io_error().map(std::io::Error::kind)
-                        == Some(std::io::ErrorKind::NotFound);
+                    && e.io_error().map(std::io::Error::kind) == Some(std::io::ErrorKind::NotFound);
                 if !missing_root {
                     io_error = true;
                 }

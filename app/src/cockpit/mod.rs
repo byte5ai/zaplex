@@ -26,7 +26,7 @@ pub use settings::CockpitSettings;
 
 use std::path::Path;
 
-use zaplex_cockpit::{Provider, SessionSnapshot};
+use zaplex_cockpit::{Account, Provider, SessionSnapshot};
 
 use crate::terminal::cli_agent::CLIAgent;
 
@@ -34,22 +34,14 @@ use crate::terminal::cli_agent::CLIAgent;
 /// by the pane and the sidebar so both render the same model·effort label.
 ///
 /// Prefers the snapshot's own value (Codex records effort in its transcript),
-/// else the launch registry's best-known intent for this session's launch
-/// coordinates — Claude effort reaches no transcript (local *or* remote), so the
-/// Spawn-Karte's launch record is its only source. The registry is keyed by the
-/// launch's `(agent, host, cwd)`, where `host` is the **stable host identity**:
-/// `None` for a local session, and the remote daemon's `host_id` for a remote
-/// one. The launch records under that same `host_id` when the host is already
-/// connected; when it is not, it records under the SSH `node_id` and migrates to
-/// the `host_id` the moment the daemon connects (before the session can appear
-/// in the inventory), so this lookup's `host_id` always matches the record — see
-/// [`crate::workspace::view::Workspace::launch_routed_agent`] and
-/// `rehost_launch_records_on_connect`. The `cwd` is likewise the *resolved*
-/// launch dir (a local default-dir launch records `$HOME`, the dir the shell
-/// actually starts in), so it equals the `session.cwd` reported here. Passing
-/// the inventory node's `host_id` makes a remote Claude launch's effort resolve
-/// instead of being dropped. `None` = honestly unknown; the label then omits the
-/// effort rather than inventing one.
+/// else the exact launch record bound to `(host, provider, account, session-id)`.
+/// Claude effort reaches no transcript (local *or* remote), so the Spawn-Karte's
+/// launch record is its only source. Host identity is the daemon `host_id`; a
+/// launch made before the daemon handshake is rehosted from SSH `node_id` once
+/// that stable identity arrives. Externally started and pre-hook sessions retain
+/// a marked compatibility path through `(agent, host, cwd)`. An account mismatch
+/// fails closed and never uses that coordinate fallback. `None` is honestly
+/// unknown, so the label omits effort rather than inventing it.
 /// The CLI behind a discovered session's provider.
 ///
 /// One mapping, so a caller cannot quietly disagree with another about which
@@ -60,6 +52,44 @@ pub(crate) fn agent_of(provider: Provider) -> CLIAgent {
         Provider::Claude => CLIAgent::Claude,
         Provider::Codex => CLIAgent::Codex,
         Provider::Antigravity => CLIAgent::Antigravity,
+    }
+}
+
+/// One identity hierarchy shared by compact and large Cockpit account cards.
+/// Provider is always explicit; account and plan occupy one quieter subordinate
+/// line, so an email used as the label is never rendered twice.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AccountIdentityPresentation {
+    pub provider: &'static str,
+    pub subline: String,
+}
+
+pub(crate) fn account_identity(account: &Account) -> AccountIdentityPresentation {
+    let provider = match account.provider {
+        Provider::Claude => "Claude",
+        Provider::Codex => "Codex",
+        Provider::Antigravity => "Antigravity",
+    };
+    let account_value = if account.label.trim().is_empty() {
+        account.email.as_deref().unwrap_or_default()
+    } else {
+        account.label.as_str()
+    };
+    let mut parts = Vec::new();
+    if !account_value.is_empty() {
+        parts.push(account_value.to_string());
+    }
+    if let Some(plan) = account
+        .plan_tier
+        .as_deref()
+        .map(str::trim)
+        .filter(|plan| !plan.is_empty())
+    {
+        parts.push(plan.to_string());
+    }
+    AccountIdentityPresentation {
+        provider,
+        subline: parts.join(" · "),
     }
 }
 
@@ -77,8 +107,21 @@ pub(crate) fn session_effort(
     // the launch resolved and stored. A remote node with no id (shouldn't
     // happen — the fold always sets it) yields the honest `None`.
     let host = if is_local { None } else { Some(host_id?) };
+    match launch_registry::lookup_bound_session_with_account_id(
+        agent,
+        host,
+        session.config_dir.as_deref().map(Path::new),
+        session.account_email.as_deref(),
+        session.account_id.as_deref(),
+        &session.session_id,
+    ) {
+        launch_registry::BoundLaunchLookup::Match(record) => return record.effort,
+        launch_registry::BoundLaunchLookup::AccountMismatch => return None,
+        launch_registry::BoundLaunchLookup::Unbound => {}
+    }
     launch_registry::lookup(agent, host, Some(Path::new(&session.cwd)))
         .and_then(|record| record.effort)
+        .map(|effort| format!("~{effort}"))
 }
 
 #[cfg(test)]

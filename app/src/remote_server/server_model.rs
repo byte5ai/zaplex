@@ -5,6 +5,7 @@ use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use warp_core::channel::ChannelState;
 use warp_core::SessionId;
@@ -24,7 +25,7 @@ use super::proto::{
     AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo, AgentSessionList, Authenticate,
     ClientMessage, DeleteFile, DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse,
     FailedFileRead, FileContextProto, FileOperationError, HostExec, HostExecResult, Initialize,
-    InitializeResponse, NavigatedToDirectory, NavigatedToDirectoryResponse,
+    InitializeResponse, NavigatedToDirectory, NavigatedToDirectoryResponse, ReadAgentTranscript,
     ReadFileContextResponse, RunCommandError, RunCommandErrorCode, RunCommandRequest,
     RunCommandResponse, RunCommandSuccess, ServerMessage, SessionBootstrapped, StartupCommandAck,
     WriteFile, WriteFileResponse, WriteFileSuccess,
@@ -45,7 +46,8 @@ use zaplex_remote_session::agent_binding::{
 #[cfg(unix)]
 use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
-    supported_features, FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_PTY_BINDING_V2,
+    supported_features, FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PROCESS_SIGNAL_V1,
+    FEATURE_AGENT_PTY_BINDING_V2, FEATURE_AGENT_TRANSCRIPT_READ_V1,
     FEATURE_SAFE_FILE_TRANSACTIONS_V1,
 };
 
@@ -84,6 +86,7 @@ const HOST_RING_CAP_BYTES: usize = 256 * 1024 * 1024;
 /// How often the detached-session GC sweep runs.
 #[cfg(unix)]
 const GC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+const MAX_CONCURRENT_AGENT_TRANSCRIPT_READS: usize = 2;
 
 /// Unique identifier for a connected proxy session in daemon mode.
 pub type ConnectionId = uuid::Uuid;
@@ -114,6 +117,28 @@ enum HandlerOutcome {
     /// are tracked by `FileId` in `pending_file_ops` rather than by
     /// `RequestId` in `in_progress`).
     Async(Option<SpawnedFutureHandle>),
+}
+
+struct AgentTranscriptReadPermit {
+    in_flight: Arc<AtomicUsize>,
+}
+
+impl AgentTranscriptReadPermit {
+    fn try_acquire(in_flight: Arc<AtomicUsize>) -> Option<Self> {
+        in_flight
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current < MAX_CONCURRENT_AGENT_TRANSCRIPT_READS).then_some(current + 1)
+            })
+            .ok()
+            .map(|_| Self { in_flight })
+    }
+}
+
+impl Drop for AgentTranscriptReadPermit {
+    fn drop(&mut self) {
+        let previous = self.in_flight.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0);
+    }
 }
 
 #[cfg(test)]
@@ -386,6 +411,12 @@ pub struct ServerModel {
     /// The scan itself stays off the model thread; the mutex only serializes
     /// concurrent readers of the process-local cache.
     agent_transcript_cache: Arc<Mutex<zaplex_cockpit::TranscriptScanCache>>,
+    /// Opaque account ids from the latest daemon-local inventory mapped to
+    /// provider config roots that never cross the wire.
+    agent_account_routes: super::agent_account::AccountRouteCache,
+    /// Daemon-wide cap for transcript filesystem scans and parsing. The permit
+    /// is owned by the abortable future, so cancellation releases it as well.
+    agent_transcript_reads_in_flight: Arc<AtomicUsize>,
 }
 
 impl Entity for ServerModel {
@@ -425,6 +456,8 @@ impl ServerModel {
             agent_transcript_cache: Arc::new(Mutex::new(
                 zaplex_cockpit::TranscriptScanCache::default(),
             )),
+            agent_account_routes: Default::default(),
+            agent_transcript_reads_in_flight: Arc::new(AtomicUsize::new(0)),
         };
         // Subscribe to FileModel and RepoMetadataModel events
         // file operation results and repo metadata pushes are forwarded to all
@@ -1012,6 +1045,13 @@ impl ServerModel {
             Some(client_message::Message::ListAgentSessions(_)) => {
                 self.handle_list_agent_sessions(&request_id, conn_id, ctx)
             }
+            // Secret-free provider-account inventory and opaque launch routes.
+            Some(client_message::Message::ListAgentAccounts(_)) => {
+                self.handle_list_agent_accounts(&request_id, conn_id, ctx)
+            }
+            Some(client_message::Message::ReadAgentTranscript(request)) => {
+                self.handle_read_agent_transcript(&request_id, conn_id, request, ctx)
+            }
             // Multi-session listing for the sidebar / adopt-by-id (Stage 4).
             #[cfg(unix)]
             Some(client_message::Message::ListSessions(_)) => self.handle_list_sessions(),
@@ -1213,6 +1253,18 @@ impl ServerModel {
         self.connection_features
             .get(&conn_id)
             .is_some_and(|features| features.contains(FEATURE_AGENT_PTY_BINDING_V2))
+    }
+
+    fn client_supports_agent_account_routing(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_AGENT_ACCOUNT_ROUTING_V1))
+    }
+
+    fn client_supports_agent_transcript_read(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_AGENT_TRANSCRIPT_READ_V1))
     }
 
     fn client_supports_agent_process_signal(&self, conn_id: ConnectionId) -> bool {
@@ -2403,64 +2455,152 @@ fn now_epoch_millis() -> u64 {
 /// this daemon's filesystem and maps them to the wire shape. Pure filesystem +
 /// transcript reads — no PTY, so it works on every platform. Runs the same
 /// `zaplex_cockpit` discovery the local app uses, over the daemon's own home:
-/// discover Claude accounts, tail each account's transcripts, flatten.
+/// discover accounts through the same roots as the route inventory, tail each
+/// account's transcripts, flatten.
 ///
 /// Returns an empty list (never an error) when the home directory can't be
 /// resolved — an inventory the client can safely fold as "zero sessions here".
+struct CollectedAgentSessions {
+    sessions: Vec<super::proto::AgentSessionInfo>,
+    account_routes: Option<super::agent_account::AccountRoutes>,
+}
+
+fn collect_agent_sessions_for_peer(
+    transcript_cache: &mut zaplex_cockpit::TranscriptScanCache,
+    supports_account_routing: bool,
+) -> CollectedAgentSessions {
+    let now = chrono::Utc::now();
+    // Build account inventory and session inventory in one discovery pass. This
+    // keeps CLAUDE_CONFIG_DIR/CODEX_HOME and process-discovered plexed roots
+    // identical to the opaque route cache that assigns account ids.
+    let scan = super::agent_account::scan_agent_accounts_with_cache(transcript_cache);
+    let mut snapshots = scan.sessions;
+    if let Some(home) = dirs::home_dir() {
+        snapshots.extend(zaplex_cockpit::antigravity_idle_sessions(
+            &home,
+            now,
+            zaplex_cockpit::IDLE_MAX_AGE,
+            zaplex_cockpit::IDLE_SESSION_LIMIT,
+        ));
+    } else {
+        log::warn!("Daemon: ListAgentSessions: no home dir; reporting empty inventory");
+    }
+    let account_routes = supports_account_routing.then_some(scan.routes);
+    let sessions = snapshots
+        .into_iter()
+        .map(|mut snapshot| {
+            if let Some(routes) = account_routes.as_ref() {
+                snapshot.account_id = super::agent_account::session_account_id(
+                    routes,
+                    snapshot.provider.as_str(),
+                    snapshot.config_dir.as_deref(),
+                );
+                // A routing-capable peer must never receive a path from this
+                // host. An unresolvable opaque identity stays visible but is
+                // deliberately non-routable rather than falling back to a path.
+                snapshot.config_dir = None;
+            }
+            super::agent_session::snapshot_to_proto(&snapshot)
+        })
+        .collect();
+    CollectedAgentSessions {
+        sessions,
+        account_routes,
+    }
+}
+
 fn collect_agent_sessions(
     transcript_cache: &mut zaplex_cockpit::TranscriptScanCache,
 ) -> Vec<super::proto::AgentSessionInfo> {
-    let Some(home) = dirs::home_dir() else {
-        log::warn!("Daemon: ListAgentSessions: no home dir; reporting empty inventory");
-        return Vec::new();
-    };
-    let now = chrono::Utc::now();
-    // Claude sessions (registry + transcript joined) … `Account::stamp` gives each
-    // one the two things it can't know about itself: its account's config-dir pin,
-    // so the client can route a remote resume to a plexed subscription, and its
-    // account's email, so the client can tell which of ITS accounts the session
-    // belongs to — nothing else on this wire identifies a subscription across
-    // hosts. The same function `build_snapshot` uses locally, so two hosts cannot
-    // stamp the same account differently.
-    let mut snapshots = Vec::new();
-    for account in zaplex_cockpit::claude::discover_accounts(&home, None) {
-        for mut snapshot in zaplex_cockpit::live_claude_sessions_with_cache(
-            &account.config_dir,
-            now,
-            transcript_cache,
-        ) {
-            account.stamp(&mut snapshot);
-            snapshots.push(snapshot);
-        }
-    }
-    // … plus Codex sessions (transcript-inferred; no registry/pid — see
-    // zaplex_cockpit::codex_sessions), so remote Codex agents flow through the
-    // unified inventory too.
-    for account in zaplex_cockpit::codex::discover_accounts(&home.join(".codex")) {
-        for mut snapshot in zaplex_cockpit::live_codex_sessions_with_cache(
-            &account.config_dir,
-            now,
-            transcript_cache,
-        ) {
-            account.stamp(&mut snapshot);
-            snapshots.push(snapshot);
-        }
-    }
-    snapshots.extend(zaplex_cockpit::antigravity_idle_sessions(
-        &home,
-        now,
-        zaplex_cockpit::IDLE_MAX_AGE,
-        zaplex_cockpit::IDLE_SESSION_LIMIT,
-    ));
-    snapshots
-        .into_iter()
-        .map(|snapshot| super::agent_session::snapshot_to_proto(&snapshot))
-        .collect()
+    collect_agent_sessions_for_peer(transcript_cache, false).sessions
 }
 
 /// Daemon-side agent-session inventory handler (Agent-Cockpit). Cross-platform:
 /// filesystem/transcript discovery, no PTY ownership required.
 impl ServerModel {
+    /// Reports this host's secret-free AI-account inventory and refreshes the
+    /// daemon-local opaque-id route cache. Discovery runs off the model thread;
+    /// no provider config path is included in the response.
+    fn handle_list_agent_accounts(
+        &mut self,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        if !self.client_supports_agent_account_routing(conn_id) {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "agent-account-routing-v1 capability was not negotiated".to_string(),
+            }));
+        }
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async { super::agent_account::scan_agent_accounts() },
+            move |me, scan, _ctx| {
+                me.agent_account_routes.replace(scan.routes);
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::AgentAccountInventory(scan.inventory),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Resolves and reads one provider transcript entirely on this daemon.
+    /// Account routing is checked synchronously against the fresh opaque route
+    /// cache; bounded filesystem parsing then runs off the model thread.
+    fn handle_read_agent_transcript(
+        &mut self,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        request: ReadAgentTranscript,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        if !self.client_supports_agent_transcript_read(conn_id) {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "agent-transcript-read-v1 capability was not negotiated".to_string(),
+            }));
+        }
+        let resolved =
+            match super::transcript_rpc::resolve_request(&self.agent_account_routes, request) {
+                Ok(resolved) => resolved,
+                Err(response) => {
+                    return HandlerOutcome::Sync(server_message::Message::AgentTranscriptResponse(
+                        response,
+                    ));
+                }
+            };
+        let Some(permit) = AgentTranscriptReadPermit::try_acquire(Arc::clone(
+            &self.agent_transcript_reads_in_flight,
+        )) else {
+            return HandlerOutcome::Sync(server_message::Message::AgentTranscriptResponse(
+                super::transcript_rpc::busy_response(&resolved),
+            ));
+        };
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let _permit = permit;
+                super::transcript_rpc::read_transcript(resolved)
+            },
+            move |me, response, _ctx| {
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::AgentTranscriptResponse(response),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
     /// Reports this host's agent-session inventory for the unified cross-host
     /// Agent-Inventory tree. Discovery failures degrade to an empty list rather
     /// than erroring the client's whole tree.
@@ -2483,6 +2623,7 @@ impl ServerModel {
     ) -> HandlerOutcome {
         let request_id_for_response = request_id.clone();
         let conn_id_for_response = conn_id;
+        let supports_account_routing = self.client_supports_agent_account_routing(conn_id);
         let transcript_cache = Arc::clone(&self.agent_transcript_cache);
         // `collect_agent_sessions` performs blocking filesystem/JSON work with no
         // await points; because `spawn_request_handler` schedules this future on
@@ -2498,9 +2639,16 @@ impl ServerModel {
                     );
                     poisoned.into_inner()
                 });
-                collect_agent_sessions(&mut cache)
+                collect_agent_sessions_for_peer(&mut cache, supports_account_routing)
             },
-            move |me, mut sessions, _ctx| {
+            move |me, collected, _ctx| {
+                let CollectedAgentSessions {
+                    mut sessions,
+                    account_routes,
+                } = collected;
+                if let Some(routes) = account_routes {
+                    me.agent_account_routes.replace(routes);
+                }
                 #[cfg(unix)]
                 me.reconcile_and_overlay_agent_bindings(conn_id_for_response, &mut sessions);
                 me.send_server_message(
@@ -2556,11 +2704,22 @@ fn agent_identity_from_proto(
             "agent provider and session id are required",
         ));
     }
+    if !identity.account_id.is_empty() && !identity.config_dir.is_empty() {
+        return Err(agent_pty_binding_response(
+            AgentPtyBindingStatus::InvalidRequest,
+            "opaque account id and host config path are mutually exclusive",
+        ));
+    }
     Ok(AgentIdentity {
         provider: identity.provider,
         session_id: identity.session_id,
         account_email: (!identity.account_email.is_empty()).then_some(identity.account_email),
-        config_dir: (!identity.config_dir.is_empty()).then_some(identity.config_dir),
+        config_dir: identity
+            .account_id
+            .is_empty()
+            .then_some(identity.config_dir)
+            .filter(|config_dir| !config_dir.is_empty()),
+        account_id: (!identity.account_id.is_empty()).then_some(identity.account_id),
     })
 }
 
@@ -2570,7 +2729,13 @@ fn agent_identity_to_proto(identity: &AgentIdentity) -> AgentSessionIdentity {
         session_id: identity.session_id.clone(),
         provider: identity.provider.clone(),
         account_email: identity.account_email.clone().unwrap_or_default(),
-        config_dir: identity.config_dir.clone().unwrap_or_default(),
+        config_dir: identity
+            .account_id
+            .is_none()
+            .then(|| identity.config_dir.clone())
+            .flatten()
+            .unwrap_or_default(),
+        account_id: identity.account_id.clone().unwrap_or_default(),
     }
 }
 
@@ -2585,7 +2750,12 @@ fn live_agent_identities(sessions: &[AgentSessionInfo]) -> HashSet<AgentIdentity
             session_id: session.session_id.clone(),
             account_email: (!session.account_email.is_empty())
                 .then(|| session.account_email.clone()),
-            config_dir: (!session.config_dir.is_empty()).then(|| session.config_dir.clone()),
+            config_dir: session
+                .account_id
+                .is_empty()
+                .then(|| session.config_dir.clone())
+                .filter(|config_dir| !config_dir.is_empty()),
+            account_id: (!session.account_id.is_empty()).then(|| session.account_id.clone()),
         })
         .collect()
 }
@@ -2665,6 +2835,7 @@ impl ServerModel {
             ));
         }
         let request_id_for_response = request_id.clone();
+        let supports_account_routing = self.client_supports_agent_account_routing(conn_id);
         let transcript_cache = Arc::clone(&self.agent_transcript_cache);
         let handle = self.spawn_request_handler(
             request_id.clone(),
@@ -2675,9 +2846,15 @@ impl ServerModel {
                     );
                     poisoned.into_inner()
                 });
-                live_agent_identities(&collect_agent_sessions(&mut cache))
+                let collected =
+                    collect_agent_sessions_for_peer(&mut cache, supports_account_routing);
+                let live_agents = live_agent_identities(&collected.sessions);
+                (live_agents, collected.account_routes)
             },
-            move |me, live_agents, _ctx| {
+            move |me, (live_agents, account_routes), _ctx| {
+                if let Some(routes) = account_routes {
+                    me.agent_account_routes.replace(routes);
+                }
                 let response = me.execute_bind_agent_pty(conn_id, msg, &live_agents);
                 me.send_server_message(
                     Some(conn_id),
@@ -2700,6 +2877,21 @@ impl ServerModel {
             return agent_pty_binding_response(
                 AgentPtyBindingStatus::CapabilityRequired,
                 "client did not negotiate agent-pty-binding-v2",
+            );
+        }
+        if !self.client_supports_agent_account_routing(conn_id)
+            && (msg
+                .agent
+                .as_ref()
+                .is_some_and(|identity| !identity.account_id.is_empty())
+                || msg
+                    .handoff_from
+                    .as_ref()
+                    .is_some_and(|identity| !identity.account_id.is_empty()))
+        {
+            return agent_pty_binding_response(
+                AgentPtyBindingStatus::CapabilityRequired,
+                "opaque account identity requires agent-account-routing-v1",
             );
         }
         let agent = match agent_identity_from_proto(msg.agent) {
@@ -2753,7 +2945,12 @@ impl ServerModel {
                 session_id: session.session_id.clone(),
                 account_email: (!session.account_email.is_empty())
                     .then(|| session.account_email.clone()),
-                config_dir: (!session.config_dir.is_empty()).then(|| session.config_dir.clone()),
+                config_dir: session
+                    .account_id
+                    .is_empty()
+                    .then(|| session.config_dir.clone())
+                    .filter(|config_dir| !config_dir.is_empty()),
+                account_id: (!session.account_id.is_empty()).then(|| session.account_id.clone()),
             };
             if let Some(binding) = self.agent_pty_bindings.binding_for(&identity) {
                 session.pty_session_id = binding.pty_session_id.clone();
@@ -2773,6 +2970,19 @@ impl ServerModel {
                 agent_pty_binding_response(
                     AgentPtyBindingStatus::CapabilityRequired,
                     "client did not negotiate agent-pty-binding-v2",
+                ),
+            ));
+        }
+        if msg
+            .agent
+            .as_ref()
+            .is_some_and(|identity| !identity.account_id.is_empty())
+            && !self.client_supports_agent_account_routing(conn_id)
+        {
+            return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                agent_pty_binding_response(
+                    AgentPtyBindingStatus::CapabilityRequired,
+                    "opaque account identity requires agent-account-routing-v1",
                 ),
             ));
         }
@@ -2804,9 +3014,28 @@ impl ServerModel {
     fn handle_open_session(
         &mut self,
         conn_id: ConnectionId,
-        msg: OpenSession,
+        mut msg: OpenSession,
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
+        let supports_agent_account_routing = self.client_supports_agent_account_routing(conn_id);
+        if msg.agent_launch_route.is_some() && !supports_agent_account_routing {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "agent-account-routing-v1 capability was not negotiated".to_string(),
+            }));
+        }
+        if supports_agent_account_routing {
+            if let Err(message) = super::agent_account::prepare_launch_environment(
+                &self.agent_account_routes,
+                msg.agent_launch_route.as_ref(),
+                &mut msg.env,
+            ) {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message,
+                }));
+            }
+        }
         let generation = self.next_pty_generation;
         let Some(next_pty_generation) = generation.checked_add(1) else {
             return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
@@ -2904,6 +3133,8 @@ impl ServerModel {
         exec.spawn(super::session_host::run_session_writer(
             async_leader,
             input_rx,
+            crate::terminal::local_tty::shell::supported_shell_path_and_type(&shell)
+                .map(|(_, shell_type)| shell_type),
         ))
         .detach();
         // Advisory probe: did the user's profile auto-attach tmux/screen into
@@ -3132,6 +3363,14 @@ impl ServerModel {
         if !self.client_supports_agent_pty_binding(conn_id) {
             return self.handle_attach_session(conn_id, msg);
         }
+        if !expected_proto.account_id.is_empty()
+            && !self.client_supports_agent_account_routing(conn_id)
+        {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "opaque account identity requires agent-account-routing-v1".to_string(),
+            }));
+        }
         let expected_agent = match agent_identity_from_proto(Some(expected_proto)) {
             Ok(identity) => identity,
             Err(response) => {
@@ -3142,6 +3381,7 @@ impl ServerModel {
             }
         };
         let request_id_for_response = request_id.clone();
+        let supports_account_routing = self.client_supports_agent_account_routing(conn_id);
         let transcript_cache = Arc::clone(&self.agent_transcript_cache);
         let handle = self.spawn_request_handler(
             request_id.clone(),
@@ -3152,9 +3392,15 @@ impl ServerModel {
                     );
                     poisoned.into_inner()
                 });
-                live_agent_identities(&collect_agent_sessions(&mut cache))
+                let collected =
+                    collect_agent_sessions_for_peer(&mut cache, supports_account_routing);
+                let live_agents = live_agent_identities(&collected.sessions);
+                (live_agents, collected.account_routes)
             },
-            move |me, live_agents, _ctx| {
+            move |me, (live_agents, account_routes), _ctx| {
+                if let Some(routes) = account_routes {
+                    me.agent_account_routes.replace(routes);
+                }
                 let message =
                     match me.validate_fresh_agent_attach(conn_id, &expected_agent, &live_agents) {
                         Ok(()) => match me.handle_attach_session(conn_id, msg) {

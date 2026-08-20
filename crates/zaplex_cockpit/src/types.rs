@@ -62,9 +62,9 @@ pub struct Account {
 impl Account {
     /// The config dir to **pin** when resuming/forking a session under this
     /// account (`CODEX_HOME` / `CLAUDE_CONFIG_DIR`), or `None` for the default
-    /// account (which needs no pin). Single source so the local snapshot builder
-    /// and the remote daemon stamp [`SessionSnapshot::config_dir`] identically —
-    /// otherwise a remote resume can't route to a plexed subscription.
+    /// account (which needs no pin). This remains the local and legacy route;
+    /// routing-capable daemons replace it with an opaque account id before the
+    /// snapshot crosses a host boundary.
     pub fn config_dir_pin(&self) -> Option<String> {
         (!self.is_default).then(|| self.config_dir.to_string_lossy().into_owned())
     }
@@ -255,10 +255,10 @@ pub struct SessionSnapshot {
     pub worktree: Option<String>,
     /// The provider config directory this session's account lives under
     /// (`~/.codex` / a plexed `CODEX_HOME`, `~/.claude` / `CLAUDE_CONFIG_DIR`).
-    /// Carried so a **remote** resume can pin the right subscription — over the
-    /// wire this is the *host's* path, replayed verbatim in the daemon's
-    /// `startup_command`. `None` for the default account (no pin needed) or when
-    /// the producer didn't record it.
+    /// Used for local routing and legacy remote peers. Routing-capable daemons
+    /// replace it on the wire with [`Self::account_id`], so a host-local path is
+    /// never replayed by a new client. `None` for the default account (no pin
+    /// needed) or when the producer didn't record it.
     ///
     /// **Routing, not identity.** It names a directory on the host that produced
     /// it, so it says nothing about *which subscription* this is: two hosts spell
@@ -277,6 +277,11 @@ pub struct SessionSnapshot {
     /// simply joins no account, rather than being guessed onto one.
     #[serde(default)]
     pub account_email: Option<String>,
+    /// Opaque account identity issued by the daemon that produced this remote
+    /// snapshot. It is meaningful only together with that host and provider.
+    /// New routing-capable peers use it instead of transporting `config_dir`.
+    #[serde(default)]
+    pub account_id: Option<String>,
     /// Opaque identity of the exact operating-system process observed during
     /// discovery. A pid can be recycled after that scan; Stop/Kill is safe only
     /// when an immediate re-probe yields this same fingerprint. `None` means

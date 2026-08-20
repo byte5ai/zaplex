@@ -239,7 +239,7 @@ Die obige Fünf-Crate-Aufteilung war der Plan vom 2026-06-22 — gebaut wurde st
 
 | Crate                     | Enthält (laut `Cargo.toml`-Beschreibung + Modul-Layout)                                                                                          | Deckt vom Plan ab |
 |---------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
-| `zaplex_cockpit`           | Read-only Daten-Spine, keine GUI, kein Netz: `claude.rs`/`codex.rs` (Discovery+Usage-Parsing), `windows.rs` (5h/Wochen-Fenster+Heat), `pricing.rs`, `sessions.rs`/`codex_sessions.rs` (Waiting-Detection), `fleet.rs` (Host▸Projekt▸Session-Baum), `routing.rs` (freester Account), `guardrails.rs`, `review.rs`, `transcript.rs`, `overrides.rs`, `favorites.rs`, `conductor.rs` | `zaplex_accounts` + `zaplex_sessions` + der Datenteil von `zaplex_fleet` |
+| `zaplex_cockpit`           | Read-only Daten-Spine, keine GUI, kein Netz: `claude.rs`/`codex.rs` (Discovery+Usage-Parsing), `windows.rs` (5h/Wochen-Fenster+Heat), `pricing.rs`, `sessions.rs`/`codex_sessions.rs` (Waiting-Detection), `fleet.rs` (Daten für Host▸Projekt▸Session▸Agent), `routing.rs` (freester Account), `guardrails.rs`, `review.rs`, `transcript.rs`, `overrides.rs`, `favorites.rs`, `conductor.rs` | `zaplex_accounts` + `zaplex_sessions` + der Datenteil von `zaplex_fleet` |
 | `zaplex_remote_session`    | PTY-Host + Output-Replay-Ring + Session-Registry (`server.rs`), Attach/Resume-Client-Logik (`client.rs`), transport-agnostische Typen inkl. reservierter (noch nicht gebauter) `FEATURE_UDP_TRANSPORT`-Capability (`types.rs`) | der Daemon-Teil von `zaplex_fleet` (§3.5) |
 | *(kein eigener Crate)*    | Dateimanager (MC-Dual-Pane, SFTP, Cross-Connection-Copy) lebt direkt unter `app/src/sftp_manager/`; Cockpit-UI (Sidebar-Panel, Pane-Dashboard) direkt unter `app/src/cockpit/` (`panel.rs`, `pane.rs`, `model.rs`, …) | `zaplex_mc`, `zaplex_ui` — nie als eigene Crates angelegt |
 
@@ -247,7 +247,7 @@ Der RAM-Governor (§3.2) sitzt ebenfalls nicht in einem `zaplex_*`-Crate, sonder
 
 Die **Provider-Abstraktion** existiert wie geplant — `pub enum Provider { Claude, Codex }` in `crates/zaplex_cockpit/src/types.rs` — aber ohne das oben skizzierte `ProviderBackend`-Trait; Discovery/Usage/Launch sind stattdessen als separate Funktionen pro Provider-Modul (`claude.rs`, `codex.rs`) implementiert, nicht hinter einem gemeinsamen Trait-Interface. Funktional deckungsgleich mit der Absicht („eine Impl pro Provider"), nur ohne die Trait-Indirektion.
 
-Was in §5 „Account Dock" und „Agent Tree" heißt, trägt im Code andere Namen: die Sidebar-Fläche ist `CockpitPanel` (`app/src/cockpit/panel.rs`), die große Pane-Ansicht `CockpitPaneView` (`app/src/cockpit/pane.rs`), der Host▸Projekt▸Session-Baum heißt im Code **Conductor** (`crates/zaplex_cockpit/src/conductor.rs` + `fleet.rs`). Einen dedizierten Launch-Wizard-Modal (§5.3) gibt es nicht — Provider-/Account-Auswahl läuft menügetrieben über das New-Session-Menü (freester Account vorausgewählt), siehe README-Statustabelle.
+Was in §5 „Account Dock" und „Agent Tree" heißt, trägt im Code andere Namen: die Sidebar-Fläche ist `CockpitPanel` (`app/src/cockpit/panel.rs`), die große Pane-Ansicht `CockpitPaneView` (`app/src/cockpit/pane.rs`), der Host▸Projekt▸Session▸Agent-Baum heißt im Code **Conductor** (`crates/zaplex_cockpit/src/conductor.rs` + `fleet.rs`). Einen dedizierten Launch-Wizard-Modal (§5.3) gibt es nicht — Provider-/Account-Auswahl läuft menügetrieben über das New-Session-Menü (freester Account vorausgewählt), siehe README-Statustabelle.
 
 ### 4.3 Datenfluss (nativ, provider-symmetrisch)
 
@@ -313,7 +313,9 @@ Aktionen laufen über **native zaplex-Logik** und Zap-Mechanismen direkt — **k
 
 **Position:** linke Sidebar, unterhalb des Account Docks.
 
-**Hierarchie:** Host ▸ Projekt ▸ Session. Aktive Sessions oben, wartende unter eigenem Header, kürzliche/idle weiter unten. Jede Session-Zeile trägt ein kleines Provider-Icon — Claude- und Codex-Sessions stehen gemischt im selben Baum (nach Host/Projekt sortiert, nicht nach Provider getrennt).
+**Hierarchie:** Host ▸ Projekt ▸ Session ▸ Agent. Die lokale Wurzel bleibt immer sichtbar. Eine Remote-Wurzel erscheint mit der ersten offenen Zaplex-Verbindung zu diesem Host und verschwindet nach der letzten getrennten Session. Die Session-Ebene entspricht dem Terminal/PTY-Container, soweit diese Identität verfügbar ist; darunter nennt jede Agent-Zeile Claude bzw. Codex ausdrücklich. Provider stehen gemischt im selben Baum (nach Host/Projekt/Session sortiert, nicht als parallele Provider-Bäume).
+
+**Flächentrennung:** „Verbindungen" ist ein eigenständiges Sidebar-Element für alle registrierten Hosts, Konfiguration und Host-Favoriten. Das Tab-Dropdown zeigt ausschließlich favorisierte Host-Referenzen. Der Agent Tree zeigt weder Offline-Registry-Einträge noch Favoriten- oder Host-Management-Aktionen.
 
 **Status-Anzeige:** keine Glyph-Soup. `[WORK]` / `[WAIT]` / `[IDLE]` als textuelle Badges in Zaps Badge-Stil, oder reine Farb-Indicator-Punkte — je nachdem, was Zap als Pattern hat.
 

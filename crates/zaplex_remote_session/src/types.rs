@@ -46,6 +46,21 @@ pub const FEATURE_UDP_TRANSPORT: &str = "udp-transport";
 /// so it is advertised on all platforms.
 pub const FEATURE_AGENT_INVENTORY: &str = "agent-inventory";
 
+/// Versioned capability for daemon-local AI-account discovery and launch
+/// routing by opaque account id.
+///
+/// Clients that negotiate this capability may request `ListAgentAccounts` and
+/// attach an `AgentLaunchRoute` to `OpenSession`. Provider config paths stay on
+/// the daemon host and are never protocol data.
+pub const FEATURE_AGENT_ACCOUNT_ROUTING_V1: &str = "agent-account-routing-v1";
+
+/// Versioned capability for bounded, provider-neutral transcript snapshots.
+///
+/// Clients that negotiate this capability may request one transcript by
+/// opaque daemon account id and provider session id. Provider config paths and
+/// raw transcript formats stay on the daemon host.
+pub const FEATURE_AGENT_TRANSCRIPT_READ_V1: &str = "agent-transcript-read-v1";
+
 /// Capability identifier for the narrow, identity-verified remote process
 /// signal RPC used by Agent-Cockpit guardrails.
 ///
@@ -145,6 +160,8 @@ pub fn supported_features() -> Vec<String> {
     // regardless of platform.
     let mut features = vec![
         FEATURE_AGENT_INVENTORY.to_string(),
+        FEATURE_AGENT_ACCOUNT_ROUTING_V1.to_string(),
+        FEATURE_AGENT_TRANSCRIPT_READ_V1.to_string(),
         FEATURE_HOST_EXEC.to_string(),
     ];
     #[cfg(target_os = "linux")]
@@ -178,6 +195,8 @@ pub fn supported_client_features() -> Vec<String> {
         FEATURE_SESSION_HOST.to_string(),
         FEATURE_STARTUP_COMMAND_ACK.to_string(),
         FEATURE_AGENT_INVENTORY.to_string(),
+        FEATURE_AGENT_ACCOUNT_ROUTING_V1.to_string(),
+        FEATURE_AGENT_TRANSCRIPT_READ_V1.to_string(),
         FEATURE_AGENT_PROCESS_SIGNAL_V1.to_string(),
         FEATURE_AGENT_PTY_BINDING.to_string(),
         FEATURE_AGENT_PTY_BINDING_V2.to_string(),

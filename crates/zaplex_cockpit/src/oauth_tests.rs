@@ -209,7 +209,10 @@ fn binding_window_surfaces_a_full_opus_sublimit_over_a_calm_5h() {
     apply_oauth_usage(&mut snapshot, &by_dir);
 
     let (frac, label) = crate::binding_window(&snapshot.accounts[0]);
-    assert!((frac - 0.91).abs() < 1e-9, "binding window is the Opus sublimit");
+    assert!(
+        (frac - 0.91).abs() < 1e-9,
+        "binding window is the Opus sublimit"
+    );
     assert_eq!(label, "opus");
 }
 

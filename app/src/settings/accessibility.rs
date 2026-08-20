@@ -13,5 +13,14 @@ define_settings_group!(AccessibilitySettings, settings: [
         storage_key: "AccessibilityVerbosity",
         toml_path: "accessibility.accessibility_verbosity",
         description: "The verbosity level for screen reader announcements.",
-    }
+    },
+    reduce_motion: ReduceMotion {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "accessibility.reduce_motion",
+        description: "Whether non-essential interface motion should be replaced with static emphasis.",
+    },
 ]);

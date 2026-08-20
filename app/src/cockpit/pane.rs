@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
@@ -34,6 +35,7 @@ use zaplex_cockpit::{
     Provider, SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
 };
 
+use crate::cockpit::account_identity;
 use crate::cockpit::capabilities::SessionCapabilities;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
@@ -48,9 +50,19 @@ use crate::editor::{
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
+#[cfg(not(target_family = "wasm"))]
+use crate::remote_server::manager::RemoteServerManager;
+#[cfg(not(target_family = "wasm"))]
+use crate::remote_server::proto::{
+    AgentTranscriptResponse, AgentTranscriptStatus, AgentTranscriptTurn,
+};
 use crate::search_bar::SearchBar;
 use crate::ui_components::icons;
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
 use crate::WorkspaceAction;
+#[cfg(not(target_family = "wasm"))]
+use zaplex_remote_session::types::{has_feature, FEATURE_AGENT_TRANSCRIPT_READ_V1};
 
 const PANE_PADDING: f32 = 16.0;
 /// Columns in the session table (spec v3 §4.3). A group header fills the first
@@ -267,6 +279,13 @@ enum TableRow {
     },
 }
 
+fn table_row_needs_attention(row: &TableRow) -> bool {
+    matches!(
+        row,
+        TableRow::Session { session, .. } if session.state == SessionState::Waiting
+    )
+}
+
 /// The session row selected by a complete [`session_key`]. Kept as a pure
 /// lookup so the menu cannot silently fall back to the first account carrying a
 /// copied conversation id.
@@ -297,6 +316,405 @@ fn matching_session_row<'a>(rows: &'a [TableRow], row_key: &str) -> Option<Match
     });
     let matched = matches.next()?;
     matches.next().is_none().then_some(matched)
+}
+
+/// The transcript surface that can honestly serve a row today.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TranscriptActionTarget {
+    ClaudeWorkspace,
+    CodexLocal,
+    Remote(RemoteTranscriptRoute),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RemoteTranscriptRoute {
+    provider: Provider,
+    host_id: String,
+    account_id: String,
+    session_id: String,
+}
+
+fn valid_transcript_identity(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn remote_transcript_route(
+    provider: Provider,
+    is_local: bool,
+    host_id: Option<&str>,
+    account_id: Option<&str>,
+    session_id: &str,
+    connected_daemon: Option<(&str, &[String])>,
+) -> Option<RemoteTranscriptRoute> {
+    if is_local || !matches!(provider, Provider::Claude | Provider::Codex) {
+        return None;
+    }
+    let host_id = host_id.filter(|value| valid_transcript_identity(value))?;
+    let account_id = account_id.filter(|value| valid_transcript_identity(value))?;
+    if !valid_transcript_identity(session_id) {
+        return None;
+    }
+    let (connected_host_id, features) = connected_daemon?;
+    if connected_host_id != host_id || !has_feature(features, FEATURE_AGENT_TRANSCRIPT_READ_V1) {
+        return None;
+    }
+    Some(RemoteTranscriptRoute {
+        provider,
+        host_id: host_id.to_string(),
+        account_id: account_id.to_string(),
+        session_id: session_id.to_string(),
+    })
+}
+
+fn transcript_action_target(
+    provider: Provider,
+    is_local: bool,
+    remote: Option<RemoteTranscriptRoute>,
+) -> Option<TranscriptActionTarget> {
+    if is_local {
+        return match provider {
+            Provider::Claude => Some(TranscriptActionTarget::ClaudeWorkspace),
+            Provider::Codex => {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    Some(TranscriptActionTarget::CodexLocal)
+                }
+                #[cfg(target_family = "wasm")]
+                {
+                    None
+                }
+            }
+            Provider::Antigravity => None,
+        };
+    }
+    match remote {
+        Some(route) if route.provider == provider => Some(TranscriptActionTarget::Remote(route)),
+        Some(_) | None => None,
+    }
+}
+
+/// The explicit read-only document state shown when a provider transcript
+/// cannot yield conversation turns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TranscriptDocumentState {
+    Ready,
+    Missing,
+    Empty,
+    Unsupported,
+    Malformed,
+    TooLarge,
+    Unavailable,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct TranscriptDocument {
+    state: TranscriptDocumentState,
+    markdown: String,
+}
+
+fn transcript_title(provider: Provider) -> String {
+    crate::t!(
+        "cockpit-transcript-title",
+        provider = provider_label(provider)
+    )
+    .to_string()
+}
+
+fn transcript_state_document(
+    provider: Provider,
+    state: TranscriptDocumentState,
+) -> TranscriptDocument {
+    let detail = match state {
+        TranscriptDocumentState::Missing => Some(crate::t!("cockpit-transcript-missing")),
+        TranscriptDocumentState::Empty => Some(crate::t!("cockpit-transcript-empty")),
+        TranscriptDocumentState::Unsupported => Some(crate::t!("cockpit-transcript-unsupported")),
+        TranscriptDocumentState::Malformed => Some(crate::t!("cockpit-transcript-malformed")),
+        TranscriptDocumentState::TooLarge => Some(crate::t!("cockpit-transcript-too-large")),
+        TranscriptDocumentState::Unavailable => Some(crate::t!("cockpit-transcript-unavailable")),
+        TranscriptDocumentState::Ready => None,
+    };
+    let mut markdown = format!("# {}", transcript_title(provider));
+    if let Some(detail) = detail {
+        markdown.push_str("\n\n");
+        markdown.push_str(&detail);
+    }
+    TranscriptDocument { state, markdown }
+}
+
+fn ready_transcript_document(
+    provider: Provider,
+    turns: &[zaplex_cockpit::TranscriptTurn],
+    truncated: bool,
+) -> TranscriptDocument {
+    let mut markdown = format_provider_transcript_markdown(provider, turns);
+    if truncated {
+        markdown.insert_str(
+            0,
+            &format!("> {}\n\n", crate::t!("cockpit-transcript-truncated")),
+        );
+    }
+    TranscriptDocument {
+        state: TranscriptDocumentState::Ready,
+        markdown,
+    }
+}
+
+fn safe_inline_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control() && *character != '`')
+        .take(96)
+        .collect()
+}
+
+/// Render provider-neutral transcript turns into the existing Markdown-backed
+/// code/text pane. Codex's loader has already removed tool arguments/results,
+/// encrypted payloads, metadata, and credential stores; this view renders only
+/// conversation text, reasoning summaries, and compact tool names.
+fn format_provider_transcript_markdown(
+    provider: Provider,
+    turns: &[zaplex_cockpit::TranscriptTurn],
+) -> String {
+    let provider = provider_label(provider);
+    let mut output = String::new();
+    for turn in turns {
+        match turn.role {
+            zaplex_cockpit::TurnRole::User => output.push_str("## You\n\n"),
+            zaplex_cockpit::TurnRole::Assistant => {
+                output.push_str("## ");
+                output.push_str(provider);
+                if let Some(model) = turn
+                    .model
+                    .as_deref()
+                    .map(safe_inline_label)
+                    .filter(|model| !model.is_empty())
+                {
+                    output.push_str(" · ");
+                    output.push_str(&model);
+                }
+                output.push_str("\n\n");
+            }
+        }
+        if !turn.thinking.is_empty() {
+            output.push_str("<details><summary>thinking</summary>\n\n");
+            output.push_str(turn.thinking.trim());
+            output.push_str("\n\n</details>\n\n");
+        }
+        if !turn.tools.is_empty() {
+            let tools: Vec<String> = turn
+                .tools
+                .iter()
+                .map(|tool| safe_inline_label(&tool.name))
+                .filter(|name| !name.is_empty())
+                .collect();
+            if !tools.is_empty() {
+                output.push_str("`⚙ ");
+                output.push_str(&tools.join(", "));
+                output.push_str("`\n\n");
+            }
+        }
+        if !turn.text.is_empty() {
+            output.push_str(turn.text.trim());
+            output.push_str("\n\n");
+        }
+        output.push_str("---\n\n");
+    }
+    output.truncate(output.trim_end().len());
+    output
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteTranscriptProjectionError {
+    InvalidEnvelope,
+    InvalidStatus,
+    InvalidPayload,
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn remote_transcript_route_is_current(tree: &FleetTree, route: &RemoteTranscriptRoute) -> bool {
+    if !matches!(route.provider, Provider::Claude | Provider::Codex)
+        || !valid_transcript_identity(&route.host_id)
+        || !valid_transcript_identity(&route.account_id)
+        || !valid_transcript_identity(&route.session_id)
+    {
+        return false;
+    }
+    let mut matches = tree
+        .hosts
+        .iter()
+        .filter(|host| {
+            !host.is_local
+                && host.is_available()
+                && host.host_id.as_deref() == Some(route.host_id.as_str())
+        })
+        .flat_map(|host| host.projects.iter())
+        .flat_map(|project| project.sessions.iter())
+        .filter(|session| {
+            session.provider == route.provider
+                && session.session_id == route.session_id
+                && session.account_id.as_deref() == Some(route.account_id.as_str())
+        });
+    matches.next().is_some() && matches.next().is_none()
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn remote_wire_turn(
+    turn: AgentTranscriptTurn,
+) -> Result<Option<zaplex_cockpit::TranscriptTurn>, RemoteTranscriptProjectionError> {
+    const MAX_TEXT_BYTES: usize = 64 * 1024;
+    const MAX_THINKING_BYTES: usize = 32 * 1024;
+    const MAX_MODEL_BYTES: usize = 128;
+    const MAX_TIMESTAMP_BYTES: usize = 64;
+    const MAX_TOOLS: usize = 32;
+    const MAX_TOOL_NAME_BYTES: usize = 128;
+
+    if turn.text.len() > MAX_TEXT_BYTES
+        || turn.thinking.len() > MAX_THINKING_BYTES
+        || turn.model.len() > MAX_MODEL_BYTES
+        || turn.timestamp.len() > MAX_TIMESTAMP_BYTES
+        || turn.tools.len() > MAX_TOOLS
+        || turn
+            .tools
+            .iter()
+            .any(|tool| tool.name.len() > MAX_TOOL_NAME_BYTES)
+    {
+        return Err(RemoteTranscriptProjectionError::InvalidPayload);
+    }
+    let role = match turn.role.as_str() {
+        "user" => zaplex_cockpit::TurnRole::User,
+        "assistant" => zaplex_cockpit::TurnRole::Assistant,
+        _ => return Ok(None),
+    };
+    let timestamp = if turn.timestamp.is_empty() {
+        None
+    } else {
+        Some(
+            chrono::DateTime::parse_from_rfc3339(&turn.timestamp)
+                .map_err(|_| RemoteTranscriptProjectionError::InvalidPayload)?
+                .with_timezone(&chrono::Utc),
+        )
+    };
+    Ok(Some(zaplex_cockpit::TranscriptTurn {
+        role,
+        text: turn.text,
+        thinking: turn.thinking,
+        tools: turn
+            .tools
+            .into_iter()
+            .map(|tool| zaplex_cockpit::ToolCall { name: tool.name })
+            .collect(),
+        model: (!turn.model.is_empty()).then_some(turn.model),
+        usage: None,
+        timestamp,
+    }))
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn remote_transcript_document(
+    route: &RemoteTranscriptRoute,
+    response: AgentTranscriptResponse,
+) -> Result<TranscriptDocument, RemoteTranscriptProjectionError> {
+    if response.schema_version != 1
+        || response.provider != route.provider.as_str()
+        || response.session_id != route.session_id
+    {
+        return Err(RemoteTranscriptProjectionError::InvalidEnvelope);
+    }
+    let status = AgentTranscriptStatus::try_from(response.status)
+        .map_err(|_| RemoteTranscriptProjectionError::InvalidStatus)?;
+    match status {
+        AgentTranscriptStatus::Loaded => {
+            if response.turns.is_empty() || response.turns.len() > 512 {
+                return Err(RemoteTranscriptProjectionError::InvalidPayload);
+            }
+            let mut turns = Vec::with_capacity(response.turns.len());
+            for turn in response.turns {
+                if let Some(turn) = remote_wire_turn(turn)? {
+                    turns.push(turn);
+                }
+            }
+            if turns.is_empty() {
+                return Err(RemoteTranscriptProjectionError::InvalidPayload);
+            }
+            Ok(ready_transcript_document(
+                route.provider,
+                &turns,
+                response.truncated,
+            ))
+        }
+        AgentTranscriptStatus::Missing => Ok(transcript_state_document(
+            route.provider,
+            TranscriptDocumentState::Missing,
+        )),
+        AgentTranscriptStatus::Empty => Ok(transcript_state_document(
+            route.provider,
+            TranscriptDocumentState::Empty,
+        )),
+        AgentTranscriptStatus::Unsupported => Ok(transcript_state_document(
+            route.provider,
+            TranscriptDocumentState::Unsupported,
+        )),
+        AgentTranscriptStatus::Malformed => Ok(transcript_state_document(
+            route.provider,
+            TranscriptDocumentState::Malformed,
+        )),
+        AgentTranscriptStatus::TooLarge => Ok(transcript_state_document(
+            route.provider,
+            TranscriptDocumentState::TooLarge,
+        )),
+        AgentTranscriptStatus::Unavailable => Ok(transcript_state_document(
+            route.provider,
+            TranscriptDocumentState::Unavailable,
+        )),
+        AgentTranscriptStatus::NotModified
+        | AgentTranscriptStatus::InvalidRequest
+        | AgentTranscriptStatus::Unspecified => Err(RemoteTranscriptProjectionError::InvalidStatus),
+    }
+}
+
+fn local_codex_transcript_error_state(
+    error: &zaplex_cockpit::codex_sessions::TranscriptError,
+) -> TranscriptDocumentState {
+    match error {
+        zaplex_cockpit::codex_sessions::TranscriptError::InvalidSessionId
+        | zaplex_cockpit::codex_sessions::TranscriptError::AmbiguousSessionId { .. }
+        | zaplex_cockpit::codex_sessions::TranscriptError::MalformedTranscript => {
+            TranscriptDocumentState::Malformed
+        }
+        zaplex_cockpit::codex_sessions::TranscriptError::HistoryLimitExceeded { .. }
+        | zaplex_cockpit::codex_sessions::TranscriptError::TranscriptLookupLimitExceeded {
+            ..
+        }
+        | zaplex_cockpit::codex_sessions::TranscriptError::TranscriptTooLarge { .. } => {
+            TranscriptDocumentState::TooLarge
+        }
+        zaplex_cockpit::codex_sessions::TranscriptError::UnsupportedTranscript => {
+            TranscriptDocumentState::Unsupported
+        }
+        zaplex_cockpit::codex_sessions::TranscriptError::Io(_)
+        | zaplex_cockpit::codex_sessions::TranscriptError::Walk(_) => {
+            TranscriptDocumentState::Unavailable
+        }
+    }
+}
+
+fn load_local_codex_transcript(codex_home: &Path, session_id: &str) -> TranscriptDocument {
+    match zaplex_cockpit::codex_sessions::load_transcript(codex_home, session_id) {
+        Ok(Some(turns)) if turns.is_empty() => {
+            transcript_state_document(Provider::Codex, TranscriptDocumentState::Empty)
+        }
+        Ok(Some(turns)) => ready_transcript_document(Provider::Codex, &turns, false),
+        Ok(None) => transcript_state_document(Provider::Codex, TranscriptDocumentState::Missing),
+        Err(error) => {
+            transcript_state_document(Provider::Codex, local_codex_transcript_error_state(&error))
+        }
+    }
 }
 
 pub struct CockpitPaneView {
@@ -490,6 +908,20 @@ pub enum CockpitPaneAction {
     /// Re-run the account scan — the retry on the loading/scan-failed/empty
     /// placeholder.
     Rescan,
+    /// Project one local Codex rollout into provider-neutral turns and open it
+    /// in the same Markdown-backed code/text pane Claude transcripts use.
+    ViewLocalCodexTranscript {
+        session_id: String,
+        codex_home: PathBuf,
+    },
+    /// Fetch one path-free transcript projection from the currently connected
+    /// daemon that owns this exact opaque account and session identity.
+    ViewRemoteTranscript {
+        provider: Provider,
+        host_id: String,
+        account_id: String,
+        session_id: String,
+    },
 }
 
 impl CockpitPaneView {
@@ -917,6 +1349,7 @@ impl CockpitPaneView {
             // Non-default accounts pin the fork to the same subscription.
             config_dir: (!acct.account.is_default).then(|| acct.account.config_dir.clone()),
             account_email: acct.account.email.clone(),
+            account_id: None,
             into_worktree,
             // The account pane's fork surface is local by contract (`acct.sessions`
             // are this machine's), matching the `is_local = true` passed to
@@ -972,64 +1405,57 @@ impl CockpitPaneView {
     }
 
     /// One session-row "log" action: open the session's conversation
-    /// transcript in a code/text pane (no regression vs claudeplex's transcript
-    /// view). Claude-only — transcripts live under a Claude account's
-    /// `projects/…/<id>.jsonl`; Codex has no equivalent here, so it gets no
-    /// surface (disabled-by-absence).
+    /// transcript in the shared code/text pane. Claude retains its workspace
+    /// live watcher; Codex rollouts use the provider-neutral local loader.
     fn session_transcript_action(
         &self,
         acct: &AccountUsage,
         session: &zaplex_cockpit::SessionSnapshot,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        if acct.account.provider != Provider::Claude {
-            return None;
-        }
         let key = session_key(true, None, session);
         let state = self.session_transcript_states.get(&key).cloned()?;
-
-        let action = WorkspaceAction::ViewTranscript {
-            session_id: session.session_id.clone(),
-            config_dir: acct.account.config_dir.clone(),
-            cwd: PathBuf::from(&session.cwd),
-            // Follow live: the opened transcript refreshes on each cockpit
-            // reconcile (claudeplex-desktop watch parity).
-            watch: true,
-        };
-        Some(icon_word_verb(
-            state,
-            icons::Icon::History,
-            crate::t!("cockpit-session-transcript").to_string(),
-            VerbKind::Constructive,
-            appearance,
-            action,
-        ))
+        match transcript_action_target(session.provider, true, None)? {
+            TranscriptActionTarget::ClaudeWorkspace => Some(icon_word_verb(
+                state,
+                icons::Icon::History,
+                crate::t!("cockpit-session-transcript").to_string(),
+                VerbKind::Constructive,
+                appearance,
+                WorkspaceAction::ViewTranscript {
+                    session_id: session.session_id.clone(),
+                    config_dir: acct.account.config_dir.clone(),
+                    cwd: PathBuf::from(&session.cwd),
+                    // Follow live: the opened transcript refreshes on each
+                    // cockpit reconcile (claudeplex-desktop watch parity).
+                    watch: true,
+                },
+            )),
+            TranscriptActionTarget::CodexLocal => Some(icon_word_verb(
+                state,
+                icons::Icon::History,
+                crate::t!("cockpit-session-transcript").to_string(),
+                VerbKind::Constructive,
+                appearance,
+                CockpitPaneAction::ViewLocalCodexTranscript {
+                    session_id: session.session_id.clone(),
+                    codex_home: session
+                        .config_dir
+                        .as_deref()
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| acct.account.config_dir.clone()),
+                },
+            )),
+            TranscriptActionTarget::Remote(_) => None,
+        }
     }
 
-    /// The pane's tab title: the account's display name, or the fleet
-    /// dashboard's when this pane shows every account.
-    ///
-    /// The display name is simply `account.label` — the overrides layer has
-    /// already replaced it with the user's alias by the time the snapshot exists
-    /// (`overrides.apply`), so reading the alias again here would be a second
-    /// source for one fact, free to disagree with the sidebar's.
-    ///
-    /// No host prefix: an account is a subscription. It is reachable from every
-    /// machine, so naming it after one would be wrong, not merely noisy.
-    fn pane_title(account_key: Option<&str>, ctx: &AppContext) -> String {
-        let Some(key) = account_key else {
-            return crate::t!("cockpit-pane-title").to_string();
-        };
-        CockpitModel::as_ref(ctx)
-            .snapshot()
-            .accounts
-            .iter()
-            .find(|a| a.account.key == key)
-            .map(|a| a.account.label.clone())
-            // An account that vanished (signed out, config dir gone) keeps its
-            // pane titled by key rather than going blank — honest about what it
-            // is showing.
-            .unwrap_or_else(|| key.to_string())
+    /// The pane chrome stays generic; provider and account identity form one
+    /// consistent hierarchy in the detail card below.
+    fn pane_title(_account_key: Option<&str>, _ctx: &AppContext) -> String {
+        // The provider is the account card's visible headline. Keeping the pane
+        // chrome generic avoids a second provider strip above that headline.
+        crate::t!("cockpit-pane-title").to_string()
     }
 
     /// The account this pane belongs to, or `None` for the fleet dashboard.
@@ -1450,8 +1876,8 @@ impl CockpitPaneView {
         let caps = SessionCapabilities::of(session, is_local);
         let agent = crate::cockpit::agent_of(session.provider);
         // The stamped account route pins fork/resume/slash to the subscription
-        // that owns this exact session. For a remote session it is a host-side
-        // path and is replayed verbatim there; for local it is the local path.
+        // that owns this exact session. New remote peers route through the
+        // opaque account id; config_dir remains only as a legacy fallback.
         let config_dir = session.config_dir.clone().map(PathBuf::from);
         let label = zaplex_cockpit::session_label(session);
         let rk = &menu.row_key;
@@ -1482,6 +1908,7 @@ impl CockpitPaneView {
                         provider: session.provider,
                         config_dir: session.config_dir.clone(),
                         account_email: session.account_email.clone(),
+                        account_id: session.account_id.clone(),
                         is_local,
                     },
                     appearance,
@@ -1501,6 +1928,7 @@ impl CockpitPaneView {
                         cwd: PathBuf::from(&session.cwd),
                         config_dir: config_dir.clone(),
                         account_email: session.account_email.clone(),
+                        account_id: session.account_id.clone(),
                         into_worktree: false,
                         host: host.clone().unwrap_or_default(),
                         host_id: host_id.clone(),
@@ -1535,6 +1963,7 @@ impl CockpitPaneView {
                             cwd: PathBuf::from(&session.cwd),
                             config_dir: config_dir.clone(),
                             account_email: session.account_email.clone(),
+                            account_id: session.account_id.clone(),
                             into_worktree: true,
                             host: host.clone().unwrap_or_default(),
                             host_id: host_id.clone(),
@@ -1554,6 +1983,7 @@ impl CockpitPaneView {
                 cwd: PathBuf::from(&session.cwd),
                 config_dir: config_dir.clone(),
                 account_email: session.account_email.clone(),
+                account_id: session.account_id.clone(),
                 command: command.to_string(),
                 host: host.clone().unwrap_or_default(),
                 host_id: host_id.clone(),
@@ -1580,24 +2010,80 @@ impl CockpitPaneView {
                 &mut col,
             );
         }
-        push(
-            self.menu_item(
-                &k("transcript"),
-                crate::t!("cockpit-menu-transcript").to_string(),
-                VerbKind::Constructive,
-                WorkspaceAction::ViewTranscript {
-                    session_id: session.session_id.clone(),
-                    config_dir: config_dir.clone().unwrap_or_default(),
-                    cwd: PathBuf::from(&session.cwd),
-                    // Follow a live conversation; a dormant one has nothing left
-                    // to follow, and re-reading it on every reconcile would be
-                    // work done to watch a file that cannot change.
-                    watch: session.state != SessionState::Idle,
-                },
-                appearance,
+        #[cfg(not(target_family = "wasm"))]
+        let remote_route = {
+            let daemons = RemoteServerManager::as_ref(app).connected_daemons();
+            let connected_daemon = host_id.as_deref().and_then(|expected_host_id| {
+                daemons
+                    .iter()
+                    .find(|daemon| daemon.host_id == expected_host_id)
+                    .map(|daemon| (daemon.host_id.as_str(), daemon.features.as_slice()))
+            });
+            remote_transcript_route(
+                session.provider,
+                is_local,
+                host_id.as_deref(),
+                session.account_id.as_deref(),
+                &session.session_id,
+                connected_daemon,
+            )
+        };
+        #[cfg(target_family = "wasm")]
+        let remote_route = None;
+        match transcript_action_target(session.provider, is_local, remote_route) {
+            Some(TranscriptActionTarget::ClaudeWorkspace) => push(
+                self.menu_item(
+                    &k("transcript"),
+                    crate::t!("cockpit-menu-transcript").to_string(),
+                    VerbKind::Constructive,
+                    WorkspaceAction::ViewTranscript {
+                        session_id: session.session_id.clone(),
+                        // Default accounts deliberately carry no routing pin on
+                        // the session. The account still owns their real home.
+                        config_dir: config_dir
+                            .clone()
+                            .unwrap_or_else(|| acct.account.config_dir.clone()),
+                        cwd: PathBuf::from(&session.cwd),
+                        // Follow a live conversation; a dormant one has nothing
+                        // left to follow, so it stays a one-shot snapshot.
+                        watch: session.state != SessionState::Idle,
+                    },
+                    appearance,
+                ),
+                &mut col,
             ),
-            &mut col,
-        );
+            Some(TranscriptActionTarget::CodexLocal) => push(
+                self.menu_item(
+                    &k("transcript"),
+                    crate::t!("cockpit-menu-transcript").to_string(),
+                    VerbKind::Constructive,
+                    CockpitPaneAction::ViewLocalCodexTranscript {
+                        session_id: session.session_id.clone(),
+                        codex_home: config_dir
+                            .clone()
+                            .unwrap_or_else(|| acct.account.config_dir.clone()),
+                    },
+                    appearance,
+                ),
+                &mut col,
+            ),
+            Some(TranscriptActionTarget::Remote(route)) => push(
+                self.menu_item(
+                    &k("transcript"),
+                    crate::t!("cockpit-menu-transcript").to_string(),
+                    VerbKind::Constructive,
+                    CockpitPaneAction::ViewRemoteTranscript {
+                        provider: route.provider,
+                        host_id: route.host_id,
+                        account_id: route.account_id,
+                        session_id: route.session_id,
+                    },
+                    appearance,
+                ),
+                &mut col,
+            ),
+            None => {}
+        }
         if caps.can_review {
             push(
                 self.menu_item(
@@ -1899,6 +2385,7 @@ impl CockpitPaneView {
 
         // Everything the render closure needs, owned: it outlives this frame.
         let rows_for_render = std::sync::Arc::new(rows);
+        let rows_for_background = std::sync::Arc::clone(&rows_for_render);
         let rows_len = rows_for_render.len();
         let group_states = self.table_group_states.clone();
         let row_states = self.table_row_states.clone();
@@ -2042,6 +2529,7 @@ impl CockpitPaneView {
                                 provider: session.provider,
                                 config_dir: session.config_dir.clone(),
                                 account_email: session.account_email.clone(),
+                                account_id: session.account_id.clone(),
                                 is_local: *is_local,
                             };
                             Hoverable::new(state, move |_m| sess)
@@ -2268,6 +2756,19 @@ impl CockpitPaneView {
                 TableHeader::new(Empty::new().finish()).with_width(TableColumnWidth::Fixed(24.0)),
             ])
             .with_row_count(rows_len)
+            .with_row_background_fn(move |row_idx, app| {
+                if rows_for_background
+                    .get(row_idx)
+                    .is_some_and(table_row_needs_attention)
+                {
+                    Some(coloru_with_opacity(
+                        attention_coloru(Appearance::as_ref(app)),
+                        10,
+                    ))
+                } else {
+                    None
+                }
+            })
             .with_config(TableConfig {
                 border_width: 1.0,
                 border_color: theme.split_pane_border_color().into_solid(),
@@ -2320,7 +2821,8 @@ impl CockpitPaneView {
         match CockpitModel::as_ref(ctx).set_alias(&key, alias.as_deref()) {
             Ok(()) => {
                 // The file is watched: the snapshot reloads and the new name
-                // reaches the title, the card and the sidebar on its own.
+                // reaches the account card and sidebar on its own. The pane title
+                // deliberately remains the generic Cockpit title.
                 self.alias_editor = None;
                 self.alias_persistence_error = None;
             }
@@ -2339,9 +2841,8 @@ impl CockpitPaneView {
     /// what it has spent.
     ///
     /// Distinct from `render_card`, which is one row in the fleet list: this is
-    /// the head of *that account's* pane, so it can afford the identity in full
-    /// (mail/org belong here — the sidebar deliberately drops them) and the three
-    /// windows side by side instead of stacked.
+    /// the head of *that account's* pane, so it carries detailed usage figures
+    /// while preserving the same provider-headline/account-subline hierarchy.
     fn render_account_detail(
         &self,
         acct: &AccountUsage,
@@ -2357,10 +2858,9 @@ impl CockpitPaneView {
         let faint = theme.sub_text_color(bg).with_opacity(55).into_solid();
         let now = chrono::Utc::now();
 
-        // Identity: provider tile, display name, then the quieter facts.
-        // The tile is a glyph-scale colour swatch: its radius follows its own
-        // size (10 px → 3), not the control scale — CONTROL_RADIUS on a mark
-        // this small would read as a circle.
+        let identity = account_identity(&acct.account);
+        // Provider is the explicit headline. The color tile supplements that
+        // word; it never carries provider identity on its own.
         let tile = ConstrainedBox::new(
             Rect::new()
                 .with_background_color(provider_color_on(acct.account.provider, bg.into_solid()))
@@ -2371,12 +2871,7 @@ impl CockpitPaneView {
         .with_height(10.0)
         .finish();
 
-        // `label` already carries the user's alias — the overrides layer replaced
-        // it before this snapshot existed. Reading the alias again here would be
-        // a second source for one fact.
-        // The name, or the box you rename it in. One `Option`, so there is no
-        // second flag to disagree with it about whether we are editing.
-        let name_el: Box<dyn Element> = match &self.alias_editor {
+        let account_el: Box<dyn Element> = match &self.alias_editor {
             Some(editor) => ConstrainedBox::new(
                 appearance
                     .ui_builder()
@@ -2392,7 +2887,7 @@ impl CockpitPaneView {
                         border_color: Some(theme.accent().into()),
                         border_width: Some(1.0),
                         border_radius: Some(CornerRadius::with_all(Radius::Pixels(CONTROL_RADIUS))),
-                        font_size: Some(heading),
+                        font_size: Some(body),
                         ..Default::default()
                     })
                     .build()
@@ -2402,21 +2897,24 @@ impl CockpitPaneView {
             // width, which a flexible row child gets during the intrinsic pass.
             .with_width(ALIAS_EDITOR_WIDTH)
             .finish(),
-            None => Self::text(acct.account.label.clone(), family, heading, main),
+            None => Self::text(identity.subline.clone(), family, body, muted),
         };
-        let mut ident = Flex::row()
+        let mut provider_header = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(8.0)
             .with_child(tile)
-            .with_child(name_el);
-        if let Some(plan) = &acct.account.plan_tier {
-            ident = ident.with_child(Self::text(plan.clone(), family, body, faint));
-        }
+            .with_child(Self::text(
+                identity.provider.to_string(),
+                family,
+                heading,
+                main,
+            ));
         // ⋯ — rename this account (A1). The alias is a label override in
         // instances.json, the one place overrides live; there is no second store.
         if self.alias_editor.is_none() {
-            ident = ident.with_child(Shrinkable::new(1.0, Empty::new().finish()).finish());
-            ident = ident.with_child(icon_verb_button_tooltip(
+            provider_header =
+                provider_header.with_child(Shrinkable::new(1.0, Empty::new().finish()).finish());
+            provider_header = provider_header.with_child(icon_verb_button_tooltip(
                 self.alias_dots_state.clone(),
                 icons::Icon::DotsHorizontal,
                 theme.sub_text_color(bg),
@@ -2427,24 +2925,26 @@ impl CockpitPaneView {
             ));
         }
 
-        // Mail / org: allowed here, unlike the sidebar (spec v3 §4.2). Absent
-        // rather than empty when the provider never told us.
-        let mut sub_parts: Vec<String> = Vec::new();
-        if let Some(email) = &acct.account.email {
-            sub_parts.push(email.clone());
-        }
-        if let Some(org) = &acct.account.org {
-            sub_parts.push(org.clone());
-        }
-
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(10.0)
-            .with_child(ident.with_main_axis_size(MainAxisSize::Max).finish());
-        if !sub_parts.is_empty() {
-            col = col.with_child(Self::text(sub_parts.join(" · "), family, body, muted));
+            .with_child(
+                provider_header
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .finish(),
+            );
+        let mut account_line = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.0)
+            .with_child(account_el);
+        if self.alias_editor.is_some() {
+            if let Some(plan) = acct.account.plan_tier.as_ref() {
+                account_line =
+                    account_line.with_child(Self::text(plan.clone(), family, body, faint));
+            }
         }
+        col = col.with_child(account_line.finish());
         if let Some(error) = self.alias_persistence_error.as_ref() {
             col = col.with_child(Self::text(
                 error.clone(),
@@ -2537,6 +3037,7 @@ impl CockpitPaneView {
         let muted = theme.sub_text_color(theme.background()).into_solid();
         let accent = theme.accent().into_solid();
         let now = chrono::Utc::now();
+        let identity = account_identity(&acct.account);
 
         // Account activity glyph (WORKING/LIVE/OFFLINE), derived by the spine.
         // The working hue is contrast-picked like every other themed mark; the
@@ -2568,22 +3069,10 @@ impl CockpitPaneView {
             .with_child(
                 Shrinkable::new(
                     1.0,
-                    Self::text(acct.account.label.clone(), family, heading, main),
+                    Self::text(identity.provider.to_string(), family, heading, main),
                 )
                 .finish(),
             );
-        if let Some(plan) = &acct.account.plan_tier {
-            header = header.with_child(
-                Container::new(Self::text(plan.clone(), family, body, accent))
-                    .with_padding_left(8.0)
-                    .with_padding_right(8.0)
-                    .with_padding_top(2.0)
-                    .with_padding_bottom(2.0)
-                    .with_background(internal_colors::fg_overlay_1(theme))
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CONTROL_RADIUS)))
-                    .finish(),
-            );
-        }
 
         // The 5h-block heat drives account routing later; the week heat shows
         // the slower budget. Week heat = week.work / budget via AccountUsage —
@@ -2616,6 +3105,7 @@ impl CockpitPaneView {
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(CARD_SPACING)
             .with_child(header.finish())
+            .with_child(Self::text(identity.subline, family, body, muted))
             .with_child(self.heat_bar(
                 &crate::t!("cockpit-meter-5h"),
                 acct.heat,
@@ -2789,6 +3279,17 @@ impl CockpitPaneView {
                 muted,
             ))
             .finish()
+    }
+
+    fn show_remote_transcript_error(ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::error(crate::t!("cockpit-remote-transcript-open-error")),
+                window_id,
+                ctx,
+            );
+        });
     }
 }
 
@@ -3175,6 +3676,127 @@ impl TypedActionView for CockpitPaneView {
             CockpitPaneAction::Rescan => {
                 CockpitModel::handle(ctx).update(ctx, |model, ctx| model.rescan(ctx));
             }
+            CockpitPaneAction::ViewLocalCodexTranscript {
+                session_id,
+                codex_home,
+            } => {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    let codex_home = codex_home.clone();
+                    let session_id = session_id.clone();
+                    ctx.spawn(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                let document =
+                                    load_local_codex_transcript(&codex_home, &session_id);
+                                Ok::<_, ()>(document.markdown)
+                            })
+                            .await
+                            .map_err(|_| ())?
+                        },
+                        |_, result, ctx| match result {
+                            Ok(contents) => {
+                                ctx.dispatch_typed_action(
+                                    &WorkspaceAction::OpenReadOnlyTextInEditor {
+                                        title: transcript_title(Provider::Codex),
+                                        contents,
+                                    },
+                                );
+                            }
+                            Err(()) => {
+                                let window_id = ctx.window_id();
+                                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                                    toast_stack.add_ephemeral_toast(
+                                        DismissibleToast::error(crate::t!(
+                                            "cockpit-transcript-open-error"
+                                        )),
+                                        window_id,
+                                        ctx,
+                                    );
+                                });
+                            }
+                        },
+                    );
+                }
+                #[cfg(target_family = "wasm")]
+                let _ = (session_id, codex_home);
+            }
+            CockpitPaneAction::ViewRemoteTranscript {
+                provider,
+                host_id,
+                account_id,
+                session_id,
+            } => {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    let route = RemoteTranscriptRoute {
+                        provider: *provider,
+                        host_id: host_id.clone(),
+                        account_id: account_id.clone(),
+                        session_id: session_id.clone(),
+                    };
+                    if !remote_transcript_route_is_current(
+                        CockpitModel::as_ref(ctx).inventory(),
+                        &route,
+                    ) {
+                        Self::show_remote_transcript_error(ctx);
+                        return;
+                    }
+                    let daemon = RemoteServerManager::as_ref(ctx)
+                        .connected_daemons()
+                        .into_iter()
+                        .find(|daemon| {
+                            daemon.host_id == route.host_id
+                                && has_feature(&daemon.features, FEATURE_AGENT_TRANSCRIPT_READ_V1)
+                        });
+                    let Some(daemon) = daemon else {
+                        Self::show_remote_transcript_error(ctx);
+                        return;
+                    };
+                    let request_route = route.clone();
+                    let projection_route = route;
+                    ctx.spawn(
+                        async move {
+                            daemon
+                                .client
+                                .read_agent_transcript(
+                                    request_route.provider.as_str().to_string(),
+                                    request_route.account_id,
+                                    request_route.session_id,
+                                    None,
+                                )
+                                .await
+                                .map_err(|_| ())
+                        },
+                        move |_, result, ctx| {
+                            let document = match result {
+                                Ok(response) => {
+                                    remote_transcript_document(&projection_route, response)
+                                }
+                                Err(()) => {
+                                    CockpitPaneView::show_remote_transcript_error(ctx);
+                                    return;
+                                }
+                            };
+                            match document {
+                                Ok(document) => ctx.dispatch_typed_action(
+                                    &WorkspaceAction::OpenReadOnlyTextInEditor {
+                                        title: transcript_title(projection_route.provider),
+                                        contents: document.markdown,
+                                    },
+                                ),
+                                Err(
+                                    RemoteTranscriptProjectionError::InvalidEnvelope
+                                    | RemoteTranscriptProjectionError::InvalidStatus
+                                    | RemoteTranscriptProjectionError::InvalidPayload,
+                                ) => CockpitPaneView::show_remote_transcript_error(ctx),
+                            }
+                        },
+                    );
+                }
+                #[cfg(target_family = "wasm")]
+                let _ = (provider, host_id, account_id, session_id);
+            }
         }
     }
 }
@@ -3209,10 +3831,8 @@ impl BackingView for CockpitPaneView {
         _ctx: &view::HeaderRenderContext<'_>,
         app: &AppContext,
     ) -> view::HeaderContent {
-        // An account pane is titled by ITS account (alias→label, spec §4.1) —
-        // two stacked account panes both reading "Cockpit" left the user unable
-        // to tell whose numbers were whose (RC acceptance, 2026-07-17). The
-        // fleet dashboard (no account key) keeps the generic title.
+        // Provider and account identity are rendered together in the card, so
+        // pane chrome cannot become a duplicated provider strip.
         view::HeaderContent::simple(Self::pane_title(self.account_key.as_deref(), app))
     }
 

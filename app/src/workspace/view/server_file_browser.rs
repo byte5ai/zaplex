@@ -1,17 +1,16 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Local, TimeZone};
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{Vector2F, vec2f};
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 use remote_server::client::RemoteServerClient;
 use remote_server::proto::{
-    FileSystemEntryKind, create_directory_response, list_directory_response,
-    read_file_chunk_response, resolve_path_response, run_command_response,
-    write_file_chunk_response,
+    create_directory_response, list_directory_response, read_file_chunk_response,
+    resolve_path_response, run_command_response, write_file_chunk_response, FileSystemEntryKind,
 };
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -19,7 +18,6 @@ use warp_completer::completer::CommandExitStatus;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::{HostId, SessionId};
 use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
@@ -30,6 +28,7 @@ use warpui::elements::{
 };
 use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
 use warpui::platform::{Cursor, FilePickerConfiguration, SaveFilePickerConfiguration};
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
@@ -43,8 +42,8 @@ use crate::editor::{
     PropagateHorizontalNavigationKeys, SingleLineEditorOptions, TextOptions,
 };
 use crate::menu::{
-    DEFAULT_WIDTH as MENU_DEFAULT_WIDTH, Event as MenuEvent, MENU_ITEM_VERTICAL_PADDING, Menu,
-    MenuItem, MenuItemFields, SUBMENU_OVERLAP, SubMenu,
+    Event as MenuEvent, Menu, MenuItem, MenuItemFields, SubMenu,
+    DEFAULT_WIDTH as MENU_DEFAULT_WIDTH, MENU_ITEM_VERTICAL_PADDING, SUBMENU_OVERLAP,
 };
 use crate::remote_server::manager::RemoteServerManager;
 use crate::terminal::model::session::{ExecuteCommandOptions, Session};
@@ -5052,11 +5051,9 @@ mod tests {
     #[test]
     fn clear_context_menu_state_removes_items_and_selection() {
         let mut position = Some(vec2f(10.0, 20.0));
-        let mut menu_items = vec![
-            MenuItemFields::new("Refresh")
-                .with_on_select_action(ServerFileBrowserAction::Refresh)
-                .into_item(),
-        ];
+        let mut menu_items = vec![MenuItemFields::new("Refresh")
+            .with_on_select_action(ServerFileBrowserAction::Refresh)
+            .into_item()];
 
         clear_context_menu_state(&mut position, &mut menu_items);
 

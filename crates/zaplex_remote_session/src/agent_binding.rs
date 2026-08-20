@@ -14,6 +14,7 @@ pub struct AgentIdentity {
     pub session_id: String,
     pub account_email: Option<String>,
     pub config_dir: Option<String>,
+    pub account_id: Option<String>,
 }
 
 /// A request to make an agent the live foreground agent for a PTY.

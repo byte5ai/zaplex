@@ -3,9 +3,7 @@ use crate::types::{Account, AccountStatus, Provider, SessionState, UsageEntry};
 use chrono::{DateTime, FixedOffset, Utc};
 
 fn ts(s: &str) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(s)
-        .unwrap()
-        .with_timezone(&Utc)
+    DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
 }
 
 fn entry(t: &str, input: u64, output: u64) -> UsageEntry {
@@ -87,7 +85,14 @@ fn idle_past_the_window_yields_empty_block_and_no_reset() {
     // 20:00 is > 5h after the block start (10:00 → resets 15:00).
     let now = ts("2026-06-30T20:00:00Z");
     let pricing = PricingTable::default();
-    let u = build_account_usage(acct(), entries, now, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK, &pricing);
+    let u = build_account_usage(
+        acct(),
+        entries,
+        now,
+        DEFAULT_BUDGET_5H,
+        DEFAULT_BUDGET_WEEK,
+        &pricing,
+    );
 
     assert_eq!(u.block5h.messages, 0);
     assert_eq!(u.block5h.work, 0);
@@ -107,7 +112,14 @@ fn a_gap_of_at_least_the_window_starts_a_new_block() {
     ];
     let now = ts("2026-06-30T16:30:00Z");
     let pricing = PricingTable::default();
-    let u = build_account_usage(acct(), entries, now, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK, &pricing);
+    let u = build_account_usage(
+        acct(),
+        entries,
+        now,
+        DEFAULT_BUDGET_5H,
+        DEFAULT_BUDGET_WEEK,
+        &pricing,
+    );
 
     // Current 5h block only contains the second turn.
     assert_eq!(u.block5h.messages, 1);
@@ -157,7 +169,14 @@ fn today_follows_the_local_calendar_day_west_of_utc() {
 fn empty_entries_are_all_zero() {
     let now = ts("2026-06-30T12:00:00Z");
     let pricing = PricingTable::default();
-    let u = build_account_usage(acct(), vec![], now, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK, &pricing);
+    let u = build_account_usage(
+        acct(),
+        vec![],
+        now,
+        DEFAULT_BUDGET_5H,
+        DEFAULT_BUDGET_WEEK,
+        &pricing,
+    );
     assert_eq!(u.block5h, WindowTotals::default());
     assert_eq!(u.today, WindowTotals::default());
     assert_eq!(u.week, WindowTotals::default());
@@ -185,6 +204,7 @@ fn snapshot(state: SessionState) -> crate::types::SessionSnapshot {
         worktree: None,
         config_dir: None,
         account_email: None,
+        account_id: None,
         process_fingerprint: None,
         pty_session_id: None,
         pty_session_generation: None,
@@ -198,16 +218,32 @@ fn snapshot(state: SessionState) -> crate::types::SessionSnapshot {
 fn status_of(sessions: Vec<crate::types::SessionSnapshot>) -> AccountStatus {
     let pricing = PricingTable::default();
     let now = ts("2026-06-30T12:00:00Z");
-    let usage = build_account_usage(acct(), vec![], now, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK, &pricing);
+    let usage = build_account_usage(
+        acct(),
+        vec![],
+        now,
+        DEFAULT_BUDGET_5H,
+        DEFAULT_BUDGET_WEEK,
+        &pricing,
+    );
     with_sessions(usage, sessions).status
 }
 
 #[test]
 fn account_status_reflects_running_work_only() {
     assert_eq!(status_of(vec![]), AccountStatus::Offline);
-    assert_eq!(status_of(vec![snapshot(SessionState::Active)]), AccountStatus::Working);
-    assert_eq!(status_of(vec![snapshot(SessionState::Waiting)]), AccountStatus::Live);
-    assert_eq!(status_of(vec![snapshot(SessionState::Monitor)]), AccountStatus::Live);
+    assert_eq!(
+        status_of(vec![snapshot(SessionState::Active)]),
+        AccountStatus::Working
+    );
+    assert_eq!(
+        status_of(vec![snapshot(SessionState::Waiting)]),
+        AccountStatus::Live
+    );
+    assert_eq!(
+        status_of(vec![snapshot(SessionState::Monitor)]),
+        AccountStatus::Live
+    );
 }
 
 /// A finished conversation must not make the account look live. Dormant
@@ -222,11 +258,17 @@ fn dormant_sessions_never_make_an_account_live() {
     );
     // Mixed: the running one still decides.
     assert_eq!(
-        status_of(vec![snapshot(SessionState::Idle), snapshot(SessionState::Waiting)]),
+        status_of(vec![
+            snapshot(SessionState::Idle),
+            snapshot(SessionState::Waiting)
+        ]),
         AccountStatus::Live
     );
     assert_eq!(
-        status_of(vec![snapshot(SessionState::Idle), snapshot(SessionState::Active)]),
+        status_of(vec![
+            snapshot(SessionState::Idle),
+            snapshot(SessionState::Active)
+        ]),
         AccountStatus::Working
     );
 }
@@ -235,7 +277,14 @@ fn dormant_sessions_never_make_an_account_live() {
 fn idle_sessions_are_carried_separately_from_live_ones() {
     let pricing = PricingTable::default();
     let now = ts("2026-06-30T12:00:00Z");
-    let usage = build_account_usage(acct(), vec![], now, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK, &pricing);
+    let usage = build_account_usage(
+        acct(),
+        vec![],
+        now,
+        DEFAULT_BUDGET_5H,
+        DEFAULT_BUDGET_WEEK,
+        &pricing,
+    );
     let usage = with_sessions(usage, vec![snapshot(SessionState::Waiting)]);
     let usage = with_idle_sessions(usage, vec![snapshot(SessionState::Idle)]);
 

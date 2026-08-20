@@ -41,8 +41,8 @@ EOF
 require_compact_action() {
     ui_file="$1"
     translation_key="$2"
-    pattern="CompactRowAction::new\\([^;]*crate::t!\\(\"${translation_key}\"\\)"
-    key_count="$( (rg -o "$translation_key" "$ui_file" || true) | awk 'END { print NR }')"
+    pattern="CompactRowAction::new(_with_icon_ansi_color)?\\([^;]*crate::t!\\(\"${translation_key}\"\\)"
+    key_count="$( (rg -o "\"${translation_key}\"" "$ui_file" || true) | awk 'END { print NR }')"
     if [ "$key_count" -ne 1 ]; then
         echo "$ui_file: '$translation_key' must occur exactly once (found $key_count)" >&2
         fail=1
@@ -53,11 +53,10 @@ require_compact_action() {
     fi
 }
 
-require_compact_action app/src/cockpit/panel.rs cockpit-host-action-agent
-require_compact_action app/src/cockpit/panel.rs cockpit-host-action-files
-require_compact_action app/src/cockpit/panel.rs cockpit-tt-manage-host
-require_compact_action app/src/cockpit/panel.rs cockpit-tt-favorite-add
-require_compact_action app/src/cockpit/panel.rs cockpit-tt-favorite-remove
+require_compact_action app/src/ssh_manager/panel.rs cockpit-tt-favorite-add
+require_compact_action app/src/ssh_manager/panel.rs cockpit-tt-favorite-remove
+require_compact_action app/src/ssh_manager/panel.rs workspace-left-panel-ssh-manager-connect
+require_compact_action app/src/ssh_manager/panel.rs workspace-left-panel-ssh-manager-disconnect
 require_compact_action app/src/ssh_manager/panel.rs workspace-left-panel-ssh-manager-multiplexer-open
 
 if ! rg --quiet 'ActionButton::new\("", PaneHeaderTheme\)' app/src/ui_components/compact_row_action.rs; then
@@ -65,7 +64,7 @@ if ! rg --quiet 'ActionButton::new\("", PaneHeaderTheme\)' app/src/ui_components
     fail=1
 fi
 
-if ! rg --quiet 'Shrinkable::new\(1\.0, label_el\)' app/src/cockpit/panel.rs; then
+if ! rg --quiet --multiline --pcre2 'Shrinkable::new\(\s*1\.0,\s*Self::identity_text\(\s*label,' app/src/cockpit/panel.rs; then
     echo "cockpit host identity must own the flexible row width" >&2
     fail=1
 fi

@@ -184,10 +184,9 @@ impl LeafContents {
             LeafContents::Image { .. } => false,
             // Cockpit dashboard: pure lens over the data spine; reopened from the sidebar.
             LeafContents::Cockpit => false,
-            // Remote-file code pane: the remote buffer depends on an active SSH connection, and the `RemoteFileTree`
-            // source is not restorable (`is_restorable() == false`). Persisting it would leave behind
-            // an orphan `Code` row that is skipped during the restore phase, causing the whole tab to be lost —
-            // therefore code panes with a remote source are not persisted at all.
+            // Ephemeral/generated and remote-file code panes are not restorable. Persisting one
+            // would leave behind an orphan `Code` row that is skipped during the restore phase,
+            // causing the whole tab to be lost.
             LeafContents::Code(CodePaneSnapShot::Local { source, .. }) => {
                 source.as_ref().map(|s| s.is_restorable()).unwrap_or(true)
             }

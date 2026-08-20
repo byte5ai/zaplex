@@ -292,7 +292,10 @@ fn task_state_cache_reuses_unchanged_files_and_invalidates_on_append_or_removal(
     let path = tmp.path().join("tasks.jsonl");
     std::fs::write(
         &path,
-        r#"{"type":"response_item","payload":{"type":"function_call","name":"update_plan","arguments":"{\"plan\":[{\"step\":\"First\",\"status\":\"pending\"}]}"}}"#,
+        concat!(
+            r#"{"type":"response_item","payload":{"type":"function_call","name":"update_plan","arguments":"{\"plan\":[{\"step\":\"First\",\"status\":\"pending\"}]}"}}"#,
+            "\n"
+        ),
     )
     .unwrap();
     let mut cache = TaskStateCache::default();

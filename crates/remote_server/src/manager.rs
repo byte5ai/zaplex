@@ -443,9 +443,7 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::ServerMessageDecodingError { session_id }
             | RemoteServerManagerEvent::SessionOutput { session_id, .. }
             | RemoteServerManagerEvent::SessionExited { session_id, .. }
-            | RemoteServerManagerEvent::SessionNotice { session_id, .. } => {
-                Some(*session_id)
-            }
+            | RemoteServerManagerEvent::SessionNotice { session_id, .. } => Some(*session_id),
             RemoteServerManagerEvent::HostConnected { .. }
             | RemoteServerManagerEvent::HostDisconnected { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
@@ -494,10 +492,7 @@ pub struct ConnectedDaemon {
     pub features: Vec<String>,
 }
 
-fn preferred_registry_node_id(
-    existing: Option<&str>,
-    candidate: Option<&str>,
-) -> Option<String> {
+fn preferred_registry_node_id(existing: Option<&str>, candidate: Option<&str>) -> Option<String> {
     match (existing, candidate) {
         (None, None) => None,
         (Some(node_id), None) | (None, Some(node_id)) => Some(node_id.to_string()),
@@ -1009,9 +1004,7 @@ impl RemoteServerManager {
                     .remove_remote_server_binary()
                     .with_timeout(REMOVAL_TIMEOUT)
                     .await
-                    .unwrap_or_else(|_| {
-                        Err(anyhow::anyhow!("timed out after {REMOVAL_TIMEOUT:?}"))
-                    })
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out after {REMOVAL_TIMEOUT:?}")))
                 {
                     log::warn!(
                         "Failed to remove stale remote binary for session {session_id:?}: {e}"
@@ -1214,6 +1207,34 @@ impl RemoteServerManager {
         }
         let mut out: Vec<ConnectedDaemon> = by_host.into_values().collect();
         out.sort_by(|a, b| a.host_id.cmp(&b.host_id));
+        out
+    }
+
+    /// Returns every connected SSH-registry node together with the stable host
+    /// identity reached through that node.
+    ///
+    /// Unlike [`Self::connected_daemons`], this projection intentionally does
+    /// not deduplicate by host: two registered aliases can reach the same
+    /// daemon, and both connection rows must still render as connected.
+    pub fn connected_registry_hosts(&self) -> Vec<(String, HostId)> {
+        let mut out = self
+            .sessions
+            .iter()
+            .filter_map(|(session_id, state)| {
+                let RemoteSessionState::Connected { host_id, .. } = state else {
+                    return None;
+                };
+                self.session_registry_node_ids
+                    .get(session_id)
+                    .map(|node_id| (node_id.clone(), host_id.clone()))
+            })
+            .collect::<Vec<_>>();
+        out.sort_by(|(left_node, left_host), (right_node, right_host)| {
+            left_node
+                .cmp(right_node)
+                .then_with(|| left_host.as_str().cmp(right_host.as_str()))
+        });
+        out.dedup();
         out
     }
 

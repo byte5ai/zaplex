@@ -3,6 +3,8 @@
 pub use remote_server::*;
 
 #[cfg(not(target_family = "wasm"))]
+pub mod agent_account;
+#[cfg(not(target_family = "wasm"))]
 pub mod agent_session;
 #[cfg(not(target_family = "wasm"))]
 pub mod auth_context;
@@ -22,6 +24,8 @@ pub mod server_model;
 pub mod session_host;
 #[cfg(not(target_family = "wasm"))]
 pub mod ssh_transport;
+#[cfg(not(target_family = "wasm"))]
+pub mod transcript_rpc;
 #[cfg(unix)]
 pub mod unix;
 

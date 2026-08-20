@@ -86,8 +86,14 @@ pub fn snapshot_to_proto(s: &SessionSnapshot) -> AgentSessionInfo {
         // Empty string encodes "honestly unknown" (None), like `effort`.
         worktree: s.worktree.clone().unwrap_or_default(),
         branch: s.branch.clone().unwrap_or_default(),
-        config_dir: s.config_dir.clone().unwrap_or_default(),
+        config_dir: s
+            .account_id
+            .is_none()
+            .then(|| s.config_dir.clone())
+            .flatten()
+            .unwrap_or_default(),
         account_email: s.account_email.clone().unwrap_or_default(),
+        account_id: s.account_id.clone().unwrap_or_default(),
         last_activity_epoch_millis: s.last_activity.timestamp_millis() as u64,
         pid: s.pid,
         process_fingerprint: s.process_fingerprint.clone().unwrap_or_default(),
@@ -119,7 +125,13 @@ pub fn snapshot_agent_identity(s: &SessionSnapshot) -> AgentSessionIdentity {
         session_id: s.session_id.clone(),
         provider: s.provider.as_str().to_string(),
         account_email: s.account_email.clone().unwrap_or_default(),
-        config_dir: s.config_dir.clone().unwrap_or_default(),
+        config_dir: s
+            .account_id
+            .is_none()
+            .then(|| s.config_dir.clone())
+            .flatten()
+            .unwrap_or_default(),
+        account_id: s.account_id.clone().unwrap_or_default(),
     }
 }
 
@@ -150,10 +162,15 @@ pub fn proto_to_snapshot(p: &AgentSessionInfo) -> SessionSnapshot {
         // Empty string ⇒ None (honestly unknown), symmetric with `effort`.
         worktree: (!p.worktree.is_empty()).then(|| p.worktree.clone()),
         branch: (!p.branch.is_empty()).then(|| p.branch.clone()),
-        config_dir: (!p.config_dir.is_empty()).then(|| p.config_dir.clone()),
+        config_dir: p
+            .account_id
+            .is_empty()
+            .then(|| p.config_dir.clone())
+            .filter(|config_dir| !config_dir.is_empty()),
         // Empty ⇒ None: an older daemon simply doesn't say, and a session that
         // names no account joins none rather than being guessed onto one.
         account_email: (!p.account_email.is_empty()).then(|| p.account_email.clone()),
+        account_id: (!p.account_id.is_empty()).then(|| p.account_id.clone()),
         process_fingerprint: (!p.process_fingerprint.is_empty())
             .then(|| p.process_fingerprint.clone()),
         pty_session_id: (!p.pty_session_id.is_empty()).then(|| p.pty_session_id.clone()),

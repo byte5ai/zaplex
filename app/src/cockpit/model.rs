@@ -1,10 +1,11 @@
 //! `CockpitModel` — the singleton that holds the latest [`CockpitSnapshot`] and keeps
 //! it fresh, emitting [`CockpitEvent::Updated`] on change.
 //!
-//! Refresh is driven by two sources (mirrors `file_mcp_watcher` + the daemon GC
+//! Refresh is driven by three sources (mirrors `file_mcp_watcher` + the daemon GC
 //! timer):
 //! - [`HomeDirectoryWatcher`] (top-level home changes) → catches account add/remove
 //!   (`~/.claude.json`, `~/.claude`, `~/.codex`).
+//! - first/last remote-host connection events → update the live host roots immediately.
 //! - a periodic **reconcile tick** → catches usage growth (transcripts append deep in
 //!   `projects/**` / `sessions/**`, which the non-recursive home watcher never sees)
 //!   and window/reset rollover.
@@ -13,7 +14,7 @@
 //! on the model's thread via the spawner round-trip.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_compat::CompatExt as _;
@@ -24,8 +25,8 @@ use watcher::HomeDirectoryWatcher;
 use zaplex_cockpit::HostNode;
 use zaplex_cockpit::{
     apply_oauth_usage, build_snapshot_with_cache, fold_inventory, session_key, AccountOverrides,
-    CockpitSnapshot, FleetTree, PricingTable, Provider, RegisteredHost, RemoteHost, ScanHealth,
-    SessionSnapshot, TranscriptScanCache,
+    AgentInventoryStatus, CockpitSnapshot, FleetTree, PricingTable, Provider, RegisteredHost,
+    RemoteHost, ScanHealth, SessionSnapshot, TranscriptScanCache,
 };
 // Cross-host daemon fold is a native-only concern: the `agent_session` module
 // (and the whole remote-daemon layer it lives in) is `#[cfg(not(wasm))]`, and a
@@ -41,7 +42,9 @@ use crate::cockpit::oauth::{self, CachedOauth};
 use crate::cockpit::settings::CockpitSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::agent_session::proto_to_snapshot;
-use crate::remote_server::manager::{ConnectedDaemon, RemoteServerManager};
+use crate::remote_server::manager::{
+    ConnectedDaemon, RemoteServerManager, RemoteServerManagerEvent,
+};
 
 #[cfg(not(target_family = "wasm"))]
 fn retain_negotiated_agent_pty_routes(features: &[String], sessions: &mut [SessionSnapshot]) {
@@ -150,12 +153,50 @@ struct RefreshInputs {
     local_label: String,
 }
 
+fn codex_home(home: &Path, configured: Option<std::ffi::OsString>) -> PathBuf {
+    configured
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"))
+}
+
 impl CockpitModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         // Account add/remove (top-level home entries).
         ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _event, ctx| {
             me.spawn_refresh(ctx);
         });
+        ctx.subscribe_to_model(
+            &RemoteServerManager::handle(ctx),
+            |me, event, ctx| match event {
+                RemoteServerManagerEvent::HostConnected { .. } => me.spawn_refresh(ctx),
+                RemoteServerManagerEvent::HostDisconnected { host_id } => {
+                    if remove_disconnected_host(&mut me.inventory, host_id.as_str()) {
+                        ctx.emit(CockpitEvent::Updated);
+                    }
+                    me.spawn_refresh(ctx);
+                }
+                RemoteServerManagerEvent::SessionConnecting { .. }
+                | RemoteServerManagerEvent::SessionConnected { .. }
+                | RemoteServerManagerEvent::SessionConnectionFailed { .. }
+                | RemoteServerManagerEvent::SessionDisconnected { .. }
+                | RemoteServerManagerEvent::SessionReconnected { .. }
+                | RemoteServerManagerEvent::SessionDeregistered { .. }
+                | RemoteServerManagerEvent::NavigatedToDirectory { .. }
+                | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
+                | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
+                | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
+                | RemoteServerManagerEvent::BufferUpdated { .. }
+                | RemoteServerManagerEvent::SetupStateChanged { .. }
+                | RemoteServerManagerEvent::BinaryCheckComplete { .. }
+                | RemoteServerManagerEvent::BinaryInstallComplete { .. }
+                | RemoteServerManagerEvent::ClientRequestFailed { .. }
+                | RemoteServerManagerEvent::ServerMessageDecodingError { .. }
+                | RemoteServerManagerEvent::SessionOutput { .. }
+                | RemoteServerManagerEvent::SessionExited { .. }
+                | RemoteServerManagerEvent::SessionNotice { .. } => {}
+            },
+        );
 
         let mut model = Self {
             snapshot: initial_snapshot(),
@@ -228,7 +269,7 @@ impl CockpitModel {
             .filter(|h| !h.is_empty())
             .unwrap_or_else(|| "local".to_string());
         Some(RefreshInputs {
-            codex_home: home.join(".codex"),
+            codex_home: codex_home(&home, std::env::var_os("CODEX_HOME")),
             claude_config_dir_env: std::env::var("CLAUDE_CONFIG_DIR").ok(),
             instances_path: instances_path(&home),
             home,
@@ -301,12 +342,15 @@ impl CockpitModel {
                     &std::fs::read_to_string(&inputs.instances_path).unwrap_or_default(),
                 );
                 snapshot.accounts = overrides.apply(std::mem::take(&mut snapshot.accounts));
+                for account in &mut snapshot.accounts {
+                    for session in &mut account.sessions {
+                        session.effort = super::session_effort(session, true, None);
+                    }
+                }
 
-                // Cross-host fold: fetch each capable daemon's agent-sessions and
-                // combine them with the local sessions into one Agent-Inventory
-                // tree. A daemon that doesn't advertise `agent-inventory` — or one
-                // whose request errors — contributes nothing and never fails the
-                // whole fold (honest degradation per host).
+                // Cross-host fold: every connected daemon contributes one host
+                // root. Agent inventory enriches that root when available; an old
+                // daemon or a request error stays visible with an honest status.
                 //
                 // Native only: the daemon layer (and `list_agent_sessions` /
                 // `proto_to_snapshot`) is `#[cfg(not(wasm))]`. On WASM there are
@@ -327,6 +371,15 @@ impl CockpitModel {
                     let mut remotes = Vec::with_capacity(inputs.daemons.len());
                     for daemon in inputs.daemons {
                         if !has_feature(&daemon.features, FEATURE_AGENT_INVENTORY) {
+                            remotes.push((
+                                RemoteHost {
+                                    label: daemon.host_label,
+                                    host_id: daemon.host_id,
+                                    registry_node_id: daemon.registry_node_id,
+                                    inventory_status: AgentInventoryStatus::Unsupported,
+                                },
+                                Vec::new(),
+                            ));
                             continue;
                         }
                         match daemon.client.list_agent_sessions().await {
@@ -334,6 +387,13 @@ impl CockpitModel {
                                 let mut sessions: Vec<SessionSnapshot> =
                                     list.sessions.iter().map(proto_to_snapshot).collect();
                                 retain_negotiated_agent_pty_routes(&daemon.features, &mut sessions);
+                                for session in &mut sessions {
+                                    session.effort = super::session_effort(
+                                        session,
+                                        false,
+                                        Some(&daemon.host_id),
+                                    );
+                                }
                                 // Carry the daemon's stable `host_id` alongside its
                                 // display label so the folded inventory can route
                                 // guardrails/attach by id, not by a collidable label.
@@ -342,6 +402,7 @@ impl CockpitModel {
                                         label: daemon.host_label,
                                         host_id: daemon.host_id,
                                         registry_node_id: daemon.registry_node_id,
+                                        inventory_status: AgentInventoryStatus::Ready,
                                     },
                                     sessions,
                                 ));
@@ -349,9 +410,18 @@ impl CockpitModel {
                             Err(e) => {
                                 log::warn!(
                                     "cockpit fold: list_agent_sessions failed for host {:?}: {e} \
-                                     — skipping this host",
+                                     — retaining the connected host without inventory",
                                     daemon.host_label
                                 );
+                                remotes.push((
+                                    RemoteHost {
+                                        label: daemon.host_label,
+                                        host_id: daemon.host_id,
+                                        registry_node_id: daemon.registry_node_id,
+                                        inventory_status: AgentInventoryStatus::Unavailable,
+                                    },
+                                    Vec::new(),
+                                ));
                             }
                         }
                     }
@@ -386,11 +456,9 @@ impl CockpitModel {
                 let local_label = inputs.local_label.clone();
                 let mut inventory = fold_inventory(inputs.local_label, local, remotes);
 
-                // Merge the SSH registry so the Conductor is the full host
-                // navigator. Every registered SSH host is a root, even offline;
-                // a live daemon enriches that root only through the registry node
-                // that established its connection. Display labels never join
-                // identities. A failed registry read degrades to no merge.
+                // Validate only the connected roots against the SSH registry.
+                // Registry-only/offline hosts belong to Connections and are never
+                // appended to the Cockpit tree. Display labels never join identities.
                 let registered: Vec<RegisteredHost> = warp_ssh_manager::with_conn(|c| {
                     Ok(warp_ssh_manager::SshRepository::list_nodes(c)?)
                 })
@@ -406,7 +474,7 @@ impl CockpitModel {
                     }
                 })
                 .collect();
-                zaplex_cockpit::merge_registered_hosts(&mut inventory, &registered);
+                zaplex_cockpit::reconcile_connected_hosts(&mut inventory, &registered);
 
                 let _ = spawner
                     .spawn(move |me, ctx| {
@@ -565,6 +633,27 @@ impl CockpitModel {
 /// harness.
 fn is_blank(snapshot: &CockpitSnapshot, inventory: &FleetTree) -> bool {
     snapshot.accounts.is_empty() && *inventory == FleetTree::default()
+}
+
+/// Remove one disconnected remote root synchronously, before the background
+/// disk/inventory refresh completes. The manager emits `HostDisconnected` only
+/// after the last session for this stable host id is gone, so retaining another
+/// session cannot race this removal. Local never matches a daemon id.
+fn remove_disconnected_host(inventory: &mut FleetTree, host_id: &str) -> bool {
+    let before = inventory.hosts.len();
+    inventory
+        .hosts
+        .retain(|host| host.is_local || host.host_id.as_deref() != Some(host_id));
+    if inventory.hosts.len() == before {
+        return false;
+    }
+    inventory.needs_me = inventory
+        .hosts
+        .iter()
+        .filter(|host| host.is_available())
+        .map(|host| host.needs_me)
+        .sum();
+    true
 }
 
 /// Detect working→Waiting transitions across the WHOLE fleet — local and every

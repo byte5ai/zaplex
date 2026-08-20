@@ -3,21 +3,25 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::proto::{
     client_message, read_file_chunk_response, resolve_path_response, run_command_response,
-    server_message, write_file_chunk_response, AgentProcessSignal, AgentProcessSignalRequest,
-    AgentProcessSignalResponse, AgentProcessSignalStatus, AgentPtyBindingResponse,
-    AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo, AgentSessionList, AgentTaskItem,
-    ClientMessage, ErrorCode, FileSystemEntryKind, HostExecResult, InitializeResponse,
-    MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList, ReadFileChunkResponse,
-    ReadFileChunkSuccess, ResolvePathResponse, ResolvePathSuccess, RunCommandResponse,
-    RunCommandSuccess, SafeFileEntryKind, SafeFileIdentity, SafeFileMutationResult,
-    SafeFileMutationState, SafeFileOpenExisting, SafeFileOpened, SafeFileRequest, SafeFileResponse,
-    ServerMessage, SessionAttached, SessionExited, SessionInfo, SessionList, SessionOpened,
-    SessionOutput, SessionSize, StartupCommandAck, WriteFileChunkResponse, WriteFileChunkSuccess,
+    server_message, write_file_chunk_response, AgentAccountInfo, AgentAccountInventory,
+    AgentLaunchRoute, AgentProcessSignal, AgentProcessSignalRequest, AgentProcessSignalResponse,
+    AgentProcessSignalStatus, AgentPtyBindingResponse, AgentPtyBindingStatus, AgentSessionIdentity,
+    AgentSessionInfo, AgentSessionList, AgentTaskItem, AgentTranscriptResponse,
+    AgentTranscriptStatus, AgentTranscriptTool, AgentTranscriptTurn, ClientMessage, ErrorCode,
+    FileSystemEntryKind, HostExecResult, InitializeResponse, MultiplexerKind,
+    MultiplexerSessionInfo, MultiplexerSessionList, ReadFileChunkResponse, ReadFileChunkSuccess,
+    ResolvePathResponse, ResolvePathSuccess, RunCommandResponse, RunCommandSuccess,
+    SafeFileEntryKind, SafeFileIdentity, SafeFileMutationResult, SafeFileMutationState,
+    SafeFileOpenExisting, SafeFileOpened, SafeFileRequest, SafeFileResponse, ServerMessage,
+    SessionAttached, SessionExited, SessionInfo, SessionList, SessionOpened, SessionOutput,
+    SessionSize, StartupCommandAck, WriteFileChunkResponse, WriteFileChunkSuccess,
 };
 use crate::protocol;
 use warp_core::SessionId;
 use warpui::r#async::executor;
-use zaplex_remote_session::types::FEATURE_AGENT_PROCESS_SIGNAL_V1;
+use zaplex_remote_session::types::{
+    FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_TRANSCRIPT_READ_V1,
+};
 
 use super::*;
 
@@ -101,6 +105,10 @@ async fn initialize_sends_empty_auth_token_when_none() {
                     .features
                     .iter()
                     .any(|feature| feature == FEATURE_AGENT_PROCESS_SIGNAL_V1));
+                assert!(init
+                    .features
+                    .iter()
+                    .any(|feature| feature == FEATURE_AGENT_TRANSCRIPT_READ_V1));
                 #[cfg(unix)]
                 assert!(init
                     .features
@@ -525,6 +533,7 @@ async fn open_session_round_trip() {
                 assert_eq!(open.shell.as_deref(), Some("/bin/zsh"));
                 assert_eq!(open.env.get("FOO").map(String::as_str), Some("bar"));
                 assert_eq!(open.ring_ceiling_bytes, Some(8 * 1024 * 1024));
+                assert!(open.agent_launch_route.is_none());
             }
             other => panic!("expected OpenSession, got {other:?}"),
         }
@@ -548,6 +557,48 @@ async fn open_session_round_trip() {
         .await
         .unwrap();
     assert_eq!(resp.session_id, "sess-1");
+}
+
+#[tokio::test]
+async fn open_session_for_agent_account_carries_only_the_opaque_route() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        let Some(client_message::Message::OpenSession(open)) = &msg.message else {
+            panic!("expected OpenSession");
+        };
+        assert_eq!(
+            open.agent_launch_route,
+            Some(AgentLaunchRoute {
+                schema_version: 1,
+                provider: "claude".to_string(),
+                account_id: "opaque-account-id".to_string(),
+            })
+        );
+        assert!(!open.env.contains_key("CLAUDE_CONFIG_DIR"));
+        assert!(!open.env.contains_key("CODEX_HOME"));
+        server_message::Message::SessionOpened(SessionOpened {
+            session_id: "sess-account".to_string(),
+            generation: 8,
+        })
+    });
+
+    let response = client
+        .open_session_for_agent_account(
+            None,
+            None,
+            std::collections::HashMap::new(),
+            24,
+            80,
+            None,
+            AgentLaunchRoute {
+                schema_version: 1,
+                provider: "claude".to_string(),
+                account_id: "opaque-account-id".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.session_id, "sess-account");
 }
 
 #[tokio::test]
@@ -591,6 +642,7 @@ async fn generation_checked_attach_reaches_wire() {
         provider: "codex".to_string(),
         account_email: "agent@example.com".to_string(),
         config_dir: "/home/agent/.codex".to_string(),
+        account_id: String::new(),
     };
     let expected_agent_for_wire = expected_agent.clone();
     let (client, _disconnect_rx, _executor) = setup_mock_client(move |msg| {
@@ -628,6 +680,7 @@ async fn agent_pty_bind_and_unbind_reach_wire() {
         provider: "codex".to_string(),
         account_email: "agent@example.com".to_string(),
         config_dir: "/home/agent/.codex".to_string(),
+        account_id: String::new(),
     };
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| match &msg.message {
         Some(client_message::Message::BindAgentPty(bind)) => {
@@ -981,6 +1034,7 @@ async fn list_agent_sessions_round_trip() {
                     // F5 fleet-join keys: whose account (email + provider) and
                     // which repo the worktree belongs to.
                     account_email: "me@example.com".to_string(),
+                    account_id: "opaque-account-1".to_string(),
                     repo_root: "/home/me/proj".to_string(),
                     process_fingerprint: "linux-v1:boot-id:12345".to_string(),
                     pty_session_id: "pty-7".to_string(),
@@ -1023,6 +1077,7 @@ async fn list_agent_sessions_round_trip() {
                     // into the host tree but joins no account, and groups by
                     // its own project_root (the degraded, not mis-grouped path).
                     account_email: String::new(),
+                    account_id: String::new(),
                     repo_root: String::new(),
                     process_fingerprint: String::new(),
                     pty_session_id: String::new(),
@@ -1054,6 +1109,89 @@ async fn list_agent_sessions_round_trip() {
     assert!(resp.sessions[1].effort.is_empty());
     assert!(!resp.sessions[1].has_task_state);
     assert!(resp.sessions[1].task_items.is_empty());
+}
+
+#[tokio::test]
+async fn list_agent_accounts_round_trip_contains_no_config_path_field() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        assert!(matches!(
+            &msg.message,
+            Some(client_message::Message::ListAgentAccounts(_))
+        ));
+        server_message::Message::AgentAccountInventory(AgentAccountInventory {
+            schema_version: 1,
+            accounts: vec![AgentAccountInfo {
+                provider: "claude".to_string(),
+                account_id: "opaque-id".to_string(),
+                display_label: "Claude".to_string(),
+                email: "agent@example.com".to_string(),
+                organization: "Example".to_string(),
+                plan_tier: "Max".to_string(),
+                is_default: false,
+                capacity_5h: 0.75,
+                capacity_week: 0.5,
+                capacity_known: true,
+                health: "loaded".to_string(),
+                usage_provenance: "estimate".to_string(),
+            }],
+            health: "loaded".to_string(),
+            health_message: String::new(),
+        })
+    });
+
+    let response = client.list_agent_accounts().await.unwrap();
+    assert_eq!(response.schema_version, 1);
+    assert_eq!(response.accounts[0].account_id, "opaque-id");
+    assert_eq!(response.accounts[0].capacity_5h, 0.75);
+}
+
+#[tokio::test]
+async fn read_agent_transcript_round_trip_contains_no_host_path_or_raw_payload() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        let Some(client_message::Message::ReadAgentTranscript(request)) = &msg.message else {
+            panic!("expected ReadAgentTranscript");
+        };
+        assert_eq!(request.schema_version, 1);
+        assert_eq!(request.provider, "codex");
+        assert_eq!(request.account_id, "opaque-account-id");
+        assert_eq!(request.session_id, "stable-session-id");
+        assert_eq!(request.known_revision, "abcdef");
+        server_message::Message::AgentTranscriptResponse(AgentTranscriptResponse {
+            schema_version: 1,
+            provider: "codex".to_string(),
+            session_id: "stable-session-id".to_string(),
+            status: AgentTranscriptStatus::Loaded.into(),
+            turns: vec![AgentTranscriptTurn {
+                role: "assistant".to_string(),
+                text: "Answer".to_string(),
+                thinking: String::new(),
+                tools: vec![AgentTranscriptTool {
+                    name: "read_file".to_string(),
+                }],
+                model: "gpt-5.6".to_string(),
+                timestamp: String::new(),
+            }],
+            truncated: false,
+            source_revision: "123456".to_string(),
+            message: String::new(),
+        })
+    });
+
+    let response = client
+        .read_agent_transcript(
+            "codex".to_string(),
+            "opaque-account-id".to_string(),
+            "stable-session-id".to_string(),
+            Some("abcdef".to_string()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        AgentTranscriptStatus::try_from(response.status),
+        Ok(AgentTranscriptStatus::Loaded)
+    );
+    assert_eq!(response.turns[0].tools[0].name, "read_file");
+    assert!(!format!("{response:?}").contains("/home/"));
 }
 
 #[tokio::test]

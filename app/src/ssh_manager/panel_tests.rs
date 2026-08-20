@@ -8,6 +8,15 @@ use diesel::Connection;
 use diesel_migrations::MigrationHarness;
 use warp_ssh_manager::{NodeKind, OneKeyCredentialKind, SshNode};
 
+#[test]
+fn connection_rows_reserve_leading_icons_for_folders_only() {
+    assert_eq!(
+        tree_row_leading_icon(NodeKind::Folder),
+        Some(crate::ui_components::icons::Icon::Folder)
+    );
+    assert_eq!(tree_row_leading_icon(NodeKind::Server), None);
+}
+
 // --- Test helpers -------------------------------------------------------
 
 fn ts() -> NaiveDateTime {

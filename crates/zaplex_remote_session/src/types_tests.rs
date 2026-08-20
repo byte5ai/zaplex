@@ -87,6 +87,22 @@ fn supported_features_advertises_agent_inventory_on_all_platforms() {
 }
 
 #[test]
+fn supported_features_advertises_agent_account_routing_on_all_platforms() {
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_AGENT_ACCOUNT_ROUTING_V1
+    ));
+}
+
+#[test]
+fn supported_features_advertises_agent_transcript_reads_on_all_platforms() {
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_AGENT_TRANSCRIPT_READ_V1
+    ));
+}
+
+#[test]
 fn supported_features_advertises_host_exec_on_all_platforms() {
     // Session-less host-exec runs in a forked subshell (no PTY), so it is
     // advertised regardless of platform for its non-guardrail callers.
@@ -118,6 +134,8 @@ fn supported_client_features_are_explicit_and_platform_independent() {
         FEATURE_SESSION_HOST,
         FEATURE_STARTUP_COMMAND_ACK,
         FEATURE_AGENT_INVENTORY,
+        FEATURE_AGENT_ACCOUNT_ROUTING_V1,
+        FEATURE_AGENT_TRANSCRIPT_READ_V1,
         FEATURE_AGENT_PROCESS_SIGNAL_V1,
         FEATURE_AGENT_PTY_BINDING,
         FEATURE_AGENT_PTY_BINDING_V2,

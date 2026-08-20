@@ -95,9 +95,7 @@ fn dead_pid() -> u32 {
 #[cfg(unix)]
 #[test]
 fn pid_outside_the_signed_process_id_range_is_not_alive() {
-    assert!(
-        !crate::process_identity::probe_registered_process(u32::MAX, None, 0).alive
-    );
+    assert!(!crate::process_identity::probe_registered_process(u32::MAX, None, 0).alive);
 }
 
 fn assistant_line(stop_reason: &str) -> serde_json::Value {
@@ -154,13 +152,7 @@ fn task_create_result_line(tool_use_id: &str, task_id: &str, subject: &str) -> s
 #[test]
 fn busy_session_is_active() {
     let tmp = tempfile::tempdir().unwrap();
-    fake_account(
-        tmp.path(),
-        "s1",
-        "busy",
-        "",
-        &[assistant_line("end_turn")],
-    );
+    fake_account(tmp.path(), "s1", "busy", "", &[assistant_line("end_turn")]);
     let sessions = live_sessions(tmp.path(), Utc::now());
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].state, SessionState::Active);
@@ -181,6 +173,154 @@ fn busy_session_is_active() {
         sessions[0].process_fingerprint.is_some(),
         "a matching Claude procStart must bind the live process"
     );
+}
+
+#[test]
+fn modern_interactive_registry_without_status_is_visible() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "modern",
+        "",
+        "interactive",
+        &[assistant_line("end_turn")],
+    );
+    let registry = tmp.path().join("sessions").join("modern.json");
+    let mut entry: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&registry).unwrap()).unwrap();
+    entry.as_object_mut().unwrap().remove("status");
+    std::fs::write(registry, serde_json::to_vec(&entry).unwrap()).unwrap();
+
+    let sessions = live_sessions(tmp.path(), Utc::now());
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id, "modern");
+    assert_eq!(sessions[0].state, SessionState::Waiting);
+}
+
+#[test]
+fn modern_background_registry_without_status_is_visible_as_monitor() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "background",
+        "",
+        "bg",
+        &[assistant_line("end_turn")],
+    );
+
+    let sessions = live_sessions(tmp.path(), Utc::now());
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id, "background");
+    assert_eq!(sessions[0].state, SessionState::Monitor);
+}
+
+#[test]
+fn modern_statusless_shell_helper_is_still_hidden() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "helper",
+        "",
+        "shell",
+        &[assistant_line("end_turn")],
+    );
+
+    assert!(live_sessions(tmp.path(), Utc::now()).is_empty());
+}
+
+#[test]
+fn modern_statusless_unknown_helper_is_still_hidden() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "helper",
+        "",
+        "worker",
+        &[assistant_line("end_turn")],
+    );
+
+    assert!(live_sessions(tmp.path(), Utc::now()).is_empty());
+}
+
+#[test]
+fn recent_substantial_transcript_survives_registry_cleanup_only_as_idle() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut first = assistant_line("end_turn");
+    first["cwd"] = json!("/tmp/proj");
+    fake_account(
+        tmp.path(),
+        "history",
+        "idle",
+        "interactive",
+        &[first, assistant_line("end_turn")],
+    );
+    std::fs::remove_file(tmp.path().join("sessions").join("history.json")).unwrap();
+
+    let scan = scan_sessions(tmp.path(), Utc::now(), Duration::hours(6), 24);
+    assert!(
+        scan.live.is_empty(),
+        "transcript-only history must not enter the live Cockpit tree"
+    );
+    assert_eq!(scan.idle.len(), 1);
+    assert_eq!(scan.idle[0].session_id, "history");
+    assert_eq!(scan.idle[0].state, SessionState::Idle);
+    assert_eq!(scan.idle[0].cwd, "/tmp/proj");
+    assert_eq!(scan.idle[0].pid, 0, "history is not a running process");
+}
+
+#[test]
+fn transcript_only_history_must_be_substantial() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut line = assistant_line("end_turn");
+    line["cwd"] = json!("/tmp/proj");
+    fake_account(tmp.path(), "fragment", "idle", "interactive", &[line]);
+    std::fs::remove_file(tmp.path().join("sessions").join("fragment.json")).unwrap();
+
+    let scan = scan_sessions(tmp.path(), Utc::now(), Duration::hours(6), 24);
+    assert!(scan.live.is_empty());
+    assert!(
+        scan.idle.is_empty(),
+        "one text turn without a tool is an automation fragment, not resumable history"
+    );
+}
+
+#[test]
+fn transcript_only_history_requires_a_launch_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "unlocated",
+        "idle",
+        "interactive",
+        &[assistant_line("end_turn"), assistant_line("end_turn")],
+    );
+    std::fs::remove_file(tmp.path().join("sessions").join("unlocated.json")).unwrap();
+
+    let scan = scan_sessions(tmp.path(), Utc::now(), Duration::hours(6), 24);
+    assert!(scan.live.is_empty());
+    assert!(
+        scan.idle.is_empty(),
+        "history without its recorded cwd cannot be resumed safely"
+    );
+}
+
+#[test]
+fn transcript_only_observer_history_is_hidden() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut first = assistant_line("end_turn");
+    first["cwd"] = json!("/tmp/observer-sessions/proj");
+    fake_account(
+        tmp.path(),
+        "observer",
+        "idle",
+        "interactive",
+        &[first, assistant_line("end_turn")],
+    );
+    std::fs::remove_file(tmp.path().join("sessions").join("observer.json")).unwrap();
+
+    let scan = scan_sessions(tmp.path(), Utc::now(), Duration::hours(6), 24);
+    assert!(scan.live.is_empty());
+    assert!(scan.idle.is_empty());
 }
 
 #[test]
@@ -436,7 +576,13 @@ fn a_finished_session_is_discovered_as_dormant_and_resumable() {
 #[test]
 fn live_and_dormant_sessions_never_overlap() {
     let tmp = tempfile::tempdir().unwrap();
-    fake_account(tmp.path(), "running", "busy", "", &[assistant_line("end_turn")]);
+    fake_account(
+        tmp.path(),
+        "running",
+        "busy",
+        "",
+        &[assistant_line("end_turn")],
+    );
     fake_account_at(
         tmp.path(),
         "finished",
@@ -455,7 +601,8 @@ fn live_and_dormant_sessions_never_overlap() {
     assert_eq!(idle.len(), 1);
     assert_eq!(idle[0].session_id, "finished");
     assert!(
-        live.iter().all(|l| idle.iter().all(|i| i.session_id != l.session_id)),
+        live.iter()
+            .all(|l| idle.iter().all(|i| i.session_id != l.session_id)),
         "a session must never appear as both running and dormant"
     );
 }
@@ -504,7 +651,10 @@ fn dormant_discovery_stops_at_the_age_bound() {
     );
     // Same session, wider bound → found. Proves the age gate is what excluded
     // it, not some unrelated filter.
-    assert_eq!(idle_sessions(tmp.path(), now, Duration::days(30), 50).len(), 1);
+    assert_eq!(
+        idle_sessions(tmp.path(), now, Duration::days(30), 50).len(),
+        1
+    );
 }
 
 #[test]
@@ -526,14 +676,19 @@ fn dormant_discovery_is_capped_and_most_recent_first() {
 
     let all = idle_sessions(tmp.path(), now, MAX_AGE, 50);
     assert_eq!(
-        all.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(),
+        all.iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
         ["newest", "middle", "oldest"],
         "most recent first"
     );
 
     let capped = idle_sessions(tmp.path(), now, MAX_AGE, 2);
     assert_eq!(
-        capped.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(),
+        capped
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
         ["newest", "middle"],
         "the cap keeps the most recent, not the first found"
     );
@@ -576,7 +731,10 @@ fn the_cap_ranks_on_real_recency_not_a_lagging_registry() {
 
     let capped = idle_sessions(tmp.path(), now, MAX_AGE, 1);
     assert_eq!(
-        capped.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(),
+        capped
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
         ["lagging-registry"],
         "the cap must keep the session that was actually touched last"
     );
@@ -586,7 +744,11 @@ fn the_cap_ranks_on_real_recency_not_a_lagging_registry() {
 fn touch_transcript(dir: &Path, session_id: &str, at: DateTime<Utc>) {
     std::fs::File::options()
         .write(true)
-        .open(dir.join("projects").join("-tmp-proj").join(format!("{session_id}.jsonl")))
+        .open(
+            dir.join("projects")
+                .join("-tmp-proj")
+                .join(format!("{session_id}.jsonl")),
+        )
         .unwrap()
         .set_modified(SystemTime::from(at))
         .unwrap();

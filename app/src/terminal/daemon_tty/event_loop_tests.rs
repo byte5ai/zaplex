@@ -6,6 +6,19 @@ use warpui::{App, ModelHandle};
 const OUR_PTY: &str = "pty-ours";
 const HOST: &str = "test-host";
 
+#[test]
+fn account_route_requires_the_negotiated_capability() {
+    let route = AgentLaunchRoute {
+        schema_version: 1,
+        provider: "claude".to_string(),
+        account_id: "opaque-account".to_string(),
+    };
+
+    assert!(!account_route_is_compatible(Some(&route), false));
+    assert!(account_route_is_compatible(Some(&route), true));
+    assert!(account_route_is_compatible(None, false));
+}
+
 /// A [`ChannelEventListener`] whose wakeup channel we keep. `process_pty_bytes`
 /// fires a wakeup *after* feeding the bytes through the ANSI processor into the
 /// terminal model, so an observed wakeup proves the output reached the parser
@@ -952,6 +965,7 @@ fn adopted_foreground_agent_hydrates_lifecycle_routing() {
         provider: "codex".to_string(),
         account_email: "agent@example.com".to_string(),
         config_dir: "/home/agent/.codex".to_string(),
+        account_id: String::new(),
     };
 
     event_loop.apply_authoritative_agent_binding_state(Some(identity.clone()));
@@ -972,6 +986,7 @@ fn attach_hydration_preserves_a_pending_explicit_handoff() {
         provider: "codex".to_string(),
         account_email: "agent@example.com".to_string(),
         config_dir: "/home/agent/.codex".to_string(),
+        account_id: String::new(),
     };
     let desired = AgentSessionIdentity {
         session_id: "agent-2".to_string(),
@@ -1044,6 +1059,7 @@ fn lifecycle_handoff_during_attach_is_not_discarded() {
             provider: "codex".to_string(),
             account_email: "a@example.com".to_string(),
             config_dir: "/home/agent/.codex-a".to_string(),
+            account_id: String::new(),
         };
         event_loop.update(&mut app, |me, _ctx| {
             me.apply_authoritative_agent_binding_state(Some(agent_a.clone()));
@@ -1057,6 +1073,7 @@ fn lifecycle_handoff_during_attach_is_not_discarded() {
                     provider: "codex".to_string(),
                     account_email: "b@example.com".to_string(),
                     config_dir: "/home/agent/.codex-b".to_string(),
+                    account_id: String::new(),
                 }),
                 "the lifecycle change must remain pending as an explicit handoff"
             );
@@ -1074,6 +1091,7 @@ fn authoritative_unbound_attach_clears_stale_inventory_seed() {
         provider: "codex".to_string(),
         account_email: "agent@example.com".to_string(),
         config_dir: "/home/agent/.codex".to_string(),
+        account_id: String::new(),
     };
     event_loop.agent_binding = Some(stale.clone());
     event_loop.desired_agent_binding = Some(stale);
@@ -1100,6 +1118,7 @@ fn sidebar_attach_binds_authoritative_agent_account_identity() {
             provider: "codex".to_string(),
             account_email: "sidebar@example.com".to_string(),
             config_dir: "/home/agent/.codex-sidebar".to_string(),
+            account_id: String::new(),
         };
         let event_loop = app.add_model(|_ctx| EventLoop::new(model, listener, conn));
 
@@ -1141,6 +1160,7 @@ fn sidebar_attach_binds_authoritative_antigravity_account_identity() {
             provider: "antigravity".to_string(),
             account_email: "antigravity@example.com".to_string(),
             config_dir: "/home/agent/.gemini/antigravity".to_string(),
+            account_id: String::new(),
         };
         let event_loop = app.add_model(|_ctx| EventLoop::new(model, listener, conn));
 
@@ -1271,6 +1291,7 @@ fn settled_binding_does_not_override_a_later_reconnect_snapshot() {
         provider: "codex".to_string(),
         account_email: "agent@example.com".to_string(),
         config_dir: "/home/agent/.codex".to_string(),
+        account_id: String::new(),
     };
     event_loop.agent_binding = Some(settled.clone());
     event_loop.desired_agent_binding = Some(settled);

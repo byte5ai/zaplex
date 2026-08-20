@@ -1,0 +1,1173 @@
+#!/usr/bin/env python3
+"""Validate and execute the GH-160/GH-169 Cockpit parity contract."""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import hashlib
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_MANIFEST = ROOT / "specs/parity/cockpit-matrix.json"
+
+EXIT_FAILED = 1
+EXIT_CONTRACT = 2
+EXIT_OPERATIONAL = 3
+
+EXPECTED_DIMENSIONS = {
+    "provider": {"claude", "codex"},
+    "account": {"default", "pinned", "multiple"},
+    "location": {"local", "remote"},
+    "state": {"live", "waiting", "idle", "dormant"},
+}
+EXPECTED_CAPABILITIES = {
+    "api",
+    "launch",
+    "reattach",
+    "transcript",
+    "usage",
+    "attention",
+    "lifecycle",
+}
+EXPECTED_REFERENCES = {
+    "claudeplex": ("iret77/claudeplex", "main"),
+    "claudeplex-desktop": ("iret77/claudeplex-desktop", "main"),
+}
+EXPECTED_SUITE_COMMANDS = {
+    "cargo-check": ["cargo", "check", "--locked", "--bin", "zaplex"],
+    "cockpit-data-spine": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "zaplex_cockpit",
+        "--lib",
+        "--no-fail-fast",
+    ],
+    "cockpit-app": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "cockpit::",
+    ],
+    "generated-read-only-code": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "generated_",
+    ],
+    "remote-daemon-app": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "remote_server::",
+    ],
+    "cockpit-cli": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp_cli",
+        "--lib",
+        "--no-fail-fast",
+        "cockpit::",
+    ],
+}
+EXPECTED_SELF_TEST_CASES = {
+    "provider-regression",
+    "host-regression",
+    "status-regression",
+    "remote-provider-cross-boundary",
+    "remote-host-cross-boundary",
+    "remote-status-cross-boundary",
+    "missing-test-regression",
+}
+EXPECTED_SCREENSHOTS = {
+    "cockpit-desktop.png",
+    "cockpit-narrow.png",
+    "cockpit-reduced-motion.png",
+}
+REQUIRED_SCENARIOS = {
+    "claude-default-local-live-launch": {
+        "provider": {"claude"},
+        "account": {"default"},
+        "location": {"local"},
+        "state": {"live"},
+    },
+    "claude-pinned-local-waiting": {
+        "provider": {"claude"},
+        "account": {"pinned"},
+        "location": {"local"},
+        "state": {"waiting"},
+    },
+    "claude-multiple-local-dormant": {
+        "provider": {"claude"},
+        "account": {"multiple"},
+        "location": {"local"},
+        "state": {"dormant"},
+    },
+    "codex-default-local-waiting": {
+        "provider": {"codex"},
+        "account": {"default"},
+        "location": {"local"},
+        "state": {"waiting"},
+    },
+    "codex-pinned-local-idle": {
+        "provider": {"codex"},
+        "account": {"pinned"},
+        "location": {"local"},
+        "state": {"idle"},
+    },
+    "codex-multiple-local-dormant": {
+        "provider": {"codex"},
+        "account": {"multiple"},
+        "location": {"local"},
+        "state": {"dormant"},
+    },
+    "remote-claude-live-lifecycle": {
+        "provider": {"claude"},
+        "account": {"default"},
+        "location": {"remote"},
+        "state": {"live"},
+    },
+    "remote-codex-waiting-attention": {
+        "provider": {"codex"},
+        "account": {"pinned"},
+        "location": {"remote"},
+        "state": {"waiting"},
+    },
+    "remote-multi-provider-idle": {
+        "provider": {"claude", "codex"},
+        "account": {"multiple"},
+        "location": {"remote"},
+        "state": {"idle"},
+    },
+}
+REQUIRED_SCENARIO_EVIDENCE = {
+    "claude-default-local-live-launch": {
+        "cockpit-json-runtime",
+        "cockpit-json-degraded",
+        "cockpit-ipc-auth",
+    },
+    "remote-claude-live-lifecycle": {
+        "remote-first-session",
+        "remote-last-session",
+        "exact-reattach-boundary",
+        "daemon-default-account",
+        "daemon-route-dimensions",
+        "daemon-binding-lifecycle",
+        "daemon-account-id-opaque",
+        "remote-claude-transcript-projection",
+        "remote-transcript-ui-gate",
+        "remote-transcript-ui-current",
+        "remote-transcript-ui-projection",
+        "remote-transcript-ui-statuses",
+        "remote-transcript-ui-fail-closed",
+        "generated-read-only-source",
+        "generated-read-only-header",
+        "generated-read-only-no-merge",
+    },
+    "remote-codex-waiting-attention": {
+        "remote-first-session",
+        "waiting-row-attention",
+        "reduced-motion",
+        "daemon-wire-all-states",
+        "daemon-wire-all-providers",
+        "daemon-route-dimensions",
+        "remote-codex-transcript-projection",
+        "remote-transcript-revision",
+        "remote-transcript-ui-gate",
+        "remote-transcript-ui-current",
+        "remote-transcript-ui-projection",
+        "remote-transcript-ui-statuses",
+        "remote-transcript-ui-fail-closed",
+        "generated-read-only-source",
+        "generated-read-only-header",
+        "generated-read-only-no-merge",
+    },
+    "remote-multi-provider-idle": {
+        "remote-provider-boundary",
+        "provider-account-boundary",
+        "remote-last-session",
+        "daemon-wire-all-providers",
+        "daemon-rejects-cross-boundary-bindings",
+        "daemon-rejects-direct-account-path",
+    },
+}
+REQUIRED_SCENARIO_CAPABILITIES = {
+    "claude-default-local-live-launch": {"api", "launch", "lifecycle"},
+    "claude-pinned-local-waiting": {"transcript", "usage", "attention"},
+    "claude-multiple-local-dormant": {"reattach", "transcript", "lifecycle"},
+    "codex-default-local-waiting": {"transcript", "usage", "attention"},
+    "codex-pinned-local-idle": {"launch", "lifecycle"},
+    "codex-multiple-local-dormant": {"reattach", "transcript"},
+    "remote-claude-live-lifecycle": {"launch", "reattach", "transcript", "lifecycle"},
+    "remote-codex-waiting-attention": {"attention", "transcript", "lifecycle"},
+    "remote-multi-provider-idle": {"usage", "lifecycle"},
+}
+ALLOWED_TEST_PREFIXES = (
+    "crates/zaplex_cockpit/src/",
+    "crates/warp_cli/src/",
+    "app/src/cockpit/",
+    "app/src/code/",
+    "app/src/control_surface_tests.rs",
+    "app/src/remote_server/",
+)
+
+
+class AuditError(Exception):
+    """An operational error that prevents the audit from producing evidence."""
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise AuditError(f"cannot read JSON {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise AuditError(f"JSON root must be an object: {path}")
+    return value
+
+
+def write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def safe_repo_path(root: Path, relative: str) -> Path | None:
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(root.resolve())
+    except ValueError:
+        return None
+    return candidate
+
+
+def string_set(value: Any, label: str, errors: list[str]) -> set[str]:
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) for item in value):
+        errors.append(f"{label} must be a non-empty array of strings")
+        return set()
+    if len(value) != len(set(value)):
+        errors.append(f"{label} contains duplicate values")
+    return set(value)
+
+
+def unique_objects(value: Any, label: str, errors: list[str]) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        errors.append(f"{label} must be a non-empty array")
+        return []
+    objects: list[dict[str, Any]] = []
+    ids: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            errors.append(f"{label}[{index}] must be an object")
+            continue
+        item_id = item.get("id")
+        if not isinstance(item_id, str) or not item_id:
+            errors.append(f"{label}[{index}].id must be a non-empty string")
+            continue
+        if item_id in ids:
+            errors.append(f"{label} contains duplicate id {item_id!r}")
+        ids.add(item_id)
+        objects.append(item)
+    return objects
+
+
+def test_function_exists(source: str, name: str) -> bool:
+    match = re.search(rf"\bfn\s+{re.escape(name)}\s*\(", source)
+    if match is None:
+        return False
+    annotation_window = source[max(0, match.start() - 500) : match.start()]
+    return "#[test]" in annotation_window or "#[warpui::test]" in annotation_window
+
+
+def validate_manifest(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    errors: list[str] = []
+
+    if manifest.get("schema_version") != 1:
+        errors.append("schema_version must be 1")
+    if manifest.get("contract") != "GH-160":
+        errors.append("contract must be GH-160")
+    if manifest.get("gate_issue") != 169:
+        errors.append("gate_issue must be 169")
+
+    dimensions = manifest.get("required_dimensions")
+    if not isinstance(dimensions, dict):
+        errors.append("required_dimensions must be an object")
+        dimensions = {}
+    for dimension, expected in EXPECTED_DIMENSIONS.items():
+        actual = string_set(
+            dimensions.get(dimension),
+            f"required_dimensions.{dimension}",
+            errors,
+        )
+        if actual != expected:
+            errors.append(
+                f"required_dimensions.{dimension} must equal {sorted(expected)}, got {sorted(actual)}"
+            )
+    extra_dimensions = set(dimensions) - set(EXPECTED_DIMENSIONS)
+    if extra_dimensions:
+        errors.append(f"unknown required dimensions: {sorted(extra_dimensions)}")
+
+    capabilities = string_set(
+        manifest.get("required_capabilities"), "required_capabilities", errors
+    )
+    if capabilities != EXPECTED_CAPABILITIES:
+        errors.append(
+            "required_capabilities must equal "
+            f"{sorted(EXPECTED_CAPABILITIES)}, got {sorted(capabilities)}"
+        )
+
+    references = unique_objects(manifest.get("references"), "references", errors)
+    reference_ids = {item.get("id") for item in references}
+    if reference_ids != set(EXPECTED_REFERENCES):
+        errors.append(
+            f"references must equal {sorted(EXPECTED_REFERENCES)}, got {sorted(reference_ids)}"
+        )
+    for reference in references:
+        reference_id = reference.get("id")
+        expected = EXPECTED_REFERENCES.get(reference_id)
+        if expected is None:
+            continue
+        if (reference.get("repository"), reference.get("branch")) != expected:
+            errors.append(
+                f"reference {reference_id} must use repository {expected[0]} branch {expected[1]}"
+            )
+        url = reference.get("url")
+        if not isinstance(url, str) or not url.startswith("https://github.com/"):
+            errors.append(f"reference {reference_id}.url must be a public GitHub HTTPS URL")
+        probes = unique_objects(reference.get("probes"), f"reference {reference_id}.probes", errors)
+        for probe in probes:
+            path = probe.get("path")
+            if not isinstance(path, str) or path.startswith("/") or ".." in Path(path).parts:
+                errors.append(f"reference {reference_id} probe {probe.get('id')} has an unsafe path")
+            patterns = string_set(
+                probe.get("contains_regex"),
+                f"reference {reference_id} probe {probe.get('id')}.contains_regex",
+                errors,
+            )
+            for pattern in patterns:
+                try:
+                    re.compile(pattern)
+                except re.error as error:
+                    errors.append(
+                        f"reference {reference_id} probe {probe.get('id')} has invalid regex "
+                        f"{pattern!r}: {error}"
+                    )
+
+    suites = unique_objects(manifest.get("suites"), "suites", errors)
+    suite_ids = {suite.get("id") for suite in suites}
+    expected_suites = {
+        "cargo-check",
+        "cockpit-cli",
+        "cockpit-data-spine",
+        "cockpit-app",
+        "generated-read-only-code",
+        "remote-daemon-app",
+    }
+    if suite_ids != expected_suites:
+        errors.append(f"suites must equal {sorted(expected_suites)}, got {sorted(suite_ids)}")
+    for suite in suites:
+        suite_id = suite.get("id")
+        command = suite.get("command")
+        if (
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(part, str) and part for part in command)
+            or command[0] != "cargo"
+        ):
+            errors.append(f"suite {suite.get('id')}.command must be a non-empty Cargo argv array")
+        elif command != EXPECTED_SUITE_COMMANDS.get(suite_id):
+            errors.append(
+                f"suite {suite_id}.command must equal "
+                f"{EXPECTED_SUITE_COMMANDS.get(suite_id)}, got {command}"
+            )
+        timeout = suite.get("timeout_seconds")
+        if not isinstance(timeout, int) or timeout < 1 or timeout > 7200:
+            errors.append(f"suite {suite.get('id')}.timeout_seconds must be between 1 and 7200")
+
+    catalog = unique_objects(manifest.get("test_catalog"), "test_catalog", errors)
+    catalog_ids = {test.get("id") for test in catalog}
+    for test in catalog:
+        test_id = test.get("id")
+        suite = test.get("suite")
+        source_path = test.get("source")
+        name = test.get("name")
+        if suite not in suite_ids or suite == "cargo-check":
+            errors.append(f"test {test_id} references unknown or non-test suite {suite!r}")
+        if not isinstance(source_path, str) or not source_path.startswith(ALLOWED_TEST_PREFIXES):
+            errors.append(f"test {test_id} source is outside the Cockpit test domains")
+            continue
+        path = safe_repo_path(root, source_path)
+        if path is None or not path.is_file():
+            errors.append(f"test {test_id} source does not exist: {source_path}")
+            continue
+        if not isinstance(name, str) or not name:
+            errors.append(f"test {test_id}.name must be a non-empty string")
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError as error:
+            errors.append(f"cannot read test source {source_path}: {error}")
+            continue
+        if not test_function_exists(source, name):
+            errors.append(f"test {test_id} does not resolve to an annotated test function {name}")
+
+    scenarios = unique_objects(manifest.get("scenarios"), "scenarios", errors)
+    scenario_ids = {scenario.get("id") for scenario in scenarios}
+    if scenario_ids != set(REQUIRED_SCENARIOS):
+        errors.append(
+            f"scenarios must equal the required cross-boundary rows "
+            f"{sorted(REQUIRED_SCENARIOS)}, got {sorted(scenario_ids)}"
+        )
+    covered_dimensions = {dimension: set() for dimension in EXPECTED_DIMENSIONS}
+    covered_capabilities: set[str] = set()
+    used_evidence: set[str] = set()
+    for scenario in scenarios:
+        scenario_id = scenario.get("id")
+        scenario_dimensions = scenario.get("dimensions")
+        if not isinstance(scenario_dimensions, dict):
+            errors.append(f"scenario {scenario_id}.dimensions must be an object")
+            continue
+        if set(scenario_dimensions) != set(EXPECTED_DIMENSIONS):
+            errors.append(
+                f"scenario {scenario_id}.dimensions must contain exactly "
+                f"{sorted(EXPECTED_DIMENSIONS)}"
+            )
+        for dimension, expected in EXPECTED_DIMENSIONS.items():
+            values = string_set(
+                scenario_dimensions.get(dimension),
+                f"scenario {scenario_id}.dimensions.{dimension}",
+                errors,
+            )
+            unknown = values - expected
+            if unknown:
+                errors.append(
+                    f"scenario {scenario_id}.dimensions.{dimension} has unknown values "
+                    f"{sorted(unknown)}"
+                )
+            covered_dimensions[dimension].update(values & expected)
+            required_values = REQUIRED_SCENARIOS.get(scenario_id, {}).get(dimension)
+            if required_values is not None and values != required_values:
+                errors.append(
+                    f"scenario {scenario_id}.dimensions.{dimension} must equal "
+                    f"{sorted(required_values)}, got {sorted(values)}"
+                )
+        scenario_capabilities = string_set(
+            scenario.get("capabilities"), f"scenario {scenario_id}.capabilities", errors
+        )
+        unknown_capabilities = scenario_capabilities - EXPECTED_CAPABILITIES
+        if unknown_capabilities:
+            errors.append(
+                f"scenario {scenario_id} has unknown capabilities {sorted(unknown_capabilities)}"
+            )
+        covered_capabilities.update(scenario_capabilities & EXPECTED_CAPABILITIES)
+        required_capabilities = REQUIRED_SCENARIO_CAPABILITIES.get(scenario_id)
+        if required_capabilities is not None and scenario_capabilities != required_capabilities:
+            errors.append(
+                f"scenario {scenario_id}.capabilities must equal "
+                f"{sorted(required_capabilities)}, got {sorted(scenario_capabilities)}"
+            )
+        evidence = string_set(
+            scenario.get("evidence"), f"scenario {scenario_id}.evidence", errors
+        )
+        unknown_evidence = evidence - catalog_ids
+        if unknown_evidence:
+            errors.append(
+                f"scenario {scenario_id} references unknown evidence {sorted(unknown_evidence)}"
+            )
+        used_evidence.update(evidence & catalog_ids)
+        required_evidence = REQUIRED_SCENARIO_EVIDENCE.get(scenario_id, set())
+        missing_required_evidence = required_evidence - evidence
+        if missing_required_evidence:
+            errors.append(
+                f"scenario {scenario_id} is missing cross-boundary evidence "
+                f"{sorted(missing_required_evidence)}"
+            )
+
+    for dimension, expected in EXPECTED_DIMENSIONS.items():
+        missing = expected - covered_dimensions[dimension]
+        if missing:
+            errors.append(f"dimension {dimension} does not cover values: {sorted(missing)}")
+    missing_capabilities = EXPECTED_CAPABILITIES - covered_capabilities
+    if missing_capabilities:
+        errors.append(f"capabilities are not covered: {sorted(missing_capabilities)}")
+    unused_evidence = catalog_ids - used_evidence
+    if unused_evidence:
+        errors.append(f"test_catalog contains unused evidence: {sorted(unused_evidence)}")
+
+    ui_contract = unique_objects(manifest.get("ui_contract"), "ui_contract", errors)
+    ui_ids = {check.get("id") for check in ui_contract}
+    if ui_ids != {"normal", "narrow", "reduced-motion"}:
+        errors.append(
+            "ui_contract must contain exactly normal, narrow, and reduced-motion checks"
+        )
+    for check in ui_contract:
+        check_id = check.get("id")
+        source_path = check.get("path")
+        if not isinstance(source_path, str):
+            errors.append(f"ui_contract {check_id}.path must be a string")
+            continue
+        path = safe_repo_path(root, source_path)
+        if path is None or not path.is_file():
+            errors.append(f"ui_contract {check_id} source does not exist: {source_path}")
+            continue
+        patterns = string_set(
+            check.get("required_regex"), f"ui_contract {check_id}.required_regex", errors
+        )
+        source = path.read_text(encoding="utf-8")
+        for pattern in patterns:
+            try:
+                matched = re.search(pattern, source, re.MULTILINE) is not None
+            except re.error as error:
+                errors.append(f"ui_contract {check_id} has invalid regex {pattern!r}: {error}")
+                continue
+            if not matched:
+                errors.append(f"ui_contract {check_id} is missing pattern {pattern!r}")
+
+    manual_runtime = manifest.get("manual_runtime")
+    if not isinstance(manual_runtime, dict):
+        errors.append("manual_runtime must be an object")
+    else:
+        source_path = manual_runtime.get("path")
+        if not isinstance(source_path, str):
+            errors.append("manual_runtime.path must be a string")
+        else:
+            path = safe_repo_path(root, source_path)
+            if path is None or not path.is_file():
+                errors.append(f"manual runtime procedure does not exist: {source_path}")
+            else:
+                source = path.read_text(encoding="utf-8")
+                patterns = string_set(
+                    manual_runtime.get("required_regex"),
+                    "manual_runtime.required_regex",
+                    errors,
+                )
+                for pattern in patterns:
+                    try:
+                        matched = re.search(pattern, source, re.IGNORECASE) is not None
+                    except re.error as error:
+                        errors.append(f"manual_runtime has invalid regex {pattern!r}: {error}")
+                        continue
+                    if not matched:
+                        errors.append(f"manual runtime procedure is missing pattern {pattern!r}")
+
+    screenshot_contract = manifest.get("screenshot_contract")
+    if not isinstance(screenshot_contract, dict):
+        errors.append("screenshot_contract must be an object")
+    else:
+        source_path = screenshot_contract.get("path")
+        if not isinstance(source_path, str):
+            errors.append("screenshot_contract.path must be a string")
+        else:
+            path = safe_repo_path(root, source_path)
+            if path is None or not path.is_file():
+                errors.append(f"screenshot contract does not exist: {source_path}")
+            else:
+                source = path.read_text(encoding="utf-8")
+                patterns = string_set(
+                    screenshot_contract.get("required_regex"),
+                    "screenshot_contract.required_regex",
+                    errors,
+                )
+                for pattern in patterns:
+                    try:
+                        matched = re.search(pattern, source, re.MULTILINE) is not None
+                    except re.error as error:
+                        errors.append(
+                            f"screenshot_contract has invalid regex {pattern!r}: {error}"
+                        )
+                        continue
+                    if not matched:
+                        errors.append(f"screenshot contract is missing pattern {pattern!r}")
+
+    result = {
+        "schema_version": 1,
+        "status": "pass" if not errors else "fail",
+        "contract": manifest.get("contract"),
+        "gate_issue": manifest.get("gate_issue"),
+        "scenario_count": len(scenarios),
+        "test_evidence_count": len(catalog),
+        "reference_probe_count": sum(
+            len(reference.get("probes", []))
+            for reference in references
+            if isinstance(reference.get("probes"), list)
+        ),
+        "coverage": {
+            dimension: sorted(values) for dimension, values in covered_dimensions.items()
+        },
+        "capabilities": sorted(covered_capabilities),
+        "ui_contract": sorted(ui_ids),
+        "errors": errors,
+    }
+    return result, errors
+
+
+def run_git(args: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        raise AuditError(f"cannot run git in {cwd}: {error}") from error
+    if check and result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise AuditError(f"git {' '.join(args)} failed in {cwd}: {detail}")
+    return result
+
+
+def normalized_git_url(url: str) -> str:
+    return url.rstrip("/").removesuffix(".git")
+
+
+def sync_reference(reference: dict[str, Any], destination_root: Path) -> dict[str, Any]:
+    reference_id = reference["id"]
+    url = reference["url"]
+    branch = reference["branch"]
+    destination = destination_root / reference_id
+    strategy: str
+
+    if not destination.exists():
+        destination_root.mkdir(parents=True, exist_ok=True)
+        try:
+            result = subprocess.run(
+                [
+                    "git",
+                    "clone",
+                    "--branch",
+                    branch,
+                    "--single-branch",
+                    "--no-tags",
+                    url,
+                    str(destination),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as error:
+            raise AuditError(f"cannot clone reference {reference_id}: {error}") from error
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip()
+            raise AuditError(f"cannot clone reference {reference_id}: {detail}")
+        strategy = "fresh-clone"
+    else:
+        if not (destination / ".git").exists():
+            raise AuditError(f"reference destination is not a Git repository: {destination}")
+        if run_git(["status", "--porcelain"], destination).stdout.strip():
+            raise AuditError(f"reference {reference_id} has local changes; refusing to update")
+        current_branch = run_git(["branch", "--show-current"], destination).stdout.strip()
+        if current_branch != branch:
+            raise AuditError(
+                f"reference {reference_id} is on {current_branch or 'detached HEAD'}, expected {branch}"
+            )
+        remote_url = run_git(["remote", "get-url", "origin"], destination).stdout.strip()
+        if normalized_git_url(remote_url) != normalized_git_url(url):
+            raise AuditError(
+                f"reference {reference_id} origin is {remote_url!r}, expected {url!r}"
+            )
+        refspec = f"refs/heads/{branch}:refs/remotes/origin/{branch}"
+        run_git(["fetch", "--prune", "--no-tags", "origin", refspec], destination)
+        remote_ref = f"refs/remotes/origin/{branch}"
+        ancestry = run_git(
+            ["merge-base", "--is-ancestor", "HEAD", remote_ref], destination, check=False
+        )
+        if ancestry.returncode != 0:
+            raise AuditError(
+                f"reference {reference_id} cannot be updated fast-forward-only to origin/{branch}"
+            )
+        run_git(["merge", "--ff-only", remote_ref], destination)
+        strategy = "fast-forward-only"
+
+    revision = run_git(["rev-parse", "HEAD"], destination).stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise AuditError(f"reference {reference_id} produced invalid revision {revision!r}")
+    current_branch = run_git(["branch", "--show-current"], destination).stdout.strip()
+    if current_branch != branch:
+        raise AuditError(f"reference {reference_id} did not finish on branch {branch}")
+    return {
+        "id": reference_id,
+        "repository": reference["repository"],
+        "branch": branch,
+        "revision": revision,
+        "strategy": strategy,
+        "path": str(destination),
+    }
+
+
+def run_reference_probes(
+    references: list[dict[str, Any]], destination_root: Path
+) -> tuple[list[dict[str, Any]], list[str]]:
+    results: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for reference in references:
+        reference_id = reference["id"]
+        checkout = destination_root / reference_id
+        for probe in reference["probes"]:
+            path = safe_repo_path(checkout, probe["path"])
+            missing: list[str] = []
+            if path is None or not path.is_file():
+                missing.append("<source-file>")
+            else:
+                source = path.read_text(encoding="utf-8")
+                for pattern in probe["contains_regex"]:
+                    if re.search(pattern, source, re.MULTILINE) is None:
+                        missing.append(pattern)
+            status = "pass" if not missing else "fail"
+            result = {
+                "reference": reference_id,
+                "id": probe["id"],
+                "path": probe["path"],
+                "status": status,
+                "missing_patterns": missing,
+            }
+            results.append(result)
+            if missing:
+                errors.append(
+                    f"reference probe {reference_id}/{probe['id']} drifted: {missing}"
+                )
+    return results, errors
+
+
+def execute_suite(root: Path, suite: dict[str, Any], log_dir: Path) -> dict[str, Any]:
+    suite_id = suite["id"]
+    command = suite["command"]
+    timeout = suite["timeout_seconds"]
+    log_path = log_dir / f"{suite_id}.log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    timed_out = False
+    try:
+        with log_path.open("w", encoding="utf-8") as log:
+            process = subprocess.Popen(
+                command,
+                cwd=root,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=os.environ.copy(),
+                start_new_session=True,
+            )
+            try:
+                exit_code = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                os.killpg(process.pid, signal.SIGKILL)
+                exit_code = process.wait()
+                log.write(f"\nAUDIT: suite timed out after {timeout} seconds\n")
+    except OSError as error:
+        exit_code = -1
+        log_path.write_text(f"cannot execute suite: {error}\n", encoding="utf-8")
+    duration = round(time.monotonic() - started, 3)
+    status = "pass" if exit_code == 0 and not timed_out else "fail"
+    print(f"[{status}] {suite_id}: {' '.join(command)} ({duration:.3f}s)", flush=True)
+    if status == "fail":
+        try:
+            tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-40:]
+        except OSError:
+            tail = []
+        if tail:
+            print("\n".join(tail), file=sys.stderr)
+    return {
+        "id": suite_id,
+        "status": status,
+        "command": command,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "duration_seconds": duration,
+        "log": str(log_path),
+    }
+
+
+def git_revision(root: Path) -> dict[str, str]:
+    revision = run_git(["rev-parse", "HEAD"], root).stdout.strip()
+    branch = run_git(["branch", "--show-current"], root).stdout.strip()
+    return {"branch": branch or "detached", "revision": revision}
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def command_validate(args: argparse.Namespace) -> int:
+    root = args.root.resolve()
+    manifest = read_json(args.manifest)
+    result, errors = validate_manifest(root, manifest)
+    if args.output:
+        write_json(args.output, result)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return EXIT_CONTRACT if errors else 0
+
+
+def command_self_test(args: argparse.Namespace) -> int:
+    root = args.root.resolve()
+    manifest = read_json(args.manifest)
+    baseline, baseline_errors = validate_manifest(root, manifest)
+    if baseline_errors:
+        print(json.dumps(baseline, indent=2, sort_keys=True), file=sys.stderr)
+        return EXIT_CONTRACT
+
+    mutations = [
+        ("provider-regression", "provider", "codex"),
+        ("host-regression", "location", "remote"),
+        ("status-regression", "state", "waiting"),
+    ]
+    results: list[dict[str, str]] = []
+    for mutation_id, dimension, removed in mutations:
+        mutated = copy.deepcopy(manifest)
+        for scenario in mutated["scenarios"]:
+            values = scenario["dimensions"][dimension]
+            scenario["dimensions"][dimension] = [value for value in values if value != removed]
+        _, errors = validate_manifest(root, mutated)
+        expected = f"dimension {dimension} does not cover values: ['{removed}']"
+        if not any(error == expected for error in errors):
+            print(
+                f"self-test {mutation_id} did not produce expected failure {expected!r}: {errors}",
+                file=sys.stderr,
+            )
+            return EXIT_CONTRACT
+        results.append({"id": mutation_id, "status": "expected-failure-observed"})
+
+    boundary_mutations = [
+        (
+            "remote-provider-cross-boundary",
+            "remote-codex-waiting-attention",
+            "provider",
+            ["claude"],
+            "scenario remote-codex-waiting-attention.dimensions.provider must equal "
+            "['codex'], got ['claude']",
+        ),
+        (
+            "remote-host-cross-boundary",
+            "remote-claude-live-lifecycle",
+            "location",
+            ["local"],
+            "scenario remote-claude-live-lifecycle.dimensions.location must equal "
+            "['remote'], got ['local']",
+        ),
+        (
+            "remote-status-cross-boundary",
+            "remote-codex-waiting-attention",
+            "state",
+            ["live"],
+            "scenario remote-codex-waiting-attention.dimensions.state must equal "
+            "['waiting'], got ['live']",
+        ),
+    ]
+    for mutation_id, scenario_id, dimension, replacement, expected in boundary_mutations:
+        mutated = copy.deepcopy(manifest)
+        scenario = next(item for item in mutated["scenarios"] if item["id"] == scenario_id)
+        scenario["dimensions"][dimension] = replacement
+        _, errors = validate_manifest(root, mutated)
+        if expected not in errors:
+            print(
+                f"self-test {mutation_id} did not produce expected failure {expected!r}: {errors}",
+                file=sys.stderr,
+            )
+            return EXIT_CONTRACT
+        results.append({"id": mutation_id, "status": "expected-failure-observed"})
+
+    mutated = copy.deepcopy(manifest)
+    mutated["test_catalog"][0]["name"] = "removed_regression_test"
+    _, errors = validate_manifest(root, mutated)
+    if not any("removed_regression_test" in error for error in errors):
+        print("self-test missing-test-regression did not fail", file=sys.stderr)
+        return EXIT_CONTRACT
+    results.append({"id": "missing-test-regression", "status": "expected-failure-observed"})
+
+    report = {"schema_version": 1, "status": "pass", "cases": results}
+    if args.output:
+        write_json(args.output, report)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
+
+
+def command_sync_references(args: argparse.Namespace) -> int:
+    root = args.root.resolve()
+    manifest = read_json(args.manifest)
+    _, validation_errors = validate_manifest(root, manifest)
+    if validation_errors:
+        raise AuditError("manifest validation failed before reference synchronization")
+    references = manifest["references"]
+    destination = args.destination.resolve()
+    synchronized: list[dict[str, Any]] = []
+    try:
+        for reference in references:
+            synchronized.append(sync_reference(reference, destination))
+        probes, probe_errors = run_reference_probes(references, destination)
+        report = {
+            "schema_version": 1,
+            "status": "pass" if not probe_errors else "fail",
+            "audited_at": utc_now(),
+            "references": synchronized,
+            "probes": probes,
+            "errors": probe_errors,
+        }
+    except AuditError as error:
+        report = {
+            "schema_version": 1,
+            "status": "fail",
+            "audited_at": utc_now(),
+            "references": synchronized,
+            "probes": [],
+            "errors": [str(error)],
+        }
+        write_json(args.output, report)
+        print(json.dumps(report, indent=2, sort_keys=True), file=sys.stderr)
+        return EXIT_OPERATIONAL
+    write_json(args.output, report)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return EXIT_CONTRACT if report["status"] != "pass" else 0
+
+
+def command_run_suites(args: argparse.Namespace) -> int:
+    root = args.root.resolve()
+    manifest = read_json(args.manifest)
+    _, validation_errors = validate_manifest(root, manifest)
+    if validation_errors:
+        raise AuditError("manifest validation failed before suite execution")
+    started_at = utc_now()
+    results = [execute_suite(root, suite, args.log_dir) for suite in manifest["suites"]]
+    report = {
+        "schema_version": 1,
+        "status": "pass" if all(result["status"] == "pass" for result in results) else "fail",
+        "started_at": started_at,
+        "finished_at": utc_now(),
+        "zaplex": git_revision(root),
+        "results": results,
+    }
+    write_json(args.output, report)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return EXIT_FAILED if report["status"] != "pass" else 0
+
+
+def command_assemble(args: argparse.Namespace) -> int:
+    root = args.root.resolve()
+    validation = read_json(args.validation)
+    self_test = read_json(args.self_test)
+    references = read_json(args.references)
+    suites = read_json(args.suites)
+    screenshot_dir = args.screenshot_dir.resolve()
+    screenshots: list[dict[str, str]] = []
+    if screenshot_dir.is_dir():
+        for path in sorted(screenshot_dir.glob("*.png")):
+            screenshots.append(
+                {"name": path.name, "sha256": file_sha256(path), "path": str(path)}
+            )
+    screenshot_names = {item["name"] for item in screenshots}
+    missing_screenshots = sorted(EXPECTED_SCREENSHOTS - screenshot_names)
+    assembly_errors: list[str] = []
+
+    validation_ok = validation.get("status") == "pass" and validation.get("errors") == []
+    if not validation_ok:
+        assembly_errors.append("contract validation did not pass cleanly")
+
+    self_test_cases = self_test.get("cases")
+    self_test_case_ids = {
+        item.get("id")
+        for item in self_test_cases
+        if isinstance(item, dict) and item.get("status") == "expected-failure-observed"
+    } if isinstance(self_test_cases, list) else set()
+    self_test_ok = (
+        self_test.get("status") == "pass"
+        and self_test_case_ids == EXPECTED_SELF_TEST_CASES
+    )
+    if not self_test_ok:
+        assembly_errors.append("gate self-test evidence is missing or incomplete")
+
+    reference_entries = references.get("references")
+    valid_reference_entries: list[dict[str, Any]] = []
+    if isinstance(reference_entries, list):
+        for item in reference_entries:
+            if not isinstance(item, dict):
+                continue
+            repository = item.get("repository")
+            branch = item.get("branch")
+            revision = item.get("revision")
+            if (
+                isinstance(repository, str)
+                and isinstance(branch, str)
+                and isinstance(revision, str)
+                and re.fullmatch(r"[0-9a-f]{40}", revision)
+            ):
+                valid_reference_entries.append(item)
+    observed_references = {
+        (item["repository"], item["branch"]) for item in valid_reference_entries
+    }
+    expected_references = set(EXPECTED_REFERENCES.values())
+    reference_audited_at = references.get("audited_at")
+    reference_time_ok = (
+        isinstance(reference_audited_at, str)
+        and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", reference_audited_at)
+        is not None
+    )
+    references_ok = (
+        references.get("status") == "pass"
+        and len(valid_reference_entries) == len(EXPECTED_REFERENCES)
+        and observed_references == expected_references
+        and reference_time_ok
+    )
+    if not references_ok:
+        assembly_errors.append("reference report does not contain both required branch/SHA rows")
+
+    suite_results = suites.get("results")
+    passing_suite_ids = {
+        item.get("id")
+        for item in suite_results
+        if isinstance(item, dict)
+        and item.get("status") == "pass"
+        and item.get("exit_code") == 0
+    } if isinstance(suite_results, list) else set()
+    suites_ok = (
+        suites.get("status") == "pass"
+        and passing_suite_ids == set(EXPECTED_SUITE_COMMANDS)
+    )
+    if not suites_ok:
+        assembly_errors.append("Cargo check/Cockpit/daemon suite evidence is incomplete")
+
+    screenshots_ok = not missing_screenshots
+    if not screenshots_ok:
+        assembly_errors.append(f"missing screenshots: {missing_screenshots}")
+
+    component_status = {
+        "contract": "pass" if validation_ok else "fail",
+        "gate_self_test": "pass" if self_test_ok else "fail",
+        "references": "pass" if references_ok else "fail",
+        "suites": "pass" if suites_ok else "fail",
+        "screenshots": "pass" if screenshots_ok else "fail",
+        "manual_runtime": "not-run",
+    }
+    automated_pass = all(
+        component_status[name] == "pass"
+        for name in ("contract", "gate_self_test", "references", "suites", "screenshots")
+    )
+    report = {
+        "schema_version": 1,
+        "status": "pass" if automated_pass else "fail",
+        "generated_at": utc_now(),
+        "reference_audited_at": reference_audited_at,
+        "zaplex": git_revision(root),
+        "components": component_status,
+        "reference_revisions": [
+            {
+                "repository": item.get("repository"),
+                "branch": item.get("branch"),
+                "revision": item.get("revision"),
+            }
+            for item in valid_reference_entries
+        ],
+        "screenshots": screenshots,
+        "missing_screenshots": missing_screenshots,
+        "errors": assembly_errors,
+        "manual_runtime_procedure": "specs/parity/COCKPIT_RUNTIME_SMOKE.md",
+        "reports": {
+            "contract": str(args.validation),
+            "gate_self_test": str(args.self_test),
+            "references": str(args.references),
+            "suites": str(args.suites),
+        },
+    }
+    write_json(args.output, report)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return EXIT_FAILED if not automated_pass else 0
+
+
+def command_enforce(args: argparse.Namespace) -> int:
+    report = read_json(args.report)
+    if report.get("status") != "pass":
+        print(json.dumps(report, indent=2, sort_keys=True), file=sys.stderr)
+        return EXIT_FAILED
+    print("Cockpit parity automated audit passed.")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    validate = subparsers.add_parser("validate", help="validate the versioned matrix")
+    validate.add_argument("--output", type=Path)
+    validate.set_defaults(handler=command_validate)
+
+    self_test = subparsers.add_parser(
+        "self-test", help="prove provider, host, status, and test-removal regressions fail"
+    )
+    self_test.add_argument("--output", type=Path)
+    self_test.set_defaults(handler=command_self_test)
+
+    sync = subparsers.add_parser(
+        "sync-references", help="fresh-clone or fast-forward-only update references and run probes"
+    )
+    sync.add_argument("--destination", type=Path, required=True)
+    sync.add_argument("--output", type=Path, required=True)
+    sync.set_defaults(handler=command_sync_references)
+
+    suites = subparsers.add_parser("run-suites", help="run the CI-only Cargo suites")
+    suites.add_argument("--log-dir", type=Path, required=True)
+    suites.add_argument("--output", type=Path, required=True)
+    suites.set_defaults(handler=command_run_suites)
+
+    assemble = subparsers.add_parser("assemble", help="assemble the final machine report")
+    assemble.add_argument("--validation", type=Path, required=True)
+    assemble.add_argument("--self-test", type=Path, required=True)
+    assemble.add_argument("--references", type=Path, required=True)
+    assemble.add_argument("--suites", type=Path, required=True)
+    assemble.add_argument("--screenshot-dir", type=Path, required=True)
+    assemble.add_argument("--output", type=Path, required=True)
+    assemble.set_defaults(handler=command_assemble)
+
+    enforce = subparsers.add_parser("enforce", help="fail unless an assembled audit passed")
+    enforce.add_argument("--report", type=Path, required=True)
+    enforce.set_defaults(handler=command_enforce)
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        return args.handler(args)
+    except AuditError as error:
+        print(f"cockpit parity audit: {error}", file=sys.stderr)
+        return EXIT_OPERATIONAL
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
