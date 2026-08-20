@@ -7,7 +7,7 @@
             "is_prerelease": false,
             "is_autopush": false,
             "release_base_name": "Zaplex",
-            "release_body_text": "Zaplex 1.0.2 — signed and notarized macOS distribution",
+            "release_body_text": "Zaplex 1.0.3 — signed and notarized macOS distribution",
             "changelog_slack_channel": "",
             "gcs_cache_control_value": "",
             "web_gcs_bucket_prefix": ""

@@ -113,7 +113,7 @@
         "claude_task_fixture_orders_ids_updates_duplicates_and_filters_internal_rows",
         "codex_latest_valid_update_plan_replaces_earlier_rows_without_accumulating_duplicates",
         "claude_session_reconcile_refreshes_structured_task_updates",
-        "task_glance_preserves_order_and_prefers_in_progress_step"
+        "current_task_prefers_in_progress_step"
       ],
       "required_runtime_rows": ["M20"]
     },
@@ -319,17 +319,17 @@
     "136": {
       "updated_at": "2026-07-23T11:39:16Z",
       "required_tests": [
-        "primary_sidebar_has_exactly_one_host_project_session_tree",
-        "registered_offline_host_remains_visible_without_live_inventory",
+        "tree_hierarchy_is_host_project_pty_agent",
+        "cockpit_excludes_registry_only_hosts",
         "registered_and_live_host_snapshots_join_into_one_host_node",
         "same_display_name_hosts_remain_distinct_by_stable_id",
         "local_host_is_rendered_exactly_once",
         "removed_host_is_never_routed_as_available",
-        "host_node_exposes_manage_terminal_agent_and_files_actions",
+        "connection_server_rows_expose_favorite_connect_disconnect_and_management_actions",
         "session_node_dispatches_shared_session_open_plan",
-        "parallel_ssh_and_cockpit_primary_roots_are_absent",
+        "primary_sidebar_keeps_cockpit_and_connections_separate",
         "metric_column_width_does_not_change_with_label_length",
-        "host_row_click_survives_rerender_between_down_and_up"
+        "compact_connection_secondary_action_survives_rerender_without_triggering_primary_row_click"
       ]
     },
     "137": {
@@ -397,7 +397,7 @@
       "required_tests": [
         "initial_scan_state_is_loading_not_empty",
         "failed_account_scan_is_excluded_from_freest_routing",
-        "older_scan_completion_cannot_replace_newer_snapshot",
+        "stale_inventory_cannot_readd_disconnected_host",
         "failed_settings_write_preserves_last_good_file",
         "dirty_onekey_dialog_requires_save_discard_or_cancel",
         "outside_click_does_not_discard_dirty_changes",

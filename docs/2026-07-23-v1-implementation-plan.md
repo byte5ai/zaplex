@@ -336,33 +336,33 @@ Push, PR, Tag, Publish oder Release.
 
 ## Paket 3 — Eine klare Navigation
 
-### Issue 12 · [#136](https://github.com/byte5ai/zaplex/issues/136) — Host–Projekt–Session als einzige primäre Sidebar
+### Issue 12 · [#136](https://github.com/byte5ai/zaplex/issues/136) — Verbindungen und Live-Tree mit klar getrennten Aufgaben
 
-- **Problem:** Cockpit und SSH bleiben Parallelwelten; `#100/#108` sind sichtbar
-  unvollständig. Eine reine Live-Inventaransicht lässt registrierte, momentan
-  nicht erreichbare SSH-Hosts verschwinden.
-- **Scope:** Hostwurzeln; Projekte/Sessions/Agenten; Hostaktionen; Konten kompakt;
-  Files/Chats/Skills sekundär; stabile Metrikspalte/Statuspunkte; getesteter,
-  deterministischer Join über stabile Host-IDs aus registrierten SSH-Hosts und
-  Live-Cockpit-Inventar. Anzeigenamen sind kein Join-Key. Der Live-Status
-  reichert den registrierten Host an, ersetzt ihn aber nicht; der lokale Host
-  erscheint genau einmal. Entfernte registrierte Hosts werden trotz
-  verspätetem Live-Eintrag nie weiter geroutet.
-- **Deps/Abnahme:** Issues 09/11, vor 13; jeder Host einmal, keine parallele
-  Hauptwurzel, Kernaktionen in höchstens zwei Schritten; registrierte
-  Offline-Hosts bleiben sichtbar, Live-Hosts erzeugen keine Dubletten, gleiche
-  Anzeigenamen vermischen keine Hosts und entfernte Ziele sind nicht
-  ausführbar.
-- **Rot-Tests:** `sidebar_has_one_host_project_session_tree`,
-  `host_node_exposes_primary_actions`,
+- **Problem:** Der frühere Plan vermischte dauerhafte Host-Konfiguration und
+  Live-Inventar in einer einzigen Wurzel. Dadurch wurden Verbindungsaktionen
+  und der Session-Tree doppelt oder widersprüchlich dargestellt.
+- **Scope:** „Verbindungen“ bleibt das eigenständige Register für konfigurierte
+  Hosts, Favoriten und Connect/Disconnect. Das Cockpit zeigt den lokalen Host
+  immer und Remote-Hosts nur, solange mindestens eine Zaplex-Verbindung offen
+  ist; darunter gilt Host–Projekt–Session–Agent. Live-Daten werden über stabile
+  Host-IDs mit dem Register angereichert, Anzeigenamen sind kein Join-Key.
+  Entfernte Hosts und verspätete Scans dürfen keine Route wiederbeleben.
+- **Deps/Abnahme:** Issues 09/11, vor 13; lokale Sessions bleiben sichtbar,
+  die erste Remote-Verbindung ergänzt genau eine Hostwurzel und das Schließen
+  der letzten entfernt sie wieder. Verbindungen und Cockpit bleiben getrennte
+  Sidebar-Elemente ohne doppelte Host-/Session-Darstellung.
+- **Rot-Tests:** `tree_hierarchy_is_host_project_pty_agent`,
+  `primary_sidebar_keeps_cockpit_and_connections_separate`,
+  `connection_server_rows_expose_favorite_connect_disconnect_and_management_actions`,
+  `compact_connection_secondary_action_survives_rerender_without_triggering_primary_row_click`,
   `session_uses_shared_open_plan`,
-  `parallel_roots_are_absent`,
   `registered_and_live_hosts_join_once`,
-  `registered_offline_host_remains_visible`,
+  `cockpit_excludes_registry_only_hosts`,
   `live_status_enriches_registered_host_without_duplicate`,
   `same_display_name_hosts_remain_distinct_by_stable_id`,
   `local_host_appears_exactly_once`,
-  `removed_registered_host_is_never_routable`.
+  `removed_registered_host_is_never_routable`,
+  `last_open_remote_session_removes_host_root`.
 - **Dateidomäne:** Left panel, Cockpit-/SSH-Panel, Workspace.
 - **Primär/Review:** `gpt-5.6-sol high` / `gpt-5.6-sol high`.
 

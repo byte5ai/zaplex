@@ -16,9 +16,9 @@
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0.2</string>
+  <string>1.0.3</string>
   <key>CFBundleVersion</key>
-  <string>1.0.2</string>
+  <string>1.0.3</string>
   <!-- This is marked as background-only so that macOS won't add it to the Dock -->
   <!-- See https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/LaunchServicesKeys.html#//apple_ref/doc/uid/20001431-109268 and https://developer.apple.com/documentation/bundleresources/information-property-list/lsbackgroundonly?language=objc -->
   <key>LSBackgroundOnly</key>

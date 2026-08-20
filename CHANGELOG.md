@@ -2,7 +2,20 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
-## [1.0.2] — unreleased
+## [1.0.3] — 2026-08-20
+
+- **Cockpit-Sidebar:** Lokale Sessions bleiben immer sichtbar; verbundene
+  Remote-Hosts erscheinen als Host–Projekt–Session–Agent-Tree und verschwinden
+  wieder, sobald ihre letzte Zaplex-Verbindung geschlossen wird.
+- **Verbindungen:** Host-Konfiguration, Favoriten und Connect/Disconnect bleiben
+  ein eigenständiges kompaktes Sidebar-Element ohne doppelte Session-Anzeige.
+- **KI-Konten:** Claude und Codex sind in Sidebar und Detailansicht als Provider
+  eindeutig erkennbar; Konto- und Session-Erkennung ist host- und
+  account-spezifisch abgesichert.
+- **Parität:** Ein fail-closed Audit vergleicht Cockpit-Verhalten und Mockups mit
+  frisch synchronisierten claudeplex- und claudeplex-desktop-Referenzen.
+- **Remote-Startup:** Vertrauliche Startup-Befehle laufen nicht mehr als
+  beobachtbare Eingabe durch die PTY.
 
 - **Cockpit:** Account-Panes mit vorhandenen Sessions stürzen beim Layout der
   virtualisierten Sitzungstabelle nicht mehr ab.
@@ -145,8 +158,8 @@ First preview release of the Zap community fork.
 - **AI**: CJK input classification, reasoning split out, BYOP `tool_call` diagnostics, LRC tag-in synthesizes a virtual subagent + floating spawn flow
 - **CI**: Release workflow explicitly declares `contents: write` permission, fixing a 403
 
-[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.2...HEAD
-[1.0.2]: https://github.com/byte5ai/zaplex/compare/v1.0.1...v1.0.2
+[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/byte5ai/zaplex/compare/v1.0.1...v1.0.3
 [1.0.1]: https://github.com/byte5ai/zaplex/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/byte5ai/zaplex/releases/tag/v1.0.0
 [v2026.05.06.preview]: https://github.com/zerx-lab/warp/compare/v2026.05.04.preview...v2026.05.06.preview
