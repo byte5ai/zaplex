@@ -2,8 +2,9 @@ use prost::Message;
 
 use crate::proto::{
     client_message, server_message, AgentSessionInfo, AgentTaskItem, BindAgentPty, ClientMessage,
-    Initialize, InitializeResponse, MultiplexerKind, MultiplexerSessionInfo,
-    MultiplexerSessionList, ServerMessage,
+    Initialize, InitializeResponse, ManagedLaunch, ManagedSessionExitInfo, ManagedSessionInfo,
+    MemoryMeasurement, MemoryMeasurementStatus, MultiplexerKind, MultiplexerSessionInfo,
+    MultiplexerSessionList, OpenSession, ServerMessage, SessionInfo, SessionList, SessionSize,
 };
 
 use super::*;
@@ -163,6 +164,28 @@ struct LegacyBindAgentPty {
     handoff_from: Option<crate::proto::AgentSessionIdentity>,
 }
 
+#[derive(Clone, PartialEq, Message)]
+struct LegacyOpenSession {
+    #[prost(string, optional, tag = "1")]
+    cwd: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct LegacySessionInfo {
+    #[prost(string, tag = "1")]
+    session_id: String,
+    #[prost(uint64, tag = "7")]
+    generation: u64,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct LegacySessionList {
+    #[prost(message, repeated, tag = "1")]
+    sessions: Vec<LegacySessionInfo>,
+    #[prost(uint64, tag = "2")]
+    host_ring_cap_bytes: u64,
+}
+
 #[test]
 fn older_client_schema_ignores_new_bind_host_identity() {
     let current = BindAgentPty {
@@ -227,6 +250,93 @@ fn older_client_ignores_new_structured_task_fields() {
 }
 
 #[test]
+fn older_daemon_ignores_managed_open_fields() {
+    let current = OpenSession {
+        cwd: Some("/srv/project".to_string()),
+        size: Some(SessionSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        }),
+        managed_launch: Some(ManagedLaunch {
+            schema_version: 1,
+            launch_id: "launch-1".to_string(),
+            provider: "claude".to_string(),
+            project_root: "/srv/project".to_string(),
+            kind: "interactive-agent".to_string(),
+            spawn_mode: String::new(),
+            capacity: 0,
+            permission_mode: String::new(),
+            display_name: String::new(),
+        }),
+        requested_min_available_bytes: Some(2 * 1024 * 1024 * 1024),
+        ..Default::default()
+    };
+
+    let legacy = LegacyOpenSession::decode(current.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(legacy.cwd.as_deref(), Some("/srv/project"));
+}
+
+#[test]
+fn older_client_ignores_managed_inventory_and_memory_fields() {
+    let current = SessionList {
+        sessions: vec![SessionInfo {
+            session_id: "pty-7".to_string(),
+            generation: 42,
+            managed: Some(ManagedSessionInfo {
+                schema_version: 1,
+                provider: "claude".to_string(),
+                account_id: "opaque-account".to_string(),
+                project_root: "/srv/project".to_string(),
+                launch_kind: "claude-remote-control".to_string(),
+                launch_id: "launch-1".to_string(),
+                generation: 42,
+            }),
+            process_memory: Some(MemoryMeasurement {
+                status: MemoryMeasurementStatus::Measured.into(),
+                bytes: Some(64 * 1024 * 1024),
+                provenance: "linux-proc-smaps-rollup".to_string(),
+                diagnostic_code: String::new(),
+            }),
+            ..Default::default()
+        }],
+        host_ring_cap_bytes: 256 * 1024 * 1024,
+        host_available_memory: Some(MemoryMeasurement {
+            status: MemoryMeasurementStatus::Measured.into(),
+            bytes: Some(4 * 1024 * 1024 * 1024),
+            provenance: "linux-proc-memavailable".to_string(),
+            diagnostic_code: String::new(),
+        }),
+        daemon_min_available_bytes: 2 * 1024 * 1024 * 1024,
+        collected_at_epoch_millis: 123,
+        recent_managed_exits: vec![ManagedSessionExitInfo {
+            managed: Some(ManagedSessionInfo {
+                schema_version: 1,
+                provider: "claude".to_string(),
+                account_id: "opaque-account".to_string(),
+                project_root: "/srv/project".to_string(),
+                launch_kind: "claude-remote-control".to_string(),
+                launch_id: "launch-1".to_string(),
+                generation: 42,
+            }),
+            session_id: "pty-ended".to_string(),
+            exit_code: Some(1),
+            exited_at_epoch_millis: 122,
+            diagnostic_code: "process-ended".to_string(),
+        }],
+    };
+
+    let legacy = LegacySessionList::decode(current.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(legacy.sessions.len(), 1);
+    assert_eq!(legacy.sessions[0].session_id, "pty-7");
+    assert_eq!(legacy.sessions[0].generation, 42);
+    assert_eq!(legacy.host_ring_cap_bytes, 256 * 1024 * 1024);
+}
+
+#[test]
 fn older_client_ignores_multiplexer_inventory_response() {
     let current = ServerMessage {
         request_id: "multiplexers".to_string(),
@@ -265,6 +375,11 @@ fn real_legacy_session_attach_fixtures_use_id_only() {
     assert_eq!(list.sessions.len(), 1);
     assert_eq!(list.sessions[0].session_id, "pty-old");
     assert_eq!(list.sessions[0].generation, 0);
+    assert!(list.sessions[0].managed.is_none());
+    assert!(list.sessions[0].process_memory.is_none());
+    assert!(list.host_available_memory.is_none());
+    assert_eq!(list.daemon_min_available_bytes, 0);
+    assert!(list.recent_managed_exits.is_empty());
 
     // Captured old ClientMessage { request_id: "legacy", attach_session:
     // AttachSession { session_id: "pty-old" } }. The missing generation check

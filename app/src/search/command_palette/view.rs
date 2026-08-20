@@ -997,6 +997,9 @@ impl View {
                     });
                 }
             }
+            CommandPaletteItemAction::RunCockpitTarget { target } => {
+                ctx.dispatch_typed_action(&WorkspaceAction::RunCockpitPaletteTarget { target });
+            }
             CommandPaletteItemAction::NoOp => {
                 // No-op action (used for non-interactable separator items that don't do anything on click).
             }

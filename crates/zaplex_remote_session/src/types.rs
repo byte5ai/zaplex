@@ -106,6 +106,10 @@ pub const FEATURE_HOST_EXEC: &str = "host-exec";
 /// never downgrade this to a generic shell-command scan against older daemons.
 pub const FEATURE_MULTIPLEXER_INVENTORY_V1: &str = "multiplexer-inventory-v1";
 
+/// Versioned daemon-owned managed-agent fleet with headroom-gated launch,
+/// generation-checked lifecycle, and explicit memory provenance.
+pub const FEATURE_MANAGED_AGENT_FLEET_V1: &str = "managed-agent-fleet-v1";
+
 /// A persistent session identifier assigned by the daemon.
 ///
 /// Unlike the protocol's existing `session_id: uint64` (which is the client's
@@ -152,8 +156,8 @@ impl std::fmt::Display for SessionId {
 ///
 /// Every daemon advertises its cross-platform inventory and host-command
 /// support. Linux daemons additionally advertise identity-verified process
-/// signalling, while Unix daemons advertise the native PTY session host and
-/// retry-safe startup delivery.
+/// signalling and the managed-agent fleet; Unix daemons advertise the native
+/// PTY session host and retry-safe startup delivery.
 pub fn supported_features() -> Vec<String> {
     // Agent-session inventory and session-less host-exec are both
     // filesystem/subshell-based (no PTY), so every daemon build advertises them
@@ -165,7 +169,10 @@ pub fn supported_features() -> Vec<String> {
         FEATURE_HOST_EXEC.to_string(),
     ];
     #[cfg(target_os = "linux")]
-    features.push(FEATURE_AGENT_PROCESS_SIGNAL_V1.to_string());
+    {
+        features.push(FEATURE_AGENT_PROCESS_SIGNAL_V1.to_string());
+        features.push(FEATURE_MANAGED_AGENT_FLEET_V1.to_string());
+    }
     // The native PTY session host is unix-only: non-unix targets do not own
     // PTYs, so they advertise nothing more — honest advertisement, never claim
     // a capability we cannot fulfil.
@@ -203,6 +210,7 @@ pub fn supported_client_features() -> Vec<String> {
         FEATURE_SAFE_FILE_TRANSACTIONS_V1.to_string(),
         FEATURE_HOST_EXEC.to_string(),
         FEATURE_MULTIPLEXER_INVENTORY_V1.to_string(),
+        FEATURE_MANAGED_AGENT_FLEET_V1.to_string(),
     ]
 }
 

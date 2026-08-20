@@ -30,6 +30,7 @@ use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::ICON_DIMENSIONS;
+use warp_editor::content::buffer::Buffer;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::Rect;
@@ -323,6 +324,19 @@ impl CodeView {
         }
         view.set_title(false, ctx);
         view
+    }
+
+    /// The generated document's buffer without extending the pane's lifetime.
+    /// Transcript live-watch state stores this weak handle and therefore stops
+    /// naturally when the user closes the pane.
+    pub fn generated_read_only_buffer(&self, ctx: &AppContext) -> Option<ModelHandle<Buffer>> {
+        if !self.source.is_generated_read_only() {
+            return None;
+        }
+        self.tab_at(self.active_tab_index).map(|tab| {
+            let editor = tab.editor_view.as_ref(ctx).editor();
+            editor.as_ref(ctx).model.as_ref(ctx).buffer().clone()
+        })
     }
 
     /// Generated documents are fixed single-document panes. Mixing file-backed

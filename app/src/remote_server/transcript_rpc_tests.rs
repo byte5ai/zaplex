@@ -53,6 +53,55 @@ fn write_codex(root: &Path, session_id: &str, lines: &[serde_json::Value]) -> Pa
 }
 
 #[test]
+fn fresh_same_inode_account_swap_rejects_a_cached_transcript_route() {
+    let account = tempfile::tempdir().unwrap();
+    let account_root = fs::canonicalize(account.path()).unwrap();
+    let request = ReadAgentTranscript {
+        schema_version: TRANSCRIPT_SCHEMA_VERSION,
+        provider: "claude".to_string(),
+        account_id: "stale-account-id".to_string(),
+        session_id: CLAUDE_ID.to_string(),
+        known_revision: String::new(),
+    };
+    let mut stale_cache = super::super::agent_account::AccountRouteCache::default();
+    stale_cache.replace_for_test("claude", "stale-account-id", Some(account_root.clone()));
+    assert!(resolve_request(stale_cache.routes_for_test(), request.clone()).is_ok());
+
+    let mut fresh_scan = super::super::agent_account::AccountRouteCache::default();
+    fresh_scan.replace_for_test("claude", "current-account-id", Some(account_root));
+    let response = match resolve_request(fresh_scan.routes_for_test(), request) {
+        Ok(_) => panic!("stale opaque account id must not resolve against a fresh scan"),
+        Err(response) => response,
+    };
+
+    assert_eq!(status(&response), AgentTranscriptStatus::InvalidRequest);
+    assert!(response.message.contains("unknown"));
+}
+
+#[test]
+fn busy_response_validates_identity_before_echoing_it() {
+    let valid = ReadAgentTranscript {
+        schema_version: TRANSCRIPT_SCHEMA_VERSION,
+        provider: "codex".to_string(),
+        account_id: "opaque-account".to_string(),
+        session_id: CODEX_ID.to_string(),
+        known_revision: String::new(),
+    };
+    let busy = busy_response(&valid);
+    assert_eq!(status(&busy), AgentTranscriptStatus::Unavailable);
+    assert_eq!(busy.provider, "codex");
+    assert_eq!(busy.session_id, CODEX_ID);
+
+    let invalid = busy_response(&ReadAgentTranscript {
+        session_id: "unbounded identity!".repeat(128),
+        ..valid
+    });
+    assert_eq!(status(&invalid), AgentTranscriptStatus::InvalidRequest);
+    assert!(invalid.provider.is_empty());
+    assert!(invalid.session_id.is_empty());
+}
+
+#[test]
 fn claude_snapshot_contains_only_the_display_projection() {
     let root = tempfile::tempdir().unwrap();
     write_claude(
@@ -86,8 +135,34 @@ fn claude_snapshot_contains_only_the_display_projection() {
     assert_eq!(response.turns[0].text, "Question");
     assert_eq!(response.turns[1].text, "Answer");
     assert_eq!(response.turns[1].tools[0].name, "read_file");
+    assert_eq!(response.source_revision.len(), 64);
     assert!(!format!("{response:?}").contains("credential-must-not-cross-wire"));
     assert!(response.encoded_len() <= MAX_TRANSCRIPT_RESPONSE_BYTES);
+}
+
+#[test]
+fn daemon_snapshot_revision_is_accepted_by_the_shared_remote_projection() {
+    let root = tempfile::tempdir().unwrap();
+    write_claude(
+        root.path(),
+        CLAUDE_ID,
+        &[json!({"type":"user","message":{"content":"Question"}})],
+    );
+    let response = read_transcript(resolved(TranscriptProvider::Claude, root.path(), CLAUDE_ID));
+
+    let projection = crate::cockpit::transcript_view::project_remote_transcript(
+        zaplex_cockpit::Provider::Claude,
+        CLAUDE_ID,
+        None,
+        response,
+    )
+    .expect("daemon response must satisfy the client projection contract");
+    assert!(matches!(
+        projection,
+        crate::cockpit::transcript_view::RemoteTranscriptProjection::Modified(document)
+            if document.state
+                == crate::cockpit::transcript_view::TranscriptDocumentState::Ready
+    ));
 }
 
 #[test]

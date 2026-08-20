@@ -3100,6 +3100,83 @@ fn pty_dedupe_uses_current_authoritative_agent_after_handoff() {
     );
 }
 
+#[test]
+fn managed_lifecycle_success_requires_the_exact_response_envelope() {
+    use remote_server::proto::{
+        ManagedSessionLifecycleAction, ManagedSessionLifecycleRequest,
+        ManagedSessionLifecycleResponse, ManagedSessionLifecycleStatus,
+    };
+
+    let request = ManagedSessionLifecycleRequest {
+        schema_version: 1,
+        action: ManagedSessionLifecycleAction::Restart.into(),
+        session_id: "managed-pty".to_string(),
+        expected_generation: 7,
+        launch_id: "launch-7".to_string(),
+        provider: "claude".to_string(),
+        account_id: "account-7".to_string(),
+        project_root: "/srv/project".to_string(),
+    };
+    let response = ManagedSessionLifecycleResponse {
+        schema_version: 1,
+        action: ManagedSessionLifecycleAction::Restart.into(),
+        status: ManagedSessionLifecycleStatus::Restarted.into(),
+        session_id: "managed-pty".to_string(),
+        generation: 7,
+        replacement_session_id: "managed-pty-next".to_string(),
+        replacement_generation: 8,
+        diagnostic_code: String::new(),
+    };
+    assert_eq!(
+        super::managed_lifecycle_result(&request, &response),
+        Ok("Managed agent restarted.")
+    );
+
+    let mut mismatched = response;
+    mismatched.generation = 6;
+    assert!(super::managed_lifecycle_result(&request, &mismatched).is_err());
+}
+
+#[test]
+fn managed_lifecycle_rejects_malformed_success_and_accepts_typed_failure() {
+    use remote_server::proto::{
+        ManagedSessionLifecycleAction, ManagedSessionLifecycleRequest,
+        ManagedSessionLifecycleResponse, ManagedSessionLifecycleStatus,
+    };
+
+    let request = ManagedSessionLifecycleRequest {
+        schema_version: 1,
+        action: ManagedSessionLifecycleAction::Stop.into(),
+        session_id: "managed-stop".to_string(),
+        expected_generation: 4,
+        launch_id: "launch-stop".to_string(),
+        provider: "codex".to_string(),
+        account_id: "account-stop".to_string(),
+        project_root: "/srv/stop".to_string(),
+    };
+    let malformed = ManagedSessionLifecycleResponse {
+        schema_version: 1,
+        action: ManagedSessionLifecycleAction::Stop.into(),
+        status: ManagedSessionLifecycleStatus::Stopped.into(),
+        session_id: "managed-stop".to_string(),
+        generation: 4,
+        replacement_session_id: "unexpected".to_string(),
+        replacement_generation: 9,
+        diagnostic_code: String::new(),
+    };
+    assert!(super::managed_lifecycle_result(&request, &malformed).is_err());
+
+    let rejected = ManagedSessionLifecycleResponse {
+        status: ManagedSessionLifecycleStatus::Blocked.into(),
+        replacement_session_id: String::new(),
+        replacement_generation: 0,
+        diagnostic_code: "headroom-below-floor".to_string(),
+        ..malformed
+    };
+    let error = super::managed_lifecycle_result(&request, &rejected).unwrap_err();
+    assert!(error.contains("headroom-below-floor"));
+}
+
 #[cfg(unix)]
 #[test]
 fn rejected_adopt_cleanup_does_not_poison_retry_key() {

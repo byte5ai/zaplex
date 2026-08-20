@@ -4,6 +4,14 @@ fn host(id: &str, name: &str) -> HostOption {
     HostOption {
         id: id.to_string(),
         name: name.to_string(),
+        managed_fleet_available: false,
+    }
+}
+
+fn managed_host(id: &str, name: &str) -> HostOption {
+    HostOption {
+        managed_fleet_available: true,
+        ..host(id, name)
     }
 }
 
@@ -111,24 +119,80 @@ fn provider(installed: bool) -> ProviderOptions {
 }
 
 fn remote_provider(installed: bool, provider_name: &str) -> ProviderOptions {
+    let account_id = format!("{provider_name}:work");
+    remote_provider_for_node(
+        installed,
+        provider_name,
+        "node-7",
+        &[(account_id.as_str(), "work@example.com", 0.8, 0.7)],
+    )
+}
+
+fn remote_provider_for_node(
+    installed: bool,
+    provider_name: &str,
+    node_id: &str,
+    accounts: &[(&str, &str, f64, f64)],
+) -> ProviderOptions {
     let mut options = provider(installed);
-    options.remote_accounts = vec![RemoteAccountOption {
-        route: remote_server::proto::AgentLaunchRoute {
-            schema_version: 1,
-            provider: provider_name.to_string(),
-            account_id: format!("{provider_name}:work"),
-        },
-        label: "work@example.com".to_string(),
-        email: Some("work@example.com".to_string()),
-        capacity_5h: 0.8,
-        capacity_week: 0.7,
-        capacity_known: true,
-    }];
+    options.remote_accounts = accounts
+        .iter()
+        .map(
+            |(account_id, email, capacity_5h, capacity_week)| RemoteAccountOption {
+                route: remote_server::proto::AgentLaunchRoute {
+                    schema_version: 1,
+                    provider: provider_name.to_string(),
+                    account_id: (*account_id).to_string(),
+                },
+                label: (*email).to_string(),
+                email: Some((*email).to_string()),
+                capacity_5h: *capacity_5h,
+                capacity_week: *capacity_week,
+                capacity_known: true,
+            },
+        )
+        .collect();
     options.remote_account_discovery = RemoteAccountDiscoveryState::Ready {
         auto_routing_available: true,
     };
-    options.remote_account_node_id = Some("node-7".to_string());
+    options.remote_account_node_id = Some(node_id.to_string());
     options
+}
+
+fn remote_claude_card(
+    claude: ProviderOptions,
+    hosts: Vec<HostOption>,
+    host: HostChoice,
+    account: AccountChoice,
+) -> SpawnCard {
+    SpawnCard {
+        cfg: SpawnCardConfig {
+            claude,
+            hosts,
+            ..Default::default()
+        },
+        agent: CLIAgent::Claude,
+        model: "opus".to_string(),
+        effort: String::new(),
+        managed_mode: ManagedLaunchMode::Ordinary,
+        account,
+        batch_accounts: BTreeSet::new(),
+        select_all_accounts: false,
+        show_accounts: false,
+        host,
+        project: None,
+        folder_history: FolderHistory::empty(),
+        folder_navigation: FolderNavigation::default(),
+        folder_history_open: false,
+        folder_validation: DirectoryValidationState::default(),
+        history_validation: BTreeMap::new(),
+        history_search_editor: None,
+        bulk_launch: None,
+        prompt: None,
+        remote_dir_editor: None,
+        chip_states: Default::default(),
+        close_button: None,
+    }
 }
 
 /// Codex review regression: when no supported agent is installed,
@@ -194,6 +258,25 @@ fn installed_agents_lists_both_when_both_installed() {
 }
 
 #[test]
+fn default_account_identity_never_becomes_an_environment_pin() {
+    let mut account = AccountOption {
+        label: "default".to_string(),
+        config_dir: PathBuf::from("/home/user/.claude"),
+        is_default: true,
+        heat_label: "10 %".to_string(),
+        heat: 0.1,
+        plan: None,
+        provider: zaplex_cockpit::Provider::Claude,
+    };
+    assert_eq!(account_config_pin(&account), None);
+    account.is_default = false;
+    assert_eq!(
+        account_config_pin(&account),
+        Some(PathBuf::from("/home/user/.claude"))
+    );
+}
+
+#[test]
 fn antigravity_launch_uses_cli_defaults_without_provider_metadata() {
     let card = SpawnCard {
         cfg: SpawnCardConfig {
@@ -203,10 +286,20 @@ fn antigravity_launch_uses_cli_defaults_without_provider_metadata() {
         agent: CLIAgent::Antigravity,
         model: String::new(),
         effort: String::new(),
+        managed_mode: ManagedLaunchMode::Ordinary,
         account: AccountChoice::Freest,
+        batch_accounts: BTreeSet::new(),
+        select_all_accounts: false,
         show_accounts: false,
         host: HostChoice::Local,
         project: Some(PathBuf::from("/workspace")),
+        folder_history: FolderHistory::empty(),
+        folder_navigation: FolderNavigation::default(),
+        folder_history_open: false,
+        folder_validation: DirectoryValidationState::default(),
+        history_validation: BTreeMap::new(),
+        history_search_editor: None,
+        bulk_launch: None,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -247,10 +340,20 @@ fn confirm_payload_carries_local_selection() {
         agent: CLIAgent::Claude,
         model: "sonnet".to_string(),
         effort: "low".to_string(),
+        managed_mode: ManagedLaunchMode::Ordinary,
         account: AccountChoice::Freest,
+        batch_accounts: BTreeSet::new(),
+        select_all_accounts: false,
         show_accounts: false,
         host: HostChoice::Local,
         project: Some(PathBuf::from("/home/dev/projects/zaplex")),
+        folder_history: FolderHistory::empty(),
+        folder_navigation: FolderNavigation::default(),
+        folder_history_open: false,
+        folder_validation: DirectoryValidationState::default(),
+        history_validation: BTreeMap::new(),
+        history_search_editor: None,
+        bulk_launch: None,
         prompt: None,
         // The pure tests build the card without a `ViewContext`, so there is
         // no editor view to construct — remote-dir prefill/read is exercised
@@ -301,10 +404,20 @@ fn confirm_payload_routes_remote_launch_to_node_id() {
         agent: CLIAgent::Claude,
         model: "opus".to_string(),
         effort: "high".to_string(),
+        managed_mode: ManagedLaunchMode::Ordinary,
         account: AccountChoice::Freest,
+        batch_accounts: BTreeSet::new(),
+        select_all_accounts: false,
         show_accounts: false,
         host: HostChoice::Remote(0),
         project: None,
+        folder_history: FolderHistory::empty(),
+        folder_navigation: FolderNavigation::default(),
+        folder_history_open: false,
+        folder_validation: DirectoryValidationState::default(),
+        history_validation: BTreeMap::new(),
+        history_search_editor: None,
+        bulk_launch: None,
         prompt: None,
         // The pure tests build the card without a `ViewContext`, so there is
         // no editor view to construct — remote-dir prefill/read is exercised
@@ -340,6 +453,139 @@ fn confirm_payload_routes_remote_launch_to_node_id() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn second_remote_claude_account_reaches_daemon_open_session_as_opaque_id() {
+    let claude = remote_provider_for_node(
+        true,
+        "claude",
+        "node-7",
+        &[
+            ("acct_opaque_primary", "primary@example.com", 0.9, 0.8),
+            ("acct_opaque_second", "second@example.com", 0.4, 0.6),
+        ],
+    );
+    let card = remote_claude_card(
+        claude,
+        vec![host("node-7", "devbox")],
+        HostChoice::Remote(0),
+        AccountChoice::Specific(1),
+    );
+
+    let SpawnCardEvent::Launch {
+        node_id,
+        config_dir,
+        agent_launch_route: Some(route),
+        remote_account_email,
+        ..
+    } = card
+        .launch_payload()
+        .expect("the selected remote account is ready")
+    else {
+        panic!("Confirm must emit a routed Launch");
+    };
+    assert_eq!(node_id.as_deref(), Some("node-7"));
+    assert_eq!(config_dir, None);
+    assert_eq!(route.provider, "claude");
+    assert_eq!(route.account_id, "acct_opaque_second");
+    assert_eq!(remote_account_email.as_deref(), Some("second@example.com"));
+
+    let server = warp_ssh_manager::SshServerInfo::new_default("node-7".to_string());
+    let open_params = super::super::daemon_open_session_params(&server, Some(&route), None);
+    assert_eq!(open_params.agent_launch_route.as_ref(), Some(&route));
+    assert!(open_params.env.is_empty());
+    assert!(open_params.managed_launch.is_none());
+}
+
+#[test]
+fn freest_remote_account_is_scoped_to_the_selected_host() {
+    let claude = remote_provider_for_node(
+        true,
+        "claude",
+        "node-a",
+        &[
+            ("node-a-primary", "a-primary@example.com", 0.99, 0.99),
+            ("node-a-second", "a-second@example.com", 0.98, 0.98),
+        ],
+    );
+    let mut card = remote_claude_card(
+        claude,
+        vec![host("node-a", "alpha"), host("node-b", "beta")],
+        HostChoice::Remote(1),
+        AccountChoice::Freest,
+    );
+
+    assert!(card.freest_remote_account().is_none());
+    assert!(card.launch_payload().is_none());
+
+    card.cfg.claude = remote_provider_for_node(
+        true,
+        "claude",
+        "node-b",
+        &[
+            ("node-b-primary", "b-primary@example.com", 0.35, 0.9),
+            ("node-b-second", "b-second@example.com", 0.8, 0.4),
+        ],
+    );
+    assert_eq!(
+        card.freest_remote_account()
+            .map(|account| account.route.account_id.as_str()),
+        Some("node-b-second")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn local_config_paths_never_cross_the_remote_host_boundary() {
+    let local_config = PathBuf::from("/home/local/.claude-work");
+    let mut claude = remote_provider_for_node(
+        true,
+        "claude",
+        "node-7",
+        &[("opaque-remote-account", "remote@example.com", 0.7, 0.7)],
+    );
+    claude.freest_dir = Some(local_config.clone());
+    claude.accounts = vec![AccountOption {
+        label: "local work".to_string(),
+        config_dir: local_config.clone(),
+        is_default: false,
+        heat_label: "10 %".to_string(),
+        heat: 0.1,
+        plan: None,
+        provider: zaplex_cockpit::Provider::Claude,
+    }];
+    let card = remote_claude_card(
+        claude,
+        vec![host("node-7", "devbox")],
+        HostChoice::Remote(0),
+        AccountChoice::Specific(0),
+    );
+
+    let SpawnCardEvent::Launch {
+        config_dir,
+        agent_launch_route: Some(route),
+        ..
+    } = card.launch_payload().expect("the remote account is ready")
+    else {
+        panic!("Confirm must emit a routed Launch");
+    };
+    assert_eq!(config_dir, None);
+    assert_eq!(route.account_id, "opaque-remote-account");
+
+    let server = warp_ssh_manager::SshServerInfo::new_default("node-7".to_string());
+    let open_params = super::super::daemon_open_session_params(&server, Some(&route), None);
+    assert_eq!(open_params.cwd, None);
+    assert!(!open_params.env.contains_key("CLAUDE_CONFIG_DIR"));
+    assert!(!open_params.env.contains_key("CODEX_HOME"));
+    assert_ne!(
+        open_params
+            .agent_launch_route
+            .as_ref()
+            .map(|selected| PathBuf::from(&selected.account_id)),
+        Some(local_config)
+    );
+}
+
 #[test]
 fn degraded_remote_inventory_never_drives_auto_routing() {
     let mut claude = remote_provider(true, "claude");
@@ -355,10 +601,20 @@ fn degraded_remote_inventory_never_drives_auto_routing() {
         agent: CLIAgent::Claude,
         model: "opus".to_string(),
         effort: String::new(),
+        managed_mode: ManagedLaunchMode::Ordinary,
         account: AccountChoice::Freest,
+        batch_accounts: BTreeSet::new(),
+        select_all_accounts: false,
         show_accounts: false,
         host: HostChoice::Remote(0),
         project: None,
+        folder_history: FolderHistory::empty(),
+        folder_navigation: FolderNavigation::default(),
+        folder_history_open: false,
+        folder_validation: DirectoryValidationState::default(),
+        history_validation: BTreeMap::new(),
+        history_search_editor: None,
+        bulk_launch: None,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -383,10 +639,20 @@ fn confirm_payload_none_when_nothing_installed() {
         agent: CLIAgent::Claude,
         model: "opus".to_string(),
         effort: "high".to_string(),
+        managed_mode: ManagedLaunchMode::Ordinary,
         account: AccountChoice::Freest,
+        batch_accounts: BTreeSet::new(),
+        select_all_accounts: false,
         show_accounts: false,
         host: HostChoice::Local,
         project: None,
+        folder_history: FolderHistory::empty(),
+        folder_navigation: FolderNavigation::default(),
+        folder_history_open: false,
+        folder_validation: DirectoryValidationState::default(),
+        history_validation: BTreeMap::new(),
+        history_search_editor: None,
+        bulk_launch: None,
         prompt: None,
         // The pure tests build the card without a `ViewContext`, so there is
         // no editor view to construct — remote-dir prefill/read is exercised
@@ -424,10 +690,20 @@ fn relative_remote_launch_directory_is_rejected() {
         agent: CLIAgent::Codex,
         model: "gpt-5-codex".to_string(),
         effort: "high".to_string(),
+        managed_mode: ManagedLaunchMode::Ordinary,
         account: AccountChoice::Freest,
+        batch_accounts: BTreeSet::new(),
+        select_all_accounts: false,
         show_accounts: false,
         host: remote,
         project: None,
+        folder_history: FolderHistory::empty(),
+        folder_navigation: FolderNavigation::default(),
+        folder_history_open: false,
+        folder_validation: DirectoryValidationState::default(),
+        history_validation: BTreeMap::new(),
+        history_search_editor: None,
+        bulk_launch: None,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -485,10 +761,20 @@ fn effort_payload_matches_cli_capability() {
         agent: CLIAgent::Codex,
         model: "gpt-5-codex".to_string(),
         effort: "high".to_string(),
+        managed_mode: ManagedLaunchMode::Ordinary,
         account: AccountChoice::Freest,
+        batch_accounts: BTreeSet::new(),
+        select_all_accounts: false,
         show_accounts: false,
         host: HostChoice::Local,
         project: None,
+        folder_history: FolderHistory::empty(),
+        folder_navigation: FolderNavigation::default(),
+        folder_history_open: false,
+        folder_validation: DirectoryValidationState::default(),
+        history_validation: BTreeMap::new(),
+        history_search_editor: None,
+        bulk_launch: None,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -519,10 +805,20 @@ fn claude_spawn_card_exposes_only_cli_default_effort() {
         agent: CLIAgent::Claude,
         model: "sonnet".to_string(),
         effort: "high".to_string(),
+        managed_mode: ManagedLaunchMode::Ordinary,
         account: AccountChoice::Freest,
+        batch_accounts: BTreeSet::new(),
+        select_all_accounts: false,
         show_accounts: false,
         host: HostChoice::Local,
         project: None,
+        folder_history: FolderHistory::empty(),
+        folder_navigation: FolderNavigation::default(),
+        folder_history_open: false,
+        folder_validation: DirectoryValidationState::default(),
+        history_validation: BTreeMap::new(),
+        history_search_editor: None,
+        bulk_launch: None,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -547,10 +843,20 @@ fn absolute_remote_launch_directory_reaches_request_unchanged() {
         agent: CLIAgent::Codex,
         model: "gpt-5-codex".to_string(),
         effort: "high".to_string(),
+        managed_mode: ManagedLaunchMode::Ordinary,
         account: AccountChoice::Freest,
+        batch_accounts: BTreeSet::new(),
+        select_all_accounts: false,
         show_accounts: false,
         host: HostChoice::Remote(0),
         project: None,
+        folder_history: FolderHistory::empty(),
+        folder_navigation: FolderNavigation::default(),
+        folder_history_open: false,
+        folder_validation: DirectoryValidationState::default(),
+        history_validation: BTreeMap::new(),
+        history_search_editor: None,
+        bulk_launch: None,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -565,4 +871,57 @@ fn absolute_remote_launch_directory_reaches_request_unchanged() {
         panic!("expected launch payload");
     };
     assert_eq!(cwd, Some(PathBuf::from(remote_path)));
+}
+
+#[test]
+fn managed_launch_is_explicit_exact_and_does_not_claim_unsupported_settings() {
+    let card = SpawnCard {
+        cfg: SpawnCardConfig {
+            claude: remote_provider(true, "claude"),
+            hosts: vec![managed_host("node-7", "devbox")],
+            ..Default::default()
+        },
+        agent: CLIAgent::Claude,
+        model: "opus".to_string(),
+        effort: "high".to_string(),
+        managed_mode: ManagedLaunchMode::ClaudeRemoteControl,
+        account: AccountChoice::Freest,
+        batch_accounts: BTreeSet::new(),
+        select_all_accounts: false,
+        show_accounts: false,
+        host: HostChoice::Remote(0),
+        project: None,
+        folder_history: FolderHistory::empty(),
+        folder_navigation: FolderNavigation::default(),
+        folder_history_open: false,
+        folder_validation: DirectoryValidationState::default(),
+        history_validation: BTreeMap::new(),
+        history_search_editor: None,
+        bulk_launch: None,
+        prompt: Some("must not be sent".to_string()),
+        remote_dir_editor: None,
+        chip_states: Default::default(),
+        close_button: None,
+    };
+
+    let SpawnCardEvent::Launch {
+        cwd,
+        model,
+        effort,
+        prompt,
+        managed_mode,
+        managed_launch_id,
+        ..
+    } = card
+        .launch_payload_for_remote_input(Some("/srv/zaplex"))
+        .expect("negotiated remote host is managed-launchable")
+    else {
+        panic!("expected launch payload");
+    };
+    assert_eq!(cwd, Some(PathBuf::from("/srv/zaplex")));
+    assert_eq!(managed_mode, ManagedLaunchMode::ClaudeRemoteControl);
+    assert!(managed_launch_id.is_some_and(|id| !id.is_empty()));
+    assert_eq!(model, None);
+    assert_eq!(effort, None);
+    assert_eq!(prompt, None);
 }

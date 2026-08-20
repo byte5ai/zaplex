@@ -261,6 +261,16 @@ pub enum RemoteServerManagerEvent {
         /// The error message from the failed phase.
         error: String,
     },
+    /// A capability-gated managed OpenSession was acknowledged by the daemon.
+    /// The launch id is the stable client-created correlation key; PTY identity
+    /// is returned only after admission and spawn actually succeeded.
+    ManagedLaunchOpened {
+        launch_id: String,
+        pty_session_id: String,
+        generation: u64,
+    },
+    /// A managed launch failed before any authoritative SessionOpened Ack.
+    ManagedLaunchFailed { launch_id: String, error: String },
     /// This session's connection dropped. Carries `host_id` so consumers
     /// don't need to look it up from the already-transitioned state.
     /// This session's underlying connection is no longer usable: the
@@ -449,7 +459,9 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
             | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
-            | RemoteServerManagerEvent::BufferUpdated { .. } => None,
+            | RemoteServerManagerEvent::BufferUpdated { .. }
+            | RemoteServerManagerEvent::ManagedLaunchOpened { .. }
+            | RemoteServerManagerEvent::ManagedLaunchFailed { .. } => None,
         }
     }
 }
@@ -555,6 +567,28 @@ impl Entity for RemoteServerManager {
 impl SingletonEntity for RemoteServerManager {}
 
 impl RemoteServerManager {
+    pub fn report_managed_launch_opened(
+        &mut self,
+        launch_id: String,
+        pty_session_id: String,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(RemoteServerManagerEvent::ManagedLaunchOpened {
+            launch_id,
+            pty_session_id,
+            generation,
+        });
+    }
+
+    pub fn report_managed_launch_failed(
+        &mut self,
+        launch_id: String,
+        error: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(RemoteServerManagerEvent::ManagedLaunchFailed { launch_id, error });
+    }
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         Self {
             sessions: HashMap::new(),

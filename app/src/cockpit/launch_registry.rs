@@ -61,6 +61,20 @@ type SessionKey = (
     String,
 );
 
+/// Exact daemon PTY transport identity. A PTY id alone is neither host- nor
+/// generation-stable, so it must never be used to join a remote provider
+/// session to launch intent.
+type RemotePtyKey = (String, String, u64);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemoteSessionObservation {
+    agent: CLIAgent,
+    account_id: String,
+    session_id: String,
+    cwd: PathBuf,
+    project_root: PathBuf,
+}
+
 /// Process-local identity assigned before a provider process can start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LaunchId(u64);
@@ -69,6 +83,10 @@ impl LaunchId {
     fn next() -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+
+    pub(crate) fn opaque_id(self) -> u64 {
+        self.0
     }
 }
 
@@ -79,6 +97,8 @@ struct LaunchStore {
     terminal_launches: HashMap<EntityId, LaunchId>,
     observed_sessions: HashMap<EntityId, String>,
     bound_terminals: HashMap<EntityId, String>,
+    remote_terminals: HashMap<RemotePtyKey, EntityId>,
+    remote_sessions: HashMap<RemotePtyKey, RemoteSessionObservation>,
     sessions: HashMap<SessionKey, LaunchRecord>,
 }
 
@@ -347,6 +367,78 @@ fn promote_terminal_binding(store: &mut LaunchStore, terminal_view_id: EntityId)
     true
 }
 
+fn remote_observation_matches(
+    record: &LaunchRecord,
+    observation: &RemoteSessionObservation,
+) -> bool {
+    let route_matches = record.agent == observation.agent
+        && record.account_id.as_deref() == Some(observation.account_id.as_str());
+    let project_matches = record
+        .cwd
+        .as_ref()
+        .is_none_or(|cwd| cwd == &observation.cwd || cwd == &observation.project_root);
+    route_matches && project_matches
+}
+
+fn promote_remote_binding(store: &mut LaunchStore, remote_key: &RemotePtyKey) -> bool {
+    let Some(terminal_view_id) = store.remote_terminals.get(remote_key).copied() else {
+        return false;
+    };
+    let Some(observation) = store.remote_sessions.get(remote_key).cloned() else {
+        return false;
+    };
+    let Some(launch_id) = store.terminal_launches.get(&terminal_view_id).copied() else {
+        return false;
+    };
+    let Some(record) = store.launches.get(&launch_id).cloned() else {
+        return false;
+    };
+    if record.host.as_deref() != Some(remote_key.0.as_str())
+        || !remote_observation_matches(&record, &observation)
+    {
+        return false;
+    }
+
+    store.launches.remove(&launch_id);
+    store.terminal_launches.remove(&terminal_view_id);
+    let coordinate_key = key(record.agent, record.host.as_deref(), record.cwd.as_deref());
+    if store.coordinates.get(&coordinate_key) == Some(&record) {
+        store.coordinates.remove(&coordinate_key);
+    }
+    let exact_key = session_key(&record, &observation.session_id);
+    let should_replace = store
+        .sessions
+        .get(&exact_key)
+        .is_none_or(|existing| record.launched_at > existing.launched_at);
+    if should_replace {
+        store.sessions.insert(exact_key, record);
+        evict_oldest_bound_session(store);
+    }
+    store
+        .bound_terminals
+        .insert(terminal_view_id, observation.session_id);
+    store.remote_terminals.remove(remote_key);
+    store.remote_sessions.remove(remote_key);
+    true
+}
+
+fn evict_remote_transport_state(store: &mut LaunchStore) {
+    while store.remote_terminals.len() > MAX_RETAINED_LAUNCH_RECORDS {
+        let Some(key) = store.remote_terminals.keys().next().cloned() else {
+            break;
+        };
+        store.remote_terminals.remove(&key);
+        store.remote_sessions.remove(&key);
+    }
+    while store.remote_sessions.len() > MAX_RETAINED_LAUNCH_RECORDS {
+        let Some(key) = store.remote_sessions.keys().next().cloned() else {
+            break;
+        };
+        store.remote_sessions.remove(&key);
+        store.remote_terminals.remove(&key);
+    }
+}
+
 /// Attach a pre-created launch identity to its transport terminal. If the hook
 /// event arrived first, this immediately completes the exact binding.
 pub fn attach_terminal(launch_id: LaunchId, terminal_view_id: EntityId) -> bool {
@@ -373,6 +465,9 @@ pub fn clear_terminal_session_binding(terminal_view_id: EntityId) {
     if let Ok(mut store) = store().lock() {
         store.observed_sessions.remove(&terminal_view_id);
         store.bound_terminals.remove(&terminal_view_id);
+        store
+            .remote_terminals
+            .retain(|_, terminal| *terminal != terminal_view_id);
     }
 }
 
@@ -383,6 +478,16 @@ pub fn forget_terminal(terminal_view_id: EntityId) {
     if let Ok(mut store) = store().lock() {
         store.observed_sessions.remove(&terminal_view_id);
         store.bound_terminals.remove(&terminal_view_id);
+        let remote_keys = store
+            .remote_terminals
+            .iter()
+            .filter(|(_, terminal)| **terminal == terminal_view_id)
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in remote_keys {
+            store.remote_terminals.remove(&key);
+            store.remote_sessions.remove(&key);
+        }
         if let Some(launch_id) = store.terminal_launches.remove(&terminal_view_id) {
             if let Some(record) = store.launches.remove(&launch_id) {
                 let coordinate_key =
@@ -411,6 +516,68 @@ pub fn bind_terminal_session(terminal_view_id: EntityId, session_id: &str) -> bo
         .observed_sessions
         .insert(terminal_view_id, session_id.to_owned());
     promote_terminal_binding(&mut store, terminal_view_id)
+}
+
+/// Associate a daemon-owned PTY with the terminal that carries a pending
+/// launch. The provider inventory may arrive before or after this transport
+/// event; promotion happens only once both sides agree on host, generation,
+/// provider, account and project.
+pub fn attach_remote_terminal(
+    terminal_view_id: EntityId,
+    host_id: &str,
+    pty_session_id: &str,
+    generation: u64,
+) -> bool {
+    if host_id.is_empty() || pty_session_id.is_empty() || generation == 0 {
+        return false;
+    }
+    let Ok(mut store) = store().lock() else {
+        return false;
+    };
+    let key = (host_id.to_owned(), pty_session_id.to_owned(), generation);
+    store.remote_terminals.insert(key.clone(), terminal_view_id);
+    evict_remote_transport_state(&mut store);
+    promote_remote_binding(&mut store, &key)
+}
+
+/// Observe an exact remote provider session from the daemon inventory. This is
+/// deliberately separate from [`attach_remote_terminal`] so scan/transport
+/// ordering cannot change correctness.
+#[allow(clippy::too_many_arguments)]
+pub fn bind_remote_pty_session(
+    host_id: &str,
+    pty_session_id: &str,
+    generation: u64,
+    agent: CLIAgent,
+    account_id: &str,
+    session_id: &str,
+    cwd: &Path,
+    project_root: &Path,
+) -> bool {
+    if host_id.is_empty()
+        || pty_session_id.is_empty()
+        || generation == 0
+        || account_id.is_empty()
+        || session_id.is_empty()
+    {
+        return false;
+    }
+    let Ok(mut store) = store().lock() else {
+        return false;
+    };
+    let key = (host_id.to_owned(), pty_session_id.to_owned(), generation);
+    store.remote_sessions.insert(
+        key.clone(),
+        RemoteSessionObservation {
+            agent,
+            account_id: account_id.to_owned(),
+            session_id: session_id.to_owned(),
+            cwd: cwd.to_path_buf(),
+            project_root: project_root.to_path_buf(),
+        },
+    );
+    evict_remote_transport_state(&mut store);
+    promote_remote_binding(&mut store, &key)
 }
 
 /// Resolve a launch by provider session id and its complete account route.
@@ -525,6 +692,10 @@ pub fn rehost(old_host: &str, new_host: &str) {
             if record.host.as_deref() == Some(old_host) {
                 record.host = Some(new_host.to_owned());
             }
+        }
+        let remote_keys = store.remote_terminals.keys().cloned().collect::<Vec<_>>();
+        for remote_key in remote_keys {
+            let _ = promote_remote_binding(&mut store, &remote_key);
         }
         let moved_sessions = store
             .sessions

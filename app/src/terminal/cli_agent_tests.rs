@@ -658,6 +658,63 @@ fn resume_command_pinned_prepends_inline_env_for_non_default_accounts() {
 }
 
 #[test]
+fn routed_resume_preserves_account_model_effort_and_scrubs_api_keys() {
+    assert_eq!(
+        CLIAgent::Claude.resume_command_routed_with(
+            "claude-session",
+            Some(Path::new("/home/u/claude work")),
+            Some("opus"),
+            Some("high"),
+        ),
+        Some(
+            "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; \
+             CLAUDE_CONFIG_DIR='/home/u/claude work' claude --model opus \
+             --resume claude-session"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        CLIAgent::Codex.resume_command_routed_with(
+            "codex-session",
+            Some(Path::new("/home/u/.codex-alt")),
+            Some("gpt-5.6-sol"),
+            Some("high"),
+        ),
+        Some(
+            "unset OPENAI_API_KEY; CODEX_HOME=/home/u/.codex-alt codex \
+             --model gpt-5.6-sol -c 'model_reasoning_effort=\"high\"' \
+             resume codex-session"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn routed_resume_quotes_session_id_and_rejects_unsupported_providers() {
+    assert_eq!(
+        CLIAgent::Claude.resume_command_routed_with(
+            "id with spaces;$(touch /tmp/nope)",
+            None,
+            None,
+            None,
+        ),
+        Some(
+            "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; \
+             claude --resume 'id with spaces;$(touch /tmp/nope)'"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        CLIAgent::Claude.resume_command_routed_with("   ", None, None, None),
+        None
+    );
+    assert_eq!(
+        CLIAgent::Unknown.resume_command_routed_with("session", None, None, None),
+        None
+    );
+}
+
+#[test]
 fn launch_command_routed_scrubs_and_pins_claude() {
     // Default account: scrub the API key env, no config-dir pin, bare `claude`.
     assert_eq!(

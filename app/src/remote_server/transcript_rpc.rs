@@ -18,7 +18,7 @@ use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 use zaplex_cockpit::{ToolCall, TranscriptTurn, TurnRole};
 
-use super::agent_account::{prepare_launch_environment, AccountRouteCache};
+use super::agent_account::{prepare_launch_environment_from_routes, AccountRoutes};
 use super::proto::{
     AgentLaunchRoute, AgentTranscriptResponse, AgentTranscriptStatus, AgentTranscriptTool,
     AgentTranscriptTurn, ReadAgentTranscript,
@@ -81,15 +81,6 @@ pub(crate) struct ResolvedTranscriptRequest {
     known_revision: Option<String>,
 }
 
-pub(crate) fn busy_response(request: &ResolvedTranscriptRequest) -> AgentTranscriptResponse {
-    response(
-        request.provider.as_str(),
-        &request.session_id,
-        AgentTranscriptStatus::Unavailable,
-        "transcript reader is busy; retry",
-    )
-}
-
 fn response(
     provider: &str,
     session_id: &str,
@@ -120,12 +111,9 @@ fn valid_opaque_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
-/// Resolve the request against the daemon's current account route cache. The
-/// resulting path never leaves this process and is canonicalized before use.
-pub(crate) fn resolve_request(
-    cache: &AccountRouteCache,
-    request: ReadAgentTranscript,
-) -> Result<ResolvedTranscriptRequest, AgentTranscriptResponse> {
+fn validate_request(
+    request: &ReadAgentTranscript,
+) -> Result<TranscriptProvider, AgentTranscriptResponse> {
     if request.schema_version != TRANSCRIPT_SCHEMA_VERSION {
         return Err(invalid_response("unsupported transcript request version"));
     }
@@ -143,6 +131,28 @@ pub(crate) fn resolve_request(
     {
         return Err(invalid_response("invalid transcript revision"));
     }
+    Ok(provider)
+}
+
+pub(crate) fn busy_response(request: &ReadAgentTranscript) -> AgentTranscriptResponse {
+    match validate_request(request) {
+        Ok(provider) => response(
+            provider.as_str(),
+            &request.session_id,
+            AgentTranscriptStatus::Unavailable,
+            "transcript reader is busy; retry",
+        ),
+        Err(response) => response,
+    }
+}
+
+/// Resolve the request against a freshly scanned daemon account inventory. The
+/// resulting path never leaves this process and is canonicalized before use.
+pub(crate) fn resolve_request(
+    routes: &AccountRoutes,
+    request: ReadAgentTranscript,
+) -> Result<ResolvedTranscriptRequest, AgentTranscriptResponse> {
+    let provider = validate_request(&request)?;
 
     let mut environment = HashMap::new();
     let route = AgentLaunchRoute {
@@ -150,7 +160,7 @@ pub(crate) fn resolve_request(
         provider: provider.as_str().to_string(),
         account_id: request.account_id,
     };
-    if prepare_launch_environment(cache, Some(&route), &mut environment).is_err() {
+    if prepare_launch_environment_from_routes(routes, Some(&route), &mut environment).is_err() {
         return Err(invalid_response(
             "unknown, stale or ambiguous daemon account id",
         ));
@@ -296,7 +306,7 @@ fn source_revision(content: &[u8]) -> String {
     let mut digest = Sha256::new();
     digest.update(b"zaplex-agent-transcript-revision-v1\0");
     digest.update(content);
-    hex::encode(&digest.finalize()[..16])
+    hex::encode(digest.finalize())
 }
 
 struct CheckedSource {

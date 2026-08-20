@@ -1,3 +1,4 @@
+pub mod cockpit;
 pub mod conversations;
 mod data_sources;
 mod files;

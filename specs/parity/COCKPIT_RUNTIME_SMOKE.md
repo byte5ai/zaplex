@@ -29,9 +29,18 @@ runtime-smoke/
   reattach.png
 ```
 
-`versions.txt` contains the Zaplex revision plus the output of `claude --version` and
-`codex --version`. Replace real host and account names with stable labels such as `local`,
-`remote-a`, `account-default`, and `account-pinned`.
+The directory is closed-world: do not add logs, transcripts, config files, nested directories, or
+symlinks. `versions.txt` uses exactly these one-line keys (replace the example values, not the keys):
+
+```text
+zaplex_revision=<40-character lowercase commit SHA>
+claude_version=<sanitized output of claude --version>
+codex_version=<sanitized output of codex --version>
+remote_provider=claude|codex
+remote_provider_version=<sanitized remote CLI version>
+```
+
+Use only the stable host aliases `local` and `remote-a`. Do not record real host or account names.
 
 ## Local Claude
 
@@ -83,21 +92,42 @@ runtime-smoke/
 
 ## Evidence record
 
-Write `observations.json` with this shape. `pass` is allowed only after every assertion above was
-observed on the Zaplex revision named in the automated audit report.
+Write `observations.json` with exactly this shape. `pass` is allowed only after every assertion
+above was observed on the Zaplex revision named in the automated audit report. The remote provider
+may be Claude or Codex, but it must match `versions.txt`.
 
 ```json
 {
   "schema_version": 1,
   "zaplex_revision": "<40-hex-sha>",
   "executed_at": "<RFC3339 UTC>",
-  "topology": ["local", "remote-a"],
+  "topology": [
+    {"label": "local", "kind": "local"},
+    {"label": "remote-a", "kind": "remote"}
+  ],
+  "providers": {
+    "local_claude": {"provider": "claude", "host": "local"},
+    "local_codex": {"provider": "codex", "host": "local"},
+    "remote_agent": {"provider": "claude", "host": "remote-a"}
+  },
+  "account_modes": ["default", "pinned"],
+  "states": ["live", "waiting", "idle", "dormant"],
+  "capabilities": [
+    "launch",
+    "reattach",
+    "transcript",
+    "usage",
+    "attention",
+    "lifecycle",
+    "snapshot"
+  ],
   "cases": {
-    "local_claude": "pass|fail",
-    "local_codex": "pass|fail",
-    "remote_host": "pass|fail",
-    "reattach_and_lifecycle": "pass|fail",
-    "machine_snapshot": "pass|fail"
+    "local_claude": "pass",
+    "local_codex": "pass",
+    "remote_host": "pass",
+    "reattach_and_lifecycle": "pass",
+    "machine_snapshot": "pass",
+    "two_host_disconnect": "pass"
   },
   "evidence": [
     "versions.txt",
@@ -105,10 +135,26 @@ observed on the Zaplex revision named in the automated audit report.
     "local-codex.png",
     "remote-host.png",
     "reattach.png"
-  ],
-  "notes": "<sanitized failure details only>"
+  ]
 }
 ```
 
-Attach the evidence directory to the same CI/audit run or release-gate record. A missing manual
-record is `not-run`, never an implicit pass.
+Validate the bundle against the exact build revision before upload:
+
+```text
+script/cockpit-parity-audit validate-runtime \
+  --evidence-dir runtime-smoke \
+  --expected-zaplex-revision <40-hex-sha> \
+  --require-pass \
+  --output runtime-evidence.json
+```
+
+The validator checks the closed file set, schema, revision, freshness, topology, coverage, cases,
+PNG structure/dimensions, and that all four screenshots differ. It cannot detect secrets rendered
+inside an otherwise valid PNG, so inspect every image before upload.
+
+Upload the directory as an Actions artifact named `cockpit-runtime-smoke`. A manually dispatched
+Cockpit parity audit can consume it using the source run id and can enable
+`require_manual_runtime`. The assembled report then passes `release_gate_status` only when the
+automated audit and the runtime evidence use the same Zaplex revision. Without such an artifact,
+`manual_runtime` and `release_gate_status` remain `not-run`; they are never an implicit pass.

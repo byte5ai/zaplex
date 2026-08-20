@@ -44,9 +44,10 @@ use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 use walkdir::WalkDir;
 
-use crate::transcript::{ToolCall, TranscriptTurn, TurnRole};
+use crate::transcript::{LoadedTranscript, ToolCall, TranscriptTurn, TurnRole};
 use crate::types::{Provider, SessionSnapshot, SessionState, TaskState};
 
 /// A rollout whose last activity is older than this is not treated as live
@@ -57,6 +58,7 @@ const ROLLOUT_CACHE_LIMIT: usize = 512;
 const TRANSCRIPT_HEADER_MAX_BYTES: u64 = 64 * 1024;
 const TRANSCRIPT_HEADER_SCAN_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const TRANSCRIPT_HISTORY_MAX_FILES: usize = 32_768;
+pub const TRANSCRIPT_MAX_LINES: usize = 20_000;
 
 /// Maximum Codex rollout size accepted by [`load_transcript`].
 ///
@@ -342,6 +344,7 @@ struct OpenedTranscript {
 struct ResolvedTranscript {
     candidate: TranscriptCandidate,
     opened: Option<OpenedTranscript>,
+    provider_root: PathBuf,
 }
 
 fn transcript_history_candidates(
@@ -384,7 +387,10 @@ fn transcript_history_candidates(
     Ok(candidates)
 }
 
-fn open_transcript(candidate: &TranscriptCandidate) -> Result<OpenedTranscript, TranscriptError> {
+fn open_transcript(
+    canonical_provider_root: &Path,
+    candidate: &TranscriptCandidate,
+) -> Result<OpenedTranscript, TranscriptError> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -397,6 +403,16 @@ fn open_transcript(candidate: &TranscriptCandidate) -> Result<OpenedTranscript, 
         return Err(TranscriptError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "Codex transcript changed after resolution",
+        )));
+    }
+    let canonical_path = std::fs::canonicalize(&candidate.path)?;
+    if !canonical_path.starts_with(canonical_provider_root) {
+        return Err(TranscriptError::MalformedTranscript);
+    }
+    if TranscriptFileIdentity::from_metadata(&canonical_path.metadata()?)? != candidate.identity {
+        return Err(TranscriptError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Codex transcript root changed after open",
         )));
     }
     Ok(OpenedTranscript {
@@ -462,6 +478,10 @@ fn resolve_transcript(
     }
 
     let candidates = transcript_history_candidates(codex_home)?;
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let provider_root = std::fs::canonicalize(codex_home)?;
     let file_name_matches: Vec<TranscriptCandidate> = candidates
         .iter()
         .filter(|candidate| {
@@ -475,6 +495,7 @@ fn resolve_transcript(
             candidate.map(|candidate| ResolvedTranscript {
                 candidate,
                 opened: None,
+                provider_root: provider_root.clone(),
             })
         });
     }
@@ -488,7 +509,7 @@ fn resolve_transcript(
                 max_bytes: TRANSCRIPT_HEADER_SCAN_MAX_BYTES,
             });
         }
-        let opened = open_transcript(&candidate)?;
+        let opened = open_transcript(&provider_root, &candidate)?;
         let (header_session_id, bytes_read, opened) =
             session_id_from_header(opened, remaining_bytes)?;
         header_bytes_read = header_bytes_read.saturating_add(bytes_read);
@@ -503,6 +524,7 @@ fn resolve_transcript(
         header_match = Some(ResolvedTranscript {
             candidate,
             opened: Some(opened),
+            provider_root: provider_root.clone(),
         });
     }
     Ok(header_match)
@@ -539,13 +561,21 @@ fn read_transcript(mut opened: OpenedTranscript) -> Result<String, TranscriptErr
             max_bytes: TRANSCRIPT_MAX_BYTES,
         });
     }
+    let newline_count = opened.bytes.iter().filter(|byte| **byte == b'\n').count();
+    let line_count = newline_count
+        + usize::from(!opened.bytes.is_empty() && opened.bytes.last() != Some(&b'\n'));
+    if line_count > TRANSCRIPT_MAX_LINES {
+        return Err(TranscriptError::TranscriptTooLarge {
+            max_bytes: TRANSCRIPT_MAX_BYTES,
+        });
+    }
     String::from_utf8(opened.bytes).map_err(|_| TranscriptError::MalformedTranscript)
 }
 
 fn read_resolved_transcript(resolved: ResolvedTranscript) -> Result<String, TranscriptError> {
     let opened = match resolved.opened {
         Some(opened) => opened,
-        None => open_transcript(&resolved.candidate)?,
+        None => open_transcript(&resolved.provider_root, &resolved.candidate)?,
     };
     read_transcript(opened)
 }
@@ -795,11 +825,35 @@ pub fn load_transcript(
     codex_home: &Path,
     session_id: &str,
 ) -> Result<Option<Vec<TranscriptTurn>>, TranscriptError> {
+    load_transcript_with_revision(codex_home, session_id)
+        .map(|transcript| transcript.map(|transcript| transcript.turns))
+}
+
+/// Load one local Codex rollout and return the revision of the exact bounded
+/// source that was parsed. The revision is content-derived, so an mtime-only
+/// change does not rewrite an open generated document.
+pub fn load_transcript_with_revision(
+    codex_home: &Path,
+    session_id: &str,
+) -> Result<Option<LoadedTranscript>, TranscriptError> {
     let Some(resolved) = resolve_transcript(codex_home, session_id)? else {
         return Ok(None);
     };
     let content = read_resolved_transcript(resolved)?;
-    parse_transcript_content(&content).map(Some)
+    let source_revision = hex_revision(&content);
+    parse_transcript_content(&content).map(|turns| {
+        Some(LoadedTranscript {
+            turns,
+            source_revision,
+        })
+    })
+}
+
+fn hex_revision(content: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"zaplex-codex-transcript-revision-v1\0");
+    digest.update(content.as_bytes());
+    format!("{digest:x}")
 }
 
 /// Distil one rollout transcript's live-session signals. Best-effort and

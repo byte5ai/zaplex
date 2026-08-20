@@ -239,6 +239,242 @@ fn provider_event_can_arrive_before_terminal_attach() {
 }
 
 #[test]
+fn remote_transport_then_inventory_promotes_exact_launch() {
+    let terminal = EntityId::new();
+    let cwd = Path::new("/tmp/remote-transport-first");
+    let launch = begin_launch_with_account_id(
+        CLIAgent::Codex,
+        Some("remote-host-transport-first"),
+        Some(cwd),
+        None,
+        None,
+        Some("account-transport-first"),
+        Some("gpt-5.6-sol".to_string()),
+        Some("xhigh".to_string()),
+    );
+    assert!(attach_terminal(launch, terminal));
+    assert!(!attach_remote_terminal(
+        terminal,
+        "remote-host-transport-first",
+        "pty-transport-first",
+        7,
+    ));
+    assert!(bind_remote_pty_session(
+        "remote-host-transport-first",
+        "pty-transport-first",
+        7,
+        CLIAgent::Codex,
+        "account-transport-first",
+        "provider-session-transport-first",
+        cwd,
+        cwd,
+    ));
+    assert!(matches!(
+        lookup_bound_session_with_account_id(
+            CLIAgent::Codex,
+            Some("remote-host-transport-first"),
+            None,
+            None,
+            Some("account-transport-first"),
+            "provider-session-transport-first",
+        ),
+        BoundLaunchLookup::Match(LaunchRecord {
+            effort: Some(ref effort),
+            ..
+        }) if effort == "xhigh"
+    ));
+}
+
+#[test]
+fn remote_inventory_then_transport_promotes_exact_launch() {
+    let terminal = EntityId::new();
+    let cwd = Path::new("/tmp/remote-inventory-first");
+    let launch = begin_launch_with_account_id(
+        CLIAgent::Claude,
+        Some("remote-host-inventory-first"),
+        Some(cwd),
+        None,
+        None,
+        Some("account-inventory-first"),
+        Some("opus".to_string()),
+        Some("high".to_string()),
+    );
+    assert!(attach_terminal(launch, terminal));
+    assert!(!bind_remote_pty_session(
+        "remote-host-inventory-first",
+        "pty-inventory-first",
+        3,
+        CLIAgent::Claude,
+        "account-inventory-first",
+        "provider-session-inventory-first",
+        cwd,
+        cwd,
+    ));
+    assert!(attach_remote_terminal(
+        terminal,
+        "remote-host-inventory-first",
+        "pty-inventory-first",
+        3,
+    ));
+    assert!(matches!(
+        lookup_bound_session_with_account_id(
+            CLIAgent::Claude,
+            Some("remote-host-inventory-first"),
+            None,
+            None,
+            Some("account-inventory-first"),
+            "provider-session-inventory-first",
+        ),
+        BoundLaunchLookup::Match(_)
+    ));
+}
+
+#[test]
+fn parallel_remote_launches_same_project_bind_by_account_and_pty() {
+    let cwd = Path::new("/tmp/parallel-remote-project");
+    let first_terminal = EntityId::new();
+    let second_terminal = EntityId::new();
+    let first = begin_launch_with_account_id(
+        CLIAgent::Codex,
+        Some("parallel-remote-host"),
+        Some(cwd),
+        None,
+        None,
+        Some("parallel-account-a"),
+        Some("model-a".to_string()),
+        Some("high".to_string()),
+    );
+    let second = begin_launch_with_account_id(
+        CLIAgent::Codex,
+        Some("parallel-remote-host"),
+        Some(cwd),
+        None,
+        None,
+        Some("parallel-account-b"),
+        Some("model-b".to_string()),
+        Some("low".to_string()),
+    );
+    assert!(attach_terminal(first, first_terminal));
+    assert!(attach_terminal(second, second_terminal));
+    assert!(!attach_remote_terminal(
+        first_terminal,
+        "parallel-remote-host",
+        "parallel-pty-a",
+        1,
+    ));
+    assert!(!attach_remote_terminal(
+        second_terminal,
+        "parallel-remote-host",
+        "parallel-pty-b",
+        1,
+    ));
+    assert!(bind_remote_pty_session(
+        "parallel-remote-host",
+        "parallel-pty-b",
+        1,
+        CLIAgent::Codex,
+        "parallel-account-b",
+        "parallel-provider-b",
+        cwd,
+        cwd,
+    ));
+    assert!(bind_remote_pty_session(
+        "parallel-remote-host",
+        "parallel-pty-a",
+        1,
+        CLIAgent::Codex,
+        "parallel-account-a",
+        "parallel-provider-a",
+        cwd,
+        cwd,
+    ));
+    let first = lookup_bound_session_with_account_id(
+        CLIAgent::Codex,
+        Some("parallel-remote-host"),
+        None,
+        None,
+        Some("parallel-account-a"),
+        "parallel-provider-a",
+    );
+    let second = lookup_bound_session_with_account_id(
+        CLIAgent::Codex,
+        Some("parallel-remote-host"),
+        None,
+        None,
+        Some("parallel-account-b"),
+        "parallel-provider-b",
+    );
+    assert!(matches!(
+        first,
+        BoundLaunchLookup::Match(LaunchRecord {
+            model: Some(ref model),
+            ..
+        }) if model == "model-a"
+    ));
+    assert!(matches!(
+        second,
+        BoundLaunchLookup::Match(LaunchRecord {
+            model: Some(ref model),
+            ..
+        }) if model == "model-b"
+    ));
+}
+
+#[test]
+fn remote_binding_fails_closed_on_wrong_provider_account_or_project() {
+    let terminal = EntityId::new();
+    let cwd = Path::new("/tmp/remote-fail-closed");
+    let launch = begin_launch_with_account_id(
+        CLIAgent::Claude,
+        Some("remote-host-fail-closed"),
+        Some(cwd),
+        None,
+        None,
+        Some("expected-account"),
+        None,
+        Some("high".to_string()),
+    );
+    assert!(attach_terminal(launch, terminal));
+    assert!(!attach_remote_terminal(
+        terminal,
+        "remote-host-fail-closed",
+        "pty-fail-closed",
+        11,
+    ));
+    for (agent, account, project) in [
+        (CLIAgent::Codex, "expected-account", cwd),
+        (CLIAgent::Claude, "wrong-account", cwd),
+        (
+            CLIAgent::Claude,
+            "expected-account",
+            Path::new("/tmp/wrong-project"),
+        ),
+    ] {
+        assert!(!bind_remote_pty_session(
+            "remote-host-fail-closed",
+            "pty-fail-closed",
+            11,
+            agent,
+            account,
+            "wrong-provider-session",
+            project,
+            project,
+        ));
+    }
+    assert_eq!(
+        lookup_bound_session_with_account_id(
+            CLIAgent::Claude,
+            Some("remote-host-fail-closed"),
+            None,
+            None,
+            Some("expected-account"),
+            "wrong-provider-session",
+        ),
+        BoundLaunchLookup::Unbound,
+    );
+}
+
+#[test]
 fn reordered_exact_bindings_keep_the_newest_launch_intent() {
     let cwd = Path::new("/tmp/reordered-exact-project");
     let config = Path::new("/tmp/reordered-exact-account");

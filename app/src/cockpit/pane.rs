@@ -15,7 +15,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
+    Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Empty,
     Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect,
@@ -37,13 +37,20 @@ use zaplex_cockpit::{
 
 use crate::cockpit::account_identity;
 use crate::cockpit::capabilities::SessionCapabilities;
+use crate::cockpit::fleet_details::{
+    managed_fleet_details_from_proto, ManagedFleetInventory, ManagedFleetSession,
+};
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
+use crate::cockpit::session_lifecycle::{
+    lifecycle_capabilities, RestartPresence, SessionAccountRoute, SessionHostRoute, SessionRoute,
+};
 use crate::cockpit::style::{
     attention_coloru, cluster_divider, ctx_pct_element, glyph_cell, heat_coloru_on,
     icon_verb_button_tooltip, icon_word_verb, provider_color_on, provider_label, status_dot_coloru,
     utilisation_coloru, verb_button, verb_button_colored, zone_card, VerbKind, BLOCK_RADIUS,
     CONTROL_RADIUS,
 };
+use crate::cockpit::transcript_view::TranscriptTarget;
 use crate::editor::{
     EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
 };
@@ -52,14 +59,12 @@ use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::manager::RemoteServerManager;
-#[cfg(not(target_family = "wasm"))]
-use crate::remote_server::proto::{
-    AgentTranscriptResponse, AgentTranscriptStatus, AgentTranscriptTurn,
-};
 use crate::search_bar::SearchBar;
+use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::ui_components::icons;
-use crate::view_components::DismissibleToast;
-use crate::workspace::ToastStack;
+use crate::view_components::action_button::{
+    ActionButton, DangerPrimaryTheme, NakedTheme, PrimaryTheme,
+};
 use crate::WorkspaceAction;
 #[cfg(not(target_family = "wasm"))]
 use zaplex_remote_session::types::{has_feature, FEATURE_AGENT_TRANSCRIPT_READ_V1};
@@ -93,6 +98,7 @@ fn session_today_cost(
 const SEARCH_WIDTH: f32 = 220.0;
 /// The ⋯ drive's width.
 const ROW_MENU_WIDTH: f32 = 216.0;
+const SESSION_DIALOG_WIDTH: f32 = 440.0;
 /// The alias editor's width — fixed for the same reason the search box is.
 const ALIAS_EDITOR_WIDTH: f32 = 220.0;
 const CARD_PADDING: f32 = 12.0;
@@ -195,6 +201,30 @@ pub struct RowMenu {
     /// provider, account, and conversation identity.
     pub row_key: String,
     pub position: Vector2F,
+    lifecycle: Option<SessionRowLifecycle>,
+}
+
+#[derive(Clone)]
+struct SessionRowLifecycle {
+    route: SessionRoute,
+    current_name: String,
+    can_restart: bool,
+    can_rename: bool,
+    cleanup_candidate: Option<zaplex_cockpit::ClaudeStaleRegistryCandidate>,
+}
+
+enum SessionLifecycleDialog {
+    Rename {
+        route: SessionRoute,
+        current_name: String,
+        editor: ViewHandle<EditorView>,
+        validation_error: Option<String>,
+    },
+    Cleanup {
+        route: SessionRoute,
+        candidate: zaplex_cockpit::ClaudeStaleRegistryCandidate,
+        session_name: String,
+    },
 }
 
 /// A sortable column of the session table (P4).
@@ -284,6 +314,20 @@ fn table_row_needs_attention(row: &TableRow) -> bool {
         row,
         TableRow::Session { session, .. } if session.state == SessionState::Waiting
     )
+}
+
+fn restart_presence_for_menu(session: &SessionSnapshot) -> RestartPresence {
+    if session.state != SessionState::Idle
+        && session.pid > 0
+        && session
+            .process_fingerprint
+            .as_deref()
+            .is_some_and(|fingerprint| !fingerprint.trim().is_empty())
+    {
+        RestartPresence::VerifiedProcess
+    } else {
+        RestartPresence::Unverifiable
+    }
 }
 
 /// The session row selected by a complete [`session_key`]. Kept as a pure
@@ -398,145 +442,7 @@ fn transcript_action_target(
     }
 }
 
-/// The explicit read-only document state shown when a provider transcript
-/// cannot yield conversation turns.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TranscriptDocumentState {
-    Ready,
-    Missing,
-    Empty,
-    Unsupported,
-    Malformed,
-    TooLarge,
-    Unavailable,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct TranscriptDocument {
-    state: TranscriptDocumentState,
-    markdown: String,
-}
-
-fn transcript_title(provider: Provider) -> String {
-    crate::t!(
-        "cockpit-transcript-title",
-        provider = provider_label(provider)
-    )
-    .to_string()
-}
-
-fn transcript_state_document(
-    provider: Provider,
-    state: TranscriptDocumentState,
-) -> TranscriptDocument {
-    let detail = match state {
-        TranscriptDocumentState::Missing => Some(crate::t!("cockpit-transcript-missing")),
-        TranscriptDocumentState::Empty => Some(crate::t!("cockpit-transcript-empty")),
-        TranscriptDocumentState::Unsupported => Some(crate::t!("cockpit-transcript-unsupported")),
-        TranscriptDocumentState::Malformed => Some(crate::t!("cockpit-transcript-malformed")),
-        TranscriptDocumentState::TooLarge => Some(crate::t!("cockpit-transcript-too-large")),
-        TranscriptDocumentState::Unavailable => Some(crate::t!("cockpit-transcript-unavailable")),
-        TranscriptDocumentState::Ready => None,
-    };
-    let mut markdown = format!("# {}", transcript_title(provider));
-    if let Some(detail) = detail {
-        markdown.push_str("\n\n");
-        markdown.push_str(&detail);
-    }
-    TranscriptDocument { state, markdown }
-}
-
-fn ready_transcript_document(
-    provider: Provider,
-    turns: &[zaplex_cockpit::TranscriptTurn],
-    truncated: bool,
-) -> TranscriptDocument {
-    let mut markdown = format_provider_transcript_markdown(provider, turns);
-    if truncated {
-        markdown.insert_str(
-            0,
-            &format!("> {}\n\n", crate::t!("cockpit-transcript-truncated")),
-        );
-    }
-    TranscriptDocument {
-        state: TranscriptDocumentState::Ready,
-        markdown,
-    }
-}
-
-fn safe_inline_label(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| !character.is_control() && *character != '`')
-        .take(96)
-        .collect()
-}
-
-/// Render provider-neutral transcript turns into the existing Markdown-backed
-/// code/text pane. Codex's loader has already removed tool arguments/results,
-/// encrypted payloads, metadata, and credential stores; this view renders only
-/// conversation text, reasoning summaries, and compact tool names.
-fn format_provider_transcript_markdown(
-    provider: Provider,
-    turns: &[zaplex_cockpit::TranscriptTurn],
-) -> String {
-    let provider = provider_label(provider);
-    let mut output = String::new();
-    for turn in turns {
-        match turn.role {
-            zaplex_cockpit::TurnRole::User => output.push_str("## You\n\n"),
-            zaplex_cockpit::TurnRole::Assistant => {
-                output.push_str("## ");
-                output.push_str(provider);
-                if let Some(model) = turn
-                    .model
-                    .as_deref()
-                    .map(safe_inline_label)
-                    .filter(|model| !model.is_empty())
-                {
-                    output.push_str(" · ");
-                    output.push_str(&model);
-                }
-                output.push_str("\n\n");
-            }
-        }
-        if !turn.thinking.is_empty() {
-            output.push_str("<details><summary>thinking</summary>\n\n");
-            output.push_str(turn.thinking.trim());
-            output.push_str("\n\n</details>\n\n");
-        }
-        if !turn.tools.is_empty() {
-            let tools: Vec<String> = turn
-                .tools
-                .iter()
-                .map(|tool| safe_inline_label(&tool.name))
-                .filter(|name| !name.is_empty())
-                .collect();
-            if !tools.is_empty() {
-                output.push_str("`⚙ ");
-                output.push_str(&tools.join(", "));
-                output.push_str("`\n\n");
-            }
-        }
-        if !turn.text.is_empty() {
-            output.push_str(turn.text.trim());
-            output.push_str("\n\n");
-        }
-        output.push_str("---\n\n");
-    }
-    output.truncate(output.trim_end().len());
-    output
-}
-
-#[cfg(not(target_family = "wasm"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RemoteTranscriptProjectionError {
-    InvalidEnvelope,
-    InvalidStatus,
-    InvalidPayload,
-}
-
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), test))]
 fn remote_transcript_route_is_current(tree: &FleetTree, route: &RemoteTranscriptRoute) -> bool {
     if !matches!(route.provider, Provider::Claude | Provider::Codex)
         || !valid_transcript_identity(&route.host_id)
@@ -561,160 +467,6 @@ fn remote_transcript_route_is_current(tree: &FleetTree, route: &RemoteTranscript
                 && session.account_id.as_deref() == Some(route.account_id.as_str())
         });
     matches.next().is_some() && matches.next().is_none()
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn remote_wire_turn(
-    turn: AgentTranscriptTurn,
-) -> Result<Option<zaplex_cockpit::TranscriptTurn>, RemoteTranscriptProjectionError> {
-    const MAX_TEXT_BYTES: usize = 64 * 1024;
-    const MAX_THINKING_BYTES: usize = 32 * 1024;
-    const MAX_MODEL_BYTES: usize = 128;
-    const MAX_TIMESTAMP_BYTES: usize = 64;
-    const MAX_TOOLS: usize = 32;
-    const MAX_TOOL_NAME_BYTES: usize = 128;
-
-    if turn.text.len() > MAX_TEXT_BYTES
-        || turn.thinking.len() > MAX_THINKING_BYTES
-        || turn.model.len() > MAX_MODEL_BYTES
-        || turn.timestamp.len() > MAX_TIMESTAMP_BYTES
-        || turn.tools.len() > MAX_TOOLS
-        || turn
-            .tools
-            .iter()
-            .any(|tool| tool.name.len() > MAX_TOOL_NAME_BYTES)
-    {
-        return Err(RemoteTranscriptProjectionError::InvalidPayload);
-    }
-    let role = match turn.role.as_str() {
-        "user" => zaplex_cockpit::TurnRole::User,
-        "assistant" => zaplex_cockpit::TurnRole::Assistant,
-        _ => return Ok(None),
-    };
-    let timestamp = if turn.timestamp.is_empty() {
-        None
-    } else {
-        Some(
-            chrono::DateTime::parse_from_rfc3339(&turn.timestamp)
-                .map_err(|_| RemoteTranscriptProjectionError::InvalidPayload)?
-                .with_timezone(&chrono::Utc),
-        )
-    };
-    Ok(Some(zaplex_cockpit::TranscriptTurn {
-        role,
-        text: turn.text,
-        thinking: turn.thinking,
-        tools: turn
-            .tools
-            .into_iter()
-            .map(|tool| zaplex_cockpit::ToolCall { name: tool.name })
-            .collect(),
-        model: (!turn.model.is_empty()).then_some(turn.model),
-        usage: None,
-        timestamp,
-    }))
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn remote_transcript_document(
-    route: &RemoteTranscriptRoute,
-    response: AgentTranscriptResponse,
-) -> Result<TranscriptDocument, RemoteTranscriptProjectionError> {
-    if response.schema_version != 1
-        || response.provider != route.provider.as_str()
-        || response.session_id != route.session_id
-    {
-        return Err(RemoteTranscriptProjectionError::InvalidEnvelope);
-    }
-    let status = AgentTranscriptStatus::try_from(response.status)
-        .map_err(|_| RemoteTranscriptProjectionError::InvalidStatus)?;
-    match status {
-        AgentTranscriptStatus::Loaded => {
-            if response.turns.is_empty() || response.turns.len() > 512 {
-                return Err(RemoteTranscriptProjectionError::InvalidPayload);
-            }
-            let mut turns = Vec::with_capacity(response.turns.len());
-            for turn in response.turns {
-                if let Some(turn) = remote_wire_turn(turn)? {
-                    turns.push(turn);
-                }
-            }
-            if turns.is_empty() {
-                return Err(RemoteTranscriptProjectionError::InvalidPayload);
-            }
-            Ok(ready_transcript_document(
-                route.provider,
-                &turns,
-                response.truncated,
-            ))
-        }
-        AgentTranscriptStatus::Missing => Ok(transcript_state_document(
-            route.provider,
-            TranscriptDocumentState::Missing,
-        )),
-        AgentTranscriptStatus::Empty => Ok(transcript_state_document(
-            route.provider,
-            TranscriptDocumentState::Empty,
-        )),
-        AgentTranscriptStatus::Unsupported => Ok(transcript_state_document(
-            route.provider,
-            TranscriptDocumentState::Unsupported,
-        )),
-        AgentTranscriptStatus::Malformed => Ok(transcript_state_document(
-            route.provider,
-            TranscriptDocumentState::Malformed,
-        )),
-        AgentTranscriptStatus::TooLarge => Ok(transcript_state_document(
-            route.provider,
-            TranscriptDocumentState::TooLarge,
-        )),
-        AgentTranscriptStatus::Unavailable => Ok(transcript_state_document(
-            route.provider,
-            TranscriptDocumentState::Unavailable,
-        )),
-        AgentTranscriptStatus::NotModified
-        | AgentTranscriptStatus::InvalidRequest
-        | AgentTranscriptStatus::Unspecified => Err(RemoteTranscriptProjectionError::InvalidStatus),
-    }
-}
-
-fn local_codex_transcript_error_state(
-    error: &zaplex_cockpit::codex_sessions::TranscriptError,
-) -> TranscriptDocumentState {
-    match error {
-        zaplex_cockpit::codex_sessions::TranscriptError::InvalidSessionId
-        | zaplex_cockpit::codex_sessions::TranscriptError::AmbiguousSessionId { .. }
-        | zaplex_cockpit::codex_sessions::TranscriptError::MalformedTranscript => {
-            TranscriptDocumentState::Malformed
-        }
-        zaplex_cockpit::codex_sessions::TranscriptError::HistoryLimitExceeded { .. }
-        | zaplex_cockpit::codex_sessions::TranscriptError::TranscriptLookupLimitExceeded {
-            ..
-        }
-        | zaplex_cockpit::codex_sessions::TranscriptError::TranscriptTooLarge { .. } => {
-            TranscriptDocumentState::TooLarge
-        }
-        zaplex_cockpit::codex_sessions::TranscriptError::UnsupportedTranscript => {
-            TranscriptDocumentState::Unsupported
-        }
-        zaplex_cockpit::codex_sessions::TranscriptError::Io(_)
-        | zaplex_cockpit::codex_sessions::TranscriptError::Walk(_) => {
-            TranscriptDocumentState::Unavailable
-        }
-    }
-}
-
-fn load_local_codex_transcript(codex_home: &Path, session_id: &str) -> TranscriptDocument {
-    match zaplex_cockpit::codex_sessions::load_transcript(codex_home, session_id) {
-        Ok(Some(turns)) if turns.is_empty() => {
-            transcript_state_document(Provider::Codex, TranscriptDocumentState::Empty)
-        }
-        Ok(Some(turns)) => ready_transcript_document(Provider::Codex, &turns, false),
-        Ok(None) => transcript_state_document(Provider::Codex, TranscriptDocumentState::Missing),
-        Err(error) => {
-            transcript_state_document(Provider::Codex, local_codex_transcript_error_state(&error))
-        }
-    }
 }
 
 pub struct CockpitPaneView {
@@ -748,6 +500,12 @@ pub struct CockpitPaneView {
     row_dots_states: HashMap<String, MouseStateHandle>,
     /// Hover state per sortable column header.
     sort_header_states: HashMap<&'static str, MouseStateHandle>,
+    /// One explicit rename/cleanup confirmation surface. Its payload is the
+    /// complete route captured when the row menu opened, never a display label.
+    session_lifecycle_dialog: Option<SessionLifecycleDialog>,
+    session_dialog_cancel_button: ViewHandle<ActionButton>,
+    session_rename_confirm_button: ViewHandle<ActionButton>,
+    session_cleanup_confirm_button: ViewHandle<ActionButton>,
     /// The alias editor (A1), present only while renaming this pane's account.
     /// `Some` is the whole "am I editing" state — a separate bool could disagree
     /// with it.
@@ -841,6 +599,9 @@ pub struct CockpitPaneView {
     /// Hover state of the Conductor pane's single fleet-wide "Stop all"
     /// control (step 7). Not keyed — one control for the whole pane.
     conductor_stop_all_state: MouseStateHandle,
+    /// Stable hover state for the exact managed-session Attach/Stop/Restart
+    /// controls in the roomy fleet details.
+    managed_fleet_action_states: HashMap<String, MouseStateHandle>,
 }
 
 /// The review-loop verbs (step 6) that hang on a local Conductor session row, in
@@ -890,9 +651,27 @@ pub enum CockpitPaneAction {
     /// Start renaming this pane's account (A1) — the ⋯ on the detail card.
     StartAliasEdit,
     /// Open the ⋯ drive for a table row (P5), anchored where it was clicked.
-    OpenRowMenu { row_key: String, position: Vector2F },
+    OpenRowMenu {
+        row_key: String,
+        position: Vector2F,
+    },
     /// Close it.
     CloseRowMenu,
+    /// Open a real editor seeded with the session's current provider name.
+    OpenSessionRename {
+        route: SessionRoute,
+        current_name: String,
+    },
+    /// Confirm the current editor value; invalid values leave the dialog open.
+    ConfirmSessionRename,
+    /// Confirm removal of one already proven-stale Claude registry row.
+    OpenClaudeCleanup {
+        route: SessionRoute,
+        candidate: zaplex_cockpit::ClaudeStaleRegistryCandidate,
+        session_name: String,
+    },
+    ConfirmClaudeCleanup,
+    CancelSessionLifecycleDialog,
     /// Fold/unfold a host node (key = stable host identity `host_ident`, not the
     /// display label — two remote daemons can share a label).
     ToggleHost(String),
@@ -908,20 +687,6 @@ pub enum CockpitPaneAction {
     /// Re-run the account scan — the retry on the loading/scan-failed/empty
     /// placeholder.
     Rescan,
-    /// Project one local Codex rollout into provider-neutral turns and open it
-    /// in the same Markdown-backed code/text pane Claude transcripts use.
-    ViewLocalCodexTranscript {
-        session_id: String,
-        codex_home: PathBuf,
-    },
-    /// Fetch one path-free transcript projection from the currently connected
-    /// daemon that owns this exact opaque account and session identity.
-    ViewRemoteTranscript {
-        provider: Provider,
-        host_id: String,
-        account_id: String,
-        session_id: String,
-    },
 }
 
 impl CockpitPaneView {
@@ -983,6 +748,27 @@ impl CockpitPaneView {
                 bar
             })
         };
+        let session_dialog_cancel_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new(crate::t!("common-cancel"), NakedTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(CockpitPaneAction::CancelSessionLifecycleDialog);
+            })
+        });
+        let session_rename_confirm_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new(crate::t!("cockpit-session-rename-confirm"), PrimaryTheme).on_click(
+                |ctx| {
+                    ctx.dispatch_typed_action(CockpitPaneAction::ConfirmSessionRename);
+                },
+            )
+        });
+        let session_cleanup_confirm_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new(
+                crate::t!("cockpit-session-cleanup-confirm"),
+                DangerPrimaryTheme,
+            )
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(CockpitPaneAction::ConfirmClaudeCleanup);
+            })
+        });
         ctx.subscribe_to_view(&search, |me: &mut Self, editor, event, ctx| {
             if matches!(event, EditorEvent::Edited(_)) {
                 me.search_text = editor.as_ref(ctx).buffer_text(ctx);
@@ -1016,6 +802,10 @@ impl CockpitPaneView {
             row_menu: None,
             row_dots_states: HashMap::new(),
             sort_header_states: HashMap::new(),
+            session_lifecycle_dialog: None,
+            session_dialog_cancel_button,
+            session_rename_confirm_button,
+            session_cleanup_confirm_button,
             alias_editor: None,
             alias_persistence_error: None,
             alias_dots_state: MouseStateHandle::default(),
@@ -1042,6 +832,7 @@ impl CockpitPaneView {
             conductor_guardrail_states: HashMap::new(),
             conductor_lever_states: HashMap::new(),
             conductor_stop_all_state: MouseStateHandle::default(),
+            managed_fleet_action_states: HashMap::new(),
         };
         me.sync_session_action_states(ctx);
         // Seed on construction too: without handles the first frame's rows would
@@ -1154,6 +945,9 @@ impl CockpitPaneView {
                     "redirect",
                     "commit",
                     "pr",
+                    "restart",
+                    "rename",
+                    "cleanup",
                     "stop",
                     "kill",
                 ] {
@@ -1203,6 +997,24 @@ impl CockpitPaneView {
         // id. Retain live keys, drop the rest, and prune stale collapse overrides
         // so a disconnected host/account doesn't leak UI state.
         let inv = CockpitModel::as_ref(ctx).inventory();
+        let managed_keys: std::collections::HashSet<String> = CockpitModel::as_ref(ctx)
+            .managed_fleet()
+            .sessions()
+            .iter()
+            .flat_map(|session| {
+                ["attach", "stop", "restart"].map(move |verb| {
+                    format!(
+                        "{}\0{}\0{}\0{verb}",
+                        session.host_id, session.session_id, session.generation
+                    )
+                })
+            })
+            .collect();
+        self.managed_fleet_action_states
+            .retain(|key, _| managed_keys.contains(key));
+        for key in managed_keys {
+            self.managed_fleet_action_states.entry(key).or_default();
+        }
         let live_rows: std::collections::HashSet<String> = inv
             .hosts
             .iter()
@@ -1404,9 +1216,8 @@ impl CockpitPaneView {
         ))
     }
 
-    /// One session-row "log" action: open the session's conversation
-    /// transcript in the shared code/text pane. Claude retains its workspace
-    /// live watcher; Codex rollouts use the provider-neutral local loader.
+    /// One session-row "log" action: open the exact local provider transcript
+    /// through the workspace-owned generated-document/watch lifecycle.
     fn session_transcript_action(
         &self,
         acct: &AccountUsage,
@@ -1415,39 +1226,34 @@ impl CockpitPaneView {
     ) -> Option<Box<dyn Element>> {
         let key = session_key(true, None, session);
         let state = self.session_transcript_states.get(&key).cloned()?;
-        match transcript_action_target(session.provider, true, None)? {
-            TranscriptActionTarget::ClaudeWorkspace => Some(icon_word_verb(
-                state,
-                icons::Icon::History,
-                crate::t!("cockpit-session-transcript").to_string(),
-                VerbKind::Constructive,
-                appearance,
-                WorkspaceAction::ViewTranscript {
-                    session_id: session.session_id.clone(),
-                    config_dir: acct.account.config_dir.clone(),
-                    cwd: PathBuf::from(&session.cwd),
-                    // Follow live: the opened transcript refreshes on each
-                    // cockpit reconcile (claudeplex-desktop watch parity).
-                    watch: true,
-                },
-            )),
-            TranscriptActionTarget::CodexLocal => Some(icon_word_verb(
-                state,
-                icons::Icon::History,
-                crate::t!("cockpit-session-transcript").to_string(),
-                VerbKind::Constructive,
-                appearance,
-                CockpitPaneAction::ViewLocalCodexTranscript {
-                    session_id: session.session_id.clone(),
-                    codex_home: session
-                        .config_dir
-                        .as_deref()
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| acct.account.config_dir.clone()),
-                },
-            )),
-            TranscriptActionTarget::Remote(_) => None,
-        }
+        let target = match transcript_action_target(session.provider, true, None)? {
+            TranscriptActionTarget::ClaudeWorkspace => TranscriptTarget::Local {
+                provider: Provider::Claude,
+                config_root: acct.account.config_dir.clone(),
+                session_id: session.session_id.clone(),
+            },
+            TranscriptActionTarget::CodexLocal => TranscriptTarget::Local {
+                provider: Provider::Codex,
+                config_root: session
+                    .config_dir
+                    .as_deref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| acct.account.config_dir.clone()),
+                session_id: session.session_id.clone(),
+            },
+            TranscriptActionTarget::Remote(_) => return None,
+        };
+        Some(icon_word_verb(
+            state,
+            icons::Icon::History,
+            crate::t!("cockpit-session-transcript").to_string(),
+            VerbKind::Constructive,
+            appearance,
+            WorkspaceAction::ViewAgentTranscript {
+                target,
+                watch: session.state != SessionState::Idle,
+            },
+        ))
     }
 
     /// The pane chrome stays generic; provider and account identity form one
@@ -1847,6 +1653,229 @@ impl CockpitPaneView {
         )
     }
 
+    fn session_row_lifecycle(
+        &self,
+        row_key: &str,
+        app: &AppContext,
+    ) -> Option<SessionRowLifecycle> {
+        let account_key = self.account_key.as_deref()?;
+        let model = CockpitModel::as_ref(app);
+        let acct = model
+            .snapshot()
+            .accounts
+            .iter()
+            .find(|account| account.account.key == account_key)?;
+        let tree = model.inventory();
+        let rows = self.build_table_rows(acct, tree, app);
+        let MatchedSessionRow {
+            session,
+            host_id,
+            is_local,
+            ..
+        } = matching_session_row(&rows, row_key)?;
+        let node_id = (!is_local)
+            .then(|| {
+                tree.hosts
+                    .iter()
+                    .find(|host| !host.is_local && host.host_id.as_deref() == host_id.as_deref())
+                    .and_then(|host| host.registry_node_id.as_deref())
+            })
+            .flatten();
+        let route =
+            SessionRoute::from_snapshot(session, is_local, host_id.as_deref(), node_id).ok()?;
+        let (launch_host, config_dir, account_email, account_id) = match &route.account {
+            SessionAccountRoute::Local {
+                config_dir,
+                account_email,
+            } => (None, config_dir.as_deref(), account_email.as_deref(), None),
+            SessionAccountRoute::Remote {
+                account_id,
+                account_email,
+            } => (
+                match &route.host {
+                    SessionHostRoute::Remote { host_id, .. } => Some(host_id.as_str()),
+                    SessionHostRoute::Local => None,
+                },
+                None,
+                account_email.as_deref(),
+                Some(account_id.as_str()),
+            ),
+        };
+        let exact_launch_bound = matches!(
+            crate::cockpit::launch_registry::lookup_bound_session_with_account_id(
+                crate::cockpit::agent_of(route.provider),
+                launch_host,
+                config_dir,
+                account_email,
+                account_id,
+                &route.session_id,
+            ),
+            crate::cockpit::launch_registry::BoundLaunchLookup::Match(_)
+        );
+        #[cfg(not(target_family = "wasm"))]
+        let cleanup_candidate = if is_local
+            && session.provider == Provider::Claude
+            && session.state == SessionState::Idle
+        {
+            let config_dir = session
+                .config_dir
+                .as_deref()
+                .map(Path::new)
+                .unwrap_or(acct.account.config_dir.as_path());
+            zaplex_cockpit::claude_stale_registry_candidate(config_dir, &session.session_id)
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        #[cfg(target_family = "wasm")]
+        let cleanup_candidate = None;
+        let capabilities = lifecycle_capabilities(
+            &route,
+            &restart_presence_for_menu(session),
+            exact_launch_bound,
+            cleanup_candidate.is_some(),
+        );
+
+        Some(SessionRowLifecycle {
+            route,
+            current_name: session.name.clone(),
+            can_restart: capabilities.can_restart,
+            can_rename: capabilities.can_rename,
+            cleanup_candidate: capabilities
+                .can_cleanup_stale
+                .then_some(cleanup_candidate)
+                .flatten(),
+        })
+    }
+
+    fn render_session_lifecycle_dialog(&self, app: &AppContext) -> Option<Box<dyn Element>> {
+        let state = self.session_lifecycle_dialog.as_ref()?;
+        let appearance = Appearance::as_ref(app);
+        let (title, body, child, confirm): (
+            String,
+            String,
+            Option<Box<dyn Element>>,
+            Box<dyn Element>,
+        ) = match state {
+            SessionLifecycleDialog::Rename {
+                current_name,
+                editor,
+                validation_error,
+                ..
+            } => {
+                let body = if current_name.trim().is_empty() {
+                    crate::t!("cockpit-session-rename-current-empty").to_string()
+                } else {
+                    crate::t!(
+                        "cockpit-session-rename-current",
+                        name = current_name.clone()
+                    )
+                    .to_string()
+                };
+                let mut editor_column = Flex::column()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_child(
+                        ConstrainedBox::new(ChildView::new(editor).finish())
+                            .with_width(SESSION_DIALOG_WIDTH - 40.0)
+                            .finish(),
+                    );
+                if let Some(error) = validation_error {
+                    editor_column = editor_column.with_child(
+                        Container::new(Self::text(
+                            error.clone(),
+                            appearance.ui_font_family(),
+                            appearance.ui_font_body(),
+                            attention_coloru(appearance),
+                        ))
+                        .with_margin_top(8.0)
+                        .finish(),
+                    );
+                }
+                (
+                    crate::t!("cockpit-session-rename-title").to_string(),
+                    body,
+                    Some(editor_column.finish()),
+                    ChildView::new(&self.session_rename_confirm_button).finish(),
+                )
+            }
+            SessionLifecycleDialog::Cleanup {
+                route,
+                session_name,
+                ..
+            } => {
+                let target = if session_name.trim().is_empty() {
+                    route.session_id.clone()
+                } else {
+                    session_name.clone()
+                };
+                (
+                    crate::t!("cockpit-session-cleanup-title").to_string(),
+                    crate::t!("cockpit-session-cleanup-body", session = target).to_string(),
+                    None,
+                    ChildView::new(&self.session_cleanup_confirm_button).finish(),
+                )
+            }
+        };
+        let cancel = ChildView::new(&self.session_dialog_cancel_button).finish();
+        let confirm = Container::new(confirm).with_margin_left(8.0).finish();
+        let mut dialog = Dialog::new(
+            title,
+            Some(body),
+            UiComponentStyles {
+                width: Some(SESSION_DIALOG_WIDTH),
+                ..dialog_styles(appearance)
+            },
+        )
+        .with_bottom_row_child(cancel)
+        .with_bottom_row_child(confirm);
+        if let Some(child) = child {
+            dialog = dialog.with_child(child);
+        }
+        let dialog = Container::new(
+            dialog
+                .build()
+                .prevent_interaction_with_other_elements()
+                .on_dismiss(|ctx, _| {
+                    ctx.dispatch_typed_action(CockpitPaneAction::CancelSessionLifecycleDialog);
+                })
+                .finish(),
+        )
+        .with_margin_top(35.0)
+        .finish();
+        let mut stack = Stack::new();
+        stack.add_positioned_child(
+            dialog,
+            OffsetPositioning::offset_from_parent(
+                vec2f(0.0, 0.0),
+                ParentOffsetBounds::WindowByPosition,
+                ParentAnchor::Center,
+                ChildAnchor::Center,
+            ),
+        );
+        Some(
+            Container::new(Align::new(stack.finish()).finish())
+                .with_background_color(warp_core::ui::theme::Fill::blur().into())
+                .with_corner_radius(app.windows().window_corner_radius())
+                .finish(),
+        )
+    }
+
+    fn wrap_session_lifecycle_dialog(
+        &self,
+        content: Box<dyn Element>,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let Some(dialog) = self.render_session_lifecycle_dialog(app) else {
+            return content;
+        };
+        let mut stack = Stack::new();
+        stack.add_child(content);
+        stack.add_child(dialog);
+        stack.finish()
+    }
+
     /// **P5** — the ⋯ drive: everything you can do to a session, in one place,
     /// **capability-gated** (F6).
     ///
@@ -2036,16 +2065,16 @@ impl CockpitPaneView {
                     &k("transcript"),
                     crate::t!("cockpit-menu-transcript").to_string(),
                     VerbKind::Constructive,
-                    WorkspaceAction::ViewTranscript {
-                        session_id: session.session_id.clone(),
-                        // Default accounts deliberately carry no routing pin on
-                        // the session. The account still owns their real home.
-                        config_dir: config_dir
-                            .clone()
-                            .unwrap_or_else(|| acct.account.config_dir.clone()),
-                        cwd: PathBuf::from(&session.cwd),
-                        // Follow a live conversation; a dormant one has nothing
-                        // left to follow, so it stays a one-shot snapshot.
+                    WorkspaceAction::ViewAgentTranscript {
+                        target: TranscriptTarget::Local {
+                            provider: Provider::Claude,
+                            // Default accounts deliberately carry no routing
+                            // pin on the session. The account owns their root.
+                            config_root: config_dir
+                                .clone()
+                                .unwrap_or_else(|| acct.account.config_dir.clone()),
+                            session_id: session.session_id.clone(),
+                        },
                         watch: session.state != SessionState::Idle,
                     },
                     appearance,
@@ -2057,11 +2086,15 @@ impl CockpitPaneView {
                     &k("transcript"),
                     crate::t!("cockpit-menu-transcript").to_string(),
                     VerbKind::Constructive,
-                    CockpitPaneAction::ViewLocalCodexTranscript {
-                        session_id: session.session_id.clone(),
-                        codex_home: config_dir
-                            .clone()
-                            .unwrap_or_else(|| acct.account.config_dir.clone()),
+                    WorkspaceAction::ViewAgentTranscript {
+                        target: TranscriptTarget::Local {
+                            provider: Provider::Codex,
+                            config_root: config_dir
+                                .clone()
+                                .unwrap_or_else(|| acct.account.config_dir.clone()),
+                            session_id: session.session_id.clone(),
+                        },
+                        watch: session.state != SessionState::Idle,
                     },
                     appearance,
                 ),
@@ -2072,11 +2105,14 @@ impl CockpitPaneView {
                     &k("transcript"),
                     crate::t!("cockpit-menu-transcript").to_string(),
                     VerbKind::Constructive,
-                    CockpitPaneAction::ViewRemoteTranscript {
-                        provider: route.provider,
-                        host_id: route.host_id,
-                        account_id: route.account_id,
-                        session_id: route.session_id,
+                    WorkspaceAction::ViewAgentTranscript {
+                        target: TranscriptTarget::Remote {
+                            provider: route.provider,
+                            host_id: route.host_id,
+                            account_id: route.account_id,
+                            session_id: route.session_id,
+                        },
+                        watch: session.state != SessionState::Idle,
                     },
                     appearance,
                 ),
@@ -2148,6 +2184,59 @@ impl CockpitPaneView {
                 ),
                 &mut col,
             );
+        }
+        if let Some(lifecycle) = menu.lifecycle.as_ref() {
+            if lifecycle.can_restart
+                || lifecycle.can_rename
+                || lifecycle.cleanup_candidate.is_some()
+            {
+                col.add_child(cluster_divider(appearance));
+            }
+            if lifecycle.can_restart {
+                push(
+                    self.menu_item(
+                        &k("restart"),
+                        crate::t!("cockpit-menu-restart").to_string(),
+                        VerbKind::Constructive,
+                        WorkspaceAction::RestartAgentSession {
+                            route: lifecycle.route.clone(),
+                        },
+                        appearance,
+                    ),
+                    &mut col,
+                );
+            }
+            if lifecycle.can_rename {
+                push(
+                    self.menu_item(
+                        &k("rename"),
+                        crate::t!("cockpit-menu-rename-session").to_string(),
+                        VerbKind::Constructive,
+                        CockpitPaneAction::OpenSessionRename {
+                            route: lifecycle.route.clone(),
+                            current_name: lifecycle.current_name.clone(),
+                        },
+                        appearance,
+                    ),
+                    &mut col,
+                );
+            }
+            if let Some(candidate) = lifecycle.cleanup_candidate.as_ref() {
+                push(
+                    self.menu_item(
+                        &k("cleanup"),
+                        crate::t!("cockpit-menu-cleanup-stale").to_string(),
+                        VerbKind::Destructive,
+                        CockpitPaneAction::OpenClaudeCleanup {
+                            route: lifecycle.route.clone(),
+                            candidate: candidate.clone(),
+                            session_name: lifecycle.current_name.clone(),
+                        },
+                        appearance,
+                    ),
+                    &mut col,
+                );
+            }
         }
         if caps.can_signal {
             col.add_child(cluster_divider(appearance));
@@ -3281,15 +3370,179 @@ impl CockpitPaneView {
             .finish()
     }
 
-    fn show_remote_transcript_error(ctx: &mut ViewContext<Self>) {
-        let window_id = ctx.window_id();
-        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            toast_stack.add_ephemeral_toast(
-                DismissibleToast::error(crate::t!("cockpit-remote-transcript-open-error")),
-                window_id,
-                ctx,
+    fn managed_action_key(session: &ManagedFleetSession, verb: &str) -> String {
+        format!(
+            "{}\0{}\0{}\0{verb}",
+            session.host_id, session.session_id, session.generation
+        )
+    }
+
+    /// Roomy managed-fleet details. The sidebar gets only a compact marker;
+    /// provenance-bearing memory values and lifecycle verbs live here.
+    fn render_managed_fleet(
+        &self,
+        inventory: &ManagedFleetInventory,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        if inventory.sessions().is_empty() {
+            return None;
+        }
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let heading = appearance.ui_font_heading_3();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let mut list = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(CARD_SPACING)
+            .with_child(Self::text(
+                format!("Managed agents {}", inventory.sessions().len()),
+                family,
+                heading,
+                main,
+            ));
+        for session in inventory.sessions() {
+            let details = managed_fleet_details_from_proto(session);
+            let mode = if session.is_claude_remote_control() {
+                " · Remote Control"
+            } else {
+                ""
+            };
+            let project = Path::new(&session.project_root)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| session.project_root.clone());
+            let identity = format!(
+                "{} · {} · {}",
+                session
+                    .account_label
+                    .as_deref()
+                    .unwrap_or("Account unavailable"),
+                session.host_label,
+                project
             );
-        });
+            let metrics = match session.exit.as_ref() {
+                Some(exit) => {
+                    let exit_code = exit
+                        .exit_code
+                        .map(|code| format!(" · exit {code}"))
+                        .unwrap_or_default();
+                    format!(
+                        "{}{exit_code} · {} {} ({})",
+                        exit.state_label(),
+                        details.host_headroom.label,
+                        details.host_headroom.value,
+                        details.host_headroom.hint,
+                    )
+                }
+                None => format!(
+                    "{} {} ({}) · {} {} ({})",
+                    details.process_memory.label,
+                    details.process_memory.value,
+                    details.process_memory.hint,
+                    details.host_headroom.label,
+                    details.host_headroom.value,
+                    details.host_headroom.hint,
+                ),
+            };
+            let restart = WorkspaceAction::ManagedFleetLifecycle {
+                target: session.clone(),
+                action: remote_server::proto::ManagedSessionLifecycleAction::Restart,
+            };
+            let mut actions = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(12.0);
+            if session.is_running() {
+                let attach = WorkspaceAction::AttachManagedFleetSession {
+                    target: session.clone(),
+                };
+                let stop = WorkspaceAction::ManagedFleetLifecycle {
+                    target: session.clone(),
+                    action: remote_server::proto::ManagedSessionLifecycleAction::Stop,
+                };
+                actions = actions.with_child(verb_button(
+                    self.managed_fleet_action_states
+                        .get(&Self::managed_action_key(session, "attach"))
+                        .cloned()
+                        .unwrap_or_default(),
+                    if session.is_claude_remote_control() {
+                        "Claude Mobile"
+                    } else {
+                        "Attach"
+                    },
+                    VerbKind::Constructive,
+                    appearance,
+                    attach,
+                ));
+                actions = actions.with_child(verb_button(
+                    self.managed_fleet_action_states
+                        .get(&Self::managed_action_key(session, "stop"))
+                        .cloned()
+                        .unwrap_or_default(),
+                    "Stop",
+                    VerbKind::Destructive,
+                    appearance,
+                    stop,
+                ));
+            }
+            if !details.launch_blocked {
+                actions = actions.with_child(verb_button(
+                    self.managed_fleet_action_states
+                        .get(&Self::managed_action_key(session, "restart"))
+                        .cloned()
+                        .unwrap_or_default(),
+                    if session.is_running() {
+                        "Restart"
+                    } else {
+                        "Start"
+                    },
+                    VerbKind::Constructive,
+                    appearance,
+                    restart,
+                ));
+            }
+            let actions = actions.with_main_axis_size(MainAxisSize::Min).finish();
+            let row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_child(
+                    Shrinkable::new(
+                        1.0,
+                        Flex::column()
+                            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                            .with_main_axis_size(MainAxisSize::Min)
+                            .with_spacing(2.0)
+                            .with_child(Self::text(
+                                format!("{}{}", provider_label(session.provider), mode),
+                                family,
+                                body,
+                                main,
+                            ))
+                            .with_child(Self::text(identity, family, body, muted))
+                            .with_child(Self::text(metrics, family, body, muted))
+                            .finish(),
+                    )
+                    .finish(),
+                )
+                .with_child(actions)
+                .finish();
+            list = list.with_child(
+                Container::new(row)
+                    .with_uniform_padding(CARD_PADDING)
+                    .with_background(theme.surface_2())
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CONTROL_RADIUS)))
+                    .finish(),
+            );
+        }
+        Some(
+            zone_card(list.finish(), appearance)
+                .with_uniform_padding(CARD_PADDING)
+                .with_margin_bottom(CARD_SPACING * 2.0)
+                .finish(),
+        )
     }
 }
 
@@ -3309,6 +3562,7 @@ impl View for CockpitPaneView {
         let enabled = *crate::cockpit::settings::CockpitSettings::as_ref(app).enabled;
 
         let snapshot = CockpitModel::as_ref(app).snapshot().clone();
+        let managed_fleet = CockpitModel::as_ref(app).managed_fleet().clone();
 
         // An account pane shows THAT account: its detail card, then its sessions
         // from every host. The fleet dashboard (no key) keeps the overview it
@@ -3440,12 +3694,17 @@ impl View for CockpitPaneView {
             // Same opaque pane background as the fleet branch below — an
             // account pane left it unset, so its content sat directly on
             // whatever was behind the pane (part of the "debug view" look).
-            return Container::new(content)
-                .with_background(theme.background())
-                .finish();
+            return self.wrap_session_lifecycle_dialog(
+                Container::new(content)
+                    .with_background(theme.background())
+                    .finish(),
+                app,
+            );
         }
 
-        let content: Box<dyn Element> = if snapshot.accounts.is_empty() {
+        let content: Box<dyn Element> = if snapshot.accounts.is_empty()
+            && managed_fleet.sessions().is_empty()
+        {
             self.render_scan_placeholder(&snapshot.health, enabled, appearance)
         } else {
             let mut col = Flex::column()
@@ -3470,6 +3729,9 @@ impl View for CockpitPaneView {
                     .with_margin_bottom(CARD_SPACING * 2.0)
                     .finish(),
             );
+            if let Some(managed) = self.render_managed_fleet(&managed_fleet, appearance) {
+                col = col.with_child(managed);
+            }
             // No Conductor tree here any more (P6). The sidebar carries it, and
             // carrying it twice meant maintaining two renderings of one thing —
             // which is how the two drifted: this one still mapped session state
@@ -3610,9 +3872,11 @@ impl TypedActionView for CockpitPaneView {
                 ctx.notify();
             }
             CockpitPaneAction::OpenRowMenu { row_key, position } => {
+                let lifecycle = self.session_row_lifecycle(row_key, ctx);
                 self.row_menu = Some(RowMenu {
                     row_key: row_key.clone(),
                     position: *position,
+                    lifecycle,
                 });
                 // Seed this row's item handles NOW. They are seeded per open row
                 // (all rows × ten items would be thousands of handles), and the
@@ -3625,6 +3889,135 @@ impl TypedActionView for CockpitPaneView {
             }
             CockpitPaneAction::CloseRowMenu => {
                 self.row_menu = None;
+                ctx.notify();
+            }
+            CockpitPaneAction::OpenSessionRename {
+                route,
+                current_name,
+            } => {
+                let initial_name = current_name.clone();
+                let editor = ctx.add_typed_action_view(move |ctx| {
+                    let appearance = Appearance::as_ref(ctx);
+                    let theme = appearance.theme();
+                    let mut editor = EditorView::single_line(
+                        SingleLineEditorOptions {
+                            is_password: false,
+                            text: TextOptions {
+                                font_size_override: Some(appearance.ui_font_body()),
+                                font_family_override: Some(appearance.ui_font_family()),
+                                text_colors_override: Some(TextColors {
+                                    default_color: theme.active_ui_text_color(),
+                                    disabled_color: theme.disabled_ui_text_color(),
+                                    hint_color: theme.disabled_ui_text_color(),
+                                }),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                    editor
+                        .set_placeholder_text(crate::t!("cockpit-session-rename-placeholder"), ctx);
+                    editor.set_buffer_text(&initial_name, ctx);
+                    editor
+                });
+                ctx.subscribe_to_view(&editor, |me: &mut Self, _, event, ctx| match event {
+                    EditorEvent::Edited(_) => {
+                        if let Some(SessionLifecycleDialog::Rename {
+                            validation_error, ..
+                        }) = me.session_lifecycle_dialog.as_mut()
+                        {
+                            *validation_error = None;
+                        }
+                        ctx.notify();
+                    }
+                    EditorEvent::Enter => {
+                        ctx.dispatch_typed_action(CockpitPaneAction::ConfirmSessionRename);
+                    }
+                    EditorEvent::Escape => {
+                        ctx.dispatch_typed_action(CockpitPaneAction::CancelSessionLifecycleDialog);
+                    }
+                    _ => {}
+                });
+                self.row_menu = None;
+                self.session_lifecycle_dialog = Some(SessionLifecycleDialog::Rename {
+                    route: route.clone(),
+                    current_name: current_name.clone(),
+                    editor: editor.clone(),
+                    validation_error: None,
+                });
+                ctx.focus(&editor);
+                ctx.notify();
+            }
+            CockpitPaneAction::ConfirmSessionRename => {
+                let Some((route, requested)) =
+                    self.session_lifecycle_dialog
+                        .as_ref()
+                        .and_then(|state| match state {
+                            SessionLifecycleDialog::Rename { route, editor, .. } => {
+                                Some((route.clone(), editor.as_ref(ctx).buffer_text(ctx)))
+                            }
+                            SessionLifecycleDialog::Cleanup { .. } => None,
+                        })
+                else {
+                    return;
+                };
+                match crate::cockpit::session_lifecycle::validate_session_name(&requested) {
+                    Ok(name) => {
+                        self.session_lifecycle_dialog = None;
+                        ctx.dispatch_typed_action(WorkspaceAction::RenameAgentSession {
+                            route,
+                            name,
+                        });
+                        ctx.notify();
+                    }
+                    Err(_) => {
+                        if let Some(SessionLifecycleDialog::Rename {
+                            validation_error, ..
+                        }) = self.session_lifecycle_dialog.as_mut()
+                        {
+                            *validation_error =
+                                Some(crate::t!("cockpit-session-rename-invalid").to_string());
+                        }
+                        ctx.notify();
+                    }
+                }
+            }
+            CockpitPaneAction::OpenClaudeCleanup {
+                route,
+                candidate,
+                session_name,
+            } => {
+                self.row_menu = None;
+                self.session_lifecycle_dialog = Some(SessionLifecycleDialog::Cleanup {
+                    route: route.clone(),
+                    candidate: candidate.clone(),
+                    session_name: session_name.clone(),
+                });
+                ctx.notify();
+            }
+            CockpitPaneAction::ConfirmClaudeCleanup => {
+                let Some((route, candidate)) =
+                    self.session_lifecycle_dialog
+                        .as_ref()
+                        .and_then(|state| match state {
+                            SessionLifecycleDialog::Cleanup {
+                                route, candidate, ..
+                            } => Some((route.clone(), candidate.clone())),
+                            SessionLifecycleDialog::Rename { .. } => None,
+                        })
+                else {
+                    return;
+                };
+                self.session_lifecycle_dialog = None;
+                ctx.dispatch_typed_action(WorkspaceAction::CleanupStaleClaudeSession {
+                    route,
+                    candidate,
+                });
+                ctx.notify();
+            }
+            CockpitPaneAction::CancelSessionLifecycleDialog => {
+                self.session_lifecycle_dialog = None;
                 ctx.notify();
             }
             CockpitPaneAction::SortBy(column) => {
@@ -3675,127 +4068,6 @@ impl TypedActionView for CockpitPaneView {
             }
             CockpitPaneAction::Rescan => {
                 CockpitModel::handle(ctx).update(ctx, |model, ctx| model.rescan(ctx));
-            }
-            CockpitPaneAction::ViewLocalCodexTranscript {
-                session_id,
-                codex_home,
-            } => {
-                #[cfg(not(target_family = "wasm"))]
-                {
-                    let codex_home = codex_home.clone();
-                    let session_id = session_id.clone();
-                    ctx.spawn(
-                        async move {
-                            tokio::task::spawn_blocking(move || {
-                                let document =
-                                    load_local_codex_transcript(&codex_home, &session_id);
-                                Ok::<_, ()>(document.markdown)
-                            })
-                            .await
-                            .map_err(|_| ())?
-                        },
-                        |_, result, ctx| match result {
-                            Ok(contents) => {
-                                ctx.dispatch_typed_action(
-                                    &WorkspaceAction::OpenReadOnlyTextInEditor {
-                                        title: transcript_title(Provider::Codex),
-                                        contents,
-                                    },
-                                );
-                            }
-                            Err(()) => {
-                                let window_id = ctx.window_id();
-                                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                                    toast_stack.add_ephemeral_toast(
-                                        DismissibleToast::error(crate::t!(
-                                            "cockpit-transcript-open-error"
-                                        )),
-                                        window_id,
-                                        ctx,
-                                    );
-                                });
-                            }
-                        },
-                    );
-                }
-                #[cfg(target_family = "wasm")]
-                let _ = (session_id, codex_home);
-            }
-            CockpitPaneAction::ViewRemoteTranscript {
-                provider,
-                host_id,
-                account_id,
-                session_id,
-            } => {
-                #[cfg(not(target_family = "wasm"))]
-                {
-                    let route = RemoteTranscriptRoute {
-                        provider: *provider,
-                        host_id: host_id.clone(),
-                        account_id: account_id.clone(),
-                        session_id: session_id.clone(),
-                    };
-                    if !remote_transcript_route_is_current(
-                        CockpitModel::as_ref(ctx).inventory(),
-                        &route,
-                    ) {
-                        Self::show_remote_transcript_error(ctx);
-                        return;
-                    }
-                    let daemon = RemoteServerManager::as_ref(ctx)
-                        .connected_daemons()
-                        .into_iter()
-                        .find(|daemon| {
-                            daemon.host_id == route.host_id
-                                && has_feature(&daemon.features, FEATURE_AGENT_TRANSCRIPT_READ_V1)
-                        });
-                    let Some(daemon) = daemon else {
-                        Self::show_remote_transcript_error(ctx);
-                        return;
-                    };
-                    let request_route = route.clone();
-                    let projection_route = route;
-                    ctx.spawn(
-                        async move {
-                            daemon
-                                .client
-                                .read_agent_transcript(
-                                    request_route.provider.as_str().to_string(),
-                                    request_route.account_id,
-                                    request_route.session_id,
-                                    None,
-                                )
-                                .await
-                                .map_err(|_| ())
-                        },
-                        move |_, result, ctx| {
-                            let document = match result {
-                                Ok(response) => {
-                                    remote_transcript_document(&projection_route, response)
-                                }
-                                Err(()) => {
-                                    CockpitPaneView::show_remote_transcript_error(ctx);
-                                    return;
-                                }
-                            };
-                            match document {
-                                Ok(document) => ctx.dispatch_typed_action(
-                                    &WorkspaceAction::OpenReadOnlyTextInEditor {
-                                        title: transcript_title(projection_route.provider),
-                                        contents: document.markdown,
-                                    },
-                                ),
-                                Err(
-                                    RemoteTranscriptProjectionError::InvalidEnvelope
-                                    | RemoteTranscriptProjectionError::InvalidStatus
-                                    | RemoteTranscriptProjectionError::InvalidPayload,
-                                ) => CockpitPaneView::show_remote_transcript_error(ctx),
-                            }
-                        },
-                    );
-                }
-                #[cfg(target_family = "wasm")]
-                let _ = (provider, host_id, account_id, session_id);
             }
         }
     }

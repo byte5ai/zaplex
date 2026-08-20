@@ -2,6 +2,22 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.4] — 2026-08-20
+
+- **Cockpit-Parität:** GitHub-Flows, Session-Restart und -Umbenennung,
+  Command-Palette, hostbezogene Startverläufe und sichere Transcript-Ansichten
+  schließen die verbliebenen Funktionslücken zu claudeplex und
+  claudeplex-desktop.
+- **Remote-Konten:** Claude- und Codex-Konten werden pro Host über opake
+  Identitäten geroutet und vor Start, Lifecycle-Aktion und Transcript-Zugriff
+  erneut geprüft.
+- **Managed Agents:** Dauerhafte daemonverwaltete Agent-Sessions erhalten
+  Start/Attach/Stop/Restart, kontrollierte RAM-Headroom-Prüfung sowie begrenzte
+  und datensparsame Exit-Diagnosen.
+- **Qualitätssicherung:** Ein ausführbarer Paritäts-Gate prüft lokale und
+  entfernte Provider-, Host-, Konto-, Status-, Lifecycle- und Transcript-Fälle
+  gegen frisch synchronisierte Referenz-Repositories.
+
 ## [1.0.3] — 2026-08-20
 
 - **Cockpit-Sidebar:** Lokale Sessions bleiben immer sichtbar; verbundene
@@ -158,7 +174,8 @@ First preview release of the Zap community fork.
 - **AI**: CJK input classification, reasoning split out, BYOP `tool_call` diagnostics, LRC tag-in synthesizes a virtual subagent + floating spawn flow
 - **CI**: Release workflow explicitly declares `contents: write` permission, fixing a 403
 
-[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/byte5ai/zaplex/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/byte5ai/zaplex/compare/v1.0.1...v1.0.3
 [1.0.1]: https://github.com/byte5ai/zaplex/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/byte5ai/zaplex/releases/tag/v1.0.0

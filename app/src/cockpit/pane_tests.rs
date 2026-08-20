@@ -1,32 +1,20 @@
 use chrono::Utc;
 use std::collections::BTreeMap;
-use std::fs;
 #[cfg(not(target_family = "wasm"))]
 use zaplex_cockpit::{AgentInventoryStatus, FleetTree, HostAvailability, HostNode, ProjectNode};
-use zaplex_cockpit::{
-    Provider, SessionSnapshot, SessionState, ToolCall, TranscriptTurn, TurnRole, WindowTotals,
-};
+use zaplex_cockpit::{Provider, SessionSnapshot, SessionState, WindowTotals};
 #[cfg(not(target_family = "wasm"))]
 use zaplex_remote_session::types::FEATURE_AGENT_TRANSCRIPT_READ_V1;
 
-#[cfg(not(target_family = "wasm"))]
-use crate::remote_server::proto::{
-    AgentTranscriptResponse, AgentTranscriptStatus, AgentTranscriptTool, AgentTranscriptTurn,
-};
-
 use super::{
-    format_provider_transcript_markdown, load_local_codex_transcript,
-    local_codex_transcript_error_state, matching_session_row, parse_hex_color, session_key,
+    matching_session_row, parse_hex_color, restart_presence_for_menu, session_key,
     session_table_viewport_height, session_today_cost, table_row_needs_attention,
-    transcript_action_target, transcript_state_document, TableRow, TranscriptActionTarget,
-    TranscriptDocumentState, SESSION_TABLE_HEADER_HEIGHT, SESSION_TABLE_MAX_VISIBLE_ROWS,
-    SESSION_TABLE_ROW_HEIGHT,
+    transcript_action_target, TableRow, TranscriptActionTarget, SESSION_TABLE_HEADER_HEIGHT,
+    SESSION_TABLE_MAX_VISIBLE_ROWS, SESSION_TABLE_ROW_HEIGHT,
 };
 #[cfg(not(target_family = "wasm"))]
-use super::{
-    remote_transcript_document, remote_transcript_route, remote_transcript_route_is_current,
-    RemoteTranscriptProjectionError, RemoteTranscriptRoute,
-};
+use super::{remote_transcript_route, remote_transcript_route_is_current, RemoteTranscriptRoute};
+use crate::cockpit::session_lifecycle::RestartPresence;
 
 #[test]
 fn remote_host_without_pricing_data_has_no_fabricated_cost() {
@@ -120,6 +108,36 @@ fn only_waiting_session_rows_receive_attention_background() {
         count: 1,
         collapsed: false,
     }));
+}
+
+#[test]
+fn restart_menu_requires_a_live_verified_process_identity() {
+    let mut candidate = session(None, None);
+    candidate.state = SessionState::Active;
+    candidate.pid = 42;
+    candidate.process_fingerprint = Some("process-42".to_string());
+    assert_eq!(
+        restart_presence_for_menu(&candidate),
+        RestartPresence::VerifiedProcess
+    );
+
+    candidate.state = SessionState::Idle;
+    assert_eq!(
+        restart_presence_for_menu(&candidate),
+        RestartPresence::Unverifiable
+    );
+    candidate.state = SessionState::Active;
+    candidate.process_fingerprint = None;
+    assert_eq!(
+        restart_presence_for_menu(&candidate),
+        RestartPresence::Unverifiable
+    );
+    candidate.process_fingerprint = Some("process-42".to_string());
+    candidate.pid = 0;
+    assert_eq!(
+        restart_presence_for_menu(&candidate),
+        RestartPresence::Unverifiable
+    );
 }
 
 #[test]
@@ -351,326 +369,4 @@ fn remote_transcript_route_must_still_match_one_available_inventory_session() {
     let mut stale_route = route;
     stale_route.account_id = "account-2".into();
     assert!(!remote_transcript_route_is_current(&tree, &stale_route));
-}
-
-#[test]
-fn provider_neutral_transcript_renderer_labels_codex_without_tool_payloads() {
-    let turns = vec![
-        TranscriptTurn {
-            role: TurnRole::User,
-            text: "Inspect the project".into(),
-            thinking: String::new(),
-            tools: Vec::new(),
-            model: None,
-            usage: None,
-            timestamp: None,
-        },
-        TranscriptTurn {
-            role: TurnRole::Assistant,
-            text: "Ready".into(),
-            thinking: "Checked the files".into(),
-            tools: vec![ToolCall {
-                name: "read_file".into(),
-            }],
-            model: Some("gpt-5.6".into()),
-            usage: None,
-            timestamp: None,
-        },
-    ];
-
-    let markdown = format_provider_transcript_markdown(Provider::Codex, &turns);
-    assert!(markdown.contains("## Codex · gpt-5.6"));
-    assert!(!markdown.contains("## Claude"));
-    assert!(markdown.contains("`⚙ read_file`"));
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn remote_response(status: AgentTranscriptStatus) -> AgentTranscriptResponse {
-    AgentTranscriptResponse {
-        schema_version: 1,
-        provider: "claude".into(),
-        session_id: "session-1".into(),
-        status: status as i32,
-        turns: Vec::new(),
-        truncated: false,
-        source_revision: "opaque-revision".into(),
-        message: "/private/provider/path must-not-appear".into(),
-    }
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn remote_turn(role: &str, text: &str) -> AgentTranscriptTurn {
-    AgentTranscriptTurn {
-        role: role.into(),
-        text: text.into(),
-        thinking: String::new(),
-        tools: Vec::new(),
-        model: String::new(),
-        timestamp: String::new(),
-    }
-}
-
-#[cfg(not(target_family = "wasm"))]
-#[test]
-fn remote_loaded_transcript_projects_only_safe_provider_neutral_fields() {
-    let route = remote_route(Provider::Claude);
-    let mut response = remote_response(AgentTranscriptStatus::Loaded);
-    response.truncated = true;
-    response.turns = vec![
-        remote_turn("future-role", "ignored wire content"),
-        remote_turn("user", "Question"),
-        AgentTranscriptTurn {
-            role: "assistant".into(),
-            text: "Answer".into(),
-            thinking: "Reasoning summary".into(),
-            tools: vec![AgentTranscriptTool {
-                name: "read_file".into(),
-            }],
-            model: "claude-opus-4-1".into(),
-            timestamp: "2026-08-20T12:00:00Z".into(),
-        },
-    ];
-
-    let document = remote_transcript_document(&route, response).expect("safe projection");
-    assert_eq!(document.state, TranscriptDocumentState::Ready);
-    assert!(document.markdown.starts_with("> "));
-    assert!(document.markdown.contains("## Claude · claude-opus-4-1"));
-    assert!(document.markdown.contains("Question"));
-    assert!(document.markdown.contains("Answer"));
-    assert!(document.markdown.contains("`⚙ read_file`"));
-    assert!(!document.markdown.contains("ignored wire content"));
-    assert!(!document.markdown.contains("must-not-appear"));
-    assert!(!document.markdown.contains("/private/provider/path"));
-}
-
-#[cfg(not(target_family = "wasm"))]
-#[test]
-fn remote_transcript_statuses_map_to_distinct_neutral_documents() {
-    for (status, expected) in [
-        (
-            AgentTranscriptStatus::Missing,
-            TranscriptDocumentState::Missing,
-        ),
-        (AgentTranscriptStatus::Empty, TranscriptDocumentState::Empty),
-        (
-            AgentTranscriptStatus::Unsupported,
-            TranscriptDocumentState::Unsupported,
-        ),
-        (
-            AgentTranscriptStatus::Malformed,
-            TranscriptDocumentState::Malformed,
-        ),
-        (
-            AgentTranscriptStatus::TooLarge,
-            TranscriptDocumentState::TooLarge,
-        ),
-        (
-            AgentTranscriptStatus::Unavailable,
-            TranscriptDocumentState::Unavailable,
-        ),
-    ] {
-        let document =
-            remote_transcript_document(&remote_route(Provider::Claude), remote_response(status))
-                .expect("typed status document");
-        assert_eq!(document.state, expected);
-        assert!(!document.markdown.contains("must-not-appear"));
-        assert!(!document.markdown.contains("/private/provider/path"));
-    }
-}
-
-#[cfg(not(target_family = "wasm"))]
-#[test]
-fn remote_transcript_fails_closed_for_invalid_status_envelope_or_payload() {
-    let route = remote_route(Provider::Claude);
-    for status in [
-        AgentTranscriptStatus::Unspecified,
-        AgentTranscriptStatus::NotModified,
-        AgentTranscriptStatus::InvalidRequest,
-    ] {
-        assert_eq!(
-            remote_transcript_document(&route, remote_response(status)),
-            Err(RemoteTranscriptProjectionError::InvalidStatus)
-        );
-    }
-
-    let mut unknown_status = remote_response(AgentTranscriptStatus::Missing);
-    unknown_status.status = i32::MAX;
-    assert_eq!(
-        remote_transcript_document(&route, unknown_status),
-        Err(RemoteTranscriptProjectionError::InvalidStatus)
-    );
-
-    let mut wrong_provider = remote_response(AgentTranscriptStatus::Missing);
-    wrong_provider.provider = "codex".into();
-    assert_eq!(
-        remote_transcript_document(&route, wrong_provider),
-        Err(RemoteTranscriptProjectionError::InvalidEnvelope)
-    );
-
-    let empty_loaded = remote_response(AgentTranscriptStatus::Loaded);
-    assert_eq!(
-        remote_transcript_document(&route, empty_loaded),
-        Err(RemoteTranscriptProjectionError::InvalidPayload)
-    );
-
-    let mut oversized_timestamp = remote_response(AgentTranscriptStatus::Loaded);
-    oversized_timestamp.turns = vec![AgentTranscriptTurn {
-        timestamp: "x".repeat(65),
-        ..remote_turn("assistant", "Answer")
-    }];
-    assert_eq!(
-        remote_transcript_document(&route, oversized_timestamp),
-        Err(RemoteTranscriptProjectionError::InvalidPayload)
-    );
-}
-
-fn write_codex_rollout(home: &std::path::Path, id: &str, lines: &[serde_json::Value]) {
-    let dir = home.join("sessions/2026/08/20");
-    fs::create_dir_all(&dir).unwrap();
-    let content = lines
-        .iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(
-        dir.join(format!("rollout-2026-08-20T12-00-00-{id}.jsonl")),
-        content,
-    )
-    .unwrap();
-}
-
-#[test]
-fn local_codex_rollout_opens_as_a_provider_neutral_document() {
-    let home = tempfile::tempdir().unwrap();
-    let id = "019f135f-7fcc-7d93-8a28-4835d98f8f0a";
-    write_codex_rollout(
-        home.path(),
-        id,
-        &[
-            serde_json::json!({"type":"session_meta","payload":{"id":id}}),
-            serde_json::json!({"type":"turn_context","payload":{"model":"gpt-5.6"}}),
-            serde_json::json!({
-                "type":"response_item",
-                "payload":{"type":"message","role":"user","content":[
-                    {"type":"input_text","text":"Question"}
-                ]}
-            }),
-            serde_json::json!({
-                "type":"response_item",
-                "payload":{
-                    "type":"function_call",
-                    "name":"read_file",
-                    "arguments":"{\"token\":\"must-not-appear\"}"
-                }
-            }),
-            serde_json::json!({
-                "type":"response_item",
-                "payload":{
-                    "type":"function_call_output",
-                    "output":"must-not-appear"
-                }
-            }),
-            serde_json::json!({
-                "type":"response_item",
-                "payload":{"type":"message","role":"assistant","content":[
-                    {"type":"output_text","text":"Answer"}
-                ]}
-            }),
-        ],
-    );
-
-    let document = load_local_codex_transcript(home.path(), id);
-    assert_eq!(document.state, TranscriptDocumentState::Ready);
-    assert!(document.markdown.contains("## Codex · gpt-5.6"));
-    assert!(document.markdown.contains("Question"));
-    assert!(document.markdown.contains("Answer"));
-    assert!(!document.markdown.contains("must-not-appear"));
-}
-
-#[test]
-fn codex_transcript_states_distinguish_missing_unsupported_and_malformed() {
-    let missing_home = tempfile::tempdir().unwrap();
-    let missing = load_local_codex_transcript(missing_home.path(), "missing");
-    assert_eq!(missing.state, TranscriptDocumentState::Missing);
-
-    let unsupported_home = tempfile::tempdir().unwrap();
-    let unsupported_id = "019f135f-7fcc-7d93-8a28-4835d98f8f0a";
-    write_codex_rollout(
-        unsupported_home.path(),
-        unsupported_id,
-        &[serde_json::json!({
-            "type":"session_meta",
-            "payload":{"id":unsupported_id}
-        })],
-    );
-    let unsupported = load_local_codex_transcript(unsupported_home.path(), unsupported_id);
-    assert_eq!(unsupported.state, TranscriptDocumentState::Unsupported);
-
-    let malformed_home = tempfile::tempdir().unwrap();
-    let malformed_id = "01a00093-815b-7b11-9c70-9f8275d0d9be";
-    let dir = malformed_home.path().join("archived_sessions");
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(
-        dir.join(format!("rollout-2026-08-20T12-00-00-{malformed_id}.jsonl")),
-        "not json\n{partial",
-    )
-    .unwrap();
-    let malformed = load_local_codex_transcript(malformed_home.path(), malformed_id);
-    assert_eq!(malformed.state, TranscriptDocumentState::Malformed);
-
-    assert_ne!(missing.markdown, unsupported.markdown);
-    assert_ne!(unsupported.markdown, malformed.markdown);
-    assert_eq!(
-        transcript_state_document(Provider::Codex, TranscriptDocumentState::Empty).state,
-        TranscriptDocumentState::Empty
-    );
-}
-
-#[test]
-fn local_codex_errors_map_to_safe_provider_neutral_states() {
-    use zaplex_cockpit::codex_sessions::TranscriptError;
-
-    for error in [
-        TranscriptError::InvalidSessionId,
-        TranscriptError::AmbiguousSessionId {
-            session_id: "session-1".into(),
-        },
-        TranscriptError::MalformedTranscript,
-    ] {
-        assert_eq!(
-            local_codex_transcript_error_state(&error),
-            TranscriptDocumentState::Malformed
-        );
-    }
-
-    for error in [
-        TranscriptError::HistoryLimitExceeded { max_files: 1 },
-        TranscriptError::TranscriptLookupLimitExceeded { max_bytes: 1 },
-        TranscriptError::TranscriptTooLarge { max_bytes: 1 },
-    ] {
-        assert_eq!(
-            local_codex_transcript_error_state(&error),
-            TranscriptDocumentState::TooLarge
-        );
-    }
-
-    let io_error = TranscriptError::Io(std::io::Error::new(
-        std::io::ErrorKind::PermissionDenied,
-        "/private/provider/path must-not-appear",
-    ));
-    assert_eq!(
-        local_codex_transcript_error_state(&io_error),
-        TranscriptDocumentState::Unavailable
-    );
-
-    let missing_root = tempfile::tempdir().unwrap().path().join("does-not-exist");
-    let walk_error = walkdir::WalkDir::new(missing_root)
-        .into_iter()
-        .next()
-        .expect("walk result")
-        .expect_err("missing root must fail");
-    assert_eq!(
-        local_codex_transcript_error_state(&TranscriptError::Walk(walk_error)),
-        TranscriptDocumentState::Unavailable
-    );
 }

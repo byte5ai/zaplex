@@ -20,19 +20,86 @@
 //! probed once, so the live and idle sets can never overlap.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::fs::{File, Metadata, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 
 use crate::types::{Provider, SessionSnapshot, SessionState};
+use crate::LoadedTranscript;
 
 /// How much transcript tail to inspect for the ended/model/context signals.
 /// Registry sessions' last turns are comfortably inside this window; if a
 /// single tool result exceeds it, the visible tail IS that tool result — which
 /// classifies as Monitor ("Claude will continue"), the correct reading.
 const TAIL_BYTES: u64 = 256 * 1024;
+
+const VIEWER_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const VIEWER_MAX_LINES: usize = 20_000;
+const VIEWER_MAX_PROJECT_DIRS: usize = 16_384;
+const VIEWER_MAX_TRANSCRIPT_FILES: usize = 65_536;
+
+/// A bounded, fail-closed Claude transcript viewer error.
+#[derive(Debug)]
+pub enum TranscriptError {
+    InvalidSessionId,
+    AmbiguousSessionId,
+    HistoryLimitExceeded,
+    TranscriptTooLarge { max_bytes: u64 },
+    MalformedTranscript,
+    UnsupportedTranscript,
+    Io(std::io::Error),
+}
+
+impl fmt::Display for TranscriptError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidSessionId => formatter.write_str("invalid Claude session id"),
+            Self::AmbiguousSessionId => formatter.write_str("ambiguous Claude session id"),
+            Self::HistoryLimitExceeded => {
+                formatter.write_str("Claude transcript history exceeds the scan limit")
+            }
+            Self::TranscriptTooLarge { max_bytes } => {
+                write!(
+                    formatter,
+                    "Claude transcript exceeds the {max_bytes}-byte limit"
+                )
+            }
+            Self::MalformedTranscript => formatter.write_str("malformed Claude transcript"),
+            Self::UnsupportedTranscript => {
+                formatter.write_str("unsupported Claude transcript format")
+            }
+            Self::Io(error) => write!(formatter, "Claude transcript I/O failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for TranscriptError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::InvalidSessionId
+            | Self::AmbiguousSessionId
+            | Self::HistoryLimitExceeded
+            | Self::TranscriptTooLarge { .. }
+            | Self::MalformedTranscript
+            | Self::UnsupportedTranscript => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for TranscriptError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
 
 /// A raw entry from `<config_dir>/sessions/*.json`.
 #[derive(Debug, Clone)]
@@ -307,6 +374,241 @@ fn transcripts_by_id(config_dir: &Path) -> HashMap<String, PathBuf> {
 /// one exists. Used by the transcript viewer to locate a session's `.jsonl`.
 pub fn transcript_path(config_dir: &Path, session_id: &str) -> Option<PathBuf> {
     transcripts_by_id(config_dir).remove(session_id)
+}
+
+fn valid_transcript_session_id(session_id: &str) -> bool {
+    !session_id.is_empty()
+        && session_id.len() <= 128
+        && session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn resolve_transcript_for_viewer(
+    config_dir: &Path,
+    session_id: &str,
+) -> Result<Option<ResolvedTranscript>, TranscriptError> {
+    if !valid_transcript_session_id(session_id) {
+        return Err(TranscriptError::InvalidSessionId);
+    }
+    let projects = config_dir.join("projects");
+    let project_dirs = match std::fs::read_dir(projects) {
+        Ok(project_dirs) => project_dirs,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let mut project_count = 0usize;
+    let mut file_count = 0usize;
+    let mut matched = None;
+    for project in project_dirs {
+        project_count += 1;
+        if project_count > VIEWER_MAX_PROJECT_DIRS {
+            return Err(TranscriptError::HistoryLimitExceeded);
+        }
+        let project = project?;
+        let file_type = project.file_type()?;
+        if !file_type.is_dir() || file_type.is_symlink() {
+            continue;
+        }
+        for file in std::fs::read_dir(project.path())? {
+            file_count += 1;
+            if file_count > VIEWER_MAX_TRANSCRIPT_FILES {
+                return Err(TranscriptError::HistoryLimitExceeded);
+            }
+            let file = file?;
+            let file_type = file.file_type()?;
+            if !file_type.is_file() || file_type.is_symlink() {
+                continue;
+            }
+            let path = file.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("jsonl")
+                || path.file_stem().and_then(|stem| stem.to_str()) != Some(session_id)
+            {
+                continue;
+            }
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                continue;
+            }
+            if matched
+                .replace((path, TranscriptFileIdentity::from_metadata(&metadata)))
+                .is_some()
+            {
+                return Err(TranscriptError::AmbiguousSessionId);
+            }
+        }
+    }
+    let Some((path, identity)) = matched else {
+        return Ok(None);
+    };
+    Ok(Some(ResolvedTranscript {
+        path,
+        identity,
+        provider_root: std::fs::canonicalize(config_dir)?,
+    }))
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TranscriptFileIdentity {
+    device: u64,
+    inode: u64,
+    length: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+}
+
+#[cfg(not(unix))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TranscriptFileIdentity {
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+impl TranscriptFileIdentity {
+    #[cfg(unix)]
+    fn from_metadata(metadata: &Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            length: metadata.len(),
+            modified_seconds: metadata.mtime(),
+            modified_nanoseconds: metadata.mtime_nsec(),
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn from_metadata(metadata: &Metadata) -> Self {
+        Self {
+            length: metadata.len(),
+            modified: metadata.modified().ok(),
+        }
+    }
+}
+
+struct ResolvedTranscript {
+    path: PathBuf,
+    identity: TranscriptFileIdentity,
+    provider_root: PathBuf,
+}
+
+fn open_transcript_for_viewer(
+    resolved: &ResolvedTranscript,
+) -> Result<(File, TranscriptFileIdentity), TranscriptError> {
+    let link_metadata = std::fs::symlink_metadata(&resolved.path)?;
+    if !link_metadata.file_type().is_file() || link_metadata.file_type().is_symlink() {
+        return Err(TranscriptError::MalformedTranscript);
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let file = options.open(&resolved.path)?;
+    let identity = checked_transcript_identity(resolved, &file)?;
+    Ok((file, identity))
+}
+
+/// Bind provider-root validation to the file descriptor that will actually be
+/// read. Canonicalizing before `open` leaves a parent-directory replacement
+/// window; resolving after `open` and comparing identities closes that window.
+fn checked_transcript_identity(
+    resolved: &ResolvedTranscript,
+    file: &File,
+) -> Result<TranscriptFileIdentity, TranscriptError> {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > VIEWER_MAX_BYTES {
+        return if metadata.len() > VIEWER_MAX_BYTES {
+            Err(TranscriptError::TranscriptTooLarge {
+                max_bytes: VIEWER_MAX_BYTES,
+            })
+        } else {
+            Err(TranscriptError::MalformedTranscript)
+        };
+    }
+    let identity = TranscriptFileIdentity::from_metadata(&metadata);
+    if identity != resolved.identity {
+        return Err(TranscriptError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Claude transcript changed after resolution",
+        )));
+    }
+    let canonical = std::fs::canonicalize(&resolved.path)?;
+    if !canonical.starts_with(&resolved.provider_root) {
+        return Err(TranscriptError::MalformedTranscript);
+    }
+    if TranscriptFileIdentity::from_metadata(&canonical.metadata()?) != identity {
+        return Err(TranscriptError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Claude transcript changed during resolution",
+        )));
+    }
+    Ok(identity)
+}
+
+fn parse_viewer_transcript(content: &str) -> Result<Vec<crate::TranscriptTurn>, TranscriptError> {
+    let mut valid = 0usize;
+    let mut supported = 0usize;
+    for line in content.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        valid += 1;
+        if matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("user" | "assistant")
+        ) {
+            supported += 1;
+        }
+    }
+    if valid == 0 && !content.trim().is_empty() {
+        return Err(TranscriptError::MalformedTranscript);
+    }
+    if supported == 0 && valid > 0 {
+        return Err(TranscriptError::UnsupportedTranscript);
+    }
+    Ok(crate::parse_transcript(content))
+}
+
+/// Load one Claude conversation through the same bounded, symlink-resistant
+/// source boundary used for remote transcript projection. Missing history is
+/// `Ok(None)`; every ambiguous or unsafe source fails closed.
+pub fn load_transcript_with_revision(
+    config_dir: &Path,
+    session_id: &str,
+) -> Result<Option<LoadedTranscript>, TranscriptError> {
+    let Some(resolved) = resolve_transcript_for_viewer(config_dir, session_id)? else {
+        return Ok(None);
+    };
+    let (mut file, identity) = open_transcript_for_viewer(&resolved)?;
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take(VIEWER_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > VIEWER_MAX_BYTES {
+        return Err(TranscriptError::TranscriptTooLarge {
+            max_bytes: VIEWER_MAX_BYTES,
+        });
+    }
+    if TranscriptFileIdentity::from_metadata(&file.metadata()?) != identity {
+        return Err(TranscriptError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Claude transcript changed while it was read",
+        )));
+    }
+    let content = String::from_utf8(bytes).map_err(|_| TranscriptError::MalformedTranscript)?;
+    if content.lines().count() > VIEWER_MAX_LINES {
+        return Err(TranscriptError::TranscriptTooLarge {
+            max_bytes: VIEWER_MAX_BYTES,
+        });
+    }
+    let turns = parse_viewer_transcript(&content)?;
+    let mut digest = Sha256::new();
+    digest.update(b"zaplex-claude-transcript-revision-v1\0");
+    digest.update(content.as_bytes());
+    Ok(Some(LoadedTranscript {
+        turns,
+        source_revision: format!("{digest:x}"),
+    }))
 }
 
 /// The registry's own idea of when a session was last touched — available

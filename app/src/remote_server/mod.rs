@@ -10,8 +10,12 @@ pub mod agent_session;
 pub mod auth_context;
 #[cfg(not(target_family = "wasm"))]
 pub mod embedded;
+#[cfg(not(target_family = "wasm"))]
+pub mod fleet_memory;
 #[cfg(unix)]
 pub mod headless_connect;
+#[cfg(not(target_family = "wasm"))]
+pub mod managed_fleet;
 #[cfg(unix)]
 pub mod multiplexer;
 #[cfg(unix)]

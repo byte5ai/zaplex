@@ -36,6 +36,7 @@ use zaplex_cockpit::{
 };
 
 use crate::cockpit::account_identity;
+use crate::cockpit::fleet_details::ManagedFleetInventory;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
     attention_coloru, glyph_cell, hover_row, provider_color_on, provider_label, status_dot_coloru,
@@ -858,6 +859,7 @@ impl CockpitPanel {
     fn render_conductor(
         &self,
         tree: &FleetTree,
+        managed_fleet: &ManagedFleetInventory,
         reduce_motion: bool,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
@@ -960,15 +962,23 @@ impl CockpitPanel {
                         {
                             for agent in session.agents {
                                 col = col.with_child(
-                                    Container::new(self.render_conductor_row(
-                                        &host.host,
-                                        host.host_id.as_deref(),
-                                        agent,
-                                        is_local,
-                                        host.is_available(),
-                                        reduce_motion,
-                                        appearance,
-                                    ))
+                                    Container::new(
+                                        self.render_conductor_row(
+                                            &host.host,
+                                            host.host_id.as_deref(),
+                                            agent,
+                                            is_local,
+                                            host.is_available(),
+                                            managed_fleet
+                                                .matching_agent_session(
+                                                    host.host_id.as_deref(),
+                                                    agent,
+                                                )
+                                                .is_some(),
+                                            reduce_motion,
+                                            appearance,
+                                        ),
+                                    )
                                     .with_padding_left(34.0)
                                     .finish(),
                                 );
@@ -1023,6 +1033,7 @@ impl CockpitPanel {
         session: &SessionSnapshot,
         is_local: bool,
         can_attach: bool,
+        is_managed: bool,
         reduce_motion: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -1030,9 +1041,10 @@ impl CockpitPanel {
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
         let main = theme.main_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
         let label = agent_leaf_label(session.provider, &session.model);
 
-        let glance = Flex::row()
+        let mut glance = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0)
             .with_child(Self::state_glyph(
@@ -1043,9 +1055,11 @@ impl CockpitPanel {
             ))
             .with_child(
                 Shrinkable::new(1.0, Self::identity_text(label, family, body, main)).finish(),
-            )
-            .with_main_axis_size(MainAxisSize::Max)
-            .finish();
+            );
+        if is_managed {
+            glance = glance.with_child(Self::text("◆", family, body, muted));
+        }
+        let glance = glance.with_main_axis_size(MainAxisSize::Max).finish();
 
         // The whole glance line attaches on click — BOTH local and remote (remote
         // in-place adopt is wired via `attach_fleet_session`).
@@ -1402,6 +1416,7 @@ impl View for CockpitPanel {
 
         let snapshot = CockpitModel::as_ref(app).snapshot().clone();
         let inventory = CockpitModel::as_ref(app).inventory().clone();
+        let managed_fleet = CockpitModel::as_ref(app).managed_fleet().clone();
         let mut cards = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min);
@@ -1409,7 +1424,9 @@ impl View for CockpitPanel {
         // The live object tree remains independent of account discovery: local
         // is always supplied by the model, while remote roots exist only for
         // currently open connections. One flat surface, no registry controls.
-        if let Some(conductor) = self.render_conductor(&inventory, reduce_motion, appearance) {
+        if let Some(conductor) =
+            self.render_conductor(&inventory, &managed_fleet, reduce_motion, appearance)
+        {
             cards = cards.with_child(
                 zone_card(conductor, appearance)
                     .with_uniform_padding(CARD_PADDING)

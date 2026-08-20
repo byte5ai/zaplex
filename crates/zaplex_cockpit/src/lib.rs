@@ -15,6 +15,7 @@
 
 pub mod antigravity_sessions;
 pub mod claude;
+pub mod claude_registry_lifecycle;
 pub mod codex;
 pub mod codex_sessions;
 pub mod conductor;
@@ -36,6 +37,10 @@ pub mod types;
 pub mod windows;
 
 pub use antigravity_sessions::idle_sessions as antigravity_idle_sessions;
+pub use claude_registry_lifecycle::{
+    claude_stale_registry_candidate, cleanup_claude_stale_registry_entry,
+    ClaudeRegistryCleanupOutcome, ClaudeRegistryLifecycleError, ClaudeStaleRegistryCandidate,
+};
 pub use conductor::{
     fleet_conductor_session_count, fleet_is_large, fleet_session_count, group_project_sessions,
     host_auto_collapsed, host_conductor_session_count, host_ident, host_key, host_key_is_local,
@@ -72,8 +77,8 @@ pub use reviewed::{ReviewedSessions, REVIEWED_LIMIT};
 pub use routing::pick_freest_checked;
 pub use routing::{is_over_budget, pick_freest, rank_by_freeness, OVER_BUDGET_HEAT};
 pub use transcript::{
-    format_transcript_markdown, parse_task_state, parse_transcript, ToolCall, TranscriptTurn,
-    TurnRole, TurnUsage,
+    format_transcript_markdown, parse_task_state, parse_transcript, LoadedTranscript, ToolCall,
+    TranscriptTurn, TurnRole, TurnUsage,
 };
 pub use types::{
     Account, AccountStatus, AccountUsage, CockpitSnapshot, Provider, ScanHealth, SessionSnapshot,

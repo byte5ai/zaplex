@@ -753,3 +753,163 @@ fn touch_transcript(dir: &Path, session_id: &str, at: DateTime<Utc>) {
         .set_modified(SystemTime::from(at))
         .unwrap();
 }
+
+#[test]
+fn transcript_viewer_returns_stable_content_revision_and_updates_on_append() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "viewer-session";
+    fake_account(
+        tmp.path(),
+        session_id,
+        "idle",
+        "",
+        &[assistant_line("end_turn")],
+    );
+
+    let first = load_transcript_with_revision(tmp.path(), session_id)
+        .unwrap()
+        .unwrap();
+    let second = load_transcript_with_revision(tmp.path(), session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.source_revision, second.source_revision);
+    assert_eq!(first.turns, second.turns);
+
+    let path = tmp
+        .path()
+        .join("projects")
+        .join("-tmp-proj")
+        .join(format!("{session_id}.jsonl"));
+    let mut file = OpenOptions::new().append(true).open(path).unwrap();
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&json!({
+            "type": "user",
+            "message": {"content": "continue"}
+        }))
+        .unwrap()
+    )
+    .unwrap();
+    let changed = load_transcript_with_revision(tmp.path(), session_id)
+        .unwrap()
+        .unwrap();
+    assert_ne!(first.source_revision, changed.source_revision);
+    assert_eq!(changed.turns.last().unwrap().text, "continue");
+}
+
+#[test]
+fn transcript_viewer_rejects_ambiguous_and_invalid_session_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "duplicate-session";
+    for project in ["one", "two"] {
+        let project = tmp.path().join("projects").join(project);
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join(format!("{session_id}.jsonl")),
+            serde_json::to_string(&assistant_line("end_turn")).unwrap(),
+        )
+        .unwrap();
+    }
+    assert!(matches!(
+        load_transcript_with_revision(tmp.path(), session_id),
+        Err(TranscriptError::AmbiguousSessionId)
+    ));
+    assert!(matches!(
+        load_transcript_with_revision(tmp.path(), "../escape"),
+        Err(TranscriptError::InvalidSessionId)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_viewer_never_follows_a_transcript_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("projects").join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let outside = tmp.path().join("outside.jsonl");
+    std::fs::write(
+        &outside,
+        serde_json::to_string(&assistant_line("end_turn")).unwrap(),
+    )
+    .unwrap();
+    symlink(&outside, project.join("linked-session.jsonl")).unwrap();
+
+    assert!(
+        load_transcript_with_revision(tmp.path(), "linked-session")
+            .unwrap()
+            .is_none(),
+        "a symlink is not an eligible transcript candidate"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_viewer_rejects_a_path_replaced_after_resolution() {
+    let account = tempfile::tempdir().unwrap();
+    let session_id = "path-replacement";
+    let project = account.path().join("projects/project");
+    std::fs::create_dir_all(&project).unwrap();
+    let path = project.join(format!("{session_id}.jsonl"));
+    std::fs::write(
+        &path,
+        serde_json::to_string(&assistant_line("end_turn")).unwrap(),
+    )
+    .unwrap();
+    let resolved = resolve_transcript_for_viewer(account.path(), session_id)
+        .unwrap()
+        .unwrap();
+
+    std::fs::rename(&path, path.with_extension("resolved")).unwrap();
+    std::fs::write(
+        &path,
+        serde_json::to_string(&assistant_line("tool_use")).unwrap(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        open_transcript_for_viewer(&resolved),
+        Err(TranscriptError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidData
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_viewer_rejects_a_provider_root_replaced_after_resolution() {
+    use std::os::unix::fs::symlink;
+
+    let base = tempfile::tempdir().unwrap();
+    let replacement = tempfile::tempdir().unwrap();
+    let account = base.path().join("account");
+    let session_id = "root-replacement";
+    let original_project = account.join("projects/project");
+    std::fs::create_dir_all(&original_project).unwrap();
+    let original_path = original_project.join(format!("{session_id}.jsonl"));
+    std::fs::write(
+        &original_path,
+        serde_json::to_string(&assistant_line("end_turn")).unwrap(),
+    )
+    .unwrap();
+    let resolved = resolve_transcript_for_viewer(&account, session_id)
+        .unwrap()
+        .unwrap();
+
+    std::fs::rename(&account, base.path().join("account-original")).unwrap();
+    let replacement_project = replacement.path().join("projects/project");
+    std::fs::create_dir_all(&replacement_project).unwrap();
+    std::fs::hard_link(
+        base.path()
+            .join("account-original/projects/project")
+            .join(format!("{session_id}.jsonl")),
+        replacement_project.join(format!("{session_id}.jsonl")),
+    )
+    .unwrap();
+    symlink(replacement.path(), &account).unwrap();
+
+    assert!(matches!(
+        open_transcript_for_viewer(&resolved),
+        Err(TranscriptError::MalformedTranscript)
+    ));
+}

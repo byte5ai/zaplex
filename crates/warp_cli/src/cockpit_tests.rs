@@ -9,9 +9,10 @@ use zaplex_cockpit::{
 use crate::control::ControlAuth;
 
 use super::{
-    COCKPIT_SNAPSHOT_PROTOCOL_VERSION, COCKPIT_SNAPSHOT_SCHEMA_VERSION, CockpitSnapshotDocument,
-    CockpitSnapshotRequest, EXIT_HARD_ERROR, EXIT_PARTIAL, EXIT_SUCCESS, SnapshotStatus,
-    SourceStatus,
+    CockpitSnapshotDocument, CockpitSnapshotRequest, RemoteAccountInventorySnapshot,
+    RemoteAccountInventoryStatus, RemoteAccountSnapshot, SnapshotStatus, SourceStatus,
+    COCKPIT_SNAPSHOT_PROTOCOL_VERSION, COCKPIT_SNAPSHOT_SCHEMA_VERSION, EXIT_HARD_ERROR,
+    EXIT_PARTIAL, EXIT_SUCCESS,
 };
 
 fn generated_at() -> chrono::DateTime<Utc> {
@@ -83,6 +84,36 @@ fn account_at(config_dir: &str, sessions: Vec<SessionSnapshot>) -> AccountUsage 
         idle_sessions: Vec::new(),
         status: AccountStatus::Live,
         provenance: UsageProvenance::Estimate,
+    }
+}
+
+fn remote_account(provider: &str, account_id: &str) -> RemoteAccountSnapshot {
+    RemoteAccountSnapshot {
+        provider: provider.to_string(),
+        account_id: account_id.to_string(),
+        display_label: format!("Remote {provider}"),
+        email: format!("{provider}@example.test"),
+        organization: "Example".to_string(),
+        plan_tier: "Max".to_string(),
+        is_default: true,
+        capacity_5h: 0.75,
+        capacity_week: 0.5,
+        capacity_known: true,
+        health: "loaded".to_string(),
+        usage_provenance: "estimate".to_string(),
+    }
+}
+
+fn remote_inventory(
+    host_id: &str,
+    status: RemoteAccountInventoryStatus,
+    accounts: Vec<RemoteAccountSnapshot>,
+) -> RemoteAccountInventorySnapshot {
+    RemoteAccountInventorySnapshot {
+        host_id: host_id.to_string(),
+        schema_version: 1,
+        status,
+        accounts,
     }
 }
 
@@ -182,6 +213,8 @@ fn degraded_scan_uses_unknown_usage_and_omits_private_collection_data() {
 
     assert_eq!(document.accounts[0].usage_provenance, "unknown");
     assert_eq!(document.accounts[0].usage, None);
+    assert_eq!(document.accounts[0].host_id, "local");
+    assert_eq!(document.accounts[0].health, "degraded");
     assert!(!encoded.contains("/home/tester"));
     assert!(!encoded.contains("private-process-fingerprint"));
     assert!(!encoded.contains("private-pty-id"));
@@ -224,6 +257,7 @@ fn runtime_export_uses_loaded_fleet_and_unique_host_scoped_session_ids() {
     let local = session("shared-session", SessionState::Active);
     let mut remote = session("shared-session", SessionState::Waiting);
     remote.config_dir = Some("/remote/private/.claude".to_string());
+    remote.account_id = Some("remote-claude-account".to_string());
     let fleet = FleetTree {
         hosts: vec![
             host(
@@ -244,7 +278,12 @@ fn runtime_export_uses_loaded_fleet_and_unique_host_scoped_session_ids() {
         needs_me: 1,
     };
 
-    let document = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet);
+    let remote_accounts = [remote_inventory(
+        "daemon-stable-id",
+        RemoteAccountInventoryStatus::Loaded,
+        vec![remote_account("claude", "remote-claude-account")],
+    )];
+    let document = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet, &remote_accounts);
     let encoded = serde_json::to_string(&document).unwrap();
     let remote_host = document
         .hosts
@@ -256,17 +295,177 @@ fn runtime_export_uses_loaded_fleet_and_unique_host_scoped_session_ids() {
     assert_eq!(document.sources.remote_hosts.status, SourceStatus::Loaded);
     assert_eq!(document.exit_code(), EXIT_SUCCESS);
     assert_eq!(remote_host.label, "devhost");
-    assert_eq!(document.accounts.len(), 1);
-    assert!(document.accounts[0].usage.is_some());
-    assert_eq!(document.accounts[0].status, "working");
-    assert_eq!(document.accounts[0].sessions.len(), 2);
-    assert_ne!(
-        document.accounts[0].sessions[0].id,
-        document.accounts[0].sessions[1].id
-    );
+    assert_eq!(document.accounts.len(), 2);
+    let local_account = document
+        .accounts
+        .iter()
+        .find(|account| account.host_id == "local")
+        .unwrap();
+    let remote_account = document
+        .accounts
+        .iter()
+        .find(|account| account.host_id == remote_host.id)
+        .unwrap();
+    assert!(local_account.usage.is_some());
+    assert_eq!(local_account.status, "working");
+    assert_eq!(local_account.sessions.len(), 1);
+    assert_eq!(remote_account.usage, None);
+    assert_eq!(remote_account.health, "loaded");
+    assert_eq!(remote_account.status, "live");
+    assert_eq!(remote_account.sessions.len(), 1);
     assert_eq!(document.attention.len(), 1);
     assert_eq!(document.attention[0].host_id, remote_host.id);
     assert!(!encoded.contains("/remote/private"));
+}
+
+#[test]
+fn runtime_export_keeps_fresh_remote_accounts_with_zero_sessions() {
+    let snapshot = CockpitSnapshot {
+        accounts: Vec::new(),
+        generated_at: generated_at(),
+        health: ScanHealth::Loaded,
+    };
+    let fleet = FleetTree {
+        hosts: vec![host(
+            "devhost",
+            false,
+            Some("daemon-stable-id"),
+            AgentInventoryStatus::Ready,
+            Vec::new(),
+        )],
+        needs_me: 0,
+    };
+    let remote_accounts = [remote_inventory(
+        "daemon-stable-id",
+        RemoteAccountInventoryStatus::Loaded,
+        vec![
+            remote_account("claude", "remote-claude"),
+            remote_account("codex", "remote-codex"),
+        ],
+    )];
+
+    let document = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet, &remote_accounts);
+    let remote_host = document
+        .hosts
+        .iter()
+        .find(|host| host.kind == "remote")
+        .unwrap();
+
+    assert_eq!(document.status, SnapshotStatus::Loaded);
+    assert_eq!(document.exit_code(), EXIT_SUCCESS);
+    assert_eq!(document.accounts.len(), 2);
+    assert!(document.accounts.iter().all(|account| {
+        account.host_id == remote_host.id
+            && account.health == "loaded"
+            && account.status == "offline"
+            && account.usage.is_none()
+            && account.sessions.is_empty()
+    }));
+    let encoded = serde_json::to_string(&document).unwrap();
+    assert!(!encoded.contains("remote-claude"));
+    assert!(!encoded.contains("remote-codex"));
+    assert!(!encoded.contains("daemon-stable-id"));
+}
+
+#[test]
+fn missing_or_stale_remote_account_inventory_degrades_without_guessing_accounts() {
+    let snapshot = CockpitSnapshot {
+        accounts: Vec::new(),
+        generated_at: generated_at(),
+        health: ScanHealth::Loaded,
+    };
+    let fleet = FleetTree {
+        hosts: vec![host(
+            "devhost",
+            false,
+            Some("current-daemon"),
+            AgentInventoryStatus::Ready,
+            Vec::new(),
+        )],
+        needs_me: 0,
+    };
+
+    let missing = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet, &[]);
+    assert_eq!(missing.status, SnapshotStatus::Degraded);
+    assert_eq!(missing.exit_code(), EXIT_PARTIAL);
+    assert!(missing.accounts.is_empty());
+
+    let stale_accounts = [remote_inventory(
+        "old-daemon",
+        RemoteAccountInventoryStatus::Loaded,
+        vec![remote_account("claude", "must-not-retarget")],
+    )];
+    let stale = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet, &stale_accounts);
+    assert_eq!(stale.status, SnapshotStatus::Degraded);
+    assert!(stale.accounts.is_empty());
+}
+
+#[test]
+fn degraded_remote_account_inventory_remains_partial_and_preserves_known_accounts() {
+    let snapshot = CockpitSnapshot {
+        accounts: Vec::new(),
+        generated_at: generated_at(),
+        health: ScanHealth::Loaded,
+    };
+    let fleet = FleetTree {
+        hosts: vec![host(
+            "devhost",
+            false,
+            Some("daemon-stable-id"),
+            AgentInventoryStatus::Ready,
+            Vec::new(),
+        )],
+        needs_me: 0,
+    };
+    let mut known = remote_account("claude", "known-account");
+    known.health = "degraded".to_string();
+    known.capacity_known = false;
+    let remote_accounts = [remote_inventory(
+        "daemon-stable-id",
+        RemoteAccountInventoryStatus::Degraded,
+        vec![known],
+    )];
+
+    let document = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet, &remote_accounts);
+
+    assert_eq!(document.status, SnapshotStatus::Degraded);
+    assert_eq!(document.exit_code(), EXIT_PARTIAL);
+    assert_eq!(document.accounts.len(), 1);
+    assert_eq!(document.accounts[0].health, "degraded");
+    assert_eq!(document.accounts[0].usage_provenance, "unknown");
+    assert_eq!(document.accounts[0].usage, None);
+}
+
+#[test]
+fn invalid_remote_account_identity_fails_closed_as_partial() {
+    let snapshot = CockpitSnapshot {
+        accounts: Vec::new(),
+        generated_at: generated_at(),
+        health: ScanHealth::Loaded,
+    };
+    let fleet = FleetTree {
+        hosts: vec![host(
+            "devhost",
+            false,
+            Some("daemon-stable-id"),
+            AgentInventoryStatus::Ready,
+            Vec::new(),
+        )],
+        needs_me: 0,
+    };
+    let mut invalid = remote_account("unknown-provider", "opaque-account");
+    invalid.display_label = "invalid\nlabel".to_string();
+    let remote_accounts = [remote_inventory(
+        "daemon-stable-id",
+        RemoteAccountInventoryStatus::Loaded,
+        vec![invalid],
+    )];
+
+    let document = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet, &remote_accounts);
+
+    assert_eq!(document.status, SnapshotStatus::Degraded);
+    assert_eq!(document.exit_code(), EXIT_PARTIAL);
+    assert!(document.accounts.is_empty());
 }
 
 #[test]
@@ -287,17 +486,20 @@ fn incomplete_connected_host_keeps_its_root_and_degrades_exit() {
         needs_me: 0,
     };
 
-    let document = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet);
+    let remote_accounts = [remote_inventory(
+        "old-daemon-id",
+        RemoteAccountInventoryStatus::Unsupported,
+        Vec::new(),
+    )];
+    let document = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet, &remote_accounts);
 
     assert_eq!(document.status, SnapshotStatus::Degraded);
     assert_eq!(document.sources.remote_hosts.status, SourceStatus::Degraded);
     assert_eq!(document.exit_code(), EXIT_PARTIAL);
-    assert!(
-        document
-            .hosts
-            .iter()
-            .any(|host| host.label == "old-daemon" && host.state == "unsupported")
-    );
+    assert!(document
+        .hosts
+        .iter()
+        .any(|host| host.label == "old-daemon" && host.state == "unsupported"));
 }
 
 #[test]

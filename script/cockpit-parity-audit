@@ -10,9 +10,12 @@ import json
 import os
 import re
 import signal
+import struct
 import subprocess
 import sys
+import tempfile
 import time
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -65,6 +68,26 @@ EXPECTED_SUITE_COMMANDS = {
         "--no-fail-fast",
         "cockpit::",
     ],
+    "control-surface-app": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "control_surface::",
+    ],
+    "workspace-spawn-app": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "workspace::view::spawn_card::",
+    ],
     "generated-read-only-code": [
         "cargo",
         "test",
@@ -85,6 +108,24 @@ EXPECTED_SUITE_COMMANDS = {
         "--no-fail-fast",
         "remote_server::",
     ],
+    "remote-client-protocol": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "remote_server",
+        "--lib",
+        "--no-fail-fast",
+    ],
+    "remote-capabilities": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "zaplex_remote_session",
+        "--lib",
+        "--no-fail-fast",
+    ],
     "cockpit-cli": [
         "cargo",
         "test",
@@ -104,12 +145,76 @@ EXPECTED_SELF_TEST_CASES = {
     "remote-host-cross-boundary",
     "remote-status-cross-boundary",
     "missing-test-regression",
+    "suite-name-filter-regression",
+    "runtime-valid",
+    "runtime-missing-is-not-run",
+    "runtime-provider-regression",
+    "runtime-host-regression",
+    "runtime-status-regression",
+    "runtime-screenshot-regression",
 }
 EXPECTED_SCREENSHOTS = {
     "cockpit-desktop.png",
     "cockpit-narrow.png",
     "cockpit-reduced-motion.png",
 }
+EXPECTED_RUNTIME_FILES = {
+    "observations.json",
+    "versions.txt",
+    "local-claude.png",
+    "local-codex.png",
+    "remote-host.png",
+    "reattach.png",
+}
+EXPECTED_RUNTIME_SCREENSHOTS = {
+    "local-claude.png",
+    "local-codex.png",
+    "remote-host.png",
+    "reattach.png",
+}
+EXPECTED_RUNTIME_CASES = {
+    "local_claude",
+    "local_codex",
+    "remote_host",
+    "reattach_and_lifecycle",
+    "machine_snapshot",
+    "two_host_disconnect",
+}
+EXPECTED_RUNTIME_ACCOUNTS = {"default", "pinned"}
+EXPECTED_RUNTIME_STATES = {"live", "waiting", "idle", "dormant"}
+EXPECTED_RUNTIME_CAPABILITIES = {
+    "launch",
+    "reattach",
+    "transcript",
+    "usage",
+    "attention",
+    "lifecycle",
+    "snapshot",
+}
+EXPECTED_RUNTIME_SELF_TEST_CASES = {
+    "runtime-valid",
+    "runtime-missing-is-not-run",
+    "runtime-provider-regression",
+    "runtime-host-regression",
+    "runtime-status-regression",
+    "runtime-screenshot-regression",
+}
+EXPECTED_SELF_TEST_RESULTS = {
+    case: (
+        "pass-observed"
+        if case == "runtime-valid"
+        else "not-run-observed"
+        if case == "runtime-missing-is-not-run"
+        else "expected-failure-observed"
+    )
+    for case in EXPECTED_SELF_TEST_CASES
+}
+MAX_RUNTIME_JSON_BYTES = 64 * 1024
+MAX_RUNTIME_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_RUNTIME_VERSION_BYTES = 8 * 1024
+MIN_RUNTIME_IMAGE_WIDTH = 320
+MIN_RUNTIME_IMAGE_HEIGHT = 200
+MAX_RUNTIME_IMAGE_DIMENSION = 16_384
 REQUIRED_SCENARIOS = {
     "claude-default-local-live-launch": {
         "provider": {"claude"},
@@ -229,13 +334,30 @@ REQUIRED_SCENARIO_CAPABILITIES = {
     "remote-multi-provider-idle": {"usage", "lifecycle"},
 }
 ALLOWED_TEST_PREFIXES = (
+    "crates/remote_server/src/",
+    "crates/zaplex_remote_session/src/",
     "crates/zaplex_cockpit/src/",
     "crates/warp_cli/src/",
     "app/src/cockpit/",
     "app/src/code/",
     "app/src/control_surface_tests.rs",
     "app/src/remote_server/",
+    "app/src/workspace/view/",
 )
+EXPECTED_SOURCE_SUITES = (
+    ("app/src/workspace/view/spawn_card", "workspace-spawn-app"),
+    ("app/src/control_surface", "control-surface-app"),
+    ("app/src/remote_server/", "remote-daemon-app"),
+    ("app/src/cockpit/", "cockpit-app"),
+    ("app/src/code/", "generated-read-only-code"),
+    ("crates/remote_server/src/", "remote-client-protocol"),
+    ("crates/zaplex_remote_session/src/", "remote-capabilities"),
+    ("crates/zaplex_cockpit/src/", "cockpit-data-spine"),
+    ("crates/warp_cli/src/", "cockpit-cli"),
+)
+EXPECTED_TEST_NAME_FILTERS = {
+    "generated-read-only-code": "generated_",
+}
 
 
 class AuditError(Exception):
@@ -305,7 +427,10 @@ def test_function_exists(source: str, name: str) -> bool:
     if match is None:
         return False
     annotation_window = source[max(0, match.start() - 500) : match.start()]
-    return "#[test]" in annotation_window or "#[warpui::test]" in annotation_window
+    return any(
+        annotation in annotation_window
+        for annotation in ("#[test]", "#[warpui::test]", "#[tokio::test]")
+    )
 
 
 def validate_manifest(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -389,8 +514,12 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, A
         "cockpit-cli",
         "cockpit-data-spine",
         "cockpit-app",
+        "control-surface-app",
         "generated-read-only-code",
+        "remote-capabilities",
+        "remote-client-protocol",
         "remote-daemon-app",
+        "workspace-spawn-app",
     }
     if suite_ids != expected_suites:
         errors.append(f"suites must equal {sorted(expected_suites)}, got {sorted(suite_ids)}")
@@ -425,6 +554,19 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, A
         if not isinstance(source_path, str) or not source_path.startswith(ALLOWED_TEST_PREFIXES):
             errors.append(f"test {test_id} source is outside the Cockpit test domains")
             continue
+        expected_suite = next(
+            (
+                expected
+                for prefix, expected in EXPECTED_SOURCE_SUITES
+                if source_path.startswith(prefix)
+            ),
+            None,
+        )
+        if suite != expected_suite:
+            errors.append(
+                f"test {test_id} source {source_path} requires suite "
+                f"{expected_suite!r}, got {suite!r}"
+            )
         path = safe_repo_path(root, source_path)
         if path is None or not path.is_file():
             errors.append(f"test {test_id} source does not exist: {source_path}")
@@ -432,6 +574,12 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, A
         if not isinstance(name, str) or not name:
             errors.append(f"test {test_id}.name must be a non-empty string")
             continue
+        name_filter = EXPECTED_TEST_NAME_FILTERS.get(suite)
+        if name_filter is not None and name_filter not in name:
+            errors.append(
+                f"test {test_id} name {name!r} does not match suite {suite!r} "
+                f"Cargo filter {name_filter!r}"
+            )
         try:
             source = path.read_text(encoding="utf-8")
         except OSError as error:
@@ -824,6 +972,499 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def parse_runtime_timestamp(value: Any, label: str, errors: list[str]) -> datetime | None:
+    if not isinstance(value, str) or re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value
+    ) is None:
+        errors.append(f"{label} must be RFC3339 UTC without fractional seconds")
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        errors.append(f"{label} is not a valid UTC timestamp")
+        return None
+
+
+def parse_runtime_versions(path: Path, errors: list[str]) -> dict[str, str]:
+    expected_keys = {
+        "zaplex_revision",
+        "claude_version",
+        "codex_version",
+        "remote_provider",
+        "remote_provider_version",
+    }
+    try:
+        if path.is_symlink() or not path.is_file():
+            errors.append("versions.txt must be a regular file, not a symlink")
+            return {}
+        if path.stat().st_size > MAX_RUNTIME_VERSION_BYTES:
+            errors.append("versions.txt exceeds the size limit")
+            return {}
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        errors.append("cannot read versions.txt")
+        return {}
+
+    values: dict[str, str] = {}
+    for line_number, line in enumerate(source.splitlines(), start=1):
+        if not line:
+            errors.append(f"versions.txt line {line_number} is empty")
+            continue
+        if "=" not in line:
+            errors.append(f"versions.txt line {line_number} is not key=value")
+            continue
+        key, value = line.split("=", 1)
+        if key not in expected_keys:
+            errors.append(f"versions.txt contains unknown key {key!r}")
+            continue
+        if key in values:
+            errors.append(f"versions.txt contains duplicate key {key!r}")
+            continue
+        value = value.strip()
+        if not value or len(value) > 256 or "\x00" in value:
+            errors.append(f"versions.txt value {key!r} is empty or unsafe")
+            continue
+        if key.endswith("_version") and re.search(
+            r"(?:/home/|/Users/|\\Users\\|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|"
+            r"github_pat_|ghp_|sk-[A-Za-z0-9_-]{12,}|bearer\s+|(?:api[_-]?key|token)\s*[=:])",
+            value,
+            re.IGNORECASE,
+        ):
+            errors.append(f"versions.txt value {key!r} contains identity, path, or secret-like text")
+            continue
+        values[key] = value
+    missing = sorted(expected_keys - set(values))
+    if missing:
+        errors.append(f"versions.txt is missing keys: {missing}")
+    if values.get("remote_provider") not in {"claude", "codex"}:
+        errors.append("versions.txt remote_provider must be claude or codex")
+    return values
+
+
+def inspect_runtime_png(path: Path, errors: list[str]) -> dict[str, Any] | None:
+    try:
+        if path.is_symlink() or not path.is_file():
+            errors.append(f"{path.name} must be a regular file, not a symlink")
+            return None
+        size = path.stat().st_size
+        if size < 45 or size > MAX_RUNTIME_IMAGE_BYTES:
+            errors.append(f"{path.name} has an invalid file size")
+            return None
+        source = path.read_bytes()
+    except OSError:
+        errors.append(f"cannot read {path.name}")
+        return None
+
+    if not source.startswith(b"\x89PNG\r\n\x1a\n"):
+        errors.append(f"{path.name} is not a PNG")
+        return None
+
+    offset = 8
+    width: int | None = None
+    height: int | None = None
+    saw_idat = False
+    saw_iend = False
+    chunk_index = 0
+    while offset + 12 <= len(source):
+        chunk_length = struct.unpack(">I", source[offset : offset + 4])[0]
+        chunk_type = source[offset + 4 : offset + 8]
+        chunk_end = offset + 12 + chunk_length
+        if chunk_end > len(source):
+            errors.append(f"{path.name} contains a truncated PNG chunk")
+            return None
+        chunk_data = source[offset + 8 : offset + 8 + chunk_length]
+        expected_crc = struct.unpack(">I", source[offset + 8 + chunk_length : chunk_end])[0]
+        actual_crc = zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF
+        if actual_crc != expected_crc:
+            errors.append(f"{path.name} contains a PNG chunk with an invalid checksum")
+            return None
+        if chunk_index == 0:
+            if chunk_type != b"IHDR" or chunk_length != 13:
+                errors.append(f"{path.name} does not start with a valid IHDR chunk")
+                return None
+            width, height = struct.unpack(">II", chunk_data[:8])
+        elif chunk_type == b"IHDR":
+            errors.append(f"{path.name} contains more than one IHDR chunk")
+            return None
+        if chunk_type == b"IDAT":
+            saw_idat = True
+        if chunk_type == b"IEND":
+            if chunk_length != 0 or chunk_end != len(source):
+                errors.append(f"{path.name} has an invalid IEND chunk")
+                return None
+            saw_iend = True
+            break
+        offset = chunk_end
+        chunk_index += 1
+
+    if not saw_idat or not saw_iend or width is None or height is None:
+        errors.append(f"{path.name} is not a complete PNG")
+        return None
+    if not (
+        MIN_RUNTIME_IMAGE_WIDTH <= width <= MAX_RUNTIME_IMAGE_DIMENSION
+        and MIN_RUNTIME_IMAGE_HEIGHT <= height <= MAX_RUNTIME_IMAGE_DIMENSION
+    ):
+        errors.append(f"{path.name} has implausible dimensions {width}x{height}")
+        return None
+    return {
+        "name": path.name,
+        "sha256": hashlib.sha256(source).hexdigest(),
+        "width": width,
+        "height": height,
+        "bytes": len(source),
+    }
+
+
+def validate_runtime_evidence(
+    evidence_dir: Path,
+    *,
+    expected_zaplex_revision: str | None,
+    max_age_hours: int,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    validated_at = utc_now()
+    if not evidence_dir.exists() and not evidence_dir.is_symlink():
+        return {
+            "schema_version": 1,
+            "status": "not-run",
+            "validated_at": validated_at,
+            "zaplex_revision": None,
+            "expected_zaplex_revision": expected_zaplex_revision,
+            "executed_at": None,
+            "topology": [],
+            "cases": {},
+            "screenshots": [],
+            "errors": [],
+            "reason": "runtime evidence directory is absent",
+        }
+
+    errors: list[str] = []
+    if evidence_dir.is_symlink() or not evidence_dir.is_dir():
+        errors.append("runtime evidence path must be a directory, not a symlink")
+        entries: list[Path] = []
+    else:
+        try:
+            entries = list(evidence_dir.iterdir())
+        except OSError:
+            errors.append("cannot list runtime evidence directory")
+            entries = []
+    actual_names = {entry.name for entry in entries}
+    missing_files = sorted(EXPECTED_RUNTIME_FILES - actual_names)
+    extra_files = sorted(actual_names - EXPECTED_RUNTIME_FILES)
+    if missing_files:
+        errors.append(f"runtime evidence is missing files: {missing_files}")
+    if extra_files:
+        errors.append(f"runtime evidence contains unexpected files: {extra_files}")
+
+    observations: dict[str, Any] = {}
+    observations_path = evidence_dir / "observations.json"
+    if observations_path.exists():
+        try:
+            if observations_path.is_symlink() or not observations_path.is_file():
+                errors.append("observations.json must be a regular file, not a symlink")
+            elif observations_path.stat().st_size > MAX_RUNTIME_JSON_BYTES:
+                errors.append("observations.json exceeds the size limit")
+            else:
+                observations = read_json(observations_path)
+        except (AuditError, OSError):
+            errors.append("cannot read or parse observations.json")
+
+    expected_observation_keys = {
+        "schema_version",
+        "zaplex_revision",
+        "executed_at",
+        "topology",
+        "providers",
+        "account_modes",
+        "states",
+        "capabilities",
+        "cases",
+        "evidence",
+    }
+    if set(observations) != expected_observation_keys:
+        missing_keys = sorted(expected_observation_keys - set(observations))
+        unknown_keys = sorted(set(observations) - expected_observation_keys)
+        errors.append(
+            f"observations.json keys differ; missing={missing_keys}, unknown={unknown_keys}"
+        )
+    if observations.get("schema_version") != 1:
+        errors.append("observations.json schema_version must be 1")
+
+    zaplex_revision = observations.get("zaplex_revision")
+    if not isinstance(zaplex_revision, str) or re.fullmatch(r"[0-9a-f]{40}", zaplex_revision) is None:
+        errors.append("observations.json zaplex_revision must be a 40-character lowercase SHA")
+        zaplex_revision = None
+    if expected_zaplex_revision is not None and zaplex_revision != expected_zaplex_revision:
+        errors.append("runtime evidence does not match the expected Zaplex revision")
+
+    executed_at_value = observations.get("executed_at")
+    executed_at = parse_runtime_timestamp(executed_at_value, "observations.json executed_at", errors)
+    if executed_at is not None:
+        effective_now = now or datetime.now(timezone.utc)
+        age_seconds = (effective_now - executed_at).total_seconds()
+        if age_seconds < -300:
+            errors.append("runtime evidence execution time is in the future")
+        elif age_seconds > max_age_hours * 3600:
+            errors.append(f"runtime evidence is older than {max_age_hours} hours")
+
+    topology = observations.get("topology")
+    normalized_topology: list[dict[str, str]] = []
+    if not isinstance(topology, list) or len(topology) != 2:
+        errors.append("topology must contain exactly the local and one remote host")
+    else:
+        for index, host in enumerate(topology):
+            if not isinstance(host, dict) or set(host) != {"label", "kind"}:
+                errors.append(f"topology[{index}] must contain only label and kind")
+                continue
+            label = host.get("label")
+            kind = host.get("kind")
+            if (label, kind) not in {("local", "local"), ("remote-a", "remote")}:
+                errors.append(f"topology[{index}] must use the sanitized local/remote-a aliases")
+                continue
+            normalized_topology.append({"label": label, "kind": kind})
+        if {(item["label"], item["kind"]) for item in normalized_topology} != {
+            ("local", "local"),
+            ("remote-a", "remote"),
+        }:
+            errors.append("topology must contain one local and one remote-a entry")
+
+    providers = observations.get("providers")
+    expected_provider_keys = {"local_claude", "local_codex", "remote_agent"}
+    if not isinstance(providers, dict) or set(providers) != expected_provider_keys:
+        errors.append("providers must contain local_claude, local_codex, and remote_agent")
+        providers = {}
+    expected_local_providers = {
+        "local_claude": {"provider": "claude", "host": "local"},
+        "local_codex": {"provider": "codex", "host": "local"},
+    }
+    for key, expected in expected_local_providers.items():
+        if providers.get(key) != expected:
+            errors.append(f"providers.{key} must equal {expected}")
+    remote_agent = providers.get("remote_agent")
+    remote_provider: str | None = None
+    if (
+        not isinstance(remote_agent, dict)
+        or set(remote_agent) != {"provider", "host"}
+        or remote_agent.get("host") != "remote-a"
+        or remote_agent.get("provider") not in {"claude", "codex"}
+    ):
+        errors.append("providers.remote_agent must bind claude or codex to remote-a")
+    else:
+        remote_provider = remote_agent["provider"]
+
+    runtime_sets = [
+        ("account_modes", EXPECTED_RUNTIME_ACCOUNTS),
+        ("states", EXPECTED_RUNTIME_STATES),
+        ("capabilities", EXPECTED_RUNTIME_CAPABILITIES),
+    ]
+    for key, expected in runtime_sets:
+        value = observations.get(key)
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            errors.append(f"{key} must be an array of strings")
+        elif len(value) != len(set(value)) or set(value) != expected:
+            errors.append(f"{key} must equal {sorted(expected)}")
+
+    cases = observations.get("cases")
+    normalized_cases: dict[str, str] = {}
+    if not isinstance(cases, dict) or set(cases) != EXPECTED_RUNTIME_CASES:
+        errors.append(f"cases must contain exactly {sorted(EXPECTED_RUNTIME_CASES)}")
+    else:
+        normalized_cases = {
+            key: value for key, value in cases.items() if isinstance(value, str)
+        }
+        non_passing = sorted(key for key, value in cases.items() if value != "pass")
+        if non_passing:
+            errors.append(f"runtime cases did not pass: {non_passing}")
+
+    expected_evidence = EXPECTED_RUNTIME_FILES - {"observations.json"}
+    evidence = observations.get("evidence")
+    if (
+        not isinstance(evidence, list)
+        or not all(isinstance(item, str) for item in evidence)
+        or len(evidence) != len(set(evidence))
+        or set(evidence) != expected_evidence
+    ):
+        errors.append(f"evidence must equal {sorted(expected_evidence)}")
+
+    versions = parse_runtime_versions(evidence_dir / "versions.txt", errors)
+    if versions.get("zaplex_revision") != zaplex_revision:
+        errors.append("versions.txt and observations.json Zaplex revisions differ")
+    if remote_provider is not None and versions.get("remote_provider") != remote_provider:
+        errors.append("versions.txt and observations.json remote providers differ")
+
+    screenshots: list[dict[str, Any]] = []
+    for name in sorted(EXPECTED_RUNTIME_SCREENSHOTS):
+        image_path = evidence_dir / name
+        inspected = inspect_runtime_png(image_path, errors)
+        if inspected is not None:
+            screenshots.append(inspected)
+    screenshot_hashes = [item["sha256"] for item in screenshots]
+    if len(screenshot_hashes) != len(set(screenshot_hashes)):
+        errors.append("runtime screenshots must be distinct images")
+
+    return {
+        "schema_version": 1,
+        "status": "fail" if errors else "pass",
+        "validated_at": validated_at,
+        "zaplex_revision": zaplex_revision,
+        "expected_zaplex_revision": expected_zaplex_revision,
+        "executed_at": executed_at_value if executed_at is not None else None,
+        "topology": normalized_topology,
+        "cases": normalized_cases,
+        "screenshots": screenshots,
+        "errors": errors,
+        "reason": None,
+    }
+
+
+def png_chunk(chunk_type: bytes, data: bytes) -> bytes:
+    return (
+        struct.pack(">I", len(data))
+        + chunk_type
+        + data
+        + struct.pack(">I", zlib.crc32(chunk_type + data) & 0xFFFFFFFF)
+    )
+
+
+def runtime_self_test_png(marker: int) -> bytes:
+    width = MIN_RUNTIME_IMAGE_WIDTH
+    height = MIN_RUNTIME_IMAGE_HEIGHT
+    row = bytes([marker, marker, marker]) * width
+    pixels = b"".join(b"\x00" + row for _ in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + png_chunk(b"IDAT", zlib.compress(pixels))
+        + png_chunk(b"IEND", b"")
+    )
+
+
+def write_runtime_self_test_fixture(directory: Path, executed_at: str) -> None:
+    revision = "a" * 40
+    observations = {
+        "schema_version": 1,
+        "zaplex_revision": revision,
+        "executed_at": executed_at,
+        "topology": [
+            {"label": "local", "kind": "local"},
+            {"label": "remote-a", "kind": "remote"},
+        ],
+        "providers": {
+            "local_claude": {"provider": "claude", "host": "local"},
+            "local_codex": {"provider": "codex", "host": "local"},
+            "remote_agent": {"provider": "claude", "host": "remote-a"},
+        },
+        "account_modes": sorted(EXPECTED_RUNTIME_ACCOUNTS),
+        "states": sorted(EXPECTED_RUNTIME_STATES),
+        "capabilities": sorted(EXPECTED_RUNTIME_CAPABILITIES),
+        "cases": {key: "pass" for key in sorted(EXPECTED_RUNTIME_CASES)},
+        "evidence": sorted(EXPECTED_RUNTIME_FILES - {"observations.json"}),
+    }
+    write_json(directory / "observations.json", observations)
+    (directory / "versions.txt").write_text(
+        "\n".join(
+            [
+                f"zaplex_revision={revision}",
+                "claude_version=self-test-claude",
+                "codex_version=self-test-codex",
+                "remote_provider=claude",
+                "remote_provider_version=self-test-remote",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for marker, name in enumerate(sorted(EXPECTED_RUNTIME_SCREENSHOTS), start=1):
+        (directory / name).write_bytes(runtime_self_test_png(marker))
+
+
+def run_runtime_self_tests() -> list[dict[str, str]]:
+    revision = "a" * 40
+    fixed_now = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    executed_at = "2026-08-20T11:30:00Z"
+    results: list[dict[str, str]] = []
+    with tempfile.TemporaryDirectory(prefix="cockpit-runtime-self-test-") as temporary:
+        root = Path(temporary)
+        missing = validate_runtime_evidence(
+            root / "missing",
+            expected_zaplex_revision=revision,
+            max_age_hours=24,
+            now=fixed_now,
+        )
+        if missing["status"] != "not-run":
+            raise AuditError("runtime self-test did not classify absent evidence as not-run")
+        results.append(
+            {"id": "runtime-missing-is-not-run", "status": "not-run-observed"}
+        )
+
+        valid = root / "valid"
+        valid.mkdir()
+        write_runtime_self_test_fixture(valid, executed_at)
+        baseline = validate_runtime_evidence(
+            valid,
+            expected_zaplex_revision=revision,
+            max_age_hours=24,
+            now=fixed_now,
+        )
+        if baseline["status"] != "pass":
+            raise AuditError(f"runtime self-test baseline failed: {baseline['errors']}")
+        results.append({"id": "runtime-valid", "status": "pass-observed"})
+
+        mutations = [
+            (
+                "runtime-provider-regression",
+                lambda value: value["providers"].__setitem__(
+                    "local_codex", {"provider": "claude", "host": "local"}
+                ),
+            ),
+            (
+                "runtime-host-regression",
+                lambda value: value.__setitem__(
+                    "topology", [{"label": "local", "kind": "local"}]
+                ),
+            ),
+            (
+                "runtime-status-regression",
+                lambda value: value.__setitem__("states", ["live", "waiting", "idle"]),
+            ),
+        ]
+        observations_path = valid / "observations.json"
+        pristine = read_json(observations_path)
+        for mutation_id, mutate in mutations:
+            mutated = copy.deepcopy(pristine)
+            mutate(mutated)
+            write_json(observations_path, mutated)
+            report = validate_runtime_evidence(
+                valid,
+                expected_zaplex_revision=revision,
+                max_age_hours=24,
+                now=fixed_now,
+            )
+            if report["status"] != "fail":
+                raise AuditError(f"runtime self-test {mutation_id} did not fail")
+            results.append({"id": mutation_id, "status": "expected-failure-observed"})
+        write_json(observations_path, pristine)
+
+        duplicate_target = valid / "reattach.png"
+        duplicate_target.write_bytes((valid / "remote-host.png").read_bytes())
+        report = validate_runtime_evidence(
+            valid,
+            expected_zaplex_revision=revision,
+            max_age_hours=24,
+            now=fixed_now,
+        )
+        if report["status"] != "fail" or not any(
+            "distinct" in error for error in report["errors"]
+        ):
+            raise AuditError("runtime screenshot duplication did not fail closed")
+        results.append(
+            {"id": "runtime-screenshot-regression", "status": "expected-failure-observed"}
+        )
+    if {item["id"] for item in results} != EXPECTED_RUNTIME_SELF_TEST_CASES:
+        raise AuditError("runtime self-test did not execute the complete mutation set")
+    return results
+
+
 def command_validate(args: argparse.Namespace) -> int:
     root = args.root.resolve()
     manifest = read_json(args.manifest)
@@ -910,10 +1551,61 @@ def command_self_test(args: argparse.Namespace) -> int:
         return EXIT_CONTRACT
     results.append({"id": "missing-test-regression", "status": "expected-failure-observed"})
 
+    mutated = copy.deepcopy(manifest)
+    generated_test = next(
+        item for item in mutated["test_catalog"] if item["suite"] == "generated-read-only-code"
+    )
+    generated_test["source"] = "app/src/code/editor/diff_tests.rs"
+    generated_test["name"] = "test_reverse_action"
+    _, errors = validate_manifest(root, mutated)
+    expected = "does not match suite 'generated-read-only-code' Cargo filter 'generated_'"
+    if not any(expected in error for error in errors):
+        print(
+            f"self-test suite-name-filter-regression did not produce expected failure "
+            f"{expected!r}: {errors}",
+            file=sys.stderr,
+        )
+        return EXIT_CONTRACT
+    if any("does not resolve to an annotated test function" in error for error in errors):
+        print(
+            "self-test suite-name-filter-regression did not use a real annotated test",
+            file=sys.stderr,
+        )
+        return EXIT_CONTRACT
+    results.append(
+        {"id": "suite-name-filter-regression", "status": "expected-failure-observed"}
+    )
+
+    try:
+        results.extend(run_runtime_self_tests())
+    except AuditError as error:
+        print(f"self-test {error}", file=sys.stderr)
+        return EXIT_CONTRACT
+
     report = {"schema_version": 1, "status": "pass", "cases": results}
     if args.output:
         write_json(args.output, report)
     print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
+
+
+def command_validate_runtime(args: argparse.Namespace) -> int:
+    expected_revision = args.expected_zaplex_revision
+    if expected_revision is not None and re.fullmatch(r"[0-9a-f]{40}", expected_revision) is None:
+        raise AuditError("--expected-zaplex-revision must be a 40-character lowercase SHA")
+    if not 1 <= args.max_age_hours <= 720:
+        raise AuditError("--max-age-hours must be between 1 and 720")
+    report = validate_runtime_evidence(
+        args.evidence_dir.absolute(),
+        expected_zaplex_revision=expected_revision,
+        max_age_hours=args.max_age_hours,
+    )
+    if args.output:
+        write_json(args.output, report)
+    output = sys.stderr if report["status"] == "fail" else sys.stdout
+    print(json.dumps(report, indent=2, sort_keys=True), file=output)
+    if report["status"] == "fail" or (args.require_pass and report["status"] != "pass"):
+        return EXIT_FAILED
     return 0
 
 
@@ -982,6 +1674,7 @@ def command_assemble(args: argparse.Namespace) -> int:
     self_test = read_json(args.self_test)
     references = read_json(args.references)
     suites = read_json(args.suites)
+    runtime = read_json(args.runtime)
     screenshot_dir = args.screenshot_dir.resolve()
     screenshots: list[dict[str, str]] = []
     if screenshot_dir.is_dir():
@@ -998,14 +1691,16 @@ def command_assemble(args: argparse.Namespace) -> int:
         assembly_errors.append("contract validation did not pass cleanly")
 
     self_test_cases = self_test.get("cases")
-    self_test_case_ids = {
-        item.get("id")
+    self_test_results = {
+        item.get("id"): item.get("status")
         for item in self_test_cases
-        if isinstance(item, dict) and item.get("status") == "expected-failure-observed"
-    } if isinstance(self_test_cases, list) else set()
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and isinstance(item.get("status"), str)
+    } if isinstance(self_test_cases, list) else {}
     self_test_ok = (
         self_test.get("status") == "pass"
-        and self_test_case_ids == EXPECTED_SELF_TEST_CASES
+        and self_test_results == EXPECTED_SELF_TEST_RESULTS
     )
     if not self_test_ok:
         assembly_errors.append("gate self-test evidence is missing or incomplete")
@@ -1064,21 +1759,60 @@ def command_assemble(args: argparse.Namespace) -> int:
     if not screenshots_ok:
         assembly_errors.append(f"missing screenshots: {missing_screenshots}")
 
+    runtime_errors: list[str] = []
+    runtime_status = runtime.get("status")
+    if runtime.get("schema_version") != 1 or runtime_status not in {"pass", "fail", "not-run"}:
+        runtime_status = "fail"
+        runtime_errors.append("runtime evidence report has an invalid schema or status")
+    if runtime_status == "pass":
+        suite_zaplex = suites.get("zaplex")
+        suite_revision = suite_zaplex.get("revision") if isinstance(suite_zaplex, dict) else None
+        if runtime.get("errors") != []:
+            runtime_status = "fail"
+            runtime_errors.append("passing runtime evidence report contains errors")
+        if runtime.get("zaplex_revision") != suite_revision:
+            runtime_status = "fail"
+            runtime_errors.append("runtime evidence and automated suites use different revisions")
+        runtime_screenshots = runtime.get("screenshots")
+        runtime_screenshot_names = {
+            item["name"]
+            for item in runtime_screenshots
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        } if isinstance(runtime_screenshots, list) else set()
+        if runtime_screenshot_names != EXPECTED_RUNTIME_SCREENSHOTS:
+            runtime_status = "fail"
+            runtime_errors.append("runtime evidence report lacks the required screenshots")
+    elif runtime_status == "fail":
+        report_errors = runtime.get("errors")
+        if isinstance(report_errors, list):
+            runtime_errors.extend(str(error) for error in report_errors)
+        if not runtime_errors:
+            runtime_errors.append("runtime evidence validation failed")
+
     component_status = {
         "contract": "pass" if validation_ok else "fail",
         "gate_self_test": "pass" if self_test_ok else "fail",
         "references": "pass" if references_ok else "fail",
         "suites": "pass" if suites_ok else "fail",
         "screenshots": "pass" if screenshots_ok else "fail",
-        "manual_runtime": "not-run",
+        "manual_runtime": runtime_status,
     }
     automated_pass = all(
         component_status[name] == "pass"
         for name in ("contract", "gate_self_test", "references", "suites", "screenshots")
     )
+    if not automated_pass:
+        release_gate_status = "fail"
+    elif runtime_status == "pass":
+        release_gate_status = "pass"
+    elif runtime_status == "fail":
+        release_gate_status = "fail"
+    else:
+        release_gate_status = "not-run"
     report = {
         "schema_version": 1,
         "status": "pass" if automated_pass else "fail",
+        "release_gate_status": release_gate_status,
         "generated_at": utc_now(),
         "reference_audited_at": reference_audited_at,
         "zaplex": git_revision(root),
@@ -1094,12 +1828,22 @@ def command_assemble(args: argparse.Namespace) -> int:
         "screenshots": screenshots,
         "missing_screenshots": missing_screenshots,
         "errors": assembly_errors,
+        "release_gate_errors": runtime_errors,
         "manual_runtime_procedure": "specs/parity/COCKPIT_RUNTIME_SMOKE.md",
+        "runtime_evidence": {
+            "status": runtime_status,
+            "zaplex_revision": runtime.get("zaplex_revision"),
+            "expected_zaplex_revision": runtime.get("expected_zaplex_revision"),
+            "executed_at": runtime.get("executed_at"),
+            "validated_at": runtime.get("validated_at"),
+            "screenshots": runtime.get("screenshots", []),
+        },
         "reports": {
             "contract": str(args.validation),
             "gate_self_test": str(args.self_test),
             "references": str(args.references),
             "suites": str(args.suites),
+            "runtime": str(args.runtime),
         },
     }
     write_json(args.output, report)
@@ -1112,6 +1856,12 @@ def command_enforce(args: argparse.Namespace) -> int:
     if report.get("status") != "pass":
         print(json.dumps(report, indent=2, sort_keys=True), file=sys.stderr)
         return EXIT_FAILED
+    if args.require_runtime and report.get("release_gate_status") != "pass":
+        print(json.dumps(report, indent=2, sort_keys=True), file=sys.stderr)
+        return EXIT_FAILED
+    if args.require_runtime:
+        print("Cockpit parity automated and runtime release gates passed.")
+        return 0
     print("Cockpit parity automated audit passed.")
     return 0
 
@@ -1144,17 +1894,33 @@ def build_parser() -> argparse.ArgumentParser:
     suites.add_argument("--output", type=Path, required=True)
     suites.set_defaults(handler=command_run_suites)
 
+    runtime = subparsers.add_parser(
+        "validate-runtime", help="validate a sanitized real two-host runtime evidence bundle"
+    )
+    runtime.add_argument("--evidence-dir", type=Path, required=True)
+    runtime.add_argument("--expected-zaplex-revision")
+    runtime.add_argument("--max-age-hours", type=int, default=168)
+    runtime.add_argument("--require-pass", action="store_true")
+    runtime.add_argument("--output", type=Path)
+    runtime.set_defaults(handler=command_validate_runtime)
+
     assemble = subparsers.add_parser("assemble", help="assemble the final machine report")
     assemble.add_argument("--validation", type=Path, required=True)
     assemble.add_argument("--self-test", type=Path, required=True)
     assemble.add_argument("--references", type=Path, required=True)
     assemble.add_argument("--suites", type=Path, required=True)
+    assemble.add_argument("--runtime", type=Path, required=True)
     assemble.add_argument("--screenshot-dir", type=Path, required=True)
     assemble.add_argument("--output", type=Path, required=True)
     assemble.set_defaults(handler=command_assemble)
 
     enforce = subparsers.add_parser("enforce", help="fail unless an assembled audit passed")
     enforce.add_argument("--report", type=Path, required=True)
+    enforce.add_argument(
+        "--require-runtime",
+        action="store_true",
+        help="also require passing real runtime evidence for the same Zaplex revision",
+    )
     enforce.set_defaults(handler=command_enforce)
     return parser
 

@@ -2,6 +2,7 @@
 
 #[cfg(not(target_family = "wasm"))]
 use std::{
+    collections::HashSet,
     env,
     io::{self, Write as _},
     path::{Path, PathBuf},
@@ -16,9 +17,9 @@ use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 #[cfg(not(target_family = "wasm"))]
 use zaplex_cockpit::{
-    Account, AccountStatus, AccountUsage, AgentInventoryStatus, CockpitSnapshot, DEFAULT_BUDGET_5H,
-    DEFAULT_BUDGET_WEEK, FleetTree, HostAvailability, PricingTable, Provider, ScanHealth,
-    SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
+    Account, AccountStatus, AccountUsage, AgentInventoryStatus, CockpitSnapshot, FleetTree,
+    HostAvailability, PricingTable, Provider, ScanHealth, SessionSnapshot, SessionState,
+    UsageProvenance, WindowTotals, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK,
 };
 
 pub const COCKPIT_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
@@ -87,6 +88,7 @@ pub struct CockpitSnapshotDocument {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AccountDocument {
     pub id: String,
+    pub host_id: String,
     pub provider: String,
     pub label: String,
     pub email: Option<String>,
@@ -94,10 +96,49 @@ pub struct AccountDocument {
     pub role: Option<String>,
     pub plan: Option<String>,
     pub is_default: bool,
+    pub health: String,
     pub status: String,
     pub usage_provenance: String,
     pub usage: Option<UsageDocument>,
     pub sessions: Vec<SessionDocument>,
+}
+
+/// One fresh, capability-gated account inventory from an exact connected daemon.
+/// This is projection input only; raw daemon account ids are hashed before JSON output.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteAccountInventorySnapshot {
+    pub host_id: String,
+    pub schema_version: u32,
+    pub status: RemoteAccountInventoryStatus,
+    pub accounts: Vec<RemoteAccountSnapshot>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteAccountInventoryStatus {
+    Loaded,
+    Degraded,
+    Unsupported,
+    Unavailable,
+    Invalid,
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteAccountSnapshot {
+    pub provider: String,
+    pub account_id: String,
+    pub display_label: String,
+    pub email: String,
+    pub organization: String,
+    pub plan_tier: String,
+    pub is_default: bool,
+    pub capacity_5h: f64,
+    pub capacity_week: f64,
+    pub capacity_known: bool,
+    pub health: String,
+    pub usage_provenance: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -284,8 +325,12 @@ impl CockpitSnapshotDocument {
         }
     }
 
-    /// Export the already-loaded application model without performing another scan.
-    pub fn from_runtime(snapshot: &CockpitSnapshot, fleet: &FleetTree) -> Self {
+    /// Export the loaded application model plus exact, freshly queried remote accounts.
+    pub fn from_runtime(
+        snapshot: &CockpitSnapshot,
+        fleet: &FleetTree,
+        remote_account_inventories: &[RemoteAccountInventorySnapshot],
+    ) -> Self {
         let (local_status, local_detail) = local_source(&snapshot.health);
         let usage_available = matches!(&snapshot.health, ScanHealth::Loaded);
         let mut accounts = snapshot
@@ -295,6 +340,7 @@ impl CockpitSnapshotDocument {
             .collect::<Vec<_>>();
         let mut hosts = Vec::new();
         let mut attention = Vec::new();
+        let mut remote_accounts_degraded = false;
 
         for host in &fleet.hosts {
             let host_identity = host
@@ -305,14 +351,60 @@ impl CockpitSnapshotDocument {
             let host_id = host_document_id(host.is_local, host_identity);
             let mut host_session_ids = Vec::new();
 
+            if !host.is_local {
+                let mut matching_inventories = remote_account_inventories
+                    .iter()
+                    .filter(|inventory| inventory.host_id == host_identity);
+                match matching_inventories.next() {
+                    Some(inventory) if matching_inventories.next().is_none() => {
+                        match remote_account_documents(inventory, &host_id) {
+                            Ok(mut remote_accounts) => accounts.append(&mut remote_accounts),
+                            Err(()) => remote_accounts_degraded = true,
+                        }
+                        remote_accounts_degraded |=
+                            inventory.status != RemoteAccountInventoryStatus::Loaded;
+                        remote_accounts_degraded |= inventory
+                            .accounts
+                            .iter()
+                            .any(|account| account.health != "loaded" || !account.capacity_known);
+                    }
+                    Some(_) | None => remote_accounts_degraded = true,
+                }
+            }
+
             for session in host
                 .projects
                 .iter()
                 .flat_map(|project| project.sessions.iter())
             {
-                let account_id = matching_account(snapshot, session, host.is_local)
+                let resolved_account_id = matching_account(snapshot, session, host.is_local)
                     .map(|usage| stable_account_id(&usage.account))
-                    .unwrap_or_else(|| synthetic_account_id(session, &host_id, &mut accounts));
+                    .or_else(|| {
+                        (!host.is_local)
+                            .then(|| session.account_id.as_deref())
+                            .flatten()
+                            .map(|account_id| {
+                                remote_account_document_id(
+                                    host_identity,
+                                    session.provider,
+                                    account_id,
+                                )
+                            })
+                            .filter(|account_id| {
+                                accounts.iter().any(|account| account.id == *account_id)
+                            })
+                    });
+                if !host.is_local && resolved_account_id.is_none() {
+                    remote_accounts_degraded = true;
+                }
+                let account_id = resolved_account_id.unwrap_or_else(|| {
+                    synthetic_account_id(
+                        session,
+                        &host_id,
+                        (!host.is_local).then_some(host_identity),
+                        &mut accounts,
+                    )
+                });
                 let session = session_document(&account_id, &host_id, session, "live");
                 if host_session_ids.iter().any(|id| id == &session.id) {
                     continue;
@@ -370,12 +462,20 @@ impl CockpitSnapshotDocument {
         });
         sort_attention(&mut attention);
 
-        let remote_degraded = fleet.hosts.iter().any(|host| {
-            !host.is_local
-                && (host.host_id.is_none()
-                    || host.availability != HostAvailability::Available
-                    || host.inventory_status != AgentInventoryStatus::Ready)
+        remote_accounts_degraded |= remote_account_inventories.iter().any(|inventory| {
+            fleet.hosts.iter().all(|host| {
+                host.is_local
+                    || host.host_id.as_deref().or(host.registry_node_id.as_deref())
+                        != Some(inventory.host_id.as_str())
+            })
         });
+        let remote_degraded = remote_accounts_degraded
+            || fleet.hosts.iter().any(|host| {
+                !host.is_local
+                    && (host.host_id.is_none()
+                        || host.availability != HostAvailability::Available
+                        || host.inventory_status != AgentInventoryStatus::Ready)
+            });
         let remote_status = if remote_degraded {
             SourceStatus::Degraded
         } else {
@@ -400,7 +500,8 @@ impl CockpitSnapshotDocument {
                 remote_hosts: SnapshotSource {
                     status: remote_status,
                     detail: remote_degraded.then(|| {
-                        "One or more connected hosts have incomplete agent inventory".to_string()
+                        "One or more connected hosts have incomplete agent or account inventory"
+                            .to_string()
                     }),
                 },
             },
@@ -548,6 +649,7 @@ fn account_document(
 
     AccountDocument {
         id: account_id,
+        host_id: "local".to_string(),
         provider: provider_name(usage.account.provider).to_string(),
         label: usage.account.label.clone(),
         email: usage.account.email.clone(),
@@ -555,6 +657,12 @@ fn account_document(
         role: usage.account.role.clone(),
         plan: usage.account.plan_tier.clone(),
         is_default: usage.account.is_default,
+        health: if usage_available {
+            "loaded"
+        } else {
+            "degraded"
+        }
+        .to_string(),
         status: account_status_name(usage.status).to_string(),
         usage_provenance: if usage_available {
             provenance_name(usage.provenance).to_string()
@@ -574,6 +682,100 @@ fn account_document(
         }),
         sessions,
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn remote_account_documents(
+    inventory: &RemoteAccountInventorySnapshot,
+    host_id: &str,
+) -> std::result::Result<Vec<AccountDocument>, ()> {
+    const MAX_ACCOUNTS_PER_HOST: usize = 256;
+    const MAX_ACCOUNT_ID_BYTES: usize = 256;
+    const MAX_DISPLAY_BYTES: usize = 512;
+
+    if inventory.schema_version != 1
+        || !matches!(
+            inventory.status,
+            RemoteAccountInventoryStatus::Loaded | RemoteAccountInventoryStatus::Degraded
+        )
+        || inventory.accounts.len() > MAX_ACCOUNTS_PER_HOST
+    {
+        return Err(());
+    }
+
+    let mut identities = HashSet::new();
+    let mut accounts = Vec::with_capacity(inventory.accounts.len());
+    for account in &inventory.accounts {
+        let provider = remote_provider(&account.provider).ok_or(())?;
+        if !valid_remote_value(&account.account_id, MAX_ACCOUNT_ID_BYTES, false)
+            || !valid_remote_value(&account.display_label, MAX_DISPLAY_BYTES, true)
+            || !valid_remote_value(&account.email, MAX_DISPLAY_BYTES, true)
+            || !valid_remote_value(&account.organization, MAX_DISPLAY_BYTES, true)
+            || !valid_remote_value(&account.plan_tier, MAX_DISPLAY_BYTES, true)
+            || !matches!(account.health.as_str(), "loaded" | "degraded")
+            || !matches!(account.usage_provenance.as_str(), "real" | "estimate")
+            || (account.capacity_known
+                && (!valid_capacity(account.capacity_5h) || !valid_capacity(account.capacity_week)))
+            || !identities.insert((provider, account.account_id.as_str()))
+        {
+            return Err(());
+        }
+
+        accounts.push(AccountDocument {
+            id: remote_account_document_id(&inventory.host_id, provider, &account.account_id),
+            host_id: host_id.to_string(),
+            provider: provider_name(provider).to_string(),
+            label: if account.display_label.is_empty() {
+                format!("Remote {}", provider_display_name(provider))
+            } else {
+                account.display_label.clone()
+            },
+            email: nonempty(&account.email),
+            organization: nonempty(&account.organization),
+            role: None,
+            plan: nonempty(&account.plan_tier),
+            is_default: account.is_default,
+            health: account.health.clone(),
+            status: "offline".to_string(),
+            usage_provenance: if account.capacity_known && account.health == "loaded" {
+                account.usage_provenance.clone()
+            } else {
+                "unknown".to_string()
+            },
+            usage: None,
+            sessions: Vec::new(),
+        });
+    }
+    Ok(accounts)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn remote_provider(value: &str) -> Option<Provider> {
+    match value {
+        "claude" => Some(Provider::Claude),
+        "codex" => Some(Provider::Codex),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn valid_remote_value(value: &str, max_bytes: usize, allow_empty: bool) -> bool {
+    (allow_empty || !value.is_empty())
+        && value.len() <= max_bytes
+        && !value.chars().any(char::is_control)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn valid_capacity(value: f64) -> bool {
+    value.is_finite() && (0.0..=1.0).contains(&value)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn remote_account_document_id(host_id: &str, provider: Provider, account_id: &str) -> String {
+    opaque_id(
+        "remote-account",
+        &[host_id, provider_name(provider), account_id],
+    )
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -598,6 +800,8 @@ fn matching_account<'a>(
         if match_.is_some() && by_config.next().is_none() {
             return match_;
         }
+    } else {
+        return None;
     }
 
     let email = session.account_email.as_deref()?;
@@ -613,21 +817,29 @@ fn matching_account<'a>(
 fn synthetic_account_id(
     session: &SessionSnapshot,
     host_id: &str,
+    remote_host_identity: Option<&str>,
     accounts: &mut Vec<AccountDocument>,
 ) -> String {
     let provider = provider_name(session.provider);
     let (identity_kind, identity) = match (
+        session.account_id.as_deref(),
         session.config_dir.as_deref(),
         session.account_email.as_deref(),
     ) {
-        (Some(config_dir), _) => ("config", config_dir),
-        (None, Some(email)) => ("email", email),
-        (None, None) => ("session", session.session_id.as_str()),
+        (Some(account_id), _, _) => ("account-id", account_id),
+        (None, Some(config_dir), _) => ("config", config_dir),
+        (None, None, Some(email)) => ("email", email),
+        (None, None, None) => ("session", session.session_id.as_str()),
     };
-    let id = opaque_id(
-        "remote-account",
-        &[provider, host_id, identity_kind, identity],
-    );
+    let id = match (remote_host_identity, session.account_id.as_deref()) {
+        (Some(host_identity), Some(account_id)) => {
+            remote_account_document_id(host_identity, session.provider, account_id)
+        }
+        (None, _) | (Some(_), None) => opaque_id(
+            "remote-account",
+            &[provider, host_id, identity_kind, identity],
+        ),
+    };
     if let Some(account) = accounts.iter_mut().find(|account| account.id == id) {
         if session.state == SessionState::Active {
             account.status = "working".to_string();
@@ -637,6 +849,7 @@ fn synthetic_account_id(
 
     accounts.push(AccountDocument {
         id: id.clone(),
+        host_id: host_id.to_string(),
         provider: provider.to_string(),
         label: session
             .account_email
@@ -647,6 +860,7 @@ fn synthetic_account_id(
         role: None,
         plan: None,
         is_default: false,
+        health: "degraded".to_string(),
         status: if session.state == SessionState::Active {
             "working"
         } else {

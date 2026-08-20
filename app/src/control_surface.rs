@@ -19,7 +19,8 @@ use warp_cli::cockpit::CockpitCommand;
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::cockpit::{
     CockpitSnapshotDocument, CockpitSnapshotRequest, CockpitSnapshotResponse,
-    CockpitSnapshotService, COCKPIT_SNAPSHOT_PROTOCOL_VERSION,
+    CockpitSnapshotService, RemoteAccountInventorySnapshot, RemoteAccountInventoryStatus,
+    RemoteAccountSnapshot, COCKPIT_SNAPSHOT_PROTOCOL_VERSION,
 };
 use warp_cli::control::{
     ControlAuth, ControlCommand, ControlFailureCode, ControlOrientation, ControlRequest,
@@ -34,6 +35,10 @@ use crate::cockpit::CockpitModel;
 use crate::pane_group::{tree::Direction, PaneGroup};
 use crate::terminal::TerminalView;
 use crate::workspace::{Workspace, WorkspaceRegistry};
+#[cfg(not(target_family = "wasm"))]
+use remote_server::{
+    client::RemoteServerClient, manager::RemoteServerManager, proto::AgentAccountInventory,
+};
 
 static CONTROL_ADDRESS: OnceLock<String> = OnceLock::new();
 const CODEWHALE_TOOL_AUDIT_LOG_ENV: &str = "CODEWHALE_TOOL_AUDIT_LOG";
@@ -224,6 +229,20 @@ struct ControlEnvelope {
 struct CockpitSnapshotEnvelope {
     request: CockpitSnapshotRequest,
     response_tx: oneshot::Sender<CockpitSnapshotResponse>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+struct RemoteAccountFetch {
+    host_id: String,
+    connection: Arc<RemoteServerClient>,
+    outcome: RemoteAccountFetchOutcome,
+}
+
+#[cfg(not(target_family = "wasm"))]
+enum RemoteAccountFetchOutcome {
+    Inventory(AgentAccountInventory),
+    Unsupported,
+    Unavailable,
 }
 
 #[derive(Clone)]
@@ -500,9 +519,65 @@ impl ControlSurfaceServer {
             return;
         }
 
-        let model = CockpitModel::as_ref(ctx);
-        let document = CockpitSnapshotDocument::from_runtime(model.snapshot(), model.inventory());
-        let _ = response_tx.send(CockpitSnapshotResponse::success(document));
+        let daemons = RemoteServerManager::as_ref(ctx).connected_daemons();
+        let requests = daemons.into_iter().map(|daemon| async move {
+            let outcome = if daemon.features.iter().any(|feature| {
+                feature == zaplex_remote_session::types::FEATURE_AGENT_ACCOUNT_ROUTING_V1
+            }) {
+                match daemon.client.list_agent_accounts().await {
+                    Ok(inventory) => RemoteAccountFetchOutcome::Inventory(inventory),
+                    Err(error) => {
+                        log::warn!(
+                            "Cockpit snapshot account inventory failed for host {:?}: {error}",
+                            daemon.host_label
+                        );
+                        RemoteAccountFetchOutcome::Unavailable
+                    }
+                }
+            } else {
+                RemoteAccountFetchOutcome::Unsupported
+            };
+            RemoteAccountFetch {
+                host_id: daemon.host_id,
+                connection: daemon.client,
+                outcome,
+            }
+        });
+        ctx.spawn(
+            async move { futures::future::join_all(requests).await },
+            move |_, fetched, ctx| {
+                let current = RemoteServerManager::as_ref(ctx).connected_daemons();
+                let inventories = current
+                    .iter()
+                    .map(|daemon| {
+                        fetched
+                            .iter()
+                            .find(|fetch| {
+                                same_connection(
+                                    &fetch.host_id,
+                                    &fetch.connection,
+                                    &daemon.host_id,
+                                    &daemon.client,
+                                )
+                            })
+                            .map(|fetch| {
+                                remote_account_inventory_snapshot(&fetch.host_id, &fetch.outcome)
+                            })
+                            .unwrap_or_else(|| {
+                                unavailable_remote_account_inventory(&daemon.host_id)
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                let model = CockpitModel::as_ref(ctx);
+                let document = CockpitSnapshotDocument::from_runtime(
+                    model.snapshot(),
+                    model.inventory(),
+                    &inventories,
+                );
+                let _ = response_tx.send(CockpitSnapshotResponse::success(document));
+            },
+        )
+        .detach();
     }
 
     fn open_worktree(
@@ -735,6 +810,69 @@ fn cockpit_unauthorized_failure() -> CockpitSnapshotResponse {
 #[cfg(not(target_family = "wasm"))]
 fn cockpit_internal_failure(message: &str) -> CockpitSnapshotResponse {
     CockpitSnapshotResponse::failure(ControlFailureCode::Internal, message)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn same_connection<T>(
+    expected_host_id: &str,
+    expected_connection: &Arc<T>,
+    current_host_id: &str,
+    current_connection: &Arc<T>,
+) -> bool {
+    expected_host_id == current_host_id && Arc::ptr_eq(expected_connection, current_connection)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn remote_account_inventory_snapshot(
+    host_id: &str,
+    outcome: &RemoteAccountFetchOutcome,
+) -> RemoteAccountInventorySnapshot {
+    match outcome {
+        RemoteAccountFetchOutcome::Inventory(inventory) => RemoteAccountInventorySnapshot {
+            host_id: host_id.to_string(),
+            schema_version: inventory.schema_version,
+            status: match (inventory.schema_version, inventory.health.as_str()) {
+                (1, "loaded") => RemoteAccountInventoryStatus::Loaded,
+                (1, "degraded") => RemoteAccountInventoryStatus::Degraded,
+                (_, _) => RemoteAccountInventoryStatus::Invalid,
+            },
+            accounts: inventory
+                .accounts
+                .iter()
+                .map(|account| RemoteAccountSnapshot {
+                    provider: account.provider.clone(),
+                    account_id: account.account_id.clone(),
+                    display_label: account.display_label.clone(),
+                    email: account.email.clone(),
+                    organization: account.organization.clone(),
+                    plan_tier: account.plan_tier.clone(),
+                    is_default: account.is_default,
+                    capacity_5h: account.capacity_5h,
+                    capacity_week: account.capacity_week,
+                    capacity_known: account.capacity_known,
+                    health: account.health.clone(),
+                    usage_provenance: account.usage_provenance.clone(),
+                })
+                .collect(),
+        },
+        RemoteAccountFetchOutcome::Unsupported => RemoteAccountInventorySnapshot {
+            host_id: host_id.to_string(),
+            schema_version: 0,
+            status: RemoteAccountInventoryStatus::Unsupported,
+            accounts: Vec::new(),
+        },
+        RemoteAccountFetchOutcome::Unavailable => unavailable_remote_account_inventory(host_id),
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn unavailable_remote_account_inventory(host_id: &str) -> RemoteAccountInventorySnapshot {
+    RemoteAccountInventorySnapshot {
+        host_id: host_id.to_string(),
+        schema_version: 0,
+        status: RemoteAccountInventoryStatus::Unavailable,
+        accounts: Vec::new(),
+    }
 }
 
 fn not_found_failure(message: &str) -> ControlResponse {

@@ -152,7 +152,9 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::SessionOutput { .. }
             | RemoteServerManagerEvent::SessionExited { .. }
             // Advisory notices are rendered by the daemon tab + workspace.
-            | RemoteServerManagerEvent::SessionNotice { .. } => {}
+            | RemoteServerManagerEvent::SessionNotice { .. }
+            | RemoteServerManagerEvent::ManagedLaunchOpened { .. }
+            | RemoteServerManagerEvent::ManagedLaunchFailed { .. } => {}
         });
 
         Self {

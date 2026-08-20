@@ -750,6 +750,42 @@ fn transcript_loader_rejects_a_path_replaced_after_resolution() {
 
     assert!(matches!(
         read_resolved_transcript(resolved),
+        Err(TranscriptError::MalformedTranscript)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_loader_rejects_a_provider_root_replaced_after_resolution() {
+    use std::os::unix::fs::symlink;
+
+    let base = tempfile::tempdir().unwrap();
+    let replacement = tempfile::tempdir().unwrap();
+    let home = base.path().join("codex-home");
+    let id = "019f135f-7fcc-7d93-8a28-4835d98f8f0a";
+    let original_path = write_rollout(
+        &home,
+        &format!("rollout-2026-07-07T12-00-00-{id}.jsonl"),
+        &[
+            session_meta("/tmp/project", id),
+            response_message("assistant", "output_text", "original"),
+        ],
+    );
+    let relative_path = original_path.strip_prefix(&home).unwrap().to_path_buf();
+    let resolved = resolve_transcript(&home, id).unwrap().unwrap();
+
+    fs::rename(&home, base.path().join("codex-home-original")).unwrap();
+    let replacement_path = replacement.path().join(&relative_path);
+    fs::create_dir_all(replacement_path.parent().unwrap()).unwrap();
+    fs::hard_link(
+        base.path().join("codex-home-original").join(relative_path),
+        replacement_path,
+    )
+    .unwrap();
+    symlink(replacement.path(), &home).unwrap();
+
+    assert!(matches!(
+        read_resolved_transcript(resolved),
         Err(TranscriptError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidData
     ));
 }
@@ -912,4 +948,58 @@ fn transcript_loader_reports_unsupported_malformed_and_oversized_rollouts() {
         load_transcript(tmp.path(), oversized_id),
         Err(TranscriptError::TranscriptTooLarge { .. })
     ));
+}
+
+#[test]
+fn transcript_loader_rejects_rollouts_over_the_line_limit_before_parsing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let id = "01a010e4-2d09-7620-952c-0fa2a5acbe7c";
+    let path = write_rollout(
+        tmp.path(),
+        &format!("rollout-2026-08-14T17-29-08-{id}.jsonl"),
+        &[],
+    );
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    for _ in 0..=TRANSCRIPT_MAX_LINES {
+        writeln!(file, "{{}}").unwrap();
+    }
+
+    assert!(matches!(
+        load_transcript(tmp.path(), id),
+        Err(TranscriptError::TranscriptTooLarge { .. })
+    ));
+}
+
+#[test]
+fn transcript_revision_is_stable_until_visible_source_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let id = "01a100e4-2d09-7620-952c-0fa2a5acbe7c";
+    let path = write_rollout(
+        tmp.path(),
+        &format!("rollout-2026-08-14T17-29-08-{id}.jsonl"),
+        &[
+            session_meta("/tmp/project", id),
+            response_message("assistant", "output_text", "first"),
+        ],
+    );
+    let first = load_transcript_with_revision(tmp.path(), id)
+        .unwrap()
+        .unwrap();
+    let unchanged = load_transcript_with_revision(tmp.path(), id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.source_revision, unchanged.source_revision);
+
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    writeln!(
+        file,
+        "{}",
+        response_message("assistant", "output_text", "second")
+    )
+    .unwrap();
+    let changed = load_transcript_with_revision(tmp.path(), id)
+        .unwrap()
+        .unwrap();
+    assert_ne!(first.source_revision, changed.source_revision);
+    assert_eq!(changed.turns.last().unwrap().text, "second");
 }
