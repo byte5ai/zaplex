@@ -529,8 +529,7 @@ pub(crate) fn managed_fleet_details_from_proto_at(
             .and_then(|measurement| measurement.bytes),
         session.daemon_min_available_bytes,
     ) {
-        (Some(available), floor) if floor > 0 => available < floor,
-        (Some(_), 0) => false,
+        (Some(available), floor) => floor > 0 && available < floor,
         (None, _) => true,
     };
     let host_headroom = if host_headroom.health == FleetDetailHealth::Normal

@@ -6390,10 +6390,14 @@ impl Workspace {
     ) {
         let pane = CodePane::new_generated_read_only(
             crate::cockpit::transcript_view::transcript_title(target.provider()),
-            &document.markdown,
+            document.markdown.clone(),
             ctx,
         );
-        let Some(buffer) = pane.generated_read_only_buffer(ctx) else {
+        let Some(buffer) = pane
+            .file_view(ctx)
+            .as_ref(ctx)
+            .generated_read_only_buffer(ctx)
+        else {
             self.show_transcript_open_error(ctx);
             return;
         };
@@ -6434,15 +6438,14 @@ impl Workspace {
             return;
         }
         self.transcript_refresh_timer_active = true;
-        ctx.spawn(
+        let _ = ctx.spawn(
             async move { warpui::r#async::Timer::after(REFRESH_INTERVAL).await },
-            |me, (), ctx| {
+            |me, _, ctx| {
                 me.transcript_refresh_timer_active = false;
                 me.refresh_watched_transcripts(ctx);
                 me.schedule_transcript_refresh(ctx);
             },
-        )
-        .detach();
+        );
     }
 
     fn transcript_document_key(

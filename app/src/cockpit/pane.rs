@@ -3932,10 +3932,10 @@ impl TypedActionView for CockpitPaneView {
                         ctx.notify();
                     }
                     EditorEvent::Enter => {
-                        ctx.dispatch_typed_action(CockpitPaneAction::ConfirmSessionRename);
+                        ctx.dispatch_typed_action(&CockpitPaneAction::ConfirmSessionRename);
                     }
                     EditorEvent::Escape => {
-                        ctx.dispatch_typed_action(CockpitPaneAction::CancelSessionLifecycleDialog);
+                        ctx.dispatch_typed_action(&CockpitPaneAction::CancelSessionLifecycleDialog);
                     }
                     _ => {}
                 });
@@ -3965,7 +3965,7 @@ impl TypedActionView for CockpitPaneView {
                 match crate::cockpit::session_lifecycle::validate_session_name(&requested) {
                     Ok(name) => {
                         self.session_lifecycle_dialog = None;
-                        ctx.dispatch_typed_action(WorkspaceAction::RenameAgentSession {
+                        ctx.dispatch_typed_action(&WorkspaceAction::RenameAgentSession {
                             route,
                             name,
                         });
@@ -4010,7 +4010,7 @@ impl TypedActionView for CockpitPaneView {
                     return;
                 };
                 self.session_lifecycle_dialog = None;
-                ctx.dispatch_typed_action(WorkspaceAction::CleanupStaleClaudeSession {
+                ctx.dispatch_typed_action(&WorkspaceAction::CleanupStaleClaudeSession {
                     route,
                     candidate,
                 });

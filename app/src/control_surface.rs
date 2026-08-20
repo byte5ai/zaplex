@@ -12,7 +12,6 @@ use std::sync::{Arc, OnceLock};
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use futures::channel::oneshot;
-use ipc::ServiceCaller as _;
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 use warp_cli::cockpit::CockpitCommand;
@@ -543,7 +542,7 @@ impl ControlSurfaceServer {
                 outcome,
             }
         });
-        ctx.spawn(
+        let _ = ctx.spawn(
             async move { futures::future::join_all(requests).await },
             move |_, fetched, ctx| {
                 let current = RemoteServerManager::as_ref(ctx).connected_daemons();
@@ -576,8 +575,7 @@ impl ControlSurfaceServer {
                 );
                 let _ = response_tx.send(CockpitSnapshotResponse::success(document));
             },
-        )
-        .detach();
+        );
     }
 
     fn open_worktree(

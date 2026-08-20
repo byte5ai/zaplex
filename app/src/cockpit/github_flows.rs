@@ -1016,20 +1016,24 @@ pub async fn run_structured_analysis(
         .map_err(|error| GitHubFlowError::CommandFailed(error.to_string()))?;
     let mut text = String::new();
     loop {
-        let event = match futures_util::future::select(
+        let next_event = match futures_util::future::select(
             Box::pin(session.next_event()),
             Box::pin(warpui::r#async::Timer::after(ANALYSIS_IDLE_TIMEOUT)),
         )
         .await
         {
-            futures_util::future::Either::Left((event, _)) => event
+            futures_util::future::Either::Left((event, _)) => Some(event),
+            futures_util::future::Either::Right((_, _)) => None,
+        };
+        let event = match next_event {
+            Some(event) => event
                 .map_err(|error| GitHubFlowError::CommandFailed(error.to_string()))?
                 .ok_or_else(|| {
                     GitHubFlowError::CommandFailed(
                         "The analysis agent ended without a result".to_string(),
                     )
                 })?,
-            futures_util::future::Either::Right((_, _)) => {
+            None => {
                 let _ = session.cancel().await;
                 return Err(GitHubFlowError::CommandFailed(
                     "The analysis agent was idle for 5 minutes".to_string(),

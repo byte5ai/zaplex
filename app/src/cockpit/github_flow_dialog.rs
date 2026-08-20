@@ -17,7 +17,7 @@ use warpui::ui_components::{
     button::ButtonVariant,
     components::{Coords, UiComponent, UiComponentStyles},
 };
-use warpui::{AppContext, Entity, TypedActionView, View, ViewContext};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::appearance::Appearance;
 use crate::cockpit::github_flows::{
@@ -559,9 +559,9 @@ impl GitHubFlowDialog {
             .with_style(UiComponentStyles {
                 font_size: Some(size),
                 font_color: Some(if muted {
-                    theme.disabled_text_color(theme.surface_1())
+                    theme.disabled_text_color(theme.surface_1()).into()
                 } else {
-                    theme.main_text_color(theme.surface_1())
+                    theme.main_text_color(theme.surface_1()).into()
                 }),
                 ..Default::default()
             })

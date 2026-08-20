@@ -745,6 +745,7 @@ impl SpawnCard {
         result: Result<String, String>,
         ctx: &mut ViewContext<Self>,
     ) {
+        let history_host = self.history_host();
         let Some(ledger) = self.bulk_launch.as_mut() else {
             return;
         };
@@ -760,10 +761,9 @@ impl SpawnCard {
                 .next()
                 .and_then(|target| target.cwd.as_deref())
             {
-                let host = self.history_host();
                 if let Err(error) =
                     self.folder_history
-                        .record_success(&host, path, chrono::Utc::now())
+                        .record_success(&history_host, path, chrono::Utc::now())
                 {
                     log::error!("failed to record spawn-folder history: {error:#}");
                 }

@@ -1057,7 +1057,7 @@ impl CockpitPanel {
                 Shrinkable::new(1.0, Self::identity_text(label, family, body, main)).finish(),
             );
         if is_managed {
-            glance = glance.with_child(Self::text("◆", family, body, muted));
+            glance = glance.with_child(Self::text("◆".to_string(), family, body, muted));
         }
         let glance = glance.with_main_axis_size(MainAxisSize::Max).finish();
 

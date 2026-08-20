@@ -3422,7 +3422,7 @@ impl ServerModel {
         let fresh_routes_for_test = self.fresh_agent_account_routes_for_test.clone();
         let handle = self.spawn_request_handler(
             request_id.clone(),
-            ctx.background_executor().spawn(async move {
+            async move {
                 #[cfg(test)]
                 let routes = match fresh_routes_for_test {
                     Some(routes) => routes,
@@ -3439,7 +3439,7 @@ impl ServerModel {
                 let memory =
                     daemon_floor.map(|_| super::fleet_memory::collect_host_memory(collected_at));
                 (routes, route_current, project_current, memory)
-            }),
+            },
             move |me, (routes, route_current, project_current, memory), ctx| {
                 me.agent_account_routes.replace(routes);
                 let target_current = if live_target {
@@ -3861,7 +3861,7 @@ impl ServerModel {
         let fresh_routes_for_test = self.fresh_agent_account_routes_for_test.clone();
         let handle = self.spawn_request_handler(
             request_id.clone(),
-            ctx.background_executor().spawn(async move {
+            async move {
                 #[cfg(test)]
                 let routes = match fresh_routes_for_test {
                     Some(routes) => routes,
@@ -3872,7 +3872,7 @@ impl ServerModel {
                 let route_identity = fresh_managed_launch_identity(&routes, &plan_for_preflight);
                 let snapshot = super::fleet_memory::collect_host_memory(collected_at);
                 (routes, route_identity, snapshot)
-            }),
+            },
             move |me, (routes, route_identity, snapshot), ctx| {
                 me.agent_account_routes.replace(routes);
                 let project_current = plan.project_identity_is_current();
@@ -4807,7 +4807,7 @@ impl ServerModel {
         let request_id_for_response = request_id.clone();
         let handle = self.spawn_request_handler(
             request_id.clone(),
-            ctx.background_executor().spawn(async move {
+            async move {
                 let _memory_permit = memory_permit;
                 let host = super::fleet_memory::collect_host_memory(collected_at_epoch_millis);
                 let sessions = sessions
@@ -4837,7 +4837,7 @@ impl ServerModel {
                     collected_at_epoch_millis,
                     recent_managed_exits,
                 }
-            }),
+            },
             move |me, inventory, _ctx| {
                 me.send_server_message(
                     Some(conn_id),
