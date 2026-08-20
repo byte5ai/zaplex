@@ -84,7 +84,7 @@ impl FolderHistory {
     }
 
     #[cfg(test)]
-    fn empty() -> Self {
+    pub(super) fn empty() -> Self {
         Self {
             persisted: PersistedFolderHistory::default(),
             file_state: HistoryFileState::Missing,

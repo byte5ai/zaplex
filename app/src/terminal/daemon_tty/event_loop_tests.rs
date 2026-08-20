@@ -1435,8 +1435,8 @@ fn connect_failure_writes_a_visible_notice() {
         let conn = SessionId::from(11u64);
         let (_manager, event_loop, _model, wakeups_rx) = start_adopted_loop(&mut app, conn);
         drain(&wakeups_rx);
-        event_loop.update(&mut app, |me, _| {
-            me.on_connect_failed("Connect", "ssh: connect timed out")
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_connect_failed("Connect", "ssh: connect timed out", ctx)
         });
         assert!(
             !wakeups_rx.is_empty(),

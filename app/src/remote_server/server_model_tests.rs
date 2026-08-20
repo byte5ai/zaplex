@@ -1014,7 +1014,8 @@ mod daemon_session {
     use std::time::Duration;
     use warpui::App;
     use zaplex_remote_session::types::{
-        FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
+        FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_TRANSCRIPT_READ_V1,
+        FEATURE_MANAGED_AGENT_FLEET_V1,
     };
 
     /// Awaits `rx.recv()` but gives up after `dur` so a stuck test fails instead

@@ -481,12 +481,9 @@ fn watch_state_allows_one_refresh_and_rejects_late_generations() {
 
 #[test]
 fn watch_lifetime_stops_for_closed_missing_or_dormant_documents() {
-    assert!(should_follow_transcript(true, Some(SessionState::Running)));
+    assert!(should_follow_transcript(true, Some(SessionState::Active)));
     assert!(should_follow_transcript(true, Some(SessionState::Waiting)));
-    assert!(!should_follow_transcript(
-        false,
-        Some(SessionState::Running)
-    ));
+    assert!(!should_follow_transcript(false, Some(SessionState::Active)));
     assert!(!should_follow_transcript(true, Some(SessionState::Idle)));
     assert!(!should_follow_transcript(true, None));
 }
