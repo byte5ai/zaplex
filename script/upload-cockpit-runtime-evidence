@@ -1,0 +1,435 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly ASSET_NAME="cockpit-runtime-smoke.zip"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  script/upload-cockpit-runtime-evidence \
+    --evidence-dir <directory> \
+    --zaplex-revision <40-character lowercase SHA>
+
+Validates and uploads a sanitized Cockpit runtime bundle to a draft GitHub
+release named cockpit-runtime-evidence-<SHA>. The helper never publishes the
+release and refuses to replace an existing asset.
+EOF
+}
+
+evidence_dir=""
+zaplex_revision=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --evidence-dir)
+      [[ $# -ge 2 ]] || { echo "--evidence-dir requires a value" >&2; exit 2; }
+      evidence_dir="$2"
+      shift 2
+      ;;
+    --zaplex-revision)
+      [[ $# -ge 2 ]] || { echo "--zaplex-revision requires a value" >&2; exit 2; }
+      zaplex_revision="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+[[ -n "$evidence_dir" ]] || { echo "--evidence-dir is required" >&2; exit 2; }
+if [[ ! "$zaplex_revision" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "--zaplex-revision must be a 40-character lowercase SHA" >&2
+  exit 2
+fi
+
+for required_command in git python3 gho getpat; do
+  if ! command -v "$required_command" >/dev/null 2>&1; then
+    echo "required command is unavailable: $required_command" >&2
+    exit 2
+  fi
+done
+
+readonly invocation_directory="$PWD"
+root="$(git -C "$(dirname "${BASH_SOURCE[0]}")/.." rev-parse --show-toplevel)"
+readonly root
+if [[ "$evidence_dir" != /* ]]; then
+  evidence_dir="${invocation_directory}/${evidence_dir}"
+fi
+
+cd "$root"
+readonly repository="byte5ai/zaplex"
+origin_url="$(git remote get-url origin)"
+if [[ "$origin_url" != "https://github.com/${repository}.git" && "$origin_url" != "git@github.com:${repository}.git" ]]; then
+  echo "refusing runtime evidence upload from an unexpected origin: ${origin_url}" >&2
+  exit 2
+fi
+pat_path="$(getpat)"
+readonly pat_path
+readonly release_tag="cockpit-runtime-evidence-${zaplex_revision}"
+temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/cockpit-runtime-evidence.XXXXXX")"
+readonly temporary_directory
+trap 'rm -rf -- "$temporary_directory"' EXIT
+readonly staged_directory="${temporary_directory}/runtime-smoke"
+readonly archive_path="${temporary_directory}/${ASSET_NAME}"
+mkdir -m 700 "$staged_directory"
+
+python3 - "$evidence_dir" "$staged_directory" <<'PY'
+from pathlib import Path
+import json
+import os
+import stat
+import struct
+import sys
+import zlib
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+limits = {
+    "observations.json": 64 * 1024,
+    "versions.txt": 8 * 1024,
+    "local-claude.png": 20 * 1024 * 1024,
+    "local-codex.png": 20 * 1024 * 1024,
+    "remote-host.png": 20 * 1024 * 1024,
+    "reattach.png": 20 * 1024 * 1024,
+}
+directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+source_directory = os.open(source, directory_flags)
+try:
+    actual_names = set(os.listdir(source_directory))
+    if actual_names != set(limits):
+        missing = sorted(set(limits) - actual_names)
+        extra = sorted(actual_names - set(limits))
+        raise SystemExit(
+            f"runtime evidence file set differs; missing={missing}, extra={extra}"
+        )
+    for name, limit in limits.items():
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=source_directory,
+        )
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode):
+                raise SystemExit(f"runtime evidence is not a regular file: {name}")
+            if before.st_size > limit:
+                raise SystemExit(f"runtime evidence exceeds its size limit: {name}")
+            remaining = before.st_size
+            with (destination / name).open("xb") as destination_file:
+                while remaining:
+                    chunk = os.read(descriptor, min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise SystemExit(f"runtime evidence shrank while copying: {name}")
+                    destination_file.write(chunk)
+                    remaining -= len(chunk)
+                if os.read(descriptor, 1):
+                    raise SystemExit(f"runtime evidence grew while copying: {name}")
+            after = os.fstat(descriptor)
+            before_identity = (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            )
+            after_identity = (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            )
+            if after_identity != before_identity:
+                raise SystemExit(f"runtime evidence changed while copying: {name}")
+            (destination / name).chmod(0o600)
+        finally:
+            os.close(descriptor)
+finally:
+    os.close(source_directory)
+
+
+def reject_duplicate_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise SystemExit(f"observations.json contains duplicate key: {key}")
+        value[key] = item
+    return value
+
+
+observations_path = destination / "observations.json"
+try:
+    observations = json.loads(
+        observations_path.read_text(encoding="utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+    )
+except (UnicodeError, json.JSONDecodeError) as error:
+    raise SystemExit(f"cannot canonicalize observations.json: {error}") from error
+observations_path.write_text(
+    json.dumps(observations, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+
+version_order = [
+    "zaplex_revision",
+    "claude_version",
+    "codex_version",
+    "remote_provider",
+    "remote_provider_version",
+]
+versions = {}
+try:
+    version_lines = (destination / "versions.txt").read_text(encoding="utf-8").splitlines()
+except UnicodeError as error:
+    raise SystemExit(f"cannot canonicalize versions.txt: {error}") from error
+for line in version_lines:
+    if "=" not in line:
+        raise SystemExit("versions.txt contains a non-key-value line")
+    key, value = line.split("=", 1)
+    if key not in version_order or key in versions:
+        raise SystemExit(f"versions.txt contains an unknown or duplicate key: {key}")
+    versions[key] = value.strip()
+if set(versions) != set(version_order):
+    raise SystemExit("versions.txt does not contain the exact key set")
+(destination / "versions.txt").write_text(
+    "".join(f"{key}={versions[key]}\n" for key in version_order),
+    encoding="utf-8",
+)
+
+
+def strip_png_metadata(path):
+    source_bytes = path.read_bytes()
+    signature = b"\x89PNG\r\n\x1a\n"
+    if not source_bytes.startswith(signature):
+        raise SystemExit(f"runtime screenshot is not PNG: {path.name}")
+    output = bytearray(signature)
+    offset = len(signature)
+    saw_iend = False
+    critical_chunks = {b"IHDR", b"PLTE", b"IDAT", b"IEND"}
+    while offset + 12 <= len(source_bytes):
+        length = struct.unpack(">I", source_bytes[offset : offset + 4])[0]
+        chunk_type = source_bytes[offset + 4 : offset + 8]
+        chunk_end = offset + 12 + length
+        if chunk_end > len(source_bytes):
+            raise SystemExit(f"runtime screenshot contains a truncated chunk: {path.name}")
+        chunk = source_bytes[offset:chunk_end]
+        chunk_data = source_bytes[offset + 8 : offset + 8 + length]
+        expected_crc = struct.unpack(">I", source_bytes[offset + 8 + length : chunk_end])[0]
+        actual_crc = zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF
+        if actual_crc != expected_crc:
+            raise SystemExit(f"runtime screenshot contains an invalid checksum: {path.name}")
+        if chunk_type in critical_chunks:
+            output.extend(chunk)
+        elif not chunk_type or chunk_type[0] & 0x20 == 0:
+            raise SystemExit(f"runtime screenshot contains an unknown critical chunk: {path.name}")
+        if chunk_type == b"IEND":
+            if length != 0 or chunk_end != len(source_bytes):
+                raise SystemExit(f"runtime screenshot has an invalid IEND: {path.name}")
+            saw_iend = True
+            break
+        offset = chunk_end
+    if not saw_iend:
+        raise SystemExit(f"runtime screenshot is incomplete: {path.name}")
+    path.write_bytes(output)
+    path.chmod(0o600)
+
+
+for screenshot_name in (
+    "local-claude.png",
+    "local-codex.png",
+    "remote-host.png",
+    "reattach.png",
+):
+    strip_png_metadata(destination / screenshot_name)
+PY
+
+# Only the private, size-bounded and metadata-free staging copy is validated
+# and archived; source files can never bypass canonicalization.
+script/cockpit-parity-audit validate-runtime \
+  --evidence-dir "$staged_directory" \
+  --expected-zaplex-revision "$zaplex_revision" \
+  --require-pass \
+  --output "${temporary_directory}/staged-validation.json"
+
+python3 - "$staged_directory" "$archive_path" <<'PY'
+from pathlib import Path
+import stat
+import sys
+import zipfile
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+names = [
+    "local-claude.png",
+    "local-codex.png",
+    "observations.json",
+    "reattach.png",
+    "remote-host.png",
+    "versions.txt",
+]
+
+with zipfile.ZipFile(
+    destination,
+    mode="w",
+    compression=zipfile.ZIP_STORED,
+) as archive:
+    for name in names:
+        info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_STORED
+        info.create_system = 3
+        info.external_attr = (stat.S_IFREG | 0o600) << 16
+        archive.writestr(info, (source / name).read_bytes())
+PY
+
+resolved_revision="$(gho "$pat_path" api "repos/${repository}/commits/${zaplex_revision}" --jq .sha)"
+if [[ "$resolved_revision" != "$zaplex_revision" ]]; then
+  echo "the requested revision does not resolve exactly in ${repository}" >&2
+  exit 1
+fi
+main_revision="$(gho "$pat_path" api "repos/${repository}/commits/main" --jq .sha)"
+if [[ "$main_revision" != "$zaplex_revision" ]]; then
+  echo "runtime evidence may be seeded only for the exact current main revision" >&2
+  exit 1
+fi
+
+matching_refs="$(gho "$pat_path" api "repos/${repository}/git/matching-refs/tags/${release_tag}")"
+if [[ "$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' <<<"$matching_refs")" != "0" ]]; then
+  echo "refusing evidence upload because a real Git tag already exists: ${release_tag}" >&2
+  exit 1
+fi
+
+readonly releases_path="${temporary_directory}/releases.json"
+gho "$pat_path" api --paginate "repos/${repository}/releases?per_page=100" > "$releases_path"
+release_count="$(python3 - "$releases_path" "$release_tag" <<'PY'
+import json
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+decoder = json.JSONDecoder()
+pages = []
+offset = 0
+while offset < len(text):
+    while offset < len(text) and text[offset].isspace():
+        offset += 1
+    if offset == len(text):
+        break
+    page, offset = decoder.raw_decode(text, offset)
+    if not isinstance(page, list):
+        raise SystemExit("GitHub releases response is not a list")
+    pages.append(page)
+tag = sys.argv[2]
+print(sum(1 for page in pages for release in page if release.get("tag_name") == tag))
+PY
+)"
+if [[ "$release_count" -gt 1 ]]; then
+  echo "multiple releases unexpectedly use ${release_tag}" >&2
+  exit 1
+fi
+if [[ "$release_count" == "0" ]]; then
+  gho "$pat_path" release create "$release_tag" \
+    --repo "$repository" \
+    --target "$zaplex_revision" \
+    --draft \
+    --title "Cockpit runtime evidence ${zaplex_revision:0:12}" \
+    --notes "Draft-only transport for a sanitized Cockpit runtime evidence bundle bound to ${zaplex_revision}."
+fi
+
+readonly release_path="${temporary_directory}/release.json"
+gho "$pat_path" api --paginate "repos/${repository}/releases?per_page=100" > "$releases_path"
+python3 - "$releases_path" "$release_path" "$release_tag" "$zaplex_revision" <<'PY'
+import json
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+decoder = json.JSONDecoder()
+releases = []
+offset = 0
+while offset < len(text):
+    while offset < len(text) and text[offset].isspace():
+        offset += 1
+    if offset == len(text):
+        break
+    page, offset = decoder.raw_decode(text, offset)
+    if not isinstance(page, list):
+        raise SystemExit("GitHub releases response is not a list")
+    releases.extend(page)
+output_path, tag, revision = sys.argv[2:]
+matches = [release for release in releases if release.get("tag_name") == tag]
+if len(matches) != 1:
+    raise SystemExit("expected exactly one matching draft release")
+release = matches[0]
+if release.get("tag_name") != tag:
+    raise SystemExit("draft release tag does not match")
+if release.get("draft") is not True:
+    raise SystemExit("refusing to upload runtime evidence to a published release")
+if release.get("target_commitish") != revision:
+    raise SystemExit("draft release is not bound to the requested revision")
+if release.get("assets"):
+    raise SystemExit("draft release already contains assets; refusing replacement or mixing")
+with open(output_path, "w", encoding="utf-8") as output:
+    json.dump(release, output, sort_keys=True)
+PY
+
+gho "$pat_path" release upload "$release_tag" "$archive_path" --repo "$repository"
+
+readonly uploaded_release_path="${temporary_directory}/uploaded-release.json"
+gho "$pat_path" api --paginate "repos/${repository}/releases?per_page=100" > "$releases_path"
+python3 - "$releases_path" "$uploaded_release_path" "$release_tag" "$zaplex_revision" "$ASSET_NAME" <<'PY'
+import json
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+decoder = json.JSONDecoder()
+releases = []
+offset = 0
+while offset < len(text):
+    while offset < len(text) and text[offset].isspace():
+        offset += 1
+    if offset == len(text):
+        break
+    page, offset = decoder.raw_decode(text, offset)
+    if not isinstance(page, list):
+        raise SystemExit("GitHub releases response is not a list")
+    releases.extend(page)
+output_path, tag, revision, asset_name = sys.argv[2:]
+matches = [release for release in releases if release.get("tag_name") == tag]
+if len(matches) != 1:
+    raise SystemExit("expected exactly one matching draft release after upload")
+release = matches[0]
+assets = [asset for asset in release.get("assets", []) if asset.get("name") == asset_name]
+if (
+    release.get("draft") is not True
+    or release.get("target_commitish") != revision
+    or len(assets) != 1
+    or len(release.get("assets", [])) != 1
+):
+    raise SystemExit("uploaded draft release did not retain exactly the expected asset")
+with open(output_path, "w", encoding="utf-8") as output:
+    json.dump(release, output, sort_keys=True)
+PY
+
+archive_sha256="$(python3 - "$archive_path" <<'PY'
+from hashlib import sha256
+from pathlib import Path
+import sys
+
+print(sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+
+echo "Validated runtime evidence uploaded to a draft release."
+echo "repository=${repository}"
+echo "release_tag=${release_tag}"
+echo "asset=${ASSET_NAME}"
+echo "archive_sha256=${archive_sha256}"
+echo
+echo "Dispatch the strict audit with:"
+echo "gho \"\$(getpat)\" workflow run cockpit-parity-audit.yml --repo ${repository} --ref main -f runtime_evidence_release_tag=${release_tag} -f runtime_evidence_release_asset=${ASSET_NAME} -f require_manual_runtime=true"

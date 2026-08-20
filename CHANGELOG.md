@@ -2,6 +2,18 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.5] — 2026-08-20
+
+- **Ehrliche Kontenerkennung:** Ein ausstehender oder fehlgeschlagener Scan wird
+  nicht mehr als `KI-KONTEN 0` dargestellt; eine Null ist nur nach einem
+  erfolgreichen leeren Scan sichtbar.
+- **Cockpit-Abnahme:** Alle verbindlichen GH-160-Regressionen sind direkte,
+  matrixgebundene Tests, einschließlich Verbindungen → Favoriten → Tab-Menü,
+  Tree-Lebenszyklus, Statusdarstellung und Claude-Historie.
+- **Laufzeit-Gate:** Sanitierte Zwei-Host-Belege können sicher an den exakten
+  Build-Commit gebunden, von CI validiert und als prüfbares Artefakt bewahrt
+  werden; ungültige oder mehrdeutige Quellen schlagen geschlossen fehl.
+
 ## [1.0.4] — 2026-08-20
 
 - **Cockpit-Parität:** GitHub-Flows, Session-Restart und -Umbenennung,
@@ -174,7 +186,8 @@ First preview release of the Zap community fork.
 - **AI**: CJK input classification, reasoning split out, BYOP `tool_call` diagnostics, LRC tag-in synthesizes a virtual subagent + floating spawn flow
 - **CI**: Release workflow explicitly declares `contents: write` permission, fixing a 403
 
-[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.5...HEAD
+[1.0.5]: https://github.com/byte5ai/zaplex/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/byte5ai/zaplex/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/byte5ai/zaplex/compare/v1.0.1...v1.0.3
 [1.0.1]: https://github.com/byte5ai/zaplex/compare/v1.0.0...v1.0.1

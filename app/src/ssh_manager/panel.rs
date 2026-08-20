@@ -537,6 +537,13 @@ impl SshManagerPanel {
             .collect();
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_nodes_for_test(&mut self, nodes: Vec<SshNode>, ctx: &mut ViewContext<Self>) {
+        self.depths = compute_depths(&nodes);
+        self.nodes = sort_for_display(nodes, &self.depths);
+        self.sync_node_derived_state(ctx);
+    }
+
     fn sync_connected_hosts(&mut self, ctx: &mut ViewContext<Self>) {
         self.connected_host_ids = RemoteServerManager::as_ref(ctx)
             .connected_registry_hosts()
@@ -545,64 +552,16 @@ impl SshManagerPanel {
             .collect();
     }
 
-    fn refresh_tree(&mut self, ctx: &mut ViewContext<Self>) {
-        match warp_ssh_manager::with_conn(|c| Ok(SshRepository::list_nodes(c)?)) {
-            Ok(nodes) => {
-                self.depths = compute_depths(&nodes);
-                self.nodes = sort_for_display(nodes, &self.depths);
-                if let Some(id) = self.selected_id.clone() {
-                    if !self.nodes.iter().any(|n| n.id == id) {
-                        self.selected_id = None;
-                    }
-                }
-                // If the node being renamed was deleted externally, clear rename_state
-                if let Some(rs) = self.rename_state.as_ref() {
-                    if !self.nodes.iter().any(|n| n.id == rs.node_id) {
-                        self.rename_state = None;
-                    }
-                }
-                // Any tree mutation invalidates the captured host/credential
-                // impact. Close the modal rather than let the user confirm
-                // against a stale folder snapshot.
-                if self.pending_delete.is_some() {
-                    self.pending_delete = None;
-                }
-                // Refresh which hosts have Zaplexify persistence enabled (mark).
-                let server_ids: Vec<String> = self
-                    .nodes
-                    .iter()
-                    .filter(|n| matches!(n.kind, NodeKind::Server))
-                    .map(|n| n.id.clone())
-                    .collect();
-                self.resilient_hosts = warp_ssh_manager::with_conn(|c| {
-                    let mut resilient = std::collections::HashSet::new();
-                    for id in &server_ids {
-                        if let Some(server) = SshRepository::get_server(c, id)? {
-                            if server.session_resilience.is_enabled() {
-                                resilient.insert(id.clone());
-                            }
-                        }
-                    }
-                    Ok(resilient)
-                })
-                .unwrap_or_default();
-            }
-            Err(e) => {
-                log::error!("ssh_manager: failed to load tree: {e:?}");
-                ctx.emit(SshManagerPanelEvent::PersistenceError(e.to_string()));
-            }
+    fn sync_node_derived_state(&mut self, ctx: &mut ViewContext<Self>) {
+        let active_ids: std::collections::HashSet<String> =
+            self.nodes.iter().map(|node| node.id.clone()).collect();
+        self.row_states.retain(|id, _| active_ids.contains(id));
+        self.row_drag_states.retain(|id, _| active_ids.contains(id));
+        for node in &self.nodes {
+            self.row_states.entry(node.id.clone()).or_default();
+            self.row_drag_states.entry(node.id.clone()).or_default();
         }
 
-        let active_ids: std::collections::HashSet<&str> =
-            self.nodes.iter().map(|n| n.id.as_str()).collect();
-        self.row_states
-            .retain(|k, _| active_ids.contains(k.as_str()));
-        self.row_drag_states
-            .retain(|k, _| active_ids.contains(k.as_str()));
-        for n in &self.nodes {
-            self.row_states.entry(n.id.clone()).or_default();
-            self.row_drag_states.entry(n.id.clone()).or_default();
-        }
         let server_ids: std::collections::HashSet<String> = self
             .nodes
             .iter()
@@ -663,18 +622,14 @@ impl SshManagerPanel {
         // Prune per-host adopt-session state for nodes that were deleted, so these
         // maps don't grow unbounded across deletions (keyed by node_id; the
         // row-state map is keyed by "<node_id>:<pty_session_id>").
-        self.host_sessions
-            .retain(|k, _| active_ids.contains(k.as_str()));
+        self.host_sessions.retain(|id, _| active_ids.contains(id));
         self.host_multiplexer_sessions
-            .retain(|k, _| active_ids.contains(k.as_str()));
-        self.sessions_expanded
-            .retain(|k| active_ids.contains(k.as_str()));
-        self.sessions_loading
-            .retain(|k| active_ids.contains(k.as_str()));
-        self.sessions_error
-            .retain(|k, _| active_ids.contains(k.as_str()));
-        self.session_row_states.retain(|k, _| {
-            k.split(':')
+            .retain(|id, _| active_ids.contains(id));
+        self.sessions_expanded.retain(|id| active_ids.contains(id));
+        self.sessions_loading.retain(|id| active_ids.contains(id));
+        self.sessions_error.retain(|id, _| active_ids.contains(id));
+        self.session_row_states.retain(|key, _| {
+            key.split(':')
                 .next()
                 .is_some_and(|node_id| active_ids.contains(node_id))
         });
@@ -683,6 +638,57 @@ impl SshManagerPanel {
                 .next()
                 .is_some_and(|node_id| active_ids.contains(node_id))
         });
+    }
+
+    fn refresh_tree(&mut self, ctx: &mut ViewContext<Self>) {
+        match warp_ssh_manager::with_conn(|c| Ok(SshRepository::list_nodes(c)?)) {
+            Ok(nodes) => {
+                self.depths = compute_depths(&nodes);
+                self.nodes = sort_for_display(nodes, &self.depths);
+                if let Some(id) = self.selected_id.clone() {
+                    if !self.nodes.iter().any(|n| n.id == id) {
+                        self.selected_id = None;
+                    }
+                }
+                // If the node being renamed was deleted externally, clear rename_state
+                if let Some(rs) = self.rename_state.as_ref() {
+                    if !self.nodes.iter().any(|n| n.id == rs.node_id) {
+                        self.rename_state = None;
+                    }
+                }
+                // Any tree mutation invalidates the captured host/credential
+                // impact. Close the modal rather than let the user confirm
+                // against a stale folder snapshot.
+                if self.pending_delete.is_some() {
+                    self.pending_delete = None;
+                }
+                // Refresh which hosts have Zaplexify persistence enabled (mark).
+                let server_ids: Vec<String> = self
+                    .nodes
+                    .iter()
+                    .filter(|n| matches!(n.kind, NodeKind::Server))
+                    .map(|n| n.id.clone())
+                    .collect();
+                self.resilient_hosts = warp_ssh_manager::with_conn(|c| {
+                    let mut resilient = std::collections::HashSet::new();
+                    for id in &server_ids {
+                        if let Some(server) = SshRepository::get_server(c, id)? {
+                            if server.session_resilience.is_enabled() {
+                                resilient.insert(id.clone());
+                            }
+                        }
+                    }
+                    Ok(resilient)
+                })
+                .unwrap_or_default();
+            }
+            Err(e) => {
+                log::error!("ssh_manager: failed to load tree: {e:?}");
+                ctx.emit(SshManagerPanelEvent::PersistenceError(e.to_string()));
+            }
+        }
+
+        self.sync_node_derived_state(ctx);
 
         // Tree changed → recompute the "Added" set (PRODUCT.md decision E). "Imported" is determined by
         // `server.host == candidate.alias` — aligned with ImportCandidate's write

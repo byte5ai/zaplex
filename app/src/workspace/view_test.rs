@@ -130,7 +130,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| ChangelogModel::new(Arc::new(http_client::Client::new())));
     app.add_singleton_model(|_| GitHubAuthNotifier::new());
     app.add_singleton_model(|_| crate::ssh_manager::SshTreeChangedNotifier::new());
-    app.add_singleton_model(crate::cockpit::favorites::FavoritesStore::new);
+    app.add_singleton_model(crate::cockpit::favorites::FavoritesStore::new_for_test);
     app.add_singleton_model(|_ctx| SyncedInputState::mock());
     app.add_singleton_model(|_| ResizableData::default());
     app.add_singleton_model(LocalWorkflows::new);
@@ -800,6 +800,108 @@ fn favorite_host_submenu() -> MenuItem<WorkspaceAction> {
         &[("node-dev".to_string(), "devhost".to_string())],
         false,
     )
+}
+
+#[test]
+fn connections_registry_drives_favorite_launch_menu() {
+    use diesel::Connection as _;
+    use diesel_migrations::MigrationHarness as _;
+
+    let mut conn = diesel::sqlite::SqliteConnection::establish(":memory:").unwrap();
+    conn.run_pending_migrations(persistence::MIGRATIONS)
+        .unwrap();
+
+    let mut favorite_server_info = warp_ssh_manager::SshServerInfo::new_default(String::new());
+    favorite_server_info.host = "remote.example.test".into();
+    let favorite_server = warp_ssh_manager::SshRepository::create_server(
+        &mut conn,
+        None,
+        "stale-display-name",
+        &favorite_server_info,
+    )
+    .unwrap();
+
+    let mut other_server_info = warp_ssh_manager::SshServerInfo::new_default(String::new());
+    other_server_info.host = "other.example.test".into();
+    warp_ssh_manager::SshRepository::create_server(
+        &mut conn,
+        None,
+        "not-favorited",
+        &other_server_info,
+    )
+    .unwrap();
+    warp_ssh_manager::SshRepository::create_folder(&mut conn, None, "not-a-host").unwrap();
+
+    let connection_nodes = warp_ssh_manager::SshRepository::list_nodes(&mut conn).unwrap();
+    warp_ssh_manager::SshRepository::rename_node(&mut conn, &favorite_server.id, "renamed-remote")
+        .unwrap();
+    let registered_hosts = warp_ssh_manager::SshRepository::list_nodes(&mut conn)
+        .unwrap()
+        .into_iter()
+        .filter(|node| matches!(node.kind, warp_ssh_manager::NodeKind::Server))
+        .map(|node| (node.id, node.name))
+        .collect::<Vec<_>>();
+
+    App::test((), move |mut app| async move {
+        initialize_app(&mut app);
+        let (_, connections) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            crate::ssh_manager::SshManagerPanel::new(ctx)
+        });
+        connections.update(&mut app, |connections, ctx| {
+            connections.set_nodes_for_test(connection_nodes, ctx);
+            <crate::ssh_manager::SshManagerPanel as warpui::TypedActionView>::handle_action(
+                connections,
+                &crate::ssh_manager::SshManagerPanelAction::ToggleFavorite(
+                    favorite_server.id.clone(),
+                ),
+                ctx,
+            );
+        });
+
+        let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(&app);
+        let menu_items = favorites_store.read(&app, |store, _| {
+            assert_eq!(store.items().len(), 1);
+            assert_eq!(store.items()[0].label, "stale-display-name");
+            assert!(store.contains(zaplex_cockpit::FavoriteKind::Host, &favorite_server.id));
+            super::favorites_menu_items_from_sources(store, registered_hosts, false)
+        });
+
+        let favorite_submenus = menu_items
+            .iter()
+            .filter_map(|item| match item {
+                MenuItem::Submenu { fields, menu } => Some((fields, menu)),
+                MenuItem::Item(_)
+                | MenuItem::Separator
+                | MenuItem::ItemsRow { .. }
+                | MenuItem::Header { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            favorite_submenus.len(),
+            1,
+            "only the host toggled in Connections belongs in the menu"
+        );
+        let (fields, menu) = favorite_submenus[0];
+        assert_eq!(
+            fields.label(),
+            "renamed-remote",
+            "the connection registry owns the current host label"
+        );
+        assert!(matches!(
+            menu.items()[0].item_on_select_action(),
+            Some(WorkspaceAction::OpenSshTerminalByNode { node_id })
+                if node_id == &favorite_server.id
+        ));
+        assert!(matches!(
+            menu.items()[1].item_on_select_action(),
+            Some(WorkspaceAction::OpenSpawnCard {
+                registry_node_id: Some(node_id),
+                host_id: None,
+                host: Some(host),
+                project: None,
+            }) if node_id == &favorite_server.id && host == "renamed-remote"
+        ));
+    });
 }
 
 #[test]

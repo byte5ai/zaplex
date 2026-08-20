@@ -4,7 +4,6 @@
 
 use super::*;
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::rc::Rc;
 
 use chrono::NaiveDateTime;
@@ -112,7 +111,13 @@ impl View for ConnectionRowTestView {
         )
         .finish();
 
-        compose_connection_row_targets(primary_target, Some(favorite_action), None)
+        Stack::new()
+            .with_child(compose_connection_row_targets(
+                primary_target,
+                Some(favorite_action),
+                None,
+            ))
+            .finish()
     }
 }
 
@@ -123,12 +128,9 @@ fn compact_connection_secondary_action_survives_rerender_without_triggering_prim
         let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
             ConnectionRowTestView::new(ctx)
         });
-        let root_view_id = app
-            .root_view_id(window_id)
-            .expect("test window should contain root view");
         let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
         let invalidation = WindowInvalidation {
-            updated: HashSet::from([root_view_id]),
+            updated: app.read(|ctx| ctx.view_ids_for_window(window_id).into_iter().collect()),
             ..Default::default()
         };
 

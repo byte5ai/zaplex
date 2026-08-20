@@ -93,21 +93,36 @@ fn row(session: SessionSnapshot) -> TableRow {
 }
 
 #[test]
-fn only_waiting_session_rows_receive_attention_background() {
+fn needs_user_session_highlights_the_full_stable_row() {
     let mut waiting = session(None, None);
+    let stable_row_key = session_key(true, None, &waiting);
     waiting.state = SessionState::Waiting;
-    assert!(table_row_needs_attention(&row(waiting)));
+    let waiting_row = row(waiting);
+    assert_eq!(
+        match &waiting_row {
+            TableRow::Session { session, .. } => session_key(true, None, session),
+            TableRow::Group { .. } => unreachable!("the fixture is a session row"),
+        },
+        stable_row_key,
+        "attention state must not replace or relocate the session row"
+    );
+    assert!(table_row_needs_attention(&waiting_row));
 
-    let idle = session(None, None);
-    assert!(!table_row_needs_attention(&row(idle)));
-    assert!(!table_row_needs_attention(&TableRow::Group {
+    for state in [SessionState::Active, SessionState::Idle] {
+        let mut quiet = session(None, None);
+        quiet.state = state;
+        let quiet_row = row(quiet);
+        assert!(!table_row_needs_attention(&quiet_row));
+    }
+    let group = TableRow::Group {
         key: "group".into(),
         name: "project".into(),
         host: None,
         host_id: None,
         count: 1,
         collapsed: false,
-    }));
+    };
+    assert!(!table_row_needs_attention(&group));
 }
 
 #[test]

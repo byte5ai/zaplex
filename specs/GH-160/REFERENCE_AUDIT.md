@@ -216,6 +216,40 @@ identity, and fail-closed remote boundaries. This is not yet a claim of executab
 parity: the stable feature commit still needs green Cargo/screenshot CI, and #160/#169 require a
 same-revision real local/remote smoke before their strict runtime gate can be marked complete.
 
+## Stage 7 — runtime-acceptance hardening
+
+Audited: 2026-08-20T20:20:20Z
+
+All three remotes were fetched with pruning immediately before this stage. The two reference
+working trees are clean, on `main`, and exactly match their freshly fetched `origin/main`. Zaplex
+`main` also matches `origin/main`; its sole untracked audit allow-file is pre-existing and was not
+read or modified. The acceptance worktree remains based on the recorded Zaplex revision until its
+reviewed feature commit is created.
+
+| Repository / tree | Branch | Audited revision |
+|---|---|---|
+| `zaplex` | `origin/main` | `2bd302611d5a2f76f4288565c0323aa6d2aa3016` |
+| Zaplex acceptance tree | `fix/cockpit-runtime-acceptance` (uncommitted; base/HEAD) | `2bd302611d5a2f76f4288565c0323aa6d2aa3016` |
+| `claudeplex` | `origin/main` | `8c2041ff68d97463aed7aeb01da0f16b708b8e22` |
+| `claudeplex-desktop` | `origin/main` | `8c0aad0a944a8f5b6a26636d0827db57ca22d0f3` |
+
+The references have not moved since Stage 6. A renewed requirement-by-requirement source audit
+found one Zaplex presentation defect and two acceptance-evidence gaps: a failed or pending account
+scan could misleadingly render `KI-KONTEN 0`; the Connections-registry/favorite/tab-menu route was
+not exercised as one integrated test; and several GH-160 acceptance names were not first-class
+matrix evidence even where equivalent lower-level tests existed.
+
+| Area | Stage-7 classification | Reproducible evidence and remaining gate |
+|---|---|---|
+| Account empty/error state | **Regression fixed.** A loaded empty scan may show zero; pending or degraded discovery keeps the section visible without asserting a false count. | `account_count_presentation` and `account_scan_error_is_not_rendered_as_zero_accounts`. |
+| Connections and favorites | **Integrated acceptance coverage added.** The real SSH registry owns the current host label, only explicit host favorites reach the tab menu, folders and non-favorites do not, and the two actions retain the exact registry node. | `connections_registry_drives_favorite_launch_menu` in its own matrix-filtered Workspace suite. |
+| GH-160 UI and discovery contract | **All mandatory acceptance tests are now first-class gate evidence.** The matrix directly names the host lifecycle, hierarchy, glyph/reduced-motion, provider/account, whole-row waiting, helper/history, and scan-error contracts instead of relying on similarly named proxies. | `specs/parity/cockpit-matrix.json` plus validator source/suite/filter ownership checks and negative self-tests. |
+| Real two-host release evidence | **Secure transport implemented; observation still required.** A closed six-file bundle can be locally validated, uploaded only to an exact-SHA draft release, safely extracted by CI, revalidated, and retained as an Actions artifact. Invalid or ambiguous sources fail closed. | `script/upload-cockpit-runtime-evidence`, Cockpit parity workflow, and GH-169 runtime documentation. Final status remains `not-run` until the reviewed, signed macOS build is exercised locally and against a real remote host. |
+
+No Cargo execution or runtime parity is claimed at this stage. The CI report for the eventual
+feature commit must prove every automated suite against that exact SHA; GH-160 and GH-169 remain
+open until a strict same-revision two-host report is also green.
+
 ## Repeat procedure
 
 1. Fetch all three remotes and record default branch, exact revision, and audit time.

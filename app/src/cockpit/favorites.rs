@@ -31,6 +31,8 @@ enum FavoritesFileState {
     Missing,
     Loaded,
     Protected,
+    #[cfg(test)]
+    InMemory,
 }
 
 /// Emitted whenever the curated favorites change (add / remove / toggle /
@@ -57,6 +59,14 @@ impl FavoritesStore {
         Self {
             favorites,
             file_state,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(_: &mut ModelContext<Self>) -> Self {
+        Self {
+            favorites: Favorites::default(),
+            file_state: FavoritesFileState::InMemory,
         }
     }
 
@@ -120,6 +130,11 @@ impl FavoritesStore {
     }
 
     fn persist_and_notify(&mut self, previous: Favorites, ctx: &mut ModelContext<Self>) -> bool {
+        #[cfg(test)]
+        if self.file_state == FavoritesFileState::InMemory {
+            ctx.emit(FavoritesEvent::Changed);
+            return true;
+        }
         if let Err(err) = save_favorites(&self.favorites, self.file_state) {
             self.favorites = previous;
             self.file_state = FavoritesFileState::Protected;

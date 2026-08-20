@@ -2845,6 +2845,8 @@ impl CockpitPaneView {
                 TableHeader::new(Empty::new().finish()).with_width(TableColumnWidth::Fixed(24.0)),
             ])
             .with_row_count(rows_len)
+            // The table paint layer owns the complete row rectangle, so this
+            // tint remains full-width regardless of cell or column sizing.
             .with_row_background_fn(move |row_idx, app| {
                 if rows_for_background
                     .get(row_idx)

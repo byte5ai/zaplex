@@ -10,12 +10,14 @@ import json
 import os
 import re
 import signal
+import stat
 import struct
 import subprocess
 import sys
 import tempfile
 import time
 import zlib
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -88,6 +90,26 @@ EXPECTED_SUITE_COMMANDS = {
         "--no-fail-fast",
         "workspace::view::spawn_card::",
     ],
+    "workspace-view-acceptance": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "workspace::view::tests::connections_registry_drives_favorite_launch_menu",
+    ],
+    "ssh-manager-app": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "ssh_manager::panel::tests::",
+    ],
     "generated-read-only-code": [
         "cargo",
         "test",
@@ -145,6 +167,11 @@ EXPECTED_SELF_TEST_CASES = {
     "remote-host-cross-boundary",
     "remote-status-cross-boundary",
     "missing-test-regression",
+    "duplicate-test-binding-regression",
+    "mandatory-test-regression",
+    "ignored-test-regression",
+    "commented-test-annotation-regression",
+    "zero-test-suite-regression",
     "suite-name-filter-regression",
     "runtime-valid",
     "runtime-missing-is-not-run",
@@ -152,6 +179,10 @@ EXPECTED_SELF_TEST_CASES = {
     "runtime-host-regression",
     "runtime-status-regression",
     "runtime-screenshot-regression",
+    "runtime-json-duplicate-key-regression",
+    "runtime-png-metadata-regression",
+    "runtime-report-redaction-regression",
+    "runtime-archive-size-regression",
 }
 EXPECTED_SCREENSHOTS = {
     "cockpit-desktop.png",
@@ -198,6 +229,10 @@ EXPECTED_RUNTIME_SELF_TEST_CASES = {
     "runtime-host-regression",
     "runtime-status-regression",
     "runtime-screenshot-regression",
+    "runtime-json-duplicate-key-regression",
+    "runtime-png-metadata-regression",
+    "runtime-report-redaction-regression",
+    "runtime-archive-size-regression",
 }
 EXPECTED_SELF_TEST_RESULTS = {
     case: (
@@ -212,6 +247,12 @@ EXPECTED_SELF_TEST_RESULTS = {
 MAX_RUNTIME_JSON_BYTES = 64 * 1024
 MAX_RUNTIME_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_RUNTIME_VERSION_BYTES = 8 * 1024
+MAX_RUNTIME_ARCHIVE_BYTES = 100 * 1024 * 1024
+RUNTIME_FILE_LIMITS = {
+    "observations.json": MAX_RUNTIME_JSON_BYTES,
+    "versions.txt": MAX_RUNTIME_VERSION_BYTES,
+    **{name: MAX_RUNTIME_IMAGE_BYTES for name in EXPECTED_RUNTIME_SCREENSHOTS},
+}
 MIN_RUNTIME_IMAGE_WIDTH = 320
 MIN_RUNTIME_IMAGE_HEIGHT = 200
 MAX_RUNTIME_IMAGE_DIMENSION = 16_384
@@ -273,13 +314,32 @@ REQUIRED_SCENARIOS = {
 }
 REQUIRED_SCENARIO_EVIDENCE = {
     "claude-default-local-live-launch": {
+        "connections-favorite-launch",
+        "connections-row-actions",
+        "connections-compact-secondary-action",
+        "registry-only-host-exclusion",
+        "local-session-root",
+        "tree-hierarchy-contract",
+        "tree-glyph-only",
+        "provider-account-presentation",
+        "account-scan-error-state",
         "cockpit-json-runtime",
         "cockpit-json-degraded",
         "cockpit-ipc-auth",
     },
+    "claude-pinned-local-waiting": {
+        "waiting-row-attention",
+        "waiting-glyph-reduced-motion",
+    },
+    "claude-multiple-local-dormant": {
+        "legacy-claude-resumable",
+        "claude-shell-helper-exclusion",
+        "dormant-history-exclusion",
+    },
     "remote-claude-live-lifecycle": {
         "remote-first-session",
         "remote-last-session",
+        "remote-stale-inventory",
         "exact-reattach-boundary",
         "daemon-default-account",
         "daemon-route-dimensions",
@@ -322,6 +382,23 @@ REQUIRED_SCENARIO_EVIDENCE = {
         "daemon-rejects-direct-account-path",
     },
 }
+REQUIRED_GH160_TEST_EVIDENCE = {
+    "connections-favorite-launch",
+    "registry-only-host-exclusion",
+    "local-session-root",
+    "remote-first-session",
+    "remote-last-session",
+    "remote-stale-inventory",
+    "tree-hierarchy-contract",
+    "tree-glyph-only",
+    "waiting-glyph-reduced-motion",
+    "provider-account-presentation",
+    "waiting-row-attention",
+    "account-scan-error-state",
+    "legacy-claude-resumable",
+    "claude-shell-helper-exclusion",
+    "dormant-history-exclusion",
+}
 REQUIRED_SCENARIO_CAPABILITIES = {
     "claude-default-local-live-launch": {"api", "launch", "lifecycle"},
     "claude-pinned-local-waiting": {"transcript", "usage", "attention"},
@@ -342,9 +419,13 @@ ALLOWED_TEST_PREFIXES = (
     "app/src/code/",
     "app/src/control_surface_tests.rs",
     "app/src/remote_server/",
+    "app/src/ssh_manager/panel_tests.rs",
+    "app/src/workspace/view_test.rs",
     "app/src/workspace/view/",
 )
 EXPECTED_SOURCE_SUITES = (
+    ("app/src/ssh_manager/panel_tests.rs", "ssh-manager-app"),
+    ("app/src/workspace/view_test.rs", "workspace-view-acceptance"),
     ("app/src/workspace/view/spawn_card", "workspace-spawn-app"),
     ("app/src/control_surface", "control-surface-app"),
     ("app/src/remote_server/", "remote-daemon-app"),
@@ -357,6 +438,7 @@ EXPECTED_SOURCE_SUITES = (
 )
 EXPECTED_TEST_NAME_FILTERS = {
     "generated-read-only-code": "generated_",
+    "workspace-view-acceptance": "connections_registry_drives_favorite_launch_menu",
 }
 
 
@@ -369,9 +451,20 @@ def utc_now() -> str:
 
 
 def read_json(path: Path) -> dict[str, Any]:
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise AuditError(f"JSON contains duplicate key {key!r}: {path}")
+            value[key] = item
+        return value
+
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise AuditError(f"cannot read JSON {path}: {error}") from error
     if not isinstance(value, dict):
         raise AuditError(f"JSON root must be an object: {path}")
@@ -422,15 +515,54 @@ def unique_objects(value: Any, label: str, errors: list[str]) -> list[dict[str, 
     return objects
 
 
-def test_function_exists(source: str, name: str) -> bool:
-    match = re.search(rf"\bfn\s+{re.escape(name)}\s*\(", source)
-    if match is None:
-        return False
-    annotation_window = source[max(0, match.start() - 500) : match.start()]
-    return any(
-        annotation in annotation_window
-        for annotation in ("#[test]", "#[warpui::test]", "#[tokio::test]")
-    )
+def test_function_annotation_state(source: str, name: str) -> str:
+    found_ignored = False
+    for match in re.finditer(rf"\bfn\s+{re.escape(name)}\s*\(", source):
+        prefix = source[: match.start()]
+        qualifier = re.search(
+            r"(?:(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?)$",
+            prefix,
+        )
+        if qualifier is not None:
+            prefix = prefix[: qualifier.start()]
+        lines = prefix.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        attributes: list[str] = []
+        while lines:
+            line = lines[-1].strip()
+            if not (line.startswith("#[") and line.endswith("]")):
+                break
+            attributes.append(line)
+            lines.pop()
+        if not attributes:
+            continue
+        attribute_source = "\n".join(reversed(attributes))
+        is_test = re.search(
+            r"#\s*\[\s*(?:test|warpui::test|tokio::test)"
+            r"(?:\s*\([^\]]*\))?\s*\]",
+            attribute_source,
+        )
+        if is_test is None:
+            continue
+        if re.search(
+            r"#\s*\[\s*ignore(?:\s*=\s*[^\]]+)?\s*\]",
+            attribute_source,
+        ):
+            found_ignored = True
+            continue
+        return "test"
+    return "ignored" if found_ignored else "missing"
+
+
+def suite_filter_error(test_id: Any, suite: Any, name: Any) -> str | None:
+    name_filter = EXPECTED_TEST_NAME_FILTERS.get(suite)
+    if name_filter is not None and isinstance(name, str) and name_filter not in name:
+        return (
+            f"test {test_id} name {name!r} does not match suite {suite!r} "
+            f"Cargo filter {name_filter!r}"
+        )
+    return None
 
 
 def validate_manifest(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -519,7 +651,9 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, A
         "remote-capabilities",
         "remote-client-protocol",
         "remote-daemon-app",
+        "ssh-manager-app",
         "workspace-spawn-app",
+        "workspace-view-acceptance",
     }
     if suite_ids != expected_suites:
         errors.append(f"suites must equal {sorted(expected_suites)}, got {sorted(suite_ids)}")
@@ -544,11 +678,35 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, A
 
     catalog = unique_objects(manifest.get("test_catalog"), "test_catalog", errors)
     catalog_ids = {test.get("id") for test in catalog}
+    missing_mandatory_evidence = REQUIRED_GH160_TEST_EVIDENCE - catalog_ids
+    if missing_mandatory_evidence:
+        errors.append(
+            "test_catalog is missing mandatory GH-160 evidence: "
+            f"{sorted(missing_mandatory_evidence)}"
+        )
+    source_name_owners: dict[tuple[str, str], str] = {}
+    suite_name_owners: dict[tuple[str, str], str] = {}
     for test in catalog:
         test_id = test.get("id")
         suite = test.get("suite")
         source_path = test.get("source")
         name = test.get("name")
+        if isinstance(source_path, str) and isinstance(name, str):
+            source_name = (source_path, name)
+            if owner := source_name_owners.get(source_name):
+                errors.append(
+                    f"test {test_id} duplicates source/name binding owned by {owner}"
+                )
+            else:
+                source_name_owners[source_name] = str(test_id)
+        if isinstance(suite, str) and isinstance(name, str):
+            suite_name = (suite, name)
+            if owner := suite_name_owners.get(suite_name):
+                errors.append(
+                    f"test {test_id} duplicates suite/name binding owned by {owner}"
+                )
+            else:
+                suite_name_owners[suite_name] = str(test_id)
         if suite not in suite_ids or suite == "cargo-check":
             errors.append(f"test {test_id} references unknown or non-test suite {suite!r}")
         if not isinstance(source_path, str) or not source_path.startswith(ALLOWED_TEST_PREFIXES):
@@ -574,19 +732,18 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, A
         if not isinstance(name, str) or not name:
             errors.append(f"test {test_id}.name must be a non-empty string")
             continue
-        name_filter = EXPECTED_TEST_NAME_FILTERS.get(suite)
-        if name_filter is not None and name_filter not in name:
-            errors.append(
-                f"test {test_id} name {name!r} does not match suite {suite!r} "
-                f"Cargo filter {name_filter!r}"
-            )
+        if filter_error := suite_filter_error(test_id, suite, name):
+            errors.append(filter_error)
         try:
             source = path.read_text(encoding="utf-8")
         except OSError as error:
             errors.append(f"cannot read test source {source_path}: {error}")
             continue
-        if not test_function_exists(source, name):
+        annotation_state = test_function_annotation_state(source, name)
+        if annotation_state == "missing":
             errors.append(f"test {test_id} does not resolve to an annotated test function {name}")
+        elif annotation_state == "ignored":
+            errors.append(f"test {test_id} resolves to an ignored test function {name}")
 
     scenarios = unique_objects(manifest.get("scenarios"), "scenarios", errors)
     scenario_ids = {scenario.get("id") for scenario in scenarios}
@@ -670,6 +827,12 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, A
     unused_evidence = catalog_ids - used_evidence
     if unused_evidence:
         errors.append(f"test_catalog contains unused evidence: {sorted(unused_evidence)}")
+    missing_used_mandatory_evidence = REQUIRED_GH160_TEST_EVIDENCE - used_evidence
+    if missing_used_mandatory_evidence:
+        errors.append(
+            "scenarios are missing mandatory GH-160 evidence: "
+            f"{sorted(missing_used_mandatory_evidence)}"
+        )
 
     ui_contract = unique_objects(manifest.get("ui_contract"), "ui_contract", errors)
     ui_ids = {check.get("id") for check in ui_contract}
@@ -908,13 +1071,12 @@ def run_reference_probes(
     return results, errors
 
 
-def execute_suite(root: Path, suite: dict[str, Any], log_dir: Path) -> dict[str, Any]:
-    suite_id = suite["id"]
-    command = suite["command"]
-    timeout = suite["timeout_seconds"]
-    log_path = log_dir / f"{suite_id}.log"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    started = time.monotonic()
+def run_logged_command(
+    root: Path,
+    command: list[str],
+    log_path: Path,
+    timeout: int,
+) -> tuple[int, bool]:
     timed_out = False
     try:
         with log_path.open("w", encoding="utf-8") as log:
@@ -933,12 +1095,117 @@ def execute_suite(root: Path, suite: dict[str, Any], log_dir: Path) -> dict[str,
                 timed_out = True
                 os.killpg(process.pid, signal.SIGKILL)
                 exit_code = process.wait()
-                log.write(f"\nAUDIT: suite timed out after {timeout} seconds\n")
+                log.write(f"\nAUDIT: command timed out after {timeout} seconds\n")
     except OSError as error:
         exit_code = -1
-        log_path.write_text(f"cannot execute suite: {error}\n", encoding="utf-8")
+        log_path.write_text(f"cannot execute command: {error}\n", encoding="utf-8")
+    return exit_code, timed_out
+
+
+def test_execution_evidence(
+    list_output: str,
+    run_output: str,
+    expected_names: list[str],
+) -> dict[str, Any]:
+    ansi_escape = re.compile(r"\x1b\[[0-9;]*m")
+    listed_tests = {
+        line.removesuffix(": test").strip()
+        for raw_line in list_output.splitlines()
+        if (line := ansi_escape.sub("", raw_line).strip()).endswith(": test")
+    }
+    missing_expected = sorted(
+        name
+        for name in expected_names
+        if sum(test.rsplit("::", 1)[-1] == name for test in listed_tests) != 1
+    )
+    duplicate_expected = sorted(
+        name for name in set(expected_names) if expected_names.count(name) > 1
+    )
+    summaries = re.findall(
+        r"test result: (?:ok|FAILED)\.\s+"
+        r"(\d+) passed;\s+(\d+) failed;\s+(\d+) ignored;\s+"
+        r"(\d+) measured;\s+(\d+) filtered out",
+        ansi_escape.sub("", run_output),
+    )
+    summary = tuple(map(int, summaries[0])) if len(summaries) == 1 else None
+    passed = summary[0] if summary is not None else None
+    failed = summary[1] if summary is not None else None
+    ignored = summary[2] if summary is not None else None
+    measured = summary[3] if summary is not None else None
+    evidence_complete = (
+        bool(listed_tests)
+        and not missing_expected
+        and not duplicate_expected
+        and summary is not None
+        and passed == len(listed_tests)
+        and failed == 0
+        and ignored == 0
+        and measured == 0
+    )
+    return {
+        "evidence_complete": evidence_complete,
+        "expected_test_count": len(expected_names),
+        "listed_test_count": len(listed_tests),
+        "passed_test_count": passed,
+        "ignored_test_count": ignored,
+        "missing_listed_tests": missing_expected,
+        "duplicate_expected_tests": duplicate_expected,
+    }
+
+
+def execute_suite(
+    root: Path,
+    suite: dict[str, Any],
+    expected_names: list[str],
+    log_dir: Path,
+) -> dict[str, Any]:
+    suite_id = suite["id"]
+    command = suite["command"]
+    timeout = suite["timeout_seconds"]
+    log_path = log_dir / f"{suite_id}.log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    list_log_path: Path | None = None
+    list_exit_code: int | None = None
+    list_timed_out = False
+    evidence: dict[str, Any] = {
+        "evidence_complete": True,
+        "expected_test_count": 0,
+        "listed_test_count": None,
+        "passed_test_count": None,
+        "ignored_test_count": None,
+        "missing_listed_tests": [],
+    }
+    if suite_id != "cargo-check":
+        list_log_path = log_dir / f"{suite_id}-list.log"
+        list_command = [*command, "--", "--list"]
+        list_exit_code, list_timed_out = run_logged_command(
+            root,
+            list_command,
+            list_log_path,
+            timeout,
+        )
+        list_output = list_log_path.read_text(encoding="utf-8", errors="replace")
+        if list_exit_code == 0 and not list_timed_out:
+            exit_code, timed_out = run_logged_command(root, command, log_path, timeout)
+            run_output = log_path.read_text(encoding="utf-8", errors="replace")
+            evidence = test_execution_evidence(list_output, run_output, expected_names)
+        else:
+            exit_code = list_exit_code
+            timed_out = list_timed_out
+            log_path.write_text("test listing failed; suite was not executed\n", encoding="utf-8")
+            evidence = test_execution_evidence(list_output, "", expected_names)
+    else:
+        exit_code, timed_out = run_logged_command(root, command, log_path, timeout)
     duration = round(time.monotonic() - started, 3)
-    status = "pass" if exit_code == 0 and not timed_out else "fail"
+    status = (
+        "pass"
+        if exit_code == 0
+        and not timed_out
+        and not list_timed_out
+        and evidence["evidence_complete"]
+        else "fail"
+    )
     print(f"[{status}] {suite_id}: {' '.join(command)} ({duration:.3f}s)", flush=True)
     if status == "fail":
         try:
@@ -953,8 +1220,12 @@ def execute_suite(root: Path, suite: dict[str, Any], log_dir: Path) -> dict[str,
         "command": command,
         "exit_code": exit_code,
         "timed_out": timed_out,
+        "list_exit_code": list_exit_code,
+        "list_timed_out": list_timed_out,
         "duration_seconds": duration,
         "log": str(log_path),
+        "list_log": str(list_log_path) if list_log_path is not None else None,
+        **evidence,
     }
 
 
@@ -985,14 +1256,65 @@ def parse_runtime_timestamp(value: Any, label: str, errors: list[str]) -> dateti
         return None
 
 
+def extract_runtime_archive(archive_path: Path, destination: Path) -> None:
+    try:
+        if archive_path.is_symlink() or not archive_path.is_file():
+            raise AuditError("runtime evidence archive must be a regular file")
+        if archive_path.stat().st_size > MAX_RUNTIME_ARCHIVE_BYTES:
+            raise AuditError("runtime evidence archive exceeds the size limit")
+        if destination.is_symlink() or not destination.is_dir():
+            raise AuditError("runtime evidence destination must be a directory")
+        if any(destination.iterdir()):
+            raise AuditError("runtime evidence destination must be empty")
+
+        with zipfile.ZipFile(archive_path) as bundle:
+            entries = bundle.infolist()
+            names = [entry.filename for entry in entries]
+            if len(names) != len(EXPECTED_RUNTIME_FILES) or set(names) != EXPECTED_RUNTIME_FILES:
+                raise AuditError("runtime evidence archive has an invalid closed file set")
+            for entry in entries:
+                mode = (entry.external_attr >> 16) & 0xFFFF
+                if entry.is_dir() or "/" in entry.filename or "\\" in entry.filename:
+                    raise AuditError("runtime evidence archive contains a path or directory")
+                if stat.S_IFMT(mode) not in {0, stat.S_IFREG}:
+                    raise AuditError("runtime evidence archive contains a non-regular entry")
+                if entry.flag_bits & 0x1:
+                    raise AuditError("runtime evidence archive contains an encrypted entry")
+                if entry.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}:
+                    raise AuditError("runtime evidence archive uses unsupported compression")
+                if entry.file_size > RUNTIME_FILE_LIMITS[entry.filename]:
+                    raise AuditError("runtime evidence archive entry exceeds its size limit")
+
+            for entry in entries:
+                limit = RUNTIME_FILE_LIMITS[entry.filename]
+                written = 0
+                target = destination / entry.filename
+                with bundle.open(entry) as source, target.open("xb") as output:
+                    while chunk := source.read(min(1024 * 1024, limit - written + 1)):
+                        written += len(chunk)
+                        if written > limit:
+                            raise AuditError(
+                                "runtime evidence archive expanded beyond its size limit"
+                            )
+                        output.write(chunk)
+                if written != entry.file_size:
+                    raise AuditError("runtime evidence archive entry size is inconsistent")
+                target.chmod(0o600)
+    except AuditError:
+        raise
+    except (OSError, RuntimeError, zipfile.BadZipFile) as error:
+        raise AuditError("cannot safely extract runtime evidence archive") from error
+
+
 def parse_runtime_versions(path: Path, errors: list[str]) -> dict[str, str]:
-    expected_keys = {
+    expected_key_order = [
         "zaplex_revision",
         "claude_version",
         "codex_version",
         "remote_provider",
         "remote_provider_version",
-    }
+    ]
+    expected_keys = set(expected_key_order)
     try:
         if path.is_symlink() or not path.is_file():
             errors.append("versions.txt must be a regular file, not a symlink")
@@ -1015,13 +1337,17 @@ def parse_runtime_versions(path: Path, errors: list[str]) -> dict[str, str]:
             continue
         key, value = line.split("=", 1)
         if key not in expected_keys:
-            errors.append(f"versions.txt contains unknown key {key!r}")
+            errors.append("versions.txt contains an unknown key")
             continue
         if key in values:
             errors.append(f"versions.txt contains duplicate key {key!r}")
             continue
-        value = value.strip()
-        if not value or len(value) > 256 or "\x00" in value:
+        stripped_value = value.strip()
+        if value != stripped_value or any(ord(character) < 32 for character in value):
+            errors.append(f"versions.txt value {key!r} is not canonical plain text")
+            continue
+        value = stripped_value
+        if not value or len(value) > 256 or "\x7f" in value:
             errors.append(f"versions.txt value {key!r} is empty or unsafe")
             continue
         if key.endswith("_version") and re.search(
@@ -1038,6 +1364,10 @@ def parse_runtime_versions(path: Path, errors: list[str]) -> dict[str, str]:
         errors.append(f"versions.txt is missing keys: {missing}")
     if values.get("remote_provider") not in {"claude", "codex"}:
         errors.append("versions.txt remote_provider must be claude or codex")
+    if set(values) == expected_keys:
+        canonical = "".join(f"{key}={values[key]}\n" for key in expected_key_order)
+        if source != canonical:
+            errors.append("versions.txt is not in canonical key order")
     return values
 
 
@@ -1065,6 +1395,7 @@ def inspect_runtime_png(path: Path, errors: list[str]) -> dict[str, Any] | None:
     saw_idat = False
     saw_iend = False
     chunk_index = 0
+    allowed_chunks = {b"IHDR", b"PLTE", b"IDAT", b"IEND"}
     while offset + 12 <= len(source):
         chunk_length = struct.unpack(">I", source[offset : offset + 4])[0]
         chunk_type = source[offset + 4 : offset + 8]
@@ -1077,6 +1408,9 @@ def inspect_runtime_png(path: Path, errors: list[str]) -> dict[str, Any] | None:
         actual_crc = zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF
         if actual_crc != expected_crc:
             errors.append(f"{path.name} contains a PNG chunk with an invalid checksum")
+            return None
+        if chunk_type not in allowed_chunks:
+            errors.append(f"{path.name} contains forbidden PNG metadata or an unknown chunk")
             return None
         if chunk_index == 0:
             if chunk_type != b"IHDR" or chunk_length != 13:
@@ -1154,7 +1488,7 @@ def validate_runtime_evidence(
     if missing_files:
         errors.append(f"runtime evidence is missing files: {missing_files}")
     if extra_files:
-        errors.append(f"runtime evidence contains unexpected files: {extra_files}")
+        errors.append(f"runtime evidence contains {len(extra_files)} unexpected file(s)")
 
     observations: dict[str, Any] = {}
     observations_path = evidence_dir / "observations.json"
@@ -1166,6 +1500,11 @@ def validate_runtime_evidence(
                 errors.append("observations.json exceeds the size limit")
             else:
                 observations = read_json(observations_path)
+                canonical_observations = (
+                    json.dumps(observations, indent=2, sort_keys=True) + "\n"
+                )
+                if observations_path.read_text(encoding="utf-8") != canonical_observations:
+                    errors.append("observations.json is not in canonical form")
         except (AuditError, OSError):
             errors.append("cannot read or parse observations.json")
 
@@ -1185,7 +1524,8 @@ def validate_runtime_evidence(
         missing_keys = sorted(expected_observation_keys - set(observations))
         unknown_keys = sorted(set(observations) - expected_observation_keys)
         errors.append(
-            f"observations.json keys differ; missing={missing_keys}, unknown={unknown_keys}"
+            "observations.json keys differ; "
+            f"missing={missing_keys}, unknown_count={len(unknown_keys)}"
         )
     if observations.get("schema_version") != 1:
         errors.append("observations.json schema_version must be 1")
@@ -1270,7 +1610,8 @@ def validate_runtime_evidence(
         errors.append(f"cases must contain exactly {sorted(EXPECTED_RUNTIME_CASES)}")
     else:
         normalized_cases = {
-            key: value for key, value in cases.items() if isinstance(value, str)
+            key: "pass" if cases[key] == "pass" else "fail"
+            for key in sorted(EXPECTED_RUNTIME_CASES)
         }
         non_passing = sorted(key for key, value in cases.items() if value != "pass")
         if non_passing:
@@ -1460,6 +1801,124 @@ def run_runtime_self_tests() -> list[dict[str, str]]:
         results.append(
             {"id": "runtime-screenshot-regression", "status": "expected-failure-observed"}
         )
+
+        write_runtime_self_test_fixture(valid, executed_at)
+        observations_source = (valid / "observations.json").read_text(encoding="utf-8")
+        duplicate_observations = observations_source.replace(
+            '  "schema_version": 1,',
+            '  "schema_version": 1,\n  "schema_version": 1,',
+            1,
+        )
+        (valid / "observations.json").write_text(duplicate_observations, encoding="utf-8")
+        report = validate_runtime_evidence(
+            valid,
+            expected_zaplex_revision=revision,
+            max_age_hours=24,
+            now=fixed_now,
+        )
+        if report["status"] != "fail":
+            raise AuditError("runtime duplicate JSON key did not fail closed")
+        results.append(
+            {
+                "id": "runtime-json-duplicate-key-regression",
+                "status": "expected-failure-observed",
+            }
+        )
+
+        write_runtime_self_test_fixture(valid, executed_at)
+        screenshot_path = valid / "local-claude.png"
+        screenshot = screenshot_path.read_bytes()
+        iend_offset = screenshot.rfind(png_chunk(b"IEND", b""))
+        screenshot_path.write_bytes(
+            screenshot[:iend_offset]
+            + png_chunk(b"tEXt", b"hidden=runtime-self-test")
+            + screenshot[iend_offset:]
+        )
+        report = validate_runtime_evidence(
+            valid,
+            expected_zaplex_revision=revision,
+            max_age_hours=24,
+            now=fixed_now,
+        )
+        if report["status"] != "fail" or not any(
+            "forbidden PNG metadata" in error for error in report["errors"]
+        ):
+            raise AuditError("runtime PNG metadata did not fail closed")
+        results.append(
+            {
+                "id": "runtime-png-metadata-regression",
+                "status": "expected-failure-observed",
+            }
+        )
+
+        write_runtime_self_test_fixture(valid, executed_at)
+        sensitive_marker = "alice@example.invalid"
+        observations = read_json(valid / "observations.json")
+        observations["cases"]["local_claude"] = sensitive_marker
+        (valid / "observations.json").write_text(
+            json.dumps(observations, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (valid / sensitive_marker).write_text("untrusted", encoding="utf-8")
+        report = validate_runtime_evidence(
+            valid,
+            expected_zaplex_revision=revision,
+            max_age_hours=24,
+            now=fixed_now,
+        )
+        if report["status"] != "fail" or sensitive_marker in json.dumps(report):
+            raise AuditError("runtime failure report reflected an untrusted value")
+        results.append(
+            {
+                "id": "runtime-report-redaction-regression",
+                "status": "expected-failure-observed",
+            }
+        )
+
+        write_runtime_self_test_fixture(valid, executed_at)
+        archive_path = root / "runtime-valid.zip"
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            for name in sorted(EXPECTED_RUNTIME_FILES):
+                bundle.writestr(name, (valid / name).read_bytes())
+        extracted = root / "runtime-extracted"
+        extracted.mkdir()
+        extract_runtime_archive(archive_path, extracted)
+        extracted_report = validate_runtime_evidence(
+            extracted,
+            expected_zaplex_revision=revision,
+            max_age_hours=24,
+            now=fixed_now,
+        )
+        if extracted_report["status"] != "pass":
+            raise AuditError("runtime archive positive extraction did not validate")
+
+        oversized_archive = root / "runtime-oversized.zip"
+        with zipfile.ZipFile(
+            oversized_archive,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as bundle:
+            for name in sorted(EXPECTED_RUNTIME_FILES):
+                value = (
+                    b"x" * (MAX_RUNTIME_JSON_BYTES + 1)
+                    if name == "observations.json"
+                    else (valid / name).read_bytes()
+                )
+                bundle.writestr(name, value)
+        oversized_destination = root / "runtime-oversized-extracted"
+        oversized_destination.mkdir()
+        try:
+            extract_runtime_archive(oversized_archive, oversized_destination)
+        except AuditError:
+            pass
+        else:
+            raise AuditError("runtime archive uncompressed size limit did not fail closed")
+        results.append(
+            {
+                "id": "runtime-archive-size-regression",
+                "status": "expected-failure-observed",
+            }
+        )
     if {item["id"] for item in results} != EXPECTED_RUNTIME_SELF_TEST_CASES:
         raise AuditError("runtime self-test did not execute the complete mutation set")
     return results
@@ -1552,28 +2011,108 @@ def command_self_test(args: argparse.Namespace) -> int:
     results.append({"id": "missing-test-regression", "status": "expected-failure-observed"})
 
     mutated = copy.deepcopy(manifest)
-    generated_test = next(
-        item for item in mutated["test_catalog"] if item["suite"] == "generated-read-only-code"
+    first = mutated["test_catalog"][0]
+    duplicate = next(
+        item
+        for item in mutated["test_catalog"][1:]
+        if item["suite"] == first["suite"]
     )
-    generated_test["source"] = "app/src/code/editor/diff_tests.rs"
-    generated_test["name"] = "test_reverse_action"
+    duplicate["source"] = first["source"]
+    duplicate["name"] = first["name"]
     _, errors = validate_manifest(root, mutated)
-    expected = "does not match suite 'generated-read-only-code' Cargo filter 'generated_'"
-    if not any(expected in error for error in errors):
-        print(
-            f"self-test suite-name-filter-regression did not produce expected failure "
-            f"{expected!r}: {errors}",
-            file=sys.stderr,
-        )
+    if not any("duplicates source/name binding" in error for error in errors) or not any(
+        "duplicates suite/name binding" in error for error in errors
+    ):
+        print("self-test duplicate-test-binding-regression did not fail", file=sys.stderr)
         return EXIT_CONTRACT
-    if any("does not resolve to an annotated test function" in error for error in errors):
+    duplicate_test_evidence = test_execution_evidence(
+        f"module::{first['name']}: test\n",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out\n",
+        [first["name"], first["name"]],
+    )
+    if duplicate_test_evidence["evidence_complete"]:
         print(
-            "self-test suite-name-filter-regression did not use a real annotated test",
+            "self-test duplicate-test-binding-regression execution evidence passed",
             file=sys.stderr,
         )
         return EXIT_CONTRACT
     results.append(
+        {
+            "id": "duplicate-test-binding-regression",
+            "status": "expected-failure-observed",
+        }
+    )
+
+    mutated = copy.deepcopy(manifest)
+    mandatory_id = "tree-glyph-only"
+    mutated["test_catalog"] = [
+        item for item in mutated["test_catalog"] if item["id"] != mandatory_id
+    ]
+    for scenario in mutated["scenarios"]:
+        scenario["evidence"] = [
+            item for item in scenario["evidence"] if item != mandatory_id
+        ]
+    _, errors = validate_manifest(root, mutated)
+    if not any("missing mandatory GH-160 evidence" in error for error in errors):
+        print("self-test mandatory-test-regression did not fail", file=sys.stderr)
+        return EXIT_CONTRACT
+    results.append(
+        {"id": "mandatory-test-regression", "status": "expected-failure-observed"}
+    )
+
+    synthetic_test = "#[test]\nfn filter_fixture_without_prefix() {}\n"
+    if test_function_annotation_state(synthetic_test, "filter_fixture_without_prefix") != "test":
+        print("self-test synthetic annotated test was not recognized", file=sys.stderr)
+        return EXIT_CONTRACT
+    filter_error = suite_filter_error(
+        "synthetic-filter-fixture",
+        "generated-read-only-code",
+        "filter_fixture_without_prefix",
+    )
+    if filter_error is None or "does not match" not in filter_error:
+        print("self-test suite-name-filter-regression did not fail", file=sys.stderr)
+        return EXIT_CONTRACT
+    results.append(
         {"id": "suite-name-filter-regression", "status": "expected-failure-observed"}
+    )
+
+    ignored_test = "#[test]\n#[ignore = \"self-test\"]\nfn ignored_fixture() {}\n"
+    if test_function_annotation_state(ignored_test, "ignored_fixture") != "ignored":
+        print("self-test ignored-test-regression did not fail", file=sys.stderr)
+        return EXIT_CONTRACT
+    results.append(
+        {"id": "ignored-test-regression", "status": "expected-failure-observed"}
+    )
+
+    commented_test = "// #[test]\nfn commented_fixture() {}\n"
+    if test_function_annotation_state(commented_test, "commented_fixture") != "missing":
+        print("self-test commented-test-annotation-regression did not fail", file=sys.stderr)
+        return EXIT_CONTRACT
+    results.append(
+        {
+            "id": "commented-test-annotation-regression",
+            "status": "expected-failure-observed",
+        }
+    )
+
+    positive_test_evidence = test_execution_evidence(
+        "module::mandatory_fixture: test\n",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out\n",
+        ["mandatory_fixture"],
+    )
+    if not positive_test_evidence["evidence_complete"]:
+        print("self-test positive suite evidence did not pass", file=sys.stderr)
+        return EXIT_CONTRACT
+    zero_test_evidence = test_execution_evidence(
+        "0 tests, 0 benchmarks\n",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out\n",
+        ["mandatory_fixture"],
+    )
+    if zero_test_evidence["evidence_complete"]:
+        print("self-test zero-test-suite-regression did not fail", file=sys.stderr)
+        return EXIT_CONTRACT
+    results.append(
+        {"id": "zero-test-suite-regression", "status": "expected-failure-observed"}
     )
 
     try:
@@ -1606,6 +2145,12 @@ def command_validate_runtime(args: argparse.Namespace) -> int:
     print(json.dumps(report, indent=2, sort_keys=True), file=output)
     if report["status"] == "fail" or (args.require_pass and report["status"] != "pass"):
         return EXIT_FAILED
+    return 0
+
+
+def command_extract_runtime(args: argparse.Namespace) -> int:
+    extract_runtime_archive(args.archive.absolute(), args.destination.absolute())
+    print("Runtime evidence archive extracted safely.")
     return 0
 
 
@@ -1654,7 +2199,18 @@ def command_run_suites(args: argparse.Namespace) -> int:
     if validation_errors:
         raise AuditError("manifest validation failed before suite execution")
     started_at = utc_now()
-    results = [execute_suite(root, suite, args.log_dir) for suite in manifest["suites"]]
+    expected_by_suite = {
+        suite["id"]: sorted(
+            test["name"]
+            for test in manifest["test_catalog"]
+            if test["suite"] == suite["id"]
+        )
+        for suite in manifest["suites"]
+    }
+    results = [
+        execute_suite(root, suite, expected_by_suite[suite["id"]], args.log_dir)
+        for suite in manifest["suites"]
+    ]
     report = {
         "schema_version": 1,
         "status": "pass" if all(result["status"] == "pass" for result in results) else "fail",
@@ -1747,6 +2303,7 @@ def command_assemble(args: argparse.Namespace) -> int:
         if isinstance(item, dict)
         and item.get("status") == "pass"
         and item.get("exit_code") == 0
+        and item.get("evidence_complete") is True
     } if isinstance(suite_results, list) else set()
     suites_ok = (
         suites.get("status") == "pass"
@@ -1903,6 +2460,14 @@ def build_parser() -> argparse.ArgumentParser:
     runtime.add_argument("--require-pass", action="store_true")
     runtime.add_argument("--output", type=Path)
     runtime.set_defaults(handler=command_validate_runtime)
+
+    extract_runtime = subparsers.add_parser(
+        "extract-runtime",
+        help="safely extract a closed-world runtime evidence ZIP",
+    )
+    extract_runtime.add_argument("--archive", type=Path, required=True)
+    extract_runtime.add_argument("--destination", type=Path, required=True)
+    extract_runtime.set_defaults(handler=command_extract_runtime)
 
     assemble = subparsers.add_parser("assemble", help="assemble the final machine report")
     assemble.add_argument("--validation", type=Path, required=True)
