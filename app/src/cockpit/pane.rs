@@ -3697,7 +3697,7 @@ impl TypedActionView for CockpitPaneView {
                         |_, result, ctx| match result {
                             Ok(contents) => {
                                 ctx.dispatch_typed_action(
-                                    WorkspaceAction::OpenReadOnlyTextInEditor {
+                                    &WorkspaceAction::OpenReadOnlyTextInEditor {
                                         title: transcript_title(Provider::Codex),
                                         contents,
                                     },
@@ -3780,7 +3780,7 @@ impl TypedActionView for CockpitPaneView {
                             };
                             match document {
                                 Ok(document) => ctx.dispatch_typed_action(
-                                    WorkspaceAction::OpenReadOnlyTextInEditor {
+                                    &WorkspaceAction::OpenReadOnlyTextInEditor {
                                         title: transcript_title(projection_route.provider),
                                         contents: document.markdown,
                                     },

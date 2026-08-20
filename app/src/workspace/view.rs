@@ -8265,7 +8265,8 @@ impl Workspace {
             self.toast_stack.update(ctx, |view, ctx| {
                 view.add_ephemeral_toast(
                     DismissibleToast::error(
-                        "Remote AI-account routing requires a persistent host with headless key authentication.",
+                        "Remote AI-account routing requires a persistent host with headless key authentication."
+                            .to_string(),
                     ),
                     ctx,
                 );
@@ -8368,7 +8369,8 @@ impl Workspace {
             self.toast_stack.update(ctx, |view, ctx| {
                 view.add_ephemeral_toast(
                     DismissibleToast::error(
-                        "Remote AI-account routing requires a connected persistent host session.",
+                        "Remote AI-account routing requires a connected persistent host session."
+                            .to_string(),
                     ),
                     ctx,
                 );
@@ -8529,7 +8531,8 @@ impl Workspace {
                 self.toast_stack.update(ctx, |view, ctx| {
                     view.add_ephemeral_toast(
                         DismissibleToast::error(
-                            "Enable persistent sessions for this host before routing an AI account.",
+                            "Enable persistent sessions for this host before routing an AI account."
+                                .to_string(),
                         ),
                         ctx,
                     );
@@ -8548,7 +8551,8 @@ impl Workspace {
                 self.toast_stack.update(ctx, |view, ctx| {
                     view.add_ephemeral_toast(
                         DismissibleToast::error(
-                            "Remote AI-account routing requires headless key authentication.",
+                            "Remote AI-account routing requires headless key authentication."
+                                .to_string(),
                         ),
                         ctx,
                     );

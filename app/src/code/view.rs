@@ -315,8 +315,9 @@ impl CodeView {
         view.open_or_focus_existing(None, None, ctx);
         if let Some(tab) = view.tab_at(view.active_tab_index) {
             let editor = tab.editor_view.as_ref(ctx).editor().clone();
+            let buffer = editor.as_ref(ctx).model.as_ref(ctx).buffer().clone();
+            buffer.update(ctx, |buffer, ctx| buffer.replace_all(contents, ctx));
             editor.update(ctx, |editor, ctx| {
-                editor.set_buffer_text_ignoring_undo(contents, ctx);
                 editor.set_interaction_state(InteractionState::Selectable, ctx);
             });
         }

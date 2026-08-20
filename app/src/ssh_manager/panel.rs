@@ -576,7 +576,7 @@ impl SshManagerPanel {
                     CompactRowAction::new(
                         crate::ui_components::icons::Icon::StarFilled,
                         crate::t!("cockpit-tt-favorite-remove"),
-                        SshManagerPanelAction::ToggleFavorite(node_id),
+                        SshManagerPanelAction::ToggleFavorite(node_id.clone()),
                         ctx,
                     )
                 });
