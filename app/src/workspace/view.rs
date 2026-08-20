@@ -1478,11 +1478,13 @@ pub struct Workspace {
 fn favorite_host_menu_item(
     favorite: &zaplex_cockpit::Favorite,
     host_nodes: &[(String, String)],
-) -> Option<MenuItem<WorkspaceAction>> {
-    host_nodes
+    changes_disabled: bool,
+) -> MenuItem<WorkspaceAction> {
+    if let Some((node_id, name)) = host_nodes
         .iter()
         .find(|(node_id, _)| node_id == &favorite.target)
-        .map(|(node_id, name)| MenuItem::Submenu {
+    {
+        return MenuItem::Submenu {
             fields: MenuItemFields::new_submenu(name.clone()).with_icon(icons::Icon::StarFilled),
             menu: SubMenu::new(vec![
                 MenuItemFields::new(crate::t!("workspace-new-session-terminal"))
@@ -1501,7 +1503,47 @@ fn favorite_host_menu_item(
                     .with_icon(icons::Icon::LayoutAlt01)
                     .into_item(),
             ]),
-        })
+        };
+    }
+
+    let remove_item = if changes_disabled {
+        MenuItemFields::new(crate::t!("cockpit-tt-favorite-remove"))
+            .with_disabled(true)
+            .with_icon(icons::Icon::Star)
+    } else {
+        MenuItemFields::new(crate::t!("cockpit-tt-favorite-remove"))
+            .with_on_select_action(WorkspaceAction::RemoveFavorite {
+                kind: favorite.kind,
+                target: favorite.target.clone(),
+            })
+            .with_icon(icons::Icon::Star)
+    };
+    MenuItem::Submenu {
+        fields: MenuItemFields::new_submenu(format!(
+            "{} · {}",
+            favorite.display_label(),
+            crate::t!("cockpit-host-removed")
+        ))
+        .with_icon(icons::Icon::StarFilled),
+        menu: SubMenu::new(vec![
+            MenuItemFields::new(crate::t!("workspace-favorite-unavailable"))
+                .with_disabled(true)
+                .with_icon(icons::Icon::AlertTriangle)
+                .into_item(),
+            remove_item.into_item(),
+        ]),
+    }
+}
+
+fn favorite_host_menu_items(
+    favorites: &[zaplex_cockpit::Favorite],
+    host_nodes: &[(String, String)],
+    changes_disabled: bool,
+) -> Vec<MenuItem<WorkspaceAction>> {
+    favorites
+        .iter()
+        .map(|favorite| favorite_host_menu_item(favorite, host_nodes, changes_disabled))
+        .collect()
 }
 
 fn primary_host_navigation_views(cockpit_enabled: bool) -> Vec<ToolPanelView> {
@@ -9551,13 +9593,14 @@ impl Workspace {
     ///
     /// Order: Terminal → User tab configs → separator → Agent → Coding Agents → separator → Docker → Worktree config → New tab config → separator → Reopen closed session.
     /// The **Favorites** section of the "+" dropdown (design §10): only
-    /// user-curated registered hosts. Each row opens a Terminal/New Agent
-    /// submenu. Other persisted favorite kinds survive the presentation
-    /// migration but do not render as flat rows here.
+    /// user-curated host favorites. Registered rows open a Terminal/New Agent
+    /// submenu; vanished targets remain visibly unavailable and removable.
+    /// Other persisted favorite kinds survive the presentation migration but
+    /// do not render as flat rows here.
     fn favorites_menu_items(&self, ctx: &mut ViewContext<Self>) -> Vec<MenuItem<WorkspaceAction>> {
         // Registered hosts (node_id -> label), read once from the SSH registry
         // to resolve favorite references without duplicating connection data.
-        let host_nodes: Vec<(String, String)> = warp_ssh_manager::with_conn(|c| {
+        let host_nodes = warp_ssh_manager::with_conn(|c| {
             let mut out = Vec::new();
             for node in warp_ssh_manager::SshRepository::list_nodes(c)? {
                 if matches!(node.kind, warp_ssh_manager::types::NodeKind::Server) {
@@ -9565,8 +9608,9 @@ impl Workspace {
                 }
             }
             Ok(out)
-        })
-        .unwrap_or_default();
+        });
+        let host_registry_unavailable = host_nodes.is_err();
+        let host_nodes: Vec<(String, String)> = host_nodes.unwrap_or_default();
 
         let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(ctx);
         let favorites_store = favorites_store.as_ref(ctx);
@@ -9590,22 +9634,18 @@ impl Workspace {
                     .with_icon(icons::Icon::AlertTriangle)
                     .into_item(),
             );
-        } else if favorites.is_empty()
-            || !favorites
-                .iter()
-                .any(|favorite| favorite_host_menu_item(favorite, &host_nodes).is_some())
-        {
+        } else if favorites.is_empty() {
             items.push(
                 MenuItemFields::new(crate::t!("workspace-favorites-empty"))
                     .with_disabled(true)
                     .into_item(),
             );
         }
-        for fav in &favorites {
-            if let Some(item) = favorite_host_menu_item(fav, &host_nodes) {
-                items.push(item);
-            }
-        }
+        items.extend(favorite_host_menu_items(
+            &favorites,
+            &host_nodes,
+            persistence_is_protected || host_registry_unavailable,
+        ));
         items
     }
 

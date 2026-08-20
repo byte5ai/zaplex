@@ -3,10 +3,18 @@
 //! Author: logic
 
 use super::*;
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::rc::Rc;
+
 use chrono::NaiveDateTime;
 use diesel::Connection;
 use diesel_migrations::MigrationHarness;
+use pathfinder_geometry::vector::vec2f;
+use warp_core::ui::appearance::Appearance;
 use warp_ssh_manager::{NodeKind, OneKeyCredentialKind, SshNode};
+use warpui::platform::WindowStyle;
+use warpui::{App, Event, Presenter, WindowInvalidation};
 
 #[test]
 fn connection_rows_reserve_leading_icons_for_folders_only() {
@@ -15,6 +23,176 @@ fn connection_rows_reserve_leading_icons_for_folders_only() {
         Some(crate::ui_components::icons::Icon::Folder)
     );
     assert_eq!(tree_row_leading_icon(NodeKind::Server), None);
+}
+
+#[test]
+fn connection_server_rows_expose_favorite_connect_disconnect_and_management_actions() {
+    assert_eq!(
+        connection_row_capabilities(NodeKind::Server, false, false),
+        ConnectionRowCapabilities {
+            favorite: true,
+            connect: true,
+            disconnect: false,
+            management: true,
+        }
+    );
+    assert_eq!(
+        connection_row_capabilities(NodeKind::Server, false, true),
+        ConnectionRowCapabilities {
+            favorite: true,
+            connect: false,
+            disconnect: true,
+            management: true,
+        }
+    );
+}
+
+#[derive(Clone, Debug)]
+enum ConnectionRowTestAction {
+    Primary,
+    Favorite,
+}
+
+struct ConnectionRowTestView {
+    primary_state: MouseStateHandle,
+    favorite_action: CompactRowAction,
+    primary_clicks: usize,
+    favorite_clicks: usize,
+}
+
+impl ConnectionRowTestView {
+    fn new(ctx: &mut ViewContext<Self>) -> Self {
+        Self {
+            primary_state: MouseStateHandle::default(),
+            favorite_action: CompactRowAction::new(
+                crate::ui_components::icons::Icon::Star,
+                "Favorite",
+                ConnectionRowTestAction::Favorite,
+                ctx,
+            ),
+            primary_clicks: 0,
+            favorite_clicks: 0,
+        }
+    }
+}
+
+impl Entity for ConnectionRowTestView {
+    type Event = ();
+}
+
+impl TypedActionView for ConnectionRowTestView {
+    type Action = ConnectionRowTestAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            ConnectionRowTestAction::Primary => self.primary_clicks += 1,
+            ConnectionRowTestAction::Favorite => self.favorite_clicks += 1,
+        }
+        ctx.notify();
+    }
+}
+
+impl View for ConnectionRowTestView {
+    fn ui_name() -> &'static str {
+        "ConnectionRowTestView"
+    }
+
+    fn render(&self, _app: &AppContext) -> Box<dyn Element> {
+        let primary_target = Hoverable::new(self.primary_state.clone(), |_| {
+            ConstrainedBox::new(Empty::new().finish())
+                .with_width(240.0)
+                .with_height(32.0)
+                .finish()
+        })
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(ConnectionRowTestAction::Primary))
+        .finish();
+        let favorite_action = SavePosition::new(
+            self.favorite_action.render(),
+            "connection_row_test:favorite",
+        )
+        .finish();
+
+        compose_connection_row_targets(primary_target, Some(favorite_action), None)
+    }
+}
+
+#[test]
+fn compact_connection_secondary_action_survives_rerender_without_triggering_primary_row_click() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            ConnectionRowTestView::new(ctx)
+        });
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("test window should contain root view");
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        let invalidation = WindowInvalidation {
+            updated: HashSet::from([root_view_id]),
+            ..Default::default()
+        };
+
+        let click_position = app.update({
+            let presenter = presenter.clone();
+            let invalidation = invalidation.clone();
+            move |ctx| {
+                presenter.borrow_mut().invalidate(invalidation, ctx);
+                presenter
+                    .borrow_mut()
+                    .build_scene(vec2f(320.0, 60.0), 1.0, None, ctx);
+                presenter
+                    .borrow()
+                    .position_cache()
+                    .get_position("connection_row_test:favorite")
+                    .expect("favorite action should be positioned")
+                    .center()
+            }
+        });
+
+        app.update({
+            let presenter = presenter.clone();
+            move |ctx| {
+                ctx.simulate_window_event(
+                    Event::LeftMouseDown {
+                        position: click_position,
+                        modifiers: Default::default(),
+                        click_count: 1,
+                        is_first_mouse: false,
+                    },
+                    window_id,
+                    presenter,
+                );
+            }
+        });
+        app.update({
+            let presenter = presenter.clone();
+            let invalidation = invalidation.clone();
+            move |ctx| {
+                presenter.borrow_mut().invalidate(invalidation, ctx);
+                presenter
+                    .borrow_mut()
+                    .build_scene(vec2f(320.0, 60.0), 1.0, None, ctx);
+            }
+        });
+        app.update({
+            let presenter = presenter.clone();
+            move |ctx| {
+                ctx.simulate_window_event(
+                    Event::LeftMouseUp {
+                        position: click_position,
+                        modifiers: Default::default(),
+                    },
+                    window_id,
+                    presenter,
+                );
+            }
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.favorite_clicks, 1);
+            assert_eq!(view.primary_clicks, 0);
+        });
+    });
 }
 
 // --- Test helpers -------------------------------------------------------

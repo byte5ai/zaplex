@@ -798,8 +798,8 @@ fn favorite_host_submenu() -> MenuItem<WorkspaceAction> {
     super::favorite_host_menu_item(
         &zaplex_cockpit::Favorite::new(zaplex_cockpit::FavoriteKind::Host, "node-dev", "devhost"),
         &[("node-dev".to_string(), "devhost".to_string())],
+        false,
     )
-    .expect("registered favorite host")
 }
 
 #[test]
@@ -835,23 +835,75 @@ fn new_agent_submenu_opens_spawn_card_without_launching() {
 }
 
 #[test]
-fn stale_favorite_is_absent_from_launch_menu() {
+fn stale_favorite_is_disabled_and_removable() {
     let favorite = zaplex_cockpit::Favorite::new(
         zaplex_cockpit::FavoriteKind::Host,
         "deleted-node",
         "old-devhost",
     );
-    assert!(super::favorite_host_menu_item(&favorite, &[]).is_none());
+    let mut items = super::favorite_host_menu_items(std::slice::from_ref(&favorite), &[], false);
+    assert_eq!(items.len(), 1);
+    let MenuItem::Submenu { fields, menu } = items.pop().unwrap() else {
+        panic!("a stale favorite must remain visible as a submenu");
+    };
+    assert!(fields.label().contains("old-devhost"));
+    assert_ne!(fields.label(), "old-devhost");
+    assert_eq!(menu.items().len(), 2);
+    let MenuItem::Item(unavailable) = &menu.items()[0] else {
+        panic!("the stale target state must be a menu item");
+    };
+    assert!(unavailable.is_disabled());
+    assert!(unavailable.on_select_action().is_none());
+    let MenuItem::Item(remove) = &menu.items()[1] else {
+        panic!("stale favorites need an explicit removal item");
+    };
+    assert!(!remove.is_disabled());
+    assert!(matches!(
+        menu.items()[1].item_on_select_action(),
+        Some(WorkspaceAction::RemoveFavorite { kind, target })
+            if *kind == zaplex_cockpit::FavoriteKind::Host && target == "deleted-node"
+    ));
 }
 
 #[test]
-fn removed_favorite_host_is_never_routed() {
+fn protected_favorite_store_disables_stale_removal() {
+    let favorite = zaplex_cockpit::Favorite::new(
+        zaplex_cockpit::FavoriteKind::Host,
+        "deleted-node",
+        "old-devhost",
+    );
+    let MenuItem::Submenu { menu, .. } = super::favorite_host_menu_item(&favorite, &[], true)
+    else {
+        panic!("the protected stale favorite must remain visible");
+    };
+    let MenuItem::Item(remove) = &menu.items()[1] else {
+        panic!("the protected stale favorite must retain its removal row");
+    };
+    assert!(remove.is_disabled());
+    assert!(remove.on_select_action().is_none());
+}
+
+#[test]
+fn removed_favorite_host_is_disabled_and_never_routed() {
     let favorite = zaplex_cockpit::Favorite::new(
         zaplex_cockpit::FavoriteKind::Host,
         "removed-node",
         "removed-host",
     );
-    assert!(super::favorite_host_menu_item(&favorite, &[]).is_none());
+    let MenuItem::Submenu { menu, .. } = super::favorite_host_menu_item(&favorite, &[], false)
+    else {
+        panic!("a removed favorite must remain explicitly removable");
+    };
+    assert!(menu.items().iter().all(|item| !matches!(
+        item.item_on_select_action(),
+        Some(WorkspaceAction::OpenSshTerminalByNode { .. } | WorkspaceAction::OpenSpawnCard { .. })
+    )));
+}
+
+#[test]
+fn automatic_host_registration_never_adds_menu_favorite() {
+    let registered_hosts = vec![("node-dev".to_string(), "devhost".to_string())];
+    assert!(super::favorite_host_menu_items(&[], &registered_hosts, false).is_empty());
 }
 
 #[test]

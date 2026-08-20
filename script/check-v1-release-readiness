@@ -99,8 +99,6 @@ PLANNED_TEST_ALIASES = {
     "hidden_panes_are_targets": "hidden_tab_file_managers_are_selectable_targets",
     "host_matching_never_crosses_boundary":
         "terminal_host_matching_never_crosses_local_or_remote_boundaries",
-    "host_node_exposes_primary_actions":
-        "host_node_exposes_manage_terminal_agent_and_files_actions",
     "identity_never_crosses_provider_or_account":
         "session_identity_matching_never_crosses_provider_or_account_boundaries",
     "invalid_pid_never_reaches_signal_backend":
@@ -131,7 +129,6 @@ PLANNED_TEST_ALIASES = {
     "only_dormant_session_can_resume": "only_a_dormant_session_can_be_resumed",
     "open_plan_refuses_unlocated_live_duplicate":
         "open_plan_refuses_to_duplicate_an_unlocated_live_session",
-    "parallel_roots_are_absent": "parallel_ssh_and_cockpit_primary_roots_are_absent",
     "pid_must_fit_positive_signed_range":
         "pid_must_fit_the_positive_signed_process_id_range",
     "pending_buffer_never_evicts_unacknowledged_startup":
@@ -146,8 +143,6 @@ PLANNED_TEST_ALIASES = {
         "refresh_generation_discards_an_older_completion",
     "registered_and_live_hosts_join_once":
         "registered_and_live_host_snapshots_join_into_one_host_node",
-    "registered_offline_host_remains_visible":
-        "registered_offline_host_remains_visible_without_live_inventory",
     "relative_remote_path_is_rejected": "relative_remote_launch_directory_is_rejected",
     "release_metadata_is_consistent":
         "release_metadata_is_consistent_across_manifests_resources_and_docs",
@@ -165,8 +160,6 @@ PLANNED_TEST_ALIASES = {
     "second_live_foreground_binding_requires_explicit_handoff":
         "second_live_agent_binding_to_same_pty_is_rejected",
     "session_uses_shared_open_plan": "session_node_dispatches_shared_session_open_plan",
-    "sidebar_has_one_host_project_session_tree":
-        "primary_sidebar_has_exactly_one_host_project_session_tree",
     "shipped_user_facing_copy_has_no_rc_beta_markers":
         "shipped_release_copy_contains_no_rc_beta_or_preview_markers",
     "stale_test_cannot_replace_current_state":

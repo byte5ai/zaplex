@@ -91,6 +91,63 @@ fn tree_row_leading_icon(kind: NodeKind) -> Option<crate::ui_components::icons::
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ConnectionRowCapabilities {
+    favorite: bool,
+    connect: bool,
+    disconnect: bool,
+    management: bool,
+}
+
+fn connection_row_capabilities(
+    kind: NodeKind,
+    is_renaming: bool,
+    is_connected: bool,
+) -> ConnectionRowCapabilities {
+    let is_server = match kind {
+        NodeKind::Folder => false,
+        NodeKind::Server => true,
+    };
+    let interactive_server = is_server && !is_renaming;
+    ConnectionRowCapabilities {
+        favorite: interactive_server,
+        connect: interactive_server && !is_connected,
+        disconnect: interactive_server && is_connected,
+        management: !is_renaming,
+    }
+}
+
+fn compose_connection_row_targets(
+    primary_target: Box<dyn Element>,
+    favorite_action: Option<Box<dyn Element>>,
+    connection_action: Option<Box<dyn Element>>,
+) -> Box<dyn Element> {
+    if favorite_action.is_none() && connection_action.is_none() {
+        return primary_target;
+    }
+
+    let mut actions = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Min);
+    if let Some(action) = favorite_action {
+        actions = actions.with_child(action);
+    }
+    if let Some(action) = connection_action {
+        actions = actions.with_child(action);
+    }
+
+    Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_child(Shrinkable::new(1.0, primary_target).finish())
+        .with_child(
+            Container::new(actions.finish())
+                .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                .finish(),
+        )
+        .finish()
+}
+
 fn tailscale_status_output(
     command_factory: &dyn WorkspaceCommandFactory,
 ) -> std::io::Result<std::process::Output> {
@@ -2744,11 +2801,15 @@ impl SshManagerPanel {
                 .finish(),
             );
         }
-        let show_secondary_actions = node.kind == NodeKind::Server && !is_renaming;
-        if show_secondary_actions {
+        let row_capabilities = connection_row_capabilities(
+            node.kind,
+            is_renaming,
+            self.connected_host_ids.contains_key(&node.id),
+        );
+        if row_capabilities.favorite || row_capabilities.connect || row_capabilities.disconnect {
             row_flex = row_flex.with_child(Shrinkable::new(1.0, Empty::new().finish()).finish());
         }
-        let favorite_action: Option<Box<dyn Element>> = if show_secondary_actions {
+        let favorite_action: Option<Box<dyn Element>> = if row_capabilities.favorite {
             let action = if self.favorite_host_ids.contains(&node.id) {
                 self.unfavorite_actions.get(&node.id)
             } else {
@@ -2759,12 +2820,12 @@ impl SshManagerPanel {
         } else {
             None
         };
-        let connection_action: Option<Box<dyn Element>> = if show_secondary_actions {
-            let action = if self.connected_host_ids.contains_key(&node.id) {
-                self.disconnect_actions.get(&node.id)
-            } else {
-                self.connect_actions.get(&node.id)
-            };
+        let connection_action: Option<Box<dyn Element>> = if row_capabilities.connect {
+            let action = self.connect_actions.get(&node.id);
+            debug_assert!(action.is_some());
+            action.map(CompactRowAction::render)
+        } else if row_capabilities.disconnect {
+            let action = self.disconnect_actions.get(&node.id);
             debug_assert!(action.is_some());
             action.map(CompactRowAction::render)
         } else {
@@ -2775,7 +2836,7 @@ impl SshManagerPanel {
         let state = self.row_states.get(&node.id).cloned().unwrap_or_default();
         let id_for_click = node.id.clone();
         let id_for_double_click = node.id.clone();
-        let id_for_right_click = node.id.clone();
+        let management_target = row_capabilities.management.then(|| node.id.clone());
 
         // While renaming, don't accept clicks/right-clicks (let EditorView handle them).
         // Padding must match the normal (hoverable) branch exactly so the row does
@@ -2812,12 +2873,15 @@ impl SshManagerPanel {
             ));
         })
         .on_right_click(move |ctx, _, position| {
+            let Some(target) = management_target.as_ref() else {
+                return;
+            };
             let offset = match ctx.element_position_by_id(SSH_PANEL_POSITION_ID) {
                 Some(bounds) => position - bounds.origin(),
                 None => position,
             };
             ctx.dispatch_typed_action(SshManagerPanelAction::OpenContextMenu {
-                target: Some(id_for_right_click.clone()),
+                target: Some(target.clone()),
                 position: offset,
             });
         })
@@ -2825,29 +2889,8 @@ impl SshManagerPanel {
 
         // Keep favorite and connection controls outside the primary click
         // target: either action must remain independent from row selection.
-        let interactive_row = if favorite_action.is_some() || connection_action.is_some() {
-            let mut actions = Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_main_axis_size(MainAxisSize::Min);
-            if let Some(action) = favorite_action {
-                actions = actions.with_child(action);
-            }
-            if let Some(action) = connection_action {
-                actions = actions.with_child(action);
-            }
-            Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_child(Shrinkable::new(1.0, hoverable).finish())
-                .with_child(
-                    Container::new(actions.finish())
-                        .with_padding_right(ITEM_PADDING_HORIZONTAL)
-                        .finish(),
-                )
-                .finish()
-        } else {
-            hoverable
-        };
+        let interactive_row =
+            compose_connection_row_targets(hoverable, favorite_action, connection_action);
 
         // Wrap the row into an element that is "both draggable and accepts drops".
         //
