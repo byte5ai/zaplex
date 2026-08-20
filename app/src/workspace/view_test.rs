@@ -848,7 +848,7 @@ fn connections_registry_drives_favorite_launch_menu() {
             crate::ssh_manager::SshManagerPanel::new(ctx)
         });
         connections.update(&mut app, |connections, ctx| {
-            connections.set_nodes_for_test(connection_nodes);
+            connections.set_nodes_for_test(connection_nodes, ctx);
             <crate::ssh_manager::SshManagerPanel as warpui::TypedActionView>::handle_action(
                 connections,
                 &crate::ssh_manager::SshManagerPanelAction::ToggleFavorite(
