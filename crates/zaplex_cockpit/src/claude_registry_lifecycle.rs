@@ -107,6 +107,7 @@ fn registry_revision(raw: &[u8]) -> String {
     let mut digest = Sha256::new();
     digest.update(b"zaplex-claude-registry-entry-v1\0");
     digest.update(raw);
+    let digest = digest.finalize();
     format!("{digest:x}")
 }
 

@@ -853,6 +853,7 @@ fn hex_revision(content: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(b"zaplex-codex-transcript-revision-v1\0");
     digest.update(content.as_bytes());
+    let digest = digest.finalize();
     format!("{digest:x}")
 }
 
