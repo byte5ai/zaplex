@@ -1,6 +1,11 @@
 use super::{
-    is_su_to_root, should_spawn_su_password_injector, PASSWORD_PROMPT_REGEX, SU_ROOT_CMD_REGEX,
+    is_su_to_root, should_spawn_su_password_injector, su_prompt_events, ShellReadyOutcome,
+    SuInjectorEvent, PASSWORD_PROMPT_REGEX, SU_ROOT_CMD_REGEX,
 };
+use futures_lite::StreamExt as _;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
 fn pw_matches(input: &str) -> bool {
@@ -108,4 +113,42 @@ fn should_spawn_su_password_injector_requires_non_empty_root_password() {
 
     let password = Zeroizing::new("root-password".to_string());
     assert!(should_spawn_su_password_injector(Some(&password)));
+}
+
+fn timeout_event_under_continuous_output() -> (SuInjectorEvent, Duration) {
+    let (tx, rx) = async_broadcast::broadcast(64);
+    let rx = rx.deactivate();
+    let stop = Arc::new(AtomicBool::new(false));
+    let producer_stop = stop.clone();
+    let producer = std::thread::spawn(move || {
+        while !producer_stop.load(Ordering::Relaxed) {
+            let _ = tx.try_broadcast(Arc::new(b"still connecting\r\n".to_vec()));
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let started = Instant::now();
+    let mut events = Box::pin(su_prompt_events(rx, Duration::from_millis(30)));
+    let event = futures_lite::future::block_on(events.next()).unwrap();
+    let elapsed = started.elapsed();
+    stop.store(true, Ordering::Relaxed);
+    producer.join().unwrap();
+    (event, elapsed)
+}
+
+#[test]
+fn su_shell_ready_timeout_is_absolute_under_continuous_output() {
+    let (event, elapsed) = timeout_event_under_continuous_output();
+
+    assert_eq!(
+        event,
+        SuInjectorEvent::ShellReadyFinished(ShellReadyOutcome::TimedOut)
+    );
+    assert!(elapsed < Duration::from_millis(250));
+}
+
+#[test]
+fn su_timeout_releases_onekey_suppression() {
+    let (event, _) = timeout_event_under_continuous_output();
+
+    assert!(event.releases_onekey_suppression());
 }

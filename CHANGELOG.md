@@ -4,6 +4,24 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.0.5] — 2026-08-20
 
+- **Verlässliche Einstellungen:** Schreibfehler werden bis zur UI propagiert;
+  validierte Werte sind im Speicher, auf Disk und nach Neustart identisch.
+- **Windows-Prozessabbruch:** Lokale Hilfskommandos laufen in eigenen Job
+  Objects, sodass Abbruch auch Kind- und Enkelprozesse beendet.
+- **Release-Tags:** Stable- und Prerelease-Tags nutzen eine gemeinsame,
+  getestete Klassifikation; nur Stable benötigt Main und wird als Latest
+  veröffentlicht.
+- **Cockpit-Refresh:** Fehlende optionale Prozesssuche degradiert Nicht-Linux
+  nicht mehr; überlappende Scans und OAuth-Abfragen werden zusammengeführt.
+- **SSH-Verbindungsstart:** Pro Host läuft höchstens ein Bootstrap bis zum
+  echten Lifecycle-Ende; Zsh-Prompts und absolute Shell-Ready-Fristen werden
+  berücksichtigt.
+- **Vertrauenswürdige HTTP-Header:** Client-, Release- und Systemmetadaten sowie
+  Integration-Header bleiben auf der konfigurierten Zaplex-Origin begrenzt.
+- **AWS-Credentials:** Nur der neueste, noch zur ausgewählten Konfiguration
+  passende Refresh darf den aktiven Bedrock-Credential-Zustand verändern.
+- **Begrenzte Portal-Flows:** Wayland-Screenshots und MCP-OAuth warten nicht
+  mehr unbegrenzt und räumen abgelaufene Requests retry-fähig auf.
 - **Atomare Linux-Updates:** AppImages werden auf demselben Dateisystem
   vorbereitet, vollständig synchronisiert und erst dann per Rename ersetzt.
 - **Import-Isolation:** Drive-Importe tragen eindeutige Generationen; Reset und

@@ -1,8 +1,10 @@
 //! Screenshot capture for Wayland using the XDG Desktop Portal.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::time::Duration;
 
-use futures::StreamExt as _;
+use futures::{Stream, StreamExt as _};
 use zbus::zvariant;
 
 use crate::{Screenshot, ScreenshotParams};
@@ -30,6 +32,9 @@ trait ScreenshotPortal {
     default_service = "org.freedesktop.portal.Desktop"
 )]
 trait PortalRequest {
+    /// Closes a pending request.
+    fn close(&self) -> zbus::fdo::Result<()>;
+
     /// Signal emitted when the request completes.
     #[zbus(signal)]
     fn response(
@@ -37,6 +42,31 @@ trait PortalRequest {
         response: u32,
         results: HashMap<String, zvariant::OwnedValue>,
     ) -> zbus::fdo::Result<()>;
+}
+
+const SCREENSHOT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+
+async fn wait_for_portal_response<S, T, Cleanup, CleanupFuture>(
+    response_stream: &mut S,
+    timeout: Duration,
+    cleanup: Cleanup,
+) -> Result<T, String>
+where
+    S: Stream<Item = T> + Unpin,
+    Cleanup: FnOnce() -> CleanupFuture,
+    CleanupFuture: Future<Output = ()>,
+{
+    match tokio::time::timeout(timeout, response_stream.next()).await {
+        Ok(Some(response)) => Ok(response),
+        Ok(None) => Err("Screenshot request was cancelled before the portal responded".to_string()),
+        Err(_) => {
+            cleanup().await;
+            Err(format!(
+                "Screenshot portal did not respond within {} seconds",
+                timeout.as_secs()
+            ))
+        }
+    }
 }
 
 /// Takes a screenshot using the XDG Desktop Portal.
@@ -71,22 +101,31 @@ pub async fn take(params: ScreenshotParams) -> Result<Screenshot, String> {
         .await
         .map_err(|e| format!("Failed to subscribe to response signal: {e}"))?;
 
-    // Wait for the response.
-    let response = response_stream
-        .next()
-        .await
-        .ok_or("Screenshot request was cancelled or timed out")?;
+    // Bound the whole response wait. A stream of unrelated activity cannot extend this deadline.
+    let response = wait_for_portal_response(
+        &mut response_stream,
+        SCREENSHOT_RESPONSE_TIMEOUT,
+        || async {
+            if let Err(err) = request_proxy.close().await {
+                log::warn!("Failed to close timed-out screenshot portal request: {err}");
+            }
+        },
+    )
+    .await?;
 
     let args = response
         .args()
         .map_err(|e| format!("Failed to get response arguments: {e}"))?;
 
     // Response code 0 means success, 1 means cancelled, 2 means other error.
-    if args.response != 0 {
-        return Err(format!(
-            "Screenshot request failed with response code: {}",
-            args.response
-        ));
+    match args.response {
+        0 => {}
+        1 => return Err("Screenshot request was cancelled by the user".to_string()),
+        response => {
+            return Err(format!(
+                "Screenshot request failed with response code: {response}"
+            ));
+        }
     }
 
     // Extract the URI from the results.
@@ -125,3 +164,7 @@ pub async fn take(params: ScreenshotParams) -> Result<Screenshot, String> {
 
     crate::screenshot_utils::process_screenshot(img, params)
 }
+
+#[cfg(test)]
+#[path = "screenshot_tests.rs"]
+mod tests;

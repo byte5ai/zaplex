@@ -2,7 +2,7 @@
 //! `su_password_injector`) to trigger actions only after login completes and shell is ready.
 //!
 //! Only examines last 256 bytes of buffer, matching common prompt endings:
-//! - ASCII: `$ ` / `# ` / `> `
+//! - ASCII: `$ ` / `# ` / `> ` / `% `
 //! - Common powerline / Starship symbols: ❯  ▶  »  λ  →
 
 const TAIL_BYTES: usize = 256;
@@ -14,7 +14,11 @@ pub fn bytes_look_like_shell_prompt(bytes: &[u8]) -> bool {
     } else {
         bytes
     };
-    if tail.ends_with(b"$ ") || tail.ends_with(b"# ") || tail.ends_with(b"> ") {
+    if tail.ends_with(b"$ ")
+        || tail.ends_with(b"# ")
+        || tail.ends_with(b"> ")
+        || tail.ends_with(b"% ")
+    {
         return true;
     }
     // Multibyte prompt symbol + space

@@ -14,6 +14,26 @@ fn accounts_without_process(home: &Path, config_dir_env: Option<&str>) -> Vec<Ac
     discover_without_process(home, config_dir_env).accounts
 }
 
+#[test]
+fn unsupported_process_discovery_does_not_degrade_static_account_scan() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    write(
+        &home.join(".claude-work/.claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"work@example.com"}}"#,
+    );
+
+    #[cfg(target_os = "linux")]
+    let process_discovery = ProcessAccountDiscovery::default();
+    #[cfg(not(target_os = "linux"))]
+    let process_discovery = running_claude_config_dirs();
+    let discovery = discover_accounts_with_process_roots(&home, None, process_discovery);
+
+    assert_eq!(discovery.accounts.len(), 1);
+    assert_eq!(discovery.accounts[0].key, "claude:work");
+    assert!(discovery.issues.is_empty());
+}
+
 #[cfg(target_os = "linux")]
 fn write_proc_process(proc_root: &Path, pid: u32, uid: u32, cmdline: &[u8], environ: &[u8]) {
     let process_root = proc_root.join(pid.to_string());

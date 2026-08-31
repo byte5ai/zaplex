@@ -234,27 +234,26 @@ impl Client {
         )
     }
 
-    /// Determine whether a request should carry Zap-specific headers. Only same-origin requests carry custom headers.
+    /// Determine whether a request should carry Zaplex-specific headers.
+    ///
+    /// The generic client is also used for user-configured providers, so only the configured
+    /// Zaplex backend origin is trusted to receive client metadata and integration headers.
     #[cfg(target_family = "wasm")]
     fn include_warp_http_headers<U: IntoUrl + Clone>(url: U) -> bool {
-        url.into_url().is_ok_and(|url| {
-            url.host_str().is_some_and(|dest_host| {
-                let window_hostname = gloo::utils::window()
-                    .location()
-                    .hostname()
-                    .expect("Can't get window hostname");
-
-                // If the request goes to the current host, the destination host should match window host exactly.
-                // See reqwest host_str() at https://docs.rs/reqwest/latest/reqwest/struct.Url.html#method.domain;
-                // See gloo hostname() at https://developer.mozilla.org/en-US/docs/Web/API/Location/hostname.
-                window_hostname == dest_host
-            })
-        })
+        let Ok(window_origin) = gloo::utils::window().location().origin() else {
+            return false;
+        };
+        let Ok(window_url) = reqwest::Url::parse(&window_origin) else {
+            return false;
+        };
+        url.into_url()
+            .is_ok_and(|url| url.origin() == window_url.origin())
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn include_warp_http_headers<U: IntoUrl + Clone>(_url: U) -> bool {
-        true
+    fn include_warp_http_headers<U: IntoUrl + Clone>(url: U) -> bool {
+        url.into_url()
+            .is_ok_and(|url| url.origin() == ChannelState::server_root_domain())
     }
 
     fn add_warp_http_headers(mut builder: RequestBuilder) -> RequestBuilder {
@@ -324,8 +323,10 @@ impl Client {
                 .linux_kernel_version()
                 .and_then(|kernel_version| HeaderValue::from_str(kernel_version).ok())
             {
-                builder =
-                    builder.header(headers::ZAPLEX_OS_LINUX_KERNEL_VERSION, linux_kernel_version);
+                builder = builder.header(
+                    headers::ZAPLEX_OS_LINUX_KERNEL_VERSION,
+                    linux_kernel_version,
+                );
             }
         }
 
@@ -700,3 +701,7 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Client {
         })
     }
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "lib_tests.rs"]
+mod tests;

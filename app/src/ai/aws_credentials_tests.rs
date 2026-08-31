@@ -1,8 +1,12 @@
 use std::time::Duration;
 
+use ai::api_keys::AwsCredentialsRefreshStrategy;
 use aws_credential_types::provider::error::CredentialsError;
 
-use super::user_facing_aws_credentials_error_message;
+use super::{
+    is_current_refresh_configuration, user_facing_aws_credentials_error_message,
+    AwsCredentialsRefreshRequest,
+};
 
 #[test]
 fn maps_credentials_not_loaded_to_user_message() {
@@ -66,5 +70,64 @@ fn maps_unhandled_error_to_user_message() {
     assert_eq!(
         message,
         "Unexpected error while loading AWS credentials. Refresh your AWS login and try again."
+    );
+}
+
+fn request(
+    generation: u64,
+    profile: &str,
+    strategy: AwsCredentialsRefreshStrategy,
+) -> AwsCredentialsRefreshRequest {
+    AwsCredentialsRefreshRequest {
+        generation,
+        profile: profile.to_string(),
+        strategy,
+        credentials_enabled: true,
+    }
+}
+
+#[test]
+fn newer_profile_refresh_rejects_late_success_or_error_from_older_refresh() {
+    let older = request(1, "account-a", AwsCredentialsRefreshStrategy::LocalChain);
+    let newer = request(2, "account-b", AwsCredentialsRefreshStrategy::LocalChain);
+
+    assert_eq!(
+        is_current_refresh_configuration(
+            &newer,
+            true,
+            "account-b",
+            &AwsCredentialsRefreshStrategy::LocalChain,
+            true,
+        ),
+        true
+    );
+    assert_eq!(
+        is_current_refresh_configuration(
+            &older,
+            false,
+            "account-b",
+            &AwsCredentialsRefreshStrategy::LocalChain,
+            true,
+        ),
+        false
+    );
+}
+
+#[test]
+fn local_chain_completion_cannot_overwrite_newer_oidc_refresh() {
+    let local = request(3, "default", AwsCredentialsRefreshStrategy::LocalChain);
+    let oidc_strategy = AwsCredentialsRefreshStrategy::OidcManaged {
+        task_id: Some("task-b".to_string()),
+        role_arn: "arn:aws:iam::123456789012:role/new".to_string(),
+    };
+    let oidc = request(4, "default", oidc_strategy.clone());
+
+    assert_eq!(
+        is_current_refresh_configuration(&oidc, true, "default", &oidc_strategy, true),
+        true
+    );
+    assert_eq!(
+        is_current_refresh_configuration(&local, false, "default", &oidc_strategy, true),
+        false
     );
 }

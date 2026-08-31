@@ -469,6 +469,37 @@ fn automatic_analysis_uses_full_freeness_policy_across_providers() {
     assert!(automatic_analysis_account(&degraded, &candidates).is_none());
 }
 
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn non_linux_loaded_snapshot_exposes_analysis_accounts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"default@example.com"}}"#,
+    )
+    .unwrap();
+    let snapshot = zaplex_cockpit::build_snapshot(
+        &home,
+        &home.join(".codex"),
+        None,
+        Utc::now(),
+        0,
+        0,
+        &zaplex_cockpit::PricingTable::default(),
+    );
+
+    assert_eq!(snapshot.health, ScanHealth::Loaded);
+    assert_eq!(
+        analysis_accounts(&snapshot)
+            .into_iter()
+            .map(|account| account.key)
+            .collect::<Vec<_>>(),
+        vec!["claude:default".to_string()]
+    );
+}
+
 #[test]
 fn mutation_commands_keep_hostile_content_in_single_argv_or_stdin_fields() {
     let operation = GitHubOperation::CreateIssue {

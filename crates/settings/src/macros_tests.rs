@@ -1,5 +1,7 @@
 use anyhow::Result;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use warpui::{AppContext, SingletonEntity};
+use warpui_extras::user_preferences::{Error as PreferencesError, UserPreferences};
 
 use crate::manager::SettingsManager;
 use crate::{Setting, SupportedPlatforms, SyncToCloud};
@@ -33,6 +35,107 @@ define_settings_group!(TestSettings, settings: [
     },
 ]);
 
+define_settings_group!(WriteFailureSettings, settings: [
+    fallible_setting: FallibleSetting {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: true,
+    },
+]);
+
+static CLAMPED_VALIDATION_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+define_settings_group!(ValidationSettings, settings: [
+    clamped_setting: ClampedSetting {
+        type: u8,
+        default: 50,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: true,
+    },
+]);
+
+impl ClampedSetting {
+    fn validate(&self, new_value: u8) -> u8 {
+        CLAMPED_VALIDATION_CALLS.fetch_add(1, Ordering::Relaxed);
+        new_value.clamp(1, 100)
+    }
+}
+
+static ENUM_VALIDATION_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(
+    Default, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub enum NormalizedEnum {
+    #[default]
+    Canonical,
+    Invalid,
+}
+
+impl settings_value::SettingsValue for NormalizedEnum {}
+
+impl NormalizedEnum {
+    fn validate(&self, new_value: Self) -> Self {
+        ENUM_VALIDATION_CALLS.fetch_add(1, Ordering::Relaxed);
+        match new_value {
+            Self::Canonical => Self::Canonical,
+            Self::Invalid => Self::Canonical,
+        }
+    }
+}
+
+implement_setting_for_enum!(
+    NormalizedEnum,
+    EnumValidationSettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Never,
+    private: true,
+);
+
+define_settings_group!(EnumValidationSettings, settings: [
+    normalized_enum: NormalizedEnum,
+]);
+
+#[derive(Default)]
+struct FailingWritePreferences;
+
+impl FailingWritePreferences {
+    fn error() -> PreferencesError {
+        std::io::Error::other("injected preferences write failure").into()
+    }
+}
+
+impl UserPreferences for FailingWritePreferences {
+    fn write_value(&self, key: &str, value: String) -> std::result::Result<(), PreferencesError> {
+        let _ = (key, value);
+        Err(Self::error())
+    }
+
+    fn read_value(&self, key: &str) -> std::result::Result<Option<String>, PreferencesError> {
+        let _ = key;
+        Ok(None)
+    }
+
+    fn remove_value(&self, key: &str) -> std::result::Result<(), PreferencesError> {
+        let _ = key;
+        Ok(())
+    }
+
+    fn write_value_with_hierarchy(
+        &self,
+        key: &str,
+        value: String,
+        hierarchy: Option<&str>,
+        max_table_depth: Option<u32>,
+    ) -> std::result::Result<(), PreferencesError> {
+        let _ = (key, value, hierarchy, max_table_depth);
+        Err(Self::error())
+    }
+}
+
 pub fn init_and_register_preferences(ctx: &mut AppContext) {
     ctx.add_singleton_model(move |_| {
         crate::PublicPreferences::new(Box::<
@@ -43,6 +146,17 @@ pub fn init_and_register_preferences(ctx: &mut AppContext) {
         crate::PrivatePreferences::new(Box::<
             warpui_extras::user_preferences::in_memory::InMemoryPreferences,
         >::default())
+    });
+}
+
+fn init_failing_write_preferences(ctx: &mut AppContext) {
+    ctx.add_singleton_model(|_| {
+        crate::PublicPreferences::new(Box::<
+            warpui_extras::user_preferences::in_memory::InMemoryPreferences,
+        >::default())
+    });
+    ctx.add_singleton_model(|_| {
+        crate::PrivatePreferences::new(Box::<FailingWritePreferences>::default())
     });
 }
 
@@ -69,6 +183,246 @@ impl EventListener {
 
 impl warpui::Entity for EventListener {
     type Event = ();
+}
+
+struct WriteFailureEventListener {
+    event_count: usize,
+}
+
+impl WriteFailureEventListener {
+    fn new(ctx: &mut warpui::ModelContext<Self>) -> Self {
+        let settings = WriteFailureSettings::handle(ctx);
+        ctx.subscribe_to_model(&settings, |listener, event, _ctx| {
+            if matches!(
+                event,
+                WriteFailureSettingsChangedEvent::FallibleSetting { .. }
+            ) {
+                listener.event_count += 1;
+            }
+        });
+        Self { event_count: 0 }
+    }
+}
+
+impl warpui::Entity for WriteFailureEventListener {
+    type Event = ();
+}
+
+struct ValidationEventListener {
+    event_count: usize,
+}
+
+impl ValidationEventListener {
+    fn new(ctx: &mut warpui::ModelContext<Self>) -> Self {
+        let settings = ValidationSettings::handle(ctx);
+        ctx.subscribe_to_model(&settings, |listener, event, _ctx| {
+            if matches!(event, ValidationSettingsChangedEvent::ClampedSetting { .. }) {
+                listener.event_count += 1;
+            }
+        });
+        Self { event_count: 0 }
+    }
+}
+
+impl warpui::Entity for ValidationEventListener {
+    type Event = ();
+}
+
+#[test]
+fn preference_write_failures_preserve_state_and_suppress_events() {
+    warpui::App::test((), |mut app| async move {
+        app.update(init_failing_write_preferences);
+        app.add_singleton_model(|_| SettingsManager::default());
+        WriteFailureSettings::register(&mut app);
+        let listener = app.add_model(WriteFailureEventListener::new);
+
+        let local_error = app
+            .update(|ctx| {
+                WriteFailureSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    settings.fallible_setting.set_value(true, ctx)
+                })
+            })
+            .expect_err("the local preferences write should fail");
+        assert!(
+            format!("{local_error:#}").contains("injected preferences write failure"),
+            "the backend error should be propagated: {local_error:#}"
+        );
+
+        let cloud_error = app
+            .update(|ctx| {
+                WriteFailureSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    settings
+                        .fallible_setting
+                        .set_value_from_cloud_sync(true, ctx)
+                })
+            })
+            .expect_err("the cloud preferences write should fail");
+        assert!(
+            format!("{cloud_error:#}").contains("injected preferences write failure"),
+            "the backend error should be propagated: {cloud_error:#}"
+        );
+
+        app.read(|ctx| {
+            let setting = &WriteFailureSettings::as_ref(ctx).fallible_setting;
+            assert_eq!(*setting.value(), FallibleSetting::default_value());
+            assert!(!setting.is_value_explicitly_set());
+            assert_eq!(listener.as_ref(ctx).event_count, 0);
+        });
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn local_and_cloud_updates_persist_the_once_validated_value() {
+    warpui::App::test((), |mut app| async move {
+        app.update(init_and_register_preferences);
+        app.add_singleton_model(|_| SettingsManager::default());
+        ValidationSettings::register(&mut app);
+        let listener = app.add_model(ValidationEventListener::new);
+
+        CLAMPED_VALIDATION_CALLS.store(0, Ordering::Relaxed);
+        app.update(|ctx| {
+            ValidationSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings.clamped_setting.set_value(0, ctx).unwrap();
+            });
+        });
+        assert_eq!(CLAMPED_VALIDATION_CALLS.load(Ordering::Relaxed), 1);
+
+        app.read(|ctx| {
+            let setting = &ValidationSettings::as_ref(ctx).clamped_setting;
+            assert_eq!(*setting.value(), 1);
+            assert!(setting.is_value_explicitly_set());
+            let stored = <crate::PrivatePreferences as SingletonEntity>::as_ref(ctx)
+                .read_value(ClampedSetting::storage_key())
+                .unwrap();
+            assert_eq!(stored.as_deref(), Some("1"));
+            assert_eq!(listener.as_ref(ctx).event_count, 1);
+        });
+
+        CLAMPED_VALIDATION_CALLS.store(0, Ordering::Relaxed);
+        app.update(|ctx| {
+            ValidationSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .clamped_setting
+                    .set_value_from_cloud_sync(u8::MAX, ctx)
+                    .unwrap();
+            });
+        });
+        assert_eq!(CLAMPED_VALIDATION_CALLS.load(Ordering::Relaxed), 1);
+
+        app.read(|ctx| {
+            assert_eq!(
+                *ValidationSettings::as_ref(ctx).clamped_setting.value(),
+                100
+            );
+            let stored = <crate::PrivatePreferences as SingletonEntity>::as_ref(ctx)
+                .read_value(ClampedSetting::storage_key())
+                .unwrap();
+            assert_eq!(stored.as_deref(), Some("100"));
+            assert_eq!(listener.as_ref(ctx).event_count, 2);
+        });
+
+        CLAMPED_VALIDATION_CALLS.store(0, Ordering::Relaxed);
+        app.update(|ctx| {
+            ValidationSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .clamped_setting
+                    .set_value_from_cloud_sync(u8::MAX, ctx)
+                    .unwrap();
+            });
+        });
+        assert_eq!(CLAMPED_VALIDATION_CALLS.load(Ordering::Relaxed), 1);
+        app.read(|ctx| {
+            assert_eq!(listener.as_ref(ctx).event_count, 2);
+        });
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn stored_values_are_validated_once_for_both_macro_variants() {
+    warpui::App::test((), |mut app| async move {
+        app.update(init_and_register_preferences);
+
+        app.update(|ctx| {
+            let preferences = <crate::PrivatePreferences as SingletonEntity>::as_ref(ctx);
+            preferences
+                .write_value(ClampedSetting::storage_key(), "0".to_string())
+                .unwrap();
+            preferences
+                .write_value(
+                    NormalizedEnum::storage_key(),
+                    serde_json::to_string(&NormalizedEnum::Invalid).unwrap(),
+                )
+                .unwrap();
+        });
+
+        CLAMPED_VALIDATION_CALLS.store(0, Ordering::Relaxed);
+        app.update(|ctx| {
+            let setting = ClampedSetting::new_from_storage(ctx);
+            assert_eq!(*setting.value(), 1);
+            assert!(setting.is_value_explicitly_set());
+        });
+        assert_eq!(CLAMPED_VALIDATION_CALLS.load(Ordering::Relaxed), 1);
+
+        ENUM_VALIDATION_CALLS.store(0, Ordering::Relaxed);
+        app.update(|ctx| {
+            let setting = NormalizedEnum::new_from_storage(ctx);
+            assert_eq!(setting, NormalizedEnum::Canonical);
+        });
+        assert_eq!(ENUM_VALIDATION_CALLS.load(Ordering::Relaxed), 1);
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn enum_updates_persist_the_once_validated_value() {
+    warpui::App::test((), |mut app| async move {
+        app.update(init_and_register_preferences);
+        app.add_singleton_model(|_| SettingsManager::default());
+        EnumValidationSettings::register(&mut app);
+
+        ENUM_VALIDATION_CALLS.store(0, Ordering::Relaxed);
+        app.update(|ctx| {
+            EnumValidationSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .normalized_enum
+                    .set_value(NormalizedEnum::Invalid, ctx)
+            })
+        })
+        .unwrap();
+        assert_eq!(ENUM_VALIDATION_CALLS.load(Ordering::Relaxed), 1);
+
+        app.read(|ctx| {
+            assert_eq!(
+                EnumValidationSettings::as_ref(ctx).normalized_enum,
+                NormalizedEnum::Canonical
+            );
+            let stored = <crate::PrivatePreferences as SingletonEntity>::as_ref(ctx)
+                .read_value(NormalizedEnum::storage_key())
+                .unwrap();
+            assert_eq!(
+                stored,
+                Some(serde_json::to_string(&NormalizedEnum::Canonical).unwrap())
+            );
+        });
+
+        app.update(|ctx| {
+            <crate::PrivatePreferences as SingletonEntity>::as_ref(ctx)
+                .remove_value(NormalizedEnum::storage_key())
+                .unwrap();
+        });
+        ENUM_VALIDATION_CALLS.store(0, Ordering::Relaxed);
+        app.update(|ctx| {
+            EnumValidationSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .normalized_enum
+                    .set_value_from_cloud_sync(NormalizedEnum::Invalid, ctx)
+            })
+        })
+        .unwrap();
+        assert_eq!(ENUM_VALIDATION_CALLS.load(Ordering::Relaxed), 1);
+    });
 }
 
 #[test]

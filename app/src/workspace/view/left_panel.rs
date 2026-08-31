@@ -295,6 +295,17 @@ fn view_remains_available(active_view: ToolPanelView, available_views: &[ToolPan
 }
 
 impl LeftPanelView {
+    pub(crate) fn set_ssh_connecting(
+        &mut self,
+        node_id: &str,
+        connecting: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.ssh_manager_view.update(ctx, |view, ctx| {
+            view.set_connecting(node_id, connecting, ctx);
+        });
+    }
+
     pub fn new(
         working_directories_model: ModelHandle<WorkingDirectoriesModel>,
         views: Vec<ToolPanelView>,

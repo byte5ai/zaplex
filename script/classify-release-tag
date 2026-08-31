@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "$#" -ne 1 ]]; then
+  echo "usage: $0 <release-tag>" >&2
+  exit 2
+fi
+
+tag="$1"
+
+# Supported stable forms:
+#   vX.Y, vX.Y.Z
+# Supported prerelease forms:
+#   vX.Y.Z-rcN, vX.Y.Z-alphaN, vX.Y.Z-betaN, vX.Y.Z-devN
+#   vX.Y.rcN, vX.Y.devN
+if [[ "$tag" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+  classification="stable"
+  base_version="${tag#v}"
+  requires_main="true"
+  prerelease="false"
+  make_latest="true"
+elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(rc|alpha|beta|dev)[0-9]+$ ]]; then
+  classification="prerelease"
+  base_version="${tag#v}"
+  base_version="${base_version%%-*}"
+  requires_main="false"
+  prerelease="true"
+  make_latest="false"
+elif [[ "$tag" =~ ^v([0-9]+\.[0-9]+)\.(rc|dev)[0-9]+$ ]]; then
+  classification="prerelease"
+  base_version="${BASH_REMATCH[1]}"
+  requires_main="false"
+  prerelease="true"
+  make_latest="false"
+else
+  echo "Unsupported release tag: $tag" >&2
+  exit 1
+fi
+
+echo "classification=$classification"
+echo "base_version=$base_version"
+echo "requires_main=$requires_main"
+echo "prerelease=$prerelease"
+echo "make_latest=$make_latest"

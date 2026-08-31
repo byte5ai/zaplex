@@ -11,9 +11,12 @@
 //! there are no error payloads to leak into.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures::lock::Mutex;
 use zaplex_cockpit::OauthUsage;
 
 const ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -29,6 +32,20 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct CachedOauth {
     pub usage: Option<OauthUsage>,
     pub fetched_at: Instant,
+}
+
+/// Shared per-model OAuth cache. Clones refer to the same entries, so even if
+/// callers accidentally overlap, they cannot start requests from independent
+/// stale snapshots of the cache.
+#[derive(Clone, Default)]
+pub struct OauthCache {
+    entries: Arc<Mutex<HashMap<PathBuf, CachedOauth>>>,
+}
+
+impl OauthCache {
+    async fn snapshot(&self) -> HashMap<PathBuf, CachedOauth> {
+        self.entries.lock().await.clone()
+    }
 }
 
 /// Read the OAuth access token for one account: `<config_dir>/.credentials.json`
@@ -107,8 +124,42 @@ async fn fetch_one(client: &reqwest::Client, token: &str) -> Option<OauthUsage> 
 pub async fn refresh_cache(
     claude_config_dirs: Vec<PathBuf>,
     default_config_dir: PathBuf,
-    mut cache: HashMap<PathBuf, CachedOauth>,
+    cache: OauthCache,
 ) -> HashMap<PathBuf, CachedOauth> {
+    let Ok(client) = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build() else {
+        return cache.snapshot().await;
+    };
+    refresh_cache_with(claude_config_dirs, cache, move |dir| {
+        let client = client.clone();
+        let default_config_dir = default_config_dir.clone();
+        async move {
+            match read_access_token(&dir, &default_config_dir) {
+                Some(token) => fetch_one(&client, &token).await,
+                None => None,
+            }
+        }
+    })
+    .await
+}
+
+async fn refresh_cache_with<F, Fut>(
+    mut claude_config_dirs: Vec<PathBuf>,
+    cache: OauthCache,
+    fetch: F,
+) -> HashMap<PathBuf, CachedOauth>
+where
+    F: Fn(PathBuf) -> Fut,
+    Fut: Future<Output = Option<OauthUsage>>,
+{
+    claude_config_dirs.sort();
+    claude_config_dirs.dedup();
+
+    // Keep the lock for the complete refresh. A concurrent caller waits, then
+    // observes the freshly timestamped entries and skips their requests. The
+    // existing implementation already fetched accounts sequentially, so this
+    // adds cross-refresh single-flight without reducing per-refresh parallelism.
+    let mut cache = cache.entries.lock().await;
+
     // Drop cache entries for accounts that disappeared.
     cache.retain(|dir, _| claude_config_dirs.contains(dir));
 
@@ -117,17 +168,11 @@ pub async fn refresh_cache(
         .filter(|dir| cache.get(dir).is_none_or(|c| c.fetched_at.elapsed() >= TTL))
         .collect();
     if stale.is_empty() {
-        return cache;
+        return cache.clone();
     }
 
-    let Ok(client) = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build() else {
-        return cache;
-    };
     for dir in stale {
-        let usage = match read_access_token(&dir, &default_config_dir) {
-            Some(token) => fetch_one(&client, &token).await,
-            None => None,
-        };
+        let usage = fetch(dir.clone()).await;
         cache.insert(
             dir,
             CachedOauth {
@@ -136,7 +181,7 @@ pub async fn refresh_cache(
             },
         );
     }
-    cache
+    cache.clone()
 }
 
 /// The merge view of a cache: only successful results, keyed by config dir.
@@ -146,3 +191,7 @@ pub fn usable_usage(cache: &HashMap<PathBuf, CachedOauth>) -> HashMap<PathBuf, O
         .filter_map(|(dir, c)| c.usage.map(|u| (dir.clone(), u)))
         .collect()
 }
+
+#[cfg(test)]
+#[path = "oauth_tests.rs"]
+mod tests;

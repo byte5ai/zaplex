@@ -384,3 +384,7 @@ mod build_snapshot_health_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "snapshot_platform_tests.rs"]
+mod snapshot_platform_tests;
