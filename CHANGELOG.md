@@ -4,6 +4,16 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.0.5] — 2026-08-20
 
+- **Atomare Linux-Updates:** AppImages werden auf demselben Dateisystem
+  vorbereitet, vollständig synchronisiert und erst dann per Rename ersetzt.
+- **Import-Isolation:** Drive-Importe tragen eindeutige Generationen; Reset und
+  Retry können keine verspäteten Events eines früheren Imports mehr übernehmen.
+- **Sichere Upload-Commits:** Remote-Pfadfehler schlagen geschlossen fehl und
+  Staging-Objekte werden identity-geprüft atomar übernommen oder zur
+  Wiederherstellung erhalten.
+- **Sichere Downloads:** Downloads landen zunächst in exklusiven Sidecars;
+  Symlinks und Spezialdateien werden sichtbar abgelehnt und bestehende Ziele
+  erst nach vollständiger Prüfung atomar ersetzt.
 - **Ehrliche Kontenerkennung:** Ein ausstehender oder fehlgeschlagener Scan wird
   nicht mehr als `KI-KONTEN 0` dargestellt; eine Null ist nur nach einem
   erfolgreichen leeren Scan sichtbar.

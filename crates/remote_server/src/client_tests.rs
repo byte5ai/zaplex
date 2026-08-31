@@ -12,11 +12,11 @@ use crate::proto::{
     ManagedSessionInfo, ManagedSessionLifecycleAction, ManagedSessionLifecycleRequest,
     ManagedSessionLifecycleResponse, ManagedSessionLifecycleStatus, MultiplexerKind,
     MultiplexerSessionInfo, MultiplexerSessionList, ReadFileChunkResponse, ReadFileChunkSuccess,
-    ResolvePathResponse, ResolvePathSuccess, RunCommandResponse, RunCommandSuccess,
-    SafeFileEntryKind, SafeFileIdentity, SafeFileMutationResult, SafeFileMutationState,
-    SafeFileOpenExisting, SafeFileOpened, SafeFileRequest, SafeFileResponse, ServerMessage,
-    SessionAttached, SessionExited, SessionInfo, SessionList, SessionOpened, SessionOutput,
-    SessionSize, StartupCommandAck, WriteFileChunkResponse, WriteFileChunkSuccess,
+    ResolvePathNotFound, ResolvePathResponse, ResolvePathSuccess, RunCommandResponse,
+    RunCommandSuccess, SafeFileEntryKind, SafeFileIdentity, SafeFileMutationResult,
+    SafeFileMutationState, SafeFileOpenExisting, SafeFileOpened, SafeFileRequest, SafeFileResponse,
+    ServerMessage, SessionAttached, SessionExited, SessionInfo, SessionList, SessionOpened,
+    SessionOutput, SessionSize, StartupCommandAck, WriteFileChunkResponse, WriteFileChunkSuccess,
 };
 use crate::protocol;
 use warp_core::SessionId;
@@ -253,6 +253,25 @@ async fn resolve_path_round_trip() {
     };
     assert_eq!(success.canonical_path, "/home/me/project");
     assert_eq!(success.kind, FileSystemEntryKind::Directory as i32);
+}
+
+#[tokio::test]
+async fn resolve_path_not_found_round_trip() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|_| {
+        server_message::Message::ResolvePathResponse(ResolvePathResponse {
+            result: Some(resolve_path_response::Result::NotFound(
+                ResolvePathNotFound {
+                    message: "Path not found: /missing".to_string(),
+                },
+            )),
+        })
+    });
+
+    let response = client.resolve_path("/missing".to_string()).await.unwrap();
+    let Some(resolve_path_response::Result::NotFound(not_found)) = response.result else {
+        panic!("expected typed not-found response");
+    };
+    assert_eq!(not_found.message, "Path not found: /missing");
 }
 
 #[tokio::test]
