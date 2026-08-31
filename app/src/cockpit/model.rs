@@ -40,7 +40,7 @@ use zaplex_remote_session::types::{
 };
 
 use crate::cockpit::fleet_details::ManagedFleetInventory;
-use crate::cockpit::oauth::{self, CachedOauth};
+use crate::cockpit::oauth::{self, OauthCache};
 use crate::cockpit::settings::CockpitSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::agent_session::proto_to_snapshot;
@@ -91,12 +91,55 @@ fn should_apply_refresh_result(current_generation: u64, completed_generation: u6
     current_generation == completed_generation
 }
 
+/// Actor-local single-flight state for full cockpit builds. A request received
+/// during a build reserves one follow-up build; further requests are folded
+/// into that reservation and only advance the generation it will use.
+#[derive(Debug, Default)]
+struct RefreshSingleFlight {
+    running: bool,
+    rerun_requested: bool,
+}
+
+impl RefreshSingleFlight {
+    /// Returns true when the caller must start a build now.
+    fn request(&mut self) -> bool {
+        if self.running {
+            self.rerun_requested = true;
+            return false;
+        }
+        self.running = true;
+        true
+    }
+
+    /// Completes the active build. A requested rerun keeps the running slot
+    /// reserved so no trigger can start a competing build before it is spawned.
+    fn finish(&mut self) -> bool {
+        debug_assert!(self.running);
+        if self.rerun_requested {
+            self.rerun_requested = false;
+            return true;
+        }
+        self.running = false;
+        false
+    }
+
+    fn cancel_rerun(&mut self) {
+        self.rerun_requested = false;
+    }
+
+    fn stop(&mut self) {
+        self.running = false;
+        self.rerun_requested = false;
+    }
+}
+
 pub struct CockpitModel {
     snapshot: CockpitSnapshot,
     /// Monotonic identity of the newest requested refresh. Background scans can
     /// complete out of order; only the result matching this generation may
     /// replace the current snapshot.
     refresh_generation: u64,
+    refresh_flight: RefreshSingleFlight,
     /// The unified cross-host Agent-Inventory: local sessions folded together
     /// with every connected daemon's sessions into one Host▸Project▸Session
     /// tree. Rebuilt on every refresh; equals the local-only tree when no
@@ -111,7 +154,7 @@ pub struct CockpitModel {
     /// Per-account real-usage cache (C3b), keyed by the account's config dir.
     /// Lives here so the 15-min TTL survives across refresh cycles; the token
     /// itself is never stored — only the parsed, secret-free usage numbers.
-    oauth_cache: HashMap<PathBuf, CachedOauth>,
+    oauth_cache: OauthCache,
     /// Bounded parse cache for structured agent task state and Codex rollout
     /// metadata. Survives reconcile ticks so unchanged transcripts are not
     /// reopened every 45 seconds.
@@ -142,9 +185,9 @@ struct RefreshInputs {
     pricing: PricingTable,
     /// `cockpit.oauth_usage` — when off, no usage requests happen at all.
     oauth_enabled: bool,
-    /// Cache state moved into the build; the (possibly refreshed) cache comes
-    /// back with the snapshot via `apply`.
-    oauth_cache: HashMap<PathBuf, CachedOauth>,
+    /// Shared cache state used by the build. Clones preserve OAuth single-flight
+    /// across refresh generations.
+    oauth_cache: OauthCache,
     /// Transcript parse cache moved through the background scan and returned
     /// with the accepted refresh result.
     transcript_cache: TranscriptScanCache,
@@ -212,10 +255,11 @@ impl CockpitModel {
         let mut model = Self {
             snapshot: initial_snapshot(),
             refresh_generation: 0,
+            refresh_flight: RefreshSingleFlight::default(),
             inventory: FleetTree::default(),
             managed_fleet: ManagedFleetInventory::default(),
             pricing: PricingTable::default(),
-            oauth_cache: HashMap::new(),
+            oauth_cache: OauthCache::default(),
             transcript_cache: TranscriptScanCache::default(),
             overrides: AccountOverrides::default(),
             local_label: "local".to_string(),
@@ -296,16 +340,30 @@ impl CockpitModel {
         })
     }
 
-    /// Kick off a background disk scan; applies the result on the model thread.
+    /// Request a background scan. Requests received while one is active are
+    /// coalesced into one rerun that captures the latest inputs after completion.
     fn spawn_refresh(&mut self, ctx: &mut ModelContext<Self>) {
         // Advance before reading inputs: disabling the cockpit must invalidate a
         // scan that is already in flight as surely as starting a newer scan does.
         self.refresh_generation = self.refresh_generation.wrapping_add(1);
         let generation = self.refresh_generation;
+
+        if !*CockpitSettings::as_ref(ctx).enabled {
+            self.refresh_flight.cancel_rerun();
+            self.clear_for_disabled(ctx);
+            return;
+        }
+        if !self.refresh_flight.request() {
+            return;
+        }
+        self.spawn_refresh_generation(generation, ctx);
+    }
+
+    /// Start the build already reserved in [`Self::refresh_flight`]. Reruns use
+    /// the newest request generation without advancing it again.
+    fn spawn_refresh_generation(&mut self, generation: u64, ctx: &mut ModelContext<Self>) {
         let Some(mut inputs) = self.refresh_inputs(ctx) else {
-            // Disabled (or no home dir): blank any stale state instead of
-            // silently doing nothing, so the ambient badge and Conductor UI
-            // don't hold onto a waiting-count from before the toggle.
+            self.refresh_flight.stop();
             self.clear_for_disabled(ctx);
             return;
         };
@@ -327,7 +385,7 @@ impl CockpitModel {
                 // Piggybacks on this refresh (no extra timer); the 15-min TTL
                 // inside `refresh_cache` keeps actual requests rare. `.compat()`
                 // provides the tokio reactor reqwest needs on this executor.
-                let oauth_cache = if inputs.oauth_enabled {
+                if inputs.oauth_enabled {
                     let claude_dirs: Vec<PathBuf> = snapshot
                         .accounts
                         .iter()
@@ -337,15 +395,12 @@ impl CockpitModel {
                     let cache = oauth::refresh_cache(
                         claude_dirs,
                         inputs.home.join(".claude"),
-                        inputs.oauth_cache,
+                        inputs.oauth_cache.clone(),
                     )
                     .compat()
                     .await;
                     apply_oauth_usage(&mut snapshot, &oauth::usable_usage(&cache));
-                    cache
-                } else {
-                    inputs.oauth_cache
-                };
+                }
                 // Apply user overrides (instances.json) last, on the fully-built
                 // snapshot: hide / relabel / reorder for display. Read off-thread;
                 // a missing or broken file yields no overrides (never blanks the
@@ -531,19 +586,31 @@ impl CockpitModel {
 
                 let _ = spawner
                     .spawn(move |me, ctx| {
-                        if !should_apply_refresh_result(me.refresh_generation, generation) {
+                        let rerun = me.refresh_flight.finish();
+                        if !*CockpitSettings::as_ref(ctx).enabled {
+                            me.refresh_flight.stop();
+                            me.clear_for_disabled(ctx);
                             return;
                         }
-                        me.apply(
-                            snapshot,
-                            oauth_cache,
-                            inputs.transcript_cache,
-                            overrides,
-                            inventory,
-                            managed_fleet,
-                            local_label,
-                            ctx,
-                        )
+                        if should_apply_refresh_result(me.refresh_generation, generation) {
+                            me.apply(
+                                snapshot,
+                                inputs.transcript_cache,
+                                overrides,
+                                inventory,
+                                managed_fleet,
+                                local_label,
+                                ctx,
+                            );
+                        } else {
+                            // The visible result is stale, but this bounded parse
+                            // cache remains valid input for the coalesced rerun.
+                            me.transcript_cache = inputs.transcript_cache;
+                        }
+                        if rerun {
+                            let generation = me.refresh_generation;
+                            me.spawn_refresh_generation(generation, ctx);
+                        }
                     })
                     .await;
             })
@@ -612,7 +679,6 @@ impl CockpitModel {
     fn apply(
         &mut self,
         snapshot: CockpitSnapshot,
-        oauth_cache: HashMap<PathBuf, CachedOauth>,
         transcript_cache: TranscriptScanCache,
         overrides: AccountOverrides,
         inventory: FleetTree,
@@ -668,7 +734,6 @@ impl CockpitModel {
         self.snapshot = snapshot;
         self.inventory = inventory;
         self.managed_fleet = managed_fleet;
-        self.oauth_cache = oauth_cache;
         self.transcript_cache = transcript_cache;
         self.overrides = overrides;
         self.local_label = local_label;

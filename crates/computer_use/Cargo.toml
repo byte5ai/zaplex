@@ -21,7 +21,7 @@ log.workspace = true
 pathfinder_geometry.workspace = true
 serde.workspace = true
 serde_with.workspace = true
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 command.workspace = true
@@ -59,6 +59,7 @@ windows = { workspace = true, features = [
 
 [dev-dependencies]
 computer_use = { path = ".", features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]
 cfg_aliases = "0.2.1"

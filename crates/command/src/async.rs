@@ -17,6 +17,8 @@ pub struct Command {
     stdin_is_default: bool,
     stdout_is_default: bool,
     stderr_is_default: bool,
+    #[cfg(windows)]
+    create_process_group: bool,
 }
 
 impl fmt::Debug for Command {
@@ -84,12 +86,23 @@ impl Command {
         // process ID as the group ID. This allows for killing any other processes
         // spawned by this process when we kill this process.
         //
-        // TODO(roland): handle for windows
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
 
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            command.creation_flags(windows::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB.0);
+        }
+
         let inner: async_process::Command = command.into();
-        Self::new_internal(inner)
+        #[allow(unused_mut)]
+        let mut command = Self::new_internal(inner);
+        #[cfg(windows)]
+        {
+            command.create_process_group = true;
+        }
+        command
     }
 
     #[allow(unused_mut)]
@@ -109,6 +122,8 @@ impl Command {
             stdin_is_default: true,
             stdout_is_default: true,
             stderr_is_default: true,
+            #[cfg(windows)]
+            create_process_group: false,
         }
     }
 
@@ -351,7 +366,34 @@ impl Command {
             self.inner.stderr(Stdio::null());
         }
 
-        self.inner.spawn()
+        #[cfg(windows)]
+        if self.create_process_group {
+            use async_process::windows::CommandExt as _;
+
+            let flags = windows::Win32::System::Threading::CREATE_NO_WINDOW.0
+                | windows::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB.0
+                | windows::Win32::System::Threading::CREATE_SUSPENDED.0;
+            self.inner.creation_flags(flags);
+        }
+
+        #[allow(unused_mut)]
+        let mut child = self.inner.spawn()?;
+
+        #[cfg(windows)]
+        if self.create_process_group {
+            use std::os::windows::io::AsRawHandle as _;
+
+            let pid = child.id();
+            if let Err(error) = crate::windows::register_and_resume_process_group(
+                pid,
+                child.as_raw_handle() as isize,
+            ) {
+                let _ = child.kill();
+                return Err(io::Error::other(error));
+            }
+        }
+
+        Ok(child)
     }
 
     /// Executes the command, waits for it to exit, and returns the exit status.

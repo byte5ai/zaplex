@@ -45,10 +45,6 @@ const PROCESS_DISCOVERY_INCOMPLETE: &str =
     "Claude process account discovery could not inspect every process";
 #[cfg(target_os = "linux")]
 const PROCESS_DISCOVERY_UNAVAILABLE: &str = "Claude process account discovery is unavailable";
-#[cfg(not(target_os = "linux"))]
-const PROCESS_DISCOVERY_UNSUPPORTED: &str =
-    "Claude process account discovery is unsupported on this platform";
-
 fn push_unique_issue(issues: &mut Vec<String>, issue: impl Into<String>) {
     let issue = issue.into();
     if !issues.contains(&issue) {
@@ -303,10 +299,9 @@ fn running_claude_config_dirs() -> ProcessAccountDiscovery {
 
 #[cfg(not(target_os = "linux"))]
 fn running_claude_config_dirs() -> ProcessAccountDiscovery {
-    ProcessAccountDiscovery {
-        roots: Vec::new(),
-        issues: vec![PROCESS_DISCOVERY_UNSUPPORTED.to_string()],
-    }
+    // Process inspection is an optional discovery source. A platform without
+    // it still has an authoritative scan of static and explicitly pinned roots.
+    ProcessAccountDiscovery::default()
 }
 
 fn is_excluded(dir_name: &str) -> bool {

@@ -68,9 +68,9 @@ use super::proto::{
     CreateDirectoryResponse, CreateDirectorySuccess, DirEntry, FileSystemEntryKind, ListDirectory,
     ListDirectoryResponse, ListDirectorySuccess, OpenBuffer, OpenBufferResponse, ReadFileChunk,
     ReadFileChunkResponse, ReadFileChunkSuccess, ResolveConflict, ResolveConflictResponse,
-    ResolveConflictSuccess, ResolvePath, ResolvePathResponse, ResolvePathSuccess, SaveBuffer,
-    SaveBufferResponse, SaveBufferSuccess, TextEdit, WriteFileChunk, WriteFileChunkResponse,
-    WriteFileChunkSuccess,
+    ResolveConflictSuccess, ResolvePath, ResolvePathNotFound, ResolvePathResponse,
+    ResolvePathSuccess, SaveBuffer, SaveBufferResponse, SaveBufferSuccess, TextEdit,
+    WriteFileChunk, WriteFileChunkResponse, WriteFileChunkSuccess,
 };
 #[cfg(feature = "local_fs")]
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
@@ -2337,41 +2337,49 @@ impl ServerModel {
         log::info!("Handling ListDirectory path={}", msg.path);
 
         let path = expand_user_path(&msg.path);
-        let result = match std::fs::read_dir(&path) {
-            Ok(read_dir) => {
-                let mut entries = Vec::new();
-                for entry in read_dir.flatten() {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    // Prefer `file_type()` (doesn't follow symlinks, no extra stat needed);
-                    // fall back to `metadata()` on failure (follows symlinks).
-                    let file_type = entry.file_type().ok();
-                    let metadata = entry.metadata().ok();
-                    let kind = entry_kind(file_type.as_ref(), metadata.as_ref());
-                    let is_dir = kind == FileSystemEntryKind::Directory as i32;
-                    let size_bytes = metadata.as_ref().filter(|m| m.is_file()).map(|m| m.len());
-                    let modified_epoch_millis = metadata
-                        .as_ref()
-                        .and_then(|m| m.modified().ok())
-                        .and_then(system_time_to_epoch_millis);
-                    entries.push(DirEntry {
-                        name,
-                        is_dir,
-                        kind,
-                        size_bytes,
-                        modified_epoch_millis,
-                    });
-                }
-                entries.sort_by(|a, b| a.name.cmp(&b.name));
-                let canonical_path = path
-                    .canonicalize()
-                    .unwrap_or(path)
-                    .to_string_lossy()
-                    .to_string();
-                list_directory_response::Result::Success(ListDirectorySuccess {
-                    entries,
-                    canonical_path,
-                })
+        let listing = (|| -> std::io::Result<ListDirectorySuccess> {
+            let root_metadata = std::fs::symlink_metadata(&path)?;
+            if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "path is not a non-symlink directory",
+                ));
             }
+            let read_dir = std::fs::read_dir(&path)?;
+            let mut entries = Vec::new();
+            for entry in read_dir {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let metadata = std::fs::symlink_metadata(entry.path())?;
+                let file_type = metadata.file_type();
+                let kind = entry_kind(Some(&file_type), Some(&metadata));
+                let is_dir = kind == FileSystemEntryKind::Directory as i32;
+                let size_bytes = metadata.is_file().then_some(metadata.len());
+                let modified_epoch_millis = metadata
+                    .modified()
+                    .ok()
+                    .and_then(system_time_to_epoch_millis);
+                entries.push(DirEntry {
+                    name,
+                    is_dir,
+                    kind,
+                    size_bytes,
+                    modified_epoch_millis,
+                });
+            }
+            entries.sort_by(|a, b| a.name.cmp(&b.name));
+            let canonical_path = path
+                .canonicalize()
+                .unwrap_or(path)
+                .to_string_lossy()
+                .to_string();
+            Ok(ListDirectorySuccess {
+                entries,
+                canonical_path,
+            })
+        })();
+        let result = match listing {
+            Ok(success) => list_directory_response::Result::Success(success),
             Err(err) => list_directory_response::Result::Error(FileOperationError {
                 message: format!("Failed to list directory {}: {err}", msg.path),
             }),
@@ -2400,6 +2408,11 @@ impl ServerModel {
                     canonical_path,
                     kind,
                     size_bytes: metadata.is_file().then_some(metadata.len()),
+                })
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                resolve_path_response::Result::NotFound(ResolvePathNotFound {
+                    message: format!("Path not found: {}", msg.path),
                 })
             }
             Err(err) => resolve_path_response::Result::Error(FileOperationError {
@@ -2446,14 +2459,23 @@ impl ServerModel {
 
         let path = expand_user_path(&msg.path);
         let result = (|| -> std::io::Result<ReadFileChunkSuccess> {
-            let mut file = std::fs::File::open(&path)?;
-            let total_size = file.metadata().ok().map(|m| m.len());
+            if msg.max_bytes == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "file chunk size must be positive",
+                ));
+            }
+            let mut file = open_regular_file_nofollow(&path)?;
+            let total_size = Some(file.metadata()?.len());
             file.seek(SeekFrom::Start(msg.offset))?;
             let max_bytes = msg.max_bytes.min(8 * 1024 * 1024) as usize;
             let mut bytes = vec![0; max_bytes];
             let read = file.read(&mut bytes)?;
             bytes.truncate(read);
-            let next_offset = msg.offset + read as u64;
+            let next_offset = msg
+                .offset
+                .checked_add(read as u64)
+                .ok_or_else(|| std::io::Error::other("file offset overflow"))?;
             let eof = total_size.is_some_and(|size| next_offset >= size) || read == 0;
             Ok(ReadFileChunkSuccess {
                 bytes,
@@ -2551,6 +2573,41 @@ fn expand_user_path(path: &str) -> PathBuf {
         }
     }
     PathBuf::from(path)
+}
+
+#[cfg(feature = "local_fs")]
+fn open_regular_file_nofollow(path: &Path) -> std::io::Result<std::fs::File> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path is not a regular non-symlink file",
+        ));
+    }
+
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "opened object is not a regular file",
+        ));
+    }
+    Ok(file)
 }
 
 #[cfg(feature = "local_fs")]

@@ -2,8 +2,36 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
-## [1.0.5] — 2026-08-20
+## [1.0.5] — 2026-09-01
 
+- **Verlässliche Einstellungen:** Schreibfehler werden bis zur UI propagiert;
+  validierte Werte sind im Speicher, auf Disk und nach Neustart identisch.
+- **Windows-Prozessabbruch:** Lokale Hilfskommandos laufen in eigenen Job
+  Objects, sodass Abbruch auch Kind- und Enkelprozesse beendet.
+- **Release-Tags:** Stable- und Prerelease-Tags nutzen eine gemeinsame,
+  getestete Klassifikation; nur Stable benötigt Main und wird als Latest
+  veröffentlicht.
+- **Cockpit-Refresh:** Fehlende optionale Prozesssuche degradiert Nicht-Linux
+  nicht mehr; überlappende Scans und OAuth-Abfragen werden zusammengeführt.
+- **SSH-Verbindungsstart:** Pro Host läuft höchstens ein Bootstrap bis zum
+  echten Lifecycle-Ende; Zsh-Prompts und absolute Shell-Ready-Fristen werden
+  berücksichtigt.
+- **Vertrauenswürdige HTTP-Header:** Client-, Release- und Systemmetadaten sowie
+  Integration-Header bleiben auf der konfigurierten Zaplex-Origin begrenzt.
+- **AWS-Credentials:** Nur der neueste, noch zur ausgewählten Konfiguration
+  passende Refresh darf den aktiven Bedrock-Credential-Zustand verändern.
+- **Begrenzte Portal-Flows:** Wayland-Screenshots und MCP-OAuth warten nicht
+  mehr unbegrenzt und räumen abgelaufene Requests retry-fähig auf.
+- **Atomare Linux-Updates:** AppImages werden auf demselben Dateisystem
+  vorbereitet, vollständig synchronisiert und erst dann per Rename ersetzt.
+- **Import-Isolation:** Drive-Importe tragen eindeutige Generationen; Reset und
+  Retry können keine verspäteten Events eines früheren Imports mehr übernehmen.
+- **Sichere Upload-Commits:** Remote-Pfadfehler schlagen geschlossen fehl und
+  Staging-Objekte werden identity-geprüft atomar übernommen oder zur
+  Wiederherstellung erhalten.
+- **Sichere Downloads:** Downloads landen zunächst in exklusiven Sidecars;
+  Symlinks und Spezialdateien werden sichtbar abgelehnt und bestehende Ziele
+  erst nach vollständiger Prüfung atomar ersetzt.
 - **Ehrliche Kontenerkennung:** Ein ausstehender oder fehlgeschlagener Scan wird
   nicht mehr als `KI-KONTEN 0` dargestellt; eine Null ist nur nach einem
   erfolgreichen leeren Scan sichtbar.

@@ -365,6 +365,40 @@ fn rename_restores_a_replacement_from_the_final_mutation_boundary() {
 }
 
 #[test]
+fn no_replace_rejects_a_target_created_at_the_mutation_boundary() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let staging = directory.path().join("staging.bin");
+    let destination = directory.path().join("destination.bin");
+    fs::write(&staging, b"uploaded").unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let opened = open_regular(&mut server, owner, &staging);
+    server.before_rename_mutation = Some(Box::new({
+        let destination = destination.clone();
+        move |_, _| fs::write(&destination, b"racing target").unwrap()
+    }));
+
+    let result = call(
+        &mut server,
+        owner,
+        "rename-target-race",
+        safe_file_request::Operation::Rename(SafeFileRename {
+            handle_id: opened.handle_id,
+            old_path: path_string(&staging),
+            new_path: path_string(&destination),
+            mode: SafeFileRenameMode::NoReplace as i32,
+            expected_target: None,
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Error(_)));
+    assert_eq!(fs::read(staging).unwrap(), b"uploaded");
+    assert_eq!(fs::read(destination).unwrap(), b"racing target");
+}
+
+#[test]
 fn exchange_restores_a_target_replacement_from_the_mutation_boundary() {
     let directory = tempfile::tempdir().unwrap();
     let journal = directory.path().join("journal");

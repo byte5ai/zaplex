@@ -1,8 +1,8 @@
 name: release-tag-guard
 
 # Enforces the engineering-standards rule: stable release tags must point at
-# commits reachable from main. Pre-release tags (containing -alpha/-beta/-rc/
-# -dev or .devN/.rcN suffix) are exempt and can be cut from any branch.
+# commits reachable from main. Supported prerelease tags are classified by
+# script/classify-release-tag and can be cut from any branch.
 #
 # Installed as .github/workflows/release-tag-guard.yml in any repo that adopts
 # the engineering-standards. Triggers on every `v*` tag push; fails fast if
@@ -49,10 +49,10 @@ jobs:
           TAG="${TAG_REF#refs/tags/}"
           echo "Validating tag: $TAG"
 
-          # Pre-release patterns we allow off-main:
-          #   vX.Y.Z-rcN, vX.Y.Z-alphaN, vX.Y.Z-betaN, vX.Y.Z-devN
-          #   vX.Y.rcN, vX.Y.devN  (PEP-440 dev style)
-          if echo "$TAG" | grep -qE -- '-(rc|alpha|beta|dev)\.?[0-9]*$|\.(dev|rc|a|b)[0-9]+$'; then
+          classification="$(script/classify-release-tag "$TAG")"
+          echo "$classification"
+          requires_main="$(sed -n 's/^requires_main=//p' <<<"$classification")"
+          if [[ "$requires_main" == "false" ]]; then
             echo "Pre-release tag detected — main-only rule does not apply."
             exit 0
           fi

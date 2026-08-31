@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
+#[cfg(windows)]
+use std::time::Duration;
+
 #[cfg(unix)]
 fn kill_all_processes_in_process_group(pid: u32) -> Result<(), nix::Error> {
     use nix::sys::signal::{kill, Signal};
@@ -215,8 +218,43 @@ impl LocalCommandExecutor {
                 anyhow!(e)
             });
 
+        #[cfg(windows)]
+        self.finish_windows_process_group(child_pid).await;
+        #[cfg(not(windows))]
         self.spawned_children_pids.lock().remove(&child_pid);
         output
+    }
+
+    #[cfg(windows)]
+    async fn finish_windows_process_group(&self, pid: u32) {
+        match command::windows::process_group_is_empty(pid) {
+            Ok(true) => {}
+            Ok(false) => {
+                if let Err(error) = command::windows::terminate_process_group(pid) {
+                    log::warn!("Failed to terminate Windows process group {pid}: {error}");
+                    return;
+                }
+                loop {
+                    match command::windows::process_group_is_empty(pid) {
+                        Ok(true) => break,
+                        Ok(false) => async_io::Timer::after(Duration::from_millis(10)).await,
+                        Err(error) => {
+                            log::warn!(
+                                "Failed to inspect Windows process group {pid} after termination: {error}"
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                log::warn!("Failed to inspect Windows process group {pid}: {error}");
+                return;
+            }
+        }
+
+        self.spawned_children_pids.lock().remove(&pid);
+        command::windows::release_process_group(pid);
     }
 }
 
@@ -248,19 +286,27 @@ impl CommandExecutor for LocalCommandExecutor {
     }
 
     fn cancel_active_commands(&self) {
-        let spawned_children_pids = std::mem::take(&mut *self.spawned_children_pids.lock());
-        for _pid in spawned_children_pids {
-            // TODO(roland): handle for windows
+        let spawned_children_pids: Vec<_> =
+            self.spawned_children_pids.lock().iter().copied().collect();
+        for pid in spawned_children_pids {
             #[cfg(unix)]
-            if let Err(e) = kill_all_processes_in_process_group(_pid) {
+            if let Err(e) = kill_all_processes_in_process_group(pid) {
                 match e {
                     // Ignore errors that occur when the process is no longer running,
                     // or if we cannot kill all processes in the process group.  These
                     // are expected to happen occasionally.
                     nix::errno::Errno::ESRCH | nix::errno::Errno::EPERM => {}
-                    _ => log::warn!("Failed to kill process {_pid}: {e}"),
+                    _ => log::warn!("Failed to kill process {pid}: {e}"),
                 }
+            }
+            #[cfg(windows)]
+            if let Err(error) = command::windows::terminate_process_group(pid) {
+                log::warn!("Failed to terminate Windows process group {pid}: {error}");
             }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "local_command_executor_tests.rs"]
+mod tests;

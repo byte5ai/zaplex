@@ -9,8 +9,11 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use remote_server::client::RemoteServerClient;
 use remote_server::proto::{
-    create_directory_response, list_directory_response, read_file_chunk_response,
-    resolve_path_response, run_command_response, write_file_chunk_response, FileSystemEntryKind,
+    create_directory_response, list_directory_response, resolve_path_response,
+    run_command_response, safe_file_request, safe_file_response, write_file_chunk_response,
+    FileSystemEntryKind, SafeFileEntryKind, SafeFileIdentity, SafeFileInspectHandle,
+    SafeFileMutationState, SafeFileOpenExisting, SafeFileReadHandle, SafeFileRename,
+    SafeFileRenameMode, SafeFileRequest, SafeFileRetryRecovery,
 };
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -34,6 +37,7 @@ use warpui::{
     AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle, WeakViewHandle,
 };
+use zaplex_remote_session::types::FEATURE_SAFE_FILE_TRANSACTIONS_V1;
 
 use crate::appearance::Appearance;
 use crate::code::buffer_location::RemotePath;
@@ -159,9 +163,7 @@ struct ServerFileUploadBatch {
     staging_root: String,
     remote_directory: String,
     conflict_policy: UploadConflictPolicy,
-    /// Paths that existed on the remote host when the batch started.
-    conflict_paths: HashSet<String>,
-    directory_overwrite_roots: HashSet<String>,
+    directory_roots: Vec<String>,
     phase: UploadBatchPhase,
     tasks: Vec<ServerFileUploadTask>,
     next_task_index: usize,
@@ -185,6 +187,7 @@ struct ServerFileDownloadTask {
 }
 
 struct ServerFileDownloadBatch {
+    client: Arc<RemoteServerClient>,
     tasks: Vec<ServerFileDownloadTask>,
     next_task_index: usize,
 }
@@ -204,6 +207,14 @@ struct PendingUploadFile {
     /// Shown in the upload progress panel (includes folder-relative path for directory uploads).
     display_name: String,
     total_bytes: u64,
+}
+
+#[derive(Clone, Debug)]
+struct PendingPromotion {
+    staging_path: String,
+    final_path: String,
+    kind: SafeFileEntryKind,
+    expected_size: Option<u64>,
 }
 
 struct PendingUploadStart {
@@ -455,6 +466,20 @@ impl ServerFileBrowserView {
         RemoteServerManager::as_ref(ctx)
             .client_for_host(host_id)
             .cloned()
+    }
+
+    fn transfer_client(&self, ctx: &AppContext) -> Result<Arc<RemoteServerClient>, String> {
+        let session_id = self
+            .session_id
+            .ok_or_else(|| crate::t!("server-file-browser-transfer-safe-file-required"))?;
+        let manager = RemoteServerManager::as_ref(ctx);
+        if !manager.session_supports_feature(session_id, FEATURE_SAFE_FILE_TRANSACTIONS_V1) {
+            return Err(crate::t!("server-file-browser-transfer-safe-file-required"));
+        }
+        manager
+            .client_for_session(session_id)
+            .cloned()
+            .ok_or_else(|| crate::t!("server-file-browser-no-session"))
     }
 
     fn remote_session_id(&self, ctx: &AppContext) -> Option<SessionId> {
@@ -1799,6 +1824,7 @@ impl ServerFileBrowserView {
             client,
             remote_directory,
             pending_files,
+            directory_roots,
             conflict_policy,
             conflicts,
             ctx,
@@ -1810,6 +1836,7 @@ impl ServerFileBrowserView {
         client: Arc<RemoteServerClient>,
         remote_directory: String,
         pending_files: Vec<PendingUploadFile>,
+        directory_roots: Vec<String>,
         conflict_policy: UploadConflictPolicy,
         conflicts: Vec<UploadConflict>,
         ctx: &mut ViewContext<Self>,
@@ -1817,19 +1844,13 @@ impl ServerFileBrowserView {
         self.upload_pipeline_claimed = true;
 
         let conflict_paths: HashSet<String> = conflicts.iter().map(|c| c.path.clone()).collect();
-        let directory_overwrite_roots: HashSet<String> =
-            if conflict_policy == UploadConflictPolicy::OverwriteAll {
-                conflicts
-                    .iter()
-                    .filter(|c| c.kind == FileSystemEntryKind::Directory)
-                    .map(|c| c.path.clone())
-                    .collect()
-            } else {
-                HashSet::new()
-            };
-
         let pending_files =
             filter_upload_tasks_by_policy(pending_files, conflict_policy, &conflict_paths);
+        let directory_roots = filter_upload_directory_roots_by_policy(
+            directory_roots,
+            conflict_policy,
+            &conflict_paths,
+        );
         if pending_files.is_empty() {
             self.status = Some(crate::t!("server-file-browser-upload-all-skipped"));
             self.release_upload_pipeline_and_continue(ctx);
@@ -1874,8 +1895,7 @@ impl ServerFileBrowserView {
                         remote_directory,
                         staging_root,
                         conflict_policy,
-                        conflict_paths,
-                        directory_overwrite_roots,
+                        directory_roots,
                         tasks,
                         ctx,
                     );
@@ -1895,8 +1915,7 @@ impl ServerFileBrowserView {
         remote_directory: String,
         staging_root: String,
         conflict_policy: UploadConflictPolicy,
-        conflict_paths: HashSet<String>,
-        directory_overwrite_roots: HashSet<String>,
+        directory_roots: Vec<String>,
         tasks: Vec<ServerFileUploadTask>,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -1914,8 +1933,7 @@ impl ServerFileBrowserView {
             staging_root,
             remote_directory,
             conflict_policy,
-            conflict_paths,
-            directory_overwrite_roots,
+            directory_roots,
             phase: UploadBatchPhase::Uploading,
             tasks,
             next_task_index: 0,
@@ -2002,7 +2020,7 @@ impl ServerFileBrowserView {
             .iter()
             .any(|task| matches!(task.status, UploadTaskStatus::Failed(_)))
         {
-            self.finish_upload_batch_failed(ctx);
+            self.finish_upload_batch_failed(client, ctx);
             return;
         }
 
@@ -2040,24 +2058,10 @@ impl ServerFileBrowserView {
         client: Arc<RemoteServerClient>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some(batch_snapshot) = self.active_upload_batch().map(|batch| {
-            (
-                batch.staging_root.clone(),
-                batch.conflict_policy,
-                batch.directory_overwrite_roots.clone(),
-                batch
-                    .tasks
-                    .iter()
-                    .filter(|task| matches!(task.status, UploadTaskStatus::Completed))
-                    .map(|task| {
-                        (
-                            task.staging_remote_path.clone(),
-                            task.final_remote_path.clone(),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        }) else {
+        let Some(batch_snapshot) = self
+            .active_upload_batch()
+            .map(|batch| (batch.conflict_policy, build_pending_promotions(batch)))
+        else {
             return;
         };
 
@@ -2066,10 +2070,7 @@ impl ServerFileBrowserView {
         }
         ctx.notify();
 
-        let (staging_root, conflict_policy, directory_overwrite_roots, promote_pairs) =
-            batch_snapshot;
-        let session = self.session.clone();
-        let remote_session_id = self.remote_session_id(ctx);
+        let (conflict_policy, promotions) = batch_snapshot;
         let client_for_promote = client.clone();
         let client_for_cleanup = client.clone();
 
@@ -2077,12 +2078,8 @@ impl ServerFileBrowserView {
             async move {
                 promote_staging_files(
                     client_for_promote,
-                    session,
-                    remote_session_id,
-                    staging_root.clone(),
                     conflict_policy,
-                    directory_overwrite_roots,
-                    promote_pairs,
+                    promotions,
                 )
                 .await
             },
@@ -2099,8 +2096,7 @@ impl ServerFileBrowserView {
                         me.finish_upload_batch_success(ctx);
                     }
                     Err(error) => {
-                        me.fail_upload_batch_with_cleanup(
-                            cleanup_client,
+                        me.fail_upload_batch_preserving_staging(
                             format_upload_promote_error(&error),
                             ctx,
                         );
@@ -2145,8 +2141,12 @@ impl ServerFileBrowserView {
         self.reload_directories_selective(directories_to_reload, ctx);
     }
 
-    fn finish_upload_batch_failed(&mut self, ctx: &mut ViewContext<Self>) {
-        let (error, staging_root, client) = {
+    fn finish_upload_batch_failed(
+        &mut self,
+        client: Arc<RemoteServerClient>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let (error, staging_root) = {
             let batch = self.active_upload_batch();
             let error = batch.and_then(|b| {
                 b.tasks.iter().find_map(|task| {
@@ -2158,9 +2158,9 @@ impl ServerFileBrowserView {
                 })
             });
             let staging_root = batch.map(|b| b.staging_root.clone());
-            (error, staging_root, self.client(ctx))
+            (error, staging_root)
         };
-        if let (Some(client), Some(staging_root)) = (client, staging_root) {
+        if let Some(staging_root) = staging_root {
             self.spawn_cleanup_staging(client, staging_root, ctx);
         }
         self.reset_upload_batch_phase();
@@ -2189,6 +2189,31 @@ impl ServerFileBrowserView {
         self.finish_active_upload_batch();
         self.release_upload_pipeline_and_continue(ctx);
         self.apply_operation_error(error, ctx);
+    }
+
+    fn fail_upload_batch_preserving_staging(&mut self, error: String, ctx: &mut ViewContext<Self>) {
+        if let Some(batch) = self.active_upload_batch_mut() {
+            for task in &mut batch.tasks {
+                if matches!(task.status, UploadTaskStatus::Completed) {
+                    task.status = UploadTaskStatus::Failed(error.clone());
+                }
+            }
+        }
+        let staging_root = self
+            .active_upload_batch()
+            .map(|batch| batch.staging_root.clone())
+            .unwrap_or_default();
+        self.reset_upload_batch_phase();
+        self.finish_active_upload_batch();
+        self.release_upload_pipeline_and_continue(ctx);
+        self.apply_operation_error(
+            crate::t!(
+                "server-file-browser-upload-promote-recovery",
+                error = error,
+                path = staging_root
+            ),
+            ctx,
+        );
     }
 
     fn confirm_upload_conflicts(
@@ -2448,6 +2473,7 @@ impl ServerFileBrowserView {
             return;
         }
         self.download_batches.push(ServerFileDownloadBatch {
+            client: client.clone(),
             tasks,
             next_task_index: 0,
         });
@@ -2530,19 +2556,18 @@ impl ServerFileBrowserView {
 
     fn finish_download_batch(&mut self, ctx: &mut ViewContext<Self>) {
         self.active_download_batch_index = None;
-        if let Some(client) = self.client(ctx) {
-            if let Some(index) = self.download_batches.iter().position(|batch| {
-                batch.tasks.iter().any(|task| {
-                    matches!(
-                        task.status,
-                        DownloadTaskStatus::Pending | DownloadTaskStatus::Downloading
-                    )
-                })
-            }) {
-                self.active_download_batch_index = Some(index);
-                self.download_next_task(client, ctx);
-                return;
-            }
+        if let Some(index) = self.download_batches.iter().position(|batch| {
+            batch.tasks.iter().any(|task| {
+                matches!(
+                    task.status,
+                    DownloadTaskStatus::Pending | DownloadTaskStatus::Downloading
+                )
+            })
+        }) {
+            let client = self.download_batches[index].client.clone();
+            self.active_download_batch_index = Some(index);
+            self.download_next_task(client, ctx);
+            return;
         }
         if !self.has_active_upload() {
             self.stop_progress_poll();
@@ -2567,12 +2592,15 @@ impl ServerFileBrowserView {
     ) {
         match entry.kind {
             FileSystemEntryKind::Directory => {
+                let root_name = remote_basename(&entry.path).unwrap_or_else(|| entry.name.clone());
+                if let Err(error) = validate_remote_entry_name(&root_name) {
+                    self.set_error(error, ctx);
+                    return;
+                }
                 ctx.open_file_picker(
                     move |result, ctx| match result {
                         Ok(paths) if !paths.is_empty() => {
                             let destination = PathBuf::from(&paths[0]);
-                            let root_name =
-                                remote_basename(&entry.path).unwrap_or_else(|| entry.name.clone());
                             let local_root = destination.join(&root_name);
                             let remote_path = entry.path.clone();
                             let client_for_batch = client.clone();
@@ -2608,7 +2636,7 @@ impl ServerFileBrowserView {
                     FilePickerConfiguration::new().folders_only(),
                 );
             }
-            _ => {
+            FileSystemEntryKind::File => {
                 let default_filename =
                     remote_basename(&entry.path).unwrap_or_else(|| entry.name.clone());
                 let picker_filename = default_filename.clone();
@@ -2625,23 +2653,27 @@ impl ServerFileBrowserView {
                                 downloaded_bytes: Arc::new(AtomicU64::new(0)),
                                 status: DownloadTaskStatus::Pending,
                             };
-                            let Some(client) = me.client(ctx) else {
-                                me.set_error(crate::t!("server-file-browser-no-session"), ctx);
-                                return;
-                            };
                             me.begin_download_batch(client, vec![task], ctx);
                         }
                     },
                     SaveFilePickerConfiguration::new().with_default_filename(picker_filename),
                 );
             }
+            FileSystemEntryKind::Symlink
+            | FileSystemEntryKind::Other
+            | FileSystemEntryKind::Unspecified => {
+                self.set_error(unsupported_transfer_entry(&entry.path), ctx);
+            }
         }
     }
 
     fn choose_and_upload_files(&mut self, remote_directory: String, ctx: &mut ViewContext<Self>) {
-        let Some(client) = self.client(ctx) else {
-            self.set_error(crate::t!("server-file-browser-no-session"), ctx);
-            return;
+        let client = match self.transfer_client(ctx) {
+            Ok(client) => client,
+            Err(error) => {
+                self.set_error(error, ctx);
+                return;
+            }
         };
         ctx.spawn(async {}, move |me, _, ctx| {
             me.open_upload_files_picker(client, remote_directory, ctx);
@@ -2685,9 +2717,12 @@ impl ServerFileBrowserView {
     }
 
     fn choose_and_upload_folder(&mut self, remote_directory: String, ctx: &mut ViewContext<Self>) {
-        let Some(client) = self.client(ctx) else {
-            self.set_error(crate::t!("server-file-browser-no-session"), ctx);
-            return;
+        let client = match self.transfer_client(ctx) {
+            Ok(client) => client,
+            Err(error) => {
+                self.set_error(error, ctx);
+                return;
+            }
         };
         ctx.spawn(async {}, move |me, _, ctx| {
             me.open_upload_folder_picker(client, remote_directory, ctx);
@@ -2739,9 +2774,12 @@ impl ServerFileBrowserView {
         else {
             return;
         };
-        let Some(client) = self.client(ctx) else {
-            self.set_error(crate::t!("server-file-browser-no-session"), ctx);
-            return;
+        let client = match self.transfer_client(ctx) {
+            Ok(client) => client,
+            Err(error) => {
+                self.set_error(error, ctx);
+                return;
+            }
         };
         self.start_download_from_entry(entry, client, ctx);
     }
@@ -3654,6 +3692,7 @@ async fn resolve_path(
             })
         }
         Some(resolve_path_response::Result::Error(error)) => Err(error.message),
+        Some(resolve_path_response::Result::NotFound(not_found)) => Err(not_found.message),
         None => Err(crate::t!("server-file-browser-empty-response")),
     }
 }
@@ -3839,7 +3878,19 @@ fn collect_upload_tasks(
     let mut files = Vec::new();
     let mut directory_roots = Vec::new();
     for local_path in local_paths {
-        if local_path.is_dir() {
+        let metadata = std::fs::symlink_metadata(&local_path).map_err(|error| {
+            crate::t!(
+                "server-file-browser-operation-failed",
+                error = format!("{}: {error}", local_path.display())
+            )
+        })?;
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() {
+            return Err(unsupported_transfer_entry(
+                &local_path.display().to_string(),
+            ));
+        }
+        if file_type.is_dir() {
             let root_name = local_path
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
@@ -3851,32 +3902,54 @@ fn collect_upload_tasks(
             } else {
                 remote_directory.clone()
             };
-            for entry in WalkDir::new(&local_path).into_iter().filter_map(Result::ok) {
+            for entry in WalkDir::new(&local_path) {
+                let entry = entry.map_err(|error| {
+                    crate::t!(
+                        "server-file-browser-operation-failed",
+                        error = error.to_string()
+                    )
+                })?;
                 let path = entry.path();
-                let Ok(relative) = path.strip_prefix(&local_path) else {
-                    continue;
-                };
+                let relative = path.strip_prefix(&local_path).map_err(|error| {
+                    crate::t!(
+                        "server-file-browser-operation-failed",
+                        error = error.to_string()
+                    )
+                })?;
                 if relative.as_os_str().is_empty() {
+                    if !entry.file_type().is_dir() {
+                        return Err(unsupported_transfer_entry(&path.display().to_string()));
+                    }
                     continue;
                 }
-                if entry.file_type().is_file() {
-                    let relative_str = relative.to_string_lossy().to_string();
-                    let final_remote_path = join_remote_path(&root_remote, &relative_str);
-                    let display_name = if preserve_directory_root {
-                        format!("{root_name}/{relative_str}")
-                    } else {
-                        relative_str
-                    };
-                    let total_bytes = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
-                    files.push(PendingUploadFile {
-                        local_path: path.to_path_buf(),
-                        final_remote_path,
-                        display_name,
-                        total_bytes,
-                    });
+                let entry_type = entry.file_type();
+                if entry_type.is_dir() {
+                    continue;
                 }
+                if entry_type.is_symlink() || !entry_type.is_file() {
+                    return Err(unsupported_transfer_entry(&path.display().to_string()));
+                }
+                let entry_metadata = entry.metadata().map_err(|error| {
+                    crate::t!(
+                        "server-file-browser-operation-failed",
+                        error = format!("{}: {error}", path.display())
+                    )
+                })?;
+                let relative_str = relative.to_string_lossy().to_string();
+                let final_remote_path = join_remote_path(&root_remote, &relative_str);
+                let display_name = if preserve_directory_root {
+                    format!("{root_name}/{relative_str}")
+                } else {
+                    relative_str
+                };
+                files.push(PendingUploadFile {
+                    local_path: path.to_path_buf(),
+                    final_remote_path,
+                    display_name,
+                    total_bytes: entry_metadata.len(),
+                });
             }
-        } else if local_path.is_file() {
+        } else if file_type.is_file() {
             let Some(name) = local_path
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
@@ -3884,15 +3957,16 @@ fn collect_upload_tasks(
                 continue;
             };
             let final_remote_path = join_remote_path(&remote_directory, &name);
-            let total_bytes = std::fs::metadata(&local_path)
-                .map(|meta| meta.len())
-                .unwrap_or(0);
             files.push(PendingUploadFile {
                 local_path,
                 final_remote_path,
                 display_name: name,
-                total_bytes,
+                total_bytes: metadata.len(),
             });
+        } else {
+            return Err(unsupported_transfer_entry(
+                &local_path.display().to_string(),
+            ));
         }
     }
     dedupe_pending_upload_files(&mut files);
@@ -3973,7 +4047,7 @@ async fn create_remote_directory(
     match response.result {
         Some(create_directory_response::Result::Success(_)) => Ok(()),
         Some(create_directory_response::Result::Error(error)) => Err(error.message),
-        None => Ok(()),
+        None => Err(crate::t!("server-file-browser-empty-response")),
     }
 }
 
@@ -3983,7 +4057,17 @@ async fn upload_file_with_progress(
     remote_path: String,
     uploaded_bytes: Arc<AtomicU64>,
 ) -> Result<(), String> {
-    let bytes = tokio::fs::read(local_path)
+    use tokio::io::AsyncReadExt as _;
+
+    let file = open_local_regular_file(&local_path).map_err(|error| {
+        crate::t!(
+            "server-file-browser-operation-failed",
+            error = format!("{}: {error}", local_path.display())
+        )
+    })?;
+    let mut file = tokio::fs::File::from_std(file);
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
         .await
         .map_err(|error| error.to_string())?;
     let mut offset = 0;
@@ -4014,6 +4098,32 @@ async fn upload_file_with_progress(
         uploaded_bytes.store(0, Ordering::Relaxed);
     }
     Ok(())
+}
+
+fn open_local_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "transfer source is not a regular file",
+        ));
+    }
+    Ok(file)
 }
 
 fn download_task_from_pending(file: PendingDownloadFile) -> ServerFileDownloadTask {
@@ -4246,6 +4356,70 @@ fn filter_upload_tasks_by_policy(
         .collect()
 }
 
+fn filter_upload_directory_roots_by_policy(
+    roots: Vec<String>,
+    policy: UploadConflictPolicy,
+    conflict_paths: &HashSet<String>,
+) -> Vec<String> {
+    if policy == UploadConflictPolicy::Proceed || policy == UploadConflictPolicy::OverwriteAll {
+        return roots;
+    }
+    roots
+        .into_iter()
+        .filter(|root| {
+            !conflict_paths
+                .iter()
+                .any(|conflict| path_is_under_conflict(root, conflict))
+        })
+        .collect()
+}
+
+fn build_pending_promotions(batch: &ServerFileUploadBatch) -> Vec<PendingPromotion> {
+    let mut roots = batch.directory_roots.clone();
+    roots.sort_by_key(|root| root.len());
+    let mut outermost_roots: Vec<String> = Vec::new();
+    for root in roots {
+        if outermost_roots
+            .iter()
+            .any(|outer| path_is_under_conflict(&root, outer))
+        {
+            continue;
+        }
+        outermost_roots.push(root);
+    }
+
+    let mut promotions = outermost_roots
+        .iter()
+        .map(|final_path| {
+            let relative = relative_remote_path_from_base(&batch.remote_directory, final_path);
+            PendingPromotion {
+                staging_path: join_remote_path(&batch.staging_root, &relative),
+                final_path: final_path.clone(),
+                kind: SafeFileEntryKind::Directory,
+                expected_size: None,
+            }
+        })
+        .collect::<Vec<_>>();
+    promotions.extend(
+        batch
+            .tasks
+            .iter()
+            .filter(|task| matches!(task.status, UploadTaskStatus::Completed))
+            .filter(|task| {
+                !outermost_roots
+                    .iter()
+                    .any(|root| path_is_under_conflict(&task.final_remote_path, root))
+            })
+            .map(|task| PendingPromotion {
+                staging_path: task.staging_remote_path.clone(),
+                final_path: task.final_remote_path.clone(),
+                kind: SafeFileEntryKind::Regular,
+                expected_size: Some(task.total_bytes),
+            }),
+    );
+    promotions
+}
+
 fn format_upload_conflict_summary(conflicts: &[UploadConflict]) -> String {
     let mut lines: Vec<String> = conflicts
         .iter()
@@ -4350,6 +4524,13 @@ async fn remote_path_conflict(
         .resolve_path(path.to_string())
         .await
         .map_err(|error| error.to_string())?;
+    decode_remote_path_conflict(path, response)
+}
+
+fn decode_remote_path_conflict(
+    path: &str,
+    response: remote_server::proto::ResolvePathResponse,
+) -> Result<Option<UploadConflict>, String> {
     match response.result {
         Some(resolve_path_response::Result::Success(success)) => {
             let display_name = remote_basename(path).unwrap_or_else(|| path.to_string());
@@ -4361,7 +4542,9 @@ async fn remote_path_conflict(
                 kind,
             }))
         }
-        Some(resolve_path_response::Result::Error(_)) | None => Ok(None),
+        Some(resolve_path_response::Result::NotFound(_)) => Ok(None),
+        Some(resolve_path_response::Result::Error(error)) => Err(error.message),
+        None => Err(crate::t!("server-file-browser-empty-response")),
     }
 }
 
@@ -4374,11 +4557,16 @@ async fn verify_staging_files(
             .resolve_path(staging_path.clone())
             .await
             .map_err(|error| error.to_string())?;
-        let Some(resolve_path_response::Result::Success(success)) = response.result else {
-            return Err(crate::t!(
-                "server-file-browser-upload-verify-missing",
-                path = staging_path
-            ));
+        let success = match response.result {
+            Some(resolve_path_response::Result::Success(success)) => success,
+            Some(resolve_path_response::Result::NotFound(_)) => {
+                return Err(crate::t!(
+                    "server-file-browser-upload-verify-missing",
+                    path = staging_path
+                ));
+            }
+            Some(resolve_path_response::Result::Error(error)) => return Err(error.message),
+            None => return Err(crate::t!("server-file-browser-empty-response")),
         };
         let remote_size = success.size_bytes.unwrap_or(0);
         if remote_size != expected_bytes {
@@ -4404,53 +4592,170 @@ fn staging_cleanup_shell_commands(staging_root: &str) -> String {
     commands.join("; ")
 }
 
-fn escape_for_single_quoted_trap_body(command: &str) -> String {
-    command.replace('\'', "'\\''")
-}
-
 fn append_staging_cleanup_script(script_lines: &mut Vec<String>, staging_root: &str) {
     script_lines.push(staging_cleanup_shell_commands(staging_root));
 }
 
 async fn promote_staging_files(
     client: Arc<RemoteServerClient>,
-    session: Option<Arc<Session>>,
-    remote_session_id: Option<SessionId>,
-    staging_root: String,
     conflict_policy: UploadConflictPolicy,
-    directory_overwrite_roots: HashSet<String>,
-    promote_pairs: Vec<(String, String)>,
+    promotions: Vec<PendingPromotion>,
 ) -> Result<(), String> {
-    let mut script_lines = Vec::new();
-    let cleanup_trap_body =
-        escape_for_single_quoted_trap_body(&staging_cleanup_shell_commands(&staging_root));
-    script_lines.push(format!("trap '{cleanup_trap_body}' EXIT"));
-    script_lines.push("set -e".to_string());
-    if conflict_policy == UploadConflictPolicy::OverwriteAll {
-        let mut roots: Vec<String> = directory_overwrite_roots.into_iter().collect();
-        roots.sort_by_key(|root| std::cmp::Reverse(root.len()));
-        for root in roots {
-            let escaped = warp_util::path::ShellFamily::Posix.shell_escape(&root);
-            script_lines.push(format!("rm -rf -- {escaped}"));
+    for promotion in promotions {
+        promote_staging_object(client.clone(), conflict_policy, promotion).await?;
+    }
+    Ok(())
+}
+
+async fn promote_staging_object(
+    client: Arc<RemoteServerClient>,
+    conflict_policy: UploadConflictPolicy,
+    promotion: PendingPromotion,
+) -> Result<(), String> {
+    let source = open_safe_remote_file(
+        client.clone(),
+        promotion.staging_path.clone(),
+        promotion.kind,
+    )
+    .await?;
+    if promotion
+        .expected_size
+        .is_some_and(|expected| source.identity.size != expected)
+    {
+        return Err(crate::t!(
+            "server-file-browser-upload-verify-size",
+            path = promotion.staging_path
+        ));
+    }
+    let parent = remote_parent(&promotion.final_path).ok_or_else(|| {
+        crate::t!(
+            "server-file-browser-operation-failed",
+            error = "missing destination parent"
+        )
+    })?;
+    create_remote_directory(client.clone(), parent).await?;
+
+    let response = client
+        .resolve_path(promotion.final_path.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    let target_kind = match response.result {
+        Some(resolve_path_response::Result::Success(success)) => Some(
+            FileSystemEntryKind::try_from(success.kind).unwrap_or(FileSystemEntryKind::Unspecified),
+        ),
+        Some(resolve_path_response::Result::NotFound(_)) => None,
+        Some(resolve_path_response::Result::Error(error)) => return Err(error.message),
+        None => return Err(crate::t!("server-file-browser-empty-response")),
+    };
+
+    let target = match (conflict_policy, target_kind) {
+        (UploadConflictPolicy::OverwriteAll, Some(kind)) => {
+            let safe_kind = safe_file_kind_for_entry(kind, &promotion.final_path)?;
+            Some(
+                open_safe_remote_file(client.clone(), promotion.final_path.clone(), safe_kind)
+                    .await?,
+            )
+        }
+        (UploadConflictPolicy::OverwriteAll, None)
+        | (UploadConflictPolicy::Proceed | UploadConflictPolicy::SkipExisting, None) => None,
+        (UploadConflictPolicy::Proceed | UploadConflictPolicy::SkipExisting, Some(_)) => {
+            return Err(format!("not replacing '{}'", promotion.final_path));
+        }
+    };
+    let mode = if target.is_some() {
+        SafeFileRenameMode::Exchange
+    } else {
+        SafeFileRenameMode::NoReplace
+    };
+    let operation_id = format!("server-file-browser-promote-{}", Uuid::new_v4());
+    let rename_result = safe_file_operation(
+        &client,
+        operation_id.clone(),
+        safe_file_request::Operation::Rename(SafeFileRename {
+            handle_id: source.handle_id.clone(),
+            old_path: promotion.staging_path.clone(),
+            new_path: promotion.final_path.clone(),
+            mode: mode as i32,
+            expected_target: target.as_ref().map(|target| target.identity.clone()),
+        }),
+    )
+    .await
+    .map_err(|error| {
+        crate::t!(
+            "server-file-browser-operation-failed",
+            error = format!(
+                "{} -> {}: {error}",
+                promotion.staging_path, promotion.final_path
+            )
+        )
+    })?;
+    let safe_file_response::Result::Mutation(mutation) = rename_result else {
+        return Err(crate::t!("server-file-browser-empty-response"));
+    };
+    match SafeFileMutationState::try_from(mutation.state) {
+        Ok(SafeFileMutationState::Applied | SafeFileMutationState::AlreadyApplied) => {}
+        Ok(SafeFileMutationState::Unspecified) | Err(_) => {
+            return Err(crate::t!("server-file-browser-empty-response"));
         }
     }
-    let mv_flag = if conflict_policy == UploadConflictPolicy::OverwriteAll {
-        "-f"
-    } else {
-        "-n"
-    };
-    for (staging_path, final_path) in promote_pairs {
-        let Some(parent) = remote_parent(&final_path) else {
-            continue;
-        };
-        let escaped_parent = warp_util::path::ShellFamily::Posix.shell_escape(&parent);
-        let escaped_staging = warp_util::path::ShellFamily::Posix.shell_escape(&staging_path);
-        let escaped_final = warp_util::path::ShellFamily::Posix.shell_escape(&final_path);
-        script_lines.push(format!("mkdir -p -- {escaped_parent}"));
-        script_lines.push(format!("mv {mv_flag} -- {escaped_staging} {escaped_final}"));
+
+    let source_inspection = inspect_safe_remote_file(&source, promotion.final_path.clone()).await?;
+    let source_identity = source_inspection
+        .identity
+        .ok_or_else(|| crate::t!("server-file-browser-empty-response"))?;
+    if !source_inspection.matches_path
+        || !same_safe_file_identity(&source.identity, &source_identity)
+    {
+        return Err(crate::t!(
+            "server-file-browser-upload-promote-verify",
+            path = promotion.final_path
+        ));
     }
-    let script = script_lines.join("\n");
-    execute_remote_shell_script(session, Some(client), remote_session_id, script).await
+    if let Some(target) = target {
+        let target_inspection =
+            inspect_safe_remote_file(&target, promotion.staging_path.clone()).await?;
+        let target_identity = target_inspection
+            .identity
+            .ok_or_else(|| crate::t!("server-file-browser-empty-response"))?;
+        if !target_inspection.matches_path
+            || !same_safe_file_identity(&target.identity, &target_identity)
+        {
+            return Err(crate::t!(
+                "server-file-browser-upload-promote-verify",
+                path = promotion.staging_path
+            ));
+        }
+    }
+    let acknowledgement = safe_file_operation(
+        &client,
+        operation_id,
+        safe_file_request::Operation::RetryRecovery(SafeFileRetryRecovery {}),
+    )
+    .await?;
+    let safe_file_response::Result::Mutation(acknowledgement) = acknowledgement else {
+        return Err(crate::t!("server-file-browser-empty-response"));
+    };
+    match SafeFileMutationState::try_from(acknowledgement.state) {
+        Ok(SafeFileMutationState::Applied | SafeFileMutationState::AlreadyApplied) => {}
+        Ok(SafeFileMutationState::Unspecified) | Err(_) => {
+            return Err(crate::t!("server-file-browser-empty-response"));
+        }
+    }
+    Ok(())
+}
+
+fn safe_file_kind_for_entry(
+    kind: FileSystemEntryKind,
+    path: &str,
+) -> Result<SafeFileEntryKind, String> {
+    match kind {
+        FileSystemEntryKind::File => Ok(SafeFileEntryKind::Regular),
+        FileSystemEntryKind::Directory => Ok(SafeFileEntryKind::Directory),
+        FileSystemEntryKind::Symlink => Ok(SafeFileEntryKind::Symlink),
+        FileSystemEntryKind::Other | FileSystemEntryKind::Unspecified => {
+            Err(unsupported_transfer_entry(path))
+        }
+    }
 }
 
 async fn cleanup_staging_root(
@@ -4471,9 +4776,10 @@ async fn collect_download_files(
     local_directory: PathBuf,
     display_root: String,
 ) -> Result<Vec<PendingDownloadFile>, String> {
-    tokio::fs::create_dir_all(&local_directory)
-        .await
-        .map_err(|error| error.to_string())?;
+    if let Some(parent) = local_directory.parent() {
+        ensure_local_transfer_directory(parent)?;
+    }
+    ensure_local_transfer_directory(&local_directory)?;
     let mut files = Vec::new();
     collect_download_files_into_prefixed(
         client,
@@ -4495,6 +4801,7 @@ async fn collect_download_files_into_prefixed(
 ) -> Result<(), String> {
     let (_, entries) = list_directory(client.clone(), remote_path).await?;
     for entry in entries {
+        validate_remote_entry_name(&entry.name)?;
         let local_path = local_directory.join(&entry.name);
         let display_name = if display_prefix.is_empty() {
             entry.name.clone()
@@ -4503,9 +4810,7 @@ async fn collect_download_files_into_prefixed(
         };
         match entry.kind {
             FileSystemEntryKind::Directory => {
-                tokio::fs::create_dir_all(&local_path)
-                    .await
-                    .map_err(|error| error.to_string())?;
+                ensure_local_transfer_directory(&local_path)?;
                 Box::pin(collect_download_files_into_prefixed(
                     client.clone(),
                     entry.path,
@@ -4515,16 +4820,18 @@ async fn collect_download_files_into_prefixed(
                 ))
                 .await?;
             }
-            FileSystemEntryKind::File
-            | FileSystemEntryKind::Symlink
-            | FileSystemEntryKind::Other
-            | FileSystemEntryKind::Unspecified => {
+            FileSystemEntryKind::File => {
                 files.push(PendingDownloadFile {
                     remote_path: entry.path,
                     local_path,
                     display_name,
                     total_bytes: entry.size_bytes.unwrap_or(0),
                 });
+            }
+            FileSystemEntryKind::Symlink
+            | FileSystemEntryKind::Other
+            | FileSystemEntryKind::Unspecified => {
+                return Err(unsupported_transfer_entry(&entry.path));
             }
         }
     }
@@ -4538,41 +4845,298 @@ async fn download_file_with_progress(
     downloaded_bytes: Arc<AtomicU64>,
     total_bytes: u64,
 ) -> Result<(), String> {
-    if let Some(parent) = local_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|error| error.to_string())?;
+    use tokio::io::AsyncWriteExt as _;
+
+    let parent = local_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    ensure_local_transfer_directory(parent)?;
+    let remote_file =
+        open_safe_remote_file(client, remote_path.clone(), SafeFileEntryKind::Regular).await?;
+    if total_bytes > 0 && remote_file.identity.size != total_bytes {
+        return Err(crate::t!(
+            "server-file-browser-download-size-changed",
+            path = remote_path
+        ));
     }
-    let mut output = tokio::fs::File::create(&local_path)
-        .await
-        .map_err(|error| error.to_string())?;
+    let mut output = AtomicDownloadFile::new(&local_path)?;
     let mut offset = 0_u64;
     loop {
-        let response = client
-            .read_file_chunk(remote_path.clone(), offset, TRANSFER_CHUNK_BYTES)
+        let read = read_safe_remote_file(&remote_file, TRANSFER_CHUNK_BYTES).await?;
+        if read.bytes.is_empty() && !read.eof {
+            return Err(crate::t!("server-file-browser-empty-response"));
+        }
+        output
+            .output
+            .write_all(&read.bytes)
             .await
             .map_err(|error| error.to_string())?;
-        match response.result {
-            Some(read_file_chunk_response::Result::Success(success)) => {
-                use tokio::io::AsyncWriteExt;
-                output
-                    .write_all(&success.bytes)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                offset = success.next_offset;
-                downloaded_bytes.store(offset, Ordering::Relaxed);
-                if success.eof {
-                    if total_bytes > 0 {
-                        downloaded_bytes.store(total_bytes, Ordering::Relaxed);
-                    }
-                    break;
-                }
-            }
-            Some(read_file_chunk_response::Result::Error(error)) => return Err(error.message),
-            None => return Err(crate::t!("server-file-browser-empty-response")),
+        offset = offset.checked_add(read.bytes.len() as u64).ok_or_else(|| {
+            crate::t!(
+                "server-file-browser-download-size-changed",
+                path = remote_path.clone()
+            )
+        })?;
+        if offset > remote_file.identity.size {
+            return Err(crate::t!(
+                "server-file-browser-download-size-changed",
+                path = remote_path
+            ));
+        }
+        downloaded_bytes.store(offset, Ordering::Relaxed);
+        if read.eof {
+            break;
         }
     }
+    if offset != remote_file.identity.size {
+        return Err(crate::t!(
+            "server-file-browser-download-size-changed",
+            path = remote_path
+        ));
+    }
+    let inspected = inspect_safe_remote_file(&remote_file, remote_path.clone()).await?;
+    let inspected_identity = inspected
+        .identity
+        .ok_or_else(|| crate::t!("server-file-browser-empty-response"))?;
+    if !inspected.matches_path
+        || !same_safe_file_identity(&remote_file.identity, &inspected_identity)
+    {
+        return Err(crate::t!(
+            "server-file-browser-download-source-changed",
+            path = remote_path
+        ));
+    }
+    output.commit(&local_path).await?;
+    downloaded_bytes.store(offset, Ordering::Relaxed);
     Ok(())
+}
+
+struct AtomicDownloadFile {
+    // Fields drop in declaration order; close the cloned writer before the
+    // NamedTempFile removes its sidecar, including on cancellation.
+    output: tokio::fs::File,
+    temporary: tempfile::NamedTempFile,
+}
+
+impl AtomicDownloadFile {
+    fn new(destination: &Path) -> Result<Self, String> {
+        let parent = destination
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        ensure_local_transfer_directory(parent)?;
+        let temporary = tempfile::Builder::new()
+            .prefix(".zaplex-download-")
+            .tempfile_in(parent)
+            .map_err(|error| {
+                crate::t!(
+                    "server-file-browser-operation-failed",
+                    error = format!("{}: {error}", destination.display())
+                )
+            })?;
+        let output = temporary.as_file().try_clone().map_err(|error| {
+            crate::t!(
+                "server-file-browser-operation-failed",
+                error = format!("{}: {error}", destination.display())
+            )
+        })?;
+        Ok(Self {
+            output: tokio::fs::File::from_std(output),
+            temporary,
+        })
+    }
+
+    async fn commit(mut self, destination: &Path) -> Result<(), String> {
+        use tokio::io::AsyncWriteExt as _;
+
+        self.output
+            .flush()
+            .await
+            .map_err(|error| error.to_string())?;
+        self.output
+            .sync_all()
+            .await
+            .map_err(|error| error.to_string())?;
+        drop(self.output);
+        self.temporary
+            .persist(destination)
+            .map_err(|error| error.error)
+            .map_err(|error| {
+                crate::t!(
+                    "server-file-browser-operation-failed",
+                    error = format!("{}: {error}", destination.display())
+                )
+            })?;
+        Ok(())
+    }
+}
+
+fn ensure_local_transfer_directory(path: &Path) -> Result<(), String> {
+    let validate = || {
+        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+            crate::t!(
+                "server-file-browser-operation-failed",
+                error = format!("{}: {error}", path.display())
+            )
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(crate::t!(
+                "server-file-browser-operation-failed",
+                error = format!(
+                    "transfer destination is not a non-symlink directory: {}",
+                    path.display()
+                )
+            ));
+        }
+        Ok(())
+    };
+
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => validate(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::create_dir(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(crate::t!(
+                        "server-file-browser-operation-failed",
+                        error = format!("{}: {error}", path.display())
+                    ));
+                }
+            }
+            validate()
+        }
+        Err(error) => Err(crate::t!(
+            "server-file-browser-operation-failed",
+            error = format!("{}: {error}", path.display())
+        )),
+    }
+}
+
+struct SafeRemoteFileHandle {
+    client: Arc<RemoteServerClient>,
+    handle_id: String,
+    identity: SafeFileIdentity,
+}
+
+impl Drop for SafeRemoteFileHandle {
+    fn drop(&mut self) {
+        let _ = self.client.close_safe_file_handle(self.handle_id.clone());
+    }
+}
+
+async fn safe_file_operation(
+    client: &Arc<RemoteServerClient>,
+    operation_id: String,
+    operation: safe_file_request::Operation,
+) -> Result<safe_file_response::Result, String> {
+    let response = client
+        .safe_file(SafeFileRequest {
+            operation_id,
+            operation: Some(operation),
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    match response.result {
+        Some(safe_file_response::Result::Error(error)) => Err(error.message),
+        Some(result) => Ok(result),
+        None => Err(crate::t!("server-file-browser-empty-response")),
+    }
+}
+
+async fn open_safe_remote_file(
+    client: Arc<RemoteServerClient>,
+    path: String,
+    expected_kind: SafeFileEntryKind,
+) -> Result<SafeRemoteFileHandle, String> {
+    let result = safe_file_operation(
+        &client,
+        String::new(),
+        safe_file_request::Operation::OpenExisting(SafeFileOpenExisting {
+            path,
+            expected_kind: expected_kind as i32,
+        }),
+    )
+    .await?;
+    let safe_file_response::Result::Opened(opened) = result else {
+        return Err(crate::t!("server-file-browser-empty-response"));
+    };
+    let identity = opened
+        .identity
+        .ok_or_else(|| crate::t!("server-file-browser-empty-response"))?;
+    Ok(SafeRemoteFileHandle {
+        client,
+        handle_id: opened.handle_id,
+        identity,
+    })
+}
+
+async fn read_safe_remote_file(
+    handle: &SafeRemoteFileHandle,
+    max_bytes: u64,
+) -> Result<remote_server::proto::SafeFileReadResult, String> {
+    let result = safe_file_operation(
+        &handle.client,
+        String::new(),
+        safe_file_request::Operation::ReadHandle(SafeFileReadHandle {
+            handle_id: handle.handle_id.clone(),
+            max_bytes,
+        }),
+    )
+    .await?;
+    let safe_file_response::Result::Read(read) = result else {
+        return Err(crate::t!("server-file-browser-empty-response"));
+    };
+    Ok(read)
+}
+
+async fn inspect_safe_remote_file(
+    handle: &SafeRemoteFileHandle,
+    path: String,
+) -> Result<remote_server::proto::SafeFileInspectResult, String> {
+    let result = safe_file_operation(
+        &handle.client,
+        String::new(),
+        safe_file_request::Operation::InspectHandle(SafeFileInspectHandle {
+            handle_id: handle.handle_id.clone(),
+            path,
+        }),
+    )
+    .await?;
+    let safe_file_response::Result::Inspected(inspected) = result else {
+        return Err(crate::t!("server-file-browser-empty-response"));
+    };
+    Ok(inspected)
+}
+
+fn same_safe_file_identity(left: &SafeFileIdentity, right: &SafeFileIdentity) -> bool {
+    left.kind == right.kind
+        && left.size == right.size
+        && left.object_id == right.object_id
+        && left.revision == right.revision
+}
+
+fn validate_remote_entry_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || matches!(name, "." | "..")
+        || name.contains('/')
+        || name.contains('\\')
+        || Path::new(name).is_absolute()
+    {
+        return Err(crate::t!(
+            "server-file-browser-operation-failed",
+            error = format!("unsafe remote entry name: {name:?}")
+        ));
+    }
+    Ok(())
+}
+
+fn unsupported_transfer_entry(path: &str) -> String {
+    crate::t!(
+        "server-file-browser-transfer-unsupported-entry",
+        path = path
+    )
 }
 
 async fn delete_remote_path(
@@ -4808,6 +5372,10 @@ fn bound_remote_session_id(
     let session_id = session_id?;
     is_session_connected(session_id).then_some(session_id)
 }
+
+#[cfg(test)]
+#[path = "server_file_browser_transfer_tests.rs"]
+mod transfer_tests;
 
 #[cfg(test)]
 mod tests {

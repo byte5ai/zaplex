@@ -402,8 +402,8 @@ pub struct SshManagerPanel {
     sessions_loading: std::collections::HashSet<String>,
     /// Server node_ids with an in-flight connect (daemon preflight/install or
     /// classic open). Gives instant feedback on the row and guards against
-    /// double-triggering while the preflight runs. Cleared by a bounded timer
-    /// (the preflight itself is bounded), so a stray entry can't stick.
+    /// double-triggering for the complete connection lifecycle. The Workspace
+    /// owns completion and the watchdog, and clears this projection explicitly.
     connecting: std::collections::HashSet<String>,
     /// Server node_ids whose host has session resilience (Zaplexify persistent
     /// sessions) enabled — rendered with the mark. Refreshed with the tree.
@@ -420,6 +420,22 @@ pub struct SshManagerPanel {
 impl SshManagerPanel {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         Self::new_with_command_factory(Arc::new(DefaultWorkspaceCommandFactory), ctx)
+    }
+
+    pub(crate) fn set_connecting(
+        &mut self,
+        node_id: &str,
+        connecting: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let changed = if connecting {
+            self.connecting.insert(node_id.to_string())
+        } else {
+            self.connecting.remove(node_id)
+        };
+        if changed {
+            ctx.notify();
+        }
     }
 
     fn new_with_command_factory(
@@ -1166,18 +1182,6 @@ impl SshManagerPanel {
             }
             self.connecting.insert(id.to_string());
             ctx.notify();
-            // Bounded self-clear: the preflight resolves (tab or fallback) well
-            // within this window; a stray entry can't wedge the row.
-            let id_owned = id.to_string();
-            ctx.spawn(
-                async move {
-                    async_io::Timer::after(std::time::Duration::from_secs(10)).await;
-                },
-                move |me, (), ctx| {
-                    me.connecting.remove(&id_owned);
-                    ctx.notify();
-                },
-            );
             ctx.emit(SshManagerPanelEvent::OpenSshTerminal {
                 node_id: id.to_string(),
                 server,

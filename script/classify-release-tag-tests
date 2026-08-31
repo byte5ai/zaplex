@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+classifier="$root/script/classify-release-tag"
+
+assert_classification() {
+  local tag="$1"
+  local expected_classification="$2"
+  local expected_base_version="$3"
+  local expected_requires_main="$4"
+  local expected_prerelease="$5"
+  local expected_make_latest="$6"
+  local output
+
+  output="$("$classifier" "$tag")"
+  grep -qx "classification=$expected_classification" <<<"$output"
+  grep -qx "base_version=$expected_base_version" <<<"$output"
+  grep -qx "requires_main=$expected_requires_main" <<<"$output"
+  grep -qx "prerelease=$expected_prerelease" <<<"$output"
+  grep -qx "make_latest=$expected_make_latest" <<<"$output"
+}
+
+assert_classification v1.2 stable 1.2 true false true
+assert_classification v1.2.3 stable 1.2.3 true false true
+assert_classification v1.2.3-rc1 prerelease 1.2.3 false true false
+assert_classification v1.2.3-alpha1 prerelease 1.2.3 false true false
+assert_classification v1.2.3-beta2 prerelease 1.2.3 false true false
+assert_classification v1.2.3-dev3 prerelease 1.2.3 false true false
+assert_classification v1.2.dev4 prerelease 1.2 false true false
+assert_classification v1.2.rc2 prerelease 1.2 false true false
+
+if "$classifier" v1.2.3-preview1 >/dev/null 2>&1; then
+  echo "unsupported prerelease tag was accepted" >&2
+  exit 1
+fi

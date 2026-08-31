@@ -18,16 +18,46 @@ use crate::{
 
 use super::nodes::{self, FileId};
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct ImportGeneration(ClientId);
+
+impl ImportGeneration {
+    pub(super) fn new() -> Self {
+        Self(ClientId::new())
+    }
+}
+
+impl Default for ImportGeneration {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub(super) enum ImportQueueEvent {
     FileCompleted {
+        generation: ImportGeneration,
         file_id: FileId,
         server_id: Option<String>,
     },
     FolderCompleted {
+        generation: ImportGeneration,
         folder_id: nodes::FolderId,
         server_id: Option<String>,
     },
-    FileSavedLocally(FileId),
+    FileSavedLocally {
+        generation: ImportGeneration,
+        file_id: FileId,
+    },
+}
+
+impl ImportQueueEvent {
+    pub(super) fn generation(&self) -> ImportGeneration {
+        match self {
+            Self::FileCompleted { generation, .. }
+            | Self::FolderCompleted { generation, .. }
+            | Self::FileSavedLocally { generation, .. } => *generation,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -38,6 +68,7 @@ pub(super) enum ParentId {
 
 #[derive(Debug)]
 pub(super) struct ImportQueueArgs {
+    pub(super) generation: ImportGeneration,
     pub(super) owner: Owner,
     pub(super) parent_id: ParentId,
     pub(super) content: RequestContent,
@@ -63,43 +94,55 @@ pub(super) enum RequestContent {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct TrackedFile {
+    generation: ImportGeneration,
+    file_id: FileId,
+}
+
 #[derive(Default)]
 struct FileCompletionCounter {
-    client_id_to_file_id: HashMap<ClientId, FileId>,
-    file_id_to_counter: HashMap<FileId, usize>,
+    client_id_to_file: HashMap<ClientId, TrackedFile>,
+    file_to_counter: HashMap<TrackedFile, usize>,
 }
 
 impl FileCompletionCounter {
-    fn request_completed(&mut self, client_id: ClientId) -> Option<FileId> {
-        if let Some(file_id) = self.client_id_to_file_id.get(&client_id) {
-            let completed = match self.file_id_to_counter.get_mut(file_id) {
-                Some(counter) => {
-                    *counter = counter.saturating_sub(1);
-                    *counter == 0
-                }
-                None => {
-                    log::error!("File completion counter should exist but it doesn't");
-                    false
-                }
-            };
-
-            if completed {
-                return Some(*file_id);
-            }
+    fn request_completed(&mut self, client_id: ClientId) -> Option<TrackedFile> {
+        let tracked_file = self.client_id_to_file.remove(&client_id)?;
+        let Some(counter) = self.file_to_counter.get_mut(&tracked_file) else {
+            log::error!("File completion counter should exist but it doesn't");
+            return None;
+        };
+        *counter = counter.saturating_sub(1);
+        if *counter == 0 {
+            self.file_to_counter.remove(&tracked_file);
+            Some(tracked_file)
+        } else {
+            None
         }
-        None
     }
 
-    fn add_entry(&mut self, client_id: ClientId, file_id: FileId) {
-        self.client_id_to_file_id.insert(client_id, file_id);
-        *self.file_id_to_counter.entry(file_id).or_insert(0) += 1;
+    fn add_entry(&mut self, client_id: ClientId, generation: ImportGeneration, file_id: FileId) {
+        let tracked_file = TrackedFile {
+            generation,
+            file_id,
+        };
+        self.client_id_to_file.insert(client_id, tracked_file);
+        *self.file_to_counter.entry(tracked_file).or_insert(0) += 1;
+    }
+
+    fn cancel_generation(&mut self, generation: ImportGeneration) {
+        self.client_id_to_file
+            .retain(|_, tracked| tracked.generation != generation);
+        self.file_to_counter
+            .retain(|tracked, _| tracked.generation != generation);
     }
 }
 
 pub(super) struct ImportQueue {
     queue: Vec<ImportQueueArgs>,
-    client_to_server_id: HashMap<ClientId, Option<FolderId>>,
-    client_to_node_folder_id: HashMap<ClientId, nodes::FolderId>,
+    client_to_server_id: HashMap<ClientId, (ImportGeneration, Option<FolderId>)>,
+    client_to_node_folder_id: HashMap<ClientId, (ImportGeneration, nodes::FolderId)>,
     file_completion: FileCompletionCounter,
 }
 
@@ -121,13 +164,24 @@ impl ImportQueue {
     // Whether all dependencies of an item has been sync-ed.
     fn dependency_synced(&self, item: &ImportQueueArgs) -> bool {
         match &item.parent_id {
-            ParentId::FolderToUpload(id) => self
-                .client_to_server_id
-                .get(id)
-                .map(|item| item.is_some())
-                .unwrap_or(false),
+            ParentId::FolderToUpload(id) => {
+                self.client_to_server_id
+                    .get(id)
+                    .is_some_and(|(generation, server_id)| {
+                        *generation == item.generation && server_id.is_some()
+                    })
+            }
             ParentId::InitialFolder(_) => true,
         }
+    }
+
+    pub fn cancel_generation(&mut self, generation: ImportGeneration) {
+        self.queue.retain(|item| item.generation != generation);
+        self.client_to_server_id
+            .retain(|_, (tracked_generation, _)| *tracked_generation != generation);
+        self.client_to_node_folder_id
+            .retain(|_, (tracked_generation, _)| *tracked_generation != generation);
+        self.file_completion.cancel_generation(generation);
     }
 
     // Enqueue a new request to the import queue.
@@ -139,17 +193,22 @@ impl ImportQueue {
                 folder_id,
                 ..
             } => {
-                self.client_to_server_id.insert(*client_id, None);
-                self.client_to_node_folder_id.insert(*client_id, *folder_id);
+                self.client_to_server_id
+                    .insert(*client_id, (arg.generation, None));
+                self.client_to_node_folder_id
+                    .insert(*client_id, (arg.generation, *folder_id));
             }
             RequestContent::Notebook {
                 client_id, file_id, ..
-            } => self.file_completion.add_entry(*client_id, *file_id),
+            } => self
+                .file_completion
+                .add_entry(*client_id, arg.generation, *file_id),
             RequestContent::Workflow {
                 workflows, file_id, ..
             } => {
                 for (_, client_id) in workflows {
-                    self.file_completion.add_entry(*client_id, *file_id);
+                    self.file_completion
+                        .add_entry(*client_id, arg.generation, *file_id);
                 }
             }
         }
@@ -175,6 +234,7 @@ impl ImportQueue {
                     self.client_to_server_id
                         .get(&client_id)
                         .expect("Client id entry should exist")
+                        .1
                         .expect("Server id entry should exist")
                         .into(),
                 )),
@@ -219,7 +279,10 @@ impl ImportQueue {
                             ctx,
                         );
                     });
-                    ctx.emit(ImportQueueEvent::FileSavedLocally(file_id));
+                    ctx.emit(ImportQueueEvent::FileSavedLocally {
+                        generation: dequeued_item.generation,
+                        file_id,
+                    });
                 }
                 RequestContent::Workflow {
                     workflows,
@@ -252,7 +315,10 @@ impl ImportQueue {
                             );
                         }
                     });
-                    ctx.emit(ImportQueueEvent::FileSavedLocally(file_id));
+                    ctx.emit(ImportQueueEvent::FileSavedLocally {
+                        generation: dequeued_item.generation,
+                        file_id,
+                    });
                 }
             }
             self.dequeue(ctx);
@@ -275,22 +341,30 @@ impl ImportQueue {
 
             let is_successful = matches!(&result.success_type, OperationSuccessType::Success);
             let server_id = result.server_id;
-            if let Some(file_id) = self.file_completion.request_completed(client_id) {
+            if let Some(tracked_file) = self.file_completion.request_completed(client_id) {
                 ctx.emit(ImportQueueEvent::FileCompleted {
-                    file_id,
+                    generation: tracked_file.generation,
+                    file_id: tracked_file.file_id,
                     server_id: server_id.map(|server_id| server_id.uid()),
                 });
                 return;
             }
 
+            let Some((generation, node_id)) =
+                self.client_to_node_folder_id.get(&client_id).copied()
+            else {
+                return;
+            };
+
             // Return early if we are not successfully uploading a folder.
             if !is_successful {
-                if let Some(node_id) = self.client_to_node_folder_id.get(&client_id) {
-                    ctx.emit(ImportQueueEvent::FolderCompleted {
-                        folder_id: *node_id,
-                        server_id: server_id.map(|server_id| server_id.uid()),
-                    });
-                }
+                self.client_to_node_folder_id.remove(&client_id);
+                self.client_to_server_id.remove(&client_id);
+                ctx.emit(ImportQueueEvent::FolderCompleted {
+                    generation,
+                    folder_id: node_id,
+                    server_id: server_id.map(|server_id| server_id.uid()),
+                });
                 return;
             }
 
@@ -304,20 +378,22 @@ impl ImportQueue {
             };
 
             let replaced = match self.client_to_server_id.get_mut(&client_id) {
-                Some(value) if value.is_none() => {
+                Some((tracked_generation, value))
+                    if *tracked_generation == generation && value.is_none() =>
+                {
                     *value = Some(folder_id.into());
                     true
                 }
-                _ => false,
+                Some(_) | None => false,
             };
 
             if replaced {
-                if let Some(node_id) = self.client_to_node_folder_id.get(&client_id) {
-                    ctx.emit(ImportQueueEvent::FolderCompleted {
-                        folder_id: *node_id,
-                        server_id: server_id.map(|server_id| server_id.uid()),
-                    });
-                }
+                self.client_to_node_folder_id.remove(&client_id);
+                ctx.emit(ImportQueueEvent::FolderCompleted {
+                    generation,
+                    folder_id: node_id,
+                    server_id: server_id.map(|server_id| server_id.uid()),
+                });
                 self.dequeue(ctx);
             }
         }
@@ -327,3 +403,7 @@ impl ImportQueue {
 impl Entity for ImportQueue {
     type Event = ImportQueueEvent;
 }
+
+#[cfg(test)]
+#[path = "queue_tests.rs"]
+mod tests;

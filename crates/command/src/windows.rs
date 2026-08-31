@@ -1,7 +1,10 @@
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::os::windows::process::CommandExt as _;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
+use lazy_static::lazy_static;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JobObjectError {
@@ -16,6 +19,12 @@ pub enum JobObjectError {
 
     #[error("Failed to get info for job: {0}")]
     GetInfoFailed(std::io::Error),
+
+    #[error("Failed to terminate job: {0}")]
+    TerminateFailed(std::io::Error),
+
+    #[error("Failed to resume suspended process (NTSTATUS {0:#010x})")]
+    ResumeFailed(u32),
 
     #[error(transparent)]
     Other(anyhow::Error),
@@ -78,7 +87,7 @@ impl JobObject {
         self
     }
 
-    fn create_internal(self) -> Result<(), win32job::JobError> {
+    fn build(self) -> Result<win32job::Job, win32job::JobError> {
         let job = win32job::Job::create()?;
 
         let mut info = job.query_extended_limit_info()?;
@@ -98,7 +107,11 @@ impl JobObject {
             job.assign_process(process)?;
         }
 
-        Box::leak(Box::new(job));
+        Ok(job)
+    }
+
+    fn create_internal(self) -> Result<(), win32job::JobError> {
+        Box::leak(Box::new(self.build()?));
         Ok(())
     }
 
@@ -108,6 +121,105 @@ impl JobObject {
     pub fn create(self) -> Result<(), JobObjectError> {
         self.create_internal().map_err(Into::into)
     }
+}
+
+/// An owned Job Object for one command tree. Keeping this handle alive keeps the
+/// root process and every inheriting descendant in one controllable unit.
+#[derive(Debug)]
+struct ProcessGroup {
+    job: win32job::Job,
+}
+
+impl ProcessGroup {
+    fn for_process(process: isize) -> Result<Self, JobObjectError> {
+        let job = JobObject::new()
+            .assign_process(process)
+            .kill_children_on_close()
+            .build()?;
+        Ok(Self { job })
+    }
+
+    fn terminate(&self) -> Result<(), JobObjectError> {
+        // win32job and the workspace currently use adjacent `windows` crate
+        // versions, so call the stable Win32 ABI with the raw handle instead of
+        // attempting to convert between their distinct HANDLE wrapper types.
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            #[link_name = "TerminateJobObject"]
+            fn terminate_job_object(job: *mut std::ffi::c_void, exit_code: u32) -> i32;
+        }
+
+        // SAFETY: `self.job` owns a valid Job Object handle for this call and
+        // remains alive for its entire duration.
+        if unsafe { terminate_job_object(self.job.handle() as *mut std::ffi::c_void, 1) } == 0 {
+            return Err(JobObjectError::TerminateFailed(
+                std::io::Error::last_os_error(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn is_empty(&self) -> Result<bool, JobObjectError> {
+        Ok(self.job.query_process_id_list()?.is_empty())
+    }
+}
+
+lazy_static! {
+    static ref PROCESS_GROUPS: Mutex<HashMap<u32, Arc<ProcessGroup>>> = Mutex::new(HashMap::new());
+}
+
+fn resume_process(process: isize) -> Result<(), JobObjectError> {
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        #[link_name = "NtResumeProcess"]
+        fn nt_resume_process(process: *mut std::ffi::c_void) -> i32;
+    }
+
+    // SAFETY: `process` is the live process handle returned by CreateProcess and remains owned by
+    // the child while this call resumes the process after Job Object assignment.
+    let status = unsafe { nt_resume_process(process as *mut std::ffi::c_void) };
+    if status < 0 {
+        return Err(JobObjectError::ResumeFailed(status as u32));
+    }
+    Ok(())
+}
+
+pub(super) fn register_and_resume_process_group(
+    pid: u32,
+    process: isize,
+) -> Result<(), JobObjectError> {
+    let group = Arc::new(ProcessGroup::for_process(process)?);
+    resume_process(process)?;
+    let replaced = PROCESS_GROUPS.lock().unwrap().insert(pid, group);
+    if replaced.is_some() {
+        log::warn!("Replaced a stale Windows process group for reused pid {pid}");
+    }
+    Ok(())
+}
+
+/// Terminates the root process and all descendants assigned to its Job Object.
+/// Returns `false` when the group was already released after confirmed exit.
+pub fn terminate_process_group(pid: u32) -> Result<bool, JobObjectError> {
+    let group = PROCESS_GROUPS.lock().unwrap().get(&pid).cloned();
+    let Some(group) = group else {
+        return Ok(false);
+    };
+    group.terminate()?;
+    Ok(true)
+}
+
+/// Whether the Job Object no longer contains any live processes.
+pub fn process_group_is_empty(pid: u32) -> Result<bool, JobObjectError> {
+    let group = PROCESS_GROUPS.lock().unwrap().get(&pid).cloned();
+    match group {
+        Some(group) => group.is_empty(),
+        None => Ok(true),
+    }
+}
+
+/// Releases the owned Job Object after the caller has observed process-tree exit.
+pub fn release_process_group(pid: u32) {
+    PROCESS_GROUPS.lock().unwrap().remove(&pid);
 }
 
 pub fn init() {

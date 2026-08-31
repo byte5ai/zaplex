@@ -1768,6 +1768,7 @@ pub enum Event {
     /// been submitted and its block has completed.
     PendingCommandCompleted,
     SessionBootstrapped,
+    SshSessionBootstrapped,
     ShellSpawned(ShellType),
 
     /// This terminal pane has initiated a file upload to a remote host.
@@ -11554,6 +11555,9 @@ impl TerminalView {
 
         self.refresh_warp_prompt(ctx);
         ctx.emit(Event::SessionBootstrapped);
+        if is_ssh_session {
+            ctx.emit(Event::SshSessionBootstrapped);
+        }
     }
 
     // Helper function to get the PATH variable for a local session.

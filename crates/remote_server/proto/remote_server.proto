@@ -557,10 +557,15 @@ message ResolvePathSuccess {
   optional uint64 size_bytes = 3;
 }
 
+message ResolvePathNotFound {
+  string message = 1;
+}
+
 message ResolvePathResponse {
   oneof result {
     ResolvePathSuccess success = 1;
     FileOperationError error = 2;
+    ResolvePathNotFound not_found = 3;
   }
 }
 

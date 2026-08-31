@@ -23,6 +23,12 @@ fn matches_powershell_prompt() {
 }
 
 #[test]
+fn matches_percent_shell_prompt() {
+    assert!(matches("user@host:~% "));
+    assert!(matches("% "));
+}
+
+#[test]
 fn matches_powerline_prompts() {
     assert!(matches("❯ "));
     assert!(matches("▶ "));
@@ -37,6 +43,7 @@ fn does_not_match_partial_prompt_chars() {
     assert!(!matches("$"));
     assert!(!matches("#"));
     assert!(!matches(">"));
+    assert!(!matches("%"));
     assert!(!matches("❯"));
 }
 

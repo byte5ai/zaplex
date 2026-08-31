@@ -70,6 +70,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate release tag classification
+        run: script/classify-release-tag-tests
+        shell: bash
+
       - name: Detect build-relevant changes
         id: detect
         env:

@@ -28,7 +28,9 @@ use super::{
     nodes::{
         expand_dirs, parse_file, FileContent, FileId, FileUploadState, FolderId, UploadResult,
     },
-    queue::{ImportQueue, ImportQueueArgs, ImportQueueEvent, ParentId, RequestContent},
+    queue::{
+        ImportGeneration, ImportQueue, ImportQueueArgs, ImportQueueEvent, ParentId, RequestContent,
+    },
 };
 
 const FILE_PICKER_BUTTON_WIDTH: f32 = 250.;
@@ -90,6 +92,7 @@ pub struct ImportModalBody {
     // All updates should go through the queue rather than calling
     // UpdateManager directly.
     import_queue: ModelHandle<ImportQueue>,
+    current_generation: ImportGeneration,
     owner: Option<Owner>,
     initial_folder_id: Option<SyncId>,
 
@@ -109,6 +112,7 @@ impl ImportModalBody {
             owner: None,
             initial_folder_id: None,
             import_queue,
+            current_generation: ImportGeneration::default(),
             file_picker_mouse_state: Default::default(),
             link_mouse_state: Default::default(),
             in_progress_handle: None,
@@ -116,10 +120,15 @@ impl ImportModalBody {
     }
 
     fn handle_import_queue_event(&mut self, event: &ImportQueueEvent, ctx: &mut ViewContext<Self>) {
+        if event.generation() != self.current_generation {
+            return;
+        }
         // Only handle event when path is expanded.
         if let ImportState::PathExpanded(state) = &mut self.state {
             match event {
-                ImportQueueEvent::FileCompleted { file_id, server_id } => {
+                ImportQueueEvent::FileCompleted {
+                    file_id, server_id, ..
+                } => {
                     let result = match server_id {
                         Some(id) => UploadResult::Success(id.clone()),
                         None => UploadResult::Error(crate::t!("drive-import-file-upload-error")),
@@ -133,6 +142,7 @@ impl ImportModalBody {
                 ImportQueueEvent::FolderCompleted {
                     folder_id,
                     server_id,
+                    ..
                 } => {
                     let result = match server_id {
                         Some(id) => UploadResult::Success(id.clone()),
@@ -142,7 +152,7 @@ impl ImportModalBody {
                     state.mark_folder_synced(result, *folder_id);
                     ctx.notify();
                 }
-                ImportQueueEvent::FileSavedLocally(file_id) => {
+                ImportQueueEvent::FileSavedLocally { file_id, .. } => {
                     let file_node = state
                         .file_id_to_node
                         .get_mut(file_id)
@@ -228,6 +238,7 @@ impl ImportModalBody {
             let parent_folder_cloud_id = state.folder_cloud_id(parent_id);
             self.push_new_update(
                 ImportQueueArgs {
+                    generation: self.current_generation,
                     owner,
                     parent_id: self.parent_id_for_upload(parent_folder_cloud_id),
                     content: RequestContent::Folder {
@@ -249,8 +260,12 @@ impl ImportModalBody {
         &mut self,
         file_id: FileId,
         continue_parsing_after_completion: bool,
+        generation: ImportGeneration,
         ctx: &mut ViewContext<Self>,
     ) {
+        if generation != self.current_generation {
+            return;
+        }
         if let ImportState::PathExpanded(state) = &self.state {
             let Some(node) = state.file_id_to_node.get(&file_id) else {
                 return;
@@ -260,6 +275,9 @@ impl ImportModalBody {
             let file_type = node.file_type();
 
             let handle = ctx.spawn(parse_file(path, file_type), move |view, response, ctx| {
+                if generation != view.current_generation {
+                    return;
+                }
                 let metadata = match &mut view.state {
                     ImportState::PathExpanded(state) => {
                         // If there is an error with the file, update the file state with the error and notify
@@ -291,6 +309,7 @@ impl ImportModalBody {
 
                         view.push_new_update(
                             ImportQueueArgs {
+                                generation,
                                 owner,
                                 parent_id: view.parent_id_for_upload(parent_cloud_id),
                                 content: RequestContent::Notebook {
@@ -308,6 +327,7 @@ impl ImportModalBody {
                         workflow_enums,
                     }) => view.push_new_update(
                         ImportQueueArgs {
+                            generation,
                             owner,
                             parent_id: view.parent_id_for_upload(parent_cloud_id),
                             content: RequestContent::Workflow {
@@ -333,6 +353,7 @@ impl ImportModalBody {
                             view.parse_next_file(
                                 next_file_id,
                                 continue_parsing_after_completion,
+                                generation,
                                 ctx,
                             );
                         } else {
@@ -353,6 +374,10 @@ impl ImportModalBody {
     }
 
     pub fn reset(&mut self, ctx: &mut ViewContext<Self>) {
+        let generation = self.current_generation;
+        self.current_generation = ImportGeneration::new();
+        self.import_queue
+            .update(ctx, |queue, _| queue.cancel_generation(generation));
         self.state = ImportState::Upload;
         if let Some(handle) = self.in_progress_handle.take() {
             handle.abort();
@@ -538,7 +563,7 @@ impl TypedActionView for ImportModalBody {
                 if let ImportState::PathExpanded(state) = &mut self.state {
                     state.set_file_and_parent_to_loading(*file_id);
                 }
-                self.parse_next_file(*file_id, false, ctx);
+                self.parse_next_file(*file_id, false, self.current_generation, ctx);
                 ctx.notify();
             }
             ImportModalBodyAction::ClickedToOpenTarget(hashed_id) => {
@@ -549,14 +574,18 @@ impl TypedActionView for ImportModalBody {
             }
             ImportModalBodyAction::PathsSelected(paths) => {
                 self.state = ImportState::PathLoaded;
+                let generation = self.current_generation;
 
                 let paths_cloned = paths.clone();
                 let handle = ctx.spawn(
                     expand_dirs(paths_cloned.into_iter().map(PathBuf::from).collect()),
                     move |view, mut upload_state, ctx| {
+                        if generation != view.current_generation {
+                            return;
+                        }
                         view.populate_folder_cloud_object(&mut upload_state, ctx);
                         view.state = ImportState::PathExpanded(upload_state);
-                        view.parse_next_file(FileId::first_id(), true, ctx);
+                        view.parse_next_file(FileId::first_id(), true, generation, ctx);
                         ctx.notify();
                     },
                 );

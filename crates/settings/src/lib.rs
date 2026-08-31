@@ -540,12 +540,12 @@ pub trait Setting {
                 key,
                 value
             );
-            let _ = preferences.write_value_with_hierarchy(
+            preferences.write_value_with_hierarchy(
                 key,
                 value,
                 Self::hierarchy(),
                 Self::max_table_depth(),
-            );
+            )?;
             Ok(true)
         } else {
             Ok(false)

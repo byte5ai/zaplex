@@ -15,6 +15,13 @@ const INJECT_TIMEOUT: Duration = Duration::from_secs(30);
 const SLIDING_WINDOW_BYTES: usize = 8 * 1024;
 const BUFFER_HARD_LIMIT: usize = 16 * 1024;
 
+#[derive(Debug, Eq, PartialEq)]
+enum StartupCommandWaitOutcome {
+    Ready(String),
+    EndOfStream,
+    TimedOut,
+}
+
 /// Spawn startup command injector task in owner context.
 pub fn spawn_startup_command_injector<O>(
     pty_reads_rx: Option<InactiveReceiver<Arc<Vec<u8>>>>,
@@ -33,20 +40,24 @@ pub fn spawn_startup_command_injector<O>(
         return;
     }
 
-    let future = async move {
-        match wait_for_shell_prompt(rx).with_timeout(INJECT_TIMEOUT).await {
-            Ok(true) => Some(startup_command),
-            Ok(false) | Err(_) => None,
-        }
-    };
-    ctx.spawn(future, move |_owner, cmd_opt, ctx| {
+    let future = wait_for_startup_command(rx, startup_command, INJECT_TIMEOUT);
+    ctx.spawn(future, move |_owner, outcome, ctx| {
         let Some(view) = terminal_view.upgrade(ctx) else {
             log::debug!("ssh startup command injector: terminal view dropped");
             return;
         };
-        let Some(cmd) = cmd_opt else {
-            log::debug!("ssh startup command injector: no shell prompt detected within timeout");
-            return;
+        let cmd = match outcome {
+            StartupCommandWaitOutcome::Ready(cmd) => cmd,
+            StartupCommandWaitOutcome::EndOfStream => {
+                log::debug!("ssh startup command injector: PTY stream ended before shell ready");
+                return;
+            }
+            StartupCommandWaitOutcome::TimedOut => {
+                log::warn!(
+                    "ssh startup command injector: shell was not ready within {INJECT_TIMEOUT:?}"
+                );
+                return;
+            }
         };
         view.update(ctx, |view, ctx| {
             let mut bytes = cmd.as_bytes().to_vec();
@@ -54,6 +65,18 @@ pub fn spawn_startup_command_injector<O>(
             view.write_to_pty(bytes, ctx);
         });
     });
+}
+
+async fn wait_for_startup_command(
+    rx: InactiveReceiver<Arc<Vec<u8>>>,
+    startup_command: String,
+    timeout: Duration,
+) -> StartupCommandWaitOutcome {
+    match wait_for_shell_prompt(rx).with_timeout(timeout).await {
+        Ok(true) => StartupCommandWaitOutcome::Ready(startup_command),
+        Ok(false) => StartupCommandWaitOutcome::EndOfStream,
+        Err(_) => StartupCommandWaitOutcome::TimedOut,
+    }
 }
 
 async fn wait_for_shell_prompt(rx: InactiveReceiver<Arc<Vec<u8>>>) -> bool {
@@ -71,3 +94,7 @@ async fn wait_for_shell_prompt(rx: InactiveReceiver<Arc<Vec<u8>>>) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+#[path = "startup_command_injector_tests.rs"]
+mod tests;

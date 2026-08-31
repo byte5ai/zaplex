@@ -270,7 +270,7 @@ http_server.workspace = true
 hyper.workspace = true
 libsqlite3-sys = { version = "0.33.0", features = ["bundled"] }
 mio = { version = "1.1.1", features = ["os-poll", "os-ext"] }
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros", "time"] }
 tokio-util.workspace = true
 
 # AWS SDK (loading credentials for BYO LLM)
@@ -392,7 +392,13 @@ warp_files = { workspace = true, features = ["test-util"] }
 repo_metadata = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "time"] }
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "macros",
+    "process",
+    "time",
+    "test-util",
+] }
 
 [build-dependencies]
 anyhow = "1.0"
