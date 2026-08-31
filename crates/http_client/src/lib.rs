@@ -165,6 +165,22 @@ impl Client {
     }
 
     pub fn from_client_builder(client_builder: reqwest::ClientBuilder) -> reqwest::Result<Self> {
+        #[cfg_attr(target_family = "wasm", expect(unused_mut))]
+        let mut client_builder = client_builder;
+        #[cfg(not(target_family = "wasm"))]
+        {
+            client_builder =
+                client_builder.redirect(reqwest::redirect::Policy::custom(|attempt| {
+                    let initial_url = attempt
+                        .previous()
+                        .first()
+                        .expect("a redirect must have an initial URL");
+                    if !Self::trusted_request_may_follow_redirect(initial_url, attempt.url()) {
+                        return attempt.stop();
+                    }
+                    reqwest::redirect::Policy::default().redirect(attempt)
+                }));
+        }
         client_builder.build().map(|client| Self {
             wrapped: client,
             before_request_sent: None,
@@ -254,6 +270,15 @@ impl Client {
     fn include_warp_http_headers<U: IntoUrl + Clone>(url: U) -> bool {
         url.into_url()
             .is_ok_and(|url| url.origin() == ChannelState::server_root_domain())
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn trusted_request_may_follow_redirect(
+        initial_url: &reqwest::Url,
+        redirect_url: &reqwest::Url,
+    ) -> bool {
+        initial_url.origin() != ChannelState::server_root_domain()
+            || redirect_url.origin() == ChannelState::server_root_domain()
     }
 
     fn add_warp_http_headers(mut builder: RequestBuilder) -> RequestBuilder {

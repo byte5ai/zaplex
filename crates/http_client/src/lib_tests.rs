@@ -63,3 +63,42 @@ fn configured_backend_origin_is_trusted_but_other_ports_are_not() {
         false
     );
 }
+
+#[test]
+fn trusted_requests_only_follow_same_origin_redirects() {
+    let trusted_url =
+        reqwest::Url::parse(ChannelState::server_root_url().as_ref()).expect("valid backend URL");
+    let same_origin = trusted_url.join("/redirected").expect("valid redirect URL");
+    assert!(Client::trusted_request_may_follow_redirect(
+        &trusted_url,
+        &same_origin
+    ));
+
+    let external =
+        reqwest::Url::parse("https://provider.example/redirected").expect("valid external URL");
+    assert!(!Client::trusted_request_may_follow_redirect(
+        &trusted_url,
+        &external
+    ));
+
+    let mut other_port = trusted_url.clone();
+    let port = other_port.port_or_known_default().unwrap_or(80) + 1;
+    other_port
+        .set_port(Some(port))
+        .expect("URL should accept a port");
+    assert!(!Client::trusted_request_may_follow_redirect(
+        &trusted_url,
+        &other_port
+    ));
+}
+
+#[test]
+fn external_requests_keep_their_normal_redirect_behavior() {
+    let initial =
+        reqwest::Url::parse("https://provider.example/start").expect("valid provider URL");
+    let redirect = reqwest::Url::parse("https://cdn.example/result").expect("valid redirect URL");
+
+    assert!(Client::trusted_request_may_follow_redirect(
+        &initial, &redirect
+    ));
+}

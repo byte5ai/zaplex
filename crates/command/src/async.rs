@@ -366,6 +366,16 @@ impl Command {
             self.inner.stderr(Stdio::null());
         }
 
+        #[cfg(windows)]
+        if self.create_process_group {
+            use async_process::windows::CommandExt as _;
+
+            let flags = windows::Win32::System::Threading::CREATE_NO_WINDOW.0
+                | windows::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB.0
+                | windows::Win32::System::Threading::CREATE_SUSPENDED.0;
+            self.inner.creation_flags(flags);
+        }
+
         #[allow(unused_mut)]
         let mut child = self.inner.spawn()?;
 
@@ -374,9 +384,10 @@ impl Command {
             use std::os::windows::io::AsRawHandle as _;
 
             let pid = child.id();
-            if let Err(error) =
-                crate::windows::register_process_group(pid, child.as_raw_handle() as isize)
-            {
+            if let Err(error) = crate::windows::register_and_resume_process_group(
+                pid,
+                child.as_raw_handle() as isize,
+            ) {
                 let _ = child.kill();
                 return Err(io::Error::other(error));
             }

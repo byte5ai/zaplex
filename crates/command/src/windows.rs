@@ -23,6 +23,9 @@ pub enum JobObjectError {
     #[error("Failed to terminate job: {0}")]
     TerminateFailed(std::io::Error),
 
+    #[error("Failed to resume suspended process (NTSTATUS {0:#010x})")]
+    ResumeFailed(u32),
+
     #[error(transparent)]
     Other(anyhow::Error),
 }
@@ -165,8 +168,28 @@ lazy_static! {
     static ref PROCESS_GROUPS: Mutex<HashMap<u32, Arc<ProcessGroup>>> = Mutex::new(HashMap::new());
 }
 
-pub(super) fn register_process_group(pid: u32, process: isize) -> Result<(), JobObjectError> {
+fn resume_process(process: isize) -> Result<(), JobObjectError> {
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        #[link_name = "NtResumeProcess"]
+        fn nt_resume_process(process: *mut std::ffi::c_void) -> i32;
+    }
+
+    // SAFETY: `process` is the live process handle returned by CreateProcess and remains owned by
+    // the child while this call resumes the process after Job Object assignment.
+    let status = unsafe { nt_resume_process(process as *mut std::ffi::c_void) };
+    if status < 0 {
+        return Err(JobObjectError::ResumeFailed(status as u32));
+    }
+    Ok(())
+}
+
+pub(super) fn register_and_resume_process_group(
+    pid: u32,
+    process: isize,
+) -> Result<(), JobObjectError> {
     let group = Arc::new(ProcessGroup::for_process(process)?);
+    resume_process(process)?;
     let replaced = PROCESS_GROUPS.lock().unwrap().insert(pid, group);
     if replaced.is_some() {
         log::warn!("Replaced a stale Windows process group for reused pid {pid}");

@@ -1401,6 +1401,15 @@ impl SshConnectRegistry {
     }
 }
 
+fn ssh_connect_terminal_event_finishes_attempt(event: &terminal::Event) -> bool {
+    matches!(
+        event,
+        terminal::Event::SshSessionBootstrapped
+            | terminal::Event::PendingCommandCompleted
+            | terminal::Event::Exited
+    )
+}
+
 pub struct Workspace {
     window_id: WindowId,
     pub(crate) tabs: Vec<TabData>,
@@ -10269,13 +10278,22 @@ impl Workspace {
             );
         }
 
+        if let Some(attempt) = attempt {
+            let mut active_attempt = Some(attempt);
+            ctx.subscribe_to_view(&terminal_view, move |workspace, _, event, ctx| {
+                if !ssh_connect_terminal_event_finishes_attempt(event) {
+                    return;
+                }
+                if let Some(attempt) = active_attempt.take() {
+                    workspace.finish_ssh_connect(&attempt, ctx);
+                }
+            });
+        }
+
         // 3. Queue the ssh command and flush it automatically once bootstrap completes.
         terminal_view.update(ctx, |view, ctx| {
             view.execute_command_or_set_pending(&cmd, ctx);
         });
-        if let Some(attempt) = attempt.as_ref() {
-            self.finish_ssh_connect(attempt, ctx);
-        }
     }
 
     /// Native persistent remote-session path (Stage 2, Option B). Returns `true`

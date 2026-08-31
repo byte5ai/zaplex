@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::SshConnectRegistry;
+use super::{ssh_connect_terminal_event_finishes_attempt, SshConnectRegistry};
 
 #[test]
 fn pending_preflight_remains_single_flight_past_ten_seconds() {
@@ -55,4 +55,20 @@ fn stale_completion_cannot_release_a_new_generation() {
 
     assert!(!registry.finish(&first));
     assert!(registry.contains(&retry));
+}
+
+#[test]
+fn classic_connection_finishes_only_with_its_terminal_lifecycle() {
+    assert!(ssh_connect_terminal_event_finishes_attempt(
+        &crate::terminal::Event::SshSessionBootstrapped
+    ));
+    assert!(ssh_connect_terminal_event_finishes_attempt(
+        &crate::terminal::Event::PendingCommandCompleted
+    ));
+    assert!(ssh_connect_terminal_event_finishes_attempt(
+        &crate::terminal::Event::Exited
+    ));
+    assert!(!ssh_connect_terminal_event_finishes_attempt(
+        &crate::terminal::Event::SessionBootstrapped
+    ));
 }
