@@ -1,10 +1,46 @@
 use anyhow::Result;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use warpui::{AppContext, SingletonEntity};
+use warpui_extras::user_preferences::{Error as PreferencesError, UserPreferences};
 
 use crate::manager::SettingsManager;
 use crate::{Setting, SupportedPlatforms, SyncToCloud};
 
 use crate::*;
+
+static CLAMPED_SETTING_VALIDATIONS: AtomicUsize = AtomicUsize::new(0);
+static CLAMPED_ENUM_SETTING_VALIDATIONS: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Default, Debug, serde::Serialize, serde::Deserialize, PartialEq, schemars::JsonSchema)]
+pub enum ClampedEnumSetting {
+    #[default]
+    Minimum,
+    BelowMinimum,
+    Maximum,
+    AboveMaximum,
+}
+
+impl settings_value::SettingsValue for ClampedEnumSetting {}
+
+impl ClampedEnumSetting {
+    fn validate(&self, new_value: Self) -> Self {
+        CLAMPED_ENUM_SETTING_VALIDATIONS.fetch_add(1, Ordering::SeqCst);
+        match new_value {
+            Self::Minimum => Self::Minimum,
+            Self::BelowMinimum => Self::Minimum,
+            Self::Maximum => Self::Maximum,
+            Self::AboveMaximum => Self::Maximum,
+        }
+    }
+}
+
+implement_setting_for_enum!(
+    ClampedEnumSetting,
+    TestSettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Never,
+    private: true,
+);
 
 define_settings_group!(TestSettings, settings: [
     simple_setting: SimpleSetting {
@@ -31,7 +67,65 @@ define_settings_group!(TestSettings, settings: [
         private: false,
         toml_path: "test_section.hierarchy_flag",
     },
+    clamped_setting: ClampedSetting {
+        type: u8,
+        default: 50,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: true,
+    },
+    clamped_enum_setting: ClampedEnumSetting,
 ]);
+
+impl ClampedSetting {
+    const MIN: u8 = 1;
+    const MAX: u8 = 100;
+
+    fn validate(&self, new_value: u8) -> u8 {
+        CLAMPED_SETTING_VALIDATIONS.fetch_add(1, Ordering::SeqCst);
+        new_value.clamp(Self::MIN, Self::MAX)
+    }
+}
+
+#[derive(Default)]
+struct WriteFailingPreferences;
+
+impl WriteFailingPreferences {
+    fn write_error() -> PreferencesError {
+        PreferencesError::IoError(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "injected write failure",
+        ))
+    }
+}
+
+impl UserPreferences for WriteFailingPreferences {
+    fn write_value(&self, key: &str, value: String) -> std::result::Result<(), PreferencesError> {
+        let _ = (key, value);
+        Err(Self::write_error())
+    }
+
+    fn read_value(&self, key: &str) -> std::result::Result<Option<String>, PreferencesError> {
+        let _ = key;
+        Ok(None)
+    }
+
+    fn remove_value(&self, key: &str) -> std::result::Result<(), PreferencesError> {
+        let _ = key;
+        Ok(())
+    }
+
+    fn write_value_with_hierarchy(
+        &self,
+        key: &str,
+        value: String,
+        hierarchy: Option<&str>,
+        max_table_depth: Option<u32>,
+    ) -> std::result::Result<(), PreferencesError> {
+        let _ = (key, value, hierarchy, max_table_depth);
+        Err(Self::write_error())
+    }
+}
 
 pub fn init_and_register_preferences(ctx: &mut AppContext) {
     ctx.add_singleton_model(move |_| {
@@ -43,6 +137,15 @@ pub fn init_and_register_preferences(ctx: &mut AppContext) {
         crate::PrivatePreferences::new(Box::<
             warpui_extras::user_preferences::in_memory::InMemoryPreferences,
         >::default())
+    });
+}
+
+fn init_write_failing_preferences(ctx: &mut AppContext) {
+    ctx.add_singleton_model(move |_| {
+        crate::PublicPreferences::new(Box::<WriteFailingPreferences>::default())
+    });
+    ctx.add_singleton_model(move |_| {
+        crate::PrivatePreferences::new(Box::<WriteFailingPreferences>::default())
     });
 }
 
@@ -68,6 +171,37 @@ impl EventListener {
 }
 
 impl warpui::Entity for EventListener {
+    type Event = ();
+}
+
+struct ValidationEventListener {
+    clamped_setting_events: usize,
+    clamped_enum_setting_events: usize,
+}
+
+impl ValidationEventListener {
+    fn new(ctx: &mut warpui::ModelContext<Self>) -> Self {
+        let test_settings = TestSettings::handle(ctx);
+        ctx.subscribe_to_model(&test_settings, |me, event, _ctx| match event {
+            TestSettingsChangedEvent::SimpleSetting { .. }
+            | TestSettingsChangedEvent::KeyOverrideSetting { .. }
+            | TestSettingsChangedEvent::HierarchyFlag { .. } => {}
+            TestSettingsChangedEvent::ClampedSetting { .. } => {
+                me.clamped_setting_events += 1;
+            }
+            TestSettingsChangedEvent::ClampedEnumSetting { .. } => {
+                me.clamped_enum_setting_events += 1;
+            }
+        });
+
+        Self {
+            clamped_setting_events: 0,
+            clamped_enum_setting_events: 0,
+        }
+    }
+}
+
+impl warpui::Entity for ValidationEventListener {
     type Event = ();
 }
 
@@ -151,6 +285,217 @@ fn test_set_value_raises_changed_event_save() {
         app.read(|ctx| {
             assert!(handle.as_ref(ctx).got_event);
         });
+    });
+}
+
+#[test]
+fn test_failed_write_does_not_update_state_or_emit_event() {
+    warpui::App::test((), |mut app| async move {
+        app.update(init_write_failing_preferences);
+        app.add_singleton_model(|_| SettingsManager::default());
+        TestSettings::register(&mut app);
+
+        let handle = app.add_model(EventListener::new);
+
+        app.read(|ctx| {
+            let setting = &TestSettings::as_ref(ctx).simple_setting;
+            assert!(!*setting.value());
+            assert!(!setting.is_value_explicitly_set());
+            assert!(!handle.as_ref(ctx).got_event);
+        });
+
+        app.update(|ctx| {
+            TestSettings::handle(ctx).update(ctx, |test_settings, ctx| {
+                let error = test_settings
+                    .simple_setting
+                    .set_value(true, ctx)
+                    .expect_err("the injected preferences write must fail");
+                assert!(error.to_string().contains("i/o error"));
+            });
+        });
+
+        app.read(|ctx| {
+            let setting = &TestSettings::as_ref(ctx).simple_setting;
+            assert!(!*setting.value());
+            assert!(!setting.is_value_explicitly_set());
+            assert!(!handle.as_ref(ctx).got_event);
+        });
+    });
+}
+
+#[test]
+fn test_struct_setting_validates_before_persistence_and_on_startup() {
+    warpui::App::test((), |mut app| async move {
+        CLAMPED_SETTING_VALIDATIONS.store(0, Ordering::SeqCst);
+        app.update(init_and_register_preferences);
+        app.add_singleton_model(|_| SettingsManager::default());
+        TestSettings::register(&mut app);
+
+        assert_eq!(CLAMPED_SETTING_VALIDATIONS.load(Ordering::SeqCst), 0);
+        let handle = app.add_model(ValidationEventListener::new);
+
+        app.update(|ctx| {
+            TestSettings::handle(ctx).update(ctx, |test_settings, ctx| {
+                test_settings.clamped_setting.set_value(0, ctx).unwrap();
+            });
+        });
+
+        assert_eq!(CLAMPED_SETTING_VALIDATIONS.load(Ordering::SeqCst), 1);
+        app.read(|ctx| {
+            let setting = &TestSettings::as_ref(ctx).clamped_setting;
+            assert_eq!(*setting.value(), ClampedSetting::MIN);
+            assert!(setting.is_value_explicitly_set());
+            assert_eq!(handle.as_ref(ctx).clamped_setting_events, 1);
+            let stored = ClampedSetting::preferences_for_setting(ctx)
+                .read_value(ClampedSetting::storage_key())
+                .unwrap();
+            assert_eq!(stored.as_deref(), Some("1"));
+        });
+
+        CLAMPED_SETTING_VALIDATIONS.store(0, Ordering::SeqCst);
+        app.update(|ctx| {
+            TestSettings::handle(ctx).update(ctx, |test_settings, ctx| {
+                test_settings.clamped_setting.set_value(0, ctx).unwrap();
+            });
+        });
+
+        assert_eq!(CLAMPED_SETTING_VALIDATIONS.load(Ordering::SeqCst), 1);
+        app.read(|ctx| {
+            assert_eq!(handle.as_ref(ctx).clamped_setting_events, 1);
+        });
+
+        CLAMPED_SETTING_VALIDATIONS.store(0, Ordering::SeqCst);
+        app.update(|ctx| {
+            TestSettings::handle(ctx).update(ctx, |test_settings, ctx| {
+                test_settings
+                    .clamped_setting
+                    .set_value_from_cloud_sync(u8::MAX, ctx)
+                    .unwrap();
+            });
+        });
+
+        assert_eq!(CLAMPED_SETTING_VALIDATIONS.load(Ordering::SeqCst), 1);
+        app.read(|ctx| {
+            let setting = &TestSettings::as_ref(ctx).clamped_setting;
+            assert_eq!(*setting.value(), ClampedSetting::MAX);
+            assert_eq!(handle.as_ref(ctx).clamped_setting_events, 2);
+            let stored = ClampedSetting::preferences_for_setting(ctx)
+                .read_value(ClampedSetting::storage_key())
+                .unwrap();
+            assert_eq!(stored.as_deref(), Some("100"));
+        });
+
+        CLAMPED_SETTING_VALIDATIONS.store(0, Ordering::SeqCst);
+        app.update(|ctx| {
+            let fresh_setting = ClampedSetting::new_from_storage(ctx);
+            assert_eq!(*fresh_setting.value(), ClampedSetting::MAX);
+            assert!(fresh_setting.is_value_explicitly_set());
+        });
+        assert_eq!(CLAMPED_SETTING_VALIDATIONS.load(Ordering::SeqCst), 1);
+
+        app.update(|ctx| {
+            ClampedSetting::preferences_for_setting(ctx)
+                .write_value(ClampedSetting::storage_key(), "0".to_string())
+                .unwrap();
+        });
+        CLAMPED_SETTING_VALIDATIONS.store(0, Ordering::SeqCst);
+        app.update(|ctx| {
+            let fresh_setting = ClampedSetting::new_from_storage(ctx);
+            assert_eq!(*fresh_setting.value(), ClampedSetting::MIN);
+            assert!(fresh_setting.is_value_explicitly_set());
+        });
+        assert_eq!(CLAMPED_SETTING_VALIDATIONS.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn test_enum_setting_validates_before_persistence_and_on_startup() {
+    warpui::App::test((), |mut app| async move {
+        CLAMPED_ENUM_SETTING_VALIDATIONS.store(0, Ordering::SeqCst);
+        app.update(init_and_register_preferences);
+        app.add_singleton_model(|_| SettingsManager::default());
+        TestSettings::register(&mut app);
+
+        assert_eq!(CLAMPED_ENUM_SETTING_VALIDATIONS.load(Ordering::SeqCst), 0);
+        let handle = app.add_model(ValidationEventListener::new);
+
+        app.update(|ctx| {
+            TestSettings::handle(ctx).update(ctx, |test_settings, ctx| {
+                test_settings
+                    .clamped_enum_setting
+                    .set_value(ClampedEnumSetting::BelowMinimum, ctx)
+                    .unwrap();
+            });
+        });
+
+        assert_eq!(CLAMPED_ENUM_SETTING_VALIDATIONS.load(Ordering::SeqCst), 1);
+        app.read(|ctx| {
+            let setting = &TestSettings::as_ref(ctx).clamped_enum_setting;
+            assert_eq!(setting.value(), &ClampedEnumSetting::Minimum);
+            assert_eq!(handle.as_ref(ctx).clamped_enum_setting_events, 1);
+            let stored = ClampedEnumSetting::preferences_for_setting(ctx)
+                .read_value(ClampedEnumSetting::storage_key())
+                .unwrap();
+            assert_eq!(stored.as_deref(), Some("\"Minimum\""));
+        });
+
+        CLAMPED_ENUM_SETTING_VALIDATIONS.store(0, Ordering::SeqCst);
+        app.update(|ctx| {
+            TestSettings::handle(ctx).update(ctx, |test_settings, ctx| {
+                test_settings
+                    .clamped_enum_setting
+                    .set_value(ClampedEnumSetting::BelowMinimum, ctx)
+                    .unwrap();
+            });
+        });
+
+        assert_eq!(CLAMPED_ENUM_SETTING_VALIDATIONS.load(Ordering::SeqCst), 1);
+        app.read(|ctx| {
+            assert_eq!(handle.as_ref(ctx).clamped_enum_setting_events, 1);
+        });
+
+        CLAMPED_ENUM_SETTING_VALIDATIONS.store(0, Ordering::SeqCst);
+        app.update(|ctx| {
+            TestSettings::handle(ctx).update(ctx, |test_settings, ctx| {
+                test_settings
+                    .clamped_enum_setting
+                    .set_value_from_cloud_sync(ClampedEnumSetting::AboveMaximum, ctx)
+                    .unwrap();
+            });
+        });
+
+        assert_eq!(CLAMPED_ENUM_SETTING_VALIDATIONS.load(Ordering::SeqCst), 1);
+        app.read(|ctx| {
+            let setting = &TestSettings::as_ref(ctx).clamped_enum_setting;
+            assert_eq!(setting.value(), &ClampedEnumSetting::Maximum);
+            assert_eq!(handle.as_ref(ctx).clamped_enum_setting_events, 2);
+            let stored = ClampedEnumSetting::preferences_for_setting(ctx)
+                .read_value(ClampedEnumSetting::storage_key())
+                .unwrap();
+            assert_eq!(stored.as_deref(), Some("\"Maximum\""));
+        });
+
+        CLAMPED_ENUM_SETTING_VALIDATIONS.store(0, Ordering::SeqCst);
+        app.update(|ctx| {
+            let fresh_setting = ClampedEnumSetting::new_from_storage(ctx);
+            assert_eq!(fresh_setting.value(), &ClampedEnumSetting::Maximum);
+        });
+        assert_eq!(CLAMPED_ENUM_SETTING_VALIDATIONS.load(Ordering::SeqCst), 1);
+
+        app.update(|ctx| {
+            ClampedEnumSetting::preferences_for_setting(ctx)
+                .write_value(
+                    ClampedEnumSetting::storage_key(),
+                    "\"AboveMaximum\"".to_string(),
+                )
+                .unwrap();
+        });
+        CLAMPED_ENUM_SETTING_VALIDATIONS.store(0, Ordering::SeqCst);
+        app.update(|ctx| {
+            let fresh_setting = ClampedEnumSetting::new_from_storage(ctx);
+            assert_eq!(fresh_setting.value(), &ClampedEnumSetting::Maximum);
+        });
+        assert_eq!(CLAMPED_ENUM_SETTING_VALIDATIONS.load(Ordering::SeqCst), 1);
     });
 }
 

@@ -243,7 +243,7 @@ pub trait Setting {
 
     /// Constructs this setting object with the given initial value.
     /// If value is None, uses the default value and marks as not explicitly set.
-    /// If value is Some, uses that value and marks as explicitly set.
+    /// If value is Some, validates and uses that value and marks as explicitly set.
     fn new(value: Option<Self::Value>) -> Self
     where
         Self: Sized;
@@ -540,12 +540,12 @@ pub trait Setting {
                 key,
                 value
             );
-            let _ = preferences.write_value_with_hierarchy(
+            preferences.write_value_with_hierarchy(
                 key,
                 value,
                 Self::hierarchy(),
                 Self::max_table_depth(),
-            );
+            )?;
             Ok(true)
         } else {
             Ok(false)

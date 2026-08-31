@@ -4,6 +4,12 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.0.5] — 2026-08-20
 
+- **Settings-Persistenz:** Fehler beim Schreiben von Einstellungen werden an
+  Aufrufer weitergegeben, ohne In-Memory-Wert, Explicit-Status oder Events als
+  erfolgreiche Änderung fortzuschreiben.
+- **Settings-Validierung:** Lokale und Cloud-Änderungen persistieren den einmal
+  validierten Effektivwert; gespeicherte Werte werden beim Start ebenfalls
+  validiert.
 - **Ehrliche Kontenerkennung:** Ein ausstehender oder fehlgeschlagener Scan wird
   nicht mehr als `KI-KONTEN 0` dargestellt; eine Null ist nur nach einem
   erfolgreichen leeren Scan sichtbar.

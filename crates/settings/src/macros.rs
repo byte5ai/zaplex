@@ -247,10 +247,14 @@ macro_rules! define_setting {
             /// set or not.
             fn new(value: Option<Self::Value>) -> Self {
                 match value {
-                    Some(v) => Self {
-                        inner: v,
-                        is_explicitly_set: true,
-                    },
+                    Some(value) => {
+                        let mut setting = Self {
+                            inner: Self::default_value(),
+                            is_explicitly_set: true,
+                        };
+                        setting.inner = setting.validate(value);
+                        setting
+                    }
                     None => {
                         let default_value = Self::default_value();
                         log::debug!(
@@ -330,10 +334,11 @@ macro_rules! define_setting {
                 ctx: &mut warpui::ModelContext<Self::Group>,
             ) -> anyhow::Result<()> {
                 use $crate::ChangeEventReason;
+                let new_value = self.validate(new_value);
                 let changed_in_storage =
                     Self::write_to_preferences(&new_value, Self::preferences_for_setting(ctx))?;
                 if self.value() != &new_value || changed_in_storage {
-                    self.inner = self.validate(new_value);
+                    self.inner = new_value;
                     self.is_explicitly_set = true;
                     ctx.emit($crate::macros::concat_idents!(EventName = $group, ChangedEvent { EventName::$name {
                         change_event_reason: ChangeEventReason::CloudSync,
@@ -348,10 +353,11 @@ macro_rules! define_setting {
                 ctx: &mut warpui::ModelContext<Self::Group>,
             ) -> anyhow::Result<()> {
                 use $crate::ChangeEventReason;
+                let new_value = self.validate(new_value);
                 let changed_in_storage =
                     Self::write_to_preferences(&new_value, Self::preferences_for_setting(ctx))?;
                 if self.value() != &new_value || changed_in_storage {
-                    self.inner = self.validate(new_value);
+                    self.inner = new_value;
                     self.is_explicitly_set = true;
                     ctx.emit($crate::macros::concat_idents!(EventName = $group, ChangedEvent { EventName::$name {
                         change_event_reason: ChangeEventReason::LocalChange,
@@ -531,7 +537,7 @@ macro_rules! implement_setting_for_enum {
 
             fn new(value: Option<Self::Value>) -> Self {
                 match value {
-                    Some(v) => v,
+                    Some(value) => Self::default_value().validate(value),
                     None => Self::default_value()
                 }
             }
@@ -599,10 +605,11 @@ macro_rules! implement_setting_for_enum {
                 ctx: &mut warpui::ModelContext<Self::Group>,
             ) -> anyhow::Result<()> {
                 use $crate::ChangeEventReason;
+                let new_value = self.validate(new_value);
                 let changed_in_storage =
                     Self::write_to_preferences(&new_value, Self::preferences_for_setting(ctx))?;
                 if self.value() != &new_value || changed_in_storage {
-                    *self = self.validate(new_value);
+                    *self = new_value;
                     ctx.emit($crate::macros::concat_idents!(EventName = $group, ChangedEvent { EventName::$name {
                         change_event_reason: ChangeEventReason::CloudSync,
                     }}));
@@ -616,10 +623,11 @@ macro_rules! implement_setting_for_enum {
                 ctx: &mut warpui::ModelContext<Self::Group>,
             ) -> anyhow::Result<()> {
                 use $crate::ChangeEventReason;
+                let new_value = self.validate(new_value);
                 let changed_in_storage =
                     Self::write_to_preferences(&new_value, Self::preferences_for_setting(ctx))?;
                 if self.value() != &new_value || changed_in_storage {
-                    *self = self.validate(new_value);
+                    *self = new_value;
                     ctx.emit($crate::macros::concat_idents!(EventName = $group, ChangedEvent { EventName::$name {
                         change_event_reason: ChangeEventReason::LocalChange,
                     }}));
