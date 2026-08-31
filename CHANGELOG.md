@@ -2,7 +2,7 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
-## [1.0.5] — 2026-08-20
+## [1.0.5] — 2026-09-01
 
 - **Verlässliche Einstellungen:** Schreibfehler werden bis zur UI propagiert;
   validierte Werte sind im Speicher, auf Disk und nach Neustart identisch.
