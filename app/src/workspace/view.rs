@@ -1401,6 +1401,26 @@ impl SshConnectRegistry {
     }
 }
 
+#[derive(Default)]
+struct ClassicSshConnectAttempts {
+    by_pane_group: HashMap<EntityId, SshConnectAttempt>,
+}
+
+impl ClassicSshConnectAttempts {
+    fn bind(&mut self, pane_group_id: EntityId, attempt: SshConnectAttempt) {
+        self.by_pane_group.insert(pane_group_id, attempt);
+    }
+
+    fn finish(&mut self, attempt: &SshConnectAttempt) {
+        self.by_pane_group
+            .retain(|_, candidate| candidate != attempt);
+    }
+
+    fn take_for_tab(&mut self, pane_group_id: EntityId) -> Option<SshConnectAttempt> {
+        self.by_pane_group.remove(&pane_group_id)
+    }
+}
+
 fn ssh_connect_terminal_event_finishes_attempt(event: &terminal::Event) -> bool {
     matches!(
         event,
@@ -1441,8 +1461,12 @@ pub struct Workspace {
     daemon_session_servers: std::collections::HashMap<SessionId, warp_ssh_manager::SshServerInfo>,
     /// Authoritative per-host guard for every SSH connect entry point. Daemon
     /// attempts remain here through preflight, install, and initialize; classic
-    /// attempts finish after their command has been queued.
+    /// attempts finish when the remote shell bootstraps, the command ends, or
+    /// their tab closes.
     ssh_connect_registry: SshConnectRegistry,
+    /// Exact classic-attempt generation owned by each pending tab. This lets a
+    /// tab close release its own guard without clearing a newer retry.
+    classic_ssh_connect_attempts: ClassicSshConnectAttempts,
     /// Daemon connection session to the guarded host attempt. Manager lifecycle
     /// events use this to release the exact generation without allowing a stale
     /// completion or watchdog to clear a newer retry.
@@ -3812,6 +3836,7 @@ impl Workspace {
             #[cfg(unix)]
             daemon_session_servers: std::collections::HashMap::new(),
             ssh_connect_registry: SshConnectRegistry::default(),
+            classic_ssh_connect_attempts: ClassicSshConnectAttempts::default(),
             #[cfg(unix)]
             daemon_connect_attempts: HashMap::new(),
             #[cfg(all(unix, feature = "local_tty"))]
@@ -9873,6 +9898,7 @@ impl Workspace {
         #[cfg(unix)]
         self.daemon_connect_attempts
             .retain(|_, candidate| candidate != attempt);
+        self.classic_ssh_connect_attempts.finish(attempt);
         self.left_panel_view.update(ctx, |panel, ctx| {
             panel.set_ssh_connecting(&attempt.node_id, false, ctx);
         });
@@ -10205,6 +10231,10 @@ impl Workspace {
         // "Open file manager here" opening the HOST's file manager).
         let pane_group_id = self.active_tab_pane_group().id();
         self.ssh_tab_nodes.insert(pane_group_id, node_id.clone());
+        if let Some(attempt) = attempt.as_ref() {
+            self.classic_ssh_connect_attempts
+                .bind(pane_group_id, attempt.clone());
+        }
 
         // Grab the focused terminal view of the new tab.
         let pane_group = self.active_tab_pane_group();
@@ -15759,6 +15789,13 @@ impl Workspace {
 
                 pane_group.detach_panes_for_close(&working_directories_model, ctx);
             });
+        }
+
+        if let Some(attempt) = self
+            .classic_ssh_connect_attempts
+            .take_for_tab(tab_data.pane_group.id())
+        {
+            self.finish_ssh_connect(&attempt, ctx);
         }
 
         let tab_data = self.tabs.remove(index);
