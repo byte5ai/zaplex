@@ -6110,6 +6110,7 @@ impl Workspace {
         is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        let stop_action = live_session_unavailable_stop_action(session, host, host_id, is_local);
         let session = Self::session_display_name(session);
         let host = if host.is_empty() {
             crate::t!("cockpit-table-host-local").to_string()
@@ -6122,7 +6123,6 @@ impl Workspace {
             host = host
         )
         .to_string();
-        let stop_action = live_session_unavailable_stop_action(session, host, host_id, is_local);
         self.toast_stack.update(ctx, |toast_stack, ctx| {
             let mut toast = DismissibleToast::default(message);
             if let Some(action) = stop_action {
