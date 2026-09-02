@@ -4,7 +4,7 @@ use crate::terminal::ssh::util::InteractiveSshCommand;
 #[test]
 fn legacy_ssh_candidates_run_both_agents_on_the_active_host() {
     let candidates = legacy_ssh_candidates(&InteractiveSshCommand {
-        host: Some("cwendler@devhost".to_string()),
+        host: Some("developer@ssh.example.test".to_string()),
         port: Some("2222".to_string()),
     })
     .unwrap();
@@ -20,7 +20,7 @@ fn legacy_ssh_candidates_run_both_agents_on_the_active_host() {
     for candidate in candidates {
         assert_eq!(
             candidate.installation.host.id,
-            "legacy-ssh:cwendler@devhost:2222"
+            "legacy-ssh:developer@ssh.example.test:2222"
         );
         assert_eq!(
             candidate.location,
@@ -32,7 +32,7 @@ fn legacy_ssh_candidates_run_both_agents_on_the_active_host() {
                     "-p".to_string(),
                     "2222".to_string(),
                     "--".to_string(),
-                    "cwendler@devhost".to_string(),
+                    "developer@ssh.example.test".to_string(),
                 ],
             }
         );
