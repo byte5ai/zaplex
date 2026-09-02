@@ -73,6 +73,69 @@ use terminal::view::ActiveSessionState;
 use warpui::AddSingletonModel;
 use warpui::{platform::WindowStyle, App, ViewHandle};
 
+fn unavailable_live_session(provider: zaplex_cockpit::Provider) -> zaplex_cockpit::SessionSnapshot {
+    zaplex_cockpit::SessionSnapshot {
+        session_id: "session-a".to_string(),
+        cwd: "/workspace/project".to_string(),
+        name: "agent-a".to_string(),
+        state: zaplex_cockpit::SessionState::Active,
+        provider,
+        model: String::new(),
+        effort: None,
+        ctx_tokens: 0,
+        project_root: "/workspace/project".to_string(),
+        repo_root: "/workspace/project".to_string(),
+        project_name: "project".to_string(),
+        branch: None,
+        worktree: None,
+        config_dir: None,
+        account_email: None,
+        account_id: None,
+        process_fingerprint: Some("process-a".to_string()),
+        pty_session_id: None,
+        pty_session_generation: None,
+        pty_foreground: false,
+        task_state: None,
+        last_activity: chrono::Utc::now(),
+        pid: 4242,
+    }
+}
+
+#[test]
+fn unavailable_fingerprinted_session_offers_exact_stop_action() {
+    let session = unavailable_live_session(zaplex_cockpit::Provider::Claude);
+
+    let Some(WorkspaceAction::StopAgent {
+        host,
+        host_id,
+        session_id,
+        pid,
+        process_fingerprint,
+        is_local,
+        agent_label,
+    }) = live_session_unavailable_stop_action(&session, "remote", Some("host-a"), false)
+    else {
+        panic!("a safely addressable live session must offer Stop");
+    };
+
+    assert_eq!(host, "remote");
+    assert_eq!(host_id.as_deref(), Some("host-a"));
+    assert_eq!(session_id, "session-a");
+    assert_eq!(pid, 4242);
+    assert_eq!(process_fingerprint.as_deref(), Some("process-a"));
+    assert!(!is_local);
+    assert_eq!(agent_label, "agent-a — project");
+}
+
+#[test]
+fn unavailable_unsignalable_session_does_not_offer_stop() {
+    let mut session = unavailable_live_session(zaplex_cockpit::Provider::Codex);
+    session.pid = 0;
+    session.process_fingerprint = None;
+
+    assert!(live_session_unavailable_stop_action(&session, "local", None, true).is_none());
+}
+
 #[test]
 fn launch_request_never_interpolates_remote_path_into_shell_source() {
     let remote_path = "/srv/projects/a path;$(touch /tmp/not-shell-source)";

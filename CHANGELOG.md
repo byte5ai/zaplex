@@ -2,6 +2,15 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.6] — 2026-09-01
+
+- **Agenten in SSH-Terminals:** `/agent` startet Claude Code oder Codex auf dem
+  aktiven SSH-Host; lokale Installationen werden auch aus den üblichen
+  macOS-GUI-Pfaden zuverlässig erkannt.
+- **Sichere Sitzungswiederherstellung:** Nicht erreichbare, noch laufende
+  Sessions bieten direkt im Hinweis eine fingerprint-geprüfte Stop-Aktion,
+  ohne versehentlich eine zweite Sitzung zu starten.
+
 ## [1.0.5] — 2026-09-01
 
 - **Verlässliche Einstellungen:** Schreibfehler werden bis zur UI propagiert;

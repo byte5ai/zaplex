@@ -7,12 +7,12 @@ use warp_editor::render::model::LineCount;
 use warp_util::path::EscapeChar;
 use warpui::App;
 
-#[cfg(unix)]
-use super::cli_agent_search_dirs;
 use super::{
     agents_for_installation_scan, build_diff_hunk_prompt, build_review_prompt,
     build_selection_line_range_prompt, build_selection_substring_prompt, CLIAgent, UBER_TEAM_UID,
 };
+#[cfg(unix)]
+use super::{cli_agent_search_dirs, resolve_executable_in_dirs};
 use crate::ai::agent::{AgentReviewCommentBatch, DiffSetHunk};
 use crate::code::editor::line::EditorLineLocation;
 use crate::code_review::comments::{
@@ -539,6 +539,45 @@ fn test_cli_agent_search_dirs_include_home_managed_bins() {
     assert!(dirs.contains(&home.join(".bun/bin")));
     assert!(dirs.contains(&home.join(".grok/bin")));
     assert!(dirs.contains(&home.join(".local/bin")));
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_resolution_uses_gui_safe_search_dirs() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let process_path = tempfile::tempdir().unwrap();
+    let gui_safe_path = tempfile::tempdir().unwrap();
+    let executable = gui_safe_path.path().join("codex");
+    std::fs::write(&executable, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(
+        resolve_executable_in_dirs(
+            "codex",
+            &[
+                process_path.path().to_owned(),
+                gui_safe_path.path().to_owned(),
+            ],
+        ),
+        Some(executable),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_resolution_rejects_non_executable_files() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let non_executable = directory.path().join("codex");
+    std::fs::write(&non_executable, "not executable\n").unwrap();
+    std::fs::set_permissions(&non_executable, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert_eq!(
+        resolve_executable_in_dirs("codex", &[directory.path().to_owned()]),
+        None,
+    );
 }
 
 #[test]

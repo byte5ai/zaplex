@@ -9,6 +9,7 @@ use crate::ai::api_error::AIApiError;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::cockpit::CockpitModel;
 use crate::remote_server::manager::RemoteServerManager;
+use crate::terminal::ssh::util::InteractiveSshCommand;
 use anyhow::{anyhow, bail, Context, Result};
 use futures::channel::oneshot;
 use futures_util::{select, FutureExt};
@@ -51,19 +52,33 @@ pub(crate) fn subscription_dispatch_info(
     let task_id = conversation.get_root_task_id().to_string();
     let needs_create_task = conversation.compute_active_tasks().is_empty();
     let prompt = prompt_from_inputs(&params.input)?;
-    let working_directory = params
-        .session_context
-        .current_working_directory()
-        .as_ref()
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
+    let working_directory = if params.session_context.is_legacy_ssh() {
+        // A legacy SSH session has no remote shell hook, so its reported cwd
+        // belongs to the local client. Start the remote CLI in its login cwd.
+        PathBuf::from(".")
+    } else {
+        params
+            .session_context
+            .current_working_directory()
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
     let registry = SubscriptionSessionRegistry::as_ref(ctx).clone();
     let mut preferences = registry.preferences();
-    let candidates = if let Some(host_id) = params.session_context.host_id() {
-        remote_candidates(host_id.as_str(), &working_directory, ctx)?
-    } else {
-        local_candidates(&mut preferences, ctx)
+    let candidates = match params.session_context.host_id() {
+        Some(host_id) => remote_candidates(host_id.as_str(), ctx)?,
+        None if params.session_context.is_legacy_ssh() => legacy_ssh_candidates(
+            params
+                .session_context
+                .ssh_connection_info()
+                .context("the active SSH session has no reusable connection details")?,
+        )?,
+        None if params.session_context.is_remote() => {
+            bail!("the active remote host is not connected; reconnect it and try again")
+        }
+        None => local_candidates(&mut preferences, ctx),
     };
     if candidates.is_empty() {
         registry.set_lifecycle(
@@ -445,7 +460,7 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
     }
     let mut candidates = Vec::new();
     for (agent, provider, command, default_dir) in local_agent_specs() {
-        let Some(executable) = crate::util::path::resolve_executable(command) else {
+        let Some(executable) = crate::terminal::cli_agent::resolve_cli_executable(command) else {
             continue;
         };
         let accounts: Vec<&AccountUsage> = snapshot
@@ -466,7 +481,7 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
                     format!("{}:default", provider.as_str()),
                     "Default subscription".to_string(),
                     dirs::home_dir().map(|home| home.join(default_dir)),
-                    executable.as_ref().to_path_buf(),
+                    executable.clone(),
                 ),
                 location: ProcessLocation::Local,
             });
@@ -479,7 +494,7 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
                     usage.account.key.clone(),
                     usage.account.label.clone(),
                     Some(usage.account.config_dir.clone()),
-                    executable.as_ref().to_path_buf(),
+                    executable.clone(),
                 ),
                 location: ProcessLocation::Local,
             }));
@@ -528,11 +543,7 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
     candidates
 }
 
-fn remote_candidates(
-    host_id: &str,
-    working_directory: &std::path::Path,
-    ctx: &AppContext,
-) -> Result<Vec<RuntimeCandidate>> {
+fn remote_candidates(host_id: &str, ctx: &AppContext) -> Result<Vec<RuntimeCandidate>> {
     let daemon = RemoteServerManager::as_ref(ctx)
         .connected_daemons()
         .into_iter()
@@ -547,14 +558,48 @@ fn remote_candidates(
         Ok(server)
     })?;
     let ssh_argv = warp_ssh_manager::ssh_command::build_ssh_args(&server);
-    let _ = working_directory;
-    Ok(local_agent_specs()
+    Ok(remote_candidates_for_ssh(
+        host_id,
+        &daemon.host_label,
+        ssh_argv,
+    ))
+}
+
+fn legacy_ssh_candidates(connection: &InteractiveSshCommand) -> Result<Vec<RuntimeCandidate>> {
+    let host = connection
+        .host
+        .as_deref()
+        .filter(|host| !host.is_empty())
+        .context("the active SSH session has no reusable host")?;
+    let mut ssh_argv = vec![
+        "ssh".to_string(),
+        "-o".to_string(),
+        "StrictHostKeyChecking=ask".to_string(),
+    ];
+    if let Some(port) = connection.port.as_deref().filter(|port| !port.is_empty()) {
+        ssh_argv.extend(["-p".to_string(), port.to_string()]);
+    }
+    ssh_argv.extend(["--".to_string(), host.to_string()]);
+    let host_id = format!(
+        "legacy-ssh:{host}:{}",
+        connection.port.as_deref().unwrap_or("22")
+    );
+
+    Ok(remote_candidates_for_ssh(&host_id, host, ssh_argv))
+}
+
+fn remote_candidates_for_ssh(
+    host_id: &str,
+    host_name: &str,
+    ssh_argv: Vec<String>,
+) -> Vec<RuntimeCandidate> {
+    local_agent_specs()
         .into_iter()
         .map(|(agent, provider, command, _)| RuntimeCandidate {
             installation: installation(
                 agent,
                 host_id,
-                &daemon.host_label,
+                host_name,
                 format!("{}:remote-default:{host_id}", provider.as_str()),
                 "Remote default subscription".to_string(),
                 None,
@@ -564,7 +609,7 @@ fn remote_candidates(
                 ssh_argv: ssh_argv.clone(),
             },
         })
-        .collect())
+        .collect()
 }
 
 fn local_agent_specs() -> [(SubscriptionAgent, Provider, &'static str, &'static str); 2] {
@@ -638,3 +683,7 @@ fn location_for_target(
         })
         .map(|candidate| candidate.location.clone())
 }
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;

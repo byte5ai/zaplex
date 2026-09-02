@@ -1430,6 +1430,25 @@ fn ssh_connect_terminal_event_finishes_attempt(event: &terminal::Event) -> bool 
     )
 }
 
+fn live_session_unavailable_stop_action(
+    session: &zaplex_cockpit::SessionSnapshot,
+    host: &str,
+    host_id: Option<&str>,
+    is_local: bool,
+) -> Option<WorkspaceAction> {
+    crate::cockpit::capabilities::SessionCapabilities::of(session, is_local)
+        .can_signal
+        .then(|| WorkspaceAction::StopAgent {
+            host: host.to_string(),
+            host_id: host_id.map(str::to_owned),
+            session_id: session.session_id.clone(),
+            pid: session.pid,
+            process_fingerprint: session.process_fingerprint.clone(),
+            is_local,
+            agent_label: zaplex_cockpit::session_label(session),
+        })
+}
+
 pub struct Workspace {
     window_id: WindowId,
     pub(crate) tabs: Vec<TabData>,
@@ -5906,16 +5925,16 @@ impl Workspace {
                     // Preserve the existing in-the-loop behavior: stage the slash
                     // command in the live pane and let the user submit it.
                     if !Self::prefill_terminal_view_input(terminal_view_id, command, ctx) {
-                        self.live_session_unavailable_toast(&session, host, ctx);
+                        self.live_session_unavailable_toast(&session, host, host_id, is_local, ctx);
                     }
                 } else {
-                    self.live_session_unavailable_toast(&session, host, ctx);
+                    self.live_session_unavailable_toast(&session, host, host_id, is_local, ctx);
                 }
                 return;
             }
             SessionOpenPlan::ResumeDormant => {}
             SessionOpenPlan::LiveSessionUnavailable => {
-                self.live_session_unavailable_toast(&session, host, ctx);
+                self.live_session_unavailable_toast(&session, host, host_id, is_local, ctx);
                 return;
             }
         }
@@ -6087,8 +6106,11 @@ impl Workspace {
         &mut self,
         session: &zaplex_cockpit::SessionSnapshot,
         host: &str,
+        host_id: Option<&str>,
+        is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        let stop_action = live_session_unavailable_stop_action(session, host, host_id, is_local);
         let session = Self::session_display_name(session);
         let host = if host.is_empty() {
             crate::t!("cockpit-table-host-local").to_string()
@@ -6102,7 +6124,14 @@ impl Workspace {
         )
         .to_string();
         self.toast_stack.update(ctx, |toast_stack, ctx| {
-            toast_stack.add_ephemeral_toast(DismissibleToast::default(message), ctx);
+            let mut toast = DismissibleToast::default(message);
+            if let Some(action) = stop_action {
+                toast = toast.with_link(
+                    ToastLink::new(crate::t!("cockpit-menu-stop").to_string())
+                        .with_onclick_action(action),
+                );
+            }
+            toast_stack.add_ephemeral_toast(toast, ctx);
         });
     }
 
@@ -6178,7 +6207,7 @@ impl Workspace {
                 if !self.focus_terminal_view_anywhere(terminal_view_id, ctx) {
                     // The model can briefly retain a terminal that closed between
                     // lookup and focus. Never turn that race into a duplicate.
-                    self.live_session_unavailable_toast(&session, host, ctx);
+                    self.live_session_unavailable_toast(&session, host, host_id, is_local, ctx);
                 }
                 return;
             }
@@ -6208,7 +6237,7 @@ impl Workspace {
                         }
                     }
                 }
-                self.live_session_unavailable_toast(&session, host, ctx);
+                self.live_session_unavailable_toast(&session, host, host_id, is_local, ctx);
                 return;
             }
         }

@@ -31,7 +31,7 @@ on:
       release_tag:
         description: "Release tag; must match VERSION"
         type: string
-        default: v1.0.5
+        default: v1.0.6
         required: true
 
 # Creating a release + uploading assets requires write permissions. Default GITHUB_TOKEN is read-only on forks/restricted repos,

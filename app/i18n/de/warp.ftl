@@ -81,7 +81,7 @@ cockpit-session-is-reviewed = ✓ Geprüft
 cockpit-session-redirect = ↻ Umlenken
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
-cockpit-session-live-unavailable = „{ $session }“ läuft noch auf { $host }, aber das Terminal ist in Zaplex nicht verfügbar. Es wurde keine zweite Sitzung gestartet.
+cockpit-session-live-unavailable = „{ $session }“ läuft noch auf { $host }, aber das Terminal ist in Zaplex nicht verfügbar. Stoppe sie zuerst und öffne sie dann hier; es wurde keine zweite Sitzung gestartet.
 cockpit-session-no-longer-available = Diese Sitzung ist auf { $host } nicht mehr verfügbar. Es wurde nichts gestartet.
 
 # GitHub-Flows auf der freiesten Instanz
