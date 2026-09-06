@@ -12,7 +12,7 @@ void warp_update_ime_state(WarpHostView *, BOOL);
 void warp_handle_drag_and_drop(WarpHostView *, NSArray *, NSPoint);
 void warp_handle_file_drag(WarpHostView *, NSPoint);
 void warp_handle_file_drag_exit(WarpHostView *);
-NSRect warp_ime_position(WarpHostView *, NSRect *);
+NSRect warp_ime_position(WarpHostView *, NSRect);
 id warp_get_accessibility_contents(WarpHostView *);
 void warp_marked_text_updated(WarpHostView *, NSString *, NSRange);
 void warp_marked_text_cleared(WarpHostView *);
@@ -421,7 +421,7 @@ void warp_marked_text_cleared(WarpHostView *);
     NSWindow *window = self.window;
     if (self.readyForWarp) {
         NSRect contentRect = [window contentRectForFrameRect:[window frame]];
-        NSRect rect = warp_ime_position(self, &contentRect);
+        NSRect rect = warp_ime_position(self, contentRect);
         return rect;
     } else {
         return NSZeroRect;

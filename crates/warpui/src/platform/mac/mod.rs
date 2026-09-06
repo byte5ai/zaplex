@@ -6,6 +6,9 @@ pub mod delegate;
 mod event;
 pub(crate) mod fonts;
 mod geometry;
+#[cfg(test)]
+#[path = "ime_abi_tests.rs"]
+mod ime_abi_tests;
 mod keycode;
 mod menus;
 mod notification;

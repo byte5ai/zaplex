@@ -131,7 +131,10 @@ impl LinuxClipboard {
         &mut self,
         clipboard_kind: LinuxClipboardKind,
     ) -> Result<ClipboardContent, arboard::Error> {
-        let text_result = self.inner.get().text();
+        let text_result = self.inner.get().clipboard(clipboard_kind).text();
+        if matches!(&text_result, Err(arboard::Error::ClipboardNotSupported)) {
+            return Err(arboard::Error::ClipboardNotSupported);
+        }
         let mut content = ClipboardContent {
             plain_text: text_result.as_ref().map(|s| s.clone()).unwrap_or_default(),
             ..Default::default()
@@ -141,36 +144,43 @@ impl LinuxClipboard {
         content.paths = self.parse_valid_filepaths_from_text(&content.plain_text);
 
         // Attempt to use HTML data first.
-        match self.inner.get().clipboard(clipboard_kind).html() {
+        let html_available = match self.inner.get().clipboard(clipboard_kind).html() {
             Ok(html) => {
                 content.html = html.is_empty().not().then_some(html);
-
-                // Try to get image content from clipboard
-                content.images = crate::clipboard_utils::read_images_from_clipboard(
-                    &mut self.inner,
-                    &content.html,
-                    &content.plain_text,
-                );
-
-                return Ok(content);
+                true
+            }
+            Err(arboard::Error::ClipboardNotSupported) => {
+                return Err(arboard::Error::ClipboardNotSupported)
             }
             Err(err) => {
                 log::info!(
                     "Unable to read HTML from clipboard: {err:?}, falling back to plaintext."
                 );
+                false
             }
-        }
+        };
 
-        // Fallback to using plaintext
-        content.images = crate::clipboard_utils::read_images_from_clipboard(
+        content.images = match crate::clipboard_utils::read_images_from_linux_clipboard(
             &mut self.inner,
-            &None, // No HTML in fallback case
+            clipboard_kind,
+            &content.html,
             &content.plain_text,
-        );
+        ) {
+            Ok(images) => images,
+            Err(arboard::Error::ClipboardNotSupported) => {
+                return Err(arboard::Error::ClipboardNotSupported)
+            }
+            Err(arboard::Error::ContentNotAvailable) => None,
+            Err(err) => {
+                log::warn!("Unable to read image from clipboard: {err:?}");
+                None
+            }
+        };
 
         // Return success if we have ANY content (text, paths, OR images)
         // Only error if ALL content types failed
         if text_result.is_ok()
+            || html_available
             || content
                 .paths
                 .as_ref()
