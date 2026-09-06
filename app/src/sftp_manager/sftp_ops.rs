@@ -19,6 +19,16 @@ use zap_sftp::Sftp;
 
 use super::types::{FileEntry, FileEntryType, StableEntryIdentity};
 
+/// Whether `name` is one safe child component in a remote directory.
+pub(super) fn is_valid_remote_child_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name
+            .chars()
+            .any(|character| matches!(character, '/' | '\\'))
+}
+
 /// SFTP operation error
 #[derive(Clone, Debug)]
 pub enum SftpOpsError {
@@ -654,13 +664,7 @@ pub fn download_dir_recursive(
         }
 
         // Path traversal protection: verify safety of filenames returned by remote server
-        if entry.name.is_empty()
-            || entry.name.starts_with('/')
-            || entry.name.starts_with('\\')
-            || entry.name.contains("..")
-            || entry.name.contains('/')
-            || entry.name.contains('\\')
-        {
+        if !is_valid_remote_child_name(&entry.name) {
             return Err(SftpOpsError::Operation(format!(
                 "Refusing unsafe remote directory entry: {}",
                 entry.name

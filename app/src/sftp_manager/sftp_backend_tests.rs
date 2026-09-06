@@ -141,10 +141,47 @@ fn legacy_listing_without_object_id_never_authorizes_mutation() {
         revision: "same-metadata".to_string(),
     };
 
-    require_mutation_ready_remote_listing(Path::new("/replacement.bin"), &legacy_listing)
+    require_mutation_ready_remote_listing(true, Path::new("/replacement.bin"), &legacy_listing)
         .expect_err("legacy path-derived metadata must not authorize a mutation");
 
     assert_eq!(fs::read(replacement).unwrap(), b"replacement");
+}
+
+#[test]
+fn tokenless_remote_listing_reports_missing_secure_capability() {
+    let tokenless_listing = StableEntryIdentity {
+        file_type: FileEntryType::File,
+        size: 11,
+        object_id: String::new(),
+        revision: "same-metadata".to_string(),
+    };
+
+    let error = require_mutation_ready_remote_listing(
+        false,
+        Path::new("/replacement.bin"),
+        &tokenless_listing,
+    )
+    .expect_err("the missing service must be reported before the missing object token");
+
+    assert!(matches!(error, SftpOpsError::CapabilityRequired(_)));
+}
+
+#[test]
+fn tokenless_remote_listing_with_secure_capability_requires_refresh() {
+    let tokenless_listing = StableEntryIdentity {
+        file_type: FileEntryType::File,
+        size: 11,
+        object_id: String::new(),
+        revision: "same-metadata".to_string(),
+    };
+    let error = require_mutation_ready_remote_listing(
+        true,
+        Path::new("/replacement.bin"),
+        &tokenless_listing,
+    )
+    .expect_err("a tokenless listing must remain distinguishable when the service is present");
+
+    assert!(matches!(error, SftpOpsError::Operation(_)));
 }
 
 #[cfg(unix)]

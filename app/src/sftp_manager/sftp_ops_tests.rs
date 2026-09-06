@@ -61,7 +61,7 @@ fn secure_transfer_capability_error_has_actionable_localized_message() {
 
     assert_eq!(
         error.user_message(),
-        "Reconnect this server before starting a secure transfer."
+        "Reconnect this server before making secure file changes."
     );
     assert!(!error.user_message().contains("not negotiated"));
 }

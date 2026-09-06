@@ -2800,10 +2800,13 @@ fn preflight_transfer_capabilities(
     target_exists: bool,
 ) -> Result<(), SftpOpsError> {
     if job.operation == TransferOperation::Move {
+        job.source_backend
+            .preflight_safe_mutation(&job.source_path, false)
+            .map_err(|error| {
+                retryable_backend_recovery(error, job.source_backend.clone(), &job.source_path)
+            })?;
         let source_identity = stable_identity_now(&*job.source_backend, &job.source_path)?;
-        if source_identity.object_id.is_empty()
-            || !job.source_backend.supports_identity_bound_cleanup()
-        {
+        if source_identity.object_id.is_empty() {
             return Err(SftpOpsError::Operation(format!(
                 "Move source has no immutable identity-bound cleanup capability: {}",
                 job.source_path.display()
@@ -2815,13 +2818,6 @@ fn preflight_transfer_capabilities(
         .map_err(|error| {
             retryable_backend_recovery(error, job.target_backend.clone(), &job.target_path)
         })?;
-    if job.operation == TransferOperation::Move {
-        job.source_backend
-            .preflight_safe_mutation(&job.source_path, false)
-            .map_err(|error| {
-                retryable_backend_recovery(error, job.source_backend.clone(), &job.source_path)
-            })?;
-    }
     Ok(())
 }
 

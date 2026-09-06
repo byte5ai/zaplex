@@ -148,9 +148,16 @@ fn has_immutable_object_token(identity: &StableEntryIdentity) -> bool {
 }
 
 fn require_mutation_ready_remote_listing(
+    safe_file_capability_available: bool,
     path: &Path,
     identity: &StableEntryIdentity,
 ) -> Result<(), SftpOpsError> {
+    if !safe_file_capability_available {
+        return Err(SftpOpsError::CapabilityRequired(format!(
+            "Secure remote file transactions are unavailable for {}",
+            path.display()
+        )));
+    }
     if !has_immutable_object_token(identity) {
         return Err(SftpOpsError::Operation(format!(
             "Remote listing identity requires refresh before mutation at {}",
@@ -1342,13 +1349,12 @@ impl SafeFileClientSlot {
         slot
     }
 
-    /// Replaces the live client and reports a transition from unavailable to
-    /// available, which is when durable remote recovery records need scanning.
+    /// Replaces the live client and reports whether its availability changed.
     pub(crate) fn set(&self, client: Option<Arc<RemoteServerClient>>) -> bool {
         let mut current = self.client.write();
-        let became_available = current.is_none() && client.is_some();
+        let availability_changed = current.is_some() != client.is_some();
         *current = client;
-        became_available
+        availability_changed
     }
 
     fn get(&self) -> Option<Arc<RemoteServerClient>> {
@@ -2155,7 +2161,8 @@ impl SftpBackend for LiveSftpBackend {
         path: &Path,
         expected: &StableEntryIdentity,
     ) -> Result<Arc<dyn BackendOwnershipAnchor>, SftpOpsError> {
-        require_mutation_ready_remote_listing(path, expected)?;
+        self.safe_client()?;
+        require_mutation_ready_remote_listing(true, path, expected)?;
         let raw_before = stable_identity_from_remote_metadata(&self.sftp.lstat(path)?);
         let expected_kind = raw_before.file_type;
         let anchor = self.open_safe_handle(path, expected_kind)?;
