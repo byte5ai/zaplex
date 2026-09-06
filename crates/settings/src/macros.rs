@@ -778,14 +778,13 @@ macro_rules! define_settings_group {
         }
 
         $crate::macros::concat_idents!(EventName = $group, ChangedEvent {
-            use $crate::ChangeEventReason;
             #[derive(Debug)]
             #[allow(clippy::enum_variant_names)]
             pub enum EventName {
                 $(
                     $setting {
                         #[allow(dead_code)]
-                        change_event_reason: ChangeEventReason,
+                        change_event_reason: $crate::ChangeEventReason,
                     },
                 )*
             }
