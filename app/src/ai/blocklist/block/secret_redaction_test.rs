@@ -320,6 +320,20 @@ fn test_detect_secrets_no_regexes_configured() {
 
 #[test]
 #[serial]
+fn enterprise_rules_keep_priority_over_user_rules() {
+    let enterprise = Regex::new("SHARED_SECRET").unwrap();
+    let duplicate_user = Regex::new("SHARED_SECRET").unwrap();
+    let user_only = Regex::new("USER_SECRET").unwrap();
+    secrets::set_user_and_enterprise_secret_regexes([&duplicate_user, &user_only], [&enterprise]);
+
+    let detected = find_secrets_in_text_with_levels("SHARED_SECRET USER_SECRET");
+    assert_eq!(detected.len(), 2);
+    assert_eq!(detected[0].1, SecretLevel::Enterprise);
+    assert_eq!(detected[1].1, SecretLevel::User);
+}
+
+#[test]
+#[serial]
 fn test_detect_secrets_single_secret_custom() {
     // Set as user secret (enterprise secrets is empty)
     secrets::set_user_and_enterprise_secret_regexes(
