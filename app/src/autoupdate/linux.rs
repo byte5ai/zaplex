@@ -65,6 +65,102 @@ mod appimage {
 
     use super::*;
 
+    pub(super) fn temporary_appimage_for(appimage_path: &Path) -> Result<tempfile::NamedTempFile> {
+        let parent = appimage_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        tempfile::Builder::new()
+            .prefix(".zaplex-update-")
+            .tempfile_in(parent)
+            .with_context(|| {
+                format!(
+                    "Failed to create temporary AppImage update in {} for {}",
+                    parent.display(),
+                    appimage_path.display()
+                )
+            })
+    }
+
+    fn atomically_replace_appimage(
+        new_appimage: tempfile::NamedTempFile,
+        appimage_path: &Path,
+    ) -> Result<()> {
+        atomically_replace_appimage_with_hook(new_appimage, appimage_path, |_, _| Ok(()))
+    }
+
+    pub(super) fn atomically_replace_appimage_with_hook(
+        mut new_appimage: tempfile::NamedTempFile,
+        appimage_path: &Path,
+        before_rename: impl FnOnce(&Path, &Path) -> Result<()>,
+    ) -> Result<()> {
+        let staged_path = new_appimage.path().to_path_buf();
+        let permissions = appimage_path
+            .metadata()
+            .with_context(|| {
+                format!(
+                    "Failed to read permissions from the current AppImage at {}",
+                    appimage_path.display()
+                )
+            })?
+            .permissions();
+        new_appimage
+            .as_file_mut()
+            .set_permissions(permissions)
+            .with_context(|| {
+                format!(
+                    "Failed to preserve AppImage permissions on {}",
+                    staged_path.display()
+                )
+            })?;
+        new_appimage.as_file_mut().flush().with_context(|| {
+            format!(
+                "Failed to flush downloaded AppImage at {}",
+                staged_path.display()
+            )
+        })?;
+        new_appimage.as_file().sync_all().with_context(|| {
+            format!(
+                "Failed to sync downloaded AppImage at {} before replacing {}",
+                staged_path.display(),
+                appimage_path.display()
+            )
+        })?;
+
+        before_rename(&staged_path, appimage_path)?;
+
+        new_appimage
+            .persist(appimage_path)
+            .map_err(|error| error.error)
+            .with_context(|| {
+                format!(
+                    "Failed to atomically replace AppImage at {}",
+                    appimage_path.display()
+                )
+            })?;
+        let parent = appimage_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::File::open(parent)
+            .with_context(|| {
+                format!(
+                    "Failed to open AppImage directory {} after replacing {}",
+                    parent.display(),
+                    appimage_path.display()
+                )
+            })?
+            .sync_all()
+            .with_context(|| {
+                format!(
+                    "Failed to sync AppImage directory {} after replacing {}",
+                    parent.display(),
+                    appimage_path.display()
+                )
+            })?;
+        Ok(())
+    }
+
     pub(super) async fn download_update_and_cleanup(
         version_info: &VersionInfo,
         appimage_path: &Path,
@@ -110,8 +206,9 @@ mod appimage {
             )
         };
 
-        // Create a temporary file that we'll write the download into.
-        let mut new_appimage = tempfile::NamedTempFile::new()?;
+        // Keep the temporary file beside the AppImage so the final rename cannot
+        // degrade into a cross-filesystem copy and delete.
+        let mut new_appimage = temporary_appimage_for(appimage_path)?;
 
         log::info!("Downloading {url} to {}...", new_appimage.path().display());
 
@@ -142,7 +239,16 @@ mod appimage {
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
-            new_appimage.as_file_mut().write_all(&chunk)?;
+            let staged_path = new_appimage.path().to_path_buf();
+            new_appimage
+                .as_file_mut()
+                .write_all(&chunk)
+                .with_context(|| {
+                    format!(
+                        "Failed to write downloaded AppImage at {}",
+                        staged_path.display()
+                    )
+                })?;
             downloaded += chunk.len() as u64;
             if downloaded - last_reported >= REPORT_BYTES_THRESHOLD
                 || last_reported_at.elapsed() >= REPORT_TIME_THRESHOLD
@@ -153,6 +259,14 @@ mod appimage {
             }
         }
         on_progress(DownloadProgress { downloaded, total });
+
+        let staged_path = new_appimage.path().to_path_buf();
+        new_appimage.as_file_mut().flush().with_context(|| {
+            format!(
+                "Failed to flush downloaded AppImage at {}",
+                staged_path.display()
+            )
+        })?;
 
         // Zaplex performs SHA-256 verification on the temporary file before overwriting the original AppImage,
         // defending against CDN man-in-the-middle attacks and network corruption. Other channels skip this (they have their own process).
@@ -167,33 +281,11 @@ mod appimage {
         }
 
         log::info!(
-            "Copying downloaded AppImage from {} to {}",
+            "Atomically replacing AppImage at {} with {}",
+            appimage_path.display(),
             new_appimage.path().display(),
-            appimage_path.display()
         );
-
-        // Copy permissions to new app before moving it to ensure we don't leave it
-        // in a bad state if the move succeeds but we are unable to update the
-        // permissions afterwards.
-        new_appimage
-            .as_file_mut()
-            .set_permissions(appimage_path.metadata()?.permissions())?;
-
-        // Move new AppImage over the one that launched the current Zaplex instance.
-        let new_appimage_path = new_appimage.into_temp_path();
-        let mv_status = command::r#async::Command::new("mv")
-            .arg(new_appimage_path.as_os_str())
-            .arg(appimage_path)
-            .output()
-            .await?
-            .status;
-        if !mv_status.success() {
-            bail!("Failed to move new AppImage over the old one: {mv_status}");
-        }
-
-        // Ensure we don't accidentally drop `new_appimage_path` before we finish
-        // moving it to its final location.
-        let _ = new_appimage_path;
+        atomically_replace_appimage(new_appimage, appimage_path)?;
 
         Ok(DownloadReady::Yes)
     }

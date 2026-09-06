@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use oauth2::{RefreshToken, TokenResponse as _};
@@ -22,6 +23,7 @@ use {crate::ai::mcp::FileBasedMCPManager, warpui::SingletonEntity};
 
 pub(crate) const TEMPLATABLE_MCP_CREDENTIALS_KEY: &str = "TemplatableMcpCredentials";
 pub(crate) const FILE_BASED_MCP_CREDENTIALS_KEY: &str = "FileBasedMcpCredentials";
+const OAUTH_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// The issuer URL for GitHub's OAuth provider.
 const GITHUB_ISSUER: &str = "https://github.com/login/oauth";
@@ -192,10 +194,29 @@ pub struct AuthContext {
 }
 
 /// Result of OAuth callback.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallbackResult {
     Success { code: String, csrf_token: String },
     Error { error: Option<String> },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum OAuthCallbackWaitError {
+    ChannelClosed(String),
+    TimedOut,
+}
+
+async fn wait_for_oauth_callback(
+    oauth_result_rx: async_channel::Receiver<CallbackResult>,
+    timeout: Duration,
+) -> Result<CallbackResult, OAuthCallbackWaitError> {
+    tokio::select! {
+        biased;
+        result = oauth_result_rx.recv() => {
+            result.map_err(|err| OAuthCallbackWaitError::ChannelClosed(err.to_string()))
+        }
+        _ = tokio::time::sleep(timeout) => Err(OAuthCallbackWaitError::TimedOut),
+    }
 }
 
 /// Makes an authenticated client for the given authorization server.
@@ -389,11 +410,29 @@ pub async fn make_authenticated_client(
         log::warn!("Failed to emit RequiresAuthentication state: {e:?}");
     }
 
-    // Wait for the authorization code from the OAuth callback channel.
-    let oauth_result = oauth_result_rx
-        .recv()
-        .await
-        .map_err(|e| AuthError::InternalError(e.to_string()))?;
+    // Wait for the authorization code from the OAuth callback channel. The callback branch is
+    // biased so a response already queued at the deadline wins deterministically over timeout.
+    let oauth_result = match wait_for_oauth_callback(oauth_result_rx, OAUTH_CALLBACK_TIMEOUT).await
+    {
+        Ok(result) => result,
+        Err(OAuthCallbackWaitError::ChannelClosed(error)) => {
+            return Err(AuthError::InternalError(error));
+        }
+        Err(OAuthCallbackWaitError::TimedOut) => {
+            if let Err(error) = spawner
+                .spawn(move |manager, _ctx| {
+                    manager.pending_oauth_csrf.retain(|_, value| *value != uuid);
+                })
+                .await
+            {
+                log::warn!("Failed to clean up timed-out MCP OAuth flow: {error:?}");
+            }
+            return Err(AuthError::AuthorizationFailed(format!(
+                "OAuth authorization timed out after {} seconds; retry the server login",
+                OAUTH_CALLBACK_TIMEOUT.as_secs()
+            )));
+        }
+    };
 
     let (code, csrf_token) = match &oauth_result {
         CallbackResult::Success { code, csrf_token } => (code, csrf_token),
@@ -569,3 +608,7 @@ pub(crate) fn write_to_secure_storage<T: Serialize>(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "oauth_tests.rs"]
+mod tests;

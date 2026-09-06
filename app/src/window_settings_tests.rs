@@ -1,97 +1,89 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use settings::{PrivatePreferences, PublicPreferences, Setting, SettingsManager};
-use warpui::{AppContext, SingletonEntity};
-use warpui_extras::user_preferences::in_memory::InMemoryPreferences;
+use warpui::{App, SingletonEntity};
+use warpui_extras::user_preferences::{Error as PreferencesError, UserPreferences};
 
 use super::{BackgroundBlurRadius, BackgroundOpacity, WindowSettings};
 
-struct SettingsFileEnabledGuard(bool);
+#[derive(Clone, Default)]
+struct SharedPreferences(Arc<Mutex<HashMap<String, String>>>);
 
-impl SettingsFileEnabledGuard {
-    fn disabled() -> Self {
-        let previous = settings::is_settings_file_enabled();
-        settings::set_settings_file_enabled(false);
-        Self(previous)
+impl SharedPreferences {
+    fn stored_value(&self, key: &str) -> Option<String> {
+        self.0.lock().unwrap().get(key).cloned()
     }
 }
 
-impl Drop for SettingsFileEnabledGuard {
-    fn drop(&mut self) {
-        settings::set_settings_file_enabled(self.0);
+impl UserPreferences for SharedPreferences {
+    fn write_value(&self, key: &str, value: String) -> std::result::Result<(), PreferencesError> {
+        self.0.lock().unwrap().insert(key.to_string(), value);
+        Ok(())
     }
-}
 
-fn init_preferences(ctx: &mut AppContext) {
-    ctx.add_singleton_model(move |_| PublicPreferences::new(Box::<InMemoryPreferences>::default()));
-    ctx.add_singleton_model(
-        move |_| PrivatePreferences::new(Box::<InMemoryPreferences>::default()),
-    );
+    fn read_value(&self, key: &str) -> std::result::Result<Option<String>, PreferencesError> {
+        Ok(self.stored_value(key))
+    }
+
+    fn remove_value(&self, key: &str) -> std::result::Result<(), PreferencesError> {
+        self.0.lock().unwrap().remove(key);
+        Ok(())
+    }
 }
 
 #[test]
-#[serial_test::serial]
-fn test_background_values_round_trip_at_validated_bounds() {
-    warpui::App::test((), |mut app| async move {
-        let _settings_file_enabled = SettingsFileEnabledGuard::disabled();
-        app.update(init_preferences);
+fn opacity_and_blur_round_trip_their_validated_bounds() {
+    App::test((), |mut app| async move {
+        let preferences = SharedPreferences::default();
+        let public_preferences = preferences.clone();
+        let private_preferences = preferences.clone();
+        app.add_singleton_model(move |_| PublicPreferences::new(Box::new(public_preferences)));
+        app.add_singleton_model(move |_| PrivatePreferences::new(Box::new(private_preferences)));
         app.add_singleton_model(|_| SettingsManager::default());
+
+        preferences
+            .write_value(BackgroundOpacity::storage_key(), "0".to_string())
+            .unwrap();
+        preferences
+            .write_value(BackgroundBlurRadius::storage_key(), u8::MAX.to_string())
+            .unwrap();
+
         WindowSettings::register(&mut app);
+        app.read(|ctx| {
+            let settings = WindowSettings::as_ref(ctx);
+            assert_eq!(*settings.background_opacity.value(), BackgroundOpacity::MIN);
+            assert_eq!(
+                *settings.background_blur_radius.value(),
+                BackgroundBlurRadius::MAX
+            );
+        });
 
         app.update(|ctx| {
-            WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-                window_settings
-                    .background_opacity
-                    .set_value(0, ctx)
-                    .unwrap();
-                window_settings
+            WindowSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings.background_opacity.set_value(u8::MAX, ctx).unwrap();
+                settings
                     .background_blur_radius
-                    .set_value(0, ctx)
+                    .set_value_from_cloud_sync(0, ctx)
                     .unwrap();
             });
         });
 
-        app.update(|ctx| {
-            let opacity = BackgroundOpacity::new_from_storage(ctx);
-            assert_eq!(*opacity.value(), BackgroundOpacity::MIN);
-            let stored_opacity = BackgroundOpacity::preferences_for_setting(ctx)
-                .read_value(BackgroundOpacity::storage_key())
-                .unwrap();
-            assert_eq!(stored_opacity.as_deref(), Some("1"));
-
-            let blur_radius = BackgroundBlurRadius::new_from_storage(ctx);
-            assert_eq!(*blur_radius.value(), BackgroundBlurRadius::MIN);
-            let stored_blur_radius = BackgroundBlurRadius::preferences_for_setting(ctx)
-                .read_value(BackgroundBlurRadius::storage_key())
-                .unwrap();
-            assert_eq!(stored_blur_radius.as_deref(), Some("1"));
-        });
-
-        app.update(|ctx| {
-            WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-                window_settings
-                    .background_opacity
-                    .set_value_from_cloud_sync(BackgroundOpacity::MAX + 1, ctx)
-                    .unwrap();
-                window_settings
-                    .background_blur_radius
-                    .set_value_from_cloud_sync(BackgroundBlurRadius::MAX + 1, ctx)
-                    .unwrap();
-            });
-        });
+        assert_eq!(
+            preferences.stored_value(BackgroundOpacity::storage_key()),
+            Some(BackgroundOpacity::MAX.to_string())
+        );
+        assert_eq!(
+            preferences.stored_value(BackgroundBlurRadius::storage_key()),
+            Some(BackgroundBlurRadius::MIN.to_string())
+        );
 
         app.update(|ctx| {
             let opacity = BackgroundOpacity::new_from_storage(ctx);
             assert_eq!(*opacity.value(), BackgroundOpacity::MAX);
-            let stored_opacity = BackgroundOpacity::preferences_for_setting(ctx)
-                .read_value(BackgroundOpacity::storage_key())
-                .unwrap();
-            assert_eq!(stored_opacity.as_deref(), Some("100"));
 
-            let blur_radius = BackgroundBlurRadius::new_from_storage(ctx);
-            assert_eq!(*blur_radius.value(), BackgroundBlurRadius::MAX);
-            let stored_blur_radius = BackgroundBlurRadius::preferences_for_setting(ctx)
-                .read_value(BackgroundBlurRadius::storage_key())
-                .unwrap();
-            assert_eq!(stored_blur_radius.as_deref(), Some("64"));
+            let blur = BackgroundBlurRadius::new_from_storage(ctx);
+            assert_eq!(*blur.value(), BackgroundBlurRadius::MIN);
         });
     });
 }

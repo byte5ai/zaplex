@@ -84,6 +84,58 @@ impl std::error::Error for LoadAwsCredentialsError {}
 
 const AWS_BEDROCK_STS_AUDIENCE: &str = "sts.amazonaws.com";
 const BEDROCK_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
+const SUPERSEDED_REFRESH_MESSAGE: &str = "Credential refresh was superseded by newer settings";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AwsCredentialsRefreshRequest {
+    generation: u64,
+    profile: String,
+    strategy: AwsCredentialsRefreshStrategy,
+    credentials_enabled: bool,
+}
+
+impl AwsCredentialsRefreshRequest {
+    fn capture(manager: &mut ApiKeyManager, ctx: &ModelContext<ApiKeyManager>) -> Self {
+        let profile = (*AISettings::as_ref(ctx).aws_bedrock_profile).clone();
+        let strategy = manager.aws_credentials_refresh_strategy();
+        let credentials_enabled =
+            UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx);
+        let generation = manager.begin_aws_credentials_refresh();
+        Self {
+            generation,
+            profile,
+            strategy,
+            credentials_enabled,
+        }
+    }
+
+    fn is_current(&self, manager: &ApiKeyManager, ctx: &ModelContext<ApiKeyManager>) -> bool {
+        let current_profile = AISettings::as_ref(ctx).aws_bedrock_profile.as_ref();
+        let current_strategy = manager.aws_credentials_refresh_strategy();
+        let credentials_enabled =
+            UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx);
+        is_current_refresh_configuration(
+            self,
+            manager.is_current_aws_credentials_refresh(self.generation),
+            current_profile,
+            &current_strategy,
+            credentials_enabled,
+        )
+    }
+}
+
+fn is_current_refresh_configuration(
+    request: &AwsCredentialsRefreshRequest,
+    generation_is_current: bool,
+    profile: &str,
+    strategy: &AwsCredentialsRefreshStrategy,
+    credentials_enabled: bool,
+) -> bool {
+    generation_is_current
+        && request.profile == profile
+        && &request.strategy == strategy
+        && request.credentials_enabled == credentials_enabled
+}
 
 pub(crate) fn aws_role_session_name(run_id: &str) -> String {
     format!("Oz_Run_{run_id}")
@@ -233,29 +285,29 @@ pub(crate) fn refresh_aws_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
-    match manager.aws_credentials_refresh_strategy() {
+    let request = AwsCredentialsRefreshRequest::capture(manager, ctx);
+    match request.strategy.clone() {
         AwsCredentialsRefreshStrategy::LocalChain => {
-            refresh_aws_credentials_local_chain(manager, ctx)
+            refresh_aws_credentials_local_chain(request, manager, ctx)
         }
         AwsCredentialsRefreshStrategy::OidcManaged { task_id, role_arn } => {
-            refresh_aws_credentials_oidc(task_id, role_arn, manager, ctx)
+            refresh_aws_credentials_oidc(task_id, role_arn, request, manager, ctx)
         }
     }
 }
 
 /// Refreshes credentials from the local AWS SDK credential chain (~/.aws).
 fn refresh_aws_credentials_local_chain(
+    request: AwsCredentialsRefreshRequest,
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
-    let is_available = UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx);
-
-    if !is_available {
+    if !request.credentials_enabled {
         manager.set_aws_credentials_state(AwsCredentialsState::Disabled, ctx);
         return Box::pin(async { Ok(()) });
     }
 
-    let profile = (*AISettings::as_ref(ctx).aws_bedrock_profile).clone();
+    let profile = request.profile.clone();
 
     manager.set_aws_credentials_state(AwsCredentialsState::Refreshing, ctx);
 
@@ -264,6 +316,10 @@ fn refresh_aws_credentials_local_chain(
     let _ = ctx.spawn(
         async move { load_aws_credentials_from_sdk(&profile).await },
         move |manager, result, ctx| {
+            if !request.is_current(manager, ctx) {
+                let _ = tx.send(Err(SUPERSEDED_REFRESH_MESSAGE.to_string()));
+                return;
+            }
             let (new_state, tx_result) = match result {
                 Ok(credentials) => (
                     AwsCredentialsState::Loaded {
@@ -292,6 +348,7 @@ fn refresh_aws_credentials_local_chain(
 fn refresh_aws_credentials_oidc(
     task_id: Option<String>,
     role_arn: String,
+    request: AwsCredentialsRefreshRequest,
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
@@ -365,6 +422,10 @@ fn refresh_aws_credentials_oidc(
             ))
         },
         move |manager, result, ctx| {
+            if !request.is_current(manager, ctx) {
+                let _ = tx.send(Err(SUPERSEDED_REFRESH_MESSAGE.to_string()));
+                return;
+            }
             let (new_state, tx_result) = match result {
                 Ok(credentials) => {
                     log::info!("Bedrock OIDC: credentials loaded successfully");

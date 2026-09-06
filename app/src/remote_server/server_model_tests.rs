@@ -892,6 +892,26 @@ fn resolve_path_reports_file_metadata() {
 
 #[cfg(feature = "local_fs")]
 #[test]
+fn resolve_path_distinguishes_missing_paths_from_io_errors() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing_path = directory.path().join("missing.txt");
+    let model = test_model();
+
+    let response = model.handle_resolve_path(ResolvePath {
+        path: missing_path.to_string_lossy().to_string(),
+    });
+
+    let server_message::Message::ResolvePathResponse(response) = response.into_message() else {
+        panic!("expected ResolvePathResponse");
+    };
+    assert!(matches!(
+        response.result,
+        Some(resolve_path_response::Result::NotFound(_))
+    ));
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
 fn list_directory_returns_sorted_metadata() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("b.txt"), "b").unwrap();
@@ -968,6 +988,66 @@ fn read_and_write_file_chunks_round_trip_binary_data() {
     assert_eq!(read_success.next_offset, 3);
     assert_eq!(read_success.total_size, Some(4));
     assert!(!read_success.eof);
+}
+
+#[cfg(all(feature = "local_fs", unix))]
+#[test]
+fn read_file_chunk_rejects_symlinks_and_special_files() {
+    use std::os::unix::fs::symlink;
+    use std::os::unix::net::UnixListener;
+
+    let directory = tempfile::tempdir().unwrap();
+    let target = directory.path().join("target.txt");
+    let file_link = directory.path().join("file-link");
+    let directory_link = directory.path().join("directory-link");
+    let broken_link = directory.path().join("broken-link");
+    let socket = directory.path().join("socket");
+    fs::write(&target, "secret").unwrap();
+    symlink(&target, &file_link).unwrap();
+    symlink(directory.path(), &directory_link).unwrap();
+    symlink(directory.path().join("missing"), &broken_link).unwrap();
+    let _listener = UnixListener::bind(&socket).unwrap();
+    let model = test_model();
+
+    for path in [file_link, directory_link, broken_link, socket] {
+        let response = model.handle_read_file_chunk(ReadFileChunk {
+            path: path.to_string_lossy().to_string(),
+            offset: 0,
+            max_bytes: 1024,
+        });
+        let server_message::Message::ReadFileChunkResponse(response) = response.into_message()
+        else {
+            panic!("expected ReadFileChunkResponse");
+        };
+        assert!(matches!(
+            response.result,
+            Some(read_file_chunk_response::Result::Error(_))
+        ));
+    }
+}
+
+#[cfg(all(feature = "local_fs", unix))]
+#[test]
+fn list_directory_rejects_a_symlink_root() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    let directory_link = directory.path().join("directory-link");
+    symlink(directory.path(), &directory_link).unwrap();
+    let model = test_model();
+
+    let response = model.handle_list_directory(ListDirectory {
+        path: directory_link.to_string_lossy().to_string(),
+    });
+    let server_message::Message::ListDirectoryResponse(response) = response.into_message() else {
+        panic!("expected ListDirectoryResponse");
+    };
+    assert!(matches!(
+        response.result,
+        Some(super::super::proto::list_directory_response::Result::Error(
+            _
+        ))
+    ));
 }
 
 #[cfg(feature = "local_fs")]

@@ -536,9 +536,10 @@ macro_rules! implement_setting_for_enum {
             type Group = $group;
 
             fn new(value: Option<Self::Value>) -> Self {
+                let default_value = Self::default_value();
                 match value {
-                    Some(value) => Self::default_value().validate(value),
-                    None => Self::default_value()
+                    Some(value) => default_value.validate(value),
+                    None => default_value,
                 }
             }
 
@@ -777,14 +778,13 @@ macro_rules! define_settings_group {
         }
 
         $crate::macros::concat_idents!(EventName = $group, ChangedEvent {
-            use $crate::ChangeEventReason;
             #[derive(Debug)]
             #[allow(clippy::enum_variant_names)]
             pub enum EventName {
                 $(
                     $setting {
                         #[allow(dead_code)]
-                        change_event_reason: ChangeEventReason,
+                        change_event_reason: $crate::ChangeEventReason,
                     },
                 )*
             }

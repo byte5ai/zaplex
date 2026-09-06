@@ -1027,7 +1027,24 @@ fn cli_agent_is_on_path_with_dirs(agent: CLIAgent, search_dirs: &[PathBuf]) -> b
 /// Inline PATH search; zero processes, zero window flashing.
 #[cfg(unix)]
 fn is_on_path_in_dirs(cmd: &str, search_dirs: &[PathBuf]) -> bool {
-    search_dirs.iter().any(|dir| dir.join(cmd).is_file())
+    resolve_executable_in_dirs(cmd, search_dirs).is_some()
+}
+
+#[cfg(unix)]
+fn resolve_executable_in_dirs(cmd: &str, search_dirs: &[PathBuf]) -> Option<PathBuf> {
+    search_dirs.iter().find_map(|dir| {
+        let path = dir.join(cmd);
+        crate::util::path::file_exists_and_is_executable(&path).then_some(path)
+    })
+}
+
+/// Resolves an agent CLI from the same GUI-safe search path used by the launcher.
+///
+/// Finder-launched macOS apps inherit a minimal `PATH`, so the process environment
+/// alone misses Homebrew, user-local, and version-manager installations.
+#[cfg(unix)]
+pub(crate) fn resolve_cli_executable(cmd: &str) -> Option<PathBuf> {
+    resolve_executable_in_dirs(cmd, &cli_agent_search_dirs().collect::<Vec<_>>())
 }
 
 #[cfg(unix)]
@@ -1101,14 +1118,21 @@ fn cli_agent_is_on_path(agent: CLIAgent) -> bool {
 
 #[cfg(windows)]
 fn is_on_path(cmd: &str) -> bool {
+    resolve_cli_executable(cmd).is_some()
+}
+
+#[cfg(windows)]
+pub(crate) fn resolve_cli_executable(cmd: &str) -> Option<std::path::PathBuf> {
     let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".into());
     let Ok(path_var) = std::env::var("PATH") else {
-        return false;
+        return None;
     };
     let exts: Vec<&str> = pathext.split(';').collect();
-    std::env::split_paths(&path_var).any(|dir| {
-        exts.iter()
-            .any(|ext| dir.join(format!("{}{}", cmd, ext)).is_file())
+    std::env::split_paths(&path_var).find_map(|dir| {
+        exts.iter().find_map(|ext| {
+            let path = dir.join(format!("{cmd}{ext}"));
+            path.is_file().then_some(path)
+        })
     })
 }
 

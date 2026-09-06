@@ -101,3 +101,7 @@ pub async fn fetch_openai_compatible_models(
     models.dedup_by(|a, b| a.id == b.id);
     Ok(models)
 }
+
+#[cfg(test)]
+#[path = "openai_compatible_tests.rs"]
+mod tests;

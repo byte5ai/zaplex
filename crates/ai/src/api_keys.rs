@@ -53,6 +53,7 @@ pub struct ApiKeyManager {
     keys: ApiKeys,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
+    aws_credentials_refresh_generation: u64,
 }
 
 impl ApiKeyManager {
@@ -62,6 +63,7 @@ impl ApiKeyManager {
             keys,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
+            aws_credentials_refresh_generation: 0,
         }
     }
 
@@ -115,6 +117,18 @@ impl ApiKeyManager {
         strategy: AwsCredentialsRefreshStrategy,
     ) {
         self.aws_credentials_refresh_strategy = strategy;
+    }
+
+    /// Starts a new AWS credential refresh and invalidates every older completion.
+    pub fn begin_aws_credentials_refresh(&mut self) -> u64 {
+        self.aws_credentials_refresh_generation =
+            self.aws_credentials_refresh_generation.wrapping_add(1);
+        self.aws_credentials_refresh_generation
+    }
+
+    /// Returns whether `generation` still represents the newest AWS credential refresh.
+    pub fn is_current_aws_credentials_refresh(&self, generation: u64) -> bool {
+        self.aws_credentials_refresh_generation == generation
     }
 
     pub fn api_keys_for_request(

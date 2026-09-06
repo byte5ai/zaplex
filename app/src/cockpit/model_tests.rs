@@ -61,6 +61,103 @@ fn stale_inventory_cannot_readd_disconnected_host() {
     assert!(visible.hosts[0].is_local);
 }
 
+#[test]
+fn blocked_build_coalesces_refresh_triggers_into_one_rerun() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    fn spawn_blocked_build(
+        builds: Arc<AtomicUsize>,
+        active: Arc<AtomicUsize>,
+        max_active: Arc<AtomicUsize>,
+        started: Arc<Barrier>,
+        release: Arc<Barrier>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            builds.fetch_add(1, Ordering::SeqCst);
+            let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+            max_active.fetch_max(current, Ordering::SeqCst);
+            started.wait();
+            release.wait();
+            active.fetch_sub(1, Ordering::SeqCst);
+        })
+    }
+
+    let builds = Arc::new(AtomicUsize::new(0));
+    let active = Arc::new(AtomicUsize::new(0));
+    let max_active = Arc::new(AtomicUsize::new(0));
+    let mut flight = RefreshSingleFlight::default();
+
+    assert!(flight.request());
+    let started = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let first = spawn_blocked_build(
+        builds.clone(),
+        active.clone(),
+        max_active.clone(),
+        started.clone(),
+        release.clone(),
+    );
+    started.wait();
+
+    assert!(!flight.request());
+    assert!(!flight.request());
+    assert!(!flight.request());
+    release.wait();
+    first.join().unwrap();
+
+    assert!(
+        flight.finish(),
+        "all overlapping triggers reserve one rerun"
+    );
+    let rerun_started = Arc::new(Barrier::new(2));
+    let rerun_release = Arc::new(Barrier::new(2));
+    let rerun = spawn_blocked_build(
+        builds.clone(),
+        active.clone(),
+        max_active.clone(),
+        rerun_started.clone(),
+        rerun_release.clone(),
+    );
+    rerun_started.wait();
+    rerun_release.wait();
+    rerun.join().unwrap();
+
+    assert!(!flight.finish());
+    assert_eq!(builds.load(Ordering::SeqCst), 2);
+    assert_eq!(max_active.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn disable_cancels_a_coalesced_refresh_rerun() {
+    let mut flight = RefreshSingleFlight::default();
+    assert!(flight.request());
+    assert!(!flight.request());
+
+    flight.cancel_rerun();
+
+    assert!(!flight.finish());
+    assert!(!flight.running);
+    assert!(!flight.rerun_requested);
+}
+
+#[test]
+fn coalesced_rerun_uses_the_latest_requested_generation() {
+    let mut flight = RefreshSingleFlight::default();
+    let mut generation = 1;
+    assert!(flight.request());
+
+    generation += 1;
+    assert!(!flight.request());
+    generation += 1;
+    assert!(!flight.request());
+
+    assert!(flight.finish());
+    assert_eq!(generation, 3);
+    assert!(should_apply_refresh_result(generation, 3));
+    assert!(!flight.finish());
+}
+
 fn empty_snapshot() -> CockpitSnapshot {
     CockpitSnapshot {
         accounts: Vec::new(),

@@ -1653,7 +1653,7 @@ fn open_nofollow(
             let mut options = OpenOptions::new();
             options
                 .read(true)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
             if create_exclusive {
                 options.write(true).create_new(true).mode(0o600);
             }

@@ -1,4 +1,4 @@
-# Zaplex release pipeline — triggered by pushing a stable tag (v*)
+# Zaplex release pipeline — triggered by pushing a supported release tag (v*)
 #
 # Differences from upstream create_release.yml:
 # - Supported release targets are macOS arm64 + Linux x86_64; Web/CLI/Universal,
@@ -31,7 +31,7 @@ on:
       release_tag:
         description: "Release tag; must match VERSION"
         type: string
-        default: v1.0.5
+        default: v1.0.6
         required: true
 
 # Creating a release + uploading assets requires write permissions. Default GITHUB_TOKEN is read-only on forks/restricted repos,
@@ -59,6 +59,8 @@ jobs:
       release_tag: ${{ steps.compute_tag.outputs.tag }}
       release_branch: ${{ steps.compute_tag.outputs.branch }}
       release_name: ${{ steps.get-config.outputs.release_base_name }} ${{ steps.compute_tag.outputs.tag }}
+      prerelease: ${{ steps.classify-tag.outputs.prerelease }}
+      make_latest: ${{ steps.classify-tag.outputs.make_latest }}
     steps:
       # fetch-depth: 0 lets git-cliff see the full commit history and the tag of
       # the previous published release.
@@ -66,19 +68,37 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify Phase A release readiness
+      - name: Classify release tag
+        id: classify-tag
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          git fetch origin main:refs/remotes/origin/main --no-tags
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            RELEASE_COMMIT="$(git rev-parse "${GITHUB_SHA}^{commit}")"
-            if ! git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main; then
-              echo "Stable releases must point to a commit reachable from origin/main." >&2
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="$REQUESTED_TAG"
+          fi
+          script/classify-release-tag "$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Phase A release readiness
+        env:
+          REQUIRES_MAIN: ${{ steps.classify-tag.outputs.requires_main }}
+        run: |
+          set -euo pipefail
+          if [[ "$REQUIRES_MAIN" == "true" ]]; then
+            git fetch origin main:refs/remotes/origin/main --no-tags
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              RELEASE_COMMIT="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+              if ! git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main; then
+                echo "Stable releases must point to a commit reachable from origin/main." >&2
+                exit 1
+              fi
+            elif [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "Manual stable releases must be dispatched from main, not '$GITHUB_REF'." >&2
               exit 1
             fi
-          elif [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Manual stable releases must be dispatched from main, not '$GITHUB_REF'." >&2
-            exit 1
           fi
           script/check-v1-release-readiness --phase-a
         shell: bash
@@ -93,8 +113,12 @@ jobs:
       - name: Compute release tag and branch
         id: compute_tag
         shell: bash
+        env:
+          BASE_VERSION: ${{ steps.classify-tag.outputs.base_version }}
+          IS_PRERELEASE: ${{ steps.classify-tag.outputs.prerelease }}
         run: |
-          EXPECTED_TAG="v$(tr -d '[:space:]' < VERSION)"
+          VERSION_VALUE="$(tr -d '[:space:]' < VERSION)"
+          EXPECTED_TAG="v$VERSION_VALUE"
           # tag-triggered scenario: GITHUB_REF=refs/tags/<tag>
           # workflow_dispatch: build the selected branch with the explicit release tag.
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
@@ -104,7 +128,12 @@ jobs:
             TAG="${{ inputs.release_tag }}"
             BRANCH="${GITHUB_REF#refs/heads/}"
           fi
-          if [[ "$TAG" != "$EXPECTED_TAG" ]]; then
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            if [[ "$VERSION_VALUE" != "$BASE_VERSION" && "$VERSION_VALUE" != "$BASE_VERSION".* ]]; then
+              echo "Prerelease tag '$TAG' does not match VERSION ('$VERSION_VALUE')." >&2
+              exit 1
+            fi
+          elif [[ "$TAG" != "$EXPECTED_TAG" ]]; then
             echo "Release tag '$TAG' does not match VERSION ('$EXPECTED_TAG')." >&2
             exit 1
           fi
@@ -682,8 +711,8 @@ jobs:
           tag_name: ${{ needs.prepare_metadata.outputs.release_tag }}
           body_path: ./release-body.md
           draft: false
-          prerelease: false
-          make_latest: "true"
+          prerelease: ${{ needs.prepare_metadata.outputs.prerelease }}
+          make_latest: ${{ needs.prepare_metadata.outputs.make_latest }}
           files: dist/*
           token: ${{ secrets.GITHUB_TOKEN }}
 
