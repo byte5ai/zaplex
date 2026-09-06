@@ -19,14 +19,21 @@ where
     let offset = offset.into();
     let mut chars = buffer.chars_at(offset).ok()?.peekable();
     if chars.peek().is_some_and(|c| *c == '\n') {
-        let paragraph_end = offset - 1 + chars.take_while(|c| *c == '\n').count();
-        let paragraph_start = offset + 1
-            - buffer
-                .chars_rev_at(offset)
-                .ok()?
-                .take_while(|c| *c == '\n')
-                .count();
-        return Some(paragraph_start..paragraph_end);
+        let forward_count = chars.take_while(|c| *c == '\n').count();
+        let backward_count = buffer
+            .chars_rev_at(offset)
+            .ok()?
+            .take_while(|c| *c == '\n')
+            .count();
+        let paragraph_start = if backward_count == offset.as_usize() {
+            CharOffset::zero()
+        } else {
+            offset + 1 - backward_count
+        };
+        let paragraph_end = offset + forward_count - 1;
+        let range = paragraph_start..paragraph_end;
+        debug_assert!(range.start <= range.end);
+        return Some(range);
     }
     let paragraph_start = find_previous_paragraph_start(buffer, offset)
         .map(|i| i + 1)
@@ -35,7 +42,9 @@ where
         .map(|i| i - 1)
         .unwrap_or_else(|| offset + chars.count());
 
-    Some(paragraph_start..paragraph_end)
+    let range = paragraph_start..paragraph_end;
+    debug_assert!(range.start <= range.end);
+    Some(range)
 }
 
 /// Vim's "a paragraph" text object, e.g. `dap`. This includes lines surrounding the cursor until

@@ -167,6 +167,15 @@ fn vim_inner_paragraph_blank_lines() {
 }
 
 #[test]
+fn vim_inner_paragraph_leading_blank_run_is_ordered() {
+    let text = "\n\nfoo\n";
+
+    assert_eq!(vim_inner_paragraph(text, 0), Some(0.into()..1.into()));
+    assert_eq!(vim_inner_paragraph(text, 1), Some(0.into()..1.into()));
+    assert_eq!(vim_inner_paragraph("\nfoo\n", 0), Some(0.into()..0.into()));
+}
+
+#[test]
 fn vim_a_paragraph_blank_lines() {
     let text = "first\n\n\nsecond\n";
 
