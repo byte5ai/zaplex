@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use chrono::{TimeZone, Utc};
 
-use super::{apply_oauth_usage, parse_oauth_usage};
+use super::{apply_oauth_usage, parse_oauth_usage, UtilizationScale};
 use crate::pricing::PricingTable;
 use crate::types::{Account, CockpitSnapshot, Provider, UsageProvenance};
 use crate::windows::build_account_usage;
@@ -35,7 +35,8 @@ const FIXTURE_UTILIZATION_100_EPOCH_MS: &str = r#"{
 
 #[test]
 fn parses_utilization_fractions_and_iso_resets() {
-    let u = parse_oauth_usage(FIXTURE_UTILIZATION_ISO).expect("fixture parses");
+    let u = parse_oauth_usage(FIXTURE_UTILIZATION_ISO, UtilizationScale::Fraction)
+        .expect("fixture parses");
     assert!((u.five_hour.fraction - 0.34).abs() < 1e-9);
     assert_eq!(
         u.five_hour.resets_at,
@@ -52,7 +53,8 @@ fn parses_utilization_fractions_and_iso_resets() {
 
 #[test]
 fn parses_used_percentage_and_epoch_second_resets() {
-    let u = parse_oauth_usage(FIXTURE_PERCENTAGE_EPOCH_S).expect("fixture parses");
+    let u = parse_oauth_usage(FIXTURE_PERCENTAGE_EPOCH_S, UtilizationScale::Unknown)
+        .expect("fixture parses");
     assert!((u.five_hour.fraction - 0.34).abs() < 1e-9);
     assert_eq!(
         u.five_hour.resets_at,
@@ -65,7 +67,8 @@ fn parses_used_percentage_and_epoch_second_resets() {
 
 #[test]
 fn parses_percent_scale_utilization_and_epoch_ms_resets() {
-    let u = parse_oauth_usage(FIXTURE_UTILIZATION_100_EPOCH_MS).expect("fixture parses");
+    let u = parse_oauth_usage(FIXTURE_UTILIZATION_100_EPOCH_MS, UtilizationScale::Percent)
+        .expect("fixture parses");
     assert!((u.five_hour.fraction - 0.34).abs() < 1e-9);
     assert_eq!(
         u.five_hour.resets_at,
@@ -77,18 +80,74 @@ fn parses_percent_scale_utilization_and_epoch_ms_resets() {
 
 #[test]
 fn rejects_bodies_without_the_five_hour_gate() {
-    assert_eq!(parse_oauth_usage(r#"{ "seven_day": {} }"#), None);
-    assert_eq!(parse_oauth_usage(r#"{ "error": "unauthorized" }"#), None);
-    assert_eq!(parse_oauth_usage("not json at all"), None);
-    assert_eq!(parse_oauth_usage(""), None);
+    assert_eq!(
+        parse_oauth_usage(r#"{ "seven_day": {} }"#, UtilizationScale::Percent),
+        None
+    );
+    assert_eq!(
+        parse_oauth_usage(r#"{ "error": "unauthorized" }"#, UtilizationScale::Percent),
+        None
+    );
+    assert_eq!(
+        parse_oauth_usage("not json at all", UtilizationScale::Percent),
+        None
+    );
+    assert_eq!(parse_oauth_usage("", UtilizationScale::Percent), None);
 }
 
 #[test]
 fn missing_window_fields_degrade_to_zero_not_error() {
-    let u = parse_oauth_usage(r#"{ "five_hour": {} }"#).expect("gate present");
+    let u = parse_oauth_usage(r#"{ "five_hour": {} }"#, UtilizationScale::Unknown)
+        .expect("gate present");
     assert_eq!(u.five_hour.fraction, 0.0);
     assert_eq!(u.five_hour.resets_at, None);
     assert_eq!(u.seven_day.fraction, 0.0);
+}
+
+#[test]
+fn percent_scale_low_value_uses_response_scale() {
+    let u = parse_oauth_usage(
+        r#"{
+            "five_hour": { "utilization": 1.0 },
+            "seven_day": { "utilization": 42.0 },
+            "seven_day_opus": { "utilization": 0.5 }
+        }"#,
+        UtilizationScale::Percent,
+    )
+    .expect("percent-scale response parses");
+
+    assert_eq!(u.five_hour.fraction, 0.01);
+    assert_eq!(u.seven_day.fraction, 0.42);
+    assert_eq!(u.opus_fraction, Some(0.005));
+}
+
+#[test]
+fn unknown_utilization_scale_rejects_ambiguous_response() {
+    assert_eq!(
+        parse_oauth_usage(
+            r#"{
+                "five_hour": { "utilization": 0.5 },
+                "seven_day": { "utilization": 1.0 }
+            }"#,
+            UtilizationScale::Unknown,
+        ),
+        None
+    );
+}
+
+#[test]
+fn used_percentage_does_not_depend_on_utilization_scale() {
+    let u = parse_oauth_usage(
+        r#"{
+            "five_hour": { "used_percentage": 1.0 },
+            "seven_day": { "used_percentage": 42.0 }
+        }"#,
+        UtilizationScale::Unknown,
+    )
+    .expect("used_percentage has an explicit scale");
+
+    assert_eq!(u.five_hour.fraction, 0.01);
+    assert_eq!(u.seven_day.fraction, 0.42);
 }
 
 fn account(provider: Provider, key: &str, dir: &str) -> Account {
@@ -125,7 +184,7 @@ fn apply_marks_matching_claude_accounts_real_and_leaves_the_rest_estimated() {
         account(Provider::Claude, "claude:work", "/home/u/claude-work"),
         account(Provider::Codex, "codex:default", "/home/u/.codex"),
     ]);
-    let real = parse_oauth_usage(FIXTURE_UTILIZATION_ISO).unwrap();
+    let real = parse_oauth_usage(FIXTURE_UTILIZATION_ISO, UtilizationScale::Fraction).unwrap();
     let by_dir: HashMap<PathBuf, _> = [(PathBuf::from("/home/u/.claude"), real)].into();
 
     apply_oauth_usage(&mut snapshot, &by_dir);
@@ -159,7 +218,11 @@ fn apply_without_reset_keeps_the_estimated_reset() {
     let estimated_reset = Some(Utc.with_ymd_and_hms(2026, 7, 3, 15, 0, 0).unwrap());
     snapshot.accounts[0].reset5h = estimated_reset;
 
-    let real = parse_oauth_usage(r#"{ "five_hour": { "utilization": 0.9 } }"#).unwrap();
+    let real = parse_oauth_usage(
+        r#"{ "five_hour": { "utilization": 0.9 } }"#,
+        UtilizationScale::Fraction,
+    )
+    .unwrap();
     let by_dir: HashMap<PathBuf, _> = [(PathBuf::from("/home/u/.claude"), real)].into();
 
     apply_oauth_usage(&mut snapshot, &by_dir);
@@ -177,7 +240,7 @@ fn apply_never_touches_token_or_cost_totals() {
         "/home/u/.claude",
     )]);
     let before = snapshot.accounts[0].clone();
-    let real = parse_oauth_usage(FIXTURE_UTILIZATION_ISO).unwrap();
+    let real = parse_oauth_usage(FIXTURE_UTILIZATION_ISO, UtilizationScale::Fraction).unwrap();
     let by_dir: HashMap<PathBuf, _> = [(PathBuf::from("/home/u/.claude"), real)].into();
 
     apply_oauth_usage(&mut snapshot, &by_dir);
@@ -203,6 +266,7 @@ fn binding_window_surfaces_a_full_opus_sublimit_over_a_calm_5h() {
         r#"{ "five_hour": { "utilization": 0.71 },
              "seven_day": { "utilization": 0.40 },
              "seven_day_opus": { "utilization": 0.91 } }"#,
+        UtilizationScale::Fraction,
     )
     .unwrap();
     let by_dir: HashMap<PathBuf, _> = [(PathBuf::from("/home/u/.claude"), real)].into();

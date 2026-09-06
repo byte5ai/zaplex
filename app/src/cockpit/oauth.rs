@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::lock::Mutex;
-use zaplex_cockpit::OauthUsage;
+use zaplex_cockpit::{OauthUsage, UtilizationScale};
 
 const ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
 /// The endpoint has an aggressive per-token 429 budget (~5 requests), so we
@@ -112,7 +112,14 @@ async fn fetch_one(client: &reqwest::Client, token: &str) -> Option<OauthUsage> 
         return None;
     }
     let body = response.text().await.ok()?;
-    zaplex_cockpit::parse_oauth_usage(&body)
+    parse_response(&body)
+}
+
+fn parse_response(body: &str) -> Option<OauthUsage> {
+    // The versioned oauth-2025-04-20 endpoint contract reports
+    // `utilization` in percent. Choose the scale once at this boundary so a
+    // low value is never reinterpreted independently from the other windows.
+    zaplex_cockpit::parse_oauth_usage(body, UtilizationScale::Percent)
 }
 
 /// Refresh every account whose cache entry is missing or older than the TTL,

@@ -64,7 +64,9 @@ pub use guardrails::{
     pid_signalable, remote_unsupported_toast, sent_toast, session_label, stop_all_confirm_message,
     stop_all_summary_toast, unsignalable_toast, GuardrailSignal, GuardrailTarget,
 };
-pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
+pub use oauth::{
+    apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow, UtilizationScale,
+};
 pub use overrides::{set_label_override, AccountOverride, AccountOverrides};
 pub use pricing::{ModelPrice, PricingSource, PricingTable};
 pub use process_identity::{
