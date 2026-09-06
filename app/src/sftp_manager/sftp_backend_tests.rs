@@ -6,6 +6,86 @@ use std::sync::{Arc, Barrier};
 use super::*;
 use tempfile::tempdir;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_open_confined_new_file_falls_back_on_enosys_without_following_symlinks() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("root");
+    let outside = directory.path().join("outside");
+    let retained = directory.path().join("retained-parent");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(root.join("parent")).unwrap();
+    fs::create_dir(&outside).unwrap();
+
+    let file =
+        open_confined_new_file_with_openat2(&root, Path::new("/parent/stage.bin"), |_, _, _| {
+            Err(std::io::Error::from_raw_os_error(libc::ENOSYS))
+        })
+        .expect("ENOSYS must use the component-walk fallback");
+    drop(file);
+    let stage = root.join("parent/stage.bin");
+    assert_eq!(
+        fs::metadata(&stage).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    assert!(
+        open_confined_new_file_with_openat2(&root, Path::new("/parent/stage.bin"), |_, _, _| Err(
+            std::io::Error::from_raw_os_error(libc::ENOSYS)
+        ),)
+        .is_err(),
+        "the fallback must not replace an existing target"
+    );
+
+    fs::remove_file(stage).unwrap();
+    fs::rename(root.join("parent"), &retained).unwrap();
+    symlink(&outside, root.join("parent")).unwrap();
+
+    assert!(open_confined_new_file_with_openat2(
+        &root,
+        Path::new("/parent/stage.bin"),
+        |_, _, _| Err(std::io::Error::from_raw_os_error(libc::ENOSYS)),
+    )
+    .is_err());
+    assert!(!outside.join("stage.bin").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_open_confined_new_file_does_not_fallback_on_other_errors() {
+    let root = tempdir().unwrap();
+    fs::create_dir(root.path().join("parent")).unwrap();
+
+    let result = open_confined_new_file_with_openat2(
+        root.path(),
+        Path::new("/parent/stage.bin"),
+        |_, _, _| Err(std::io::Error::from_raw_os_error(libc::EINVAL)),
+    );
+
+    assert!(matches!(result, Err(SftpOpsError::LocalIo(_))));
+    assert!(!root.path().join("parent/stage.bin").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_component_walk_rejects_parent_components_before_opening() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("root");
+    let outside = directory.path().join("outside");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&outside).unwrap();
+
+    assert!(open_confined_new_file_with_openat2(
+        &root,
+        Path::new("/../outside/escaped.bin"),
+        |_, _, _| Err(std::io::Error::from_raw_os_error(libc::ENOSYS)),
+    )
+    .is_err());
+    assert!(!outside.join("escaped.bin").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn identity_bound_delete_preserves_replacement_at_mutation_boundary() {
