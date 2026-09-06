@@ -2646,6 +2646,128 @@ mod daemon_session {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn restart_of_exit_is_rejected_when_same_route_has_new_live_launch() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |model, ctx| {
+                model.register_connection(conn_id, conn_tx, ctx);
+                enable_managed_fleet(model, conn_id);
+                model.managed_min_available_bytes = Ok(1);
+            });
+            let project = tempfile::tempdir().unwrap();
+            let cwd = project.path().to_string_lossy().to_string();
+
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(conn_id, managed_open(&cwd, "launch-1"), ctx)
+            });
+            let first = loop {
+                let message = recv_deadline(&conn_rx, Duration::from_secs(10))
+                    .await
+                    .expect("first managed launch response");
+                if let Some(server_message::Message::SessionOpened(opened)) = message.message {
+                    break opened;
+                }
+            };
+
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(
+                    conn_id,
+                    ClientMessage {
+                        request_id: "stop-launch-1".to_string(),
+                        message: Some(client_message::Message::ManagedSessionLifecycle(
+                            ManagedSessionLifecycleRequest {
+                                schema_version: 1,
+                                action: ManagedSessionLifecycleAction::Stop.into(),
+                                session_id: first.session_id.clone(),
+                                expected_generation: first.generation,
+                                launch_id: "launch-1".to_string(),
+                                provider: "claude".to_string(),
+                                account_id: "opaque-account".to_string(),
+                                project_root: cwd.clone(),
+                            },
+                        )),
+                    },
+                    ctx,
+                );
+            });
+            let stopped = loop {
+                let message = recv_deadline(&conn_rx, Duration::from_secs(10))
+                    .await
+                    .expect("managed stop response");
+                if let Some(server_message::Message::ManagedSessionLifecycleResponse(response)) =
+                    message.message
+                {
+                    break response;
+                }
+            };
+            assert_eq!(
+                ManagedSessionLifecycleStatus::try_from(stopped.status).unwrap(),
+                ManagedSessionLifecycleStatus::Stopped
+            );
+
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(conn_id, managed_open(&cwd, "launch-2"), ctx)
+            });
+            let second = loop {
+                let message = recv_deadline(&conn_rx, Duration::from_secs(10))
+                    .await
+                    .expect("replacement managed launch response");
+                if let Some(server_message::Message::SessionOpened(opened)) = message.message {
+                    break opened;
+                }
+            };
+            assert_ne!(first.session_id, second.session_id);
+
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(
+                    conn_id,
+                    ClientMessage {
+                        request_id: "restart-launch-1".to_string(),
+                        message: Some(client_message::Message::ManagedSessionLifecycle(
+                            ManagedSessionLifecycleRequest {
+                                schema_version: 1,
+                                action: ManagedSessionLifecycleAction::Restart.into(),
+                                session_id: first.session_id.clone(),
+                                expected_generation: first.generation,
+                                launch_id: "launch-1".to_string(),
+                                provider: "claude".to_string(),
+                                account_id: "opaque-account".to_string(),
+                                project_root: cwd.clone(),
+                            },
+                        )),
+                    },
+                    ctx,
+                );
+            });
+            let rejected = loop {
+                let message = recv_deadline(&conn_rx, Duration::from_secs(10))
+                    .await
+                    .expect("stale managed restart response");
+                if let Some(server_message::Message::ManagedSessionLifecycleResponse(response)) =
+                    message.message
+                {
+                    break response;
+                }
+            };
+            assert_eq!(
+                ManagedSessionLifecycleStatus::try_from(rejected.status).unwrap(),
+                ManagedSessionLifecycleStatus::StaleIdentity
+            );
+            assert_eq!(rejected.diagnostic_code, "managed-route-already-running");
+            model.update(&mut app, |model, ctx| {
+                assert_eq!(model.sessions.len(), 1);
+                assert!(model.sessions.contains_key(&second.session_id));
+                model
+                    .handle_close_managed_session_verified(&second.session_id, ctx)
+                    .unwrap();
+            });
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn managed_start_is_blocked_before_process_creation_below_daemon_floor() {
         App::test((), |mut app| async move {
             let model = app.add_singleton_model(|_ctx| test_model());
