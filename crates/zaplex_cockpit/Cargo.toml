@@ -19,6 +19,7 @@ sha2.workspace = true
 
 [dev-dependencies]
 command.workspace = true
+markdown_parser.workspace = true
 tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]

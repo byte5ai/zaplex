@@ -45,6 +45,26 @@ fn shquote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+fn longest_backtick_run(value: &str) -> usize {
+    value
+        .chars()
+        .fold((0, 0), |(longest, current), character| {
+            let current = if character == '`' { current + 1 } else { 0 };
+            (longest.max(current), current)
+        })
+        .0
+}
+
+fn inline_code(value: &str) -> String {
+    let delimiter = "`".repeat(longest_backtick_run(value) + 1);
+    format!("{delimiter}{value}{delimiter}")
+}
+
+fn fenced_code_block(language: &str, value: &str) -> String {
+    let delimiter = "`".repeat((longest_backtick_run(value) + 1).max(3));
+    format!("{delimiter}{language}\n{}{delimiter}\n", value.trim_end())
+}
+
 /// The exact `git -C <root> add -A && git -C <root> commit -m <message>` the
 /// **Commit** verb runs, shell-quoted. Surfaced in the review pane so the user
 /// sees precisely what will happen before pressing commit (github_flows ethos:
@@ -82,7 +102,7 @@ pub fn render_review_markdown(
     let branch_line = if branch.trim().is_empty() {
         String::new()
     } else {
-        format!("Branch: `{}`\n\n", branch.trim())
+        format!("Branch: {}\n\n", inline_code(branch.trim()))
     };
 
     if changes.is_empty() {
@@ -100,7 +120,7 @@ pub fn render_review_markdown(
         ));
         for f in &changes.untracked {
             if !f.trim().is_empty() {
-                out.push_str(&format!("- `{}`\n", f.trim()));
+                out.push_str(&format!("- {}\n", inline_code(f.trim())));
             }
         }
         out.push('\n');
@@ -110,15 +130,13 @@ pub fn render_review_markdown(
     if changes.diff.trim().is_empty() {
         out.push_str("_(only untracked files — no tracked changes)_\n\n");
     } else {
-        out.push_str("```diff\n");
-        out.push_str(changes.diff.trim_end());
-        out.push_str("\n```\n\n");
+        out.push_str(&fenced_code_block("diff", &changes.diff));
+        out.push('\n');
     }
 
     if !commit_preview.trim().is_empty() {
-        out.push_str("---\n\nCommit will run:\n\n```sh\n");
-        out.push_str(commit_preview.trim());
-        out.push_str("\n```\n");
+        out.push_str("---\n\nCommit will run:\n\n");
+        out.push_str(&fenced_code_block("sh", commit_preview));
     }
 
     out
