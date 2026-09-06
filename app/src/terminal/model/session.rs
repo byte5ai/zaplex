@@ -1379,7 +1379,11 @@ impl Session {
 
         let output_in_bytes = self
             .execute_command(
-                format!("cat {history_file}").as_str(),
+                format!(
+                    "cat {}",
+                    shell_quote_arg(history_file, self.info.shell.shell_type())
+                )
+                .as_str(),
                 None,
                 env_vars,
                 ExecuteCommandOptions::default(),

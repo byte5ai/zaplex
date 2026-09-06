@@ -9,7 +9,7 @@ use itertools::Itertools as _;
 use crate::env_vars::{serialize_variables_for_shell, EnvVarValue};
 use crate::terminal::shell::Shell;
 
-use super::{CommandExecutor, CommandOutput, ExecuteCommandOptions};
+use super::{shell_quote_arg, CommandExecutor, CommandOutput, ExecuteCommandOptions};
 
 /// `CommandExecutor` implementation that executes the given `command` in a forked process
 /// that establishes a one-off SSH session with the same remote host as the active SSH session
@@ -57,7 +57,9 @@ impl CommandExecutor for RemoteCommandExecutor {
             command_str.push(';');
         }
         if let Some(current_directory_path) = current_directory_path {
-            command_str.push_str(&format!("cd '{current_directory_path}' && "));
+            let current_directory_path =
+                shell_quote_arg(current_directory_path, shell.shell_type());
+            command_str.push_str(&format!("cd {current_directory_path} && "));
         }
         command_str.push_str(command);
 
