@@ -63,6 +63,8 @@ fn build_oneshot_request(
     user: &str,
     opts: &OneshotOptions,
 ) -> (ChatRequest, ChatOptions) {
+    let request_api_type =
+        chat_stream::effective_api_type_for(cfg.api_type, &cfg.model_id, &cfg.base_url);
     let mut chat_opts = ChatOptions::default()
         .with_capture_content(true)
         .with_capture_usage(true);
@@ -74,7 +76,7 @@ fn build_oneshot_request(
     }
     if opts.allow_reasoning {
         if let Some(effort) = cfg.reasoning_effort.to_genai() {
-            if super::reasoning::model_supports_reasoning(cfg.api_type, &cfg.model_id) {
+            if super::reasoning::model_supports_reasoning(request_api_type, &cfg.model_id) {
                 chat_opts = chat_opts.with_reasoning_effort(effort);
             }
         }
@@ -98,7 +100,7 @@ pub async fn byop_oneshot_completion(
     user: &str,
     opts: &OneshotOptions,
 ) -> anyhow::Result<String> {
-    let client = chat_stream::build_client(cfg.api_type, cfg.base_url.clone(), cfg.api_key.clone());
+    let client = chat_stream::build_client(cfg.api_type, &cfg.base_url, cfg.api_key.clone());
     let (chat_req, chat_opts) = build_oneshot_request(cfg, system, user, opts);
 
     let resp = client
@@ -119,7 +121,7 @@ pub async fn byop_oneshot_streaming_completion(
     user: &str,
     opts: &OneshotOptions,
 ) -> anyhow::Result<String> {
-    let client = chat_stream::build_client(cfg.api_type, cfg.base_url.clone(), cfg.api_key.clone());
+    let client = chat_stream::build_client(cfg.api_type, &cfg.base_url, cfg.api_key.clone());
     let (chat_req, chat_opts) = build_oneshot_request(cfg, system, user, opts);
     let mut resp = client
         .exec_chat_stream(&cfg.model_id, chat_req, Some(&chat_opts))
