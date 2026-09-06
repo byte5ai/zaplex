@@ -11,6 +11,7 @@ use crate::webc::{WebResponse, WebStream};
 use crate::{Error, Headers, ModelIden, Result, ServiceTarget};
 use reqwest::RequestBuilder;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use value_ext::JsonValueExt;
 
 pub struct GeminiAdapter;
@@ -318,11 +319,13 @@ impl GeminiAdapter {
 			}
 
 			// -- Function call
-			if let Ok(fc) = part.x_take::<Value>("functionCall") {
+			if let Ok(mut fc) = part.x_take::<Value>("functionCall") {
 				let fn_name: String = fc.x_get("name").unwrap_or_default();
-				// Gemini omits call_id; synthesize a unique one to avoid
-				// collisions when the same tool is called multiple times.
-				let call_id = format!("call#{}#{}", fn_name, tool_call_counter);
+				let call_id = fc
+					.x_take::<String>("id")
+					.ok()
+					.filter(|call_id| !call_id.is_empty())
+					.unwrap_or_else(|| format!("call#{fn_name}#{tool_call_counter}"));
 				tool_call_counter += 1;
 				content.push(GeminiChatContent::ToolCall(ToolCall {
 					call_id,
@@ -553,6 +556,7 @@ impl GeminiAdapter {
 	) -> Result<GeminiChatRequestParts> {
 		let mut contents: Vec<Value> = Vec::new();
 		let mut systems: Vec<String> = Vec::new();
+		let mut tool_names_by_call_id: HashMap<String, String> = HashMap::new();
 
 		if let Some(system) = chat_req.system {
 			systems.push(system);
@@ -592,23 +596,12 @@ impl GeminiAdapter {
 								}
 							}
 							ContentPart::ToolCall(tool_call) => {
-								parts_values.push(json!({
-									"functionCall": {
-										"name": tool_call.fn_name,
-										"args": tool_call.fn_arguments,
-									}
-								}));
+								tool_names_by_call_id.insert(tool_call.call_id.clone(), tool_call.fn_name.clone());
+								parts_values.push(gemini_function_call_part(tool_call));
 							}
 							ContentPart::ToolResponse(tool_response) => {
-								parts_values.push(json!({
-									"functionResponse": {
-										"name": tool_response.call_id,
-										"response": {
-											"name": tool_response.call_id,
-											"content": tool_response.content,
-										}
-									}
-								}));
+								let known_name = tool_names_by_call_id.get(&tool_response.call_id).map(String::as_str);
+								parts_values.push(gemini_function_response_part(tool_response, known_name));
 							}
 							ContentPart::ThoughtSignature(thought) => {
 								parts_values.push(json!({
@@ -638,14 +631,10 @@ impl GeminiAdapter {
 								parts_values.push(json!({"text": text}));
 							}
 							ContentPart::ToolCall(tool_call) => {
+								tool_names_by_call_id.insert(tool_call.call_id.clone(), tool_call.fn_name.clone());
 								let mut part_obj = serde_json::Map::new();
-								part_obj.insert(
-									"functionCall".to_string(),
-									json!({
-										"name": tool_call.fn_name,
-										"args": tool_call.fn_arguments,
-									}),
-								);
+								let mut function_call_part = gemini_function_call_part(tool_call);
+								part_obj.insert("functionCall".to_string(), function_call_part["functionCall"].take());
 
 								match pending_thought.take() {
 									Some(thought) => {
@@ -703,23 +692,12 @@ impl GeminiAdapter {
 					for part in msg.content {
 						match part {
 							ContentPart::ToolCall(tool_call) => {
-								parts_values.push(json!({
-									"functionCall": {
-										"name": tool_call.fn_name,
-										"args": tool_call.fn_arguments,
-									}
-								}));
+								tool_names_by_call_id.insert(tool_call.call_id.clone(), tool_call.fn_name.clone());
+								parts_values.push(gemini_function_call_part(tool_call));
 							}
 							ContentPart::ToolResponse(tool_response) => {
-								parts_values.push(json!({
-									"functionResponse": {
-										"name": tool_response.call_id,
-										"response": {
-											"name": tool_response.call_id,
-											"content": tool_response.content,
-										}
-									}
-								}));
+								let known_name = tool_names_by_call_id.get(&tool_response.call_id).map(String::as_str);
+								parts_values.push(gemini_function_response_part(tool_response, known_name));
 							}
 							ContentPart::ThoughtSignature(thought) => {
 								parts_values.push(json!({
@@ -904,7 +882,55 @@ fn take_bool(v: &mut Value, key: &str) -> bool {
 		.unwrap_or(false)
 }
 
+fn legacy_synthetic_function_name(call_id: &str) -> Option<&str> {
+	call_id
+		.strip_prefix("call#")
+		.and_then(|rest| rest.rsplit_once('#'))
+		.and_then(|(name, index)| index.parse::<usize>().ok().map(|_| name))
+		.filter(|name| !name.is_empty())
+}
+
+fn native_gemini_call_id(call_id: &str) -> Option<&str> {
+	(!call_id.is_empty() && legacy_synthetic_function_name(call_id).is_none()).then_some(call_id)
+}
+
+fn gemini_function_call_part(tool_call: ToolCall) -> Value {
+	let mut function_call = json!({
+		"name": tool_call.fn_name,
+		"args": tool_call.fn_arguments,
+	});
+	if let Some(call_id) = native_gemini_call_id(&tool_call.call_id) {
+		function_call["id"] = json!(call_id);
+	}
+	json!({ "functionCall": function_call })
+}
+
+fn gemini_function_response_part(tool_response: crate::chat::ToolResponse, known_name: Option<&str>) -> Value {
+	let fn_name = tool_response
+		.fn_name
+		.as_deref()
+		.or(known_name)
+		.or_else(|| legacy_synthetic_function_name(&tool_response.call_id))
+		.unwrap_or(&tool_response.call_id)
+		.to_string();
+	let mut function_response = json!({
+		"name": fn_name,
+		"response": {
+			"name": fn_name,
+			"content": tool_response.content,
+		}
+	});
+	if let Some(call_id) = native_gemini_call_id(&tool_response.call_id) {
+		function_response["id"] = json!(call_id);
+	}
+	json!({ "functionResponse": function_response })
+}
+
 // endregion: --- Helpers
+
+#[cfg(test)]
+#[path = "adapter_impl_tests.rs"]
+mod regression_tests;
 
 #[cfg(test)]
 mod tests {

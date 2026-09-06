@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 pub struct ToolResponse {
 	/// Identifier of the originating tool call.
 	pub call_id: String,
+	/// Function name associated with the originating tool call, when known.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub fn_name: Option<String>,
 	/// Tool output payload as a string. Providers may use JSON-serialized content.
 	// For now, just a string (would probably be serialized JSON)
 	pub content: String,
@@ -16,8 +19,15 @@ impl ToolResponse {
 	pub fn new(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
 		Self {
 			call_id: tool_call_id.into(),
+			fn_name: None,
 			content: content.into(),
 		}
+	}
+
+	/// Associates the response with the originating function name.
+	pub fn with_fn_name(mut self, fn_name: impl Into<String>) -> Self {
+		self.fn_name = Some(fn_name.into());
+		self
 	}
 }
 
@@ -26,9 +36,10 @@ impl ToolResponse {
 	/// Returns an approximate in-memory size of this `ToolResponse`, in bytes,
 	/// computed as the sum of the UTF-8 lengths of:
 	/// - `call_id`
+	/// - `fn_name`, when present
 	/// - `content`
 	pub fn size(&self) -> usize {
-		self.call_id.len() + self.content.len()
+		self.call_id.len() + self.fn_name.as_ref().map_or(0, String::len) + self.content.len()
 	}
 }
 

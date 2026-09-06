@@ -25,6 +25,7 @@ enum InProgressBlock {
 	Text,
 	ToolUse { id: String, name: String, input: String },
 	Thinking,
+	Ignored,
 }
 
 impl AnthropicStreamer {
@@ -34,10 +35,14 @@ impl AnthropicStreamer {
 			done: false,
 			options: StreamerOptions::new(model_iden, options_set),
 			captured_data: Default::default(),
-			in_progress_block: InProgressBlock::Text,
+			in_progress_block: InProgressBlock::Ignored,
 		}
 	}
 }
+
+#[cfg(test)]
+#[path = "streamer_tests.rs"]
+mod tests;
 
 impl futures::Stream for AnthropicStreamer {
 	type Item = Result<InterStreamEvent>;
@@ -75,13 +80,21 @@ impl futures::Stream for AnthropicStreamer {
 									model_iden: self.options.model_iden.clone(),
 									serde_error,
 								})?;
+							self.in_progress_block = InProgressBlock::Ignored;
 
 							match data.x_get_str("/content_block/type") {
 								Ok("text") => self.in_progress_block = InProgressBlock::Text,
 								Ok("thinking") => self.in_progress_block = InProgressBlock::Thinking,
 								Ok("tool_use") => {
-									let id: String = data.x_take("/content_block/id")?;
-									let name: String = data.x_take("/content_block/name")?;
+									let id = data.x_take::<String>("/content_block/id");
+									let name = data.x_take::<String>("/content_block/name");
+									let (id, name) = match (id, name) {
+										(Ok(id), Ok(name)) => (id, name),
+										(Err(error), Ok(_)) | (Ok(_), Err(error)) | (Err(error), Err(_)) => {
+											tracing::warn!("ignoring malformed tool_use block: {error}");
+											continue;
+										}
+									};
 
 									// Emit an initial ToolCallChunk with name and empty args,
 									// matching OpenAI's incremental streaming behaviour.
@@ -116,9 +129,16 @@ impl futures::Stream for AnthropicStreamer {
 									model_iden: self.options.model_iden.clone(),
 									serde_error,
 								})?;
+							let delta_type = match data.x_get::<String>("/delta/type") {
+								Ok(delta_type) => delta_type,
+								Err(error) => {
+									tracing::warn!("ignoring content block delta without a valid type: {error}");
+									continue;
+								}
+							};
 
-							match &mut self.in_progress_block {
-								InProgressBlock::Text => {
+							match delta_type.as_str() {
+								"text_delta" if matches!(self.in_progress_block, InProgressBlock::Text) => {
 									let content: String = data.x_take("/delta/text")?;
 
 									// Add to the captured_content if chat options say so
@@ -131,7 +151,11 @@ impl futures::Stream for AnthropicStreamer {
 
 									return Poll::Ready(Some(Ok(InterStreamEvent::Chunk(content))));
 								}
-								InProgressBlock::ToolUse { id, name, input } => {
+								"input_json_delta" => {
+									let InProgressBlock::ToolUse { id, name, input } = &mut self.in_progress_block
+									else {
+										continue;
+									};
 									let partial = data.x_get_str("/delta/partial_json")?;
 									input.push_str(partial);
 
@@ -146,33 +170,29 @@ impl futures::Stream for AnthropicStreamer {
 
 									return Poll::Ready(Some(Ok(InterStreamEvent::ToolCallChunk(tc))));
 								}
-								InProgressBlock::Thinking => {
-									if let Ok(thinking) = data.x_take::<String>("/delta/thinking") {
-										// Add to the captured_thinking if chat options say so
-										if self.options.capture_reasoning_content {
-											match self.captured_data.reasoning_content {
-												Some(ref mut r) => r.push_str(&thinking),
-												None => self.captured_data.reasoning_content = Some(thinking.clone()),
-											}
+								"thinking_delta" if matches!(self.in_progress_block, InProgressBlock::Thinking) => {
+									let thinking: String = data.x_take("/delta/thinking")?;
+									if self.options.capture_reasoning_content {
+										match self.captured_data.reasoning_content {
+											Some(ref mut reasoning) => reasoning.push_str(&thinking),
+											None => self.captured_data.reasoning_content = Some(thinking.clone()),
 										}
-
-										return Poll::Ready(Some(Ok(InterStreamEvent::ReasoningChunk(thinking))));
-									} else if let Ok(signature) = data.x_take::<String>("/delta/signature") {
-										return Poll::Ready(Some(Ok(InterStreamEvent::ThoughtSignatureChunk(
-											signature,
-										))));
-									} else {
-										// If it is thinking but no thinking or signature field, we log and skip.
-										tracing::warn!(
-											"content_block_delta for thinking block but no thinking or signature found: {data:?}"
-										);
-										continue;
 									}
+									return Poll::Ready(Some(Ok(InterStreamEvent::ReasoningChunk(thinking))));
+								}
+								"signature_delta" if matches!(self.in_progress_block, InProgressBlock::Thinking) => {
+									let signature: String = data.x_take("/delta/signature")?;
+									return Poll::Ready(Some(Ok(InterStreamEvent::ThoughtSignatureChunk(signature))));
+								}
+								"citations_delta" | "text_delta" | "thinking_delta" | "signature_delta" => continue,
+								unknown => {
+									tracing::warn!("ignoring unsupported content block delta type: {unknown}");
+									continue;
 								}
 							}
 						}
 						"content_block_stop" => {
-							match std::mem::replace(&mut self.in_progress_block, InProgressBlock::Text) {
+							match std::mem::replace(&mut self.in_progress_block, InProgressBlock::Ignored) {
 								InProgressBlock::ToolUse { id, name, input } if self.options.capture_tool_calls => {
 									// ToolCallChunks were already emitted incrementally
 									// during content_block_start and content_block_delta.
@@ -195,9 +215,10 @@ impl futures::Stream for AnthropicStreamer {
 										None => self.captured_data.tool_calls = Some(vec![tc]),
 									}
 								}
-								_ => {
-									// no-op for remaining block types
-								}
+								InProgressBlock::ToolUse { .. }
+								| InProgressBlock::Text
+								| InProgressBlock::Thinking
+								| InProgressBlock::Ignored => {}
 							}
 
 							continue;
@@ -262,73 +283,63 @@ impl AnthropicStreamer {
 	fn capture_usage(&mut self, message_type: &str, message_data: &str) -> Result<()> {
 		if self.options.capture_usage {
 			let data = self.parse_message_data(message_data)?;
-			// TODO: Might want to exit early if usage is not found
 
-			let (input_path, output_path) = if message_type == "message_start" {
-				("/message/usage/input_tokens", "/message/usage/output_tokens")
+			let usage_path = if message_type == "message_start" {
+				"/message/usage"
 			} else if message_type == "message_delta" {
-				("/usage/input_tokens", "/usage/output_tokens")
+				"/usage"
 			} else {
-				// TODO: Use tracing
-				tracing::debug!(
-					"TRACING DEBUG - Anthropic message type not supported for input/output tokens: {message_type}"
-				);
-				return Ok(()); // For now permissive
+				tracing::debug!("Anthropic message type has no usage snapshot: {message_type}");
+				return Ok(());
 			};
 
-			// -- Capture/Add the eventual input_tokens
-			// NOTE: Permissive on this one; if an error occurs, treat it as nonexistent (for now)
-			if let Ok(input_tokens) = data.x_get::<i32>(input_path) {
-				let val = self
-					.captured_data
-					.usage
-					.get_or_insert(Usage::default())
-					.prompt_tokens
-					.get_or_insert(0);
-				*val += input_tokens;
+			let input_tokens = data.x_get::<i32>(&format!("{usage_path}/input_tokens")).ok();
+			let output_tokens = data.x_get::<i32>(&format!("{usage_path}/output_tokens")).ok();
+			let cache_creation = data.x_get::<i32>(&format!("{usage_path}/cache_creation_input_tokens")).ok();
+			let cache_read = data.x_get::<i32>(&format!("{usage_path}/cache_read_input_tokens")).ok();
+			let cache_creation_details = data
+				.x_get::<Value>(&format!("{usage_path}/cache_creation"))
+				.ok()
+				.as_ref()
+				.and_then(parse_cache_creation_details);
+
+			let usage = self.captured_data.usage.get_or_insert_with(Usage::default);
+			let previous_cache_creation = usage
+				.prompt_tokens_details
+				.as_ref()
+				.and_then(|details| details.cache_creation_tokens);
+			let previous_cache_read = usage.prompt_tokens_details.as_ref().and_then(|details| details.cached_tokens);
+			let previous_input = usage
+				.prompt_tokens
+				.map(|tokens| tokens - previous_cache_creation.unwrap_or(0) - previous_cache_read.unwrap_or(0));
+			let input_tokens = input_tokens.or(previous_input);
+			let cache_creation = cache_creation.or(previous_cache_creation);
+			let cache_read = cache_read.or(previous_cache_read);
+
+			if input_tokens.is_some() || cache_creation.is_some() || cache_read.is_some() {
+				usage.prompt_tokens =
+					Some(input_tokens.unwrap_or(0) + cache_creation.unwrap_or(0) + cache_read.unwrap_or(0));
+			}
+			if let Some(output_tokens) = output_tokens {
+				usage.completion_tokens = Some(output_tokens);
 			}
 
-			if let Ok(output_tokens) = data.x_get::<i32>(output_path) {
-				let val = self
-					.captured_data
-					.usage
-					.get_or_insert(Usage::default())
-					.completion_tokens
-					.get_or_insert(0);
-				*val += output_tokens;
-			}
-
-			// -- Capture cache tokens (only present in message_start)
-			// NOTE: Anthropic's input_tokens does NOT include cached tokens, so we must add them.
-			// See also: AnthropicAdapter::into_usage() for non-streaming equivalent.
-			if message_type == "message_start" {
-				let cache_creation: i32 = data.x_get("/message/usage/cache_creation_input_tokens").unwrap_or(0);
-				let cache_read: i32 = data.x_get("/message/usage/cache_read_input_tokens").unwrap_or(0);
-
-				// Parse cache_creation breakdown if present (TTL-specific breakdown)
-				// Use x_get with JSON pointer to navigate to /message/usage/cache_creation
-				let cache_creation_details = data
-					.x_get::<Value>("/message/usage/cache_creation")
-					.ok()
-					.as_ref()
-					.and_then(parse_cache_creation_details);
-
-				if cache_creation > 0 || cache_read > 0 || cache_creation_details.is_some() {
-					let usage = self.captured_data.usage.get_or_insert(Usage::default());
-
-					// Add cache tokens to prompt_tokens (same as into_usage does)
-					if let Some(ref mut pt) = usage.prompt_tokens {
-						*pt += cache_creation + cache_read;
-					}
-
-					// Set prompt_tokens_details (match into_usage behavior: always Some(value))
-					usage.prompt_tokens_details = Some(PromptTokensDetails {
-						cache_creation_tokens: Some(cache_creation),
-						cache_creation_details,
-						cached_tokens: Some(cache_read),
-						audio_tokens: None,
-					});
-				}
+			let previous_details = usage.prompt_tokens_details.take();
+			if cache_creation_details.is_some()
+				|| previous_details.is_some()
+				|| cache_creation.is_some()
+				|| cache_read.is_some()
+			{
+				usage.prompt_tokens_details = Some(PromptTokensDetails {
+					cache_creation_tokens: cache_creation,
+					cache_creation_details: cache_creation_details.or_else(|| {
+						previous_details
+							.as_ref()
+							.and_then(|details| details.cache_creation_details.clone())
+					}),
+					cached_tokens: cache_read,
+					audio_tokens: previous_details.and_then(|details| details.audio_tokens),
+				});
 			}
 		}
 
