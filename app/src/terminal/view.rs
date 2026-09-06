@@ -4444,6 +4444,12 @@ impl TerminalView {
         event: &BlocklistAIControllerEvent,
         ctx: &mut ViewContext<Self>,
     ) {
+        if matches!(
+            event,
+            BlocklistAIControllerEvent::SubscriptionPreflightUpdated
+        ) {
+            ctx.notify();
+        }
         if let BlocklistAIControllerEvent::SentRequest { model_id, .. } = event {
             self.maybe_insert_aws_bedrock_login_banner(model_id, ctx);
         }

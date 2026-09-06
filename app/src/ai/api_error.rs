@@ -1,4 +1,6 @@
-use crate::ai::byop_readiness::BlockedByopReadinessError;
+use crate::ai::{
+    byop_readiness::BlockedByopReadinessError, subscription_agent::SubscriptionAuthenticationError,
+};
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use warp_core::errors::{AnyhowErrorExt, ErrorExt};
@@ -163,7 +165,12 @@ impl AIApiError {
             | AIApiError::Deserialization(_)
             | AIApiError::NoContextFound
             | AIApiError::Stream { .. } => true,
-            AIApiError::Other(error) => error.downcast_ref::<BlockedByopReadinessError>().is_none(),
+            AIApiError::Other(error) => {
+                error.downcast_ref::<BlockedByopReadinessError>().is_none()
+                    && error
+                        .downcast_ref::<SubscriptionAuthenticationError>()
+                        .is_none()
+            }
         }
     }
 }
@@ -178,6 +185,18 @@ mod tests {
         let error = AIApiError::Other(
             BlockedByopReadinessError::new(ReadinessCategory::MissingResultWithoutRepairSource)
                 .into(),
+        );
+
+        assert!(!error.is_retryable());
+    }
+
+    #[test]
+    fn subscription_authentication_error_is_not_retryable() {
+        let error = AIApiError::Other(
+            SubscriptionAuthenticationError {
+                message: "Not logged in · Please run /login".to_string(),
+            }
+            .into(),
         );
 
         assert!(!error.is_retryable());

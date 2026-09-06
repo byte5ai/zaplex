@@ -370,7 +370,10 @@ impl ResponseStream {
 }
 
 fn convert_to_api_error(error: ConvertToAPITypeError) -> AIApiError {
-    AIApiError::Other(anyhow!(error.to_string()))
+    match error {
+        ConvertToAPITypeError::Other(error) => AIApiError::Other(error),
+        error => AIApiError::Other(anyhow!(error.to_string())),
+    }
 }
 
 #[derive(Debug)]
@@ -417,4 +420,22 @@ pub enum ResponseStreamEvent {
 
 impl Entity for ResponseStream {
     type Event = ResponseStreamEvent;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::subscription_agent::SubscriptionAuthenticationError;
+
+    #[test]
+    fn conversion_preserves_non_retryable_subscription_authentication_errors() {
+        let error = ConvertToAPITypeError::Other(
+            SubscriptionAuthenticationError {
+                message: "Claude Code is not signed in".to_string(),
+            }
+            .into(),
+        );
+
+        assert!(!convert_to_api_error(error).is_retryable());
+    }
 }

@@ -1,5 +1,67 @@
-use super::{legacy_ssh_candidates, ProcessLocation, SubscriptionAgent};
+use super::{
+    discovery_failure_lifecycle, legacy_ssh_candidates, AccountIdentity, AgentLifecycle,
+    HostIdentity, InstallationIdentity, ModelCapability, ProcessLocation, SessionIdentity,
+    SubscriptionAgent, SubscriptionSessionRegistry, SubscriptionTarget,
+};
 use crate::terminal::ssh::util::InteractiveSshCommand;
+
+fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
+    SubscriptionTarget {
+        installation: InstallationIdentity {
+            agent,
+            host: HostIdentity {
+                id: "local".to_string(),
+                display_name: "Local".to_string(),
+            },
+            account: AccountIdentity {
+                id: "account".to_string(),
+                display_name: "Account".to_string(),
+                config_dir: None,
+            },
+            executable: agent.display_name().into(),
+            version: "1.0.0".to_string(),
+        },
+        working_directory: "/workspace".into(),
+        model: ModelCapability {
+            id: "model".to_string(),
+            display_name: "Model".to_string(),
+            description: None,
+            resolved_model: None,
+            is_default: true,
+            supported_efforts: Vec::new(),
+            default_effort: None,
+            context_window: None,
+        },
+        effort: None,
+    }
+}
+
+#[test]
+fn signed_out_agents_are_not_recoverable_even_with_a_session_identity() {
+    for (agent, message, session) in [
+        (
+            SubscriptionAgent::ClaudeCode,
+            "Not logged in · Please run /login",
+            SessionIdentity::ClaudeCode("session-1".to_string()),
+        ),
+        (
+            SubscriptionAgent::Codex,
+            "Codex is not using a ChatGPT subscription account",
+            SessionIdentity::Codex("thread-1".to_string()),
+        ),
+    ] {
+        let registry = SubscriptionSessionRegistry::default();
+        registry.store("conversation".to_string(), target(agent), session);
+
+        let lifecycle =
+            discovery_failure_lifecycle(&[agent], message.to_string(), &registry, "conversation");
+
+        assert_eq!(lifecycle, AgentLifecycle::NotSignedIn { agent });
+        assert!(!lifecycle.accepts_prompt());
+        assert!(!lifecycle.can_resume());
+        assert!(registry.get("conversation").is_none());
+    }
+}
 
 #[test]
 fn legacy_ssh_candidates_run_both_agents_on_the_active_host() {
