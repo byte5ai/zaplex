@@ -3567,42 +3567,57 @@ impl ServerModel {
                             reason.protocol_code(),
                         )
                     } else {
-                        let close_result = if live_target {
-                            me.handle_close_managed_session_verified(
-                                &request_for_response.session_id,
-                                ctx,
-                            )
-                        } else {
-                            Ok(())
-                        };
-                        if let Err(error) = close_result {
+                        let excluded_session_id =
+                            live_target.then_some(request_for_response.session_id.as_str());
+                        let launch_is_unique = me
+                            .existing_managed_launch(&plan, excluded_session_id)
+                            .is_ok_and(|existing| existing.is_none());
+                        if !launch_is_unique {
                             managed_lifecycle_response(
                                 &request_for_response,
-                                ManagedSessionLifecycleStatus::Failed,
+                                ManagedSessionLifecycleStatus::StaleIdentity,
                                 None,
-                                error.protocol_code(),
+                                "managed-route-already-running",
                             )
                         } else {
-                            match me.open_session_ready(conn_id, open, Some(plan), ctx) {
-                                HandlerOutcome::Sync(server_message::Message::SessionOpened(
-                                    opened,
-                                )) => {
-                                    me.recent_managed_exits
-                                        .retain(|record| !record.matches(&request_for_response));
-                                    managed_lifecycle_response(
-                                        &request_for_response,
-                                        ManagedSessionLifecycleStatus::Restarted,
-                                        Some(&opened),
-                                        String::new(),
-                                    )
-                                }
-                                HandlerOutcome::Sync(_) | HandlerOutcome::Async(_) => {
-                                    managed_lifecycle_response(
-                                        &request_for_response,
-                                        ManagedSessionLifecycleStatus::Failed,
-                                        None,
-                                        "restart-start-failed",
-                                    )
+                            let close_result = if live_target {
+                                me.handle_close_managed_session_verified(
+                                    &request_for_response.session_id,
+                                    ctx,
+                                )
+                            } else {
+                                Ok(())
+                            };
+                            if let Err(error) = close_result {
+                                managed_lifecycle_response(
+                                    &request_for_response,
+                                    ManagedSessionLifecycleStatus::Failed,
+                                    None,
+                                    error.protocol_code(),
+                                )
+                            } else {
+                                match me.open_session_ready(conn_id, open, Some(plan), ctx) {
+                                    HandlerOutcome::Sync(
+                                        server_message::Message::SessionOpened(opened),
+                                    ) => {
+                                        me.recent_managed_exits.retain(|record| {
+                                            !record.matches(&request_for_response)
+                                        });
+                                        managed_lifecycle_response(
+                                            &request_for_response,
+                                            ManagedSessionLifecycleStatus::Restarted,
+                                            Some(&opened),
+                                            String::new(),
+                                        )
+                                    }
+                                    HandlerOutcome::Sync(_) | HandlerOutcome::Async(_) => {
+                                        managed_lifecycle_response(
+                                            &request_for_response,
+                                            ManagedSessionLifecycleStatus::Failed,
+                                            None,
+                                            "restart-start-failed",
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -3820,8 +3835,12 @@ impl ServerModel {
     fn existing_managed_launch(
         &self,
         plan: &super::managed_fleet::ManagedLaunchPlan,
+        excluded_session_id: Option<&str>,
     ) -> Result<Option<SessionOpened>, &'static str> {
         for (session_id, session) in &self.sessions {
+            if excluded_session_id == Some(session_id.as_str()) {
+                continue;
+            }
             let Some(metadata) = session.managed.as_ref() else {
                 continue;
             };
@@ -3880,7 +3899,7 @@ impl ServerModel {
                 }));
             }
         };
-        match self.existing_managed_launch(&plan) {
+        match self.existing_managed_launch(&plan, None) {
             Ok(Some(_)) | Ok(None) => {}
             Err(code) => {
                 return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
@@ -3956,7 +3975,7 @@ impl ServerModel {
                         code: ErrorCode::InvalidRequest.into(),
                         message: "managed launch rejected: account-route-changed".to_string(),
                     }),
-                    Ok(_) => match me.existing_managed_launch(&plan) {
+                    Ok(_) => match me.existing_managed_launch(&plan, None) {
                         Ok(Some(opened)) => server_message::Message::SessionOpened(opened),
                         Ok(None) => match super::managed_fleet::evaluate_headroom(
                             policy,
