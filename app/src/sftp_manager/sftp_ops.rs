@@ -173,10 +173,15 @@ fn unique_transfer_sibling(path: &Path, marker: &str) -> PathBuf {
 }
 
 fn open_new_local_transfer_file(path: &Path) -> std::io::Result<fs::File> {
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 fn create_unique_local_transfer_file(
@@ -204,7 +209,9 @@ fn create_unique_remote_transfer_file(
 ) -> Result<(PathBuf, zap_sftp::File), SftpOpsError> {
     for _ in 0..128 {
         let candidate = unique_transfer_sibling(path, marker);
-        match sftp.open(&candidate, OpenOptions::create_new()) {
+        let mut options = OpenOptions::create_new();
+        options.mode = Some(0o600);
+        match sftp.open(&candidate, options) {
             Ok(file) => return Ok((candidate, file)),
             Err(_) if sftp.lstat(&candidate).is_ok() => continue,
             Err(error) => return Err(error.into()),
@@ -393,7 +400,18 @@ fn upload_file_streaming_with_mode(
 ) -> Result<(), SftpOpsError> {
     let mut local_file =
         fs::File::open(local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
-    let total_size = local_file.metadata().map(|m| m.len()).unwrap_or(0);
+    let local_metadata = local_file
+        .metadata()
+        .map_err(|error| SftpOpsError::LocalIo(error.to_string()))?;
+    let total_size = local_metadata.len();
+    #[cfg(unix)]
+    let source_mode = {
+        use std::os::unix::fs::PermissionsExt;
+
+        local_metadata.permissions().mode() & 0o777
+    };
+    #[cfg(not(unix))]
+    let source_mode = 0o600;
 
     // Each in-flight transfer owns its temporary path. Two writes to the same
     // destination must never truncate, finalize, or clean up each other's data.
@@ -420,6 +438,7 @@ fn upload_file_streaming_with_mode(
                 cb(transferred, total_size);
             }
         }
+        remote_file.set_mode(source_mode)?;
         remote_file.flush()?;
         Ok(())
     })();
@@ -520,6 +539,8 @@ fn download_file_streaming_with_mode(
     let mut remote_file = sftp.open(remote_path, OpenOptions::read())?;
     let metadata = remote_file.stat()?;
     let total_size = metadata.size;
+    #[cfg(unix)]
+    let source_mode = metadata.mode.unwrap_or(0o600) & 0o777;
 
     if let Some(parent) = local_path.parent() {
         fs::create_dir_all(parent).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
@@ -550,6 +571,14 @@ fn download_file_streaming_with_mode(
             if let Some(cb) = progress_cb {
                 cb(transferred, total_size);
             }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            local_file
+                .set_permissions(fs::Permissions::from_mode(source_mode))
+                .map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
         }
         local_file
             .flush()
