@@ -144,7 +144,7 @@ impl ProcessLaunch {
     }
 
     fn command(&self) -> Result<Command> {
-        match &self.location {
+        let mut command = match &self.location {
             ProcessLocation::Local => {
                 let mut command = Command::new(&self.program);
                 command
@@ -156,17 +156,35 @@ impl ProcessLaunch {
                 for name in &self.unset_environment {
                     command.env_remove(name);
                 }
-                Ok(command)
+                command
             }
             ProcessLocation::Remote { ssh_argv } => {
                 let (program, ssh_args) = ssh_argv
                     .split_first()
                     .context("remote launch requires an SSH program")?;
+                let destination_delimiter = ssh_args
+                    .iter()
+                    .position(|arg| arg == "--")
+                    .context("remote launch requires an SSH destination delimiter")?;
+                let mut ssh_args = ssh_args.to_vec();
+                ssh_args.splice(
+                    destination_delimiter..destination_delimiter,
+                    [
+                        "-o".to_string(),
+                        "BatchMode=yes".to_string(),
+                        "-o".to_string(),
+                        "ConnectTimeout=10".to_string(),
+                        "-o".to_string(),
+                        "ConnectionAttempts=1".to_string(),
+                    ],
+                );
                 let mut command = Command::new(program);
                 command.args(ssh_args).arg(self.remote_command());
-                Ok(command)
+                command
             }
-        }
+        };
+        command.kill_on_drop(true);
+        Ok(command)
     }
 
     fn remote_command(&self) -> String {

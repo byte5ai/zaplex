@@ -44,7 +44,7 @@ use std::{
     os::unix::{
         ffi::OsStringExt,
         fs::DirBuilderExt,
-        io::{AsRawFd, FromRawFd, RawFd},
+        io::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd},
     },
     path::{Path, PathBuf},
     ptr,
@@ -52,23 +52,25 @@ use std::{
 use warp_core::channel::ChannelState;
 use warpui::{AppContext, SingletonEntity};
 
-/// Get raw fds for leader/follower ends of a new PTY.
-fn make_pty(size: winsize) -> Result<(RawFd, RawFd)> {
+/// Get owned leader/follower ends of a new PTY.
+fn make_pty(size: winsize) -> Result<(OwnedFd, File)> {
     let mut win_size = size;
     win_size.ws_xpixel = 0;
     win_size.ws_ypixel = 0;
 
     let ends = openpty(Some(&win_size), None).context("openpty failed")?;
+    let leader = unsafe { OwnedFd::from_raw_fd(ends.master) };
+    let follower = unsafe { File::from_raw_fd(ends.slave) };
     // Configure the two new file descriptors to be closed on exec.  This keeps
     // us from leaking tty fds into spawned shells.  FD_CLOEXEC is _not_ shared
     // across duplicated fds, so when we call `libc::dup2()` below, those fds
     // will _not_ be closed when we exec the shell.
     unsafe {
-        libc::fcntl(ends.master, libc::F_SETFD, libc::FD_CLOEXEC);
-        libc::fcntl(ends.slave, libc::F_SETFD, libc::FD_CLOEXEC);
+        libc::fcntl(leader.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
+        libc::fcntl(follower.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
     }
 
-    Ok((ends.master, ends.slave))
+    Ok((leader, follower))
 }
 
 fn docker_sandbox_run_args(starter: &DockerSandboxShellStarter) -> Vec<std::ffi::OsString> {
@@ -393,16 +395,14 @@ fn spawn_command_in_pty(
     close_fds: bool,
 ) -> Result<PtySpawnInfo> {
     let (leader, follower) = make_pty(size.to_winsize())?;
-
-    // Close the follower at the end of this function.
-    // We need to keep it alive long enough for fork().
-    let _file = unsafe { File::from_raw_fd(follower) };
+    let leader_fd = leader.as_raw_fd();
+    let follower_fd = follower.as_raw_fd();
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    if let Ok(mut termios) = termios::tcgetattr(leader) {
+    if let Ok(mut termios) = termios::tcgetattr(leader_fd) {
         // Set character encoding to UTF-8.
         termios.input_flags.set(InputFlags::IUTF8, true);
-        let _ = termios::tcsetattr(leader, SetArg::TCSANOW, &termios);
+        let _ = termios::tcsetattr(leader_fd, SetArg::TCSANOW, &termios);
     }
 
     // Detect isolation platform outside pre_exec, since detect() is not async-signal-safe.
@@ -448,9 +448,9 @@ fn spawn_command_in_pty(
             libc::sigprocmask(libc::SIG_SETMASK, &signals, ptr::null_mut());
 
             // Set up stdin/stdout/stderr.
-            cvt(libc::dup2(follower, libc::STDIN_FILENO))?;
-            cvt(libc::dup2(follower, libc::STDOUT_FILENO))?;
-            cvt(libc::dup2(follower, libc::STDERR_FILENO))?;
+            cvt(libc::dup2(follower_fd, libc::STDIN_FILENO))?;
+            cvt(libc::dup2(follower_fd, libc::STDOUT_FILENO))?;
+            cvt(libc::dup2(follower_fd, libc::STDERR_FILENO))?;
 
             // Create a new process group.
             cvt(libc::setsid())?;
@@ -461,7 +461,7 @@ fn spawn_command_in_pty(
             // there are no issues. To allow such a generic cast the clippy warning
             // is disabled.
             #[allow(clippy::cast_lossless)]
-            cvt(libc::ioctl(follower, TIOCSCTTY as _, 0))?;
+            cvt(libc::ioctl(follower_fd, TIOCSCTTY as _, 0))?;
 
             // Close all other FDs to avoid leaking any other non-pty FDs
             // into the shell process.  Don't propagate up errors, as most
@@ -508,7 +508,7 @@ fn spawn_command_in_pty(
     Ok(PtySpawnInfo {
         result: PtySpawnResult {
             pid: spawned.id(),
-            leader_fd: leader,
+            leader_fd: leader.into_raw_fd(),
         },
         child: spawned,
     })

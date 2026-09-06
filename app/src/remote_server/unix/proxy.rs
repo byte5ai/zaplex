@@ -4,13 +4,12 @@
 //! Responsibilities:
 //! 1. Acquire an exclusive `flock` on the PID file to serialise concurrent
 //!    proxy starts (e.g. two tabs SSH-ing to the same host at the same time).
-//! 2. Check whether a matching daemon is already running (`kill -0` on the
-//!    PID file — versioned for Zaplex release builds, see
+//! 2. Connect to the matching daemon socket (versioned for Zaplex release builds, see
 //!    [`setup::daemon_runtime_filename`]).
 //! 3. If not: spawn the daemon subcommand in a new session and wait for its
-//!    socket to appear.
-//! 4. Connect to the socket and bridge stdin/stdout to it using the
-//!    existing 4-byte length-prefixed frame format.
+//!    socket to accept connections.
+//! 4. Bridge stdin/stdout over the connected socket using the existing
+//!    4-byte length-prefixed frame format.
 //!
 //! For Zaplex (Oss) release builds the socket/PID names carry the release
 //! tag: reuse-by-liveness alone once bridged new clients to a running daemon
@@ -21,8 +20,10 @@
 //! non-Oss channels keep the legacy unversioned names.
 
 use std::fs::Permissions;
+use std::io::ErrorKind;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -82,98 +83,114 @@ pub fn run(identity_key: &str) -> anyhow::Result<()> {
     let pid_fd = pid_file.as_raw_fd();
     flock_wait(pid_fd, libc::LOCK_EX)?;
 
-    // ---- Check whether daemon is already running --------------------------------
-    let daemon_running = check_daemon_running(&pid_path);
-    if daemon_running {
-        log::info!("Proxy: reusing existing daemon");
-    } else {
-        log::info!("Proxy: no daemon running, will start one");
-    }
-
-    if !daemon_running {
-        // Remove any stale socket from a previous crash.
-        if socket_path.exists() {
-            let _ = std::fs::remove_file(&socket_path);
+    // ---- Connect to an existing daemon or start a new one ------------------------
+    let stream = match select_daemon(&socket_path)? {
+        DaemonSelection::Connected(stream) => {
+            log::info!("Proxy: reusing existing daemon");
+            stream
         }
+        DaemonSelection::StartDaemon => {
+            log::info!("Proxy: no reachable daemon, will start one");
+            // Remove any stale socket from a previous crash.
+            if socket_path.exists() {
+                match std::fs::remove_file(&socket_path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
 
-        // Spawn the daemon in a new Unix session so it is detached from
-        // the SSH session.  When SSH exits the OS sends SIGHUP to every
-        // process in the session's foreground process group.  `setsid()`
-        // creates a new session for the child, so the daemon is not in
-        // SSH's process group and will not receive that signal.
-        let exe = std::env::current_exe()?;
-        let mut cmd = command::blocking::Command::new(&exe);
-        cmd.arg("remote-server-daemon")
-            .arg("--identity-key")
-            .arg(identity_key)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        // SAFETY: setsid(2) is async-signal-safe and has no side effects
-        // other than creating a new session.  pre_exec closures run between
-        // fork and exec in the child process.
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
+            // Spawn the daemon in a new Unix session so it is detached from
+            // the SSH session.  When SSH exits the OS sends SIGHUP to every
+            // process in the session's foreground process group.  `setsid()`
+            // creates a new session for the child, so the daemon is not in
+            // SSH's process group and will not receive that signal.
+            let exe = std::env::current_exe()?;
+            let mut cmd = command::blocking::Command::new(&exe);
+            cmd.arg("remote-server-daemon")
+                .arg("--identity-key")
+                .arg(identity_key)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            // SAFETY: setsid(2) is async-signal-safe and has no side effects
+            // other than creating a new session.  pre_exec closures run between
+            // fork and exec in the child process.
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+            cmd.spawn()
+                .map_err(|e| anyhow::anyhow!("failed to spawn daemon: {e}"))?;
+
+            // Wait for the daemon's socket to accept a connection before releasing the flock.
+            // Holding the lock here prevents a concurrent proxy from acquiring it and
+            // racing to spawn a second daemon.
+            wait_for_socket_connection(&socket_path)?
         }
-        cmd.spawn()
-            .map_err(|e| anyhow::anyhow!("failed to spawn daemon: {e}"))?;
+    };
 
-        // Wait for the daemon's socket to appear before releasing the flock.
-        // Holding the lock here prevents a concurrent proxy from acquiring it,
-        // reading a stale PID file, and racing to spawn a second daemon.
-        wait_for_socket(&socket_path)?;
-
-        flock_wait(pid_fd, libc::LOCK_UN)?;
-        drop(pid_file);
-    } else {
-        // Daemon already running — release the flock and connect.
-        flock_wait(pid_fd, libc::LOCK_UN)?;
-        drop(pid_file);
-    }
+    flock_wait(pid_fd, libc::LOCK_UN)?;
+    drop(pid_file);
 
     // ---- Bridge stdin/stdout to the daemon socket --------------------------------
-    bridge_stdio_to_socket(&socket_path)
+    bridge_stdio_to_stream(stream)
 }
 
-/// Returns true if the PID stored in `pid_path` belongs to a live process.
-fn check_daemon_running(pid_path: &std::path::Path) -> bool {
-    let Ok(contents) = std::fs::read_to_string(pid_path) else {
-        return false;
-    };
-    let Ok(pid) = contents.trim().parse::<libc::pid_t>() else {
-        return false;
-    };
-    // kill(pid, 0) succeeds (returns 0) if the process exists and we can
-    // signal it; it fails with ESRCH if the process does not exist.
-    // SAFETY: sending signal 0 is always safe — it performs a permission
-    // check only and does not deliver an actual signal.
-    unsafe { libc::kill(pid, 0) == 0 }
+enum DaemonSelection {
+    Connected(UnixStream),
+    StartDaemon,
 }
 
-/// Poll until the daemon's socket file appears or the timeout elapses.
+fn select_daemon(socket_path: &std::path::Path) -> std::io::Result<DaemonSelection> {
+    match UnixStream::connect(socket_path) {
+        Ok(stream) => Ok(DaemonSelection::Connected(stream)),
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::NotFound | ErrorKind::ConnectionRefused
+            ) =>
+        {
+            Ok(DaemonSelection::StartDaemon)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Poll until the daemon's socket accepts a connection or the timeout elapses.
 ///
 /// After we spawn the daemon there is a race: the daemon needs time to bind
 /// and listen on the socket before the proxy can connect to it.  We poll
-/// until the socket file is present rather than connecting immediately,
-/// which would fail with "no such file" if the daemon hasn't started yet.
-fn wait_for_socket(socket_path: &std::path::Path) -> anyhow::Result<()> {
+/// the endpoint itself so a stale socket file cannot be mistaken for readiness.
+fn wait_for_socket_connection(socket_path: &std::path::Path) -> anyhow::Result<UnixStream> {
     const TIMEOUT: Duration = Duration::from_secs(10);
     const POLL_INTERVAL: Duration = Duration::from_millis(20);
     let start = instant::Instant::now();
-    while !socket_path.exists() {
-        if start.elapsed() >= TIMEOUT {
-            anyhow::bail!(
-                "timed out waiting for daemon socket at {}",
-                socket_path.display()
-            );
+    loop {
+        match UnixStream::connect(socket_path) {
+            Ok(stream) => {
+                log::info!("Proxy: daemon socket ready after {:?}", start.elapsed());
+                return Ok(stream);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    ErrorKind::NotFound | ErrorKind::ConnectionRefused
+                ) =>
+            {
+                if start.elapsed() >= TIMEOUT {
+                    anyhow::bail!(
+                        "timed out waiting for daemon socket at {}: {error}",
+                        socket_path.display()
+                    );
+                }
+            }
+            Err(error) => return Err(error.into()),
         }
         std::thread::sleep(POLL_INTERVAL);
     }
-    log::info!("Proxy: daemon socket ready after {:?}", start.elapsed());
-    Ok(())
 }
 
 /// Calls `flock(2)` with the given operation, retrying on `EINTR`.
@@ -225,15 +242,10 @@ fn flock_wait(fd: std::os::unix::io::RawFd, operation: libc::c_int) -> anyhow::R
 /// daemon is doing.
 ///
 /// [Shutdown]: std::net::Shutdown
-fn bridge_stdio_to_socket(socket_path: &std::path::Path) -> anyhow::Result<()> {
+fn bridge_stdio_to_stream(stream: UnixStream) -> anyhow::Result<()> {
     use std::io::{Read, Write};
     use std::net::Shutdown;
 
-    log::info!(
-        "Proxy: connecting to daemon socket at {}",
-        socket_path.display()
-    );
-    let stream = std::os::unix::net::UnixStream::connect(socket_path)?;
     log::info!("Proxy: connected, bridging stdio");
 
     // Each thread holds two clones: one it actively reads/writes, and
@@ -308,3 +320,7 @@ fn bridge_stdio_to_socket(socket_path: &std::path::Path) -> anyhow::Result<()> {
     log::info!("Proxy: bridge closed, exiting");
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "proxy_tests.rs"]
+mod tests;
