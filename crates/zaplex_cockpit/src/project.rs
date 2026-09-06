@@ -8,7 +8,7 @@
 //! Filesystem reads only (no network, no git subprocess): a `.git` probe up the
 //! ancestry plus a best-effort parse of `.git/config`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The resolved project of a working directory.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,16 +55,15 @@ pub fn resolve_project(cwd: &Path) -> ResolvedProject {
     // worktrees use the canonical main-checkout identity, so accessing the same
     // repo through a mount alias or symlink cannot split one project in two.
     let repo_root = main_worktree_root(root_path)
-        .or_else(|| discovered_root.and_then(|_| root_path.canonicalize().ok()))
-        .map(|p| normalize(&p))
-        .unwrap_or_else(|| root.clone());
+        .or_else(|| discovered_root.and_then(|_| dunce::canonicalize(root_path).ok()))
+        .unwrap_or_else(|| normalized_path(root_path));
     // Named after the REPO, not this tree: `origin` is recorded once, in the
     // shared config, so every worktree of a repo answers with the same name.
     let name = origin_repo_name(root_path).unwrap_or_else(|| basename(&repo_root));
     let (branch, worktree) = resolve_worktree_identity(root_path);
     ResolvedProject {
         root,
-        repo_root,
+        repo_root: normalize(&repo_root),
         name,
         branch,
         worktree,
@@ -77,10 +76,9 @@ pub fn resolve_project(cwd: &Path) -> ResolvedProject {
 /// Git states the relationship itself: a linked worktree's per-worktree gitdir
 /// holds a `commondir` file pointing at the repo's shared git dir, whose parent
 /// is the main working tree. Read that rather than stripping `worktrees/<name>`
-/// off the gitdir by hand — the two agree for an ordinary layout, but only the
-/// file is the contract, and it keeps holding when the git dir lives somewhere
-/// else entirely (`--separate-git-dir`).
-fn main_worktree_root(root: &Path) -> Option<std::path::PathBuf> {
+/// off the gitdir by hand. A `.git` file without that contract belongs to a
+/// submodule or `--separate-git-dir` checkout, not a linked worktree.
+fn main_worktree_root(root: &Path) -> Option<PathBuf> {
     // Not a checkout → no repo above it. Guarding here too keeps a dangling
     // `.git` file from producing a repo_root under a path that does not exist:
     // a grouping key made of leftovers, quietly collecting unrelated sessions.
@@ -93,12 +91,33 @@ fn main_worktree_root(root: &Path) -> Option<std::path::PathBuf> {
         return None;
     }
     let gitdir = worktree_gitdir(root)?;
-    let common = git_common_dir(&gitdir);
+    let common = worktree_common_dir(&gitdir)?;
     // `<main>/.git` → `<main>`. A bare repo has no working tree above it, so its
     // parent is not one; grouping still keys on a path every worktree of the repo
     // shares, which is all the key has to do.
-    let common = common.canonicalize().unwrap_or(common);
     common.parent().map(Path::to_path_buf)
+}
+
+/// The validated common git directory for a real linked-worktree admin dir.
+///
+/// Submodules and `--separate-git-dir` checkouts also use a `.git` file, but
+/// they do not have a `commondir` contract and must remain independent roots.
+fn worktree_common_dir(gitdir: &Path) -> Option<PathBuf> {
+    let relative = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+    let relative = relative.trim();
+    if relative.is_empty() {
+        return None;
+    }
+    let common = Path::new(relative);
+    let common = if common.is_absolute() {
+        common.to_path_buf()
+    } else {
+        gitdir.join(common)
+    };
+    let common = dunce::canonicalize(common).ok()?;
+    let gitdir_parent = dunce::canonicalize(gitdir.parent()?).ok()?;
+    let worktrees = dunce::canonicalize(common.join("worktrees")).ok()?;
+    (gitdir_parent == worktrees).then_some(common)
 }
 
 /// The per-worktree git dir a `.git` *file* points at (`gitdir: <path>`).
@@ -161,11 +180,14 @@ fn resolve_worktree_identity(root: &Path) -> (Option<String>, Option<String>) {
         root.join(gitdir_path)
     };
     let branch = head_branch(&gitdir_abs);
-    // The worktree's own name is the leaf of its per-worktree gitdir.
-    let worktree = gitdir_abs
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(str::to_string);
+    // Only `<common>/worktrees/<name>` is a linked worktree. Submodules and
+    // separate git directories also use `.git` files but are not worktrees.
+    let worktree = worktree_common_dir(&gitdir_abs).and_then(|_| {
+        gitdir_abs
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+    });
     (branch, worktree)
 }
 
@@ -219,24 +241,23 @@ fn is_work_tree(dir: &Path) -> bool {
     worktree_gitdir(dir).is_some_and(|gitdir| gitdir.join("HEAD").exists())
 }
 
-/// Normalize a path to a string without a trailing slash (root `/` preserved).
-fn normalize(p: &Path) -> String {
-    let s = p.to_string_lossy();
-    let trimmed = s.trim_end_matches('/');
-    if trimmed.is_empty() {
-        "/".to_string()
-    } else {
-        trimmed.to_string()
-    }
+/// Normalize path components and remove Windows verbatim prefixes.
+fn normalized_path(path: &Path) -> PathBuf {
+    dunce::simplified(path).components().collect()
 }
 
-/// Final path component of a normalized path string.
-fn basename(root: &str) -> String {
-    root.trim_end_matches('/')
-        .rsplit('/')
-        .find(|s| !s.is_empty())
-        .unwrap_or(root)
-        .to_string()
+/// Normalize a path to its display string without trailing separators.
+fn normalize(path: &Path) -> String {
+    normalized_path(path).to_string_lossy().into_owned()
+}
+
+/// Final component of a path, independent of the platform separator.
+fn basename(root: &Path) -> String {
+    normalized_path(root)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| normalize(root))
 }
 
 /// Parse the repo's git config for `[remote "origin"] url` and return its repo
@@ -257,7 +278,7 @@ fn origin_repo_name(root: &Path) -> Option<String> {
 
 /// The repo's shared git dir for a (possibly per-worktree) git dir: follows the
 /// `commondir` file when there is one, else `git_dir` itself is already shared.
-fn git_common_dir(git_dir: &Path) -> std::path::PathBuf {
+fn git_common_dir(git_dir: &Path) -> PathBuf {
     match std::fs::read_to_string(git_dir.join("commondir")) {
         Ok(rel) => git_dir.join(rel.trim()),
         Err(_) => git_dir.to_path_buf(),
@@ -266,7 +287,7 @@ fn git_common_dir(git_dir: &Path) -> std::path::PathBuf {
 
 /// Resolve the real git directory for a working-tree root: `<root>/.git` when a
 /// directory, or the `gitdir:` target when `<root>/.git` is a file.
-fn resolve_git_dir(root: &Path) -> Option<std::path::PathBuf> {
+fn resolve_git_dir(root: &Path) -> Option<PathBuf> {
     let dot_git = root.join(".git");
     let meta = std::fs::metadata(&dot_git).ok()?;
     if meta.is_dir() {
@@ -290,7 +311,7 @@ fn resolve_git_dir(root: &Path) -> Option<std::path::PathBuf> {
     if let Ok(rel) = std::fs::read_to_string(&common) {
         let rel = rel.trim();
         let common_dir = resolved.join(rel);
-        if let Ok(c) = common_dir.canonicalize() {
+        if let Ok(c) = dunce::canonicalize(common_dir) {
             return Some(c);
         }
     }
