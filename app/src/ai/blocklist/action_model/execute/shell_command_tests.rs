@@ -163,3 +163,48 @@ fn preemption_logic_covers_until_completion_timeout() {
         DurationDelay(Duration::from_secs(1))
     ));
 }
+
+#[test]
+fn multiline_heredoc_keeps_delimiter_and_closer_on_separate_lines() {
+    let command = "python3 - <<'PY'\nprint('ok')\nPY";
+
+    for shell_type in [ShellType::Bash, ShellType::Zsh] {
+        let wrapped = wrap_command_without_pager(Some(shell_type), command);
+        let lines: Vec<_> = wrapped.lines().collect();
+        assert_eq!(lines[lines.len() - 2], "PY");
+        assert_eq!(lines[lines.len() - 1], ")");
+    }
+}
+
+#[test]
+fn multiline_trailing_comment_does_not_swallow_closer() {
+    let command = "echo start\necho done # trailing comment";
+
+    assert!(wrap_command_without_pager(Some(ShellType::Bash), command).ends_with("\n)"));
+    assert!(wrap_command_without_pager(Some(ShellType::Zsh), command).ends_with("\n)"));
+    assert!(wrap_command_without_pager(Some(ShellType::Fish), command).ends_with("\nend"));
+    assert!(wrap_command_without_pager(Some(ShellType::PowerShell), command).ends_with("\n}"));
+}
+
+#[test]
+fn single_line_commands_keep_the_existing_single_line_shape() {
+    let command = "cargo check";
+
+    for shell_type in [
+        ShellType::Bash,
+        ShellType::Zsh,
+        ShellType::Fish,
+        ShellType::PowerShell,
+    ] {
+        let wrapped = wrap_command_without_pager(Some(shell_type), command);
+        assert!(!wrapped.contains('\n'));
+        assert!(wrapped.contains(command));
+    }
+}
+
+#[test]
+fn unknown_shell_passes_multiline_command_through_unchanged() {
+    let command = "python3 - <<'PY'\nprint('ok')\nPY";
+
+    assert_eq!(wrap_command_without_pager(None, command), command);
+}

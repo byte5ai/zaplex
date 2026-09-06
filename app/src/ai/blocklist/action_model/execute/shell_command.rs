@@ -263,30 +263,7 @@ impl ShellCommandExecutor {
     /// Even if all of the above fail, `action_result_future`'s `MAX_UNTIL_COMPLETION_DURATION`
     /// fallback ensures the agent will never hang **forever**.
     fn turn_off_pager_for_command(&self, command: &String, ctx: &mut ModelContext<Self>) -> String {
-        match self.active_session.as_ref(ctx).shell_type(ctx) {
-            // Export inside a subshell; the subshell's exit code = the last command's exit code, thus
-            // preserving the real $?. unset first to clear PAGER/GIT_PAGER/MANPAGER inherited from
-            // the parent shell, then export=cat.
-            Some(ShellType::Zsh) | Some(ShellType::Bash) => format!(
-                "(unset PAGER GIT_PAGER MANPAGER; export PAGER=cat GIT_PAGER=cat MANPAGER=cat GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=cat; {command})"
-            ),
-            // fish: set -lx is a local export inside a begin/end block, and $status comes from the
-            // last command. Use `set -e` to clear inherited variables first, then `set -lx` to
-            // assign cat.
-            Some(ShellType::Fish) => format!(
-                "begin; set -e PAGER; set -e GIT_PAGER; set -e MANPAGER; set -lx PAGER cat; set -lx GIT_PAGER cat; set -lx MANPAGER cat; set -lx GIT_CONFIG_COUNT 1; set -lx GIT_CONFIG_KEY_0 core.pager; set -lx GIT_CONFIG_VALUE_0 cat; {command}; end"
-            ),
-            // pwsh: a script block's local $env: does not pollute the outer session, and
-            // $LASTEXITCODE propagates out. Remove-Item Env: clears inherited values, then assigns
-            // cat; for variables that don't exist, use -ErrorAction SilentlyContinue.
-            Some(ShellType::PowerShell) => format!(
-                "& {{ Remove-Item Env:PAGER -ErrorAction SilentlyContinue; Remove-Item Env:GIT_PAGER -ErrorAction SilentlyContinue; Remove-Item Env:MANPAGER -ErrorAction SilentlyContinue; $env:PAGER='cat'; $env:GIT_PAGER='cat'; $env:MANPAGER='cat'; $env:GIT_CONFIG_COUNT='1'; $env:GIT_CONFIG_KEY_0='core.pager'; $env:GIT_CONFIG_VALUE_0='cat'; {command} }}"
-            ),
-            // An unknown shell cannot be decorated safely, so pass it through unchanged -- on this
-            // path pager suppression is completely ineffective, and we can only rely on the
-            // MAX_UNTIL_COMPLETION_DURATION fallback timeout to avoid hanging forever.
-            None => command.clone(),
-        }
+        wrap_command_without_pager(self.active_session.as_ref(ctx).shell_type(ctx), command)
     }
 
     pub(super) fn execute(
@@ -782,6 +759,37 @@ impl ShellCommandExecutor {
         _ctx: &mut ModelContext<Self>,
     ) -> BoxFuture<'static, ()> {
         futures::future::ready(()).boxed()
+    }
+}
+
+const POSIX_NO_PAGER_PRELUDE: &str = "unset PAGER GIT_PAGER MANPAGER; export PAGER=cat GIT_PAGER=cat MANPAGER=cat GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=cat";
+const FISH_NO_PAGER_PRELUDE: &str = "set -e PAGER; set -e GIT_PAGER; set -e MANPAGER; set -lx PAGER cat; set -lx GIT_PAGER cat; set -lx MANPAGER cat; set -lx GIT_CONFIG_COUNT 1; set -lx GIT_CONFIG_KEY_0 core.pager; set -lx GIT_CONFIG_VALUE_0 cat";
+const POWERSHELL_NO_PAGER_PRELUDE: &str = "Remove-Item Env:PAGER -ErrorAction SilentlyContinue; Remove-Item Env:GIT_PAGER -ErrorAction SilentlyContinue; Remove-Item Env:MANPAGER -ErrorAction SilentlyContinue; $env:PAGER='cat'; $env:GIT_PAGER='cat'; $env:MANPAGER='cat'; $env:GIT_CONFIG_COUNT='1'; $env:GIT_CONFIG_KEY_0='core.pager'; $env:GIT_CONFIG_VALUE_0='cat'";
+
+/// Wraps a command in a pager-disabled shell scope while keeping a multiline
+/// command's closing token on its own line.
+fn wrap_command_without_pager(shell_type: Option<ShellType>, command: &str) -> String {
+    let is_multiline = command.contains('\n');
+    match shell_type {
+        Some(ShellType::Zsh) | Some(ShellType::Bash) if is_multiline => {
+            format!("({POSIX_NO_PAGER_PRELUDE};\n{command}\n)")
+        }
+        Some(ShellType::Zsh) | Some(ShellType::Bash) => {
+            format!("({POSIX_NO_PAGER_PRELUDE}; {command})")
+        }
+        Some(ShellType::Fish) if is_multiline => {
+            format!("begin; {FISH_NO_PAGER_PRELUDE};\n{command}\nend")
+        }
+        Some(ShellType::Fish) => {
+            format!("begin; {FISH_NO_PAGER_PRELUDE}; {command}; end")
+        }
+        Some(ShellType::PowerShell) if is_multiline => {
+            format!("& {{ {POWERSHELL_NO_PAGER_PRELUDE};\n{command}\n}}")
+        }
+        Some(ShellType::PowerShell) => {
+            format!("& {{ {POWERSHELL_NO_PAGER_PRELUDE}; {command} }}")
+        }
+        None => command.to_owned(),
     }
 }
 
