@@ -19,12 +19,33 @@ const LINUX_FINGERPRINT_VERSION: &str = "linux-v1";
 /// Result of probing one registry pid during discovery.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProcessProbe {
-    /// Whether the pid currently names a process. An unknown pid (`0`) remains
-    /// visible as live because its absence is not proof that the session ended.
-    pub alive: bool,
+    pub presence: ProcessPresence,
     /// Exact identity only when the current process is bound to Claude's
     /// registry `procStart` value.
     pub fingerprint: Option<String>,
+}
+
+/// Relationship between a registry entry and the process currently using its pid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessPresence {
+    /// The process exists and its current-boot identity matches the registry.
+    VerifiedLive,
+    /// The process exists, but the registry lacks a usable identity binding.
+    UnverifiedLive,
+    /// The registry is from a previous boot or its pid now belongs to another process.
+    StaleRegistration,
+    /// No process currently occupies the registered pid.
+    Absent,
+}
+
+impl ProcessPresence {
+    pub const fn is_live(self) -> bool {
+        matches!(self, Self::VerifiedLive | Self::UnverifiedLive)
+    }
+
+    pub const fn allows_registry_cleanup(self) -> bool {
+        matches!(self, Self::StaleRegistration | Self::Absent)
+    }
 }
 
 /// Why a verified signal was not sent.
@@ -139,8 +160,9 @@ pub fn current_process_fingerprint(pid: u32) -> Option<String> {
 
 /// Probes a Claude registry process and binds it to the registry's `procStart`.
 ///
-/// A live process with a missing or mismatching registry start stays visible,
-/// but receives no fingerprint and is therefore never offered Stop/Kill.
+/// A live process with a missing or unparseable registry binding stays visible
+/// but unsignalable. A previous-boot registration or a numeric Linux start-tick
+/// mismatch is stale even when another process now occupies the pid.
 pub fn probe_registered_process(
     pid: u32,
     registry_proc_start: Option<&str>,
@@ -148,55 +170,86 @@ pub fn probe_registered_process(
 ) -> ProcessProbe {
     if pid == 0 {
         return ProcessProbe {
-            alive: true,
+            presence: ProcessPresence::UnverifiedLive,
             fingerprint: None,
         };
     }
     if !pid_signalable(pid) {
         return ProcessProbe {
-            alive: false,
+            presence: ProcessPresence::Absent,
             fingerprint: None,
         };
     }
 
     let precise_start = precise_process_start(pid);
-    let alive = precise_start.is_some() || process_exists(pid);
+    let process_is_live = precise_start.is_some() || process_exists(pid);
+    if !process_is_live {
+        return ProcessProbe {
+            presence: ProcessPresence::Absent,
+            fingerprint: None,
+        };
+    }
+
+    let boot_time = system_boot_time();
+    if boot_time.is_some_and(|boot_time| {
+        registry_started_at_millis > 0
+            && i128::from(registry_started_at_millis) < i128::from(boot_time) * 1_000
+    }) {
+        return ProcessProbe {
+            presence: ProcessPresence::StaleRegistration,
+            fingerprint: None,
+        };
+    }
+
     let Some(precise_start) = precise_start else {
         return ProcessProbe {
-            alive,
+            presence: ProcessPresence::UnverifiedLive,
             fingerprint: None,
         };
     };
     let Some(registry_proc_start) = registry_proc_start.filter(|value| !value.trim().is_empty())
     else {
         return ProcessProbe {
-            alive,
-            fingerprint: None,
-        };
-    };
-    let Some(boot_time) = system_boot_time() else {
-        return ProcessProbe {
-            alive,
+            presence: ProcessPresence::UnverifiedLive,
             fingerprint: None,
         };
     };
 
-    let fingerprint = match precise_start {
-        PreciseProcessStart::Linux { ticks }
-            if linux_registry_binding_matches(
-                registry_proc_start,
-                ticks,
-                registry_started_at_millis,
-                boot_time,
-            ) =>
-        {
-            linux_boot_id().map(|boot_id| linux_fingerprint(&boot_id, ticks))
+    match precise_start {
+        PreciseProcessStart::Linux { ticks } => {
+            let Ok(registry_ticks) = registry_proc_start.trim().parse::<u64>() else {
+                return ProcessProbe {
+                    presence: ProcessPresence::UnverifiedLive,
+                    fingerprint: None,
+                };
+            };
+            if registry_ticks != ticks {
+                return ProcessProbe {
+                    presence: ProcessPresence::StaleRegistration,
+                    fingerprint: None,
+                };
+            }
+            let Some(boot_id) = boot_time
+                .filter(|boot_time| {
+                    registration_is_from_current_boot(registry_started_at_millis, *boot_time)
+                })
+                .and_then(|_| linux_boot_id())
+            else {
+                return ProcessProbe {
+                    presence: ProcessPresence::UnverifiedLive,
+                    fingerprint: None,
+                };
+            };
+            ProcessProbe {
+                presence: ProcessPresence::VerifiedLive,
+                fingerprint: Some(linux_fingerprint(&boot_id, ticks)),
+            }
         }
-        PreciseProcessStart::MacOs { .. } => None,
-        PreciseProcessStart::Linux { .. } => None,
-    };
-
-    ProcessProbe { alive, fingerprint }
+        PreciseProcessStart::MacOs { .. } => ProcessProbe {
+            presence: ProcessPresence::UnverifiedLive,
+            fingerprint: None,
+        },
+    }
 }
 
 /// Sends a guardrail signal only to the process identified by `expected`.
@@ -395,16 +448,6 @@ fn linux_fingerprint(boot_id: &str, ticks: u64) -> String {
 
 fn registration_is_from_current_boot(started_at_millis: i64, boot_time: u64) -> bool {
     started_at_millis > 0 && i128::from(started_at_millis) >= i128::from(boot_time) * 1_000
-}
-
-fn linux_registry_binding_matches(
-    registry_proc_start: &str,
-    ticks: u64,
-    started_at_millis: i64,
-    boot_time: u64,
-) -> bool {
-    registration_is_from_current_boot(started_at_millis, boot_time)
-        && registry_proc_start.trim().parse::<u64>().ok() == Some(ticks)
 }
 
 fn parse_linux_proc_start(stat: &str) -> Option<u64> {

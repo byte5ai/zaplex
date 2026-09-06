@@ -716,8 +716,9 @@ pub struct SessionScan {
 ///   such an entry stays live and is never claimed dormant — we don't assert
 ///   "resumable" where we cannot show the process is gone.
 /// - A live pid is signalable only when its exact process start matches Claude's
-///   registry `procStart`. Missing/mismatching identity keeps the row visible
-///   with no fingerprint, so Stop/Kill fails closed without hiding the session.
+///   registry `procStart`. Missing or unparseable identity keeps the row visible
+///   with no fingerprint. A previous-boot registration or numeric start-tick
+///   mismatch is dormant even when the pid has been reused.
 /// - Only the last `max_age` counts; older conversations are not usefully
 ///   resumable and would only be noise.
 /// - At most `limit`, most-recent first.
@@ -765,7 +766,7 @@ pub(crate) fn scan_sessions_with_cache(
             r.proc_start.as_deref(),
             r.started_at,
         );
-        if process.alive {
+        if process.presence.is_live() {
             live_entries.push((r, path, process.fingerprint));
         } else if limit > 0 {
             let est = recency_estimate(&r, &path, now);

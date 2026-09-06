@@ -69,7 +69,7 @@ pub use overrides::{set_label_override, AccountOverride, AccountOverrides};
 pub use pricing::{ModelPrice, PricingSource, PricingTable};
 pub use process_identity::{
     current_process_fingerprint, local_process_signalling_supported, probe_registered_process,
-    send_verified_process_signal, ProcessProbe, ProcessSignalError,
+    send_verified_process_signal, ProcessPresence, ProcessProbe, ProcessSignalError,
 };
 pub use project::{resolve_project, ResolvedProject};
 pub use review::{git_commit_all_cmd, git_diff_cmd, render_review_markdown, WorkingChanges};
