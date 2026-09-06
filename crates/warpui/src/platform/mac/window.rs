@@ -475,6 +475,11 @@ extern "C" {
     fn open_save_file_picker(callback: *mut c_void, default_filename: id, default_directory: id);
     fn open_url(urlString: id);
     fn set_titlebar_height(window: id, height: f64);
+    #[cfg(test)]
+    fn warp_should_dispatch_native_window_chrome_event(
+        mouse_down_started_in_native_chrome: BOOL,
+        native_chrome_dispatch_is_supported: BOOL,
+    ) -> BOOL;
 }
 
 pub type FrameCaptureCallback = Box<dyn FnOnce(platform::CapturedFrame) + Send + 'static>;
@@ -1686,3 +1691,7 @@ unsafe fn to_string(value: *mut Object) -> String {
     let slice = slice::from_raw_parts(value.UTF8String() as *const c_uchar, value.len());
     str::from_utf8_unchecked(slice).to_string()
 }
+
+#[cfg(test)]
+#[path = "window_tests.rs"]
+mod tests;
