@@ -2,8 +2,15 @@
 /// author: logic
 /// date: 2026/06/01
 use super::*;
+use pathfinder_geometry::vector::vec2f;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use warp_core::ui::appearance::Appearance;
+use warpui::platform::WindowStyle;
+use warpui::{App, WindowInvalidation};
+
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::view_components::dropdown::DropdownAction;
 
 /// In-process mock bypassing OS keychain. Supports error injection to simulate NoBackend / Keyring errors.
 struct MockSecretStore {
@@ -270,6 +277,70 @@ fn onekey_key_credential_resolves_test_connection_to_key_auth() {
 fn missing_lookup_id_returns_none_when_editor_empty() {
     let store = MockSecretStore::new();
     assert!(resolve_test_password(None, SecretKind::OneKeyPassword, "", &store).is_none());
+}
+
+#[test]
+fn selecting_onekey_dropdown_item_does_not_rebuild_dropdown_while_it_is_borrowed() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut view = SshServerView::new("server-1".to_string(), ctx);
+            view.node = Some(SshNode {
+                id: "server-1".to_string(),
+                parent_id: None,
+                kind: NodeKind::Server,
+                name: "server".to_string(),
+                sort_order: 0,
+                created_at: chrono::Utc::now().naive_utc(),
+                updated_at: chrono::Utc::now().naive_utc(),
+                is_collapsed: false,
+            });
+            view.auth_type = AuthType::OneKey;
+            view.onekey_credentials = vec![credential(
+                "cred-1",
+                "shared-user",
+                OneKeyCredentialKind::Password,
+                None,
+            )];
+            view.rebuild_onekey_credential_dropdown(ctx);
+            view
+        });
+        let presenter = app.presenter(window_id).unwrap();
+        let mut updated = std::collections::HashSet::new();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        app.update(|ctx| {
+            let mut presenter = presenter.borrow_mut();
+            presenter.invalidate(
+                WindowInvalidation {
+                    updated,
+                    ..Default::default()
+                },
+                ctx,
+            );
+            presenter.build_scene(vec2f(640., 480.), 1., None, ctx);
+        });
+
+        let dropdown = view.read(&app, |view, _| view.onekey_credential_dropdown.clone());
+        dropdown.update(&mut app, |dropdown, ctx| {
+            dropdown.handle_action(
+                &DropdownAction::SelectActionAndClose(SshServerAction::SelectOneKeyCredential(
+                    Some(0),
+                )),
+                ctx,
+            );
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.selected_onekey_credential_id.as_deref(),
+                Some("cred-1")
+            );
+        });
+    });
 }
 
 #[test]
