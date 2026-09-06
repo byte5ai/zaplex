@@ -120,3 +120,4 @@ jobs:
           export ZAPLEX_LIVE_SFTP_KEY_PATH="${test_key}"
           export ZAPLEX_LIVE_SFTP_ROOT="${test_root}"
           cargo test --locked -p warp --lib live_sftp_remote_safe_rename -- --ignored
+          cargo test --locked -p warp --lib live_sftp_copy_file_keeps_destination_after_handles_drop -- --ignored
