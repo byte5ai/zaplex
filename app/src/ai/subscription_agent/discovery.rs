@@ -22,7 +22,9 @@ pub(crate) async fn discover_capabilities(
         SubscriptionAgent::ClaudeCode => discover_claude(&mut process, installation).await,
         SubscriptionAgent::Codex => discover_codex(&mut process, installation).await,
     };
-    let _ = process.terminate();
+    if let Err(error) = process.terminate().await {
+        log::warn!("Failed to end subscription-agent discovery process: {error:#}");
+    }
     result
 }
 

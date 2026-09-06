@@ -105,6 +105,35 @@ fn approvals_are_resolved_by_conversation_and_native_request() {
 }
 
 #[test]
+fn same_native_request_id_is_routed_to_the_matching_conversation() {
+    futures_lite::future::block_on(async {
+        let registry = SubscriptionSessionRegistry::default();
+        let claude = registry.register_approval(
+            "claude-conversation".to_string(),
+            "shared-request-id".to_string(),
+        );
+        let codex = registry.register_approval(
+            "codex-conversation".to_string(),
+            "shared-request-id".to_string(),
+        );
+
+        assert!(registry.resolve_approval(
+            "codex-conversation",
+            "shared-request-id",
+            ApprovalDecision::Cancel,
+        ));
+        assert!(registry.resolve_approval(
+            "claude-conversation",
+            "shared-request-id",
+            ApprovalDecision::Allow,
+        ));
+
+        assert_eq!(claude.await.unwrap(), ApprovalDecision::Allow);
+        assert_eq!(codex.await.unwrap(), ApprovalDecision::Cancel);
+    });
+}
+
+#[test]
 fn selecting_an_agent_remembers_it_and_clears_the_pending_choice() {
     let registry = SubscriptionSessionRegistry::default();
     registry.set_agent_choices(
