@@ -125,6 +125,70 @@ fn dot_git_file_worktree_is_treated_as_a_root() {
 }
 
 #[test]
+fn submodules_are_distinct_projects_not_linked_worktrees() {
+    let tmp = tempfile::tempdir().unwrap();
+    let superproject_git = tmp.path().join("superproject/.git");
+    let mut projects = Vec::new();
+
+    for name in ["lib-a", "lib-b"] {
+        let root = tmp.path().join("superproject/vendor").join(name);
+        let gitdir = superproject_git.join("modules").join(name);
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&gitdir).unwrap();
+        fs::write(gitdir.join("HEAD"), format!("ref: refs/heads/{name}\n")).unwrap();
+        fs::write(
+            root.join(".git"),
+            format!("gitdir: {}\n", gitdir.to_string_lossy()),
+        )
+        .unwrap();
+        projects.push((root.clone(), resolve_project(&root)));
+    }
+
+    for (root, project) in &projects {
+        assert_eq!(
+            project.repo_root,
+            normalize(&dunce::canonicalize(root).unwrap())
+        );
+        assert_eq!(project.worktree, None);
+    }
+    assert_ne!(projects[0].1.repo_root, projects[1].1.repo_root);
+    assert_eq!(projects[0].1.branch.as_deref(), Some("lib-a"));
+    assert_eq!(projects[1].1.branch.as_deref(), Some("lib-b"));
+}
+
+#[test]
+fn separate_git_dir_checkout_is_not_labeled_as_a_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("checkout");
+    let gitdir = tmp.path().join("external-git-dir");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&gitdir).unwrap();
+    fs::write(gitdir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    fs::write(
+        root.join(".git"),
+        format!("gitdir: {}\n", gitdir.to_string_lossy()),
+    )
+    .unwrap();
+
+    let project = resolve_project(&root);
+
+    assert_eq!(
+        project.repo_root,
+        normalize(&dunce::canonicalize(&root).unwrap())
+    );
+    assert_eq!(project.branch.as_deref(), Some("main"));
+    assert_eq!(project.worktree, None);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_non_repo_cwd_uses_leaf_project_name() {
+    let project = resolve_project(Path::new(r"C:\Users\me\scratch"));
+
+    assert_eq!(project.name, "scratch");
+}
+
+#[test]
 fn detached_head_has_no_branch() {
     // A detached HEAD holds a raw sha, not a `ref:` — branch resolves to None
     // (never a fabricated branch), while the repo still resolves normally.
