@@ -1298,7 +1298,9 @@ fn resolved_daemon_connection(
     node_id: &str,
 ) -> Option<warp_ssh_manager::ResolvedSshConnection> {
     warp_ssh_manager::with_conn(|database| {
-        warp_ssh_manager::SshRepository::get_server_with_resolved_auth(database, node_id)
+        Ok(warp_ssh_manager::SshRepository::get_server_with_resolved_auth(
+            database, node_id,
+        )?)
     })
     .ok()
     .flatten()
@@ -1423,7 +1425,9 @@ fn resolve_ssh_connection(
     server: &warp_ssh_manager::SshServerInfo,
 ) -> anyhow::Result<warp_ssh_manager::ResolvedSshConnection> {
     warp_ssh_manager::with_conn(|database| {
-        warp_ssh_manager::SshRepository::resolve_server_connection(database, server)
+        Ok(warp_ssh_manager::SshRepository::resolve_server_connection(
+            database, server,
+        )?)
     })
 }
 
