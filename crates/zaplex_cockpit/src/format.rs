@@ -164,16 +164,43 @@ pub fn format_cost(usd: f64) -> String {
 /// Humanized token count: 42 -> "42", 3400 -> "3.4k", 300000 -> "300k",
 /// 1_200_000 -> "1.2M", 6_000_000 -> "6M".
 pub fn format_tokens(n: u64) -> String {
-    let (val, unit) = if n >= 1_000_000 {
-        (n as f64 / 1_000_000.0, "M")
-    } else if n >= 1_000 {
-        (n as f64 / 1_000.0, "k")
-    } else {
+    const UNITS: [(&str, u64); 4] = [
+        ("", 1),
+        ("k", 1_000),
+        ("M", 1_000_000),
+        ("B", 1_000_000_000),
+    ];
+
+    if n < UNITS[1].1 {
         return n.to_string();
-    };
-    let s = format!("{val:.1}");
-    let s = s.strip_suffix(".0").unwrap_or(&s);
-    format!("{s}{unit}")
+    }
+
+    let mut unit_index = UNITS
+        .iter()
+        .rposition(|(_, divisor)| n >= *divisor)
+        .expect("the unit table starts at one");
+    let mut tenths = rounded_tenths(n, UNITS[unit_index].1);
+    if tenths >= 10_000 && unit_index + 1 < UNITS.len() {
+        unit_index += 1;
+        tenths = rounded_tenths(n, UNITS[unit_index].1);
+    }
+
+    let whole = tenths / 10;
+    let decimal = tenths % 10;
+    let suffix = UNITS[unit_index].0;
+    if decimal == 0 {
+        format!("{whole}{suffix}")
+    } else {
+        format!("{whole}.{decimal}{suffix}")
+    }
+}
+
+fn rounded_tenths(n: u64, divisor: u64) -> u128 {
+    let n = u128::from(n);
+    let divisor = u128::from(divisor);
+    let whole = n / divisor;
+    let remainder = n % divisor;
+    whole * 10 + (remainder * 10 + divisor / 2) / divisor
 }
 
 /// Relative reset countdown (claudeplex `resetIn`): "45m", "2h13m", "4d1h";

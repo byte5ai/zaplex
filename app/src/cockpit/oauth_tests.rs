@@ -4,6 +4,20 @@ use std::sync::{mpsc, Arc, Condvar, Mutex as StdMutex};
 use std::thread;
 
 #[test]
+fn endpoint_contract_treats_low_utilization_as_percent() {
+    let usage = parse_response(
+        r#"{
+            "five_hour": { "utilization": 1.0 },
+            "seven_day": { "utilization": 42.0 }
+        }"#,
+    )
+    .expect("versioned endpoint response parses");
+
+    assert_eq!(usage.five_hour.fraction, 0.01);
+    assert_eq!(usage.seven_day.fraction, 0.42);
+}
+
+#[test]
 fn concurrent_refreshes_send_one_request_per_account_within_ttl() {
     let account = PathBuf::from("/test/claude-account");
     let cache = OauthCache::default();
