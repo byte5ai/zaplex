@@ -10217,19 +10217,33 @@ impl Workspace {
             return;
         }
 
-        let cmd = match multiplexer.as_ref() {
-            Some((mode, target)) => match warp_ssh_manager::build_multiplexer_ssh_command_line(
-                &server_for_connection,
-                *mode,
-                target,
-            ) {
-                Ok(command) => command,
+        let secret = match KeychainSecretStore.get(&secret_lookup_id, secret_kind) {
+            Ok(opt) => opt.unwrap_or_else(|| zeroize::Zeroizing::new(String::new())),
+            Err(e) => {
+                log::warn!("ssh keychain read failed (will continue without injection): {e}");
+                zeroize::Zeroizing::new(String::new())
+            }
+        };
+
+        let prepared_command = if server_for_connection.auth_type == warp_ssh_manager::AuthType::Key
+            && !secret.is_empty()
+        {
+            let result = match multiplexer.as_ref() {
+                Some((mode, target)) => warp_ssh_manager::prepare_key_multiplexer_ssh_command(
+                    &server_for_connection,
+                    *mode,
+                    target,
+                    &secret,
+                ),
+                None => warp_ssh_manager::prepare_key_ssh_command(&server_for_connection, &secret),
+            };
+            match result {
+                Ok(prepared) => Some(prepared),
                 Err(error) => {
                     self.toast_stack.update(ctx, |view, ctx| {
                         view.add_ephemeral_toast(
-                            DismissibleToast::error(crate::t!(
-                                "workspace-left-panel-ssh-manager-multiplexer-attach-error",
-                                detail = error.to_string()
+                            DismissibleToast::error(format!(
+                                "Failed to prepare secure SSH key authentication: {error}"
                             )),
                             ctx,
                         );
@@ -10239,8 +10253,41 @@ impl Workspace {
                     }
                     return;
                 }
-            },
-            None => warp_ssh_manager::build_ssh_command_line(&server_for_connection),
+            }
+        } else {
+            None
+        };
+
+        let cmd = if let Some(prepared) = prepared_command.as_ref() {
+            prepared.command_line().to_string()
+        } else {
+            match multiplexer.as_ref() {
+                Some((mode, target)) => {
+                    match warp_ssh_manager::build_multiplexer_ssh_command_line(
+                        &server_for_connection,
+                        *mode,
+                        target,
+                    ) {
+                        Ok(command) => command,
+                        Err(error) => {
+                            self.toast_stack.update(ctx, |view, ctx| {
+                                view.add_ephemeral_toast(
+                                    DismissibleToast::error(crate::t!(
+                                        "workspace-left-panel-ssh-manager-multiplexer-attach-error",
+                                        detail = error.to_string()
+                                    )),
+                                    ctx,
+                                );
+                            });
+                            if let Some(attempt) = attempt.as_ref() {
+                                self.finish_ssh_connect(attempt, ctx);
+                            }
+                            return;
+                        }
+                    }
+                }
+                None => warp_ssh_manager::build_ssh_command_line(&server_for_connection),
+            }
         };
         let window_id = ctx.window_id();
 
@@ -10285,15 +10332,6 @@ impl Workspace {
             });
         }
 
-        // 1. Read the keychain synchronously (fine on the main thread). A OneKey server uses a shared credential id.
-        let secret = match KeychainSecretStore.get(&secret_lookup_id, secret_kind) {
-            Ok(opt) => opt.unwrap_or_else(|| zeroize::Zeroizing::new(String::new())),
-            Err(e) => {
-                log::warn!("ssh keychain read failed (will continue without injection): {e}");
-                zeroize::Zeroizing::new(String::new())
-            }
-        };
-
         // 2. The injector must be spawned before execute_command — otherwise the password prompt
         //    will have already gone out over the broadcast before the spawn, and the injector won't receive it.
         let pty_reads_rx = terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c));
@@ -10301,8 +10339,17 @@ impl Workspace {
             pty_reads_rx,
             terminal_view.downgrade(),
             secret,
+            server_for_connection.auth_type,
             ctx,
         );
+
+        if let Some(prepared_command) = prepared_command {
+            crate::ssh_manager::secret_injector::retain_key_askpass_until_shell_ready(
+                terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c)),
+                prepared_command,
+                ctx,
+            );
+        }
 
         // Startup command injector — waits for the shell to be ready, then automatically runs startup_command
         if multiplexer.is_none() {

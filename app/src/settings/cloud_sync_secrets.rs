@@ -11,12 +11,15 @@ use std::collections::HashMap;
 
 use warpui::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::secure_storage::{self, AppContextExt};
+use zeroize::Zeroizing;
 
 const SECURE_STORAGE_KEY: &str = "CloudSyncTokens";
 
 /// Keys for platform tokens in HashMap
 pub const GITHUB_TOKEN_KEY: &str = "github_token";
 pub const GITEE_TOKEN_KEY: &str = "gitee_token";
+/// User-chosen passphrase that encrypts SSH sync payloads independently of transport tokens.
+pub const SSH_SYNC_SECRET_KEY: &str = "ssh_sync_secret";
 
 /// Emitted when a token changes
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +43,11 @@ impl CloudSyncTokenStore {
     /// Retrieves the token for a specified platform; returns `None` if not configured
     pub fn get(&self, platform_key: &str) -> Option<&str> {
         self.tokens.get(platform_key).map(String::as_str)
+    }
+
+    /// Retrieves a secret in zeroizing memory for cryptographic use.
+    pub fn get_zeroizing(&self, key: &str) -> Option<Zeroizing<String>> {
+        self.tokens.get(key).cloned().map(Zeroizing::new)
     }
 
     /// Sets/updates a token for a platform. Passing an empty string is equivalent to deletion

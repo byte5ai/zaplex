@@ -76,6 +76,10 @@ pub struct SyncData {
 pub enum SyncEngineError {
     #[error("Encryption error: {0}")]
     Crypto(String),
+    #[error("The sync secret is incorrect or the encrypted payload metadata was modified")]
+    InvalidSyncSecret,
+    #[error("Legacy SSH secret recovery requires the transport token used for the original upload")]
+    LegacyRecoveryRequired,
     #[error("Gist error: {0}")]
     Gist(String),
     #[error("Data provider error: {0}")]
