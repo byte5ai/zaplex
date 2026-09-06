@@ -641,6 +641,18 @@ fn test_parse_code_block_with_backticks() {
 }
 
 #[test]
+fn test_longer_code_fence_keeps_shorter_fence_in_body() {
+    let source = "````diff\n context\n ```\n more context\n````";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::CodeBlock(CodeBlockText {
+            lang: "diff".to_string(),
+            code: " context\n ```\n more context\n".to_string()
+        })]
+    );
+}
+
+#[test]
 fn test_parse_code_block_body() {
     let source = "```json
         {
