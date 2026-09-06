@@ -72,7 +72,7 @@ impl FavoritesStore {
 
     /// The curated favorites, in the user's order.
     pub fn items(&self) -> &[Favorite] {
-        &self.favorites.items
+        self.favorites.items()
     }
 
     /// Favorite hosts projected into the "+" menu. Other favorite kinds remain

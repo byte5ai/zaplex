@@ -119,6 +119,21 @@ fn broken_json_yields_no_overrides_never_hides_accounts() {
     }
 }
 
+#[test]
+fn malformed_entry_does_not_discard_valid_overrides() {
+    let overrides = AccountOverrides::parse(
+        r#"{
+            "claude:good": {"label": "Work"},
+            "claude:bad": {"order": "two"}
+        }"#,
+    );
+
+    let accounts = overrides.apply(vec![account("claude:good"), account("claude:bad")]);
+
+    assert_eq!(accounts[0].account.label, "Work");
+    assert_eq!(accounts[1].account.label, "claude:bad");
+}
+
 // ── Writing an alias back (A1) ──────────────────────────────────────────────
 
 /// The one that matters: `instances.json` is claudeplex's file. A user's copy may

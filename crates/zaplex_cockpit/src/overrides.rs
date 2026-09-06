@@ -36,18 +36,31 @@ pub struct AccountOverride {
 
 /// The full override set, keyed by account key. Deserializes directly from an
 /// `instances.json` object: `{ "claude:work": { "label": "...", "hidden": true } }`.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, Default)]
 pub struct AccountOverrides {
     entries: HashMap<String, AccountOverride>,
 }
 
 impl AccountOverrides {
-    /// Parse instances.json-style overrides. **Lenient**: returns an empty set
-    /// (no overrides) on any parse failure — a broken overrides file must never
-    /// hide the user's accounts or blank the cockpit.
+    /// Parse instances.json-style overrides. A malformed top-level object
+    /// yields an empty set, while malformed entries are skipped independently
+    /// so one bad account cannot discard valid sibling overrides.
     pub fn parse(json: &str) -> Self {
-        serde_json::from_str(json).unwrap_or_default()
+        let Ok(raw_entries) = serde_json::from_str::<HashMap<String, serde_json::Value>>(json)
+        else {
+            return Self::default();
+        };
+        let entries = raw_entries
+            .into_iter()
+            .filter_map(|(key, value)| match serde_json::from_value(value) {
+                Ok(entry) => Some((key, entry)),
+                Err(err) => {
+                    log::warn!("skipping invalid account override for {key}: {err}");
+                    None
+                }
+            })
+            .collect();
+        Self { entries }
     }
 
     pub fn is_empty(&self) -> bool {
