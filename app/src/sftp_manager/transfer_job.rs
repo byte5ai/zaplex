@@ -4980,10 +4980,13 @@ fn cleanup_failed_stage(
         return Err(primary);
     }
     let mut retained = ownership;
+    let mandatory_cleanup =
+        matches!(&primary, SftpOpsError::Cancelled).then(TransferControl::default);
+    let cleanup_control = mandatory_cleanup.as_ref().unwrap_or(control);
     match cleanup_owned_manifest(
         &*backend,
         &mut retained,
-        control,
+        cleanup_control,
         progress_callback,
         TransferPhase::Finalizing,
     ) {
