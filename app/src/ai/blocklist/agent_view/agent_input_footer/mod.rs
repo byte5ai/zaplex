@@ -1860,9 +1860,12 @@ fn subscription_lifecycle_status(
 fn subscription_lifecycle_label(lifecycle: &AgentLifecycle) -> String {
     match lifecycle {
         AgentLifecycle::NoAgentInstalled => "No agent installed".to_string(),
-        AgentLifecycle::NotSignedIn { agent } => {
-            format!("{} not signed in", agent.display_name())
-        }
+        AgentLifecycle::NotSignedIn {
+            agent: SubscriptionAgent::ClaudeCode,
+        } => "Claude Code not signed in · run /login in Claude Code".to_string(),
+        AgentLifecycle::NotSignedIn {
+            agent: SubscriptionAgent::Codex,
+        } => "Codex not signed in · run codex login".to_string(),
         AgentLifecycle::Ready => "Ready".to_string(),
         AgentLifecycle::Starting => "Starting".to_string(),
         AgentLifecycle::Responding => "Responding".to_string(),

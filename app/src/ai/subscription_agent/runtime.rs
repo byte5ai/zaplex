@@ -1,12 +1,12 @@
 use super::{
     discover_capabilities, query_cli_version, route_target, AccountIdentity, AgentCapability,
     AgentLifecycle, HostIdentity, InstallationIdentity, ProcessLocation, ResponseEventAdapter,
-    RoutePreferences, RouteResult, SubscriptionAgent, SubscriptionSession,
-    SubscriptionSessionRegistry, SubscriptionTarget,
+    RoutePreferences, RouteResult, SubscriptionAgent, SubscriptionAuthenticationError,
+    SubscriptionSession, SubscriptionSessionRegistry, SubscriptionTarget,
 };
 use crate::ai::agent::{api, AIAgentInput, AIIdentifiers};
 use crate::ai::api_error::AIApiError;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, SessionContext};
 use crate::cockpit::CockpitModel;
 use crate::remote_server::manager::RemoteServerManager;
 use crate::terminal::ssh::util::InteractiveSshCommand;
@@ -37,6 +37,81 @@ pub(crate) struct SubscriptionDispatch {
     working_directory: PathBuf,
 }
 
+pub(crate) struct SubscriptionPreflight {
+    candidates: Vec<RuntimeCandidate>,
+    preferences: RoutePreferences,
+    registry: SubscriptionSessionRegistry,
+    conversation_id: String,
+    working_directory: PathBuf,
+}
+
+fn runtime_candidates(
+    session_context: &SessionContext,
+    registry: &SubscriptionSessionRegistry,
+    ctx: &AppContext,
+) -> Result<(Vec<RuntimeCandidate>, RoutePreferences, PathBuf)> {
+    let working_directory = if session_context.is_legacy_ssh() {
+        // A legacy SSH session has no remote shell hook, so its reported cwd
+        // belongs to the local client. Start the remote CLI in its login cwd.
+        PathBuf::from(".")
+    } else {
+        session_context
+            .current_working_directory()
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+    let mut preferences = registry.preferences();
+    let candidates = match session_context.host_id() {
+        Some(host_id) => remote_candidates(host_id.as_str(), ctx)?,
+        None if session_context.is_legacy_ssh() => legacy_ssh_candidates(
+            session_context
+                .ssh_connection_info()
+                .context("the active SSH session has no reusable connection details")?,
+        )?,
+        None if session_context.is_remote() => {
+            bail!("the active remote host is not connected; reconnect it and try again")
+        }
+        None => local_candidates(&mut preferences, ctx),
+    };
+    Ok((candidates, preferences, working_directory))
+}
+
+pub(crate) fn subscription_preflight_info(
+    conversation_id: String,
+    session_context: &SessionContext,
+    ctx: &AppContext,
+) -> Result<SubscriptionPreflight> {
+    let registry = SubscriptionSessionRegistry::as_ref(ctx).clone();
+    registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Starting);
+    let (candidates, preferences, working_directory) =
+        match runtime_candidates(session_context, &registry, ctx) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                registry.set_lifecycle(
+                    conversation_id,
+                    AgentLifecycle::RecoverableError {
+                        message: error.to_string(),
+                        session: None,
+                    },
+                );
+                return Err(error);
+            }
+        };
+    if candidates.is_empty() {
+        registry.set_lifecycle(conversation_id, AgentLifecycle::NoAgentInstalled);
+        bail!("Install Claude Code or Codex and sign in with a subscription account");
+    }
+    Ok(SubscriptionPreflight {
+        candidates,
+        preferences,
+        registry,
+        conversation_id,
+        working_directory,
+    })
+}
+
 pub(crate) fn subscription_dispatch_info(
     params: &api::RequestParams,
     identifiers: &AIIdentifiers,
@@ -52,34 +127,9 @@ pub(crate) fn subscription_dispatch_info(
     let task_id = conversation.get_root_task_id().to_string();
     let needs_create_task = conversation.compute_active_tasks().is_empty();
     let prompt = prompt_from_inputs(&params.input)?;
-    let working_directory = if params.session_context.is_legacy_ssh() {
-        // A legacy SSH session has no remote shell hook, so its reported cwd
-        // belongs to the local client. Start the remote CLI in its login cwd.
-        PathBuf::from(".")
-    } else {
-        params
-            .session_context
-            .current_working_directory()
-            .as_ref()
-            .map(PathBuf::from)
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."))
-    };
     let registry = SubscriptionSessionRegistry::as_ref(ctx).clone();
-    let mut preferences = registry.preferences();
-    let candidates = match params.session_context.host_id() {
-        Some(host_id) => remote_candidates(host_id.as_str(), ctx)?,
-        None if params.session_context.is_legacy_ssh() => legacy_ssh_candidates(
-            params
-                .session_context
-                .ssh_connection_info()
-                .context("the active SSH session has no reusable connection details")?,
-        )?,
-        None if params.session_context.is_remote() => {
-            bail!("the active remote host is not connected; reconnect it and try again")
-        }
-        None => local_candidates(&mut preferences, ctx),
-    };
+    let (candidates, preferences, working_directory) =
+        runtime_candidates(&params.session_context, &registry, ctx)?;
     if candidates.is_empty() {
         registry.set_lifecycle(
             conversation_id_string.clone(),
@@ -99,6 +149,208 @@ pub(crate) fn subscription_dispatch_info(
     })
 }
 
+fn is_authentication_failure(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("not signed in")
+        || message.contains("not logged in")
+        || message.contains("please run /login")
+        || message.contains("not using a chatgpt subscription account")
+}
+
+fn discovery_failure_lifecycle(
+    attempted_agents: &[SubscriptionAgent],
+    message: String,
+    registry: &SubscriptionSessionRegistry,
+    conversation_id: &str,
+) -> AgentLifecycle {
+    if attempted_agents.len() == 1 && is_authentication_failure(&message) {
+        registry.clear_session_identity(conversation_id);
+        AgentLifecycle::NotSignedIn {
+            agent: attempted_agents[0],
+        }
+    } else {
+        AgentLifecycle::RecoverableError {
+            message,
+            session: registry.get(conversation_id).map(|stored| stored.session),
+        }
+    }
+}
+
+fn runtime_error_lifecycle(
+    registry: &SubscriptionSessionRegistry,
+    conversation_id: &str,
+    agent: SubscriptionAgent,
+    message: String,
+) -> AgentLifecycle {
+    if is_authentication_failure(&message) {
+        registry.clear_session_identity(conversation_id);
+        AgentLifecycle::NotSignedIn { agent }
+    } else {
+        recoverable_lifecycle(registry, conversation_id, message)
+    }
+}
+
+fn classify_subscription_error(error: anyhow::Error) -> anyhow::Error {
+    let message = error.to_string();
+    if is_authentication_failure(&message) {
+        SubscriptionAuthenticationError { message }.into()
+    } else {
+        error
+    }
+}
+
+fn subscription_api_error(error: anyhow::Error) -> AIApiError {
+    AIApiError::Other(classify_subscription_error(error))
+}
+
+async fn discover_routed_target(
+    candidates: Vec<RuntimeCandidate>,
+    preferences: &RoutePreferences,
+    registry: &SubscriptionSessionRegistry,
+    conversation_id: &str,
+    working_directory: &std::path::Path,
+) -> Result<SubscriptionTarget> {
+    let mut attempted_agents: Vec<_> = candidates
+        .iter()
+        .map(|candidate| candidate.installation.agent)
+        .collect();
+    attempted_agents.sort_by_key(|agent| match agent {
+        SubscriptionAgent::ClaudeCode => 0,
+        SubscriptionAgent::Codex => 1,
+    });
+    attempted_agents.dedup();
+    let mut capabilities = Vec::new();
+    let mut discovery_errors = Vec::new();
+    for candidate in candidates {
+        let agent = candidate.installation.agent;
+        let account_id = candidate.installation.account.id.clone();
+        match discover_candidate(candidate, working_directory).await {
+            Ok(capability) => capabilities.push(capability),
+            Err(error) => discovery_errors.push((agent, account_id, error.to_string())),
+        }
+    }
+    if let Some(preferred_agent) = preferences.agent {
+        let selected_authentication_error =
+            discovery_errors.iter().find(|(agent, account, error)| {
+                *agent == preferred_agent
+                    && preferences
+                        .account_id
+                        .as_ref()
+                        .map_or(true, |selected| selected == account)
+                    && is_authentication_failure(error)
+            });
+        if let Some((_, _, error)) = selected_authentication_error {
+            let lifecycle = discovery_failure_lifecycle(
+                &[preferred_agent],
+                error.clone(),
+                registry,
+                conversation_id,
+            );
+            registry.set_lifecycle(conversation_id.to_string(), lifecycle);
+            return Err(SubscriptionAuthenticationError {
+                message: format!(
+                    "No compatible signed-in subscription agent is available: {error}"
+                ),
+            }
+            .into());
+        }
+    }
+    if capabilities.is_empty() {
+        let message = discovery_errors
+            .into_iter()
+            .map(|(_, _, error)| error)
+            .collect::<Vec<_>>()
+            .join("; ");
+        let authentication_failure =
+            attempted_agents.len() == 1 && is_authentication_failure(&message);
+        let lifecycle = discovery_failure_lifecycle(
+            &attempted_agents,
+            message.clone(),
+            registry,
+            conversation_id,
+        );
+        registry.set_lifecycle(conversation_id.to_string(), lifecycle);
+        let error = anyhow!("No compatible signed-in subscription agent is available: {message}");
+        return if authentication_failure {
+            Err(classify_subscription_error(error))
+        } else {
+            Err(error)
+        };
+    }
+    match route_target(
+        capabilities.clone(),
+        preferences,
+        working_directory.to_path_buf(),
+    ) {
+        RouteResult::Ready(target) => Ok(target),
+        RouteResult::NoReachableAgent => {
+            let message = "No compatible signed-in subscription agent is reachable".to_string();
+            registry.set_lifecycle(
+                conversation_id.to_string(),
+                recoverable_lifecycle(registry, conversation_id, message.clone()),
+            );
+            bail!(message)
+        }
+        RouteResult::NeedsAgentChoice(agents) => {
+            registry.set_agent_choices(conversation_id.to_string(), agents.clone());
+            registry.set_lifecycle(conversation_id.to_string(), AgentLifecycle::Ready);
+            bail!(
+                "Choose the in-app agent first: {}",
+                agents
+                    .into_iter()
+                    .map(SubscriptionAgent::display_name)
+                    .collect::<Vec<_>>()
+                    .join(" or ")
+            )
+        }
+        RouteResult::NeedsAccountChoice { agent, .. } => {
+            registry.set_lifecycle(conversation_id.to_string(), AgentLifecycle::Ready);
+            bail!(
+                "Choose a {} subscription account first",
+                agent.display_name()
+            )
+        }
+        RouteResult::NeedsModelChoice { agent, account_id } => {
+            let models = capabilities
+                .iter()
+                .find(|capability| {
+                    capability.installation.agent == agent
+                        && capability.installation.account.id == account_id
+                })
+                .map(|capability| capability.models.clone())
+                .unwrap_or_default();
+            registry.set_model_choices(conversation_id.to_string(), models);
+            registry.set_lifecycle(conversation_id.to_string(), AgentLifecycle::Ready);
+            bail!(
+                "{} did not report one unambiguous default model; choose one of its reported models",
+                agent.display_name()
+            )
+        }
+    }
+}
+
+pub(crate) async fn preflight_subscription_target(preflight: SubscriptionPreflight) -> Result<()> {
+    let SubscriptionPreflight {
+        candidates,
+        preferences,
+        registry,
+        conversation_id,
+        working_directory,
+    } = preflight;
+    let target = discover_routed_target(
+        candidates,
+        &preferences,
+        &registry,
+        &conversation_id,
+        &working_directory,
+    )
+    .await?;
+    registry.remember_target(&target);
+    registry.set_target(conversation_id.clone(), target);
+    registry.set_lifecycle(conversation_id, AgentLifecycle::Ready);
+    Ok(())
+}
+
 pub(crate) async fn generate_subscription_output(
     dispatch: SubscriptionDispatch,
     cancellation_rx: oneshot::Receiver<()>,
@@ -113,96 +365,23 @@ pub(crate) async fn generate_subscription_output(
         prompt,
         working_directory,
     } = dispatch;
-    registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Starting);
-
-    let mut attempted_agents: Vec<_> = candidates
-        .iter()
-        .map(|candidate| candidate.installation.agent)
-        .collect();
-    attempted_agents.sort_by_key(|agent| match agent {
-        SubscriptionAgent::ClaudeCode => 0,
-        SubscriptionAgent::Codex => 1,
-    });
-    attempted_agents.dedup();
     let candidate_locations = candidates.clone();
-    let mut capabilities = Vec::new();
-    let mut discovery_errors = Vec::new();
-    for candidate in candidates {
-        match discover_candidate(candidate, &working_directory).await {
-            Ok(capability) => capabilities.push(capability),
-            Err(error) => discovery_errors.push(error.to_string()),
-        }
-    }
-    if capabilities.is_empty() {
-        let message = discovery_errors.join("; ");
-        let lifecycle = if attempted_agents.len() == 1
-            && message.to_ascii_lowercase().contains("not signed in")
-        {
-            AgentLifecycle::NotSignedIn {
-                agent: attempted_agents[0],
-            }
-        } else {
-            AgentLifecycle::RecoverableError {
-                message: message.clone(),
-                session: registry.get(&conversation_id).map(|stored| stored.session),
-            }
-        };
-        registry.set_lifecycle(conversation_id.clone(), lifecycle);
-        return Err(api::ConvertToAPITypeError::Other(anyhow!(
-            "No compatible signed-in subscription agent is available: {}",
-            message
-        )));
-    }
-    let target = match route_target(capabilities.clone(), &preferences, working_directory) {
-        RouteResult::Ready(target) => target,
-        RouteResult::NoReachableAgent => {
-            registry.set_lifecycle(
-                conversation_id.clone(),
-                recoverable_lifecycle(
-                    &registry,
-                    &conversation_id,
-                    "No compatible signed-in subscription agent is reachable".to_string(),
-                ),
-            );
-            return Err(api::ConvertToAPITypeError::Other(anyhow!(
-                "No compatible signed-in subscription agent is reachable"
-            )));
-        }
-        RouteResult::NeedsAgentChoice(agents) => {
-            registry.set_agent_choices(conversation_id.clone(), agents.clone());
-            registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Ready);
-            return Err(api::ConvertToAPITypeError::Other(anyhow!(
-                "Choose the in-app agent first: {}",
-                agents
-                    .into_iter()
-                    .map(SubscriptionAgent::display_name)
-                    .collect::<Vec<_>>()
-                    .join(" or ")
-            )));
-        }
-        RouteResult::NeedsAccountChoice { agent, .. } => {
-            registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Ready);
-            return Err(api::ConvertToAPITypeError::Other(anyhow!(
-                "Choose a {} subscription account first",
-                agent.display_name()
-            )));
-        }
-        RouteResult::NeedsModelChoice { agent, account_id } => {
-            let models = capabilities
-                .iter()
-                .find(|capability| {
-                    capability.installation.agent == agent
-                        && capability.installation.account.id == account_id
-                })
-                .map(|capability| capability.models.clone())
-                .unwrap_or_default();
-            registry.set_model_choices(conversation_id.clone(), models);
-            registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Ready);
-            return Err(api::ConvertToAPITypeError::Other(anyhow!(
-                "{} did not report one unambiguous default model; choose one of its reported models",
-                agent.display_name()
-            )));
-        }
+    let preflight_target = registry
+        .lifecycle(&conversation_id)
+        .filter(AgentLifecycle::accepts_prompt)
+        .and_then(|_| registry.target(&conversation_id));
+    registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Starting);
+    let target = match preflight_target {
+        Some(target) => target,
+        None => discover_routed_target(
+            candidates,
+            &preferences,
+            &registry,
+            &conversation_id,
+            &working_directory,
+        )
+        .await
+        .map_err(api::ConvertToAPITypeError::Other)?,
     };
     registry.remember_target(&target);
     registry.set_target(conversation_id.clone(), target.clone());
@@ -222,17 +401,31 @@ pub(crate) async fn generate_subscription_output(
         Err(error) => {
             registry.set_lifecycle(
                 conversation_id.clone(),
-                recoverable_lifecycle(&registry, &conversation_id, error.to_string()),
+                runtime_error_lifecycle(
+                    &registry,
+                    &conversation_id,
+                    target.installation.agent,
+                    error.to_string(),
+                ),
             );
-            return Err(api::ConvertToAPITypeError::Other(error));
+            return Err(api::ConvertToAPITypeError::Other(
+                classify_subscription_error(error),
+            ));
         }
     };
     if let Err(error) = session.send_prompt(&prompt).await {
         registry.set_lifecycle(
             conversation_id.clone(),
-            recoverable_lifecycle(&registry, &conversation_id, error.to_string()),
+            runtime_error_lifecycle(
+                &registry,
+                &conversation_id,
+                target.installation.agent,
+                error.to_string(),
+            ),
         );
-        return Err(api::ConvertToAPITypeError::Other(error));
+        return Err(api::ConvertToAPITypeError::Other(
+            classify_subscription_error(error),
+        ));
     }
     registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Responding);
 
@@ -269,9 +462,14 @@ pub(crate) async fn generate_subscription_output(
                     Err(error) => {
                         registry.set_lifecycle(
                             conversation_id.clone(),
-                            recoverable_lifecycle(&registry, &conversation_id, error.to_string()),
+                            runtime_error_lifecycle(
+                                &registry,
+                                &conversation_id,
+                                target.installation.agent,
+                                error.to_string(),
+                            ),
                         );
-                        yield Err(Arc::new(AIApiError::Other(error)));
+                        yield Err(Arc::new(subscription_api_error(error)));
                         break;
                     }
                 },
@@ -312,17 +510,20 @@ pub(crate) async fn generate_subscription_output(
                     recoverable,
                     session: identity,
                 } => {
-                    registry.set_lifecycle(
-                        conversation_id.clone(),
-                        if *recoverable {
+                    let lifecycle = if is_authentication_failure(message) {
+                        registry.clear_session_identity(&conversation_id);
+                        AgentLifecycle::NotSignedIn {
+                            agent: target.installation.agent,
+                        }
+                    } else if *recoverable {
                             AgentLifecycle::RecoverableError {
                                 message: message.clone(),
                                 session: identity.clone(),
                             }
                         } else {
                             AgentLifecycle::SessionEnded
-                        },
-                    );
+                        };
+                    registry.set_lifecycle(conversation_id.clone(), lifecycle);
                 }
                 super::SubscriptionEvent::ToolOutput { .. }
                 | super::SubscriptionEvent::Diff(_)
@@ -361,16 +562,26 @@ pub(crate) async fn generate_subscription_output(
                 if let Err(error) = session.respond_to_approval(&request_id, decision).await {
                     registry.set_lifecycle(
                         conversation_id.clone(),
-                        recoverable_lifecycle(&registry, &conversation_id, error.to_string()),
+                        runtime_error_lifecycle(
+                            &registry,
+                            &conversation_id,
+                            target.installation.agent,
+                            error.to_string(),
+                        ),
                     );
-                    yield Err(Arc::new(AIApiError::Other(error)));
+                    yield Err(Arc::new(subscription_api_error(error)));
                     break;
                 }
                 registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Responding);
             } else if matches!(event, super::SubscriptionEvent::TurnCompleted { .. }) {
                 break;
             } else if let super::SubscriptionEvent::Error { message, .. } = event {
-                yield Err(Arc::new(AIApiError::Other(anyhow!(message))));
+                let error = if is_authentication_failure(&message) {
+                    AIApiError::Other(SubscriptionAuthenticationError { message }.into())
+                } else {
+                    AIApiError::Other(anyhow!(message))
+                };
+                yield Err(Arc::new(error));
                 break;
             }
         }

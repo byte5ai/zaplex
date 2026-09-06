@@ -10,6 +10,12 @@ pub(crate) enum SubscriptionAgent {
     Codex,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub(crate) struct SubscriptionAuthenticationError {
+    pub(crate) message: String,
+}
+
 impl SubscriptionAgent {
     pub(crate) fn display_name(self) -> &'static str {
         match self {

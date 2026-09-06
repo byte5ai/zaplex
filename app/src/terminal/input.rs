@@ -2720,6 +2720,7 @@ impl Input {
                     log::warn!("Export to file is not supported on WASM");
                 }
             }
+            BlocklistAIControllerEvent::SubscriptionPreflightUpdated => ctx.notify(),
             _ => {}
         });
 
@@ -12377,7 +12378,6 @@ impl Input {
             });
         }
 
-        self.prune_stale_at_context_attachments(ctx);
         let ai_query = self.editor.as_ref(ctx).buffer_text(ctx);
         // We don't send AI requests with empty queries, even if the context is non-empty. We
         // also don't send a query when the input (query plus context) is over the length limit.
@@ -12387,6 +12387,38 @@ impl Input {
             return;
         }
 
+        let selected_conversation_id = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx);
+        if let Some(conversation_id) = selected_conversation_id {
+            let registry = crate::ai::subscription_agent::SubscriptionSessionRegistry::as_ref(ctx);
+            if let Some(lifecycle) = registry.lifecycle(&conversation_id.to_string()) {
+                if !lifecycle.accepts_prompt() {
+                    if matches!(
+                        lifecycle,
+                        crate::ai::subscription_agent::AgentLifecycle::NoAgentInstalled
+                            | crate::ai::subscription_agent::AgentLifecycle::NotSignedIn { .. }
+                            | crate::ai::subscription_agent::AgentLifecycle::RecoverableError {
+                                session: None,
+                                ..
+                            }
+                    ) {
+                        #[cfg(not(target_family = "wasm"))]
+                        self.ai_controller.update(ctx, move |controller, ctx| {
+                            controller.preflight_subscription_agent(
+                                conversation_id,
+                                Some(ai_query),
+                                ctx,
+                            );
+                        });
+                    }
+                    return;
+                }
+            }
+        }
+
+        self.prune_stale_at_context_attachments(ctx);
         IgnoredSuggestionsModel::handle(ctx).update(ctx, |model, ctx| {
             model.remove_ignored_suggestion(ai_query.clone(), SuggestionType::AIQuery, ctx);
         });
@@ -12395,11 +12427,7 @@ impl Input {
             model.handle_input_buffer_submitted(ctx);
         });
 
-        if let Some(conversation_id) = self
-            .ai_context_model
-            .as_ref(ctx)
-            .selected_conversation_id(ctx)
-        {
+        if let Some(conversation_id) = selected_conversation_id {
             self.ai_controller.update(ctx, move |controller, ctx| {
                 controller.send_user_query_in_conversation(ai_query, conversation_id, None, ctx)
             });
