@@ -11,12 +11,7 @@ use objc::{
     sel, sel_impl,
 };
 
-use std::{
-    borrow::Cow,
-    ffi::CStr,
-    os::raw::{c_char, c_void},
-    path::PathBuf,
-};
+use std::{borrow::Cow, os::raw::c_void, path::PathBuf};
 
 use crate::platform::{
     app::{AppBackend, AppBuilder},
@@ -38,6 +33,7 @@ use super::{
     keycode::{Keycode, CMD_KEY, CONTROL_KEY, OPTION_KEY, SHIFT_KEY},
     make_nsstring,
     menus::{make_dock_menu, make_main_menu},
+    utils::nsstring_as_str,
     window::{get_window_state, IntegrationTestWindowManager, Window, WindowManager},
 };
 
@@ -542,10 +538,10 @@ extern "C-unwind" fn warp_app_open_files(this: &mut Object, paths: id) {
         (0..paths.count())
             .filter_map(|i| {
                 let path = paths.objectAtIndex(i);
-                match CStr::from_ptr(path.UTF8String() as *mut c_char).to_str() {
-                    Ok(string) => Some(PathBuf::from(string)),
-                    Err(err) => {
-                        log::error!("error converting path to string: {err}");
+                match nsstring_as_str(path) {
+                    Some(string) => Some(PathBuf::from(string)),
+                    None => {
+                        log::error!("error converting path to UTF-8 string");
                         None
                     }
                 }
@@ -562,10 +558,10 @@ extern "C-unwind" fn warp_app_open_urls(this: &mut Object, urls: id) {
         (0..urls.count())
             .filter_map(|i| {
                 let url = urls.objectAtIndex(i).absoluteString();
-                match CStr::from_ptr(url.UTF8String() as *mut c_char).to_str() {
-                    Ok(string) => Some(string.to_string()),
-                    Err(err) => {
-                        log::error!("error converting url to string: {err}");
+                match nsstring_as_str(url) {
+                    Some(string) => Some(string.to_string()),
+                    None => {
+                        log::error!("error converting URL to UTF-8 string");
                         None
                     }
                 }
@@ -592,14 +588,10 @@ pub(crate) extern "C-unwind" fn warp_open_panel_file_selected(urls: id, callback
 
     let paths = unsafe {
         (0..urls.count())
-            .map(|i| {
+            .filter_map(|i| {
                 let file_url = urls.objectAtIndex(i);
                 let file_path: id = msg_send![file_url, path];
-                let slice = std::slice::from_raw_parts(
-                    file_path.UTF8String() as *const std::ffi::c_uchar,
-                    file_path.len(),
-                );
-                std::str::from_utf8_unchecked(slice).to_string()
+                nsstring_as_str(file_path).map(str::to_owned)
             })
             .collect::<Vec<_>>()
     };
@@ -624,11 +616,7 @@ pub(crate) extern "C-unwind" fn warp_save_panel_file_selected(url: id, callback:
     } else {
         unsafe {
             let file_path: id = msg_send![url, path];
-            let slice = std::slice::from_raw_parts(
-                file_path.UTF8String() as *const std::ffi::c_uchar,
-                file_path.len(),
-            );
-            Some(std::str::from_utf8_unchecked(slice).to_string())
+            nsstring_as_str(file_path).map(str::to_owned)
         }
     };
 

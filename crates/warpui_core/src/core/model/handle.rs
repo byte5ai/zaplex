@@ -219,11 +219,16 @@ impl<T: Entity> WeakModelHandle<T> {
     }
 
     pub fn upgrade(&self, app: &AppContext) -> Option<ModelHandle<T>> {
-        if app.models.contains_key(&self.model_id) {
-            Some(ModelHandle::new(self.model_id, &app.ref_counts))
-        } else {
-            None
+        let mut ref_counts = app.ref_counts.lock();
+        if !app.models.contains_key(&self.model_id) || !ref_counts.try_inc_entity(self.model_id) {
+            return None;
         }
+        drop(ref_counts);
+        Some(ModelHandle {
+            model_id: self.model_id,
+            model_type: PhantomData,
+            ref_counts: Arc::downgrade(&app.ref_counts),
+        })
     }
 }
 

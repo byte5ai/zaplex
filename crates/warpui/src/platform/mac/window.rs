@@ -2,6 +2,7 @@ use super::delegate::DispatchDelegate;
 use super::{
     app, make_nsstring,
     rendering::{is_integrated_gpu, Device, RendererManager},
+    utils::nsstring_as_str,
     RectFExt as _,
 };
 use anyhow::{anyhow, Result};
@@ -46,9 +47,8 @@ use instant::Instant;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{cell::Cell, os::raw::c_uchar, panic, path::Path, ptr};
+use std::{cell::Cell, panic, path::Path, ptr};
 use std::{cell::RefCell, ffi::c_void, rc::Rc};
-use std::{slice, str};
 
 extern "C" {
     fn screenFrame() -> NSRect;
@@ -1683,6 +1683,9 @@ fn transform_origin_from_rect_coord_to_frame_coord(origin: Vector2F, size: Vecto
 
 /// Converts an Objective-C `Object` into a `String`
 unsafe fn to_string(value: *mut Object) -> String {
-    let slice = slice::from_raw_parts(value.UTF8String() as *const c_uchar, value.len());
-    str::from_utf8_unchecked(slice).to_string()
+    nsstring_as_str(value).unwrap_or_default().to_owned()
 }
+
+#[cfg(test)]
+#[path = "window_tests.rs"]
+mod tests;

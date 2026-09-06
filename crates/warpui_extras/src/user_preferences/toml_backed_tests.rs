@@ -2,6 +2,52 @@ use super::*;
 
 use toml_edit::Item;
 
+#[cfg(unix)]
+#[test]
+fn test_flush_replaces_existing_file_atomically() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    use super::super::UserPreferences as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("settings.toml");
+    std::fs::write(&file_path, "existing = true\n").unwrap();
+    std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let old_inode = std::fs::metadata(&file_path).unwrap().ino();
+    let (prefs, error) = TomlBackedUserPreferences::new(file_path.clone());
+    assert!(error.is_none());
+
+    prefs
+        .write_value_with_hierarchy("second", "2".to_string(), None, None)
+        .unwrap();
+
+    let new_inode = std::fs::metadata(&file_path).unwrap().ino();
+    let document = std::fs::read_to_string(&file_path)
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    assert_ne!(old_inode, new_inode);
+    assert_eq!(std::fs::metadata(&file_path).unwrap().mode() & 0o777, 0o640);
+    assert_eq!(document["existing"].as_bool(), Some(true));
+    assert_eq!(document["second"].as_integer(), Some(2));
+}
+
+#[test]
+fn pre_persist_failure_leaves_existing_file_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("settings.toml");
+    let original = b"existing = true\n";
+    std::fs::write(&file_path, original).unwrap();
+
+    let result =
+        super::super::atomic_write_with_pre_persist(&file_path, b"existing = false\n", |_| {
+            Err(std::io::Error::other("injected failure"))
+        });
+
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&file_path).unwrap(), original);
+}
+
 #[test]
 fn test_json_to_toml_round_trip_bool() {
     let item = TomlBackedUserPreferences::json_value_to_toml_item("true", None);

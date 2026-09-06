@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{in_memory::InMemoryPreferences, Error};
+use super::{atomic_write, in_memory::InMemoryPreferences, Error};
 
 /// An implementation of the [`UserPreferences`] trait using a file for
 /// persistence.
@@ -65,15 +65,8 @@ impl FileBackedUserPreferences {
 
     /// Flushes the internal in-memory preferences store to disk.
     fn flush(&self) -> Result<(), Error> {
-        let parent_dir = self
-            .file_path
-            .parent()
-            .expect("absolute path to file should have parent");
-        std::fs::create_dir_all(parent_dir)?;
-
         let data = serde_json::to_string_pretty(&self.inner).map_err(anyhow::Error::new)?;
-        std::fs::write(&self.file_path, data)?;
-        Ok(())
+        atomic_write(&self.file_path, data.as_bytes())
     }
 }
 
