@@ -51,9 +51,10 @@ pub use conductor::{
 };
 pub use favorites::{Favorite, FavoriteKind, Favorites};
 pub use fleet::{
-    build_fleet_tree, fold_inventory, reconcile_connected_hosts, sessions_of_account,
-    AccountSession, AgentInventoryStatus, AgentSession, FleetTree, HostAvailability, HostNode,
-    HostSessions, ProjectNode, RegisteredHost, RemoteHost,
+    build_fleet_tree, fold_inventory, mark_registry_bound_hosts_unverified,
+    reconcile_connected_hosts, sessions_of_account, AccountSession, AgentInventoryStatus,
+    AgentSession, FleetTree, HostAvailability, HostNode, HostSessions, ProjectNode, RegisteredHost,
+    RemoteHost,
 };
 pub use format::{
     binding_window, context_fill, context_window, format_cost, format_relative, format_reset,

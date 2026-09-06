@@ -77,13 +77,40 @@ fn removed_host_is_marked_and_cannot_attach_agents() {
         projects: Vec::new(),
     };
     assert_eq!(
-        host_display_label(&host, "removed from Connections"),
+        host_display_label(
+            &host,
+            "removed from Connections",
+            "Connections registry unavailable"
+        ),
         "devhost — removed from Connections"
     );
     assert!(
         !host.is_available(),
         "removed daemon data is visible but cannot seed session click routes"
     );
+}
+
+#[test]
+fn unverified_host_is_labeled_and_not_routable() {
+    let host = HostNode {
+        host: "devhost".to_string(),
+        is_local: false,
+        host_id: Some("daemon-dev".to_string()),
+        availability: HostAvailability::Unverified,
+        inventory_status: zaplex_cockpit::AgentInventoryStatus::Ready,
+        registry_node_id: Some("node-dev".to_string()),
+        needs_me: 1,
+        projects: Vec::new(),
+    };
+    assert_eq!(
+        host_display_label(
+            &host,
+            "removed from Connections",
+            "Connections registry unavailable"
+        ),
+        "devhost — Connections registry unavailable"
+    );
+    assert!(!host.is_available());
 }
 
 #[test]

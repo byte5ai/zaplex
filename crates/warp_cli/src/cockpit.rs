@@ -931,6 +931,7 @@ fn host_state(
 ) -> &'static str {
     match (availability, inventory_status) {
         (HostAvailability::Removed, _) => "removed",
+        (HostAvailability::Unverified, _) => "unverified",
         (HostAvailability::Available, AgentInventoryStatus::Ready) => "connected",
         (HostAvailability::Available, AgentInventoryStatus::Unsupported) => "unsupported",
         (HostAvailability::Available, AgentInventoryStatus::Unavailable) => "unavailable",
