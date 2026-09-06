@@ -1,4 +1,6 @@
-use super::{AgentIdentity, AgentPtyBindings, BindingError, BindingRequest};
+use super::{
+    AgentIdentity, AgentPtyBindings, BindingError, BindingRequest, MAX_HISTORICAL_BINDINGS,
+};
 use std::collections::HashSet;
 
 const HOST: &str = "daemon-host-1";
@@ -25,6 +27,90 @@ fn request(
         agent,
         handoff_from,
     }
+}
+
+#[test]
+fn closed_binding_history_is_bounded() {
+    let mut bindings = AgentPtyBindings::default();
+    let history_size = MAX_HISTORICAL_BINDINGS + 5;
+
+    for index in 0..history_size {
+        let pty_session_id = format!("pty-{index}");
+        let agent = identity("codex", &format!("agent-{index}"));
+        bindings.register_pty(&pty_session_id, 1, HOST, 11);
+        bindings
+            .bind(
+                11,
+                BindingRequest {
+                    host_id: HOST.to_string(),
+                    pty_session_id: pty_session_id.clone(),
+                    pty_generation: 1,
+                    agent,
+                    handoff_from: None,
+                },
+            )
+            .unwrap();
+        bindings.remove_pty(&pty_session_id, 1);
+    }
+
+    assert!(bindings.bindings.len() <= MAX_HISTORICAL_BINDINGS);
+    let newest = identity("codex", &format!("agent-{}", history_size - 1));
+    assert_eq!(
+        bindings.binding_for(&newest).unwrap().pty_session_id,
+        format!("pty-{}", history_size - 1)
+    );
+    assert!(bindings
+        .binding_for(&identity("codex", "agent-0"))
+        .is_none());
+}
+
+#[test]
+fn registered_generation_history_is_never_pruned() {
+    let mut bindings = AgentPtyBindings::default();
+    let protected_history_size = MAX_HISTORICAL_BINDINGS + 5;
+    bindings.register_pty("protected-pty", 1, HOST, 11);
+
+    let mut foreground = None;
+    for index in 0..protected_history_size {
+        let agent = identity("codex", &format!("protected-agent-{index}"));
+        bindings
+            .bind(
+                11,
+                BindingRequest {
+                    host_id: HOST.to_string(),
+                    pty_session_id: "protected-pty".to_string(),
+                    pty_generation: 1,
+                    agent: agent.clone(),
+                    handoff_from: foreground,
+                },
+            )
+            .unwrap();
+        foreground = Some(agent);
+    }
+
+    for index in 0..MAX_HISTORICAL_BINDINGS + 5 {
+        let pty_session_id = format!("closed-pty-{index}");
+        bindings.register_pty(&pty_session_id, 1, HOST, 11);
+        bindings
+            .bind(
+                11,
+                BindingRequest {
+                    host_id: HOST.to_string(),
+                    pty_session_id: pty_session_id.clone(),
+                    pty_generation: 1,
+                    agent: identity("codex", &format!("closed-agent-{index}")),
+                    handoff_from: None,
+                },
+            )
+            .unwrap();
+        bindings.remove_pty(&pty_session_id, 1);
+    }
+
+    assert_eq!(
+        bindings.bindings_for_pty("protected-pty", 1).len(),
+        protected_history_size
+    );
+    assert!(bindings.foreground_for_pty("protected-pty", 1).is_some());
 }
 
 #[test]
