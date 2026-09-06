@@ -1,8 +1,9 @@
 use super::{
     discovery_failure_lifecycle, legacy_ssh_candidates, AccountIdentity, AgentLifecycle,
-    HostIdentity, InstallationIdentity, ModelCapability, ProcessLocation, SessionIdentity,
-    SubscriptionAgent, SubscriptionSessionRegistry, SubscriptionTarget,
+    HostIdentity, InstallationIdentity, ProcessLocation, SubscriptionAgent,
+    SubscriptionSessionRegistry, SubscriptionTarget,
 };
+use crate::ai::subscription_agent::{ModelCapability, SessionIdentity};
 use crate::terminal::ssh::util::InteractiveSshCommand;
 
 fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
