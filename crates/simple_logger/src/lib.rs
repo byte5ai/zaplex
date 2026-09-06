@@ -46,7 +46,7 @@ impl LogWorker {
         #[cfg(not(test))]
         let _ = after_receive;
         let logging_task = executor.spawn(async move {
-            let mut log_file = None;
+            let mut log_file: Option<async_fs::File> = None;
             while let Ok(command) = log_rx.recv().await {
                 match command {
                     LogCommand::Begin => {
