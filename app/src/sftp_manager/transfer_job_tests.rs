@@ -317,6 +317,10 @@ impl BackendFileWriter for FailingAfterChunksWriter {
         Ok(())
     }
 
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        self.inner.set_mode(mode)
+    }
+
     fn flush(&mut self) -> Result<(), SftpOpsError> {
         self.inner.flush()
     }
@@ -336,6 +340,13 @@ impl BackendFileWriter for ReplacingFailingWriter {
         Err(SftpOpsError::Operation(
             "injected writer failure after stage replacement".to_string(),
         ))
+    }
+
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        self.inner
+            .as_mut()
+            .ok_or_else(|| SftpOpsError::Operation("replacement writer is closed".to_string()))?
+            .set_mode(mode)
     }
 
     fn flush(&mut self) -> Result<(), SftpOpsError> {
@@ -358,6 +369,13 @@ impl BackendFileWriter for ReplacingOnDropWriter {
             .as_mut()
             .expect("replacement writer is still open")
             .write_chunk(buffer)
+    }
+
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        self.inner
+            .as_mut()
+            .expect("replacement writer is still open")
+            .set_mode(mode)
     }
 
     fn flush(&mut self) -> Result<(), SftpOpsError> {
@@ -671,6 +689,10 @@ impl SftpBackend for InstrumentedBackend {
             .or(self.inner.modification_time(path)?))
     }
 
+    fn regular_file_mode(&self, path: &Path) -> Result<Option<u32>, SftpOpsError> {
+        self.inner.regular_file_mode(path)
+    }
+
     fn stable_identity(&self, path: &Path) -> Result<StableEntryIdentity, SftpOpsError> {
         if self.rename_completed.load(Ordering::SeqCst)
             && self.fail_identity_after_rename.as_deref() == Some(path)
@@ -845,6 +867,52 @@ fn job(
         operation,
         conflict,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn copy_preserves_executable_mode() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let source = tempdir().unwrap();
+    let target = tempdir().unwrap();
+    let source_path = source.path().join("source.bin");
+    fs::write(&source_path, b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&source_path, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut observed_private_stage = false;
+
+    let outcome = run_transfer(
+        &job(
+            source.path(),
+            target.path(),
+            TransferOperation::Copy,
+            ConflictDecision::Overwrite,
+        ),
+        &TransferControl::default(),
+        Some(&mut |progress| {
+            if progress.phase == TransferPhase::Transferring && progress.transferred > 0 {
+                let stages = transfer_artifacts(target.path(), "zaplex-transfer");
+                assert_eq!(stages.len(), 1);
+                assert_eq!(
+                    fs::metadata(&stages[0]).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+                observed_private_stage = true;
+            }
+        }),
+    )
+    .unwrap();
+
+    assert_eq!(outcome, TransferOutcome::Completed);
+    assert!(observed_private_stage);
+    assert_eq!(
+        fs::metadata(target.path().join("target.bin"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
 }
 
 fn directory_job(

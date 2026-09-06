@@ -22,7 +22,7 @@ use remote_server::proto::{
     SafeFileEntryKind, SafeFileFlushHandle, SafeFileIdentity, SafeFileInspectHandle,
     SafeFileInspectResult, SafeFileListRecoveries, SafeFileOpenExisting, SafeFileReadHandle,
     SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileRetryRecovery,
-    SafeFileWriteHandle,
+    SafeFileSetModeHandle, SafeFileWriteHandle,
 };
 use sha2::{Digest, Sha256};
 
@@ -174,6 +174,11 @@ pub trait BackendFileReader: Send {
 /// Chunk writer used by the cross-backend transfer engine.
 pub trait BackendFileWriter: Send {
     fn write_chunk(&mut self, buffer: &[u8]) -> Result<(), SftpOpsError>;
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        Err(SftpOpsError::Operation(format!(
+            "Handle-bound file modes are unsupported for mode {mode:o}"
+        )))
+    }
     fn flush(&mut self) -> Result<(), SftpOpsError>;
 
     /// Returns a live handle to the exclusively reserved file. Path-only
@@ -757,6 +762,12 @@ pub trait SftpBackend: Send + Sync {
         &self,
         _path: &Path,
     ) -> Result<Option<std::time::SystemTime>, SftpOpsError> {
+        Ok(None)
+    }
+
+    /// Returns the regular file's Unix permission bits when the backend can
+    /// observe them. Special bits are never part of a transfer mode.
+    fn regular_file_mode(&self, _path: &Path) -> Result<Option<u32>, SftpOpsError> {
         Ok(None)
     }
 
@@ -2004,6 +2015,21 @@ impl BackendFileWriter for RemoteSafeFileWriter {
         }
     }
 
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        let response = safe_file_call(
+            &self.handle.client,
+            String::new(),
+            safe_file_request::Operation::SetModeHandle(SafeFileSetModeHandle {
+                handle_id: self.handle.handle_id.clone(),
+                mode: mode & 0o777,
+            }),
+        )?;
+        match response {
+            safe_file_response::Result::Mutation(_) => Ok(()),
+            _ => Err(unexpected_safe_file_response("set mode")),
+        }
+    }
+
     fn flush(&mut self) -> Result<(), SftpOpsError> {
         let response = safe_file_call(
             &self.handle.client,
@@ -2477,6 +2503,16 @@ impl SftpBackend for LiveSftpBackend {
         Ok(self.sftp.lstat(path)?.modified)
     }
 
+    fn regular_file_mode(&self, path: &Path) -> Result<Option<u32>, SftpOpsError> {
+        let metadata = self.sftp.lstat(path)?;
+        match metadata.file_type {
+            zap_sftp::types::FileType::File => Ok(metadata.mode),
+            zap_sftp::types::FileType::Dir
+            | zap_sftp::types::FileType::Symlink
+            | zap_sftp::types::FileType::Other => Ok(None),
+        }
+    }
+
     fn stable_identity(&self, path: &Path) -> Result<StableEntryIdentity, SftpOpsError> {
         let metadata = self.sftp.lstat(path)?;
         let kind = match metadata.file_type {
@@ -2943,8 +2979,27 @@ impl BackendFileWriter for LocalFileWriter {
         self.file.write_all(buffer).map_err(Into::into)
     }
 
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            self.file
+                .set_permissions(fs::Permissions::from_mode(mode & 0o777))?;
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = mode;
+            Err(SftpOpsError::Operation(
+                "Handle-bound Unix file modes are unsupported on this platform".to_string(),
+            ))
+        }
+    }
+
     fn flush(&mut self) -> Result<(), SftpOpsError> {
-        self.file.flush().map_err(Into::into)
+        self.file.flush()?;
+        self.file.sync_all().map_err(Into::into)
     }
 
     fn ownership_anchor(
@@ -2966,6 +3021,24 @@ impl BackendFileWriter for FailingFileWriter {
         Err(SftpOpsError::Operation(
             "injected streaming writer failure".to_string(),
         ))
+    }
+
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            self.file
+                .set_permissions(fs::Permissions::from_mode(mode & 0o777))?;
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = mode;
+            Err(SftpOpsError::Operation(
+                "Handle-bound Unix file modes are unsupported on this platform".to_string(),
+            ))
+        }
     }
 
     fn flush(&mut self) -> Result<(), SftpOpsError> {
@@ -2997,8 +3070,27 @@ impl BackendFileWriter for CorruptingFileWriter {
         self.file.write_all(&bytes).map_err(Into::into)
     }
 
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            self.file
+                .set_permissions(fs::Permissions::from_mode(mode & 0o777))?;
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = mode;
+            Err(SftpOpsError::Operation(
+                "Handle-bound Unix file modes are unsupported on this platform".to_string(),
+            ))
+        }
+    }
+
     fn flush(&mut self) -> Result<(), SftpOpsError> {
-        self.file.flush().map_err(Into::into)
+        self.file.flush()?;
+        self.file.sync_all().map_err(Into::into)
     }
 
     fn ownership_anchor(
@@ -11276,6 +11368,23 @@ impl SftpBackend for InMemorySftpBackend {
         Ok(metadata.modified().ok())
     }
 
+    fn regular_file_mode(&self, path: &Path) -> Result<Option<u32>, SftpOpsError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let metadata = fs::symlink_metadata(self.to_local(path)?)?;
+            Ok(metadata
+                .is_file()
+                .then_some(metadata.permissions().mode() & 0o777))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Ok(None)
+        }
+    }
+
     fn stable_identity(&self, path: &Path) -> Result<StableEntryIdentity, SftpOpsError> {
         #[cfg(test)]
         if self.fail_staged_identity
@@ -11375,10 +11484,12 @@ impl SftpBackend for InMemorySftpBackend {
         cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError> {
         let total = self.lstat(remote_path)?.size;
+        let mode = self.regular_file_mode(remote_path)?;
         let mut reader = self.open_file_reader(remote_path)?;
         copy_reader_into_place(
             &mut *reader,
             total,
+            mode,
             local_path,
             progress_cb,
             cancel_flag,
@@ -11405,10 +11516,12 @@ impl SftpBackend for InMemorySftpBackend {
         cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError> {
         let total = self.lstat(remote_path)?.size;
+        let mode = self.regular_file_mode(remote_path)?;
         let mut reader = self.open_file_reader(remote_path)?;
         copy_reader_into_place(
             &mut *reader,
             total,
+            mode,
             local_path,
             progress_cb,
             cancel_flag,
@@ -11419,9 +11532,10 @@ impl SftpBackend for InMemorySftpBackend {
     fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
         validate_copy_destination(src, dst, false)?;
         let total = self.lstat(src)?.size;
+        let mode = self.regular_file_mode(src)?;
         let mut reader = self.open_file_reader(src)?;
         let dst_local = self.to_local(dst)?;
-        copy_reader_into_place(&mut *reader, total, &dst_local, None, None, true)
+        copy_reader_into_place(&mut *reader, total, mode, &dst_local, None, None, true)
     }
 }
 
@@ -11455,11 +11569,15 @@ fn create_copy_temp(dest: &Path) -> Result<(PathBuf, fs::File), SftpOpsError> {
 
     for _ in 0..MAX_ATTEMPTS {
         let temp = temp_sibling(dest)?;
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+        match options.open(&temp) {
             Ok(file) => return Ok((temp, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => {
@@ -11506,6 +11624,7 @@ fn copy_into_place_no_replace(
 fn copy_reader_into_place(
     reader: &mut dyn BackendFileReader,
     total: u64,
+    mode: Option<u32>,
     dest: &Path,
     progress_cb: Option<&ProgressCallback>,
     cancel_flag: Option<&AtomicBool>,
@@ -11536,6 +11655,14 @@ fn copy_reader_into_place(
                 callback(copied, total);
             }
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            temp_file.set_permissions(fs::Permissions::from_mode(mode.unwrap_or(0o600) & 0o777))?;
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
         temp_file.flush()?;
         temp_file.sync_all()?;
         drop(temp_file);
@@ -11567,7 +11694,15 @@ fn copy_into_place_with_mode(
             .map_err(|e| SftpOpsError::LocalIo(format!("Failed to create directory: {e}")))?;
     }
 
-    let total = fs::metadata(src).map(|m| m.len()).unwrap_or(0);
+    let source_metadata = fs::metadata(src)
+        .map_err(|error| SftpOpsError::LocalIo(format!("Failed to get source info: {error}")))?;
+    let total = source_metadata.len();
+    #[cfg(unix)]
+    let source_mode = {
+        use std::os::unix::fs::PermissionsExt;
+
+        source_metadata.permissions().mode() & 0o777
+    };
     let (temp, mut temp_file) = create_copy_temp(dest)?;
 
     let result = (|| -> Result<(), SftpOpsError> {
@@ -11594,6 +11729,14 @@ fn copy_into_place_with_mode(
             if let Some(cb) = progress_cb {
                 cb(copied, total);
             }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            temp_file
+                .set_permissions(fs::Permissions::from_mode(source_mode))
+                .map_err(|e| SftpOpsError::LocalIo(format!("Setting file mode failed: {e}")))?;
         }
         temp_file
             .flush()
