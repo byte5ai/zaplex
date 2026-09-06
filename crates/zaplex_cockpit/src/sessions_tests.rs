@@ -95,7 +95,10 @@ fn dead_pid() -> u32 {
 #[cfg(unix)]
 #[test]
 fn pid_outside_the_signed_process_id_range_is_not_alive() {
-    assert!(!crate::process_identity::probe_registered_process(u32::MAX, None, 0).alive);
+    assert_eq!(
+        crate::process_identity::probe_registered_process(u32::MAX, None, 0).presence,
+        crate::process_identity::ProcessPresence::Absent
+    );
 }
 
 fn assistant_line(stop_reason: &str) -> serde_json::Value {
@@ -443,7 +446,7 @@ fn replace_registry_proc_start(dir: &Path, session_id: &str, proc_start: Option<
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn mismatching_registry_process_start_keeps_the_session_visible_but_unsignalable() {
+fn unparseable_registry_process_start_keeps_the_session_visible_but_unsignalable() {
     let tmp = tempfile::tempdir().unwrap();
     fake_account(
         tmp.path(),
@@ -458,6 +461,33 @@ fn mismatching_registry_process_start_keeps_the_session_visible_but_unsignalable
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].session_id, "recycled");
     assert_eq!(sessions[0].process_fingerprint, None);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn previous_boot_registration_is_dormant_even_when_pid_exists() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "previous-boot",
+        "busy",
+        "",
+        &[assistant_line("tool_use")],
+    );
+    let registry = tmp.path().join("sessions/previous-boot.json");
+    let mut entry: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
+    let previous_boot = sysinfo::System::boot_time().saturating_sub(1);
+    entry["startedAt"] = json!(previous_boot.saturating_mul(1_000));
+    std::fs::write(registry, serde_json::to_vec(&entry).unwrap()).unwrap();
+
+    let scan = scan_sessions(tmp.path(), Utc::now(), Duration::days(3650), 24);
+
+    assert!(scan.live.is_empty());
+    assert_eq!(scan.idle.len(), 1);
+    assert_eq!(scan.idle[0].session_id, "previous-boot");
+    assert_eq!(scan.idle[0].state, SessionState::Idle);
+    assert_eq!(scan.idle[0].process_fingerprint, None);
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
