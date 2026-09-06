@@ -66,7 +66,7 @@ end
 
 # warp_hex_encode_string hex-encodes the given string with `od`.
 function warp_hex_encode_string 
-  echo "$argv" | od -An -v -tx1 | command tr -d ' \n'
+  printf '%s' "$argv" | od -An -v -tx1 | command tr -d ' \n'
 end
 
 # A list of PIDs for running in-band command(s). This is used to kill running
@@ -164,12 +164,11 @@ function warp_preexec --on-event fish_preexec
     warp_maybe_send_reset_grid_osc
 
     # If this preexec is called for user command, kill ongoing generator command jobs.
-    if test (! string match -q "warp_run_generator_command*" $argv[1])
+    if not string match -q "warp_run_generator_command*" -- (string trim -- $argv[1])
         for pid in $_warp_generator_pids
-            # Suppress stderr output; kill writes to stderr if any of the given
-            # PIDS are not running (which might rarely be the case due to race
-            # conditions in checking which PIDS to cancel and this kill command.
-            kill -9 $pids >/dev/null 2>/dev/null
+            # Suppress stderr output; kill writes to stderr if the PID is not running
+            # due to a race between completion and cancellation.
+            kill -9 $pid >/dev/null 2>/dev/null
         end
         set -g _warp_generator_pids ''
     end
