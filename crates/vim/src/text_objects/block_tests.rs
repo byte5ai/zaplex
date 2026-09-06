@@ -145,3 +145,17 @@ fn test_vim_inner_block() {
         );
     }
 }
+
+#[test]
+fn vim_inner_block_normalizes_newline_only_change_ranges() {
+    for (text, bracket_type) in [
+        ("{\n}", BracketType::CurlyBrace),
+        ("(\n)", BracketType::Parenthesis),
+        ("[\n]", BracketType::SquareBracket),
+    ] {
+        assert_eq!(
+            vim_inner_block(text, 0, bracket_type, true),
+            Some(2.into()..2.into())
+        );
+    }
+}

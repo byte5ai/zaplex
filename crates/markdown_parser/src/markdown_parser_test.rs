@@ -1332,6 +1332,31 @@ fn test_parse_inline() {
 }
 
 #[test]
+fn test_long_delimiter_runs_preserve_text() {
+    for delimiter in ["*", "_", "~"] {
+        for count in [256, 300, 1024] {
+            let source = format!("Result: {}", delimiter.repeat(count));
+            let fragments = parse_all(source.as_str(), parse_inline);
+            let parsed_text = fragments
+                .into_iter()
+                .map(|fragment| fragment.text)
+                .collect::<String>();
+            assert_eq!(parsed_text, source);
+        }
+    }
+
+    let paired = format!("{}content{}", "*".repeat(300), "*".repeat(300));
+    let fragments = parse_all(paired.as_str(), parse_inline);
+    assert_eq!(
+        fragments
+            .into_iter()
+            .map(|fragment| fragment.text)
+            .collect::<String>(),
+        "content"
+    );
+}
+
+#[test]
 fn test_parse_inline_link() {
     assert_eq!(
         parse_all("[basic](https://warp.dev)", parse_inline),
