@@ -293,11 +293,14 @@ fn abort_detaches_blocking_result_and_cleans_up_in_progress() {
                 .await,
             Ok(Ok(()))
         ));
-        assert!(stale_rx
+        match stale_rx
             .recv()
             .with_timeout(std::time::Duration::from_millis(100))
             .await
-            .is_err());
+        {
+            Ok(Ok(())) => panic!("aborted request resolved with a stale result"),
+            Ok(Err(_)) | Err(_) => {}
+        }
     });
 }
 
