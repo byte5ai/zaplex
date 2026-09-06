@@ -41,6 +41,8 @@ struct MenuItem {
     label: String,
     /// Associated action
     action: SftpBrowserAction,
+    /// Whether the item needs descriptor-bound cleanup support.
+    requires_identity_bound_cleanup: bool,
 }
 
 /// Build file right-click menu items list
@@ -49,22 +51,27 @@ fn build_file_menu_items(entry: &EntryReference) -> Vec<MenuItem> {
         MenuItem {
             label: crate::t!("sftp-context-menu-open"),
             action: SftpBrowserAction::OpenEntry(entry.clone()),
+            requires_identity_bound_cleanup: false,
         },
         MenuItem {
             label: crate::t!("sftp-context-menu-download"),
             action: SftpBrowserAction::DownloadEntry(entry.clone()),
+            requires_identity_bound_cleanup: false,
         },
         MenuItem {
             label: crate::t!("sftp-context-menu-rename"),
             action: SftpBrowserAction::RenameEntry(entry.clone()),
+            requires_identity_bound_cleanup: true,
         },
         MenuItem {
             label: crate::t!("sftp-context-menu-delete"),
             action: SftpBrowserAction::DeleteEntry(entry.clone()),
+            requires_identity_bound_cleanup: true,
         },
         MenuItem {
             label: crate::t!("sftp-context-menu-details"),
             action: SftpBrowserAction::DetailsEntry(entry.clone()),
+            requires_identity_bound_cleanup: false,
         },
     ]
 }
@@ -73,11 +80,16 @@ fn build_file_menu_items(entry: &EntryReference) -> Vec<MenuItem> {
 fn render_menu_item(
     label: &str,
     action: SftpBrowserAction,
+    enabled: bool,
     appearance: &Appearance,
     position_id: &str,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let text_color = theme.active_ui_text_color();
+    let text_color = if enabled {
+        theme.active_ui_text_color()
+    } else {
+        theme.disabled_ui_text_color()
+    };
     let hover_bg = theme.surface_3();
     let default_bg = theme.surface_2();
     let ui_font = appearance.ui_font_family();
@@ -85,7 +97,7 @@ fn render_menu_item(
     let label_owned = label.to_string();
 
     let item_el = Hoverable::new(Default::default(), move |state| {
-        let bg = if state.is_hovered() || state.is_clicked() {
+        let bg = if enabled && (state.is_hovered() || state.is_clicked()) {
             hover_bg
         } else {
             default_bg
@@ -101,18 +113,31 @@ fn render_menu_item(
             .with_padding_bottom(6.0)
             .finish()
     })
-    .with_cursor(Cursor::PointingHand)
-    .on_mouse_down(move |ctx, _, _| {
-        ctx.dispatch_typed_action(action.clone());
-        ctx.dispatch_typed_action(SftpBrowserAction::CloseContextMenu);
-    })
-    .finish();
+    .with_cursor(if enabled {
+        Cursor::PointingHand
+    } else {
+        Cursor::NotAllowed
+    });
+    let item_el = if enabled {
+        item_el
+            .on_mouse_down(move |ctx, _, _| {
+                ctx.dispatch_typed_action(action.clone());
+                ctx.dispatch_typed_action(SftpBrowserAction::CloseContextMenu);
+            })
+            .finish()
+    } else {
+        item_el.finish()
+    };
 
     SavePosition::new(item_el, position_id).finish()
 }
 
 /// Render right-click context menu
-pub fn render_context_menu(state: &ContextMenuState, appearance: &Appearance) -> Box<dyn Element> {
+pub fn render_context_menu(
+    state: &ContextMenuState,
+    identity_bound_cleanup_available: bool,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let menu_items = build_file_menu_items(&state.entry);
 
@@ -188,7 +213,14 @@ pub fn render_context_menu(state: &ContextMenuState, appearance: &Appearance) ->
             | SftpBrowserAction::ToggleTransferPanel
             | SftpBrowserAction::ConfirmCloseTransferPanel => "sftp_ctx:unknown",
         };
-        let el = render_menu_item(&item.label, item.action.clone(), appearance, position_id);
+        let enabled = !item.requires_identity_bound_cleanup || identity_bound_cleanup_available;
+        let el = render_menu_item(
+            &item.label,
+            item.action.clone(),
+            enabled,
+            appearance,
+            position_id,
+        );
         col.add_child(el);
     }
 
@@ -323,6 +355,11 @@ mod tests {
         assert!(
             matches!(&items[4].action, SftpBrowserAction::DetailsEntry(actual) if actual == &entry)
         );
+        assert!(!items[0].requires_identity_bound_cleanup);
+        assert!(!items[1].requires_identity_bound_cleanup);
+        assert!(items[2].requires_identity_bound_cleanup);
+        assert!(items[3].requires_identity_bound_cleanup);
+        assert!(!items[4].requires_identity_bound_cleanup);
     }
 
     /// Test menu item actions are correct with index=0
