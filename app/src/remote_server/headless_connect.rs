@@ -25,8 +25,8 @@ use remote_server::transport::{Connection, RemoteTransport};
 use warp_core::SessionId;
 use warp_ssh_manager::{
     build_ssh_args, preflight_host_key_with_factory, validate_ssh_endpoint, AuthType,
-    DefaultWorkspaceCommandFactory, EndpointUse, HostKeyPreflight, SshServerInfo,
-    WorkspaceCommandFactory,
+    DefaultWorkspaceCommandFactory, EndpointUse, HostKeyPreflight, ResolvedSshConnection,
+    SshServerInfo, WorkspaceCommandFactory,
 };
 use warpui::r#async::executor::Background;
 use zaplex_remote_session::types::{has_feature, FEATURE_MULTIPLEXER_INVENTORY_V1};
@@ -68,6 +68,12 @@ pub fn alloc_daemon_session_id() -> SessionId {
 /// we don't have here, so those hosts use the normal SSH path instead.
 pub fn is_headless_capable(server: &SshServerInfo) -> bool {
     matches!(server.auth_type, AuthType::Key)
+}
+
+/// Headless predicate for an agent route after repository authentication has
+/// been resolved exactly once.
+pub fn is_agent_route_headless_capable(connection: &ResolvedSshConnection) -> bool {
+    is_headless_capable(&connection.server)
 }
 
 /// FNV-1a, used only to derive a short, stable, run-to-run-consistent socket

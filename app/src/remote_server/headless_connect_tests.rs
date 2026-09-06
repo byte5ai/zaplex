@@ -1,5 +1,5 @@
 use super::*;
-use warp_ssh_manager::{AuthType, SshServerInfo};
+use warp_ssh_manager::{AuthType, ResolvedSshConnection, SecretKind, SshServerInfo};
 
 fn server(auth: AuthType) -> SshServerInfo {
     let mut s = SshServerInfo::new_default("node-1".to_string());
@@ -17,6 +17,24 @@ fn headless_capable_only_for_key_auth() {
     // OneKey is resolved to Key/Password upstream (resolve_server_auth); the
     // bare OneKey marker is not headless-capable on its own.
     assert!(!is_headless_capable(&server(AuthType::OneKey)));
+}
+
+#[test]
+fn agent_route_preflight_resolves_onekey_key() {
+    let resolved = |auth_type, secret_kind| ResolvedSshConnection {
+        server: server(auth_type),
+        secret_lookup_id: "cred-1".to_string(),
+        secret_kind,
+    };
+
+    assert!(is_agent_route_headless_capable(&resolved(
+        AuthType::Key,
+        SecretKind::Passphrase,
+    )));
+    assert!(!is_agent_route_headless_capable(&resolved(
+        AuthType::Password,
+        SecretKind::OneKeyPassword,
+    )));
 }
 
 #[test]
