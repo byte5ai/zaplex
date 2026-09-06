@@ -49,24 +49,13 @@ fn jwt_payload(token: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-fn account_key(codex_home: &Path, is_default: bool) -> String {
-    if is_default {
-        return "codex:default".to_string();
-    }
-    let name = codex_home
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("account");
-    let suffix = name
-        .strip_prefix(".codex-")
-        .or_else(|| name.strip_prefix(".codex"))
-        .filter(|suffix| !suffix.is_empty())
-        .unwrap_or(name);
-    format!("codex:{suffix}")
+fn account_key(codex_home: &Path, home: &Path, is_default: bool) -> String {
+    crate::account_key::stable_account_key(Provider::Codex, codex_home, home, is_default)
 }
 
 fn account_from_root(
     codex_home: &Path,
+    home: &Path,
     is_default: bool,
 ) -> Result<Option<(Account, Option<String>)>, String> {
     let auth_path = codex_home.join("auth.json");
@@ -115,7 +104,7 @@ fn account_from_root(
     Ok(Some((
         Account {
             provider: Provider::Codex,
-            key: account_key(codex_home, is_default),
+            key: account_key(codex_home, home, is_default),
             config_dir: codex_home.to_path_buf(),
             label,
             email,
@@ -149,6 +138,7 @@ pub fn discover_account_roots(home: &Path, codex_home_env: Option<&Path>) -> Acc
     let mut issues = Vec::new();
     let mut seen_roots = HashSet::new();
     let mut seen_identities = HashSet::new();
+    let mut seen_keys = HashSet::new();
     for (root, is_default, is_pinned) in candidates {
         let canonical_root = match fs::canonicalize(&root) {
             Ok(canonical_root) => canonical_root,
@@ -168,12 +158,16 @@ pub fn discover_account_roots(home: &Path, codex_home_env: Option<&Path>) -> Acc
             }
             continue;
         }
-        match account_from_root(&canonical_root, is_default) {
+        match account_from_root(&canonical_root, home, is_default) {
             Ok(Some((account, stable_identity))) => {
                 if stable_identity
                     .as_ref()
                     .is_some_and(|identity| !seen_identities.insert(identity.clone()))
                 {
+                    continue;
+                }
+                if !seen_keys.insert(account.key.clone()) {
+                    issues.push("Codex account key collision".to_string());
                     continue;
                 }
                 accounts.push(account);
@@ -191,7 +185,8 @@ pub fn discover_account_roots(home: &Path, codex_home_env: Option<&Path>) -> Acc
 /// Compatibility helper for callers that already resolved one root.
 pub fn discover_accounts(codex_home: &Path) -> Vec<Account> {
     let root = fs::canonicalize(codex_home).unwrap_or_else(|_| codex_home.to_path_buf());
-    account_from_root(&root, true)
+    let home = root.parent().unwrap_or(&root);
+    account_from_root(&root, home, true)
         .ok()
         .flatten()
         .map(|(account, _)| vec![account])

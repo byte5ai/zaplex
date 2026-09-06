@@ -405,9 +405,10 @@ impl CockpitModel {
                 // snapshot: hide / relabel / reorder for display. Read off-thread;
                 // a missing or broken file yields no overrides (never blanks the
                 // cockpit — see `AccountOverrides::parse`).
-                let overrides = AccountOverrides::parse(
+                let mut overrides = AccountOverrides::parse(
                     &std::fs::read_to_string(&inputs.instances_path).unwrap_or_default(),
                 );
+                overrides.migrate_legacy_keys(&snapshot.accounts);
                 snapshot.accounts = overrides.apply(std::mem::take(&mut snapshot.accounts));
                 for account in &mut snapshot.accounts {
                     for session in &mut account.sessions {

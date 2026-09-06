@@ -43,8 +43,8 @@ impl Provider {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Account {
     pub provider: Provider,
-    /// Stable key derived from the provider + config dir, e.g. `claude:default`,
-    /// `claude:work`, `codex:default`. Stable across restarts for pinning later.
+    /// Stable key derived from the provider + canonical config root. Direct
+    /// home siblings keep readable legacy keys; external roots include a path hash.
     pub key: String,
     /// The config directory this account was discovered from.
     pub config_dir: PathBuf,

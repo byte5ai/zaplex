@@ -1,5 +1,5 @@
 use super::*;
-use std::fs;
+use std::{collections::HashSet, fs};
 
 fn write(path: &Path, content: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -181,6 +181,88 @@ fn duplicate_stable_claude_identity_is_emitted_once() {
     assert!(discovery.issues.is_empty());
     assert_eq!(discovery.accounts.len(), 1);
     assert_eq!(discovery.accounts[0].key, "claude:a");
+}
+
+#[test]
+fn distinct_roots_with_same_basename_have_distinct_keys() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let sibling_root = home.join(".claude-work");
+    let external_root = tmp.path().join("accounts/work");
+    write(
+        &sibling_root.join(".claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"home-work"}}"#,
+    );
+    write(
+        &external_root.join(".claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"external-work"}}"#,
+    );
+
+    let discovery = discover_accounts_with_process_roots(
+        &home,
+        None,
+        ProcessAccountDiscovery {
+            roots: vec![external_root.clone()],
+            issues: Vec::new(),
+        },
+    );
+
+    assert!(discovery.issues.is_empty());
+    assert_eq!(discovery.accounts.len(), 2);
+    let sibling_key = discovery
+        .accounts
+        .iter()
+        .find(|account| account.config_dir == fs::canonicalize(&sibling_root).unwrap())
+        .unwrap()
+        .key
+        .clone();
+    let external_key = discovery
+        .accounts
+        .iter()
+        .find(|account| account.config_dir == fs::canonicalize(&external_root).unwrap())
+        .unwrap()
+        .key
+        .clone();
+    assert_eq!(sibling_key, "claude:work");
+    assert!(external_key.starts_with("claude:work:"));
+    assert_ne!(sibling_key, external_key);
+
+    fs::remove_dir_all(sibling_root).unwrap();
+    let without_sibling = discover_accounts_with_process_roots(
+        &home,
+        None,
+        ProcessAccountDiscovery {
+            roots: vec![external_root],
+            issues: Vec::new(),
+        },
+    );
+    assert_eq!(without_sibling.accounts[0].key, external_key);
+}
+
+#[test]
+fn default_named_home_sibling_never_uses_the_reserved_default_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    write(
+        &home.join(".claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"real-default"}}"#,
+    );
+    write(
+        &home.join(".claude-default/.claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"named-default"}}"#,
+    );
+
+    let discovery = discover_without_process(home, None);
+    let keys: HashSet<_> = discovery
+        .accounts
+        .iter()
+        .map(|account| account.key.as_str())
+        .collect();
+
+    assert!(discovery.issues.is_empty());
+    assert_eq!(keys.len(), 2);
+    assert!(keys.contains("claude:default"));
+    assert!(keys.iter().any(|key| key.starts_with("claude:default:")));
 }
 
 #[cfg(unix)]
