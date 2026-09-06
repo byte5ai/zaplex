@@ -49,11 +49,11 @@ use warp_editor::editor::NavigationKey;
 use warpui::Element;
 use warpui::{
     elements::{
-        Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle,
-        ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DispatchEventResult, Empty, EventHandler, Expanded, Fill, Flex, MainAxisSize,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-        ScrollbarWidth, Shrinkable, Stack, Text,
+        get_rich_content_position_id, Align, Border, ChildAnchor, ChildView, Clipped,
+        ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
+        CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Expanded, Fill, Flex,
+        MainAxisSize, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
+        SavePosition, ScrollbarWidth, Shrinkable, Stack, Text,
     },
     fonts::{Properties, Weight},
     id,
@@ -772,6 +772,9 @@ pub enum SettingsAction {
     ToggleMaximizePane,
     Close,
     OpenContextMenu(Vector2F),
+    EditorCut,
+    EditorCopy,
+    EditorPaste,
     FocusSelf,
     Up,
     Down,
@@ -935,6 +938,7 @@ pub struct SettingsView {
     clipped_scroll_state: ClippedScrollStateHandle,
     context_menu: ViewHandle<Menu<SettingsAction>>,
     context_menu_state: Option<Vector2F>,
+    context_menu_editor: Option<ViewHandle<EditorView>>,
     /// Sidebar navigation items (pages + umbrellas).
     nav_items: Vec<SettingsNavItem>,
     /// Handle to the AI settings page, used to switch subpage modes.
@@ -1139,6 +1143,7 @@ impl SettingsView {
             clipped_scroll_state: Default::default(),
             context_menu,
             context_menu_state: Default::default(),
+            context_menu_editor: None,
             nav_items,
             ai_page_handle: ai_page_handle_for_nav,
             code_page_handle: code_page_handle_for_nav,
@@ -1371,8 +1376,90 @@ impl SettingsView {
         }
     }
 
+    fn focused_editor(&self, ctx: &ViewContext<Self>) -> Option<ViewHandle<EditorView>> {
+        let window_id = ctx.window_id();
+        let focused_id = ctx.focused_view_id(window_id)?;
+        ctx.view_with_id(window_id, focused_id)
+    }
+
+    fn editor_at_position(
+        &self,
+        position: Vector2F,
+        ctx: &ViewContext<Self>,
+    ) -> Option<ViewHandle<EditorView>> {
+        let editor = self.focused_editor(ctx)?;
+        let bounds = ctx.element_position_by_id(get_rich_content_position_id(&editor.id()))?;
+        bounds.contains_point(position).then_some(editor)
+    }
+
+    fn editor_context_menu_items(
+        &self,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<Vec<MenuItem<SettingsAction>>> {
+        let editor = self.context_menu_editor.clone()?;
+        let (has_selection, can_edit, is_password) = editor.read(ctx, |editor, ctx| {
+            (
+                !editor.selected_text(ctx).is_empty(),
+                editor.can_edit(ctx),
+                editor.is_password(),
+            )
+        });
+        let (show_cut, show_copy, show_paste) =
+            editor_context_menu_visibility(has_selection, can_edit, is_password);
+
+        let mut items = Vec::new();
+        if show_cut {
+            items.push(
+                MenuItemFields::new(crate::t!("common-cut"))
+                    .with_on_select_action(SettingsAction::EditorCut)
+                    .with_key_shortcut_label(
+                        custom_tag_to_keystroke(CustomAction::Cut.into())
+                            .map(|keystroke| keystroke.displayed()),
+                    )
+                    .into_item(),
+            );
+        }
+        if show_copy {
+            items.push(
+                MenuItemFields::new(crate::t!("common-copy"))
+                    .with_on_select_action(SettingsAction::EditorCopy)
+                    .with_key_shortcut_label(
+                        custom_tag_to_keystroke(CustomAction::Copy.into())
+                            .map(|keystroke| keystroke.displayed()),
+                    )
+                    .into_item(),
+            );
+        }
+        if show_paste {
+            items.push(
+                MenuItemFields::new(crate::t!("common-paste"))
+                    .with_on_select_action(SettingsAction::EditorPaste)
+                    .with_key_shortcut_label(
+                        custom_tag_to_keystroke(CustomAction::Paste.into())
+                            .map(|keystroke| keystroke.displayed()),
+                    )
+                    .into_item(),
+            );
+        }
+
+        (!items.is_empty()).then_some(items)
+    }
+
     fn context_menu_items(&self, ctx: &mut ViewContext<Self>) -> Vec<MenuItem<SettingsAction>> {
         let mut items = vec![];
+
+        if let Some(editor_items) = self.editor_context_menu_items(ctx) {
+            items.extend(editor_items);
+            if ContextFlag::CreateNewSession.is_enabled()
+                || self
+                    .focus_handle
+                    .as_ref()
+                    .map(|handle| handle.split_pane_state(ctx).is_in_split_pane())
+                    .unwrap_or(false)
+            {
+                items.push(MenuItem::Separator);
+            }
+        }
 
         if ContextFlag::CreateNewSession.is_enabled() {
             items.extend(vec![
@@ -1442,6 +1529,7 @@ impl SettingsView {
     fn handle_menu_event(&mut self, event: &menu::Event, ctx: &mut ViewContext<Self>) {
         if let menu::Event::Close { .. } = event {
             self.context_menu_state.take();
+            self.context_menu_editor.take();
         }
         ctx.notify();
     }
@@ -2296,12 +2384,30 @@ impl TypedActionView for SettingsView {
             SettingsAction::Close => ctx.emit(SettingsViewEvent::Pane(PaneEvent::Close)),
             SettingsAction::OpenContextMenu(position) => {
                 self.context_menu_state = Some(*position);
+                self.context_menu_editor = self.editor_at_position(*position, ctx);
                 let menu_items = self.context_menu_items(ctx);
                 self.context_menu.update(ctx, move |menu, ctx| {
                     menu.set_items(menu_items, ctx);
                     ctx.notify();
                 });
                 ctx.notify();
+            }
+            SettingsAction::EditorCut => {
+                if let Some(editor) = self.context_menu_editor.clone() {
+                    ctx.focus(&editor);
+                    editor.update(ctx, |editor, ctx| editor.cut(ctx));
+                }
+            }
+            SettingsAction::EditorCopy => {
+                if let Some(editor) = self.context_menu_editor.clone() {
+                    editor.update(ctx, |editor, ctx| editor.copy(ctx));
+                }
+            }
+            SettingsAction::EditorPaste => {
+                if let Some(editor) = self.context_menu_editor.clone() {
+                    ctx.focus(&editor);
+                    editor.update(ctx, |editor, ctx| editor.paste(ctx));
+                }
             }
             SettingsAction::FocusSelf => ctx.emit(SettingsViewEvent::Pane(PaneEvent::FocusSelf)),
             SettingsAction::Up => self.key_up(ctx),
@@ -2310,6 +2416,22 @@ impl TypedActionView for SettingsView {
         }
     }
 }
+
+fn editor_context_menu_visibility(
+    has_selection: bool,
+    can_edit: bool,
+    is_password: bool,
+) -> (bool, bool, bool) {
+    (
+        has_selection && can_edit && !is_password,
+        has_selection && !is_password,
+        can_edit,
+    )
+}
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
 
 impl BackingView for SettingsView {
     type PaneHeaderOverflowMenuAction = SettingsAction;
