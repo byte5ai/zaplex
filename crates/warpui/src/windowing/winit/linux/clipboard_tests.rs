@@ -107,18 +107,29 @@ mod clipboard_tests {
     #[test]
     fn test_primary_clipboard_operations() {
         with_test_clipboard(|clipboard| {
-            let test_content = ClipboardContent::plain_text("Primary clipboard test".to_string());
+            let regular = ClipboardContent::plain_text("regular-value".to_string());
+            let primary = ClipboardContent::plain_text("primary-value".to_string());
 
-            // Test primary clipboard write (should not panic)
-            clipboard.write_to_primary_clipboard(test_content.clone());
+            for (kind, content) in [
+                (arboard::LinuxClipboardKind::Clipboard, &regular),
+                (arboard::LinuxClipboardKind::Primary, &primary),
+            ] {
+                match clipboard.write_to_specific_clipboard(kind, content) {
+                    Ok(()) => {}
+                    Err(arboard::Error::ClipboardNotSupported) => return,
+                    Err(error) => panic!("failed to write test clipboard: {error}"),
+                }
+            }
 
-            // Test primary clipboard read (should return valid ClipboardContent)
-            let read_content = clipboard.read_from_primary_clipboard();
+            let read_content = match clipboard
+                .read_from_specific_clipboard(arboard::LinuxClipboardKind::Primary)
+            {
+                Ok(content) => content,
+                Err(arboard::Error::ClipboardNotSupported) => return,
+                Err(error) => panic!("failed to read primary clipboard: {error}"),
+            };
 
-            // Should always return a ClipboardContent struct, even if empty
-            // (this tests the fallback behavior when primary clipboard isn't supported)
-            assert!(matches!(read_content.images, None | Some(_)));
-            assert!(matches!(read_content.html, None | Some(_)));
+            assert_eq!(read_content.plain_text, "primary-value");
         });
     }
 
