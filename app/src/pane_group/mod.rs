@@ -709,6 +709,7 @@ pub struct DraggedBorder {
 /// Target filesystem for the in-place file manager (FM pane-mode P1).
 pub enum FileManagerTarget {
     /// The machine zaplex runs on, rooted at `start_path` (the session cwd).
+    #[cfg(not(target_os = "windows"))]
     Local { start_path: std::path::PathBuf },
     /// An SSH host (browsed over its SFTP connection), by `ssh_servers.node_id`,
     /// rooted at `start_path` (the remote shell's cwd) when known, else `/`.
@@ -716,6 +717,21 @@ pub enum FileManagerTarget {
         node_id: String,
         start_path: Option<std::path::PathBuf>,
     },
+}
+
+/// Builds a local target only where the native local backend is supported.
+pub(crate) fn local_file_manager_target(
+    start_path: std::path::PathBuf,
+) -> Option<FileManagerTarget> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = start_path;
+        None
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Some(FileManagerTarget::Local { start_path })
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -4111,6 +4127,7 @@ impl PaneGroup {
     ) {
         use crate::pane_group::pane::sftp_pane::SftpPane;
         match target {
+            #[cfg(not(target_os = "windows"))]
             FileManagerTarget::Local { start_path } => {
                 let pane = SftpPane::new_local(start_path, ctx);
                 self.replace_pane(pane_id, pane, /* is_temporary */ true, ctx);

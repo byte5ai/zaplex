@@ -2678,6 +2678,7 @@ pub struct TerminalView {
     ambient_agent_cancel_mouse_state: warpui::elements::MouseStateHandle,
 
     /// Mouse state handle for the "toggle to file manager" button in the pane header.
+    #[cfg(not(target_os = "windows"))]
     open_file_manager_mouse_state: warpui::elements::MouseStateHandle,
 
     /// Weak handle to the [`PaneStack`] this view is part of, allowing push/pop operations.
@@ -3974,6 +3975,7 @@ impl TerminalView {
             is_using_conversation_for_pane_header_title: false,
             ambient_agent_view_model,
             ambient_agent_cancel_mouse_state: Default::default(),
+            #[cfg(not(target_os = "windows"))]
             open_file_manager_mouse_state: Default::default(),
 
             is_pending_aws_login: false,
@@ -23963,13 +23965,18 @@ impl TypedActionView for TerminalView {
             }
             ToggleMaximizePane => ctx.emit(Event::Pane(PaneEvent::ToggleMaximized)),
             OpenFileManagerHere => {
-                // Root the FM at the active session's cwd — the validated local
-                // path for a local session, or the remote shell's reported cwd for
-                // a remote session — falling back to $HOME then `/`.
-                let start_path = file_manager_start_path(self.active_session_cwd(ctx));
-                ctx.dispatch_typed_action(
-                    &crate::workspace::WorkspaceAction::OpenLocalFileManager { start_path },
-                );
+                #[cfg(target_os = "windows")]
+                self.show_error_toast(crate::t!("file-manager-local-unavailable-windows"), ctx);
+                #[cfg(not(target_os = "windows"))]
+                {
+                    // Root the FM at the active session's cwd — the validated local
+                    // path for a local session, or the remote shell's reported cwd for
+                    // a remote session — falling back to $HOME then `/`.
+                    let start_path = file_manager_start_path(self.active_session_cwd(ctx));
+                    ctx.dispatch_typed_action(
+                        &crate::workspace::WorkspaceAction::OpenLocalFileManager { start_path },
+                    );
+                }
             }
             PromptContextMenu {
                 position_offset_from_prompt,

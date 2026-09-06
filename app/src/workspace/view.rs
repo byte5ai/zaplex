@@ -9331,6 +9331,7 @@ impl Workspace {
     /// Opens the local file-manager pane (FM pane-mode P1) rooted at
     /// `start_path` — same browser surface as the per-host SFTP pane, backed by
     /// the local filesystem. Opened next to the invoking pane (smart split).
+    #[cfg(not(target_os = "windows"))]
     pub fn open_local_file_manager(
         &mut self,
         start_path: std::path::PathBuf,
@@ -25960,9 +25961,20 @@ impl TypedActionView for Workspace {
                     // into an error, and inside an SSH tab it would even scope it
                     // to that tab's host.
                     let target = if pane_is_local != Some(false) {
-                        crate::pane_group::FileManagerTarget::Local {
-                            start_path: start_path.clone(),
-                        }
+                        let Some(target) =
+                            crate::pane_group::local_file_manager_target(start_path.clone())
+                        else {
+                            workspace.toast_stack.update(ctx, |toast_stack, ctx| {
+                                toast_stack.add_ephemeral_toast(
+                                    DismissibleToast::error(crate::t!(
+                                        "file-manager-local-unavailable-windows"
+                                    )),
+                                    ctx,
+                                );
+                            });
+                            return;
+                        };
+                        target
                     } else {
                         let node_id = active_view
                             .as_ref()

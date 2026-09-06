@@ -834,6 +834,7 @@ cockpit-spawn-card-filter-folders = Ordner filtern…
 cockpit-account-rename = Konto umbenennen
 cockpit-account-alias-write-error = Kontoname konnte nicht gespeichert werden: { $error }
 file-manager-unknown-host = Datei-Manager nicht möglich: Der Host dieses Panes ließ sich nicht bestimmen — stattdessen diesen Rechner zu zeigen, wären die falschen Dateien.
+file-manager-local-unavailable-windows = Der lokale Dateimanager ist unter Windows noch nicht verfügbar.
 sftp-file-manager-title = Datei-Manager
 sftp-context-menu-open = Öffnen
 sftp-context-menu-download = Herunterladen

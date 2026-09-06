@@ -4056,6 +4056,7 @@ cockpit-spawn-card-filter-folders = Filter folders…
 cockpit-account-rename = Rename this account
 cockpit-account-alias-write-error = Could not save the account name: { $error }
 file-manager-unknown-host = Cannot open the file manager: this pane's host could not be identified, and browsing this machine instead would show the wrong files.
+file-manager-local-unavailable-windows = The local file manager is not available on Windows yet.
 sftp-file-manager-title = File manager
 cockpit-table-search-placeholder = Filter sessions…
 cockpit-meter-5h = 5h

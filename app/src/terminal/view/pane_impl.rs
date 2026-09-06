@@ -331,8 +331,9 @@ impl TerminalView {
             right_row.add_child(sharing);
         }
         // FM design §7: a visible "toggle to file manager" icon on the pane header,
-        // beside the sharing/overflow/close controls. (Universal fallback = the
-        // cmd-shift-E hotkey, which also works on a lone pane with no header.)
+        // beside the sharing/overflow/close controls on supported platforms.
+        // The hotkey also works on a lone pane with no header.
+        #[cfg(not(target_os = "windows"))]
         right_row.add_child(self.render_open_file_manager_button(app));
         let show_close_button = self
             .focus_handle
@@ -350,7 +351,7 @@ impl TerminalView {
         let icon_button_count = show_close_button as u32
             + header_ctx.has_overflow_items as u32
             + has_sharing_element as u32
-            + 1; // the always-present "toggle to file manager" button
+            + (!cfg!(target_os = "windows")) as u32;
 
         let min_width = header_edge_min_width(icon_button_count);
         (right_row.finish(), min_width)
@@ -540,6 +541,7 @@ impl TerminalView {
     /// The pane header now always renders (`should_render_header` returns true even
     /// for a lone pane), so this icon is available on every terminal pane; the
     /// `cmd-shift-E` hotkey is the equivalent keyboard affordance.
+    #[cfg(not(target_os = "windows"))]
     fn render_open_file_manager_button(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();

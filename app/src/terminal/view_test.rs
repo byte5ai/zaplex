@@ -4865,3 +4865,37 @@ fn file_manager_start_path_falls_back_when_no_cwd() {
     );
     assert!(start.is_absolute());
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+fn open_file_manager_here_is_unavailable_on_windows() {
+    use std::cell::Cell;
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let unavailable_toast_seen = Rc::new(Cell::new(false));
+
+        app.update(|ctx| {
+            let unavailable_toast_seen = unavailable_toast_seen.clone();
+            ctx.subscribe_to_model(
+                &crate::workspace::ToastStack::handle(ctx),
+                move |_, event, _| {
+                    if matches!(
+                        event,
+                        crate::workspace::toast_stack::ToastStackEvent::AddEphemeralToast { .. }
+                    ) {
+                        unavailable_toast_seen.set(true);
+                    }
+                },
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(&TerminalAction::OpenFileManagerHere, ctx);
+        });
+
+        assert!(unavailable_toast_seen.get());
+        terminal.read(&app, |_, _| ());
+    });
+}
