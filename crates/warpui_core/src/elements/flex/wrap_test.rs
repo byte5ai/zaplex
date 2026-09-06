@@ -350,6 +350,85 @@ fn test_fill_element_within_size_constraint() {
 }
 
 #[test]
+fn test_fill_entire_run_as_first_child_has_no_leading_run_spacing() {
+    App::test((), |mut app| async move {
+        let (window_id, test_view) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            TestDynamicView::new(|_| {
+                ConstrainedBox::new(
+                    Wrap::row()
+                        .with_run_spacing(10.)
+                        .with_children([
+                            WrapFillEntireRun::new(
+                                ConstrainedBox::new(Rect::new().finish())
+                                    .with_height(50.)
+                                    .finish(),
+                            )
+                            .finish(),
+                            ConstrainedBox::new(Rect::new().finish())
+                                .with_width(100.)
+                                .with_height(50.)
+                                .finish(),
+                        ])
+                        .finish(),
+                )
+                .with_width(100.)
+                .finish()
+            })
+        });
+
+        test_view.update(&mut app, |_, ctx| ctx.notify());
+        assert_bounds_of_rects(
+            &mut app,
+            window_id,
+            [
+                RectF::new(vec2f(0., 0.), vec2f(100., 50.)),
+                RectF::new(vec2f(0., 60.), vec2f(100., 50.)),
+            ],
+        );
+    });
+}
+
+#[test]
+fn test_oversized_fill_as_first_child_has_no_leading_run_spacing() {
+    App::test((), |mut app| async move {
+        let (window_id, test_view) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            TestDynamicView::new(|_| {
+                ConstrainedBox::new(
+                    Wrap::row()
+                        .with_run_spacing(10.)
+                        .with_children([
+                            WrapFill::new(
+                                101.,
+                                ConstrainedBox::new(Rect::new().finish())
+                                    .with_height(50.)
+                                    .finish(),
+                            )
+                            .finish(),
+                            ConstrainedBox::new(Rect::new().finish())
+                                .with_width(100.)
+                                .with_height(50.)
+                                .finish(),
+                        ])
+                        .finish(),
+                )
+                .with_width(100.)
+                .finish()
+            })
+        });
+
+        test_view.update(&mut app, |_, ctx| ctx.notify());
+        assert_bounds_of_rects(
+            &mut app,
+            window_id,
+            [
+                RectF::new(vec2f(0., 0.), vec2f(100., 50.)),
+                RectF::new(vec2f(0., 60.), vec2f(100., 50.)),
+            ],
+        );
+    });
+}
+
+#[test]
 fn test_wrap_spacing() {
     App::test((), |mut app| async move {
         let app = &mut app;

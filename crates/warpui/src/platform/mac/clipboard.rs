@@ -6,11 +6,10 @@ use cocoa::{
     foundation::NSString,
 };
 use objc::{class, msg_send, sel, sel_impl};
-use std::ffi::CStr;
-use std::os::raw::{c_uchar, c_void};
+use std::os::raw::c_void;
 use std::slice;
 
-use super::make_nsstring;
+use super::{make_nsstring, utils::nsstring_as_str};
 use warpui_core::clipboard::{ClipboardContent, ImageData};
 
 extern "C" {
@@ -91,10 +90,7 @@ impl crate::Clipboard for Clipboard {
 
             let text = NSPasteboard::stringForType(self.0, NSPasteboardTypeString);
             let mut content = ClipboardContent::plain_text(if text != nil {
-                CStr::from_ptr(text.UTF8String())
-                    .to_str()
-                    .unwrap_or("")
-                    .to_string()
+                nsstring_as_str(text).unwrap_or_default().to_owned()
             } else {
                 String::from("")
             });
@@ -102,13 +98,9 @@ impl crate::Clipboard for Clipboard {
             if available_paths > 0 {
                 content.paths = Some(
                     (0..available_paths)
-                        .map(|i| {
+                        .filter_map(|i| {
                             let directory = file_paths.objectAtIndex(i);
-                            let slice = slice::from_raw_parts(
-                                directory.UTF8String() as *const c_uchar,
-                                directory.len(),
-                            );
-                            std::str::from_utf8_unchecked(slice).to_string()
+                            nsstring_as_str(directory).map(str::to_owned)
                         })
                         .collect::<Vec<String>>(),
                 );
@@ -116,12 +108,7 @@ impl crate::Clipboard for Clipboard {
 
             let html = NSPasteboard::stringForType(self.0, NSPasteboardTypeHTML);
             if html != nil {
-                content.html = Some(
-                    CStr::from_ptr(html.UTF8String())
-                        .to_str()
-                        .unwrap_or("")
-                        .to_string(),
-                )
+                content.html = Some(nsstring_as_str(html).unwrap_or_default().to_owned())
             }
 
             // Try to read image data from clipboard
@@ -161,10 +148,7 @@ impl Clipboard {
                         let bytes_ptr = NSData::bytes(data) as *const u8;
                         let bytes = slice::from_raw_parts(bytes_ptr, length as usize);
 
-                        let mime_type = match CStr::from_ptr(pasteboard_type.UTF8String())
-                            .to_str()
-                            .unwrap_or("")
-                        {
+                        let mime_type = match nsstring_as_str(pasteboard_type).unwrap_or_default() {
                             "public.png" => "image/png",
                             "public.jpeg" => "image/jpeg",
                             "public.gif" | "com.compuserve.gif" => "image/gif",
@@ -177,8 +161,7 @@ impl Clipboard {
                         let filename = {
                             let html = NSPasteboard::stringForType(self.0, NSPasteboardTypeHTML);
                             if html != nil {
-                                let html_str =
-                                    CStr::from_ptr(html.UTF8String()).to_str().unwrap_or("");
+                                let html_str = nsstring_as_str(html).unwrap_or_default();
                                 if !html_str.is_empty() {
                                     crate::clipboard_utils::extract_filename_from_html(html_str)
                                 } else {

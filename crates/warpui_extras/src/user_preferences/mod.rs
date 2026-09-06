@@ -1,5 +1,8 @@
 //! Storage for user preferences.
 
+use std::io::Write as _;
+use std::path::Path;
+
 pub mod file_backed;
 pub mod in_memory;
 #[cfg(target_family = "wasm")]
@@ -10,6 +13,54 @@ pub mod registry_backed;
 pub mod toml_backed;
 #[cfg(target_os = "macos")]
 pub mod user_defaults;
+
+/// Replaces a preferences file atomically. Existing permissions are retained; newly created files
+/// keep `NamedTempFile`'s owner-only Unix mode. File data is synced before replacement, and the
+/// parent directory is synced on Unix so the rename survives power loss.
+fn atomic_write_inner(
+    file_path: &Path,
+    data: &[u8],
+    before_persist: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<(), Error> {
+    let parent_dir = file_path
+        .parent()
+        .expect("absolute path to file should have parent");
+    std::fs::create_dir_all(parent_dir)?;
+
+    let mut temporary = tempfile::NamedTempFile::new_in(parent_dir)?;
+    temporary.write_all(data)?;
+    temporary.flush()?;
+    match std::fs::metadata(file_path) {
+        Ok(metadata) => temporary
+            .as_file()
+            .set_permissions(metadata.permissions())?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    temporary.as_file().sync_all()?;
+    before_persist(temporary.path())?;
+    temporary
+        .persist(file_path)
+        .map_err(|error| Error::IoError(error.error))?;
+
+    #[cfg(unix)]
+    std::fs::File::open(parent_dir)?.sync_all()?;
+
+    Ok(())
+}
+
+pub(super) fn atomic_write(file_path: &Path, data: &[u8]) -> Result<(), Error> {
+    atomic_write_inner(file_path, data, |_| Ok(()))
+}
+
+#[cfg(test)]
+pub(super) fn atomic_write_with_pre_persist(
+    file_path: &Path,
+    data: &[u8],
+    before_persist: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<(), Error> {
+    atomic_write_inner(file_path, data, before_persist)
+}
 
 /// A type alias for a boxed user preferences backend.
 pub type Model = Box<dyn UserPreferences>;

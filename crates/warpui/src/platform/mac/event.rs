@@ -1,5 +1,4 @@
 use cocoa::foundation::NSUInteger;
-use std::{ffi::CStr, os::raw::c_char};
 
 use warpui_core::event::{KeyEventDetails, ModifiersState};
 use warpui_core::platform::keyboard::{KeyCode, PhysicalKey};
@@ -14,7 +13,7 @@ use pathfinder_geometry::vector::vec2f;
 
 use super::{
     keycode::{scancode_to_physicalkey, Keycode},
-    utils::unicode_char_to_key,
+    utils::{nsstring_as_str, unicode_char_to_key},
 };
 
 // Unpublished but widely known and stable flags for distinguishing left/right alt.
@@ -77,9 +76,7 @@ pub unsafe fn from_native(
                 key_without_modifiers,
             };
             let unmodified_chars = native_event.charactersIgnoringModifiers();
-            let unmodified_chars = CStr::from_ptr(unmodified_chars.UTF8String() as *mut c_char)
-                .to_str()
-                .ok()?;
+            let unmodified_chars = nsstring_as_str(unmodified_chars)?;
 
             let unmodified_chars = if let Some(first_char) = unmodified_chars.chars().next() {
                 unicode_char_to_key(first_char as u16).unwrap_or(unmodified_chars)
@@ -96,17 +93,9 @@ pub unsafe fn from_native(
                 key: unmodified_chars.into(),
             };
 
-            let chars = native_event.characters().UTF8String() as *mut c_char;
-            let chars = if chars.is_null() {
-                // `UTF8String` can return null in some rare cases where the
-                // string isn't valid UTF-8.  For example, if the user
-                // enters a UTF-8 surrogate character, e.g. U+DDDD, via the
-                // Unicode Hex Input keyboard, the conversion will produce
-                // null.
-                String::new()
-            } else {
-                CStr::from_ptr(chars).to_str().ok()?.to_owned()
-            };
+            let chars = nsstring_as_str(native_event.characters())
+                .unwrap_or_default()
+                .to_owned();
 
             Some(Event::KeyDown {
                 keystroke,

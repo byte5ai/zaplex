@@ -141,6 +141,31 @@ fn test_update_model_dependency_rerenders() {
 }
 
 #[test]
+fn panic_during_render_restores_autotracking_state() {
+    let window_id = crate::WindowId::new();
+    let view_id = crate::EntityId::new();
+    let result = std::panic::catch_unwind(|| {
+        render_view(window_id, view_id, || panic!("render failed"));
+    });
+
+    assert!(result.is_err());
+    with_cache(|cache| assert!(cache.rendering_view.is_none()));
+    render_view(window_id, view_id, || ());
+}
+
+#[test]
+fn recursive_render_is_rejected_and_restores_autotracking_state() {
+    let result = std::panic::catch_unwind(|| {
+        render_view(crate::WindowId::new(), crate::EntityId::new(), || {
+            render_view(crate::WindowId::new(), crate::EntityId::new(), || ());
+        });
+    });
+
+    assert!(result.is_err());
+    with_cache(|cache| assert!(cache.rendering_view.is_none()));
+}
+
+#[test]
 fn test_update_model_non_dependency_no_rerender() {
     App::test((), |mut app| async move {
         let model_handle = app.add_model(|_| Model::default());

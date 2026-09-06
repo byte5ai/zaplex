@@ -409,6 +409,17 @@ impl RefCounts {
         *self.entity_counts.entry(entity_id).or_insert(0) += 1;
     }
 
+    fn try_inc_entity(&mut self, entity_id: EntityId) -> bool {
+        let Some(count) = self.entity_counts.get_mut(&entity_id) else {
+            return false;
+        };
+        if *count == 0 {
+            return false;
+        }
+        *count += 1;
+        true
+    }
+
     fn dec_model(&mut self, model_id: EntityId) {
         if let Some(count) = self.entity_counts.get_mut(&model_id) {
             *count -= 1;

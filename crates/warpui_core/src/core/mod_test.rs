@@ -22,6 +22,98 @@ use crate::{
 mod transfer_view_tests;
 
 #[test]
+fn weak_model_upgrade_never_returns_doomed_handle() {
+    struct Model;
+    impl Entity for Model {
+        type Event = ();
+    }
+
+    App::test((), |mut app| async move {
+        let model = app.add_model(|_| Model);
+        let weak = model.downgrade();
+
+        app.update(|ctx| {
+            drop(model);
+            assert!(weak.upgrade(ctx).is_none());
+        });
+        app.read(|ctx| assert!(weak.upgrade(ctx).is_none()));
+    });
+}
+
+#[test]
+fn weak_view_upgrade_never_returns_doomed_handle() {
+    struct TestView;
+    impl Entity for TestView {
+        type Event = ();
+    }
+    impl View for TestView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "weak_view_upgrade_never_returns_doomed_handle"
+        }
+    }
+    impl TypedActionView for TestView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let (window_id, _root) = app.add_window(WindowStyle::NotStealFocus, |_| TestView);
+        let view = app.add_view(window_id, |_| TestView);
+        let weak = view.downgrade();
+
+        app.update(|ctx| {
+            drop(view);
+            assert!(weak.upgrade(ctx).is_none());
+        });
+        app.read(|ctx| assert!(weak.upgrade(ctx).is_none()));
+    });
+}
+
+#[test]
+fn weak_upgrades_after_background_drop_return_none() {
+    struct Model;
+    impl Entity for Model {
+        type Event = ();
+    }
+
+    struct TestView;
+    impl Entity for TestView {
+        type Event = ();
+    }
+    impl View for TestView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "weak_upgrades_after_background_drop_return_none"
+        }
+    }
+    impl TypedActionView for TestView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let model = app.add_model(|_| Model);
+        let weak_model = model.downgrade();
+        let (window_id, _root) = app.add_window(WindowStyle::NotStealFocus, |_| TestView);
+        let view = app.add_view(window_id, |_| TestView);
+        let weak_view = view.downgrade();
+
+        std::thread::spawn(move || drop(model)).join().unwrap();
+        std::thread::spawn(move || drop(view)).join().unwrap();
+
+        app.update(|ctx| {
+            assert!(weak_model.upgrade(ctx).is_none());
+            assert!(weak_view.upgrade(ctx).is_none());
+        });
+    });
+}
+
+#[test]
 fn test_subscribe_and_emit_from_model() {
     #[derive(Default)]
     struct Model {

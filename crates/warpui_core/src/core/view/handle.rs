@@ -253,16 +253,23 @@ impl<T: View> WeakViewHandle<T> {
         // Look up the current window for this view
         let window_id = app.view_to_window.get(&self.view_id).copied()?;
 
+        let mut ref_counts = app.ref_counts.lock();
         if app
             .windows
             .get(&window_id)
             .and_then(|w| w.views.get(&self.view_id))
-            .is_some()
+            .is_none()
+            || !ref_counts.try_inc_entity(self.view_id)
         {
-            Some(ViewHandle::new(window_id, self.view_id, &app.ref_counts))
-        } else {
-            None
+            return None;
         }
+        drop(ref_counts);
+        Some(ViewHandle {
+            window_id,
+            view_id: self.view_id,
+            view_type: PhantomData,
+            ref_counts: Arc::downgrade(&app.ref_counts),
+        })
     }
 
     pub fn id(&self) -> EntityId {
