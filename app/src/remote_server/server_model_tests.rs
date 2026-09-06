@@ -3,11 +3,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use super::super::proto::{
-    list_directory_response, read_file_chunk_response, resolve_path_response, server_message,
-    write_file_chunk_response, AgentProcessSignal, AgentProcessSignalRequest,
+    client_message, list_directory_response, read_file_chunk_response, resolve_path_response,
+    server_message, write_file_chunk_response, AgentProcessSignal, AgentProcessSignalRequest,
     AgentProcessSignalStatus, AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo,
-    Authenticate, BindAgentPty, CreateDirectory, Initialize, ListDirectory, ReadFileChunk,
-    ResolvePath, UnbindAgentPty, WriteFileChunk,
+    Authenticate, BindAgentPty, ClientMessage, CreateDirectory, Initialize, ListDirectory,
+    ReadFileChunk, ResolvePath, SessionBootstrapped, UnbindAgentPty, WriteFileChunk,
 };
 use super::super::protocol::RequestId;
 #[cfg(feature = "local_fs")]
@@ -71,11 +71,69 @@ fn request_id() -> RequestId {
     RequestId::from("test-request".to_string())
 }
 
+fn session_bootstrapped_message(session_id: u64) -> ClientMessage {
+    ClientMessage {
+        request_id: String::new(),
+        message: Some(client_message::Message::SessionBootstrapped(
+            SessionBootstrapped {
+                session_id,
+                shell_type: "bash".to_string(),
+                shell_path: Some("/bin/bash".to_string()),
+            },
+        )),
+    }
+}
+
 #[test]
 fn fresh_model_starts_without_auth_token() {
     let model = test_model();
 
     assert_eq!(model.auth_token(), None);
+}
+
+#[test]
+fn deregister_connection_removes_its_session_executors() {
+    warpui::App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_ctx| test_model());
+        let (first_tx, _first_rx) = async_channel::unbounded();
+        let (second_tx, _second_rx) = async_channel::unbounded();
+        let first = uuid::Uuid::new_v4();
+        let second = uuid::Uuid::new_v4();
+
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(first, first_tx, ctx);
+            model.register_connection(second, second_tx, ctx);
+            model.handle_message(first, session_bootstrapped_message(7), ctx);
+            assert_eq!(model.executors.len(), 1);
+
+            model.deregister_connection(first, ctx);
+
+            assert!(model.connection_senders.contains_key(&second));
+            assert!(model.executors.is_empty());
+        });
+    });
+}
+
+#[test]
+fn identical_client_session_ids_do_not_collide_across_connections() {
+    warpui::App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_ctx| test_model());
+        let (first_tx, _first_rx) = async_channel::unbounded();
+        let (second_tx, _second_rx) = async_channel::unbounded();
+        let first = uuid::Uuid::new_v4();
+        let second = uuid::Uuid::new_v4();
+
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(first, first_tx, ctx);
+            model.register_connection(second, second_tx, ctx);
+            model.handle_message(first, session_bootstrapped_message(7), ctx);
+            model.handle_message(second, session_bootstrapped_message(7), ctx);
+
+            assert_eq!(model.executors.len(), 2);
+            model.deregister_connection(first, ctx);
+            assert_eq!(model.executors.len(), 1);
+        });
+    });
 }
 
 #[test]

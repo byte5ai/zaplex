@@ -490,8 +490,9 @@ pub struct ServerModel {
     /// Returned in every `InitializeResponse` so clients can deduplicate
     /// host-scoped models.
     host_id: String,
-    /// Per-session command executors created from `SessionBootstrapped` notifications.
-    executors: HashMap<SessionId, Arc<LocalCommandExecutor>>,
+    /// Per-connection, per-session command executors created from `SessionBootstrapped`
+    /// notifications. Client-local session ids may overlap across proxy connections.
+    executors: HashMap<(ConnectionId, SessionId), Arc<LocalCommandExecutor>>,
     /// Tracks in-flight file write/delete operations and handles cleanup.
     pending_file_ops: PendingFileOps,
     /// Tracks open server-local buffers, their connections, and pending
@@ -914,6 +915,8 @@ impl ServerModel {
         if self.connection_senders.remove(&conn_id).is_none() {
             return;
         }
+        self.executors
+            .retain(|(executor_conn_id, _), _| *executor_conn_id != conn_id);
         #[cfg(unix)]
         self.safe_files.close_connection(conn_id);
         // Drop this connection from all open server-local buffers; orphaned
@@ -995,7 +998,7 @@ impl ServerModel {
                 return;
             }
             Some(client_message::Message::SessionBootstrapped(msg)) => {
-                self.handle_session_bootstrapped(msg);
+                self.handle_session_bootstrapped(conn_id, msg);
                 return;
             }
             Some(client_message::Message::Abort(abort)) => {
@@ -1504,7 +1507,7 @@ impl ServerModel {
 
     /// Handles `SessionBootstrapped` by creating a `LocalCommandExecutor` for
     /// the session. This is a notification — no response is sent.
-    fn handle_session_bootstrapped(&mut self, msg: SessionBootstrapped) {
+    fn handle_session_bootstrapped(&mut self, conn_id: ConnectionId, msg: SessionBootstrapped) {
         let session_id = SessionId::from(msg.session_id);
         log::info!(
             "Handling SessionBootstrapped: session_id={session_id:?}, \
@@ -1529,7 +1532,11 @@ impl ServerModel {
             );
         }
         let executor = Arc::new(LocalCommandExecutor::new(shell_path, shell_type));
-        if self.executors.insert(session_id, executor).is_some() {
+        if self
+            .executors
+            .insert((conn_id, session_id), executor)
+            .is_some()
+        {
             log::warn!(
                 "Overwriting existing executor for session {session_id:?} \
                  (re-SessionBootstrapped with shell_type={:?})",
@@ -1566,7 +1573,7 @@ impl ServerModel {
             Some(req.environment_variables)
         };
 
-        let Some(executor) = self.executors.get(&session_id).cloned() else {
+        let Some(executor) = self.executors.get(&(conn_id, session_id)).cloned() else {
             log::error!("No executor for session {session_id:?}, session was never initialized");
             return HandlerOutcome::Sync(server_message::Message::RunCommandResponse(
                 RunCommandResponse {
