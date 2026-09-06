@@ -2346,28 +2346,7 @@ impl ServerModel {
                 ));
             }
             let read_dir = std::fs::read_dir(&path)?;
-            let mut entries = Vec::new();
-            for entry in read_dir {
-                let entry = entry?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                let metadata = std::fs::symlink_metadata(entry.path())?;
-                let file_type = metadata.file_type();
-                let kind = entry_kind(Some(&file_type), Some(&metadata));
-                let is_dir = kind == FileSystemEntryKind::Directory as i32;
-                let size_bytes = metadata.is_file().then_some(metadata.len());
-                let modified_epoch_millis = metadata
-                    .modified()
-                    .ok()
-                    .and_then(system_time_to_epoch_millis);
-                entries.push(DirEntry {
-                    name,
-                    is_dir,
-                    kind,
-                    size_bytes,
-                    modified_epoch_millis,
-                });
-            }
-            entries.sort_by(|a, b| a.name.cmp(&b.name));
+            let entries = collect_directory_entries(read_dir);
             let canonical_path = path
                 .canonicalize()
                 .unwrap_or(path)
@@ -2622,6 +2601,52 @@ fn entry_kind(file_type: Option<&std::fs::FileType>, metadata: Option<&std::fs::
         return FileSystemEntryKind::File as i32;
     }
     FileSystemEntryKind::Other as i32
+}
+
+#[cfg(feature = "local_fs")]
+fn collect_directory_entries<I>(entries: I) -> Vec<DirEntry>
+where
+    I: IntoIterator<Item = std::io::Result<std::fs::DirEntry>>,
+{
+    let mut collected = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                log::warn!("Skipping unreadable directory entry: {err}");
+                continue;
+            }
+        };
+        let path = entry.path();
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                log::debug!("Skipping directory entry removed during listing: {path:?}");
+                continue;
+            }
+            Err(err) => {
+                log::warn!("Skipping directory entry with unreadable metadata {path:?}: {err}");
+                continue;
+            }
+        };
+        let file_type = metadata.file_type();
+        let kind = entry_kind(Some(&file_type), Some(&metadata));
+        let is_dir = kind == FileSystemEntryKind::Directory as i32;
+        let size_bytes = metadata.is_file().then_some(metadata.len());
+        let modified_epoch_millis = metadata
+            .modified()
+            .ok()
+            .and_then(system_time_to_epoch_millis);
+        collected.push(DirEntry {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            is_dir,
+            kind,
+            size_bytes,
+            modified_epoch_millis,
+        });
+    }
+    collected.sort_by(|a, b| a.name.cmp(&b.name));
+    collected
 }
 
 #[cfg(feature = "local_fs")]
