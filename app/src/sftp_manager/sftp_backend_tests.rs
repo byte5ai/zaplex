@@ -4966,6 +4966,78 @@ async fn live_sftp_remote_safe_rename_recovers_when_response_was_lost() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the isolated OpenSSH fixture from live-sftp-safety.yml"]
+async fn live_sftp_copy_file_keeps_destination_after_handles_drop() {
+    let (host, port, username, key_path, root) = live_sftp_configuration();
+    let case_root = root.join(format!("zaplex-live-sftp-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&case_root).unwrap();
+    let source = case_root.join("source.bin");
+    let destination = case_root.join("destination.bin");
+    fs::write(&source, b"live-sftp-copy-payload").unwrap();
+
+    let session = zap_sftp::SftpSession::connect(
+        &host,
+        port,
+        &username,
+        zap_sftp::AuthMethod::PublicKey {
+            key_path,
+            passphrase: None,
+        },
+        Some(std::time::Duration::from_secs(10)),
+    )
+    .expect("the CI OpenSSH fixture must accept the configured key");
+    let sftp = session.sftp().expect("the live SFTP subsystem must open");
+    let journal = tempdir().unwrap();
+    let slot = SafeFileClientSlot::default();
+    let (client, _executor, server) =
+        spawn_live_safe_file_client(journal.path().to_path_buf(), None);
+    slot.set(Some(client));
+    let backend = LiveSftpBackend::new_with_safe_file_slot(sftp, slot.clone());
+
+    backend
+        .copy_file(&source, &destination)
+        .expect("copy_file must publish the completed stage");
+
+    fs::write(&source, b"replacement-payload").unwrap();
+    backend
+        .copy_file(&source, &destination)
+        .expect_err("copy_file must not replace an existing destination");
+
+    let source_tree = case_root.join("source-tree");
+    let destination_tree = case_root.join("destination-tree");
+    fs::create_dir_all(source_tree.join("nested")).unwrap();
+    fs::write(source_tree.join("first.bin"), b"first").unwrap();
+    fs::write(source_tree.join("nested/second.bin"), b"second").unwrap();
+    backend
+        .copy_dir_recursive(&source_tree, &destination_tree)
+        .expect("recursive copy must retain every published file");
+    drop(backend);
+
+    assert_eq!(fs::read(&destination).unwrap(), b"live-sftp-copy-payload");
+    assert_eq!(
+        fs::read(destination_tree.join("first.bin")).unwrap(),
+        b"first"
+    );
+    assert_eq!(
+        fs::read(destination_tree.join("nested/second.bin")).unwrap(),
+        b"second"
+    );
+    assert!(fs::read_dir(&case_root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".zaplex-copy-")
+    }));
+
+    slot.set(None);
+    server.abort();
+    let _ = server.await;
+    fs::remove_dir_all(case_root).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the isolated OpenSSH fixture from live-sftp-safety.yml"]
 async fn live_sftp_remote_safe_rename_does_not_claim_a_missing_user_source_was_restored() {
     let (host, port, username, key_path, root) = live_sftp_configuration();
     let case_root = root.join(format!("zaplex-live-sftp-{}", uuid::Uuid::new_v4()));

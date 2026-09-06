@@ -5791,7 +5791,10 @@ fn restore_quarantine_after_validation_failure(
     }
 }
 
-fn temporary_target_path(target: &std::path::Path, kind: &str) -> Result<PathBuf, SftpOpsError> {
+pub(super) fn temporary_target_path(
+    target: &std::path::Path,
+    kind: &str,
+) -> Result<PathBuf, SftpOpsError> {
     static NEXT_STAGE_ID: AtomicU64 = AtomicU64::new(1);
     let name = target.file_name().ok_or_else(|| {
         SftpOpsError::Operation(format!(

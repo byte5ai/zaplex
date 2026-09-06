@@ -2568,8 +2568,9 @@ impl SftpBackend for LiveSftpBackend {
 
     fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
         validate_copy_destination(src, dst, false)?;
+        let staged_path = super::transfer_job::temporary_target_path(dst, "copy")?;
         let mut reader = self.open_file_reader(src)?;
-        let mut writer = self.create_file_writer(dst)?;
+        let mut writer = self.create_file_writer(&staged_path)?;
         let mut buffer = vec![0_u8; super::transfer_job::STREAM_CHUNK_SIZE];
         loop {
             let read = reader.read_chunk(&mut buffer)?;
@@ -2578,7 +2579,14 @@ impl SftpBackend for LiveSftpBackend {
             }
             writer.write_chunk(&buffer[..read])?;
         }
-        writer.flush()
+        writer.flush()?;
+        let anchor = writer.ownership_anchor()?.ok_or_else(|| {
+            SftpOpsError::Operation(format!(
+                "Remote copy stage has no ownership anchor: {}",
+                staged_path.display()
+            ))
+        })?;
+        self.rename_if_matches(&staged_path, dst, anchor)
     }
 }
 
