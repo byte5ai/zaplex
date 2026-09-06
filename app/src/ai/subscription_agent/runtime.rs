@@ -9,6 +9,7 @@ use crate::ai::api_error::AIApiError;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::cockpit::CockpitModel;
 use crate::remote_server::manager::RemoteServerManager;
+use crate::report_if_error;
 use crate::terminal::ssh::util::InteractiveSshCommand;
 use anyhow::{anyhow, bail, Context, Result};
 use futures::channel::oneshot;
