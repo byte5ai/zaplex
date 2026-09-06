@@ -1146,10 +1146,10 @@ fn cancel_preserves_source() {
 }
 
 #[test]
-fn cancelled_copy_preserves_previous_destination() {
+fn cancelled_file_transfer_removes_owned_stage_and_returns_cancelled() {
     let source = tempdir().unwrap();
     let target = tempdir().unwrap();
-    let bytes = vec![0x5c; STREAM_CHUNK_SIZE * 2];
+    let bytes = vec![0x5c; STREAM_CHUNK_SIZE * 3 + 1];
     fs::write(source.path().join("source.bin"), &bytes).unwrap();
     fs::write(target.path().join("target.bin"), b"existing").unwrap();
     let control = TransferControl::default();
@@ -1169,11 +1169,15 @@ fn cancelled_copy_preserves_previous_destination() {
         }),
     );
 
-    assert!(matches!(result, Err(SftpOpsError::RecoveryRequired { .. })));
+    assert!(matches!(result, Err(SftpOpsError::Cancelled)));
     assert_eq!(fs::read(source.path().join("source.bin")).unwrap(), bytes);
     assert_eq!(
         fs::read(target.path().join("target.bin")).unwrap(),
         b"existing"
+    );
+    assert!(
+        transfer_artifacts(target.path(), "zaplex-transfer").is_empty(),
+        "cancelling after a staged write must remove the owned stage"
     );
     assert!(control.is_cancelled());
 }
