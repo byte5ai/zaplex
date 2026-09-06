@@ -94,6 +94,10 @@ pub enum AgentInventoryStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostAvailability {
     Available,
+    /// The live daemon reports a registry binding, but no authoritative
+    /// registry snapshot has been read yet. Keep the observed host visible,
+    /// but do not route actions or attention through it.
+    Unverified,
     Removed,
 }
 
@@ -313,6 +317,28 @@ pub fn reconcile_connected_hosts(tree: &mut FleetTree, registered: &[RegisteredH
             live.host.clone_from(&registered_host.label);
             live.availability = HostAvailability::Available;
             live.registry_node_id = Some(registered_host.node_id.clone());
+        }
+    }
+
+    sort_hosts(&mut tree.hosts);
+    tree.needs_me = tree
+        .hosts
+        .iter()
+        .filter(|host| host.is_available())
+        .map(|host| host.needs_me)
+        .sum();
+}
+
+/// Fail closed for registry-bound daemon hosts when no authoritative registry
+/// snapshot is available. Unscoped daemon connections remain usable because
+/// their routes do not depend on a registry row.
+pub fn mark_registry_bound_hosts_unverified(tree: &mut FleetTree) {
+    for host in &mut tree.hosts {
+        if host.is_local {
+            host.availability = HostAvailability::Available;
+            host.registry_node_id = None;
+        } else if host.registry_node_id.is_some() {
+            host.availability = HostAvailability::Unverified;
         }
     }
 

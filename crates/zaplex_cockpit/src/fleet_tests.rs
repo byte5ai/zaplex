@@ -641,6 +641,27 @@ fn removed_host_is_never_routed_as_available() {
     );
 }
 
+#[test]
+fn unavailable_registry_keeps_bound_host_visible_but_unroutable() {
+    let mut remote = remote_host("devhost", "daemon-dev");
+    remote.registry_node_id = Some("node-dev".to_string());
+    let mut remote_session = session("a", "/p/x", SessionState::Waiting, 10);
+    remote_session.account_email = Some("me@example.com".to_string());
+    let mut tree = fold_inventory("local", Vec::new(), vec![(remote, vec![remote_session])]);
+
+    mark_registry_bound_hosts_unverified(&mut tree);
+
+    let host = tree
+        .hosts
+        .iter()
+        .find(|host| host.host_id.as_deref() == Some("daemon-dev"))
+        .unwrap();
+    assert_eq!(host.availability, HostAvailability::Unverified);
+    assert_eq!(host.registry_node_id.as_deref(), Some("node-dev"));
+    assert_eq!(tree.needs_me, 0);
+    assert!(crate::conductor::waiting_sessions(&tree).is_empty());
+}
+
 // ── Account ↔ fleet join (F5) ───────────────────────────────────────────────
 
 use crate::types::Account;

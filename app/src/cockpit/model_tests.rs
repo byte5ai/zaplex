@@ -244,6 +244,97 @@ fn last_open_remote_session_removes_host_root() {
     assert!(!remove_disconnected_host(&mut inventory, "host-dev"));
 }
 
+#[test]
+fn registry_read_error_reuses_last_successful_snapshot() {
+    let mut remote = remote_host(
+        "daemon-label",
+        "host-dev",
+        session("waiting", zaplex_cockpit::SessionState::Waiting),
+    );
+    remote.registry_node_id = Some("node-dev".to_string());
+    remote.needs_me = 1;
+    remote.projects[0].needs_me = 1;
+    let mut inventory = FleetTree {
+        hosts: vec![remote],
+        needs_me: 1,
+    };
+    let cached = vec![RegisteredHost {
+        node_id: "node-dev".to_string(),
+        label: "registry-label".to_string(),
+        live_host_id: None,
+    }];
+    let live_hosts = HashMap::from([("node-dev".to_string(), "host-dev".to_string())]);
+
+    let read = resolve_registry_read(Err("database busy".to_string()), Some(&cached));
+    reconcile_registry_read(&mut inventory, &read, &live_hosts);
+
+    let host = &inventory.hosts[0];
+    assert_eq!(host.host, "registry-label");
+    assert_eq!(
+        host.availability,
+        zaplex_cockpit::HostAvailability::Available
+    );
+    assert_eq!(host.registry_node_id.as_deref(), Some("node-dev"));
+    assert_eq!(inventory.needs_me, 1);
+}
+
+#[test]
+fn first_registry_read_error_marks_bound_hosts_unverified() {
+    let mut remote = remote_host(
+        "daemon-label",
+        "host-dev",
+        session("waiting", zaplex_cockpit::SessionState::Waiting),
+    );
+    remote.registry_node_id = Some("node-dev".to_string());
+    remote.needs_me = 1;
+    remote.projects[0].needs_me = 1;
+    let mut inventory = FleetTree {
+        hosts: vec![remote],
+        needs_me: 1,
+    };
+
+    let read = resolve_registry_read(Err("database busy".to_string()), None);
+    reconcile_registry_read(&mut inventory, &read, &HashMap::new());
+
+    let host = &inventory.hosts[0];
+    assert_eq!(
+        host.availability,
+        zaplex_cockpit::HostAvailability::Unverified
+    );
+    assert_eq!(host.registry_node_id.as_deref(), Some("node-dev"));
+    assert_eq!(inventory.needs_me, 0);
+}
+
+#[test]
+fn successful_empty_registry_read_remains_authoritative() {
+    let mut remote = remote_host(
+        "daemon-label",
+        "host-dev",
+        session("waiting", zaplex_cockpit::SessionState::Waiting),
+    );
+    remote.registry_node_id = Some("node-dev".to_string());
+    remote.needs_me = 1;
+    remote.projects[0].needs_me = 1;
+    let mut inventory = FleetTree {
+        hosts: vec![remote],
+        needs_me: 1,
+    };
+    let cached = vec![RegisteredHost {
+        node_id: "node-dev".to_string(),
+        label: "registry-label".to_string(),
+        live_host_id: None,
+    }];
+
+    let read = resolve_registry_read(Ok(Vec::new()), Some(&cached));
+    reconcile_registry_read(&mut inventory, &read, &HashMap::new());
+
+    assert_eq!(
+        inventory.hosts[0].availability,
+        zaplex_cockpit::HostAvailability::Removed
+    );
+    assert_eq!(inventory.needs_me, 0);
+}
+
 fn session(id: &str, state: zaplex_cockpit::SessionState) -> SessionSnapshot {
     SessionSnapshot {
         session_id: id.into(),
