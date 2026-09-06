@@ -1589,6 +1589,9 @@ settings-cloud-sync-platform-description = Cloud-Dienst für die Synchronisierun
 settings-cloud-sync-token-label = Zugriffs-Token
 settings-cloud-sync-token-description = Persönliches Zugriffs-Token mit Gist-Berechtigung
 settings-cloud-sync-token-placeholder = Zugriffs-Token eingeben…
+settings-cloud-sync-secret-label = Sync-Passphrase
+settings-cloud-sync-secret-description = Verschlüsselt SSH-Geheimnisse unabhängig vom Transport-Token. Auf allen Geräten dieselbe Passphrase verwenden. Zur Wiederherstellung alter Daten einmal mit dem ursprünglichen Token herunterladen und danach erneut hochladen.
+settings-cloud-sync-secret-placeholder = Sync-Passphrase eingeben…
 settings-cloud-sync-operations-header = Synchronisierung
 settings-cloud-sync-upload-label = Hochladen
 settings-cloud-sync-download-label = Herunterladen
@@ -1610,6 +1613,7 @@ settings-cloud-sync-failed = Fehlgeschlagen: {$error}
 settings-cloud-sync-conflict-status = Konflikt: lokal v{$local}, remote v{$remote}
 settings-cloud-sync-conflict-status-equal = Versionen sind identisch: lokal v{$local} = remote v{$remote}
 settings-cloud-sync-token-not-configured = Token für {$platform} nicht konfiguriert
+settings-cloud-sync-secret-not-configured = Sync-Passphrase nicht konfiguriert
 settings-cloud-sync-conflict-title = Versionskonflikt
 settings-cloud-sync-conflict-description = Die Remote-Version (v{$remote}) ist neuer als die lokale Version (v{$local}). Erzwungenes Hochladen überschreibt die Remote-Daten.
 settings-cloud-sync-conflict-description-equal = Remote- und lokale Version sind identisch. Erzwungenes Hochladen überschreibt die Remote-Daten.

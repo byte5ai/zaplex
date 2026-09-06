@@ -171,10 +171,89 @@ pub fn build_multiplexer_ssh_command_line(
 
 pub fn build_ssh_command_line(server: &SshServerInfo) -> String {
     let args = build_ssh_args(server);
+    shell_join(&args)
+}
+
+fn shell_join(args: &[String]) -> String {
     args.iter()
         .map(|a| shell_escape::unix::escape(Cow::Borrowed(a.as_str())).to_string())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// A key-auth command whose askpass files stay alive until the caller drops this guard.
+///
+/// The command line contains only temporary file paths. The passphrase remains in an owner-only
+/// file and is never placed in PTY input, logs, environment values serialized by Zaplex, or argv.
+pub struct PreparedSshCommand {
+    command_line: String,
+    launcher_path: std::path::PathBuf,
+    _askpass: AskpassSession,
+}
+
+impl PreparedSshCommand {
+    pub fn command_line(&self) -> &str {
+        &self.command_line
+    }
+}
+
+impl Drop for PreparedSshCommand {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.launcher_path);
+    }
+}
+
+/// Prepare a normal SSH command that supplies a private-key passphrase only via SSH_ASKPASS.
+pub fn prepare_key_ssh_command(
+    server: &SshServerInfo,
+    passphrase: &Zeroizing<String>,
+) -> Result<PreparedSshCommand, String> {
+    prepare_key_ssh_args(build_ssh_args(server), passphrase)
+}
+
+/// Prepare a multiplexer SSH command with the same out-of-band key-passphrase channel.
+pub fn prepare_key_multiplexer_ssh_command(
+    server: &SshServerInfo,
+    mode: MultiplexerAttachMode,
+    target: &str,
+    passphrase: &Zeroizing<String>,
+) -> Result<PreparedSshCommand, String> {
+    let args =
+        build_multiplexer_ssh_args(server, mode, target).map_err(|error| error.to_string())?;
+    prepare_key_ssh_args(args, passphrase)
+}
+
+fn prepare_key_ssh_args(
+    mut args: Vec<String>,
+    passphrase: &Zeroizing<String>,
+) -> Result<PreparedSshCommand, String> {
+    let destination_delimiter = args
+        .iter()
+        .position(|arg| arg == "--")
+        .ok_or_else(|| "SSH command has no destination delimiter".to_string())?;
+    args.splice(
+        destination_delimiter..destination_delimiter,
+        [
+            "-o".to_string(),
+            "BatchMode=no".to_string(),
+            "-o".to_string(),
+            "PreferredAuthentications=publickey".to_string(),
+            "-o".to_string(),
+            "PasswordAuthentication=no".to_string(),
+            "-o".to_string(),
+            "KbdInteractiveAuthentication=no".to_string(),
+        ],
+    );
+    let askpass = AskpassSession::new(passphrase)
+        .map_err(|error| format!("Failed to prepare SSH askpass: {error}"))?;
+    let (launcher_path, command_line) = askpass
+        .create_terminal_launcher(&args)
+        .map_err(|error| format!("Failed to prepare SSH askpass launcher: {error}"))?;
+    Ok(PreparedSshCommand {
+        command_line,
+        launcher_path,
+        _askpass: askpass,
+    })
 }
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -992,6 +1071,87 @@ impl AskpassSession {
             .env("SSH_ASKPASS_REQUIRE", "force")
             .env("ZAPLEX_SSH_ASKPASS_FILE", &self.password_path)
             .env_remove("DISPLAY");
+    }
+
+    #[cfg(not(windows))]
+    fn create_terminal_launcher(
+        &self,
+        ssh_args: &[String],
+    ) -> std::io::Result<(std::path::PathBuf, String)> {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let launcher_path = self.script_path.with_extension("launcher.sh");
+        let askpass =
+            shell_escape::unix::escape(Cow::Owned(self.script_path.to_string_lossy().into_owned()));
+        let secret_file = shell_escape::unix::escape(Cow::Owned(
+            self.password_path.to_string_lossy().into_owned(),
+        ));
+        let body = format!(
+            "#!/bin/sh\nexport SSH_ASKPASS={askpass}\nexport SSH_ASKPASS_REQUIRE=force\nexport ZAPLEX_SSH_ASKPASS_FILE={secret_file}\nunset DISPLAY\nexec {}\n",
+            shell_join(ssh_args)
+        );
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(&launcher_path)?;
+        if let Err(error) = file
+            .write_all(body.as_bytes())
+            .and_then(|()| file.sync_all())
+        {
+            drop(file);
+            let _ = std::fs::remove_file(&launcher_path);
+            return Err(error);
+        }
+        drop(file);
+        let command_line =
+            shell_escape::unix::escape(Cow::Owned(launcher_path.to_string_lossy().into_owned()))
+                .to_string();
+        Ok((launcher_path, command_line))
+    }
+
+    #[cfg(windows)]
+    fn create_terminal_launcher(
+        &self,
+        ssh_args: &[String],
+    ) -> std::io::Result<(std::path::PathBuf, String)> {
+        use std::io::Write as _;
+
+        fn powershell_quote(value: &str) -> String {
+            format!("'{}'", value.replace('\'', "''"))
+        }
+
+        let launcher_path = self.script_path.with_extension("launcher.ps1");
+        let args = ssh_args
+            .iter()
+            .skip(1)
+            .map(|arg| powershell_quote(arg))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let body = format!(
+            "$env:SSH_ASKPASS = {}\n$env:SSH_ASKPASS_REQUIRE = 'force'\n$env:ZAPLEX_SSH_ASKPASS_FILE = {}\nRemove-Item Env:DISPLAY -ErrorAction SilentlyContinue\n& 'ssh' {args}\nexit $LASTEXITCODE\n",
+            powershell_quote(&self.script_path.to_string_lossy()),
+            powershell_quote(&self.password_path.to_string_lossy()),
+        );
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&launcher_path)?;
+        if let Err(error) = file
+            .write_all(body.as_bytes())
+            .and_then(|()| file.sync_all())
+        {
+            drop(file);
+            let _ = std::fs::remove_file(&launcher_path);
+            return Err(error);
+        }
+        drop(file);
+        let quoted_launcher = launcher_path.to_string_lossy().replace('"', "\\\"");
+        let command_line = format!(
+            "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{quoted_launcher}\""
+        );
+        Ok((launcher_path, command_line))
     }
 }
 

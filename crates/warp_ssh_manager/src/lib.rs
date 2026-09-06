@@ -22,8 +22,9 @@ pub use repository::{SshRepository, SshRepositoryError, SyncMetaRepository};
 pub use secrets::{KeychainSecretStore, SecretKind, SshSecretStore, SshSecretStoreError};
 pub use ssh_command::{
     ConnectionTestResult, DefaultWorkspaceCommandFactory, InvalidMultiplexerTarget,
-    MultiplexerAttachMode, UnknownHostKey, WorkspaceCommandFactory,
-    build_multiplexer_ssh_command_line, build_ssh_args, build_ssh_command_line, test_connection,
+    MultiplexerAttachMode, PreparedSshCommand, UnknownHostKey, WorkspaceCommandFactory,
+    build_multiplexer_ssh_command_line, build_ssh_args, build_ssh_command_line,
+    prepare_key_multiplexer_ssh_command, prepare_key_ssh_command, test_connection,
     test_connection_confirm_host_key, test_connection_with_factory,
 };
 pub use ssh_config_parser::{
