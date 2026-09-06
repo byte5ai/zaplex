@@ -191,6 +191,34 @@ pub struct UnknownHostKey {
     pub host: String,
     pub port: u16,
     pub fingerprint: String,
+    key: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HostKeyPreflight {
+    Verified,
+    ConfirmationRequired(UnknownHostKey),
+    Changed,
+}
+
+pub async fn preflight_host_key(server: &SshServerInfo) -> Result<HostKeyPreflight, String> {
+    preflight_host_key_with_factory(server, &DefaultWorkspaceCommandFactory).await
+}
+
+pub async fn preflight_host_key_with_factory(
+    server: &SshServerInfo,
+    command_factory: &dyn WorkspaceCommandFactory,
+) -> Result<HostKeyPreflight, String> {
+    match probe_host_key(server, command_factory).await {
+        Ok(HostKeyProbeOutcome::Verified) => Ok(HostKeyPreflight::Verified),
+        Ok(HostKeyProbeOutcome::Unknown(host_key)) => {
+            Ok(HostKeyPreflight::ConfirmationRequired(host_key))
+        }
+        Err(error) if error == "SSH host key changed; connection blocked" => {
+            Ok(HostKeyPreflight::Changed)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub async fn test_connection(
@@ -315,11 +343,17 @@ async fn probe_host_key(
     match classify_host_key_probe(server, &output)? {
         HostKeyProbeOutcome::Verified => Ok(HostKeyProbeOutcome::Verified),
         HostKeyProbeOutcome::Unknown(_) => {
-            let (_, fingerprint) = capture_host_key(server, "yes", command_factory).await?;
+            let (pinned_host_key, fingerprint) =
+                capture_host_key(server, "yes", command_factory).await?;
+            let key = std::fs::read_to_string(&pinned_host_key.path)
+                .map_err(|error| format!("Failed to read captured SSH host key: {error}"))?
+                .trim()
+                .to_string();
             Ok(HostKeyProbeOutcome::Unknown(UnknownHostKey {
                 host: server.host.clone(),
                 port: server.port,
                 fingerprint,
+                key,
             }))
         }
     }
@@ -373,9 +407,71 @@ fn classify_host_key_probe(
             host: server.host.clone(),
             port: server.port,
             fingerprint,
+            key: String::new(),
         }));
     }
     Ok(HostKeyProbeOutcome::Verified)
+}
+
+#[cfg(unix)]
+pub fn persist_confirmed_host_key(
+    server: &SshServerInfo,
+    expected: &UnknownHostKey,
+    destination: &std::path::Path,
+) -> Result<(), String> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let endpoint = crate::validation::validate_ssh_endpoint(
+        crate::validation::EndpointUse::Connect,
+        &server.host,
+        &server.port.to_string(),
+    )
+    .map_err(|error| format!("Invalid SSH endpoint for host-key confirmation: {error}"))?;
+    if expected.host != endpoint.host || expected.port != endpoint.port {
+        return Err("SSH endpoint changed before host-key confirmation".to_string());
+    }
+    if expected.key.is_empty() || expected.key.lines().count() != 1 {
+        return Err("Captured SSH host key is invalid; connection blocked".to_string());
+    }
+
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "Managed SSH known-hosts path has no parent directory".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Failed to prepare managed SSH host-key directory: {error}"))?;
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Managed SSH known-hosts path has no valid file name".to_string())?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let temporary = parent.join(format!(".{file_name}.{}-{nonce}.tmp", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true).mode(0o600);
+    let mut file = options
+        .open(&temporary)
+        .map_err(|error| format!("Failed to create managed SSH host-key file: {error}"))?;
+    let write_result = file
+        .write_all(expected.key.as_bytes())
+        .and_then(|()| file.write_all(b"\n"))
+        .and_then(|()| file.sync_all());
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!(
+            "Failed to write managed SSH host-key file: {error}"
+        ));
+    }
+    drop(file);
+    if let Err(error) = std::fs::rename(&temporary, destination) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!(
+            "Failed to commit managed SSH host-key file: {error}"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

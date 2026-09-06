@@ -360,6 +360,8 @@ use warp_core::semantic_selection::SemanticSelection;
 use warp_core::HostId;
 use warp_util::path::{user_friendly_path, LineAndColumnArg};
 use warpui::fonts::Weight;
+#[cfg(unix)]
+use warpui::modals::ModalButton;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
 
 use warp_core::user_preferences::GetUserPreferences as _;
@@ -10535,6 +10537,29 @@ impl Workspace {
                 let preflight = match result {
                     Ok(preflight) => preflight,
                     Err(e) => {
+                        if e == headless_connect::HOST_KEY_CHANGED {
+                            let message =
+                                crate::t!("connect-host-key-changed", host = host.clone())
+                                    .to_string();
+                            let _ = progress_tx.try_send(message.clone());
+                            workspace.toast_stack.update(ctx, |stack, ctx| {
+                                stack.add_persistent_toast(DismissibleToast::error(message), ctx);
+                            });
+                            if let Some(attempt) = attempt.as_ref() {
+                                workspace.finish_ssh_connect(attempt, ctx);
+                            }
+                            if let Some(pane_group_id) = pending_pane_group {
+                                workspace.ssh_tab_nodes.remove(&pane_group_id);
+                                if let Some(index) = workspace
+                                    .tabs
+                                    .iter()
+                                    .position(|tab| tab.pane_group.id() == pane_group_id)
+                                {
+                                    workspace.close_tab(index, true, false, ctx);
+                                }
+                            }
+                            return;
+                        }
                         // Daemon unavailable → classic SSH with a prominent warning so
                         // the user KNOWS they have no persistent session (a disconnect
                         // loses open work). Never silent, never a hang.
@@ -10607,6 +10632,178 @@ impl Workspace {
                 );
 
                 match preflight {
+                    DaemonPreflight::HostKeyConfirmationRequired(host_key) => {
+                        let confirm_server = server_owned.clone();
+                        let confirm_host_key = host_key.clone();
+                        let confirm_node_id = node_id_owned.clone();
+                        let confirm_route = agent_launch_route.clone();
+                        let confirm_managed_launch = managed_launch.clone();
+                        let confirm_attempt = attempt.clone();
+                        let confirm_progress = progress_tx.clone();
+                        let cancel_attempt = attempt.clone();
+                        let cancel_progress = progress_tx.clone();
+                        let cancel_host = host.clone();
+                        let dialog = AlertDialogWithCallbacks::for_view(
+                            crate::t!("connect-host-key-confirm-title"),
+                            crate::t!(
+                                "connect-host-key-confirm-info",
+                                host = host_key.host,
+                                port = host_key.port,
+                                fingerprint = host_key.fingerprint
+                            ),
+                            vec![
+                                ModalButton::for_view(
+                                    crate::t!("common-confirm"),
+                                    move |workspace: &mut Workspace, ctx| {
+                                        let server = confirm_server.clone();
+                                        let host_key = confirm_host_key.clone();
+                                        let server_for_retry = confirm_server.clone();
+                                        let node_id_for_retry = confirm_node_id.clone();
+                                        let route_for_retry = confirm_route.clone();
+                                        let managed_launch_for_retry =
+                                            confirm_managed_launch.clone();
+                                        let attempt_for_retry = confirm_attempt.clone();
+                                        let progress_for_retry = confirm_progress.clone();
+                                        ctx.spawn(
+                                            async move {
+                                                headless_connect::confirm_host_key(
+                                                    &server, &host_key,
+                                                )
+                                            },
+                                            move |workspace, result, ctx| {
+                                                if attempt_for_retry.as_ref().is_some_and(
+                                                    |attempt| {
+                                                        !workspace.ssh_connect_is_active(attempt)
+                                                    },
+                                                ) {
+                                                    return;
+                                                }
+                                                let pending_tab_alive = pending_pane_group
+                                                    .is_some_and(|pane_group_id| {
+                                                        workspace.tabs.iter().any(|tab| {
+                                                            tab.pane_group.id() == pane_group_id
+                                                        })
+                                                    });
+                                                if !pending_tab_alive {
+                                                    if let Some(attempt) =
+                                                        attempt_for_retry.as_ref()
+                                                    {
+                                                        workspace.finish_ssh_connect(attempt, ctx);
+                                                    }
+                                                    return;
+                                                }
+                                                if let Err(error) = result {
+                                                    let message = crate::t!(
+                                                        "connect-host-key-save-failed",
+                                                        host = server_for_retry.host.clone(),
+                                                        error = error
+                                                    )
+                                                    .to_string();
+                                                    let _ = progress_for_retry
+                                                        .try_send(message.clone());
+                                                    workspace.toast_stack.update(
+                                                        ctx,
+                                                        |stack, ctx| {
+                                                            stack.add_persistent_toast(
+                                                                DismissibleToast::error(message),
+                                                                ctx,
+                                                            );
+                                                        },
+                                                    );
+                                                    if let Some(attempt) =
+                                                        attempt_for_retry.as_ref()
+                                                    {
+                                                        workspace.finish_ssh_connect(attempt, ctx);
+                                                    }
+                                                    if let Some(pane_group_id) = pending_pane_group
+                                                    {
+                                                        workspace
+                                                            .ssh_tab_nodes
+                                                            .remove(&pane_group_id);
+                                                        if let Some(index) =
+                                                            workspace.tabs.iter().position(|tab| {
+                                                                tab.pane_group.id() == pane_group_id
+                                                            })
+                                                        {
+                                                            workspace
+                                                                .close_tab(index, true, false, ctx);
+                                                        }
+                                                    }
+                                                    return;
+                                                }
+
+                                                if let Some(attempt) = attempt_for_retry.as_ref() {
+                                                    workspace.finish_ssh_connect(attempt, ctx);
+                                                }
+                                                let Some(retry_attempt) = workspace
+                                                    .begin_ssh_connect(
+                                                        node_id_for_retry.clone(),
+                                                        server_for_retry.host.clone(),
+                                                        ctx,
+                                                    )
+                                                else {
+                                                    return;
+                                                };
+                                                workspace.open_ssh_terminal_command(
+                                                    node_id_for_retry,
+                                                    server_for_retry,
+                                                    false,
+                                                    None,
+                                                    route_for_retry,
+                                                    managed_launch_for_retry,
+                                                    Some(retry_attempt),
+                                                    ctx,
+                                                );
+                                                if let Some(pane_group_id) = pending_pane_group {
+                                                    workspace.ssh_tab_nodes.remove(&pane_group_id);
+                                                    if let Some(index) =
+                                                        workspace.tabs.iter().position(|tab| {
+                                                            tab.pane_group.id() == pane_group_id
+                                                        })
+                                                    {
+                                                        workspace
+                                                            .close_tab(index, true, false, ctx);
+                                                    }
+                                                }
+                                            },
+                                        );
+                                    },
+                                ),
+                                ModalButton::for_view(
+                                    crate::t!("common-cancel"),
+                                    move |workspace: &mut Workspace, ctx| {
+                                        let message = crate::t!(
+                                            "connect-host-key-cancelled",
+                                            host = cancel_host.clone()
+                                        )
+                                        .to_string();
+                                        let _ = cancel_progress.try_send(message.clone());
+                                        workspace.toast_stack.update(ctx, |stack, ctx| {
+                                            stack.add_persistent_toast(
+                                                DismissibleToast::error(message),
+                                                ctx,
+                                            );
+                                        });
+                                        if let Some(attempt) = cancel_attempt.as_ref() {
+                                            workspace.finish_ssh_connect(attempt, ctx);
+                                        }
+                                        if let Some(pane_group_id) = pending_pane_group {
+                                            workspace.ssh_tab_nodes.remove(&pane_group_id);
+                                            if let Some(index) =
+                                                workspace.tabs.iter().position(|tab| {
+                                                    tab.pane_group.id() == pane_group_id
+                                                })
+                                            {
+                                                workspace.close_tab(index, true, false, ctx);
+                                            }
+                                        }
+                                    },
+                                ),
+                            ],
+                            |_, _| {},
+                        );
+                        ctx.show_native_platform_modal(dialog);
+                    }
                     // Daemon already installed → connect right away. Dropping the
                     // progress sender ends the tab's progress stream after the
                     // initial "Connecting…" line.

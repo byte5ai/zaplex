@@ -72,7 +72,7 @@ fn headless_control_master_rejects_invalid_endpoints_before_spawn() {
         invalid.host = host.to_string();
         invalid.port = port;
         assert!(
-            control_master_args(&invalid, Path::new("/tmp/zaplex-test-control")).is_err(),
+            control_master_args(&invalid, Path::new("/tmp/zaplex-test-control"), None).is_err(),
             "headless ControlMaster must reject {host:?}:{port}"
         );
     }
@@ -83,6 +83,7 @@ fn headless_control_master_uses_l2_host_key_and_argument_policy() {
     let args = control_master_args(
         &server(AuthType::Key),
         Path::new("/tmp/zaplex-test-control"),
+        None,
     )
     .expect("valid endpoint should produce arguments");
     let destination_delimiter = args
@@ -103,4 +104,100 @@ fn headless_control_master_uses_l2_host_key_and_argument_policy() {
     assert!(args[..destination_delimiter]
         .iter()
         .any(|arg| arg == "ControlMaster=auto"));
+}
+
+#[cfg(unix)]
+struct HostKeyCommandFactory {
+    script: PathBuf,
+    log_path: PathBuf,
+}
+
+#[cfg(unix)]
+impl WorkspaceCommandFactory for HostKeyCommandFactory {
+    fn async_command(&self, program: &str) -> command::r#async::Command {
+        let mut command = command::r#async::Command::new(&self.script);
+        command
+            .arg(program)
+            .env("ZAPLEX_HOST_KEY_TEST_LOG", &self.log_path);
+        command
+    }
+
+    fn blocking_command(&self, program: &str) -> command::blocking::Command {
+        let mut command = command::blocking::Command::new(&self.script);
+        command
+            .arg(program)
+            .env("ZAPLEX_HOST_KEY_TEST_LOG", &self.log_path);
+        command
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unknown_host_key_requires_confirmation_before_control_master() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("fake-ssh-tools");
+    let log_path = directory.path().join("argv.log");
+    let mut file = std::fs::File::create(&script).unwrap();
+    file.write_all(
+        b"#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$ZAPLEX_HOST_KEY_TEST_LOG\"\ncase \"$1\" in\n  ssh-keygen)\n    printf '256 SHA256:confirmed host (ED25519)\\n' ;;\n  ssh)\n    shift\n    for arg in \"$@\"; do\n      case \"$arg\" in\n        UserKnownHostsFile=*) path=${arg#UserKnownHostsFile=} ;;\n        StrictHostKeyChecking=*) strict=${arg#StrictHostKeyChecking=} ;;\n        BatchMode=*) batch=${arg#BatchMode=} ;;\n        ControlPath=*) control=${arg#ControlPath=} ;;\n      esac\n    done\n    if [ \"$strict\" = yes ]; then\n      if [ -n \"$path\" ] && grep -q 'ssh-ed25519 AAAA' \"$path\"; then\n        : > \"$control\"\n        exit 0\n      fi\n      printf 'Host key verification failed.\\nED25519 key fingerprint is SHA256:confirmed.\\n' >&2\n      exit 255\n    fi\n    if [ \"$strict\" = ask ] && [ \"$batch\" = no ]; then\n      printf 'example.com ssh-ed25519 AAAA\\n' > \"$path\"\n      exit 255\n    fi\n    exit 2 ;;\n  *) exit 2 ;;\nesac\n",
+    )
+    .unwrap();
+    let mut permissions = file.metadata().unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    drop(file);
+    let factory = HostKeyCommandFactory { script, log_path };
+    let managed_known_hosts = directory.path().join("known_hosts");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+
+    let outcome = runtime
+        .block_on(preflight_control_master_host_key_with_factory(
+            &server(AuthType::Key),
+            &managed_known_hosts,
+            &factory,
+        ))
+        .unwrap();
+    let HostKeyPreflight::ConfirmationRequired(host_key) = outcome else {
+        panic!("unknown host key must require confirmation");
+    };
+    let invocations = std::fs::read_to_string(&factory.log_path).unwrap();
+    assert!(
+        !invocations
+            .lines()
+            .any(|line| line.split_whitespace().any(|arg| arg == "-f")),
+        "ControlMaster started before confirmation: {invocations}"
+    );
+
+    confirm_host_key_at(&server(AuthType::Key), &host_key, &managed_known_hosts).unwrap();
+    assert_eq!(
+        std::fs::metadata(&managed_known_hosts)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    let args = control_master_args(
+        &server(AuthType::Key),
+        Path::new("/tmp/zaplex-test-control"),
+        Some(&managed_known_hosts),
+    )
+    .unwrap();
+    assert!(args.iter().any(|arg| arg == "StrictHostKeyChecking=yes"));
+    assert!(args
+        .iter()
+        .any(|arg| { arg == &format!("UserKnownHostsFile={}", managed_known_hosts.display()) }));
+    let control_socket = directory.path().join("control");
+    runtime
+        .block_on(ensure_control_master_with_factory(
+            &server(AuthType::Key),
+            &control_socket,
+            Some(&managed_known_hosts),
+            &factory,
+        ))
+        .unwrap();
+    assert!(control_socket.exists());
 }
