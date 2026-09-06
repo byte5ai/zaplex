@@ -215,10 +215,7 @@ pub fn build_snapshot_with_cache(
     let codex_discovery = codex::discover_account_roots(home, pinned_codex_home);
     degraded.extend(codex_discovery.issues);
     for account in codex_discovery.accounts {
-        let (entries, io_error) = codex::usage_for_account(&account, since);
-        if io_error {
-            degraded.push(format!("{}: usage history unreadable", account.label));
-        }
+        let (entries, usage_io_error) = codex::usage_for_account(&account, since);
         let b5h = if budget_5h > 0 {
             budget_5h
         } else {
@@ -240,6 +237,9 @@ pub fn build_snapshot_with_cache(
             IDLE_SESSION_LIMIT,
             &mut transcript_cache.codex_rollouts,
         );
+        if usage_io_error || scan.io_error {
+            degraded.push(format!("{}: transcript history unreadable", account.label));
+        }
         let stamp = |mut s: SessionSnapshot| {
             account.stamp(&mut s);
             s
@@ -287,14 +287,17 @@ pub fn live_codex_sessions_with_cache(
     now: DateTime<Utc>,
     transcript_cache: &mut TranscriptScanCache,
 ) -> Vec<SessionSnapshot> {
-    codex_sessions::scan_sessions_with_cache(
+    let scan = codex_sessions::scan_sessions_with_cache(
         config_dir,
         now,
         Duration::zero(),
         0,
         &mut transcript_cache.codex_rollouts,
-    )
-    .live
+    );
+    if scan.io_error {
+        log::warn!("Codex session discovery was incomplete");
+    }
+    scan.live
 }
 
 #[cfg(test)]
@@ -388,3 +391,7 @@ mod build_snapshot_health_tests {
 #[cfg(test)]
 #[path = "snapshot_platform_tests.rs"]
 mod snapshot_platform_tests;
+
+#[cfg(test)]
+#[path = "snapshot_health_tests.rs"]
+mod snapshot_health_tests;

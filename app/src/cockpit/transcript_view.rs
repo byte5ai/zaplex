@@ -312,38 +312,40 @@ pub(crate) fn load_local_transcript(
     config_root: &Path,
     session_id: &str,
 ) -> TranscriptDocument {
+    match load_local_transcript_once(provider, config_root, session_id) {
+        Ok(document) => document,
+        Err(()) => load_local_transcript_once(provider, config_root, session_id)
+            .unwrap_or_else(|()| state_document(provider, TranscriptDocumentState::Unavailable)),
+    }
+}
+
+pub(crate) fn refresh_local_transcript(
+    provider: Provider,
+    config_root: &Path,
+    session_id: &str,
+) -> Result<TranscriptDocument, ()> {
+    load_local_transcript_once(provider, config_root, session_id)
+}
+
+fn load_local_transcript_once(
+    provider: Provider,
+    config_root: &Path,
+    session_id: &str,
+) -> Result<TranscriptDocument, ()> {
     match provider {
-        Provider::Claude => {
-            match zaplex_cockpit::sessions::load_transcript_with_revision(config_root, session_id) {
-                Ok(Some(loaded)) => ready_document(provider, loaded, false),
-                Ok(None) => state_document(provider, TranscriptDocumentState::Missing),
-                Err(zaplex_cockpit::sessions::TranscriptError::InvalidSessionId)
-                | Err(zaplex_cockpit::sessions::TranscriptError::AmbiguousSessionId)
-                | Err(zaplex_cockpit::sessions::TranscriptError::MalformedTranscript) => {
-                    state_document(provider, TranscriptDocumentState::Malformed)
-                }
-                Err(zaplex_cockpit::sessions::TranscriptError::HistoryLimitExceeded)
-                | Err(zaplex_cockpit::sessions::TranscriptError::TranscriptTooLarge { .. }) => {
-                    state_document(provider, TranscriptDocumentState::TooLarge)
-                }
-                Err(zaplex_cockpit::sessions::TranscriptError::UnsupportedTranscript) => {
-                    state_document(provider, TranscriptDocumentState::Unsupported)
-                }
-                Err(zaplex_cockpit::sessions::TranscriptError::Io(_)) => {
-                    state_document(provider, TranscriptDocumentState::Unavailable)
-                }
-            }
-        }
+        Provider::Claude => project_claude_transcript(
+            zaplex_cockpit::sessions::load_transcript_with_revision(config_root, session_id),
+        ),
         Provider::Codex => match zaplex_cockpit::codex_sessions::load_transcript_with_revision(
             config_root,
             session_id,
         ) {
-            Ok(Some(loaded)) => ready_document(provider, loaded, false),
-            Ok(None) => state_document(provider, TranscriptDocumentState::Missing),
+            Ok(Some(loaded)) => Ok(ready_document(provider, loaded, false)),
+            Ok(None) => Ok(state_document(provider, TranscriptDocumentState::Missing)),
             Err(zaplex_cockpit::codex_sessions::TranscriptError::InvalidSessionId)
             | Err(zaplex_cockpit::codex_sessions::TranscriptError::AmbiguousSessionId { .. })
             | Err(zaplex_cockpit::codex_sessions::TranscriptError::MalformedTranscript) => {
-                state_document(provider, TranscriptDocumentState::Malformed)
+                Ok(state_document(provider, TranscriptDocumentState::Malformed))
             }
             Err(zaplex_cockpit::codex_sessions::TranscriptError::HistoryLimitExceeded {
                 ..
@@ -354,17 +356,50 @@ pub(crate) fn load_local_transcript(
                 },
             )
             | Err(zaplex_cockpit::codex_sessions::TranscriptError::TranscriptTooLarge { .. }) => {
-                state_document(provider, TranscriptDocumentState::TooLarge)
+                Ok(state_document(provider, TranscriptDocumentState::TooLarge))
             }
-            Err(zaplex_cockpit::codex_sessions::TranscriptError::UnsupportedTranscript) => {
-                state_document(provider, TranscriptDocumentState::Unsupported)
-            }
+            Err(zaplex_cockpit::codex_sessions::TranscriptError::UnsupportedTranscript) => Ok(
+                state_document(provider, TranscriptDocumentState::Unsupported),
+            ),
             Err(zaplex_cockpit::codex_sessions::TranscriptError::Io(_))
-            | Err(zaplex_cockpit::codex_sessions::TranscriptError::Walk(_)) => {
-                state_document(provider, TranscriptDocumentState::Unavailable)
-            }
+            | Err(zaplex_cockpit::codex_sessions::TranscriptError::Walk(_)) => Ok(state_document(
+                provider,
+                TranscriptDocumentState::Unavailable,
+            )),
         },
-        Provider::Antigravity => state_document(provider, TranscriptDocumentState::Unsupported),
+        Provider::Antigravity => Ok(state_document(
+            provider,
+            TranscriptDocumentState::Unsupported,
+        )),
+    }
+}
+
+fn project_claude_transcript(
+    result: Result<Option<LoadedTranscript>, zaplex_cockpit::sessions::TranscriptError>,
+) -> Result<TranscriptDocument, ()> {
+    match result {
+        Ok(Some(loaded)) => Ok(ready_document(Provider::Claude, loaded, false)),
+        Ok(None) => Ok(state_document(
+            Provider::Claude,
+            TranscriptDocumentState::Missing,
+        )),
+        Err(zaplex_cockpit::sessions::TranscriptError::InvalidSessionId)
+        | Err(zaplex_cockpit::sessions::TranscriptError::AmbiguousSessionId)
+        | Err(zaplex_cockpit::sessions::TranscriptError::MalformedTranscript) => Ok(
+            state_document(Provider::Claude, TranscriptDocumentState::Malformed),
+        ),
+        Err(zaplex_cockpit::sessions::TranscriptError::HistoryLimitExceeded)
+        | Err(zaplex_cockpit::sessions::TranscriptError::TranscriptTooLarge { .. }) => Ok(
+            state_document(Provider::Claude, TranscriptDocumentState::TooLarge),
+        ),
+        Err(zaplex_cockpit::sessions::TranscriptError::UnsupportedTranscript) => Ok(
+            state_document(Provider::Claude, TranscriptDocumentState::Unsupported),
+        ),
+        Err(zaplex_cockpit::sessions::TranscriptError::ChangedDuringRead) => Err(()),
+        Err(zaplex_cockpit::sessions::TranscriptError::Io(_)) => Ok(state_document(
+            Provider::Claude,
+            TranscriptDocumentState::Unavailable,
+        )),
     }
 }
 
