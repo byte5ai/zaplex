@@ -15568,6 +15568,7 @@ dependencies = [
  "async-channel",
  "cocoa 0.26.0",
  "gloo-storage",
+ "libc",
  "log",
  "objc",
  "ouroboros",
@@ -15586,6 +15587,7 @@ dependencies = [
  "windows 0.62.2",
  "windows-registry 0.2.0",
  "windows-result 0.2.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -17010,11 +17012,15 @@ dependencies = [
 name = "zap_sftp"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "dirs 6.0.0",
  "openssl-sys",
+ "sha2 0.10.9",
  "smol",
  "ssh2",
  "tempfile",
  "thiserror 2.0.18",
+ "zeroize",
 ]
 
 [[package]]
