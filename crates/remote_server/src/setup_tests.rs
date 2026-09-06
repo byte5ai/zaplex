@@ -216,7 +216,7 @@ fn oss_download_tarball_url_uses_github_release_asset() {
 
     assert_eq!(
         url,
-        "https://github.com/byte5ai/zaplex/releases/latest/download/zap-linux-x86_64.tar.gz"
+        "https://github.com/byte5ai/zaplex/releases/latest/download/zap-remote-server-linux-x86_64.tar.gz"
     );
     assert!(!url.contains("app.warp.dev"));
     assert!(!url.contains("/download/cli"));
@@ -224,10 +224,23 @@ fn oss_download_tarball_url_uses_github_release_asset() {
 
 #[test]
 fn install_script_uses_zap_asset_and_staging_placeholder() {
-    let script = install_script(Some("~/.zaplex/remote-server/zap-upload.tar.gz"));
+    let digest = "a".repeat(64);
+    let script =
+        install_script(Some("~/.zaplex/remote-server/zap-upload.tar.gz"), &digest).unwrap();
 
     assert!(script.contains("staging_tarball_path=\"~/.zaplex/remote-server/zap-upload.tar.gz\""));
-    assert!(script.contains("zap-$os_name-$arch_name.tar.gz"));
+    assert!(script.contains("zap-remote-server-$os_name-$arch_name.tar.gz"));
+    assert!(script.contains(&format!("expected_sha256=\"{digest}\"")));
+    assert!(script.contains("sha256sum"));
+    assert!(script.contains("shasum -a 256"));
+    assert!(script.contains("SHA-256 mismatch"));
     assert!(!script.contains("app.warp.dev"));
     assert!(!script.contains("/download/cli"));
+}
+
+#[test]
+fn install_script_rejects_missing_or_untrusted_digest() {
+    assert!(install_script(None, "").is_err());
+    assert!(install_script(None, &"g".repeat(64)).is_err());
+    assert!(install_script(None, &"A".repeat(64)).is_err());
 }
