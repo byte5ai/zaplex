@@ -13,7 +13,7 @@ use std::time::Duration;
 use warp_ssh_manager::secrets::SshSecretStore;
 use warp_ssh_manager::types::{AuthType, ResolvedSshAuth, SshServerInfo};
 use warp_ssh_manager::SshRepository;
-use zap_sftp::session::{AuthMethod, SftpSession};
+use zap_sftp::session::{AuthMethod, HostKeyConfirmation, SftpSession};
 use zap_sftp::types::OpenOptions;
 use zap_sftp::Sftp;
 
@@ -32,6 +32,19 @@ pub enum SftpOpsError {
     LocalIo(String),
     /// Credentials not found
     NoCredentials(String),
+    /// A server key is not present in known_hosts and needs explicit approval.
+    UnknownHostKey {
+        host: String,
+        port: u16,
+        fingerprint_sha256: String,
+        key_type: String,
+    },
+    /// A known host presented a different key.
+    HostKeyMismatch(String),
+    /// Authentication was attempted only after host-key verification and failed.
+    Authentication(String),
+    /// The SSH transport failed before authentication completed.
+    Transport(String),
     /// Transfer cancelled
     Cancelled,
     /// The destination is committed even though the final acknowledgement failed.
@@ -61,6 +74,18 @@ impl std::fmt::Display for SftpOpsError {
             }
             SftpOpsError::LocalIo(msg) => write!(f, "Local I/O error: {msg}"),
             SftpOpsError::NoCredentials(msg) => write!(f, "Credentials not found: {msg}"),
+            SftpOpsError::UnknownHostKey {
+                host,
+                port,
+                fingerprint_sha256,
+                key_type,
+            } => write!(
+                f,
+                "Unknown {key_type} host key for {host}:{port} ({fingerprint_sha256})"
+            ),
+            SftpOpsError::HostKeyMismatch(msg) => write!(f, "Host key mismatch: {msg}"),
+            SftpOpsError::Authentication(msg) => write!(f, "Authentication failed: {msg}"),
+            SftpOpsError::Transport(msg) => write!(f, "Transport error: {msg}"),
             SftpOpsError::Cancelled => write!(f, "Transfer cancelled"),
             SftpOpsError::Committed(msg) => write!(f, "{msg}"),
             SftpOpsError::NotFound(path) => write!(f, "Path not found: {path}"),
@@ -91,6 +116,10 @@ impl SftpOpsError {
             Self::CapabilityRequired(_) => crate::t!("fm-error-secure-transfer-required"),
             Self::LocalIo(_) => crate::t!("fm-error-local-io"),
             Self::NoCredentials(_) => crate::t!("fm-error-credentials"),
+            Self::UnknownHostKey { .. } => crate::t!("fm-error-unknown-host-key"),
+            Self::HostKeyMismatch(_) => crate::t!("fm-error-host-key-mismatch"),
+            Self::Authentication(_) => crate::t!("fm-error-authentication"),
+            Self::Transport(_) => crate::t!("fm-error-transport"),
             Self::Cancelled => crate::t!("fm-error-cancelled"),
             Self::Committed(_) => crate::t!("fm-error-committed"),
             Self::NotFound(_) => crate::t!("fm-error-not-found"),
@@ -106,6 +135,10 @@ impl SftpOpsError {
             | Self::CapabilityRequired(_)
             | Self::LocalIo(_)
             | Self::NoCredentials(_)
+            | Self::UnknownHostKey { .. }
+            | Self::HostKeyMismatch(_)
+            | Self::Authentication(_)
+            | Self::Transport(_)
             | Self::Cancelled
             | Self::Committed(_)
             | Self::NotFound(_) => None,
@@ -120,6 +153,10 @@ impl SftpOpsError {
             | Self::CapabilityRequired(_)
             | Self::LocalIo(_)
             | Self::NoCredentials(_)
+            | Self::UnknownHostKey { .. }
+            | Self::HostKeyMismatch(_)
+            | Self::Authentication(_)
+            | Self::Transport(_)
             | Self::Cancelled
             | Self::Committed(_)
             | Self::NotFound(_) => &[],
@@ -140,10 +177,23 @@ impl SftpOpsError {
 
 impl From<zap_sftp::SftpError> for SftpOpsError {
     fn from(e: zap_sftp::SftpError) -> Self {
-        if e.is_not_found() {
-            SftpOpsError::NotFound(e.to_string())
-        } else {
-            SftpOpsError::Operation(e.to_string())
+        match e {
+            zap_sftp::SftpError::UnknownHostKey {
+                fingerprint_sha256,
+                key_type,
+            } => Self::Transport(format!(
+                "Host-key confirmation for {key_type} {fingerprint_sha256} requires the original endpoint context"
+            )),
+            zap_sftp::SftpError::HostKeyMismatch { .. } => Self::HostKeyMismatch(e.to_string()),
+            zap_sftp::SftpError::AuthFailed(_) => Self::Authentication(e.to_string()),
+            zap_sftp::SftpError::ConnectionFailed(_) | zap_sftp::SftpError::Timeout => {
+                Self::Transport(e.to_string())
+            }
+            zap_sftp::SftpError::NoSuchFile(_) => Self::NotFound(e.to_string()),
+            zap_sftp::SftpError::PermissionDenied(_)
+            | zap_sftp::SftpError::General(_)
+            | zap_sftp::SftpError::Io(_)
+            | zap_sftp::SftpError::Ssh2(_) => Self::Operation(e.to_string()),
         }
     }
 }
@@ -221,16 +271,58 @@ pub fn connect_from_server(
     server: &SshServerInfo,
     secret_store: &dyn SshSecretStore,
 ) -> Result<SftpSession, SftpOpsError> {
+    connect_from_server_with_confirmation(server, secret_store, None)
+}
+
+/// Connect after the user approved the exact fingerprint from the preceding handshake.
+pub fn connect_from_server_confirmed(
+    server: &SshServerInfo,
+    secret_store: &dyn SshSecretStore,
+    confirmation: &HostKeyConfirmation,
+) -> Result<SftpSession, SftpOpsError> {
+    connect_from_server_with_confirmation(server, secret_store, Some(confirmation))
+}
+
+fn connect_from_server_with_confirmation(
+    server: &SshServerInfo,
+    secret_store: &dyn SshSecretStore,
+    confirmation: Option<&HostKeyConfirmation>,
+) -> Result<SftpSession, SftpOpsError> {
     let resolved_auth = resolve_sftp_auth(server)?;
     let auth = build_auth_method(server, &resolved_auth, secret_store)?;
-    SftpSession::connect(
-        &server.host,
-        server.port,
-        &resolved_auth.username,
-        auth,
-        Some(CONNECT_TIMEOUT),
-    )
-    .map_err(|e| SftpOpsError::Connection(e.to_string()))
+    let result = match confirmation {
+        Some(confirmation) => SftpSession::connect_confirmed(
+            &server.host,
+            server.port,
+            &resolved_auth.username,
+            auth,
+            Some(CONNECT_TIMEOUT),
+            confirmation,
+        ),
+        None => SftpSession::connect(
+            &server.host,
+            server.port,
+            &resolved_auth.username,
+            auth,
+            Some(CONNECT_TIMEOUT),
+        ),
+    };
+    result.map_err(|error| match error {
+        zap_sftp::SftpError::UnknownHostKey {
+            fingerprint_sha256,
+            key_type,
+        } => SftpOpsError::UnknownHostKey {
+            host: server.host.clone(),
+            port: server.port,
+            fingerprint_sha256,
+            key_type,
+        },
+        zap_sftp::SftpError::ConnectionFailed(_)
+        | zap_sftp::SftpError::Timeout
+        | zap_sftp::SftpError::Io(_)
+        | zap_sftp::SftpError::Ssh2(_) => SftpOpsError::Transport(error.to_string()),
+        error => error.into(),
+    })
 }
 
 fn resolve_sftp_auth(server: &SshServerInfo) -> Result<ResolvedSshAuth, SftpOpsError> {
@@ -724,16 +816,13 @@ fn build_auth_method(
                         server.host
                     ))
                 })?;
-            Ok(AuthMethod::Password {
-                password: password.to_string(),
-            })
+            Ok(AuthMethod::Password { password })
         }
         AuthType::Key => {
             let passphrase = secret_store
                 .get(&resolved_auth.secret_lookup_id, resolved_auth.secret_kind)
                 .ok()
-                .flatten()
-                .map(|p| p.to_string());
+                .flatten();
             // A host configured for key auth without an explicit key file is
             // the normal case for anyone relying on `~/.ssh/config` +
             // `ssh-agent`: the terminal path shells out to `ssh` and just

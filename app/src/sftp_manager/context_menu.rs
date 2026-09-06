@@ -143,6 +143,7 @@ pub fn render_context_menu(state: &ContextMenuState, appearance: &Appearance) ->
             | SftpBrowserAction::ConfirmRename
             | SftpBrowserAction::ConfirmNewFolder
             | SftpBrowserAction::ConfirmOverwrite
+            | SftpBrowserAction::ConfirmUnknownHostKey
             | SftpBrowserAction::ContextMenu { .. }
             | SftpBrowserAction::CloseContextMenu
             | SftpBrowserAction::CloseDialog

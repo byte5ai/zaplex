@@ -4,11 +4,17 @@
 //! author: logic
 //! date: 2026-05-31
 
+use std::fs;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+use base64::Engine as _;
+use sha2::{Digest as _, Sha256};
+use ssh2::{CheckResult, HostKeyType, KnownHostFileKind};
+use zeroize::Zeroizing;
 
 use crate::error::SftpError;
 use crate::sftp::Sftp;
@@ -17,16 +23,49 @@ use crate::sftp::Sftp;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Authentication method
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum AuthMethod {
-    Password { password: String },
-    PublicKey { key_path: PathBuf, passphrase: Option<String> },
+    Password {
+        password: Zeroizing<String>,
+    },
+    PublicKey {
+        key_path: PathBuf,
+        passphrase: Option<Zeroizing<String>>,
+    },
     /// Key authentication with no key file configured for the host — the
     /// common case when the user relies on `~/.ssh/config` + `ssh-agent`, as
     /// the terminal path does (it shells out to `ssh`, which reads both).
     /// Tries the agent first, then OpenSSH's default identity files, so the
     /// file manager reaches the same hosts the terminal can.
-    AgentOrDefaultKeys { passphrase: Option<String> },
+    AgentOrDefaultKeys {
+        passphrase: Option<Zeroizing<String>>,
+    },
+}
+
+/// The exact host-key fingerprint approved by the user for one retry.
+#[derive(Clone, Eq, PartialEq)]
+pub struct HostKeyConfirmation {
+    host: String,
+    port: u16,
+    fingerprint_sha256: String,
+}
+
+impl HostKeyConfirmation {
+    pub fn new(host: String, port: u16, fingerprint_sha256: String) -> Self {
+        Self {
+            host,
+            port,
+            fingerprint_sha256,
+        }
+    }
+
+    pub fn fingerprint_sha256(&self) -> &str {
+        &self.fingerprint_sha256
+    }
+
+    fn matches_endpoint(&self, host: &str, port: u16) -> bool {
+        self.host == host && self.port == port
+    }
 }
 
 /// SFTP session, wraps ssh2 connection
@@ -53,70 +92,78 @@ impl SftpSession {
         auth: AuthMethod,
         timeout: Option<Duration>,
     ) -> Result<Self, SftpError> {
+        Self::connect_with_confirmation(host, port, username, auth, timeout, None)
+    }
+
+    /// Establishes a connection after the user approved an exact SHA256 host-key fingerprint.
+    ///
+    /// The fingerprint is checked against the key from this new handshake before the key is
+    /// persisted or any authentication method is attempted.
+    pub fn connect_confirmed(
+        host: &str,
+        port: u16,
+        username: &str,
+        auth: AuthMethod,
+        timeout: Option<Duration>,
+        confirmation: &HostKeyConfirmation,
+    ) -> Result<Self, SftpError> {
+        Self::connect_with_confirmation(host, port, username, auth, timeout, Some(confirmation))
+    }
+
+    fn connect_with_confirmation(
+        host: &str,
+        port: u16,
+        username: &str,
+        auth: AuthMethod,
+        timeout: Option<Duration>,
+        confirmation: Option<&HostKeyConfirmation>,
+    ) -> Result<Self, SftpError> {
         let effective_timeout = timeout.unwrap_or(DEFAULT_TIMEOUT);
         let addr = format!("{host}:{port}");
 
         // Resolve DNS via ToSocketAddrs; supports hostnames and IP addresses
-        let socket_addr = addr.to_socket_addrs()
+        let socket_addr = addr
+            .to_socket_addrs()
             .map_err(|e| SftpError::ConnectionFailed(format!("Address resolution failed: {e}")))?
             .next()
-            .ok_or_else(|| SftpError::ConnectionFailed(format!("DNS resolution returned no results: {addr}")))?;
-
-        // Use TCP connection with timeout
-        let tcp = TcpStream::connect_timeout(&socket_addr, effective_timeout)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::TimedOut {
-                    SftpError::Timeout
-                } else {
-                    SftpError::ConnectionFailed(format!("Failed to connect to {addr}: {e}"))
-                }
+            .ok_or_else(|| {
+                SftpError::ConnectionFailed(format!("DNS resolution returned no results: {addr}"))
             })?;
 
-        let mut session = ssh2::Session::new()
-            .map_err(|e| SftpError::ConnectionFailed(format!("Failed to create SSH session: {e}")))?;
+        // Use TCP connection with timeout
+        let tcp = TcpStream::connect_timeout(&socket_addr, effective_timeout).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::TimedOut {
+                SftpError::Timeout
+            } else {
+                SftpError::ConnectionFailed(format!("Failed to connect to {addr}: {e}"))
+            }
+        })?;
 
-        let tcp_for_session = tcp.try_clone()
+        let mut session = ssh2::Session::new().map_err(|e| {
+            SftpError::ConnectionFailed(format!("Failed to create SSH session: {e}"))
+        })?;
+
+        let tcp_for_session = tcp
+            .try_clone()
             .map_err(|e| SftpError::ConnectionFailed(format!("Failed to clone TCP stream: {e}")))?;
         session.set_tcp_stream(tcp_for_session);
 
         // Set SSH session timeout (milliseconds); affects handshake and all subsequent blocking operations
         session.set_timeout(effective_timeout.as_millis() as u32);
 
-        session.handshake()
-            .map_err(|e| {
-                if is_timeout_error(&e) {
-                    SftpError::Timeout
-                } else {
-                    SftpError::ConnectionFailed(format!("SSH handshake failed: {e}"))
-                }
-            })?;
+        session.handshake().map_err(|e| {
+            if is_timeout_error(&e) {
+                SftpError::Timeout
+            } else {
+                SftpError::ConnectionFailed(format!("SSH handshake failed: {e}"))
+            }
+        })?;
 
-        match &auth {
-            AuthMethod::Password { password } => {
-                session.userauth_password(username, password)
-                    .map_err(|e| {
-                        if is_timeout_error(&e) {
-                            SftpError::Timeout
-                        } else {
-                            SftpError::AuthFailed(format!("Password authentication failed: {e}"))
-                        }
-                    })?;
-            }
-            AuthMethod::PublicKey { key_path, passphrase } => {
-                let pass = passphrase.as_deref();
-                session.userauth_pubkey_file(username, None, key_path, pass)
-                    .map_err(|e| {
-                        if is_timeout_error(&e) {
-                            SftpError::Timeout
-                        } else {
-                            SftpError::AuthFailed(format!("Public key authentication failed: {e}"))
-                        }
-                    })?;
-            }
-            AuthMethod::AgentOrDefaultKeys { passphrase } => {
-                authenticate_like_openssh(&session, username, passphrase.as_deref())?;
-            }
-        }
+        let known_hosts_path = default_known_hosts_path()?;
+        authenticate_after_host_key_check(
+            verify_host_key(&session, host, port, &known_hosts_path, confirmation),
+            || authenticate(&session, username, &auth),
+        )?;
 
         if !session.authenticated() {
             return Err(SftpError::AuthFailed("Authentication failed".into()));
@@ -151,6 +198,193 @@ impl SftpSession {
     /// Check if connection is alive
     pub fn is_authenticated(&self) -> bool {
         self.session.authenticated()
+    }
+}
+
+fn authenticate(
+    session: &ssh2::Session,
+    username: &str,
+    auth: &AuthMethod,
+) -> Result<(), SftpError> {
+    match auth {
+        AuthMethod::Password { password } => session
+            .userauth_password(username, password.as_str())
+            .map_err(|error| auth_error("Password", error)),
+        AuthMethod::PublicKey {
+            key_path,
+            passphrase,
+        } => session
+            .userauth_pubkey_file(
+                username,
+                None,
+                key_path,
+                passphrase.as_deref().map(String::as_str),
+            )
+            .map_err(|error| auth_error("Public key", error)),
+        AuthMethod::AgentOrDefaultKeys { passphrase } => {
+            authenticate_like_openssh(session, username, passphrase.as_deref().map(String::as_str))
+        }
+    }
+}
+
+fn auth_error(method: &str, error: ssh2::Error) -> SftpError {
+    if is_timeout_error(&error) {
+        SftpError::Timeout
+    } else {
+        SftpError::AuthFailed(format!("{method} authentication failed: {error}"))
+    }
+}
+
+fn default_known_hosts_path() -> Result<PathBuf, SftpError> {
+    dirs::home_dir()
+        .map(|home| home.join(".ssh").join("known_hosts"))
+        .ok_or_else(|| {
+            SftpError::ConnectionFailed(
+                "Cannot verify the SSH host key because the home directory is unavailable"
+                    .to_string(),
+            )
+        })
+}
+
+fn verify_host_key(
+    session: &ssh2::Session,
+    host: &str,
+    port: u16,
+    known_hosts_path: &Path,
+    confirmation: Option<&HostKeyConfirmation>,
+) -> Result<(), SftpError> {
+    let (host_key, host_key_type) = session.host_key().ok_or_else(|| {
+        SftpError::ConnectionFailed("SSH handshake returned no host key".to_string())
+    })?;
+    let fingerprint_sha256 = host_key_fingerprint_sha256(host_key);
+    let key_type = host_key_type_name(host_key_type).to_string();
+    let mut known_hosts = session.known_hosts().map_err(SftpError::Ssh2)?;
+
+    match fs::metadata(known_hosts_path) {
+        Ok(_) => {
+            known_hosts
+                .read_file(known_hosts_path, KnownHostFileKind::OpenSSH)
+                .map_err(SftpError::Ssh2)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(SftpError::Io(error)),
+    }
+
+    enforce_host_key_policy(
+        known_hosts.check_port(host, port, host_key),
+        host,
+        port,
+        fingerprint_sha256,
+        key_type,
+        confirmation,
+        || {
+            persist_host_key(
+                &mut known_hosts,
+                known_hosts_path,
+                host,
+                port,
+                host_key,
+                host_key_type,
+            )
+        },
+    )
+}
+
+fn enforce_host_key_policy(
+    check_result: CheckResult,
+    host: &str,
+    port: u16,
+    fingerprint_sha256: String,
+    key_type: String,
+    confirmation: Option<&HostKeyConfirmation>,
+    persist: impl FnOnce() -> Result<(), SftpError>,
+) -> Result<(), SftpError> {
+    match check_result {
+        CheckResult::Match => Ok(()),
+        CheckResult::Mismatch => Err(SftpError::HostKeyMismatch {
+            fingerprint_sha256,
+            key_type,
+        }),
+        CheckResult::NotFound => match confirmation {
+            Some(confirmation)
+                if confirmation.matches_endpoint(host, port)
+                    && confirmation.fingerprint_sha256() == fingerprint_sha256.as_str() =>
+            {
+                persist()?;
+                Ok(())
+            }
+            Some(_) => Err(SftpError::HostKeyMismatch {
+                fingerprint_sha256,
+                key_type,
+            }),
+            None => Err(SftpError::UnknownHostKey {
+                fingerprint_sha256,
+                key_type,
+            }),
+        },
+        CheckResult::Failure => Err(SftpError::ConnectionFailed(
+            "Failed to verify the SSH host key against known_hosts".to_string(),
+        )),
+    }
+}
+
+fn authenticate_after_host_key_check<T>(
+    verification: Result<(), SftpError>,
+    authenticate: impl FnOnce() -> Result<T, SftpError>,
+) -> Result<T, SftpError> {
+    verification?;
+    authenticate()
+}
+
+fn persist_host_key(
+    known_hosts: &mut ssh2::KnownHosts,
+    known_hosts_path: &Path,
+    host: &str,
+    port: u16,
+    host_key: &[u8],
+    host_key_type: HostKeyType,
+) -> Result<(), SftpError> {
+    let Some(parent) = known_hosts_path.parent() else {
+        return Err(SftpError::ConnectionFailed(
+            "known_hosts path has no parent directory".to_string(),
+        ));
+    };
+    fs::create_dir_all(parent)?;
+    let host_pattern = if port == 22 {
+        host.to_string()
+    } else {
+        format!("[{host}]:{port}")
+    };
+    known_hosts
+        .add(
+            &host_pattern,
+            host_key,
+            "added by Zaplex SFTP",
+            host_key_type.into(),
+        )
+        .map_err(SftpError::Ssh2)?;
+    known_hosts
+        .write_file(known_hosts_path, KnownHostFileKind::OpenSSH)
+        .map_err(SftpError::Ssh2)
+}
+
+fn host_key_fingerprint_sha256(host_key: &[u8]) -> String {
+    let digest = Sha256::digest(host_key);
+    format!(
+        "SHA256:{}",
+        base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest)
+    )
+}
+
+fn host_key_type_name(host_key_type: HostKeyType) -> &'static str {
+    match host_key_type {
+        HostKeyType::Unknown => "unknown",
+        HostKeyType::Rsa => "RSA",
+        HostKeyType::Dss => "DSA",
+        HostKeyType::Ecdsa256 => "ECDSA P-256",
+        HostKeyType::Ecdsa384 => "ECDSA P-384",
+        HostKeyType::Ecdsa521 => "ECDSA P-521",
+        HostKeyType::Ed25519 => "ED25519",
     }
 }
 
@@ -253,3 +487,7 @@ fn authenticate_like_openssh(
             .to_string(),
     }))
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;
