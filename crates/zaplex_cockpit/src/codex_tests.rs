@@ -177,7 +177,7 @@ fn unavailable_pinned_codex_root_is_degraded_not_successfully_empty() {
 }
 
 #[test]
-fn parse_transcript_sums_per_turn_and_ignores_cumulative_envelope() {
+fn parse_transcript_uses_per_turn_usage_from_token_count_events() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("rollout-x.jsonl");
     write(
@@ -185,11 +185,10 @@ fn parse_transcript_sums_per_turn_and_ignores_cumulative_envelope() {
         concat!(
             r#"{"type":"turn_context","model":"gpt-5-codex","timestamp":"2026-06-30T10:00:00Z"}"#,
             "\n",
-            // last_token_usage nested under "info" — exercises the recursive finder.
-            r#"{"type":"event_msg","timestamp":"2026-06-30T10:01:00Z","info":{"last_token_usage":{"input_tokens":200,"output_tokens":40,"cached_input_tokens":15,"reasoning_output_tokens":30}}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-06-30T10:01:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200,"output_tokens":40,"cached_input_tokens":15,"reasoning_output_tokens":30},"total_token_usage":{"input_tokens":200,"output_tokens":40,"cached_input_tokens":15,"reasoning_output_tokens":30,"total_tokens":240}}}}"#,
             "\n",
-            // cumulative envelope must be ignored to avoid double-counting.
-            r#"{"type":"event_msg","timestamp":"2026-06-30T10:02:00Z","total_token_usage":{"input_tokens":999,"output_tokens":999}}"#,
+            // Usage attached to a different event type is not a completed turn.
+            r#"{"type":"event_msg","timestamp":"2026-06-30T10:02:00Z","payload":{"type":"rate_limits","info":{"last_token_usage":{"input_tokens":999,"output_tokens":999},"total_token_usage":{"input_tokens":999,"output_tokens":999}}}}"#,
             "\n",
         ),
     );
@@ -215,12 +214,185 @@ fn parse_transcript_sums_per_turn_and_ignores_cumulative_envelope() {
 }
 
 #[test]
+fn parse_transcript_skips_rate_limit_rebroadcast_without_dropping_equal_real_turns() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("rollout-x.jsonl");
+    let token_count = |timestamp: &str, total_tokens: u64, rate_limit_update: bool| {
+        serde_json::json!({
+            "type": "event_msg",
+            "timestamp": timestamp,
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "last_token_usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "cached_input_tokens": 10,
+                        "reasoning_output_tokens": 5
+                    },
+                    "total_token_usage": {
+                        "input_tokens": total_tokens - 20,
+                        "output_tokens": 20,
+                        "cached_input_tokens": 10,
+                        "reasoning_output_tokens": 5,
+                        "total_tokens": total_tokens
+                    },
+                    "rate_limits": rate_limit_update.then_some(serde_json::json!({
+                        "primary": {"used_percent": 42.0}
+                    }))
+                }
+            }
+        })
+    };
+    write(
+        &path,
+        &[
+            token_count("2026-06-30T10:01:00Z", 120, false),
+            token_count("2026-06-30T10:01:01Z", 120, true),
+            token_count("2026-06-30T10:02:00Z", 240, false),
+            token_count("2026-06-30T10:03:00Z", 360, false),
+        ]
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n"),
+    );
+
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+
+    assert_eq!(entries.len(), 3);
+    assert!(entries.iter().all(|entry| entry.input == 90));
+    assert!(entries.iter().all(|entry| entry.output == 20));
+    assert!(entries.iter().all(|entry| entry.cache_read == 10));
+    assert!(entries.iter().all(|entry| entry.reasoning == 5));
+}
+
+#[test]
+fn parse_transcript_uses_cumulative_delta_when_last_usage_is_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("rollout-x.jsonl");
+    write(
+        &path,
+        &[
+            serde_json::json!({
+                "type": "event_msg",
+                "timestamp": "2026-06-30T10:01:00Z",
+                "payload": {"type": "token_count", "info": {
+                    "total_token_usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 10,
+                        "cached_input_tokens": 20,
+                        "total_tokens": 110
+                    }
+                }}
+            }),
+            serde_json::json!({
+                "type": "event_msg",
+                "timestamp": "2026-06-30T10:02:00Z",
+                "payload": {"type": "token_count", "info": {
+                    "total_token_usage": {
+                        "input_tokens": 160,
+                        "output_tokens": 15,
+                        "cached_input_tokens": 30,
+                        "total_tokens": 175
+                    }
+                }}
+            }),
+        ]
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n"),
+    );
+
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+    assert_eq!(entries.len(), 2);
+    assert_eq!((entries[0].input, entries[0].output), (80, 10));
+    assert_eq!(entries[0].cache_read, 20);
+    assert_eq!((entries[1].input, entries[1].output), (50, 5));
+    assert_eq!(entries[1].cache_read, 10);
+}
+
+#[test]
+fn parse_transcript_rebaselines_after_cumulative_reset() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("rollout-x.jsonl");
+    let token_count = |timestamp: &str, total_tokens: u64, input: u64, output: u64| {
+        serde_json::json!({
+            "type": "event_msg",
+            "timestamp": timestamp,
+            "payload": {"type": "token_count", "info": {
+                "last_token_usage": {
+                    "input_tokens": input,
+                    "output_tokens": output
+                },
+                "total_token_usage": {
+                    "input_tokens": total_tokens,
+                    "output_tokens": 0,
+                    "total_tokens": total_tokens
+                }
+            }}
+        })
+    };
+    write(
+        &path,
+        &[
+            token_count("2026-06-30T10:01:00Z", 100, 80, 20),
+            token_count("2026-06-30T10:02:00Z", 10, 999, 999),
+            token_count("2026-06-30T10:03:00Z", 30, 15, 5),
+        ]
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n"),
+    );
+
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+    assert_eq!(entries.len(), 2);
+    assert_eq!((entries[0].input, entries[0].output), (80, 20));
+    assert_eq!((entries[1].input, entries[1].output), (15, 5));
+}
+
+#[test]
+fn legacy_token_count_without_totals_keeps_equal_real_turns() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("rollout-x.jsonl");
+    let line = r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10}}}}"#;
+    write(&path, &format!("{line}\n{line}\n"));
+
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().all(|entry| entry.input == 10));
+    assert!(entries.iter().all(|entry| entry.cache_read == 90));
+}
+
+#[test]
 fn codex_usage_subtracts_cached_tokens_from_input_total() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("rollout-x.jsonl");
     write(
         &path,
-        r#"{"type":"event_msg","last_token_usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10,"reasoning_output_tokens":5}}"#,
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10,"reasoning_output_tokens":5}}}}"#,
     );
 
     let entries = parse_transcript(
@@ -240,7 +412,7 @@ fn codex_usage_fixture_reports_total_110_and_work_20() {
     let path = tmp.path().join("rollout-x.jsonl");
     write(
         &path,
-        r#"{"type":"event_msg","last_token_usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10,"reasoning_output_tokens":5}}"#,
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10,"reasoning_output_tokens":5}}}}"#,
     );
     let entries = parse_transcript(
         &path,
@@ -265,7 +437,7 @@ fn cached_input_larger_than_input_saturates_at_zero() {
     let path = tmp.path().join("rollout-x.jsonl");
     write(
         &path,
-        r#"{"type":"event_msg","last_token_usage":{"input_tokens":10,"cached_input_tokens":90}}"#,
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":90}}}}"#,
     );
 
     let entries = parse_transcript(
@@ -284,7 +456,7 @@ fn missing_usage_fields_are_zero_without_dropping_present_tokens() {
     let path = tmp.path().join("rollout-x.jsonl");
     write(
         &path,
-        r#"{"type":"event_msg","last_token_usage":{"cached_input_tokens":90,"reasoning_output_tokens":5}}"#,
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"cached_input_tokens":90,"reasoning_output_tokens":5}}}}"#,
     );
 
     let entries = parse_transcript(
@@ -314,7 +486,7 @@ fn usage_for_account_walks_sessions_tree() {
         concat!(
             r#"{"type":"turn_context","model":"gpt-5-codex","timestamp":"2026-06-30T10:00:00Z"}"#,
             "\n",
-            r#"{"type":"event_msg","timestamp":"2026-06-30T10:01:00Z","last_token_usage":{"input_tokens":10,"output_tokens":5}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-06-30T10:01:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":5}}}}"#,
             "\n",
         ),
     );

@@ -490,6 +490,88 @@ fn parse_transcript_extracts_only_assistant_usage() {
 }
 
 #[test]
+fn parse_transcript_keeps_one_final_usage_snapshot_per_request() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("session.jsonl");
+    write(
+        &path,
+        concat!(
+            r#"{"type":"assistant","requestId":"req-1","timestamp":"2026-06-30T10:00:00Z","message":{"id":"msg-1","model":"claude-opus-4-8","stop_reason":null,"usage":{"input_tokens":100,"output_tokens":2,"cache_creation_input_tokens":10,"cache_read_input_tokens":5}}}"#,
+            "\n",
+            r#"{"type":"assistant","requestId":"req-1","timestamp":"2026-06-30T10:00:01Z","message":{"id":"msg-1","model":"claude-opus-4-8","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":1093,"cache_creation_input_tokens":10,"cache_read_input_tokens":5}}}"#,
+            "\n",
+        ),
+    );
+
+    let entries = parse_transcript(&path);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].input, 100);
+    assert_eq!(entries[0].output, 1093);
+    assert_eq!(entries[0].cache_create, 10);
+    assert_eq!(entries[0].cache_read, 5);
+
+    let mut totals = crate::types::WindowTotals::default();
+    for entry in &entries {
+        totals.add(entry, &crate::pricing::PricingTable::default());
+    }
+    assert_eq!(totals.messages, 1);
+    assert_eq!(totals.input, 100);
+    assert_eq!(totals.output, 1093);
+    assert_eq!(totals.work, 1203);
+    assert_eq!(totals.total, 1208);
+    assert!(totals.cost_usd > 0.0);
+}
+
+#[test]
+fn parse_transcript_keeps_distinct_requests_and_unkeyed_snapshots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("session.jsonl");
+    write(
+        &path,
+        concat!(
+            r#"{"type":"assistant","requestId":"req-1","timestamp":"2026-06-30T10:00:00Z","message":{"id":"msg-shared","model":"claude-opus-4-8","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            "\n",
+            r#"{"type":"assistant","requestId":"req-2","timestamp":"2026-06-30T10:01:00Z","message":{"id":"msg-shared","model":"claude-opus-4-8","stop_reason":"end_turn","usage":{"input_tokens":20,"output_tokens":2}}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-06-30T10:02:00Z","message":{"id":"msg-shared","model":"claude-opus-4-8","stop_reason":"end_turn","usage":{"input_tokens":30,"output_tokens":3}}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-06-30T10:03:00Z","message":{"id":"msg-shared","model":"claude-opus-4-8","stop_reason":"end_turn","usage":{"input_tokens":40,"output_tokens":4}}}"#,
+            "\n",
+        ),
+    );
+
+    let entries = parse_transcript(&path);
+    assert_eq!(entries.len(), 4);
+    assert_eq!(
+        entries.iter().map(|entry| entry.input).collect::<Vec<_>>(),
+        vec![10, 20, 30, 40]
+    );
+}
+
+#[test]
+fn parse_transcript_selects_one_whole_highest_output_provisional_snapshot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("session.jsonl");
+    write(
+        &path,
+        concat!(
+            r#"{"type":"assistant","requestId":"req-1","timestamp":"2026-06-30T10:00:00Z","message":{"id":"msg-1","model":"first","stop_reason":null,"usage":{"input_tokens":900,"output_tokens":20}}}"#,
+            "\n",
+            r#"{"type":"assistant","requestId":"req-1","timestamp":"2026-06-30T10:01:00Z","message":{"id":"msg-1","model":"second","stop_reason":null,"usage":{"input_tokens":100,"output_tokens":30}}}"#,
+            "\n",
+            r#"{"type":"assistant","requestId":"req-1","timestamp":"2026-06-30T10:02:00Z","message":{"id":"msg-1","model":"last","stop_reason":null,"usage":{"input_tokens":50,"output_tokens":30}}}"#,
+            "\n",
+        ),
+    );
+
+    let entries = parse_transcript(&path);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].model, "last");
+    assert_eq!(entries[0].input, 50);
+    assert_eq!(entries[0].output, 30);
+}
+
+#[test]
 fn usage_for_account_respects_the_since_cutoff() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();

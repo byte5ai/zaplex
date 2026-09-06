@@ -198,28 +198,136 @@ pub fn discover_accounts(codex_home: &Path) -> Vec<Account> {
         .unwrap_or_default()
 }
 
-/// Read `input_tokens` / `output_tokens` / `cached_input_tokens` /
-/// `reasoning_output_tokens` from a token-usage object.
-fn tokens_from(obj: &Value) -> (u64, u64, u64, u64) {
-    let n = |k: &str| obj.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-    let input = n("input_tokens");
-    let cached = n("cached_input_tokens");
-    (
-        // Codex reports cached input as part of `input_tokens`. Store only the
-        // uncached remainder here; `cache_read` owns the cached part so totals,
-        // work, and pricing each count every token once.
-        input.saturating_sub(cached),
-        n("output_tokens"),
-        cached,
-        n("reasoning_output_tokens"),
-    )
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TokenCounts {
+    input: u64,
+    output: u64,
+    cached: u64,
+    reasoning: u64,
+}
+
+impl TokenCounts {
+    fn from_value(obj: &Value) -> Self {
+        let n = |key: &str| obj.get(key).and_then(Value::as_u64).unwrap_or(0);
+        Self {
+            input: n("input_tokens"),
+            output: n("output_tokens"),
+            cached: n("cached_input_tokens"),
+            reasoning: n("reasoning_output_tokens"),
+        }
+    }
+
+    fn delta_from(self, previous: Self) -> Self {
+        Self {
+            input: self.input.saturating_sub(previous.input),
+            output: self.output.saturating_sub(previous.output),
+            cached: self.cached.saturating_sub(previous.cached),
+            reasoning: self.reasoning.saturating_sub(previous.reasoning),
+        }
+    }
+
+    fn normalized(self) -> (u64, u64, u64, u64) {
+        (
+            self.input.saturating_sub(self.cached),
+            self.output,
+            self.cached,
+            self.reasoning,
+        )
+    }
+
+    fn is_empty(self) -> bool {
+        self.input == 0 && self.output == 0 && self.cached == 0 && self.reasoning == 0
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CumulativeUsage {
+    counts: TokenCounts,
+    total: u64,
+}
+
+impl CumulativeUsage {
+    fn from_value(obj: &Value) -> Option<Self> {
+        let counts = TokenCounts::from_value(obj);
+        let total = obj
+            .get("total_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| counts.input.saturating_add(counts.output));
+        (total > 0 || !counts.is_empty()).then_some(Self { counts, total })
+    }
+}
+
+fn token_count_info(v: &Value) -> Option<&Value> {
+    if v.get("type").and_then(Value::as_str) != Some("event_msg") {
+        return None;
+    }
+    let payload = v.get("payload")?;
+    if payload.get("type").and_then(Value::as_str) != Some("token_count") {
+        return None;
+    }
+    Some(payload.get("info").unwrap_or(payload))
+}
+
+fn usage_entry(
+    counts: TokenCounts,
+    ts: DateTime<Utc>,
+    model: &str,
+    session_id: &str,
+) -> Option<UsageEntry> {
+    let (input, output, cached, reasoning) = counts.normalized();
+    [input, output, cached, reasoning]
+        .into_iter()
+        .any(|count| count > 0)
+        .then(|| UsageEntry {
+            ts,
+            provider: Provider::Codex,
+            model: model.to_string(),
+            input,
+            output,
+            cache_create: 0,
+            cache_read: cached,
+            reasoning,
+            session_id: session_id.to_string(),
+        })
+}
+
+fn confirmed_usage(
+    info: &Value,
+    previous_total: &mut Option<CumulativeUsage>,
+) -> Option<TokenCounts> {
+    let last = info
+        .get("last_token_usage")
+        .map(TokenCounts::from_value)
+        .filter(|counts| !counts.is_empty());
+    let Some(current) = info
+        .get("total_token_usage")
+        .and_then(CumulativeUsage::from_value)
+    else {
+        // Older token_count records did not include cumulative totals. They cannot
+        // be deduplicated without also dropping equal-sized real turns.
+        return last;
+    };
+
+    let selected = match *previous_total {
+        None => last.or(Some(current.counts)),
+        Some(previous) if current.total > previous.total => {
+            last.or_else(|| Some(current.counts.delta_from(previous.counts)))
+        }
+        Some(previous) if current.total == previous.total => None,
+        Some(previous) => {
+            debug_assert!(current.total < previous.total);
+            None
+        }
+    };
+    *previous_total = Some(current);
+    selected
 }
 
 /// Parse a Codex `rollout-*.jsonl` session into per-turn usage entries.
 ///
-/// Sums **per-turn** deltas (`last_token_usage`) to avoid double-counting the
-/// cumulative `total_token_usage` envelope. `file_date` (from the `YYYY/MM/DD` path)
-/// is the timestamp fallback when a line carries none.
+/// Emits per-turn usage only for `token_count` events whose cumulative snapshot
+/// advances. `file_date` (from the `YYYY/MM/DD` path) is the timestamp fallback
+/// when a line carries none.
 pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry> {
     let Ok(content) = fs::read_to_string(path) else {
         return Vec::new();
@@ -231,6 +339,7 @@ pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry
     // way here would stamp spend with an id no session row carries.
     let mut session_id = crate::codex_sessions::session_id_from_path(path);
     let mut entries = Vec::new();
+    let mut previous_total = None;
 
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
@@ -250,24 +359,12 @@ pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry
         {
             current_ts = ts.with_timezone(&Utc);
         }
-        // Per-turn usage; ignore cumulative `total_token_usage` to avoid double counts.
-        if let Some(usage) = find(&v, "last_token_usage") {
-            let (input, output, cached, reasoning) = tokens_from(usage);
-            if [input, output, cached, reasoning]
-                .into_iter()
-                .any(|n| n > 0)
-            {
-                entries.push(UsageEntry {
-                    ts: current_ts,
-                    provider: Provider::Codex,
-                    model: current_model.clone(),
-                    input,
-                    output,
-                    cache_create: 0, // Codex has no separate cache-write concept
-                    cache_read: cached,
-                    reasoning,
-                    session_id: session_id.clone(),
-                });
+        let Some(info) = token_count_info(&v) else {
+            continue;
+        };
+        if let Some(counts) = confirmed_usage(info, &mut previous_total) {
+            if let Some(entry) = usage_entry(counts, current_ts, &current_model, &session_id) {
+                entries.push(entry);
             }
         }
     }
