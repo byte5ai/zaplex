@@ -4,12 +4,15 @@
 //! the remote server binary and to launch the `remote-server-proxy` process
 //! whose stdin/stdout become the protocol channel.
 use std::fmt;
+use std::fs::File;
 use std::future::Future;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use sha2::{Digest, Sha256};
 use warpui::r#async::{executor, FutureExt as _};
 
 use remote_server::auth::RemoteServerAuthContext;
@@ -114,6 +117,9 @@ impl SshTransport {
         let Ok(platform) = detect_remote_platform(&self.socket_path).await else {
             return false;
         };
+        if crate::remote_server::embedded::expected_server_tarball_sha256(&platform).is_err() {
+            return false;
+        }
         // Rung 3a: a tarball bundled in the app matches — always installable, offline.
         if crate::remote_server::embedded::embedded_server_tarball(&platform).is_some() {
             return true;
@@ -234,9 +240,10 @@ async fn verify_installed_binary(socket_path: &Path) -> Result<()> {
 async fn run_install_script(
     socket_path: &Path,
     staging_tarball_path: Option<&str>,
+    expected_sha256: &str,
     timeout: std::time::Duration,
 ) -> core::result::Result<(), InstallError> {
-    let script = remote_server::setup::install_script(staging_tarball_path);
+    let script = remote_server::setup::install_script(staging_tarball_path, expected_sha256)?;
     match remote_server::ssh::run_ssh_script(socket_path, &script, timeout).await {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => {
@@ -575,7 +582,11 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
     verify_installed_binary(socket_path).await
 }
 
-async fn download_remote_server_tarball(download_url: &str, tarball_path: &Path) -> Result<()> {
+async fn download_remote_server_tarball(
+    download_url: &str,
+    tarball_path: &Path,
+    expected_sha256: &str,
+) -> Result<()> {
     let output = async {
         command::r#async::Command::new("curl")
             .arg("-fSL")
@@ -599,7 +610,7 @@ async fn download_remote_server_tarball(download_url: &str, tarball_path: &Path)
     .map_err(|e| anyhow!("local curl failed to execute: {e}"))?;
 
     if output.status.success() {
-        return Ok(());
+        return verify_remote_server_tarball(tarball_path, expected_sha256);
     }
 
     let code = output.status.code().unwrap_or(-1);
@@ -607,6 +618,48 @@ async fn download_remote_server_tarball(download_url: &str, tarball_path: &Path)
     Err(anyhow!(
         "local tarball download failed with code {code}: {stderr}"
     ))
+}
+
+fn verify_remote_server_tarball(tarball_path: &Path, expected_sha256: &str) -> Result<()> {
+    if expected_sha256.len() != 64 || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(anyhow!(
+            "missing or invalid authenticated remote-server archive digest"
+        ));
+    }
+
+    let mut archive = File::open(tarball_path).map_err(|error| {
+        anyhow!(
+            "failed to open remote-server archive {}: {error}",
+            tarball_path.display()
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let bytes_read = archive.read(&mut buffer).map_err(|error| {
+            anyhow!(
+                "failed to hash remote-server archive {}: {error}",
+                tarball_path.display()
+            )
+        })?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    let actual_sha256 = format!("{:x}", hasher.finalize());
+    if actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "remote-server archive SHA-256 mismatch for {}: expected {}, got {}",
+            tarball_path.display(),
+            expected_sha256.to_ascii_lowercase(),
+            actual_sha256
+        ))
+    }
 }
 
 /// Progress reporting for the install ladder. Wraps an optional unbounded
@@ -650,7 +703,13 @@ async fn probe_host_internet(socket_path: &Path, platform: &RemotePlatform) -> b
 /// Rung-3 relay: upload a tarball the *client* supplies (bundled or downloaded)
 /// over the ControlMaster and run the staged install script — the host needs no
 /// internet access.
-async fn relay_tarball_install(socket_path: &Path, local_tarball: &Path) -> Result<()> {
+async fn relay_tarball_install(
+    socket_path: &Path,
+    local_tarball: &Path,
+    expected_sha256: &str,
+) -> Result<()> {
+    verify_remote_server_tarball(local_tarball, expected_sha256)?;
+
     let remote_server_dir = remote_server::setup::remote_server_dir();
     let mkdir_cmd = format!("mkdir -p {remote_server_dir}");
     let mkdir_output = remote_server::ssh::run_ssh_command(
@@ -680,6 +739,7 @@ async fn relay_tarball_install(socket_path: &Path, local_tarball: &Path) -> Resu
     run_install_script(
         socket_path,
         Some(&remote_tarball_path),
+        expected_sha256,
         remote_server::setup::SCP_INSTALL_TIMEOUT,
     )
     .await
@@ -700,6 +760,8 @@ async fn install_ladder(
     let platform = detect_remote_platform(socket_path)
         .await
         .map_err(|error| format!("{error:#}"))?;
+    let expected_sha256 = crate::remote_server::embedded::expected_server_tarball_sha256(&platform)
+        .map_err(|error| format!("{error:#}"))?;
 
     // Rung 1: a fast probe so a locked-down/air-gapped host doesn't pay a full
     // download timeout before we relay from the client.
@@ -708,7 +770,14 @@ async fn install_ladder(
         // Rung 2: the host fetches the version-matched tarball itself (fastest —
         // its own pipe, no client bandwidth). On failure, fall to the relay.
         progress.phase("Host is downloading the Zaplex session daemon…");
-        match run_install_script(socket_path, None, remote_server::setup::INSTALL_TIMEOUT).await {
+        match run_install_script(
+            socket_path,
+            None,
+            &expected_sha256,
+            remote_server::setup::INSTALL_TIMEOUT,
+        )
+        .await
+        {
             Ok(()) => {
                 progress.phase("Verifying installation…");
                 return verify_installed_binary(socket_path)
@@ -727,7 +796,7 @@ async fn install_ladder(
     // version-matched by construction (CI stages it with the same GIT_RELEASE_TAG).
     if let Some(tarball) = crate::remote_server::embedded::embedded_server_tarball(&platform) {
         progress.phase("Uploading the bundled Zaplex session daemon to the host…");
-        return relay_tarball_install(socket_path, &tarball)
+        return relay_tarball_install(socket_path, &tarball, &expected_sha256)
             .await
             .map_err(|error| format!("{error:#}"));
     }
@@ -738,11 +807,11 @@ async fn install_ladder(
     let tempdir = tempfile::tempdir().map_err(|error| format!("{error:#}"))?;
     let tarball_path = tempdir.path().join("zap.tar.gz");
     let download_url = remote_server::setup::download_tarball_url(&platform);
-    download_remote_server_tarball(&download_url, &tarball_path)
+    download_remote_server_tarball(&download_url, &tarball_path, &expected_sha256)
         .await
         .map_err(|error| format!("{error:#}"))?;
     progress.phase("Uploading the Zaplex session daemon to the host…");
-    relay_tarball_install(socket_path, &tarball_path)
+    relay_tarball_install(socket_path, &tarball_path, &expected_sha256)
         .await
         .map_err(|error| format!("{error:#}"))
 }
@@ -934,26 +1003,5 @@ impl RemoteTransport for SshTransport {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use warpui::r#async::BoxFuture;
-    fn static_auth_context() -> Arc<RemoteServerAuthContext> {
-        Arc::new(RemoteServerAuthContext::new(
-            || -> BoxFuture<'static, Option<String>> { Box::pin(async { None }) },
-            || "user id/with spaces".to_string(),
-        ))
-    }
-
-    #[test]
-    fn remote_proxy_command_quotes_identity_key() {
-        let transport = SshTransport::new(
-            PathBuf::from("/tmp/control-master.sock"),
-            static_auth_context(),
-        );
-
-        let command = transport.remote_proxy_command();
-
-        assert!(command.contains("remote-server-proxy --identity-key"));
-        assert!(command.contains("'user id/with spaces'"));
-    }
-}
+#[path = "ssh_transport_tests.rs"]
+mod tests;

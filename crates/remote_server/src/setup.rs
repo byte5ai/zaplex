@@ -418,15 +418,25 @@ fn pinned_version() -> &'static str {
 const INSTALL_SCRIPT_TEMPLATE: &str = include_str!("install_remote_server.sh");
 
 /// Returns the install script. When `staging_tarball_path` is non-empty, the script skips remote
-/// download and instead extracts a tarball pre-uploaded by the client via SCP.
-pub fn install_script(staging_tarball_path: Option<&str>) -> String {
+/// download and instead extracts a tarball pre-uploaded by the client via SCP. The expected digest
+/// must come from release metadata authenticated by the client bundle, never from the archive host.
+pub fn install_script(staging_tarball_path: Option<&str>, expected_sha256: &str) -> Result<String> {
+    if expected_sha256.len() != 64
+        || !expected_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(anyhow!("missing or invalid remote-server archive SHA-256"));
+    }
+
     let version_suffix = version_suffix();
-    INSTALL_SCRIPT_TEMPLATE
+    Ok(INSTALL_SCRIPT_TEMPLATE
         .replace("{download_base_url}", &download_url())
         .replace("{install_dir}", &remote_server_dir())
         .replace("{binary_name}", binary_name())
         .replace("{version_suffix}", &version_suffix)
         .replace("{staging_tarball_path}", staging_tarball_path.unwrap_or(""))
+        .replace("{expected_sha256}", expected_sha256))
 }
 
 /// Constructs the base URL for downloading Zaplex CLI release assets.
@@ -449,12 +459,12 @@ fn version_suffix() -> String {
 }
 
 /// Returns the release-asset tarball filename for a remote platform, e.g.
-/// `zap-linux-x86_64.tar.gz`. Single source of truth for the tarball naming —
+/// `zap-remote-server-linux-x86_64.tar.gz`. Single source of truth for the tarball naming —
 /// shared by the download URL, the bundled-in-the-app copies (install ladder
 /// rung 3a), and the CI packaging step that stages them.
 pub fn tarball_basename(platform: &RemotePlatform) -> String {
     format!(
-        "zap-{}-{}.tar.gz",
+        "zap-remote-server-{}-{}.tar.gz",
         platform.os.as_str(),
         platform.arch.as_str(),
     )
