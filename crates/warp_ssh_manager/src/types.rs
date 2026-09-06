@@ -227,3 +227,13 @@ pub struct ResolvedSshAuth {
     pub secret_lookup_id: String,
     pub secret_kind: crate::secrets::SecretKind,
 }
+
+/// Connection-ready server data paired with the keychain identity that owns
+/// its password or passphrase. This transient value prevents callers from
+/// resolving OneKey authentication twice and losing the credential owner.
+#[derive(Clone, Debug)]
+pub struct ResolvedSshConnection {
+    pub server: SshServerInfo,
+    pub secret_lookup_id: String,
+    pub secret_kind: crate::secrets::SecretKind,
+}

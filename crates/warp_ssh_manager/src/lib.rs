@@ -38,8 +38,8 @@ pub use sync_provider::{
 };
 pub use types::ConnectionStatus;
 pub use types::{
-    AuthType, NodeKind, OneKeyCredentialKind, ResolvedSshAuth, SessionResilience, SshNode,
-    SshOneKeyCredential, SshServerInfo,
+    AuthType, NodeKind, OneKeyCredentialKind, ResolvedSshAuth, ResolvedSshConnection,
+    SessionResilience, SshNode, SshOneKeyCredential, SshServerInfo,
 };
 pub use validation::{
     EndpointUse, SshEndpointValidationError, ValidatedSshEndpoint, validate_ssh_endpoint,

@@ -1,5 +1,10 @@
-use super::{legacy_ssh_candidates, ProcessLocation, SubscriptionAgent};
+use super::{
+    ProcessLocation, SubscriptionAgent, legacy_ssh_candidates, remote_candidates_for_resolved_ssh,
+};
 use crate::terminal::ssh::util::InteractiveSshCommand;
+use warp_ssh_manager::{
+    AuthType, ResolvedSshConnection, SecretKind, SessionResilience, SshServerInfo,
+};
 
 #[test]
 fn legacy_ssh_candidates_run_both_agents_on_the_active_host() {
@@ -49,4 +54,42 @@ fn legacy_ssh_candidates_require_a_reusable_host() {
         error.to_string(),
         "the active SSH session has no reusable host"
     );
+}
+
+#[test]
+fn remote_onekey_key_uses_shared_credential() {
+    let connection = ResolvedSshConnection {
+        server: SshServerInfo {
+            node_id: "host-1".to_string(),
+            host: "example.test".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            auth_type: AuthType::Key,
+            key_path: Some("/keys/deploy".to_string()),
+            credential_id: Some("cred-1".to_string()),
+            startup_command: None,
+            notes: None,
+            last_connected_at: None,
+            session_resilience: SessionResilience::PersistOnly,
+            ring_ceiling_mb: 0,
+        },
+        secret_lookup_id: "cred-1".to_string(),
+        secret_kind: SecretKind::Passphrase,
+    };
+
+    let candidates = remote_candidates_for_resolved_ssh("daemon-1", "edge", &connection);
+    for candidate in candidates {
+        let ProcessLocation::Remote { ssh_argv } = candidate.location else {
+            panic!("resolved OneKey host must remain remote");
+        };
+        assert!(
+            ssh_argv
+                .windows(2)
+                .any(|args| args == ["-i", "/keys/deploy"])
+        );
+        assert_eq!(
+            ssh_argv.last().map(String::as_str),
+            Some("deploy@example.test")
+        );
+    }
 }

@@ -552,17 +552,29 @@ fn remote_candidates(host_id: &str, ctx: &AppContext) -> Result<Vec<RuntimeCandi
     let node_id = daemon
         .registry_node_id
         .context("remote host has no SSH registry identity")?;
-    let server = warp_ssh_manager::with_conn(|connection| {
-        let server = warp_ssh_manager::SshRepository::get_server(connection, &node_id)?
-            .ok_or_else(|| warp_ssh_manager::SshRepositoryError::NotFound(node_id.clone()))?;
-        Ok(server)
+    let connection = warp_ssh_manager::with_conn(|database| {
+        let connection =
+            warp_ssh_manager::SshRepository::get_server_with_resolved_auth(database, &node_id)?
+                .ok_or_else(|| warp_ssh_manager::SshRepositoryError::NotFound(node_id.clone()))?;
+        Ok(connection)
     })?;
-    let ssh_argv = warp_ssh_manager::ssh_command::build_ssh_args(&server);
-    Ok(remote_candidates_for_ssh(
+    Ok(remote_candidates_for_resolved_ssh(
         host_id,
         &daemon.host_label,
-        ssh_argv,
+        &connection,
     ))
+}
+
+fn remote_candidates_for_resolved_ssh(
+    host_id: &str,
+    host_label: &str,
+    connection: &warp_ssh_manager::ResolvedSshConnection,
+) -> Vec<RuntimeCandidate> {
+    remote_candidates_for_ssh(
+        host_id,
+        host_label,
+        warp_ssh_manager::ssh_command::build_ssh_args(&connection.server),
+    )
 }
 
 fn legacy_ssh_candidates(connection: &InteractiveSshCommand) -> Result<Vec<RuntimeCandidate>> {

@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use crate::secrets::SecretKind;
 use crate::types::{
-    AuthType, NodeKind, OneKeyCredentialKind, ResolvedSshAuth, SessionResilience, SshNode,
-    SshOneKeyCredential, SshServerInfo,
+    AuthType, NodeKind, OneKeyCredentialKind, ResolvedSshAuth, ResolvedSshConnection,
+    SessionResilience, SshNode, SshOneKeyCredential, SshServerInfo,
 };
 use persistence::model::{
     NewSshNode, NewSshOneKeyCredential, NewSshServer, NewSyncMeta, SshNodeRow,
@@ -58,6 +58,15 @@ impl SshRepository {
     ) -> Result<Option<SshServerInfo>, SshRepositoryError> {
         let row: Option<SshServerRow> = ssh_servers::table.find(node_id).first(conn).optional()?;
         row.map(server_from_row).transpose()
+    }
+
+    pub fn get_server_with_resolved_auth(
+        conn: &mut SqliteConnection,
+        node_id: &str,
+    ) -> Result<Option<ResolvedSshConnection>, SshRepositoryError> {
+        Self::get_server(conn, node_id)?
+            .map(|server| Self::resolve_server_connection(conn, &server))
+            .transpose()
     }
 
     pub fn create_folder(
@@ -371,6 +380,22 @@ impl SshRepository {
                 })
             }
         }
+    }
+
+    pub fn resolve_server_connection(
+        conn: &mut SqliteConnection,
+        server: &SshServerInfo,
+    ) -> Result<ResolvedSshConnection, SshRepositoryError> {
+        let resolved_auth = Self::resolve_server_auth(conn, server)?;
+        let mut resolved_server = server.clone();
+        resolved_server.username = resolved_auth.username;
+        resolved_server.auth_type = resolved_auth.auth_type;
+        resolved_server.key_path = resolved_auth.key_path;
+        Ok(ResolvedSshConnection {
+            server: resolved_server,
+            secret_lookup_id: resolved_auth.secret_lookup_id,
+            secret_kind: resolved_auth.secret_kind,
+        })
     }
 
     /// Update collapsed state for a single folder. Server nodes can also be set (though UI doesn't use it)
