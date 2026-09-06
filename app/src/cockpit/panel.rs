@@ -24,9 +24,10 @@ use warpui::elements::{
 };
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
+use warpui::windowing::{StateEvent, WindowManager};
 use warpui::{
     AfterLayoutContext, AppContext, Entity, EventContext, LayoutContext, PaintContext,
-    SingletonEntity, SizeConstraint, TypedActionView, View, ViewContext,
+    SingletonEntity, SizeConstraint, TypedActionView, View, ViewContext, WindowId,
 };
 use zaplex_cockpit::{
     fleet_conductor_session_count, format_cost, format_relative, group_project_sessions, heat_fill,
@@ -44,6 +45,7 @@ use crate::cockpit::style::{
 };
 use crate::settings::AccessibilitySettings;
 use crate::ui_components::icons;
+use crate::ui_components::window_focus_dimming::WindowFocusDimming;
 use crate::WorkspaceAction;
 
 const CARD_PADDING: f32 = 8.0;
@@ -55,7 +57,7 @@ pub(super) const TASK_PEEK_DELAY: Duration = Duration::from_millis(350);
 const WAITING_PULSE_PERIOD: Duration = Duration::from_millis(1600);
 const WAITING_GLYPH_FOOTPRINT: f32 = GLYPH_COL_WIDTH;
 const WAITING_GLYPH_CORE_DIAMETER: f32 = 6.0;
-const WAITING_PULSE_REPAINT: Duration = Duration::from_millis(32);
+const WAITING_PULSE_REPAINT: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ContainerCountPresentation {
@@ -110,8 +112,8 @@ fn session_glyph_presentation(state: SessionState) -> SessionGlyphPresentation {
     }
 }
 
-fn waiting_pulse_frame(elapsed: Duration, reduce_motion: bool) -> WaitingPulseFrame {
-    if reduce_motion {
+fn waiting_pulse_frame(elapsed: Duration, animate: bool) -> WaitingPulseFrame {
+    if !animate {
         return WaitingPulseFrame {
             core_opacity: 100,
             ring_diameter: WAITING_GLYPH_CORE_DIAMETER * 1.45,
@@ -130,19 +132,23 @@ fn waiting_pulse_frame(elapsed: Duration, reduce_motion: bool) -> WaitingPulseFr
     }
 }
 
+fn waiting_pulse_should_animate(reduce_motion: bool, window_focused: bool) -> bool {
+    !reduce_motion && window_focused
+}
+
 struct WaitingPulseElement {
     color: ColorU,
-    reduce_motion: bool,
+    animate: bool,
     started_at: Instant,
     size: Option<Vector2F>,
     origin: Option<Point>,
 }
 
 impl WaitingPulseElement {
-    fn new(color: ColorU, reduce_motion: bool) -> Self {
+    fn new(color: ColorU, animate: bool) -> Self {
         Self {
             color,
-            reduce_motion,
+            animate,
             started_at: Instant::now(),
             size: None,
             origin: None,
@@ -166,7 +172,7 @@ impl Element for WaitingPulseElement {
 
     fn paint(&mut self, origin: Vector2F, ctx: &mut PaintContext, _app: &AppContext) {
         self.origin = Some(Point::from_vec2f(origin, ctx.scene.z_index()));
-        let frame = waiting_pulse_frame(self.started_at.elapsed(), self.reduce_motion);
+        let frame = waiting_pulse_frame(self.started_at.elapsed(), self.animate);
         if frame.repaint {
             ctx.repaint_after(WAITING_PULSE_REPAINT);
         }
@@ -230,6 +236,7 @@ pub enum CockpitPanelEvent {
 }
 
 pub struct CockpitPanel {
+    window_id: WindowId,
     scroll_state: ClippedScrollStateHandle,
     /// Hover/click state per Conductor session row (complete host + provider +
     /// account + conversation identity), synced against the unified inventory.
@@ -350,7 +357,16 @@ impl CockpitPanel {
                 ctx.notify();
             }
         });
+        let window_manager = WindowManager::handle(ctx);
+        ctx.subscribe_to_model(&window_manager, |_, _, event, ctx| match event {
+            StateEvent::ValueChanged { current, previous } => {
+                if WindowManager::did_window_change_focus(ctx.window_id(), current, previous) {
+                    ctx.notify();
+                }
+            }
+        });
         let mut me = Self {
+            window_id: ctx.window_id(),
             scroll_state: ClippedScrollStateHandle::default(),
             conductor_row_states: HashMap::new(),
             conductor_peek_states: HashMap::new(),
@@ -508,13 +524,13 @@ impl CockpitPanel {
     fn state_glyph(
         state: SessionState,
         pulse_waiting: bool,
-        reduce_motion: bool,
+        animate_waiting: bool,
         tooltip_state: MouseStateHandle,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let presentation = session_glyph_presentation(state);
         let glyph = if state == SessionState::Waiting && pulse_waiting {
-            WaitingPulseElement::new(attention_coloru(appearance), reduce_motion).finish()
+            WaitingPulseElement::new(attention_coloru(appearance), animate_waiting).finish()
         } else {
             glyph_cell(
                 presentation.visible_label,
@@ -923,7 +939,7 @@ impl CockpitPanel {
         &self,
         tree: &FleetTree,
         managed_fleet: &ManagedFleetInventory,
-        reduce_motion: bool,
+        animate_waiting: bool,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         let family = appearance.ui_font_family();
@@ -939,7 +955,7 @@ impl CockpitPanel {
                 .with_child(Self::state_glyph(
                     SessionState::Waiting,
                     true,
-                    reduce_motion,
+                    animate_waiting,
                     self.conductor_attention_state.clone(),
                     appearance,
                 ))
@@ -1039,7 +1055,7 @@ impl CockpitPanel {
                                                     agent,
                                                 )
                                                 .is_some(),
-                                            reduce_motion,
+                                            animate_waiting,
                                             appearance,
                                         ),
                                     )
@@ -1098,7 +1114,7 @@ impl CockpitPanel {
         is_local: bool,
         can_attach: bool,
         is_managed: bool,
-        reduce_motion: bool,
+        animate_waiting: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -1115,7 +1131,7 @@ impl CockpitPanel {
             .with_child(Self::state_glyph(
                 session.state,
                 true,
-                reduce_motion,
+                animate_waiting,
                 self.conductor_row_glyph_states
                     .get(&key)
                     .cloned()
@@ -1475,6 +1491,10 @@ impl View for CockpitPanel {
         // "disabled", not "no accounts" (spec: the empty state is only for the real one).
         let enabled = *crate::cockpit::settings::CockpitSettings::as_ref(app).enabled;
         let reduce_motion = *AccessibilitySettings::as_ref(app).reduce_motion;
+        let animate_waiting = waiting_pulse_should_animate(
+            reduce_motion,
+            WindowFocusDimming::is_window_focused(self.window_id, app),
+        );
 
         let snapshot = CockpitModel::as_ref(app).snapshot().clone();
         let inventory = CockpitModel::as_ref(app).inventory().clone();
@@ -1487,7 +1507,7 @@ impl View for CockpitPanel {
         // is always supplied by the model, while remote roots exist only for
         // currently open connections. One flat surface, no registry controls.
         if let Some(conductor) =
-            self.render_conductor(&inventory, &managed_fleet, reduce_motion, appearance)
+            self.render_conductor(&inventory, &managed_fleet, animate_waiting, appearance)
         {
             cards = cards.with_child(
                 zone_card(conductor, appearance)

@@ -156,8 +156,8 @@ fn tree_status_is_glyph_only() {
 
 #[test]
 fn waiting_pulse_is_fixed_and_capped_at_twice_the_core() {
-    let start = waiting_pulse_frame(Duration::ZERO, false);
-    let near_end = waiting_pulse_frame(Duration::from_millis(1599), false);
+    let start = waiting_pulse_frame(Duration::ZERO, true);
+    let near_end = waiting_pulse_frame(Duration::from_millis(1599), true);
 
     assert!(start.repaint);
     assert!(near_end.repaint);
@@ -170,7 +170,7 @@ fn waiting_pulse_is_fixed_and_capped_at_twice_the_core() {
 
 #[test]
 fn reduced_motion_uses_static_waiting_emphasis() {
-    let frame = waiting_pulse_frame(Duration::from_secs(30), true);
+    let frame = waiting_pulse_frame(Duration::from_secs(30), false);
 
     assert!(!frame.repaint);
     assert_eq!(frame.core_opacity, 100);
@@ -180,14 +180,26 @@ fn reduced_motion_uses_static_waiting_emphasis() {
 
 #[test]
 fn waiting_glyph_motion_respects_reduced_motion() {
-    let animated = waiting_pulse_frame(Duration::from_millis(1599), false);
+    let animated = waiting_pulse_frame(Duration::from_millis(1599), true);
     assert!(animated.repaint);
     assert!(animated.ring_diameter <= WAITING_GLYPH_CORE_DIAMETER * 2.0);
 
-    let reduced = waiting_pulse_frame(Duration::from_millis(1599), true);
+    let reduced = waiting_pulse_frame(Duration::from_millis(1599), false);
     assert!(!reduced.repaint);
     assert_eq!(reduced.core_opacity, 100);
     assert_eq!(reduced.ring_diameter, WAITING_GLYPH_CORE_DIAMETER * 1.45);
+}
+
+#[test]
+fn waiting_pulse_repaint_interval_is_battery_bounded() {
+    assert!(WAITING_PULSE_REPAINT >= Duration::from_millis(100));
+}
+
+#[test]
+fn waiting_pulse_animates_only_in_a_focused_window_without_reduced_motion() {
+    assert!(waiting_pulse_should_animate(false, true));
+    assert!(!waiting_pulse_should_animate(false, false));
+    assert!(!waiting_pulse_should_animate(true, true));
 }
 
 #[test]
