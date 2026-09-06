@@ -12,6 +12,8 @@ use super::super::proto::{
 use super::super::protocol::RequestId;
 #[cfg(feature = "local_fs")]
 use super::super::server_buffer_tracker::ServerBufferTracker;
+#[cfg(feature = "local_fs")]
+use super::collect_directory_entries;
 use super::{
     execute_agent_process_signal_with, server_features_with_runtime_support,
     AgentTranscriptReadPermit, PendingFileOps, ServerModel, MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
@@ -944,6 +946,22 @@ fn list_directory_returns_sorted_metadata() {
         super::super::proto::FileSystemEntryKind::File as i32
     );
     assert_eq!(success.entries[1].size_bytes, Some(1));
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn list_directory_skips_entry_removed_after_readdir() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("keep"), "present").unwrap();
+    let vanished_path = directory.path().join("vanish");
+    fs::write(&vanished_path, "temporary").unwrap();
+    let entries = fs::read_dir(directory.path()).unwrap().collect::<Vec<_>>();
+    fs::remove_file(vanished_path).unwrap();
+
+    let entries = collect_directory_entries(entries);
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "keep");
 }
 
 #[cfg(feature = "local_fs")]
