@@ -4,8 +4,9 @@
 //! confirmed (design doc §10), so parsing is deliberately **defensive**: it searches
 //! each JSONL line for a token-usage object rather than assuming a fixed path.
 //!
-//! Privacy: reads `auth.json` only for `auth_mode` and decodes the **unverified**
-//! `id_token` JWT payload for an `email` claim. Token strings are never stored.
+//! Privacy: reads `auth.json` only to classify the auth form and decodes the
+//! **unverified** `id_token` JWT payload for an `email` claim. API-key values
+//! and token strings are never stored.
 
 use std::collections::HashSet;
 use std::fs;
@@ -103,7 +104,20 @@ fn account_from_root(
         .filter(|id| !id.is_empty())
         .map(str::to_string);
 
-    if auth_mode.is_none() && account_id.is_none() && email.is_none() {
+    let has_legacy_api_key = auth
+        .get("OPENAI_API_KEY")
+        .and_then(Value::as_str)
+        .is_some_and(|key| !key.trim().is_empty());
+    if auth_mode.as_deref() == Some("apikey") {
+        return Ok(None);
+    }
+
+    let has_subscription_identity =
+        auth_mode.as_deref() == Some("chatgpt") || account_id.is_some() || email.is_some();
+    if !has_subscription_identity && has_legacy_api_key {
+        return Ok(None);
+    }
+    if !has_subscription_identity {
         return Err("Codex account sign-in file is malformed".to_string());
     }
 
