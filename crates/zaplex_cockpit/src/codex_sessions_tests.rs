@@ -75,6 +75,14 @@ fn event(kind: &str) -> Value {
     json!({"type":"event_msg","timestamp":ts_now(),"payload":{"type":kind}})
 }
 
+fn event_for_turn(kind: &str, turn_id: &str) -> Value {
+    json!({
+        "type": "event_msg",
+        "timestamp": ts_now(),
+        "payload": {"type": kind, "turn_id": turn_id}
+    })
+}
+
 fn update_plan(rows: &[(&str, &str)]) -> Value {
     let plan: Vec<Value> = rows
         .iter()
@@ -122,6 +130,149 @@ fn completed_turn_is_waiting_with_model_effort_ctx() {
     // Codex records no pid.
     assert_eq!(s.pid, 0);
     assert_eq!(s.task_state, None);
+}
+
+#[test]
+fn aborted_turn_is_waiting() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-aborted.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-aborted"),
+            event("task_started"),
+            event("turn_aborted"),
+        ],
+    );
+
+    let sessions = live_sessions(tmp.path(), Utc::now());
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].state, SessionState::Waiting);
+}
+
+#[test]
+fn task_started_after_an_aborted_turn_restores_monitor_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-restarted.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-restarted"),
+            event("task_started"),
+            event("turn_aborted"),
+            event("task_started"),
+        ],
+    );
+
+    let sessions = live_sessions(tmp.path(), Utc::now());
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].state, SessionState::Monitor);
+}
+
+#[test]
+fn only_an_error_bound_to_the_active_turn_ends_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-bound-error.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-bound-error"),
+            event_for_turn("task_started", "turn-1"),
+            event_for_turn("error", "turn-1"),
+        ],
+    );
+    write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-01-stale-error.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-stale-error"),
+            event_for_turn("task_started", "turn-2"),
+            event_for_turn("error", "turn-old"),
+            event("unrecognized_event"),
+        ],
+    );
+
+    let sessions = live_sessions(tmp.path(), Utc::now());
+    assert_eq!(sessions.len(), 2);
+    let bound = sessions
+        .iter()
+        .find(|session| session.session_id == "sess-bound-error")
+        .unwrap();
+    let stale = sessions
+        .iter()
+        .find(|session| session.session_id == "sess-stale-error")
+        .unwrap();
+    assert_eq!(bound.state, SessionState::Waiting);
+    assert_eq!(stale.state, SessionState::Monitor);
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_rollout_subtree_marks_session_scan_incomplete() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-readable.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-readable"),
+            event("task_started"),
+        ],
+    );
+    let unreadable = tmp.path().join("sessions/2026/08");
+    fs::create_dir_all(&unreadable).unwrap();
+    let original_permissions = fs::metadata(&unreadable).unwrap().permissions();
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0)).unwrap();
+
+    let scan = scan_sessions(tmp.path(), Utc::now(), Duration::zero(), 0);
+
+    fs::set_permissions(&unreadable, original_permissions).unwrap();
+    assert_eq!(scan.live.len(), 1, "reachable rollouts must survive");
+    assert!(scan.io_error, "the incomplete walk must be reported");
+}
+
+#[test]
+fn missing_rollout_root_is_an_authoritative_empty_scan() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let scan = scan_sessions(tmp.path(), Utc::now(), Duration::zero(), 0);
+
+    assert!(scan.live.is_empty());
+    assert!(scan.idle.is_empty());
+    assert!(!scan.io_error);
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_rollout_file_marks_session_scan_incomplete() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-unreadable.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-unreadable"),
+            event("task_started"),
+        ],
+    );
+    let original_permissions = fs::metadata(&path).unwrap().permissions();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0)).unwrap();
+
+    let scan = scan_sessions(tmp.path(), Utc::now(), Duration::zero(), 0);
+
+    fs::set_permissions(&path, original_permissions).unwrap();
+    assert!(scan.live.is_empty());
+    assert!(scan.io_error);
 }
 
 #[test]
