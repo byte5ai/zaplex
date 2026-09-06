@@ -95,11 +95,25 @@ impl Span {
     }
 
     pub fn slice<'a>(&self, source: &'a str) -> &'a str {
-        let start = self.start;
-        let end = self.end;
+        let len = source.len();
+        let start = floor_char_boundary(source, self.start.min(len));
+        let end = floor_char_boundary(source, self.end.min(len)).max(start);
 
         &source[start..end]
     }
+}
+
+/// Returns the greatest byte index at or before `index` that is a UTF-8
+/// character boundary in `source`.
+fn floor_char_boundary(source: &str, index: usize) -> usize {
+    if index >= source.len() {
+        return source.len();
+    }
+    let mut index = index;
+    while index > 0 && !source.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 impl PartialOrd<usize> for Span {
