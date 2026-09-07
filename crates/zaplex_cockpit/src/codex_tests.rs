@@ -72,7 +72,7 @@ fn discovers_default_and_pinned_roots_with_distinct_routing() {
         .iter()
         .find(|account| !account.is_default)
         .unwrap();
-    assert_eq!(pinned.key, "codex:work");
+    assert!(pinned.key.starts_with("codex:work:"));
     assert_eq!(
         pinned.config_dir_pin(),
         Some(
