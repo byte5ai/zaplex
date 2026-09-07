@@ -1,5 +1,123 @@
 use super::*;
 
+#[cfg(unix)]
+fn live_sftp_configuration() -> (String, u16, String, PathBuf, PathBuf) {
+    let host = std::env::var("ZAPLEX_LIVE_SFTP_HOST")
+        .expect("ZAPLEX_LIVE_SFTP_HOST is required for the ignored live SFTP tests");
+    let port = std::env::var("ZAPLEX_LIVE_SFTP_PORT")
+        .expect("ZAPLEX_LIVE_SFTP_PORT is required for the ignored live SFTP tests")
+        .parse()
+        .expect("ZAPLEX_LIVE_SFTP_PORT must be a valid u16");
+    let username = std::env::var("ZAPLEX_LIVE_SFTP_USERNAME")
+        .expect("ZAPLEX_LIVE_SFTP_USERNAME is required for the ignored live SFTP tests");
+    let key_path = PathBuf::from(
+        std::env::var("ZAPLEX_LIVE_SFTP_KEY_PATH")
+            .expect("ZAPLEX_LIVE_SFTP_KEY_PATH is required for the ignored live SFTP tests"),
+    );
+    let root = PathBuf::from(
+        std::env::var("ZAPLEX_LIVE_SFTP_ROOT")
+            .expect("ZAPLEX_LIVE_SFTP_ROOT is required for the ignored live SFTP tests"),
+    );
+    (host, port, username, key_path, root)
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires the isolated OpenSSH fixture from live-sftp-safety.yml"]
+fn overwrite_existing_file_on_openssh_v3() {
+    let (host, port, username, key_path, root) = live_sftp_configuration();
+    let case_root = root.join(format!("zaplex-live-sftp-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&case_root).unwrap();
+    let remote_target = case_root.join("target.txt");
+    fs::write(&remote_target, b"old").unwrap();
+    let local = tempfile::tempdir().unwrap();
+    let local_source = local.path().join("source.txt");
+    fs::write(&local_source, b"new").unwrap();
+
+    let session = SftpSession::connect(
+        &host,
+        port,
+        &username,
+        AuthMethod::PublicKey {
+            key_path,
+            passphrase: None,
+        },
+        Some(Duration::from_secs(10)),
+    )
+    .expect("the CI OpenSSH fixture must accept the configured key");
+    let sftp = session.sftp().expect("the live SFTP subsystem must open");
+
+    upload_file_streaming(
+        &sftp,
+        &local_source,
+        &remote_target,
+        None,
+        &AtomicBool::new(false),
+    )
+    .expect("an existing file on OpenSSH SFTP v3 must be replaced");
+
+    assert_eq!(fs::read(&remote_target).unwrap(), b"new");
+    assert!(fs::read_dir(&case_root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".sftp_partial-")
+    }));
+    drop(sftp);
+    drop(session);
+    fs::remove_dir_all(case_root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires the isolated OpenSSH fixture from live-sftp-safety.yml"]
+fn no_replace_existing_file_on_openssh_v3_keeps_target() {
+    let (host, port, username, key_path, root) = live_sftp_configuration();
+    let case_root = root.join(format!("zaplex-live-sftp-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&case_root).unwrap();
+    let remote_target = case_root.join("target.txt");
+    fs::write(&remote_target, b"old").unwrap();
+    let local = tempfile::tempdir().unwrap();
+    let local_source = local.path().join("source.txt");
+    fs::write(&local_source, b"new").unwrap();
+
+    let session = SftpSession::connect(
+        &host,
+        port,
+        &username,
+        AuthMethod::PublicKey {
+            key_path,
+            passphrase: None,
+        },
+        Some(Duration::from_secs(10)),
+    )
+    .expect("the CI OpenSSH fixture must accept the configured key");
+    let sftp = session.sftp().expect("the live SFTP subsystem must open");
+
+    let error = upload_file_streaming_no_replace(
+        &sftp,
+        &local_source,
+        &remote_target,
+        None,
+        &AtomicBool::new(false),
+    )
+    .expect_err("a no-replace upload must reject an existing destination");
+
+    assert!(matches!(error, SftpOpsError::Operation(_)));
+    assert_eq!(fs::read(&remote_target).unwrap(), b"old");
+    assert!(fs::read_dir(&case_root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".sftp_partial-")
+    }));
+    drop(sftp);
+    drop(session);
+    fs::remove_dir_all(case_root).unwrap();
+}
+
 #[test]
 fn user_message_is_localized_without_exposing_raw_diagnostic() {
     crate::i18n::init(Some("en"));
