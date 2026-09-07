@@ -2599,10 +2599,10 @@ impl TypedActionView for AgentInputFooter {
                 ctx.notify();
             }
             AgentInputFooterAction::StartNewAgentConversation => {
-                ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation);
+                ctx.dispatch_typed_action(&TerminalAction::StartNewAgentConversation);
             }
             AgentInputFooterAction::BackToShell => {
-                ctx.dispatch_typed_action(TerminalAction::ExitAgentView);
+                ctx.dispatch_typed_action(&TerminalAction::ExitAgentView);
             }
             AgentInputFooterAction::SelectSubscriptionAgent {
                 conversation_id,
