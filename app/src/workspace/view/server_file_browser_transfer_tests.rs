@@ -157,7 +157,7 @@ fn conflict_scan_treats_only_typed_not_found_as_absent() {
 }
 
 #[test]
-fn directory_upload_promotes_the_staged_root_as_one_object() {
+fn existing_directory_overwrite_promotes_children_not_root() {
     let batch = ServerFileUploadBatch {
         staging_root: "/remote/.zap-upload-staging/batch".to_string(),
         remote_directory: "/remote".to_string(),
@@ -179,12 +179,40 @@ fn directory_upload_promotes_the_staged_root_as_one_object() {
     let promotions = build_pending_promotions(&batch);
 
     assert_eq!(promotions.len(), 1);
-    assert_eq!(promotions[0].kind, SafeFileEntryKind::Directory);
+    assert_eq!(promotions[0].kind, SafeFileEntryKind::Regular);
     assert_eq!(
         promotions[0].staging_path,
-        "/remote/.zap-upload-staging/batch/folder"
+        "/remote/.zap-upload-staging/batch/folder/file.txt"
     );
-    assert_eq!(promotions[0].final_path, "/remote/folder");
+    assert_eq!(promotions[0].final_path, "/remote/folder/file.txt");
+}
+
+#[test]
+fn directory_upload_manifest_includes_empty_and_nested_directories() {
+    let local = tempfile::tempdir().unwrap();
+    let project = local.path().join("project");
+    fs::create_dir(&project).unwrap();
+    fs::create_dir(project.join("empty")).unwrap();
+    fs::create_dir_all(project.join("nested/deep")).unwrap();
+    fs::write(project.join("nested/file.txt"), b"data").unwrap();
+
+    let (files, directories) =
+        collect_upload_tasks(vec![project], "/remote".to_string(), true).unwrap();
+
+    assert_eq!(files.len(), 1);
+    assert_eq!(
+        files[0].final_remote_path,
+        "/remote/project/nested/file.txt"
+    );
+    assert_eq!(
+        directories,
+        vec![
+            "/remote/project".to_string(),
+            "/remote/project/empty".to_string(),
+            "/remote/project/nested".to_string(),
+            "/remote/project/nested/deep".to_string(),
+        ]
+    );
 }
 
 #[test]
