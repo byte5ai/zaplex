@@ -390,13 +390,18 @@ fn identity_only_delete_rejects_a_ctime_change() {
     let owner = ConnectionId::new_v4();
     let mut server = SafeFileServer::new_for_test(journal);
     let opened = open_regular(&mut server, owner, &file);
-    let expected = opened.identity.expect("open must return an identity");
-    let current_mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
-    fs::set_permissions(&file, fs::Permissions::from_mode(current_mode ^ 0o100)).unwrap();
-    let changed = open_regular(&mut server, owner, &file)
-        .identity
-        .expect("reopen must return an identity");
-    assert_ne!(expected.revision, changed.revision);
+    let current = opened.identity.expect("open must return an identity");
+    let mut stale = current.clone();
+    let mut revision = stale
+        .revision
+        .split(':')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(revision.len(), 7);
+    revision[5] = if revision[5] == "0" { "1" } else { "0" }.to_string();
+    stale.revision = revision.join(":");
+    assert!(!same_identity(&stale, &current));
+    assert!(same_renamed_identity(&stale, &current));
 
     let result = call(
         &mut server,
@@ -404,7 +409,7 @@ fn identity_only_delete_rejects_a_ctime_change() {
         "delete-ctime-change-v2",
         safe_file_request::Operation::DeleteV2(SafeFileDeleteV2 {
             path: path_string(&file),
-            expected: Some(expected),
+            expected: Some(stale),
         }),
     );
 
