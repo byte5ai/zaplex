@@ -19,12 +19,12 @@ use sha2::{Digest, Sha256};
 
 use super::proto::{
     safe_file_request, safe_file_response, FileOperationError, SafeFileBeginUploadBatch,
-    SafeFileCreateExclusive, SafeFileDelete, SafeFileEntryKind, SafeFileFlushHandle,
-    SafeFileIdentity, SafeFileIdentityBatchEntryResult, SafeFileIdentityBatchResult,
-    SafeFileIdentityBatchStatus, SafeFileInspectHandle, SafeFileInspectResult,
-    SafeFileListIdentities, SafeFileMutationResult, SafeFileMutationState, SafeFileOpenExisting,
-    SafeFileOpened, SafeFileReadHandle, SafeFileReadResult, SafeFileRecovery, SafeFileRecoveryList,
-    SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileResponse,
+    SafeFileCreateExclusive, SafeFileDelete, SafeFileDeleteV2, SafeFileEntryKind,
+    SafeFileFlushHandle, SafeFileIdentity, SafeFileIdentityBatchEntryResult,
+    SafeFileIdentityBatchResult, SafeFileIdentityBatchStatus, SafeFileInspectHandle,
+    SafeFileInspectResult, SafeFileListIdentities, SafeFileMutationResult, SafeFileMutationState,
+    SafeFileOpenExisting, SafeFileOpened, SafeFileReadHandle, SafeFileReadResult, SafeFileRecovery,
+    SafeFileRecoveryList, SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileResponse,
     SafeFileUploadBatchOpened, SafeFileUploadEntry, SafeFileUploadEntryOpened, SafeFileWriteHandle,
 };
 #[cfg(test)]
@@ -465,7 +465,18 @@ impl SafeFileServer {
                 .rename(connection_id, &request.operation_id, rename)
                 .map(safe_file_response::Result::Mutation),
             Some(safe_file_request::Operation::Delete(delete)) => self
-                .delete(&request.operation_id, delete)
+                .delete(&request.operation_id, delete, true)
+                .map(safe_file_response::Result::Mutation),
+            Some(safe_file_request::Operation::DeleteV2(delete)) => self
+                .delete(
+                    &request.operation_id,
+                    SafeFileDelete {
+                        path: delete.path,
+                        expected: delete.expected,
+                        expected_sha256: None,
+                    },
+                    false,
+                )
                 .map(safe_file_response::Result::Mutation),
             Some(safe_file_request::Operation::ListRecoveries(_)) => self
                 .list_recoveries()
@@ -1051,6 +1062,7 @@ impl SafeFileServer {
         &mut self,
         operation_id: &str,
         request: SafeFileDelete,
+        require_file_digest: bool,
     ) -> Result<SafeFileMutationResult, String> {
         let expected = request
             .expected
@@ -1078,9 +1090,14 @@ impl SafeFileServer {
         }
         match kind {
             SafeFileEntryKind::Regular => {
-                let digest = sha256_file(&file)?;
-                if request.expected_sha256.as_deref() != Some(digest.as_str()) {
-                    return Err("Safe-file delete content digest changed".to_string());
+                if require_file_digest {
+                    let expected_digest = request.expected_sha256.as_deref().ok_or_else(|| {
+                        "Safe-file v1 delete requires a content digest".to_string()
+                    })?;
+                    let digest = sha256_file(&file)?;
+                    if expected_digest != digest {
+                        return Err("Safe-file delete content digest changed".to_string());
+                    }
                 }
             }
             SafeFileEntryKind::Directory => {
@@ -2186,11 +2203,13 @@ fn identity_from_metadata(
         size: metadata.len(),
         object_id: format!("{}:{}", metadata.dev(), metadata.ino()),
         revision: format!(
-            "{}:{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}:{}",
             metadata.dev(),
             metadata.ino(),
             metadata.mtime(),
             metadata.mtime_nsec(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
             metadata.len()
         ),
     })
@@ -2205,7 +2224,19 @@ fn same_object(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
 fn same_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
     same_object(expected, actual)
         && expected.size == actual.size
-        && expected.revision == actual.revision
+        && same_revision(&expected.revision, &actual.revision)
+}
+
+fn same_revision(expected: &str, actual: &str) -> bool {
+    if expected == actual {
+        return true;
+    }
+    let legacy = expected.split(':').collect::<Vec<_>>();
+    let current = actual.split(':').collect::<Vec<_>>();
+    legacy.len() == 5
+        && current.len() == 7
+        && legacy[..4] == current[..4]
+        && legacy[4] == current[6]
 }
 
 fn matches_delete_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
@@ -2348,9 +2379,11 @@ fn delete_exact_path(
     }
     match kind {
         SafeFileEntryKind::Regular => {
-            let digest = sha256_file(&file)?;
-            if expected_sha256 != Some(digest.as_str()) {
-                return Err("Safe-file delete content digest changed".to_string());
+            if let Some(expected_sha256) = expected_sha256 {
+                let digest = sha256_file(&file)?;
+                if expected_sha256 != digest {
+                    return Err("Safe-file delete content digest changed".to_string());
+                }
             }
         }
         SafeFileEntryKind::Directory => {

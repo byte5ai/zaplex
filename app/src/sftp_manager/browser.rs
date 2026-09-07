@@ -39,6 +39,7 @@ use warpui::{
 };
 use zaplex_remote_session::types::{
     has_feature, FEATURE_SAFE_FILE_IDENTITY_BATCH_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
+    FEATURE_SAFE_FILE_TRANSACTIONS_V2,
 };
 
 use super::context_menu::ContextMenuState;
@@ -1452,15 +1453,19 @@ impl SftpBrowserView {
             .map(|daemon| {
                 let identity_batch =
                     has_feature(&daemon.features, FEATURE_SAFE_FILE_IDENTITY_BATCH_V1);
-                (daemon.client, identity_batch)
+                let transactions_v2 =
+                    has_feature(&daemon.features, FEATURE_SAFE_FILE_TRANSACTIONS_V2);
+                (daemon.client, identity_batch, transactions_v2)
             });
-        let (client, identity_batch) = match negotiated {
-            Some((client, identity_batch)) => (Some(client), identity_batch),
-            None => (None, false),
+        let (client, identity_batch, transactions_v2) = match negotiated {
+            Some((client, identity_batch, transactions_v2)) => {
+                (Some(client), identity_batch, transactions_v2)
+            }
+            None => (None, false, false),
         };
         if self
             .safe_file_client
-            .set_with_identity_batch(client, identity_batch)
+            .set_with_capabilities(client, identity_batch, transactions_v2)
         {
             self.dialog = None;
             self.selected.clear();

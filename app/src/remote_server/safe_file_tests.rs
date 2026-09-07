@@ -381,6 +381,38 @@ fn identity_bound_symlink_delete_removes_only_the_link() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn identity_only_delete_rejects_a_ctime_change() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let file = directory.path().join("payload.bin");
+    fs::write(&file, b"payload").unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let opened = open_regular(&mut server, owner, &file);
+    let expected = opened.identity.expect("open must return an identity");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    let changed = open_regular(&mut server, owner, &file)
+        .identity
+        .expect("reopen must return an identity");
+    assert_ne!(expected.revision, changed.revision);
+
+    let result = call(
+        &mut server,
+        owner,
+        "delete-ctime-change-v2",
+        safe_file_request::Operation::DeleteV2(SafeFileDeleteV2 {
+            path: path_string(&file),
+            expected: Some(expected),
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Error(_)));
+    assert_eq!(fs::read(file).unwrap(), b"payload");
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn identity_bound_symlink_delete_preserves_a_replacement() {
     let directory = tempfile::tempdir().unwrap();
     let journal = directory.path().join("journal");

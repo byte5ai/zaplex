@@ -400,6 +400,12 @@ struct OwnedPathError {
     ownership: PathOwnership,
 }
 
+struct StreamedFile {
+    written: u64,
+    sha256: String,
+    ownership: PathOwnership,
+}
+
 #[derive(Clone)]
 struct PathOwnership {
     root: PathBuf,
@@ -1029,13 +1035,6 @@ pub fn run_transfer(
     }
     preflight_transfer_capabilities(job, original_target.is_some())?;
     let source_anchor = capture_move_source_anchor(job, &source_identity)?;
-    let source_publication = capture_publication_snapshot_controlled(
-        &*job.source_backend,
-        &job.source_path,
-        source_snapshot.total_file_size(),
-        control,
-        &mut progress_callback,
-    )?;
     let original_target_publication = original_target
         .as_ref()
         .map(|snapshot| {
@@ -1064,7 +1063,7 @@ pub fn run_transfer(
     }
 
     let staged_path = temporary_target_path(&job.target_path, "transfer")?;
-    let mut stage_ownership = match stream_file_to_new_path_owned(
+    let streamed = match stream_file_to_new_path_owned(
         &*job.source_backend,
         &job.source_path,
         &source_identity,
@@ -1076,7 +1075,7 @@ pub fn run_transfer(
         source_identity.size,
         Instant::now(),
     ) {
-        Ok((_, ownership)) => ownership,
+        Ok(streamed) => streamed,
         Err(failure) => {
             return cleanup_failed_stage(
                 failure.error,
@@ -1088,6 +1087,20 @@ pub fn run_transfer(
                 &mut progress_callback,
             );
         }
+    };
+    let mut stage_ownership = streamed.ownership;
+    let source_publication = EntrySnapshot {
+        root: job.source_path.clone(),
+        entries: BTreeMap::from([(
+            job.source_path.clone(),
+            super::sftp_backend::StableEntryIdentity {
+                file_type: FileEntryType::File,
+                size: streamed.written,
+                object_id: String::new(),
+                revision: streamed.sha256,
+            },
+        )]),
+        children: BTreeMap::new(),
     };
     let staged_snapshot = match capture_snapshot(&*job.target_backend, &staged_path) {
         Ok(snapshot) => snapshot,
@@ -1167,6 +1180,7 @@ pub fn run_transfer(
     }
 
     let backup = match (&original_target, &original_target_publication) {
+        (Some(_), Some(_)) if job.target_backend.supports_durable_exchange_recovery() => None,
         (Some(target_snapshot), Some(target_publication)) => {
             match create_verified_backup(
                 job.target_backend.clone(),
@@ -1437,19 +1451,6 @@ pub fn run_transfer(
         if current_source != source_identity {
             return Err(SftpOpsError::Operation(format!(
                 "Source identity changed before move completion for {}",
-                job.source_path.display()
-            )));
-        }
-        if capture_publication_snapshot_controlled(
-            &*job.source_backend,
-            &job.source_path,
-            source_identity.size,
-            control,
-            &mut progress_callback,
-        )? != source_publication
-        {
-            return Err(SftpOpsError::Operation(format!(
-                "Source content changed before move completion for {}",
                 job.source_path.display()
             )));
         }
@@ -3962,7 +3963,7 @@ fn merge_snapshot_into_existing_root(
             skipped = true;
             continue;
         }
-        let (written, next_ownership) = stream_file_to_new_path(
+        let streamed = stream_file_to_new_path(
             source_backend,
             source_path,
             identity,
@@ -3975,8 +3976,8 @@ fn merge_snapshot_into_existing_root(
             started,
             ownership,
         )?;
-        ownership = next_ownership;
-        *transferred = transferred.saturating_add(written);
+        ownership = streamed.ownership;
+        *transferred = transferred.saturating_add(streamed.written);
     }
     Ok((skipped, ownership))
 }
@@ -4187,7 +4188,17 @@ fn refresh_owned_path(
     let Some(expected) = ownership.owned.get(path).cloned() else {
         return Ok(());
     };
-    let actual = stable_identity_now(backend, path)?;
+    let actual = match stable_identity_now(backend, path) {
+        Ok(actual) => actual,
+        Err(error) => {
+            ownership.owned.remove(path);
+            ownership.unresolved.insert(path.to_path_buf());
+            return Err(SftpOpsError::Operation(format!(
+                "Refreshing owned transfer identity failed at {}: {error}",
+                path.display()
+            )));
+        }
+    };
     if expected.anchor.matches_path(path)? && same_reserved_object(&expected.reserved, &actual) {
         if let Some(entry) = ownership.owned.get_mut(path) {
             entry.guard = actual;
@@ -4336,18 +4347,17 @@ fn copy_file_without_progress_owned(
         target_path,
         PathOwnership::empty(target_path),
     )?;
-    copy_open_file_without_progress(
+    let result = copy_open_file_without_progress(
         source_backend,
         source_path,
         source_identity,
         &mut *reader,
         &mut *writer,
-        target_backend,
-        target_path,
         control,
-        &mut ownership,
-    )
-    .map_err(|error| OwnedPathError {
+    );
+    let refreshed = refresh_owned_mutation(target_backend, target_path, &mut ownership);
+    drop(writer);
+    combine_owned_write_result(result, refreshed).map_err(|error| OwnedPathError {
         error,
         ownership: ownership.clone(),
     })?;
@@ -4383,18 +4393,17 @@ fn copy_file_without_progress(
             ownership: ownership.clone(),
         })?;
     let (mut writer, mut ownership) = create_owned_writer(target_backend, target_path, ownership)?;
-    copy_open_file_without_progress(
+    let result = copy_open_file_without_progress(
         source_backend,
         source_path,
         source_identity,
         &mut *reader,
         &mut *writer,
-        target_backend,
-        target_path,
         control,
-        &mut ownership,
-    )
-    .map_err(|error| OwnedPathError {
+    );
+    let refreshed = refresh_owned_mutation(target_backend, target_path, &mut ownership);
+    drop(writer);
+    combine_owned_write_result(result, refreshed).map_err(|error| OwnedPathError {
         error,
         ownership: ownership.clone(),
     })?;
@@ -4407,10 +4416,7 @@ fn copy_open_file_without_progress(
     source_identity: &super::sftp_backend::StableEntryIdentity,
     reader: &mut dyn super::sftp_backend::BackendFileReader,
     writer: &mut dyn super::sftp_backend::BackendFileWriter,
-    target_backend: &dyn SftpBackend,
-    target_path: &Path,
     control: &TransferControl,
-    ownership: &mut PathOwnership,
 ) -> Result<(), SftpOpsError> {
     let mut buffer = vec![0_u8; STREAM_CHUNK_SIZE];
     let mut written = 0_u64;
@@ -4421,11 +4427,9 @@ fn copy_open_file_without_progress(
             break;
         }
         writer.write_chunk(&buffer[..read])?;
-        refresh_owned_mutation(target_backend, target_path, ownership)?;
         written = written.saturating_add(read as u64);
     }
     writer.flush()?;
-    refresh_owned_mutation(target_backend, target_path, ownership)?;
     if written != source_identity.size
         || stable_identity_now(source_backend, source_path)? != *source_identity
     {
@@ -4435,6 +4439,19 @@ fn copy_open_file_without_progress(
         )));
     }
     Ok(())
+}
+
+fn combine_owned_write_result(
+    result: Result<(), SftpOpsError>,
+    refreshed: Result<(), SftpOpsError>,
+) -> Result<(), SftpOpsError> {
+    match (result, refreshed) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(refresh_error)) => Err(SftpOpsError::Operation(format!(
+            "{error}; refreshing the failed writer ownership guard failed: {refresh_error}"
+        ))),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4462,9 +4479,9 @@ fn copy_snapshot_to_new_root_with_progress(
             total,
             started,
         )
-        .map(|(written, ownership)| {
-            *transferred = transferred.saturating_add(written);
-            ownership
+        .map(|streamed| {
+            *transferred = transferred.saturating_add(streamed.written);
+            streamed.ownership
         }),
         FileEntryType::Directory => {
             let mut ownership = create_owned_directory(
@@ -4501,7 +4518,7 @@ fn copy_snapshot_to_new_root_with_progress(
                 let relative = source_path
                     .strip_prefix(&source.root)
                     .expect("snapshot entry is below root");
-                let (written, next_ownership) = stream_file_to_new_path(
+                let streamed = stream_file_to_new_path(
                     source_backend,
                     source_path,
                     identity,
@@ -4514,8 +4531,8 @@ fn copy_snapshot_to_new_root_with_progress(
                     started,
                     ownership,
                 )?;
-                ownership = next_ownership;
-                *transferred = transferred.saturating_add(written);
+                ownership = streamed.ownership;
+                *transferred = transferred.saturating_add(streamed.written);
             }
             Ok(ownership)
         }
@@ -4542,7 +4559,7 @@ fn stream_file_to_new_path(
     total: u64,
     started: Instant,
     ownership: PathOwnership,
-) -> Result<(u64, PathOwnership), OwnedPathError> {
+) -> Result<StreamedFile, OwnedPathError> {
     stream_file_to_new_path_tracked(
         source_backend,
         source_path,
@@ -4570,7 +4587,7 @@ fn stream_file_to_new_path_owned(
     transferred_before: u64,
     total: u64,
     started: Instant,
-) -> Result<(u64, PathOwnership), OwnedPathError> {
+) -> Result<StreamedFile, OwnedPathError> {
     stream_file_to_new_path_tracked(
         source_backend,
         source_path,
@@ -4599,7 +4616,7 @@ fn stream_file_to_new_path_tracked(
     total: u64,
     started: Instant,
     ownership: PathOwnership,
-) -> Result<(u64, PathOwnership), OwnedPathError> {
+) -> Result<StreamedFile, OwnedPathError> {
     if stable_identity_now(source_backend, source_path).map_err(|error| OwnedPathError {
         error,
         ownership: ownership.clone(),
@@ -4628,6 +4645,7 @@ fn stream_file_to_new_path_tracked(
     let (mut writer, mut ownership) = create_owned_writer(target_backend, target_path, ownership)?;
     let result = (|| {
         let mut written = 0_u64;
+        let mut digest = Sha256::new();
         let mut tracker = ProgressTracker::new(total);
         let mut buffer = vec![0_u8; STREAM_CHUNK_SIZE];
         loop {
@@ -4637,7 +4655,7 @@ fn stream_file_to_new_path_tracked(
                 break;
             }
             writer.write_chunk(&buffer[..read])?;
-            refresh_owned_mutation(target_backend, target_path, &mut ownership)?;
+            digest.update(&buffer[..read]);
             written = written.saturating_add(read as u64);
             let progress = tracker.record_at(
                 transferred_before.saturating_add(written),
@@ -4649,8 +4667,6 @@ fn stream_file_to_new_path_tracked(
             }
         }
         writer.flush()?;
-        refresh_owned_mutation(target_backend, target_path, &mut ownership)?;
-        drop(writer);
         if written != source_identity.size
             || stable_identity_now(source_backend, source_path)? != *source_identity
         {
@@ -4659,11 +4675,23 @@ fn stream_file_to_new_path_tracked(
                 source_path.display()
             )));
         }
-        Ok(written)
+        Ok((written, format!("{:x}", digest.finalize())))
     })();
-    match result {
-        Ok(written) => Ok((written, ownership)),
-        Err(error) => Err(OwnedPathError { error, ownership }),
+    let refreshed = refresh_owned_mutation(target_backend, target_path, &mut ownership);
+    drop(writer);
+    match (result, refreshed) {
+        (Ok((written, sha256)), Ok(())) => Ok(StreamedFile {
+            written,
+            sha256,
+            ownership,
+        }),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(OwnedPathError { error, ownership }),
+        (Err(error), Err(refresh_error)) => Err(OwnedPathError {
+            error: SftpOpsError::Operation(format!(
+                "{error}; refreshing the failed writer ownership guard failed: {refresh_error}"
+            )),
+            ownership,
+        }),
     }
 }
 
@@ -4879,25 +4907,30 @@ fn cleanup_owned_manifest(
         };
         match current.file_type {
             FileEntryType::File => {
-                let publication = capture_publication_snapshot_in_phase(
-                    backend,
-                    &path,
-                    current.size,
-                    control,
-                    progress_callback,
-                    phase,
-                )?;
-                let digest = publication
-                    .entries
-                    .get(&path)
-                    .map(|entry| entry.revision.as_str())
-                    .ok_or_else(|| {
-                        SftpOpsError::Operation(format!(
-                            "Owned cleanup manifest has no digest for {}",
-                            path.display()
-                        ))
-                    })?;
-                match backend.delete_file_if_matches(&path, &current, digest) {
+                let delete_result = if backend.supports_identity_only_delete() {
+                    backend.delete_entry_if_matches(&path, reserved.anchor.clone(), false)
+                } else {
+                    let publication = capture_publication_snapshot_in_phase(
+                        backend,
+                        &path,
+                        current.size,
+                        control,
+                        progress_callback,
+                        phase,
+                    )?;
+                    let digest = publication
+                        .entries
+                        .get(&path)
+                        .map(|entry| entry.revision.as_str())
+                        .ok_or_else(|| {
+                            SftpOpsError::Operation(format!(
+                                "Owned cleanup manifest has no digest for {}",
+                                path.display()
+                            ))
+                        })?;
+                    backend.delete_file_if_matches(&path, &current, digest)
+                };
+                match delete_result {
                     Ok(()) => {
                         ownership.owned.remove(&path);
                         refresh_owned_ancestors(backend, &path, ownership)?;
