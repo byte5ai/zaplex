@@ -177,6 +177,10 @@ impl SftpOpsError {
 
 impl From<zap_sftp::SftpError> for SftpOpsError {
     fn from(e: zap_sftp::SftpError) -> Self {
+        let message = e.to_string();
+        if e.is_not_found() {
+            return Self::NotFound(message);
+        }
         match e {
             zap_sftp::SftpError::UnknownHostKey {
                 fingerprint_sha256,
@@ -184,16 +188,16 @@ impl From<zap_sftp::SftpError> for SftpOpsError {
             } => Self::Transport(format!(
                 "Host-key confirmation for {key_type} {fingerprint_sha256} requires the original endpoint context"
             )),
-            zap_sftp::SftpError::HostKeyMismatch { .. } => Self::HostKeyMismatch(e.to_string()),
-            zap_sftp::SftpError::AuthFailed(_) => Self::Authentication(e.to_string()),
+            zap_sftp::SftpError::HostKeyMismatch { .. } => Self::HostKeyMismatch(message),
+            zap_sftp::SftpError::AuthFailed(_) => Self::Authentication(message),
             zap_sftp::SftpError::ConnectionFailed(_) | zap_sftp::SftpError::Timeout => {
-                Self::Transport(e.to_string())
+                Self::Transport(message)
             }
-            zap_sftp::SftpError::NoSuchFile(_) => Self::NotFound(e.to_string()),
+            zap_sftp::SftpError::NoSuchFile(_) => Self::NotFound(message),
             zap_sftp::SftpError::PermissionDenied(_)
             | zap_sftp::SftpError::General(_)
             | zap_sftp::SftpError::Io(_)
-            | zap_sftp::SftpError::Ssh2(_) => Self::Operation(e.to_string()),
+            | zap_sftp::SftpError::Ssh2(_) => Self::Operation(message),
         }
     }
 }

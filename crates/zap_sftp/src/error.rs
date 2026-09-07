@@ -87,3 +87,7 @@ impl From<ssh2::Error> for SftpChannelError {
         SftpChannelError::Sftp(SftpError::Ssh2(e))
     }
 }
+
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod tests;
