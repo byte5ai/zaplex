@@ -160,6 +160,8 @@ fn conflict_scan_treats_only_typed_not_found_as_absent() {
 fn directory_upload_promotes_the_staged_root_as_one_object() {
     let batch = ServerFileUploadBatch {
         staging_root: "/remote/.zap-upload-staging/batch".to_string(),
+        staging_batch_handle: None,
+        staging_handles: HashMap::new(),
         remote_directory: "/remote".to_string(),
         conflict_policy: UploadConflictPolicy::OverwriteAll,
         directory_roots: vec!["/remote/folder".to_string()],

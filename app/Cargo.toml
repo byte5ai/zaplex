@@ -326,6 +326,7 @@ cvt = "0.1.1"
 signal-hook = "0.3.17"
 signal-hook-mio = { version = "0.2.4", features = ["support-v1_0"] }
 nix = { workspace = true, features = [
+    "dir",
     "fs",
     "hostname",
     "resource",

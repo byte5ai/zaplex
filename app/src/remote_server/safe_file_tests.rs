@@ -1,6 +1,6 @@
 use std::fs::{self, File};
-use std::os::unix::fs::symlink;
-use std::path::Path;
+use std::os::unix::fs::{symlink, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
@@ -62,6 +62,173 @@ fn create_regular(
         safe_file_response::Result::Opened(opened) => opened,
         other => panic!("expected created response, got {other:?}"),
     }
+}
+
+#[test]
+fn upload_batch_uses_private_modes_and_identity_bound_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let destination = directory.path().join("destination");
+    let attacker = directory.path().join("attacker");
+    fs::create_dir(&destination).unwrap();
+    fs::create_dir(&attacker).unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let result = call(
+        &mut server,
+        owner,
+        "",
+        safe_file_request::Operation::BeginUploadBatch(SafeFileBeginUploadBatch {
+            destination_directory: path_string(&destination),
+            batch_id: "batch".to_string(),
+            entries: vec![
+                SafeFileUploadEntry {
+                    relative_path: "folder".to_string(),
+                    kind: SafeFileEntryKind::Directory as i32,
+                },
+                SafeFileUploadEntry {
+                    relative_path: "folder/file.bin".to_string(),
+                    kind: SafeFileEntryKind::Regular as i32,
+                },
+            ],
+        }),
+    );
+    let safe_file_response::Result::UploadBatchOpened(opened) = result else {
+        panic!("expected opened upload batch");
+    };
+    let staging_parent = destination.join(".zap-upload-staging");
+    let staging_root = staging_parent.join("batch");
+    let staged_file = staging_root.join("folder/file.bin");
+    assert_eq!(
+        fs::metadata(&staging_parent).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&staging_root).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&staged_file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    let file_handle = opened
+        .entries
+        .iter()
+        .find(|entry| entry.relative_path == "folder/file.bin")
+        .unwrap();
+    assert!(matches!(
+        call(
+            &mut server,
+            owner,
+            "",
+            safe_file_request::Operation::WriteHandle(SafeFileWriteHandle {
+                handle_id: file_handle.handle_id.clone(),
+                bytes: b"held payload".to_vec(),
+            }),
+        ),
+        safe_file_response::Result::Mutation(_)
+    ));
+
+    let retained_parent = destination.join("retained-staging");
+    fs::rename(&staging_parent, &retained_parent).unwrap();
+    fs::write(attacker.join("batch"), b"attacker sentinel").unwrap();
+    symlink(&attacker, &staging_parent).unwrap();
+    assert!(matches!(
+        call(
+            &mut server,
+            owner,
+            "",
+            safe_file_request::Operation::CleanupUploadBatch(SafeFileCleanupUploadBatch {
+                batch_handle_id: opened.batch_handle_id,
+            }),
+        ),
+        safe_file_response::Result::Mutation(_)
+    ));
+
+    assert!(!retained_parent.join("batch").exists());
+    assert_eq!(
+        fs::read(attacker.join("batch")).unwrap(),
+        b"attacker sentinel"
+    );
+}
+
+#[test]
+fn upload_batch_promotes_the_verified_handle_not_a_path_replacement() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination_directory = directory.path().join("destination");
+    fs::create_dir(&destination_directory).unwrap();
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(directory.path().join("safe-file-journal"));
+    let opened = match call(
+        &mut server,
+        owner,
+        "",
+        safe_file_request::Operation::BeginUploadBatch(SafeFileBeginUploadBatch {
+            destination_directory: path_string(&destination_directory),
+            batch_id: "verified-batch".to_string(),
+            entries: vec![SafeFileUploadEntry {
+                relative_path: "payload.bin".to_string(),
+                kind: SafeFileEntryKind::Regular as i32,
+            }],
+        }),
+    ) {
+        safe_file_response::Result::UploadBatchOpened(opened) => opened,
+        other => panic!("expected upload batch, got {other:?}"),
+    };
+    let file_handle = &opened.entries[0].handle_id;
+    assert!(matches!(
+        call(
+            &mut server,
+            owner,
+            "",
+            safe_file_request::Operation::WriteHandle(SafeFileWriteHandle {
+                handle_id: file_handle.clone(),
+                bytes: b"verified".to_vec(),
+            }),
+        ),
+        safe_file_response::Result::Mutation(_)
+    ));
+    let staging_path = PathBuf::from(&opened.root_path).join("payload.bin");
+    let inspection = call(
+        &mut server,
+        owner,
+        "",
+        safe_file_request::Operation::InspectHandle(SafeFileInspectHandle {
+            handle_id: file_handle.clone(),
+            path: path_string(&staging_path),
+        }),
+    );
+    assert!(matches!(
+        inspection,
+        safe_file_response::Result::Inspected(SafeFileInspectResult {
+            matches_path: true,
+            ..
+        })
+    ));
+
+    let retained = staging_path.with_extension("retained");
+    fs::rename(&staging_path, &retained).unwrap();
+    fs::write(&staging_path, b"replacement").unwrap();
+    let final_path = destination_directory.join("payload.bin");
+    let result = call(
+        &mut server,
+        owner,
+        "promote-verified-upload",
+        safe_file_request::Operation::Rename(SafeFileRename {
+            handle_id: file_handle.clone(),
+            old_path: path_string(&staging_path),
+            new_path: path_string(&final_path),
+            mode: SafeFileRenameMode::NoReplace as i32,
+            expected_target: None,
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Error(_)));
+    assert!(!final_path.exists());
+    assert_eq!(fs::read(staging_path).unwrap(), b"replacement");
+    assert_eq!(fs::read(retained).unwrap(), b"verified");
 }
 
 #[test]

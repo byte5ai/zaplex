@@ -5,26 +5,29 @@
 //! descriptors alive across chunk calls. Every path mutation is journaled under
 //! the remote user's home directory and keyed by a caller-supplied operation id.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ffi::{CString, OsStr};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-#[cfg(test)]
-use super::proto::SafeFileRetryRecovery;
 use super::proto::{
-    safe_file_request, safe_file_response, FileOperationError, SafeFileCreateExclusive,
-    SafeFileDelete, SafeFileEntryKind, SafeFileFlushHandle, SafeFileIdentity,
-    SafeFileInspectHandle, SafeFileInspectResult, SafeFileMutationResult, SafeFileMutationState,
-    SafeFileOpenExisting, SafeFileOpened, SafeFileReadHandle, SafeFileReadResult, SafeFileRecovery,
-    SafeFileRecoveryList, SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileResponse,
-    SafeFileWriteHandle,
+    safe_file_request, safe_file_response, FileOperationError, SafeFileBeginUploadBatch,
+    SafeFileCreateExclusive, SafeFileDelete, SafeFileEntryKind, SafeFileFlushHandle,
+    SafeFileIdentity, SafeFileInspectHandle, SafeFileInspectResult, SafeFileMutationResult,
+    SafeFileMutationState, SafeFileOpenExisting, SafeFileOpened, SafeFileReadHandle,
+    SafeFileReadResult, SafeFileRecovery, SafeFileRecoveryList, SafeFileRename, SafeFileRenameMode,
+    SafeFileRequest, SafeFileResponse, SafeFileUploadBatchOpened, SafeFileUploadEntry,
+    SafeFileUploadEntryOpened, SafeFileWriteHandle,
 };
+#[cfg(test)]
+use super::proto::{SafeFileCleanupUploadBatch, SafeFileRetryRecovery};
 use super::server_model::ConnectionId;
 
 const MAX_CHUNK_BYTES: usize = 8 * 1024 * 1024;
@@ -307,10 +310,19 @@ struct SafeHandle {
     _artifact_lock: Option<OperationLock>,
 }
 
+struct SafeUploadBatch {
+    owner: ConnectionId,
+    parent: File,
+    root: File,
+    root_name: CString,
+    root_path: PathBuf,
+}
+
 pub struct SafeFileServer {
     journal: Option<Journal>,
     initialization_error: Option<String>,
     handles: HashMap<String, SafeHandle>,
+    upload_batches: HashMap<String, SafeUploadBatch>,
     #[cfg(test)]
     before_rename_mutation: Option<Box<dyn Fn(&Path, &Path) + Send + Sync>>,
     #[cfg(test)]
@@ -329,6 +341,7 @@ impl SafeFileServer {
                     journal: Some(journal),
                     initialization_error: None,
                     handles: HashMap::new(),
+                    upload_batches: HashMap::new(),
                     #[cfg(test)]
                     before_rename_mutation: None,
                     #[cfg(test)]
@@ -345,6 +358,7 @@ impl SafeFileServer {
                 journal: None,
                 initialization_error: Some(error.to_string()),
                 handles: HashMap::new(),
+                upload_batches: HashMap::new(),
                 #[cfg(test)]
                 before_rename_mutation: None,
                 #[cfg(test)]
@@ -367,6 +381,7 @@ impl SafeFileServer {
             journal: None,
             initialization_error: Some("disabled in unrelated unit test".to_string()),
             handles: HashMap::new(),
+            upload_batches: HashMap::new(),
             before_rename_mutation: None,
             after_rename_mutation: None,
             before_delete_isolation: None,
@@ -381,6 +396,7 @@ impl SafeFileServer {
             journal: Some(journal),
             initialization_error: None,
             handles: HashMap::new(),
+            upload_batches: HashMap::new(),
             before_rename_mutation: None,
             after_rename_mutation: None,
             before_delete_isolation: None,
@@ -401,6 +417,18 @@ impl SafeFileServer {
         for handle_id in handles {
             if let Some(handle) = self.handles.remove(&handle_id) {
                 self.cleanup_owned_artifact(&handle);
+            }
+        }
+        let upload_batches = self
+            .upload_batches
+            .iter()
+            .filter_map(|(handle_id, batch)| {
+                (batch.owner == connection_id).then_some(handle_id.clone())
+            })
+            .collect::<Vec<_>>();
+        for handle_id in upload_batches {
+            if let Err(error) = self.cleanup_upload_batch(connection_id, &handle_id) {
+                log::warn!("Failed to clean up disconnected upload batch: {error}");
             }
         }
     }
@@ -444,6 +472,12 @@ impl SafeFileServer {
             Some(safe_file_request::Operation::RetryRecovery(_)) => self
                 .retry_recovery(&request.operation_id)
                 .map(safe_file_response::Result::Mutation),
+            Some(safe_file_request::Operation::BeginUploadBatch(begin)) => self
+                .begin_upload_batch(connection_id, begin)
+                .map(safe_file_response::Result::UploadBatchOpened),
+            Some(safe_file_request::Operation::CleanupUploadBatch(cleanup)) => self
+                .cleanup_upload_batch(connection_id, &cleanup.batch_handle_id)
+                .map(safe_file_response::Result::Mutation),
             None => Err("Safe-file request has no operation".to_string()),
         };
         SafeFileResponse {
@@ -462,6 +496,103 @@ impl SafeFileServer {
                     .unwrap_or("unknown error")
             )
         })
+    }
+
+    fn begin_upload_batch(
+        &mut self,
+        owner: ConnectionId,
+        request: SafeFileBeginUploadBatch,
+    ) -> Result<SafeFileUploadBatchOpened, String> {
+        Journal::validate_operation_id(&request.batch_id).map_err(|error| error.to_string())?;
+        let destination_path = validated_path(&request.destination_directory)?;
+        let destination = open_nofollow(&destination_path, SafeFileEntryKind::Directory, false)
+            .map_err(|error| error.to_string())?;
+        let staging_name = CString::new(".zap-upload-staging").expect("static name has no NUL");
+        let staging_parent = ensure_private_directory_at(&destination, &staging_name, true)?;
+        let batch_name = CString::new(request.batch_id.as_bytes())
+            .map_err(|_| "Upload batch id contains NUL".to_string())?;
+        let root = ensure_private_directory_at(&staging_parent, &batch_name, false)?;
+        let root_path = destination_path
+            .join(OsStr::from_bytes(staging_name.as_bytes()))
+            .join(OsStr::from_bytes(batch_name.as_bytes()));
+
+        let entries_result = create_upload_entries(&root, &root_path, request.entries);
+        let entries = match entries_result {
+            Ok(entries) => entries,
+            Err(error) => {
+                let _ = remove_directory_contents(&root);
+                let _ = unlink_directory_at(&staging_parent, &batch_name);
+                return Err(error);
+            }
+        };
+
+        let mut opened_entries = Vec::with_capacity(entries.len());
+        for (relative_path, path, kind, file, identity) in entries {
+            let handle_id = uuid::Uuid::new_v4().to_string();
+            self.handles.insert(
+                handle_id.clone(),
+                SafeHandle {
+                    owner,
+                    file,
+                    kind,
+                    path,
+                    artifact_operation_id: None,
+                    _artifact_lock: None,
+                },
+            );
+            opened_entries.push(SafeFileUploadEntryOpened {
+                relative_path,
+                handle_id,
+                identity: Some(identity),
+            });
+        }
+
+        let batch_handle_id = uuid::Uuid::new_v4().to_string();
+        let root_path_string = path_to_string(&root_path)?;
+        self.upload_batches.insert(
+            batch_handle_id.clone(),
+            SafeUploadBatch {
+                owner,
+                parent: staging_parent,
+                root,
+                root_name: batch_name,
+                root_path,
+            },
+        );
+        Ok(SafeFileUploadBatchOpened {
+            batch_handle_id,
+            root_path: root_path_string,
+            entries: opened_entries,
+        })
+    }
+
+    fn cleanup_upload_batch(
+        &mut self,
+        owner: ConnectionId,
+        batch_handle_id: &str,
+    ) -> Result<SafeFileMutationResult, String> {
+        if !self
+            .upload_batches
+            .get(batch_handle_id)
+            .is_some_and(|batch| batch.owner == owner)
+        {
+            return Err("Upload batch is unknown or belongs to another connection".to_string());
+        }
+        let batch = self
+            .upload_batches
+            .remove(batch_handle_id)
+            .expect("owned upload batch disappeared");
+        let result = authenticate_upload_batch(&batch)
+            .and_then(|()| remove_directory_contents(&batch.root))
+            .and_then(|()| unlink_directory_at(&batch.parent, &batch.root_name));
+        match result {
+            Ok(()) => Ok(applied_mutation()),
+            Err(error) => {
+                self.upload_batches
+                    .insert(batch_handle_id.to_string(), batch);
+                Err(error)
+            }
+        }
     }
 
     fn open_existing(
@@ -716,6 +847,13 @@ impl SafeFileServer {
         owner: ConnectionId,
         handle_id: &str,
     ) -> Result<SafeFileMutationResult, String> {
+        if self
+            .upload_batches
+            .get(handle_id)
+            .is_some_and(|batch| batch.owner == owner)
+        {
+            return self.cleanup_upload_batch(owner, handle_id);
+        }
         if !self
             .handles
             .get(handle_id)
@@ -1560,6 +1698,227 @@ fn validated_path(raw: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+type CreatedUploadEntry = (String, PathBuf, SafeFileEntryKind, File, SafeFileIdentity);
+
+fn create_upload_entries(
+    root: &File,
+    root_path: &Path,
+    entries: Vec<SafeFileUploadEntry>,
+) -> Result<Vec<CreatedUploadEntry>, String> {
+    let mut seen = HashSet::new();
+    let mut created = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if !seen.insert(entry.relative_path.clone()) {
+            return Err(format!(
+                "Upload batch contains duplicate entry {:?}",
+                entry.relative_path
+            ));
+        }
+        let kind = SafeFileEntryKind::try_from(entry.kind)
+            .map_err(|_| "Invalid upload entry kind".to_string())?;
+        if !matches!(
+            kind,
+            SafeFileEntryKind::Regular | SafeFileEntryKind::Directory
+        ) {
+            return Err("Upload entries must be regular files or directories".to_string());
+        }
+        let components = validated_upload_components(&entry.relative_path)?;
+        let (leaf, parents) = components
+            .split_last()
+            .ok_or_else(|| "Upload entry path is empty".to_string())?;
+        let mut directory = root.try_clone().map_err(|error| error.to_string())?;
+        for parent in parents {
+            directory = ensure_private_directory_at(&directory, parent, true)?;
+        }
+        let file = match kind {
+            SafeFileEntryKind::Regular => create_private_file_at(&directory, leaf)?,
+            SafeFileEntryKind::Directory => ensure_private_directory_at(&directory, leaf, true)?,
+            SafeFileEntryKind::Symlink | SafeFileEntryKind::Unspecified => unreachable!(),
+        };
+        let identity = identity_for_file(&file, kind)?;
+        let relative_path = entry.relative_path;
+        created.push((
+            relative_path.clone(),
+            root_path.join(relative_path),
+            kind,
+            file,
+            identity,
+        ));
+    }
+    Ok(created)
+}
+
+fn validated_upload_components(path: &str) -> Result<Vec<CString>, String> {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        return Err("Upload entry path must be relative".to_string());
+    }
+    let components = path
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(component) => CString::new(component.as_bytes())
+                .map_err(|_| "Upload entry path contains NUL".to_string()),
+            std::path::Component::RootDir
+            | std::path::Component::CurDir
+            | std::path::Component::ParentDir
+            | std::path::Component::Prefix(_) => {
+                Err("Upload entry path escapes its batch root".to_string())
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if components.is_empty() {
+        return Err("Upload entry path is empty".to_string());
+    }
+    Ok(components)
+}
+
+fn ensure_private_directory_at(
+    parent: &File,
+    name: &CString,
+    allow_existing: bool,
+) -> Result<File, String> {
+    let created = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } == 0;
+    if !created {
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::AlreadyExists || !allow_existing {
+            return Err(error.to_string());
+        }
+    }
+    let result = (|| {
+        let directory = open_directory_at(parent, name)?;
+        if created {
+            let result = unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) };
+            if result != 0 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+        }
+        authenticate_private_directory(&directory)?;
+        Ok(directory)
+    })();
+    if created && result.is_err() {
+        let _ = unlink_directory_at(parent, name);
+    }
+    result
+}
+
+fn open_directory_at(parent: &File, name: &CString) -> Result<File, String> {
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+fn authenticate_private_directory(directory: &File) -> Result<(), String> {
+    let metadata = directory.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o777 != 0o700
+    {
+        return Err("Upload staging directory is not owned private storage".to_string());
+    }
+    Ok(())
+}
+
+fn create_private_file_at(parent: &File, name: &CString) -> Result<File, String> {
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    let result = unsafe { libc::fchmod(file.as_raw_fd(), 0o600) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(file)
+}
+
+fn authenticate_upload_batch(batch: &SafeUploadBatch) -> Result<(), String> {
+    authenticate_private_directory(&batch.parent)?;
+    authenticate_private_directory(&batch.root)?;
+    let current = open_directory_at(&batch.parent, &batch.root_name).map_err(|error| {
+        format!(
+            "Upload batch root {} is inaccessible: {error}",
+            batch.root_path.display()
+        )
+    })?;
+    let expected = identity_for_file(&batch.root, SafeFileEntryKind::Directory)?;
+    let actual = identity_for_file(&current, SafeFileEntryKind::Directory)?;
+    if !same_object(&expected, &actual) {
+        return Err("Upload batch root no longer matches its held handle".to_string());
+    }
+    Ok(())
+}
+
+fn remove_directory_contents(directory: &File) -> Result<(), String> {
+    let reader = directory.try_clone().map_err(|error| error.to_string())?;
+    let mut reader = nix::dir::Dir::from(reader).map_err(|error| error.to_string())?;
+    let names = reader
+        .iter()
+        .filter_map(|entry| match entry {
+            Ok(entry)
+                if entry.file_name().to_bytes() != b"."
+                    && entry.file_name().to_bytes() != b".." =>
+            {
+                Some(Ok(entry.file_name().to_owned()))
+            }
+            Ok(_) => None,
+            Err(error) => Some(Err(error.to_string())),
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    drop(reader);
+
+    for name in names {
+        let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let result = unsafe {
+            libc::fstatat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                metadata.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let metadata = unsafe { metadata.assume_init() };
+        if metadata.st_mode & libc::S_IFMT == libc::S_IFDIR {
+            let child_name = name.to_owned();
+            let child = open_directory_at(directory, &child_name)?;
+            remove_directory_contents(&child)?;
+            unlink_directory_at(directory, &child_name)?;
+        } else {
+            let result = unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) };
+            if result != 0 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn unlink_directory_at(parent: &File, name: &CString) -> Result<(), String> {
+    let result = unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().to_string())
+    }
+}
+
 fn path_to_string(path: &Path) -> Result<String, String> {
     path.to_str()
         .map(ToOwned::to_owned)
@@ -1661,16 +2020,34 @@ fn open_nofollow(
         }
         SafeFileEntryKind::Directory => {
             if create_exclusive {
-                fs::create_dir(path)?;
+                use std::os::unix::fs::DirBuilderExt as _;
+
+                let mut builder = fs::DirBuilder::new();
+                builder.mode(0o700).create(path)?;
             }
-            let result = OpenOptions::new()
+            let directory = OpenOptions::new()
                 .read(true)
                 .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_DIRECTORY)
                 .open(path);
-            if create_exclusive && result.is_err() {
-                let _ = fs::remove_dir(path);
+            let directory = match directory {
+                Ok(directory) => directory,
+                Err(error) => {
+                    if create_exclusive {
+                        let _ = fs::remove_dir(path);
+                    }
+                    return Err(error);
+                }
+            };
+            if create_exclusive {
+                let chmod = unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) };
+                if chmod != 0 {
+                    let error = std::io::Error::last_os_error();
+                    drop(directory);
+                    let _ = fs::remove_dir(path);
+                    return Err(error);
+                }
             }
-            result
+            Ok(directory)
         }
         SafeFileEntryKind::Symlink => {
             if create_exclusive {

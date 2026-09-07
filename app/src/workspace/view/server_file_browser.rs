@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,9 +11,10 @@ use remote_server::client::RemoteServerClient;
 use remote_server::proto::{
     create_directory_response, list_directory_response, resolve_path_response,
     run_command_response, safe_file_request, safe_file_response, write_file_chunk_response,
-    FileSystemEntryKind, SafeFileEntryKind, SafeFileIdentity, SafeFileInspectHandle,
-    SafeFileMutationState, SafeFileOpenExisting, SafeFileReadHandle, SafeFileRename,
-    SafeFileRenameMode, SafeFileRequest, SafeFileRetryRecovery,
+    FileSystemEntryKind, SafeFileBeginUploadBatch, SafeFileCleanupUploadBatch, SafeFileEntryKind,
+    SafeFileFlushHandle, SafeFileIdentity, SafeFileInspectHandle, SafeFileMutationState,
+    SafeFileOpenExisting, SafeFileReadHandle, SafeFileRename, SafeFileRenameMode, SafeFileRequest,
+    SafeFileRetryRecovery, SafeFileUploadEntry, SafeFileWriteHandle,
 };
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -161,6 +162,8 @@ struct ServerFileUploadTask {
 
 struct ServerFileUploadBatch {
     staging_root: String,
+    staging_batch_handle: Option<Arc<SafeRemoteUploadBatchHandle>>,
+    staging_handles: HashMap<String, Arc<SafeRemoteFileHandle>>,
     remote_directory: String,
     conflict_policy: UploadConflictPolicy,
     directory_roots: Vec<String>,
@@ -1884,16 +1887,46 @@ impl ServerFileBrowserView {
             })
             .collect();
 
-        let staging_root_for_spawn = staging_root.clone();
-        let client_for_mkdir = client.clone();
+        let mut upload_entries = directory_roots
+            .iter()
+            .map(|directory| SafeFileUploadEntry {
+                relative_path: relative_remote_path_from_base(&remote_directory, directory),
+                kind: SafeFileEntryKind::Directory as i32,
+            })
+            .collect::<Vec<_>>();
+        upload_entries.extend(tasks.iter().map(|task| SafeFileUploadEntry {
+            relative_path: relative_remote_path_from_base(
+                &remote_directory,
+                &task.final_remote_path,
+            ),
+            kind: SafeFileEntryKind::Regular as i32,
+        }));
+
+        let client_for_staging = client.clone();
+        let remote_directory_for_staging = remote_directory.clone();
         ctx.spawn(
-            async move { create_remote_directory(client_for_mkdir, staging_root_for_spawn).await },
+            async move {
+                begin_safe_upload_batch(
+                    client_for_staging,
+                    remote_directory_for_staging,
+                    batch_id,
+                    upload_entries,
+                )
+                .await
+            },
             move |me, result, ctx| match result {
-                Ok(()) => {
+                Ok(staging) => {
+                    if staging.root_path != staging_root {
+                        me.release_upload_pipeline_and_continue(ctx);
+                        me.set_error("Remote upload staging root changed unexpectedly", ctx);
+                        return;
+                    }
                     me.start_upload_batch_after_staging_ready(
                         client,
                         remote_directory,
                         staging_root,
+                        staging.handle,
+                        staging.entries,
                         conflict_policy,
                         directory_roots,
                         tasks,
@@ -1914,6 +1947,8 @@ impl ServerFileBrowserView {
         client: Arc<RemoteServerClient>,
         remote_directory: String,
         staging_root: String,
+        staging_batch_handle: Arc<SafeRemoteUploadBatchHandle>,
+        staging_handles: HashMap<String, Arc<SafeRemoteFileHandle>>,
         conflict_policy: UploadConflictPolicy,
         directory_roots: Vec<String>,
         tasks: Vec<ServerFileUploadTask>,
@@ -1931,6 +1966,8 @@ impl ServerFileBrowserView {
         }
         self.upload_batches.push(ServerFileUploadBatch {
             staging_root,
+            staging_batch_handle: Some(staging_batch_handle),
+            staging_handles,
             remote_directory,
             conflict_policy,
             directory_roots,
@@ -1971,15 +2008,20 @@ impl ServerFileBrowserView {
             batch.next_task_index += 1;
         }
 
-        let (local_path, staging_remote_path, uploaded_bytes) = {
+        let (local_path, staging_remote_path, staging_handle, uploaded_bytes) = {
             let batch = self
                 .upload_batches
                 .get(batch_index)
                 .expect("active upload batch exists");
             let task = &batch.tasks[index];
+            let staging_handle = batch
+                .staging_handles
+                .get(&task.staging_remote_path)
+                .cloned();
             (
                 task.local_path.clone(),
                 task.staging_remote_path.clone(),
+                staging_handle,
                 task.uploaded_bytes.clone(),
             )
         };
@@ -1988,8 +2030,10 @@ impl ServerFileBrowserView {
         let client_for_next = client.clone();
         ctx.spawn(
             async move {
-                upload_file_with_progress(client, local_path, staging_remote_path, uploaded_bytes)
-                    .await
+                let staging_handle = staging_handle.ok_or_else(|| {
+                    format!("Missing safe upload handle for {staging_remote_path}")
+                })?;
+                upload_file_with_progress(staging_handle, local_path, uploaded_bytes).await
             },
             move |me, result, ctx| {
                 if let Some(batch) = me.upload_batches.get_mut(batch_index) {
@@ -2020,7 +2064,7 @@ impl ServerFileBrowserView {
             .iter()
             .any(|task| matches!(task.status, UploadTaskStatus::Failed(_)))
         {
-            self.finish_upload_batch_failed(client, ctx);
+            self.finish_upload_batch_failed(ctx);
             return;
         }
 
@@ -2029,25 +2073,50 @@ impl ServerFileBrowserView {
         }
         ctx.notify();
 
-        let verify_tasks: Vec<(String, u64)> = self
+        let verify_tasks: Vec<(String, u64, Arc<SafeRemoteFileHandle>)> = self
             .active_upload_batch()
             .map(|batch| {
                 batch
                     .tasks
                     .iter()
                     .filter(|task| matches!(task.status, UploadTaskStatus::Completed))
-                    .map(|task| (task.staging_remote_path.clone(), task.total_bytes))
+                    .filter_map(|task| {
+                        batch
+                            .staging_handles
+                            .get(&task.staging_remote_path)
+                            .cloned()
+                            .map(|handle| {
+                                (task.staging_remote_path.clone(), task.total_bytes, handle)
+                            })
+                    })
                     .collect()
             })
             .unwrap_or_default();
 
-        let client_for_verify = client.clone();
+        let completed_task_count = self
+            .active_upload_batch()
+            .map(|batch| {
+                batch
+                    .tasks
+                    .iter()
+                    .filter(|task| matches!(task.status, UploadTaskStatus::Completed))
+                    .count()
+            })
+            .unwrap_or_default();
+        if verify_tasks.len() != completed_task_count {
+            self.fail_upload_batch_with_cleanup(
+                "Safe upload handles are incomplete".to_string(),
+                ctx,
+            );
+            return;
+        }
+
         ctx.spawn(
-            async move { verify_staging_files(client_for_verify, verify_tasks).await },
+            async move { verify_staging_files(verify_tasks).await },
             move |me, result, ctx| match result {
                 Ok(()) => me.promote_staging_batch(client, ctx),
                 Err(error) => {
-                    me.fail_upload_batch_with_cleanup(client, error, ctx);
+                    me.fail_upload_batch_with_cleanup(error, ctx);
                 }
             },
         );
@@ -2058,10 +2127,13 @@ impl ServerFileBrowserView {
         client: Arc<RemoteServerClient>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some(batch_snapshot) = self
-            .active_upload_batch()
-            .map(|batch| (batch.conflict_policy, build_pending_promotions(batch)))
-        else {
+        let Some(batch_snapshot) = self.active_upload_batch().map(|batch| {
+            (
+                batch.conflict_policy,
+                build_pending_promotions(batch),
+                batch.staging_handles.clone(),
+            )
+        }) else {
             return;
         };
 
@@ -2070,9 +2142,11 @@ impl ServerFileBrowserView {
         }
         ctx.notify();
 
-        let (conflict_policy, promotions) = batch_snapshot;
+        let (conflict_policy, promotions, staging_handles) = batch_snapshot;
         let client_for_promote = client.clone();
-        let client_for_cleanup = client.clone();
+        let staging_batch_handle = self
+            .active_upload_batch()
+            .and_then(|batch| batch.staging_batch_handle.clone());
 
         ctx.spawn(
             async move {
@@ -2080,27 +2154,22 @@ impl ServerFileBrowserView {
                     client_for_promote,
                     conflict_policy,
                     promotions,
+                    staging_handles,
                 )
                 .await
             },
-            move |me, result, ctx| {
-                let cleanup_client = client_for_cleanup.clone();
-                let staging_root = me
-                    .active_upload_batch()
-                    .map(|batch| batch.staging_root.clone());
-                match result {
-                    Ok(()) => {
-                        if let Some(root) = staging_root {
-                            me.spawn_cleanup_staging(cleanup_client, root, ctx);
-                        }
-                        me.finish_upload_batch_success(ctx);
+            move |me, result, ctx| match result {
+                Ok(()) => {
+                    if let Some(handle) = staging_batch_handle.clone() {
+                        me.spawn_cleanup_staging(handle, ctx);
                     }
-                    Err(error) => {
-                        me.fail_upload_batch_preserving_staging(
-                            format_upload_promote_error(&error),
-                            ctx,
-                        );
-                    }
+                    me.finish_upload_batch_success(ctx);
+                }
+                Err(error) => {
+                    me.fail_upload_batch_preserving_staging(
+                        format_upload_promote_error(&error),
+                        ctx,
+                    );
                 }
             },
         );
@@ -2108,16 +2177,11 @@ impl ServerFileBrowserView {
 
     fn spawn_cleanup_staging(
         &mut self,
-        client: Arc<RemoteServerClient>,
-        staging_root: String,
+        staging_batch_handle: Arc<SafeRemoteUploadBatchHandle>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let session = self.session.clone();
-        let remote_session_id = self.remote_session_id(ctx);
         ctx.spawn(
-            async move {
-                cleanup_staging_root(client, session, remote_session_id, staging_root).await
-            },
+            async move { cleanup_staging_root(staging_batch_handle).await },
             |_, _result, _ctx| {},
         );
     }
@@ -2141,12 +2205,8 @@ impl ServerFileBrowserView {
         self.reload_directories_selective(directories_to_reload, ctx);
     }
 
-    fn finish_upload_batch_failed(
-        &mut self,
-        client: Arc<RemoteServerClient>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let (error, staging_root) = {
+    fn finish_upload_batch_failed(&mut self, ctx: &mut ViewContext<Self>) {
+        let (error, staging_batch_handle) = {
             let batch = self.active_upload_batch();
             let error = batch.and_then(|b| {
                 b.tasks.iter().find_map(|task| {
@@ -2157,11 +2217,11 @@ impl ServerFileBrowserView {
                     }
                 })
             });
-            let staging_root = batch.map(|b| b.staging_root.clone());
-            (error, staging_root)
+            let staging_batch_handle = batch.and_then(|batch| batch.staging_batch_handle.clone());
+            (error, staging_batch_handle)
         };
-        if let Some(staging_root) = staging_root {
-            self.spawn_cleanup_staging(client, staging_root, ctx);
+        if let Some(staging_batch_handle) = staging_batch_handle {
+            self.spawn_cleanup_staging(staging_batch_handle, ctx);
         }
         self.reset_upload_batch_phase();
         self.finish_active_upload_batch();
@@ -2173,17 +2233,12 @@ impl ServerFileBrowserView {
         ctx.notify();
     }
 
-    fn fail_upload_batch_with_cleanup(
-        &mut self,
-        client: Arc<RemoteServerClient>,
-        error: String,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if let Some(staging_root) = self
+    fn fail_upload_batch_with_cleanup(&mut self, error: String, ctx: &mut ViewContext<Self>) {
+        if let Some(staging_batch_handle) = self
             .active_upload_batch()
-            .map(|batch| batch.staging_root.clone())
+            .and_then(|batch| batch.staging_batch_handle.clone())
         {
-            self.spawn_cleanup_staging(client, staging_root, ctx);
+            self.spawn_cleanup_staging(staging_batch_handle, ctx);
         }
         self.reset_upload_batch_phase();
         self.finish_active_upload_batch();
@@ -4052,9 +4107,8 @@ async fn create_remote_directory(
 }
 
 async fn upload_file_with_progress(
-    client: Arc<RemoteServerClient>,
+    remote_file: Arc<SafeRemoteFileHandle>,
     local_path: PathBuf,
-    remote_path: String,
     uploaded_bytes: Arc<AtomicU64>,
 ) -> Result<(), String> {
     use tokio::io::AsyncReadExt as _;
@@ -4070,33 +4124,34 @@ async fn upload_file_with_progress(
     file.read_to_end(&mut bytes)
         .await
         .map_err(|error| error.to_string())?;
-    let mut offset = 0;
-    let mut truncate = true;
+    let mut offset = 0_u64;
     for chunk in bytes.chunks(TRANSFER_CHUNK_BYTES as usize) {
-        let response = client
-            .write_file_chunk(remote_path.clone(), offset, chunk.to_vec(), truncate, None)
-            .await
-            .map_err(|error| error.to_string())?;
-        match response.result {
-            Some(write_file_chunk_response::Result::Success(success)) => {
-                offset = success.next_offset;
-                uploaded_bytes.store(offset, Ordering::Relaxed);
-                truncate = false;
-            }
-            Some(write_file_chunk_response::Result::Error(error)) => return Err(error.message),
-            None => return Err(crate::t!("server-file-browser-empty-response")),
-        }
+        expect_safe_file_mutation(
+            safe_file_operation(
+                &remote_file.client,
+                String::new(),
+                safe_file_request::Operation::WriteHandle(SafeFileWriteHandle {
+                    handle_id: remote_file.handle_id.clone(),
+                    bytes: chunk.to_vec(),
+                }),
+            )
+            .await?,
+        )?;
+        offset = offset
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| "Upload byte count overflow".to_string())?;
+        uploaded_bytes.store(offset, Ordering::Relaxed);
     }
-    if bytes.is_empty() {
-        let response = client
-            .write_file_chunk(remote_path, 0, Vec::new(), true, None)
-            .await
-            .map_err(|error| error.to_string())?;
-        if let Some(write_file_chunk_response::Result::Error(error)) = response.result {
-            return Err(error.message);
-        }
-        uploaded_bytes.store(0, Ordering::Relaxed);
-    }
+    expect_safe_file_mutation(
+        safe_file_operation(
+            &remote_file.client,
+            String::new(),
+            safe_file_request::Operation::FlushHandle(SafeFileFlushHandle {
+                handle_id: remote_file.handle_id.clone(),
+            }),
+        )
+        .await?,
+    )?;
     Ok(())
 }
 
@@ -4549,27 +4604,20 @@ fn decode_remote_path_conflict(
 }
 
 async fn verify_staging_files(
-    client: Arc<RemoteServerClient>,
-    tasks: Vec<(String, u64)>,
+    tasks: Vec<(String, u64, Arc<SafeRemoteFileHandle>)>,
 ) -> Result<(), String> {
-    for (staging_path, expected_bytes) in tasks {
-        let response = client
-            .resolve_path(staging_path.clone())
-            .await
-            .map_err(|error| error.to_string())?;
-        let success = match response.result {
-            Some(resolve_path_response::Result::Success(success)) => success,
-            Some(resolve_path_response::Result::NotFound(_)) => {
-                return Err(crate::t!(
-                    "server-file-browser-upload-verify-missing",
-                    path = staging_path
-                ));
-            }
-            Some(resolve_path_response::Result::Error(error)) => return Err(error.message),
-            None => return Err(crate::t!("server-file-browser-empty-response")),
-        };
-        let remote_size = success.size_bytes.unwrap_or(0);
-        if remote_size != expected_bytes {
+    for (staging_path, expected_bytes, handle) in tasks {
+        let inspection = inspect_safe_remote_file(&handle, staging_path.clone()).await?;
+        let identity = inspection
+            .identity
+            .ok_or_else(|| crate::t!("server-file-browser-empty-response"))?;
+        if !inspection.matches_path {
+            return Err(crate::t!(
+                "server-file-browser-upload-verify-missing",
+                path = staging_path
+            ));
+        }
+        if identity.size != expected_bytes {
             return Err(crate::t!(
                 "server-file-browser-upload-verify-size",
                 path = staging_path
@@ -4579,30 +4627,18 @@ async fn verify_staging_files(
     Ok(())
 }
 
-fn staging_cleanup_shell_commands(staging_root: &str) -> String {
-    let escaped_staging_root = warp_util::path::ShellFamily::Posix.shell_escape(staging_root);
-    let mut commands = vec![format!("rm -rf -- {escaped_staging_root}")];
-    if let Some(staging_parent) = remote_parent(staging_root) {
-        let escaped_staging_parent =
-            warp_util::path::ShellFamily::Posix.shell_escape(&staging_parent);
-        commands.push(format!(
-            "rmdir -- {escaped_staging_parent} 2>/dev/null || true"
-        ));
-    }
-    commands.join("; ")
-}
-
-fn append_staging_cleanup_script(script_lines: &mut Vec<String>, staging_root: &str) {
-    script_lines.push(staging_cleanup_shell_commands(staging_root));
-}
-
 async fn promote_staging_files(
     client: Arc<RemoteServerClient>,
     conflict_policy: UploadConflictPolicy,
     promotions: Vec<PendingPromotion>,
+    staging_handles: HashMap<String, Arc<SafeRemoteFileHandle>>,
 ) -> Result<(), String> {
     for promotion in promotions {
-        promote_staging_object(client.clone(), conflict_policy, promotion).await?;
+        let source = staging_handles
+            .get(&promotion.staging_path)
+            .cloned()
+            .ok_or_else(|| format!("Missing safe upload handle for {}", promotion.staging_path))?;
+        promote_staging_object(client.clone(), conflict_policy, promotion, source).await?;
     }
     Ok(())
 }
@@ -4611,16 +4647,22 @@ async fn promote_staging_object(
     client: Arc<RemoteServerClient>,
     conflict_policy: UploadConflictPolicy,
     promotion: PendingPromotion,
+    source: Arc<SafeRemoteFileHandle>,
 ) -> Result<(), String> {
-    let source = open_safe_remote_file(
-        client.clone(),
-        promotion.staging_path.clone(),
-        promotion.kind,
-    )
-    .await?;
+    let source_inspection =
+        inspect_safe_remote_file(&source, promotion.staging_path.clone()).await?;
+    let source_identity = source_inspection
+        .identity
+        .ok_or_else(|| crate::t!("server-file-browser-empty-response"))?;
+    if !source_inspection.matches_path {
+        return Err(crate::t!(
+            "server-file-browser-upload-verify-missing",
+            path = promotion.staging_path
+        ));
+    }
     if promotion
         .expected_size
-        .is_some_and(|expected| source.identity.size != expected)
+        .is_some_and(|expected| source_identity.size != expected)
     {
         return Err(crate::t!(
             "server-file-browser-upload-verify-size",
@@ -4699,12 +4741,13 @@ async fn promote_staging_object(
         }
     }
 
-    let source_inspection = inspect_safe_remote_file(&source, promotion.final_path.clone()).await?;
-    let source_identity = source_inspection
+    let promoted_source_inspection =
+        inspect_safe_remote_file(&source, promotion.final_path.clone()).await?;
+    let promoted_source_identity = promoted_source_inspection
         .identity
         .ok_or_else(|| crate::t!("server-file-browser-empty-response"))?;
-    if !source_inspection.matches_path
-        || !same_safe_file_identity(&source.identity, &source_identity)
+    if !promoted_source_inspection.matches_path
+        || !same_safe_file_identity(&source_identity, &promoted_source_identity)
     {
         return Err(crate::t!(
             "server-file-browser-upload-promote-verify",
@@ -4759,15 +4802,19 @@ fn safe_file_kind_for_entry(
 }
 
 async fn cleanup_staging_root(
-    client: Arc<RemoteServerClient>,
-    session: Option<Arc<Session>>,
-    remote_session_id: Option<SessionId>,
-    staging_root: String,
+    staging_batch: Arc<SafeRemoteUploadBatchHandle>,
 ) -> Result<(), String> {
-    let mut script_lines = Vec::new();
-    append_staging_cleanup_script(&mut script_lines, &staging_root);
-    let script = script_lines.join("\n");
-    execute_remote_shell_script(session, Some(client), remote_session_id, script).await
+    let result = safe_file_operation(
+        &staging_batch.client,
+        String::new(),
+        safe_file_request::Operation::CleanupUploadBatch(SafeFileCleanupUploadBatch {
+            batch_handle_id: staging_batch.handle_id.clone(),
+        }),
+    )
+    .await?;
+    expect_safe_file_mutation(result)?;
+    staging_batch.closed.store(true, Ordering::Release);
+    Ok(())
 }
 
 async fn collect_download_files(
@@ -5014,6 +5061,93 @@ fn ensure_local_transfer_directory(path: &Path) -> Result<(), String> {
     }
 }
 
+struct SafeRemoteUploadBatchHandle {
+    client: Arc<RemoteServerClient>,
+    handle_id: String,
+    closed: AtomicBool,
+}
+
+impl Drop for SafeRemoteUploadBatchHandle {
+    fn drop(&mut self) {
+        if !self.closed.load(Ordering::Acquire) {
+            let _ = self.client.close_safe_file_handle(self.handle_id.clone());
+        }
+    }
+}
+
+struct PreparedSafeUploadBatch {
+    handle: Arc<SafeRemoteUploadBatchHandle>,
+    root_path: String,
+    entries: HashMap<String, Arc<SafeRemoteFileHandle>>,
+}
+
+async fn begin_safe_upload_batch(
+    client: Arc<RemoteServerClient>,
+    destination_directory: String,
+    batch_id: String,
+    entries: Vec<SafeFileUploadEntry>,
+) -> Result<PreparedSafeUploadBatch, String> {
+    let mut expected = entries
+        .iter()
+        .map(|entry| (entry.relative_path.clone(), entry.kind))
+        .collect::<HashMap<_, _>>();
+    if expected.len() != entries.len() {
+        return Err("Upload batch contains duplicate entries".to_string());
+    }
+    let response = safe_file_operation(
+        &client,
+        String::new(),
+        safe_file_request::Operation::BeginUploadBatch(SafeFileBeginUploadBatch {
+            destination_directory,
+            batch_id,
+            entries,
+        }),
+    )
+    .await?;
+    let safe_file_response::Result::UploadBatchOpened(opened) = response else {
+        return Err(crate::t!("server-file-browser-empty-response"));
+    };
+    let batch_handle = Arc::new(SafeRemoteUploadBatchHandle {
+        client: client.clone(),
+        handle_id: opened.batch_handle_id,
+        closed: AtomicBool::new(false),
+    });
+    let mut opened_entries = HashMap::with_capacity(opened.entries.len());
+    for entry in opened.entries {
+        let expected_kind = expected
+            .remove(&entry.relative_path)
+            .ok_or_else(|| "Remote upload batch returned an unexpected entry".to_string())?;
+        let identity = entry
+            .identity
+            .ok_or_else(|| crate::t!("server-file-browser-empty-response"))?;
+        if identity.kind != expected_kind {
+            return Err("Remote upload batch returned the wrong entry kind".to_string());
+        }
+        let staging_path = join_remote_path(&opened.root_path, &entry.relative_path);
+        if opened_entries
+            .insert(
+                staging_path,
+                Arc::new(SafeRemoteFileHandle {
+                    client: client.clone(),
+                    handle_id: entry.handle_id,
+                    identity,
+                }),
+            )
+            .is_some()
+        {
+            return Err("Remote upload batch returned duplicate entries".to_string());
+        }
+    }
+    if !expected.is_empty() {
+        return Err("Remote upload batch omitted requested entries".to_string());
+    }
+    Ok(PreparedSafeUploadBatch {
+        handle: batch_handle,
+        root_path: opened.root_path,
+        entries: opened_entries,
+    })
+}
+
 struct SafeRemoteFileHandle {
     client: Arc<RemoteServerClient>,
     handle_id: String,
@@ -5042,6 +5176,18 @@ async fn safe_file_operation(
         Some(safe_file_response::Result::Error(error)) => Err(error.message),
         Some(result) => Ok(result),
         None => Err(crate::t!("server-file-browser-empty-response")),
+    }
+}
+
+fn expect_safe_file_mutation(result: safe_file_response::Result) -> Result<(), String> {
+    let safe_file_response::Result::Mutation(mutation) = result else {
+        return Err(crate::t!("server-file-browser-empty-response"));
+    };
+    match SafeFileMutationState::try_from(mutation.state) {
+        Ok(SafeFileMutationState::Applied | SafeFileMutationState::AlreadyApplied) => Ok(()),
+        Ok(SafeFileMutationState::Unspecified) | Err(_) => {
+            Err(crate::t!("server-file-browser-empty-response"))
+        }
     }
 }
 

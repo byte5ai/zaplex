@@ -703,6 +703,21 @@ message SafeFileListRecoveries {}
 
 message SafeFileRetryRecovery {}
 
+message SafeFileUploadEntry {
+  string relative_path = 1;
+  SafeFileEntryKind kind = 2;
+}
+
+message SafeFileBeginUploadBatch {
+  string destination_directory = 1;
+  string batch_id = 2;
+  repeated SafeFileUploadEntry entries = 3;
+}
+
+message SafeFileCleanupUploadBatch {
+  string batch_handle_id = 1;
+}
+
 message SafeFileRequest {
   // Required for create/rename/delete. Reusing an id returns the persisted
   // result instead of executing a second mutation.
@@ -719,6 +734,8 @@ message SafeFileRequest {
     SafeFileDelete delete = 10;
     SafeFileListRecoveries list_recoveries = 11;
     SafeFileRetryRecovery retry_recovery = 12;
+    SafeFileBeginUploadBatch begin_upload_batch = 13;
+    SafeFileCleanupUploadBatch cleanup_upload_batch = 14;
   }
 }
 
@@ -761,6 +778,18 @@ message SafeFileRecoveryList {
   repeated SafeFileRecovery recoveries = 1;
 }
 
+message SafeFileUploadEntryOpened {
+  string relative_path = 1;
+  string handle_id = 2;
+  SafeFileIdentity identity = 3;
+}
+
+message SafeFileUploadBatchOpened {
+  string batch_handle_id = 1;
+  string root_path = 2;
+  repeated SafeFileUploadEntryOpened entries = 3;
+}
+
 message SafeFileResponse {
   oneof result {
     SafeFileOpened opened = 1;
@@ -768,6 +797,7 @@ message SafeFileResponse {
     SafeFileInspectResult inspected = 3;
     SafeFileMutationResult mutation = 4;
     SafeFileRecoveryList recoveries = 5;
+    SafeFileUploadBatchOpened upload_batch_opened = 6;
     FileOperationError error = 15;
   }
 }
