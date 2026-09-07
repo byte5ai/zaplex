@@ -66,6 +66,11 @@ jobs:
           chmod 700 "${HOME}/.ssh"
           ssh-keygen -y -f "${test_key}" > "${authorized_keys}"
           chmod 600 "${authorized_keys}"
+          printf '[127.0.0.1]:%s %s\n' \
+            "${test_port}" \
+            "$(ssh-keygen -y -f "${RUNNER_TEMP}/live-sftp-host-key")" \
+            > "${HOME}/.ssh/known_hosts"
+          chmod 600 "${HOME}/.ssh/known_hosts"
 
           {
             echo "Port ${test_port}"
