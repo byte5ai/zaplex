@@ -1483,11 +1483,24 @@ impl SafeFileServer {
             if let Some(hook) = &self.before_delete_isolation {
                 hook(&path);
             }
+            let Some(pre_isolation) = identity_for_path(&path)
+                .ok()
+                .filter(|actual| matches_delete_identity(&expected, actual))
+            else {
+                let error = "Safe-file delete target content changed before isolation".to_string();
+                record.state = JournalState::Rejected;
+                record.failure = Some(error.clone());
+                self.journal()?
+                    .save(record)
+                    .map_err(|save_error| save_error.to_string())?;
+                return Err(error);
+            };
             match rename_noreplace(&path, &tombstone) {
                 Ok(()) => {
-                    let isolated_matches = identity_for_path(&tombstone)
-                        .as_ref()
-                        .is_ok_and(|actual| matches_isolated_delete_identity(&expected, actual));
+                    let isolated_matches =
+                        identity_for_path(&tombstone).as_ref().is_ok_and(|actual| {
+                            matches_isolated_delete_identity(&pre_isolation, actual)
+                        });
                     if !isolated_matches {
                         let isolated = identity_for_path(&tombstone).ok();
                         let restored = path_is_absent(&path)
@@ -2362,6 +2375,10 @@ fn delete_exact_path(
     let private_directory = private_delete_directory(path);
     let private_entry = private_delete_entry(path);
     if path_is_absent(&private_entry) {
+        let boundary = identity_for_path(path)?;
+        if !matches_isolated_delete_identity(expected, &boundary) {
+            return Err("Safe-file delete isolation identity changed".to_string());
+        }
         match fs::create_dir(&private_directory) {
             Ok(()) => fs::set_permissions(&private_directory, fs::Permissions::from_mode(0o700))
                 .map_err(|error| error.to_string())?,
@@ -2386,10 +2403,14 @@ fn delete_exact_path(
         if let Some(hook) = before_isolation {
             hook(path);
         }
+        let pre_isolation = identity_for_path(path)?;
+        if !matches_delete_identity(&boundary, &pre_isolation) {
+            return Err("Safe-file delete identity changed before private isolation".to_string());
+        }
         rename_noreplace_into_directory(path, &directory, &name)
             .map_err(|error| error.to_string())?;
         let isolated = identity_for_path(&private_entry)?;
-        if !matches_isolated_delete_identity(expected, &isolated) {
+        if !matches_isolated_delete_identity(&pre_isolation, &isolated) {
             let restored = path_is_absent(path)
                 && rename_noreplace_from_directory(&directory, &name, path).is_ok()
                 && identity_for_path(path)
