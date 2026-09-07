@@ -1082,7 +1082,7 @@ fn create_directory_creates_nested_directories() {
 
 #[cfg(unix)]
 mod daemon_session {
-    use super::super::HOST_RING_CAP_BYTES;
+    use super::super::{normalize_pty_dimensions, HOST_RING_CAP_BYTES};
     use super::{bind_status, binding_identity, test_model};
     use crate::remote_server::proto::{
         client_message, server_message, AttachSession, BindAgentPty, ClientMessage, CloseSession,
@@ -1091,6 +1091,7 @@ mod daemon_session {
         ReadAgentTranscript, ResizeSession, ServerMessage, SessionInput, SessionList, SessionSize,
     };
     use futures::future::Either;
+    use std::os::fd::AsRawFd;
     use std::time::Duration;
     use warpui::App;
     use zaplex_remote_session::types::{
@@ -1264,6 +1265,93 @@ mod daemon_session {
             );
 
             // CloseSession -> reaps the shell, emits SessionExited.
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id,
+                    ClientMessage {
+                        request_id: String::new(),
+                        message: Some(client_message::Message::CloseSession(CloseSession {
+                            session_id: session_id.clone(),
+                        })),
+                    },
+                    ctx,
+                )
+            });
+            assert!(
+                wait_for_exit(&conn_rx, &session_id, Duration::from_secs(10)).await,
+                "expected SessionExited after CloseSession"
+            );
+        });
+    }
+
+    #[test]
+    fn oversized_resize_is_clamped_and_matches_pty() {
+        assert_eq!(normalize_pty_dimensions(0, 0), (1, 1));
+        assert_eq!(
+            normalize_pty_dimensions(65_536, 65_600),
+            (u16::MAX, u16::MAX)
+        );
+
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_session_msg(), ctx)
+            });
+
+            let session_id = loop {
+                let message = recv_deadline(&conn_rx, Duration::from_secs(10))
+                    .await
+                    .expect("session opened before the deadline");
+                if let Some(server_message::Message::SessionOpened(opened)) = message.message {
+                    break opened.session_id;
+                }
+            };
+            model.update(&mut app, |m, _ctx| {
+                m.handle_resize_session(
+                    conn_id,
+                    ResizeSession {
+                        session_id: session_id.clone(),
+                        size: Some(SessionSize {
+                            rows: 65_536,
+                            cols: 65_600,
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        }),
+                    },
+                );
+            });
+
+            let (stored, kernel, ioctl_result) = model.read(&app, |m, _ctx| {
+                let session = &m.sessions[&session_id];
+                let mut size = libc::winsize {
+                    ws_row: 0,
+                    ws_col: 0,
+                    ws_xpixel: 0,
+                    ws_ypixel: 0,
+                };
+                // SAFETY: the session owns a live PTY master and `size` is writable.
+                let result = unsafe {
+                    libc::ioctl(
+                        session.leader.as_raw_fd(),
+                        libc::TIOCGWINSZ,
+                        &mut size as *mut libc::winsize,
+                    )
+                };
+                (
+                    (session.rows, session.cols),
+                    (size.ws_row, size.ws_col),
+                    result,
+                )
+            });
+            assert_eq!(ioctl_result, 0, "TIOCGWINSZ should succeed");
+            assert_eq!(stored, (u16::MAX as usize, u16::MAX as usize));
+            assert_eq!(kernel, (u16::MAX, u16::MAX));
+
             model.update(&mut app, |m, ctx| {
                 m.handle_message(
                     conn_id,

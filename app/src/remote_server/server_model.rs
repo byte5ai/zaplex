@@ -101,6 +101,12 @@ const MAX_RECENT_MANAGED_EXITS: usize = 32;
 #[cfg(unix)]
 const RECENT_MANAGED_EXIT_TTL_MILLIS: u64 = 15 * 60 * 1000;
 
+#[cfg(unix)]
+fn normalize_pty_dimensions(rows: u32, cols: u32) -> (u16, u16) {
+    let normalize = |dimension: u32| dimension.clamp(1, u16::MAX as u32) as u16;
+    (normalize(rows), normalize(cols))
+}
+
 /// Unique identifier for a connected proxy session in daemon mode.
 pub type ConnectionId = uuid::Uuid;
 use super::protocol::RequestId;
@@ -4060,8 +4066,9 @@ impl ServerModel {
         let (rows, cols) = msg
             .size
             .as_ref()
-            .map(|s| (s.rows.max(1) as usize, s.cols.max(1) as usize))
+            .map(|size| normalize_pty_dimensions(size.rows, size.cols))
             .unwrap_or((24, 80));
+        let (rows, cols) = (usize::from(rows), usize::from(cols));
         let shell = msg
             .shell
             .filter(|s| !s.is_empty())
@@ -5057,19 +5064,26 @@ impl ServerModel {
         let Some(size) = msg.size else {
             return;
         };
-        session.rows = size.rows.max(1) as usize;
-        session.cols = size.cols.max(1) as usize;
+        let (rows, cols) = normalize_pty_dimensions(size.rows, size.cols);
         let win = libc::winsize {
-            ws_row: session.rows as libc::c_ushort,
-            ws_col: session.cols as libc::c_ushort,
+            ws_row: rows,
+            ws_col: cols,
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
         let fd = session.leader.as_raw_fd();
         // SAFETY: `fd` is a live PTY master; TIOCSWINSZ takes a `*const winsize`.
-        unsafe {
-            libc::ioctl(fd, libc::TIOCSWINSZ, &win as *const libc::winsize);
+        let result = unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &win as *const libc::winsize) };
+        if result < 0 {
+            log::warn!(
+                "Daemon: failed to resize session {} PTY: {}",
+                msg.session_id,
+                std::io::Error::last_os_error()
+            );
+            return;
         }
+        session.rows = usize::from(rows);
+        session.cols = usize::from(cols);
     }
 
     /// Closes one managed session only after its Linux process session has
