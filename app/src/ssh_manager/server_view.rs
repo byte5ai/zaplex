@@ -53,12 +53,7 @@ const AUTH_TOGGLE_PADDING_H: f32 = 14.0;
 const AUTH_TOGGLE_PADDING_V: f32 = 6.0;
 /// Per-host daemon scrollback-ceiling presets shown as pills: (MiB, label).
 /// 0 = the daemon's built-in default ceiling.
-const RING_CEILING_PRESETS: [(u32, &str); 4] = [
-    (0, "Default"),
-    (64, "64 MB"),
-    (256, "256 MB"),
-    (1024, "1 GB"),
-];
+const RING_CEILING_PRESETS: [(u32, &str); 3] = [(0, "Default"), (64, "64 MB"), (256, "256 MB")];
 const ONEKEY_MANAGER_WIDTH: f32 = 680.0;
 const ONEKEY_MANAGER_HEIGHT: f32 = 500.0;
 const ONEKEY_MANAGER_LIST_WIDTH: f32 = 220.0;
