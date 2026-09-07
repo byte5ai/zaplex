@@ -3,7 +3,8 @@
 /// date: 2026/06/01
 use super::*;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Barrier, Mutex};
 
 /// In-process mock bypassing OS keychain. Supports error injection to simulate NoBackend / Keyring errors.
 struct MockSecretStore {
@@ -74,6 +75,60 @@ impl SshSecretStore for MockSecretStore {
     fn delete(&self, _node_id: &str, _kind: SecretKind) -> Result<(), SshSecretStoreError> {
         unimplemented!()
     }
+}
+
+struct BlockingSecretStore {
+    started: Arc<Barrier>,
+    release: Arc<Barrier>,
+    blocked_once: AtomicBool,
+}
+
+impl SshSecretStore for BlockingSecretStore {
+    fn set(
+        &self,
+        _node_id: &str,
+        _kind: SecretKind,
+        _secret: &str,
+    ) -> Result<(), SshSecretStoreError> {
+        Ok(())
+    }
+
+    fn get(
+        &self,
+        _node_id: &str,
+        _kind: SecretKind,
+    ) -> Result<Option<Zeroizing<String>>, SshSecretStoreError> {
+        if !self.blocked_once.swap(true, Ordering::SeqCst) {
+            self.started.wait();
+            self.release.wait();
+        }
+        Ok(None)
+    }
+
+    fn delete(&self, _node_id: &str, _kind: SecretKind) -> Result<(), SshSecretStoreError> {
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reload_returns_while_keychain_get_is_blocked() {
+    let started = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let store: Arc<dyn SshSecretStore> = Arc::new(BlockingSecretStore {
+        started: started.clone(),
+        release: release.clone(),
+        blocked_once: AtomicBool::new(false),
+    });
+    let server = SshServerInfo::new_default("server-1".to_string());
+
+    let worker = tokio::task::spawn_blocking(move || {
+        load_server_secret_presence(Some(&server), store.as_ref())
+    });
+    started.wait();
+
+    assert!(!worker.is_finished());
+    release.wait();
+    assert_eq!(worker.await.unwrap().unwrap(), (false, false));
 }
 
 #[test]
