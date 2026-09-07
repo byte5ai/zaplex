@@ -1224,16 +1224,16 @@ impl SafeFileServer {
                     && path_is_absent(&old_path)
                     && boundary_old.as_ref().is_some_and(|expected| {
                         new.as_ref()
-                            .is_some_and(|actual| same_identity(expected, actual))
+                            .is_some_and(|actual| same_renamed_identity(expected, actual))
                     })
             }
             SafeFileRenameMode::Exchange => {
                 boundary_old.as_ref().is_some_and(|expected| {
                     new.as_ref()
-                        .is_some_and(|actual| same_identity(expected, actual))
+                        .is_some_and(|actual| same_renamed_identity(expected, actual))
                 }) && boundary_new.as_ref().is_some_and(|expected| {
                     old.as_ref()
-                        .is_some_and(|actual| same_identity(expected, actual))
+                        .is_some_and(|actual| same_renamed_identity(expected, actual))
                 })
             }
             SafeFileRenameMode::Unspecified => false,

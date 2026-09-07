@@ -391,7 +391,8 @@ fn identity_only_delete_rejects_a_ctime_change() {
     let mut server = SafeFileServer::new_for_test(journal);
     let opened = open_regular(&mut server, owner, &file);
     let expected = opened.identity.expect("open must return an identity");
-    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    let current_mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+    fs::set_permissions(&file, fs::Permissions::from_mode(current_mode ^ 0o100)).unwrap();
     let changed = open_regular(&mut server, owner, &file)
         .identity
         .expect("reopen must return an identity");
