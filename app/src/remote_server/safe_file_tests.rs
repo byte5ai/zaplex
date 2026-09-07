@@ -65,6 +65,56 @@ fn create_regular(
 }
 
 #[test]
+fn identity_batch_returns_tokens_without_retaining_handles() {
+    let directory = tempfile::tempdir().unwrap();
+    let unreadable = directory.path().join("unreadable.bin");
+    let missing = directory.path().join("missing.bin");
+    fs::write(&unreadable, b"payload").unwrap();
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(directory.path().join("journal"));
+    let result = call(
+        &mut server,
+        owner,
+        "",
+        safe_file_request::Operation::ListIdentities(SafeFileListIdentities {
+            entries: vec![
+                super::super::proto::SafeFileIdentityBatchEntry {
+                    path: path_string(&unreadable),
+                    expected_kind: SafeFileEntryKind::Regular as i32,
+                },
+                super::super::proto::SafeFileIdentityBatchEntry {
+                    path: path_string(&missing),
+                    expected_kind: SafeFileEntryKind::Regular as i32,
+                },
+            ],
+        }),
+    );
+    let safe_file_response::Result::Identities(batch) = result else {
+        panic!("expected identity batch response");
+    };
+
+    assert_eq!(batch.entries.len(), 2);
+    assert_eq!(
+        SafeFileIdentityBatchStatus::try_from(batch.entries[0].status).unwrap(),
+        SafeFileIdentityBatchStatus::Found
+    );
+    assert!(!batch.entries[0]
+        .identity
+        .as_ref()
+        .unwrap()
+        .object_id
+        .is_empty());
+    assert_eq!(
+        SafeFileIdentityBatchStatus::try_from(batch.entries[1].status).unwrap(),
+        SafeFileIdentityBatchStatus::NotFound
+    );
+    assert!(batch.entries[1].identity.is_none());
+    assert!(server.handles.is_empty());
+}
+
+#[test]
 fn upload_batch_uses_private_modes_and_identity_bound_cleanup() {
     let directory = tempfile::tempdir().unwrap();
     let journal = directory.path().join("journal");

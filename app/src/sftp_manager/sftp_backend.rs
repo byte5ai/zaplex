@@ -19,8 +19,9 @@ use parking_lot::RwLock;
 use remote_server::client::RemoteServerClient;
 use remote_server::proto::{
     safe_file_request, safe_file_response, SafeFileCreateExclusive, SafeFileDelete,
-    SafeFileEntryKind, SafeFileFlushHandle, SafeFileIdentity, SafeFileInspectHandle,
-    SafeFileInspectResult, SafeFileListRecoveries, SafeFileOpenExisting, SafeFileReadHandle,
+    SafeFileEntryKind, SafeFileFlushHandle, SafeFileIdentity, SafeFileIdentityBatchEntry,
+    SafeFileIdentityBatchStatus, SafeFileInspectHandle, SafeFileInspectResult,
+    SafeFileListIdentities, SafeFileListRecoveries, SafeFileOpenExisting, SafeFileReadHandle,
     SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileRetryRecovery,
     SafeFileWriteHandle,
 };
@@ -1333,6 +1334,7 @@ enum RemoteRecoveryResolution {
 #[derive(Clone, Default)]
 pub(crate) struct SafeFileClientSlot {
     client: Arc<RwLock<Option<Arc<RemoteServerClient>>>>,
+    identity_batch: Arc<AtomicBool>,
 }
 
 impl SafeFileClientSlot {
@@ -1345,9 +1347,19 @@ impl SafeFileClientSlot {
     /// Replaces the live client and reports a transition from unavailable to
     /// available, which is when durable remote recovery records need scanning.
     pub(crate) fn set(&self, client: Option<Arc<RemoteServerClient>>) -> bool {
+        self.set_with_identity_batch(client, false)
+    }
+
+    pub(crate) fn set_with_identity_batch(
+        &self,
+        client: Option<Arc<RemoteServerClient>>,
+        identity_batch: bool,
+    ) -> bool {
         let mut current = self.client.write();
         let became_available = current.is_none() && client.is_some();
         *current = client;
+        self.identity_batch
+            .store(identity_batch && current.is_some(), Ordering::Release);
         became_available
     }
 
@@ -1357,6 +1369,10 @@ impl SafeFileClientSlot {
 
     fn is_available(&self) -> bool {
         self.client.read().is_some()
+    }
+
+    fn supports_identity_batch(&self) -> bool {
+        self.identity_batch.load(Ordering::Acquire)
     }
 }
 
@@ -2025,6 +2041,132 @@ impl BackendFileWriter for RemoteSafeFileWriter {
     }
 }
 
+impl LiveSftpBackend {
+    fn enrich_listing_identities_batch(
+        &self,
+        entries: Vec<FileEntry>,
+    ) -> Result<Vec<FileEntry>, SftpOpsError> {
+        let client = self.safe_client()?;
+        let requests = entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.file_type,
+                    FileEntryType::File | FileEntryType::Directory | FileEntryType::Symlink
+                )
+            })
+            .map(|entry| {
+                Ok(SafeFileIdentityBatchEntry {
+                    path: remote_path_string(&entry.path)?,
+                    expected_kind: safe_kind(entry.file_type)? as i32,
+                })
+            })
+            .collect::<Result<Vec<_>, SftpOpsError>>()?;
+        if requests.is_empty() {
+            return Ok(entries);
+        }
+        let response = safe_file_call(
+            &client,
+            String::new(),
+            safe_file_request::Operation::ListIdentities(SafeFileListIdentities {
+                entries: requests,
+            }),
+        )?;
+        let safe_file_response::Result::Identities(batch) = response else {
+            return Err(unexpected_safe_file_response("identity batch"));
+        };
+        let mut results = HashMap::with_capacity(batch.entries.len());
+        for result in batch.entries {
+            if results.insert(result.path.clone(), result).is_some() {
+                return Err(SftpOpsError::Operation(
+                    "Remote safe-file identity batch returned a duplicate path".to_string(),
+                ));
+            }
+        }
+
+        let mut enriched = Vec::with_capacity(entries.len());
+        for mut entry in entries {
+            if matches!(entry.file_type, FileEntryType::Other) {
+                enriched.push(entry);
+                continue;
+            }
+            let path = remote_path_string(&entry.path)?;
+            let result = results.remove(&path).ok_or_else(|| {
+                SftpOpsError::Operation(format!("Remote safe-file identity batch omitted {path}"))
+            })?;
+            match SafeFileIdentityBatchStatus::try_from(result.status).ok() {
+                Some(SafeFileIdentityBatchStatus::Found) => {
+                    let identity = result.identity.ok_or_else(|| {
+                        SftpOpsError::Operation(format!(
+                            "Remote safe-file identity batch omitted the identity for {path}"
+                        ))
+                    })?;
+                    let identity = stable_identity_from_safe(identity);
+                    if identity.object_id.is_empty() || identity.file_type != entry.file_type {
+                        return Err(SftpOpsError::Operation(format!(
+                            "Remote safe-file identity batch returned an invalid identity for {path}"
+                        )));
+                    }
+                    entry.identity = identity;
+                    enriched.push(entry);
+                }
+                Some(SafeFileIdentityBatchStatus::NotFound) => {}
+                Some(
+                    SafeFileIdentityBatchStatus::PermissionDenied
+                    | SafeFileIdentityBatchStatus::KindChanged,
+                ) => {
+                    log::debug!(
+                        "Remote listing entry {path} has no mutation token (status {})",
+                        result.status
+                    );
+                    enriched.push(entry);
+                }
+                Some(SafeFileIdentityBatchStatus::Unspecified) | None => {
+                    return Err(SftpOpsError::Operation(format!(
+                        "Remote safe-file identity batch returned an invalid status for {path}"
+                    )));
+                }
+            }
+        }
+        Ok(enriched)
+    }
+
+    fn enrich_listing_identities_legacy(
+        &self,
+        entries: Vec<FileEntry>,
+    ) -> Result<Vec<FileEntry>, SftpOpsError> {
+        let mut enriched = Vec::with_capacity(entries.len());
+        for mut entry in entries {
+            if matches!(entry.file_type, FileEntryType::Other) {
+                enriched.push(entry);
+                continue;
+            }
+            match self.stable_identity(&entry.path) {
+                Ok(identity) => {
+                    entry.identity = identity;
+                    enriched.push(entry);
+                }
+                Err(SftpOpsError::NotFound(message)) => {
+                    log::debug!(
+                        "Remote listing entry {} disappeared: {message}",
+                        entry.path.display()
+                    );
+                }
+                Err(error @ SftpOpsError::Connection(..))
+                | Err(error @ SftpOpsError::Transport(..)) => return Err(error),
+                Err(error) => {
+                    log::warn!(
+                        "Remote listing entry {} has no mutation token: {error}",
+                        entry.path.display()
+                    );
+                    enriched.push(entry);
+                }
+            }
+        }
+        Ok(enriched)
+    }
+}
+
 impl SftpBackend for LiveSftpBackend {
     fn supports_atomic_exchange(&self) -> bool {
         self.safe_files.is_available()
@@ -2188,18 +2330,15 @@ impl SftpBackend for LiveSftpBackend {
     }
 
     fn list_dir(&self, path: &Path) -> Result<Vec<FileEntry>, SftpOpsError> {
-        let mut entries = sftp_ops::list_dir(&self.sftp, path)?;
-        if self.safe_files.is_available() {
-            for entry in &mut entries {
-                if matches!(
-                    entry.file_type,
-                    FileEntryType::File | FileEntryType::Directory | FileEntryType::Symlink
-                ) {
-                    entry.identity = self.stable_identity(&entry.path)?;
-                }
-            }
+        let entries = sftp_ops::list_dir(&self.sftp, path)?;
+        if !self.safe_files.is_available() {
+            return Ok(entries);
         }
-        Ok(entries)
+        if self.safe_files.supports_identity_batch() {
+            self.enrich_listing_identities_batch(entries)
+        } else {
+            self.enrich_listing_identities_legacy(entries)
+        }
     }
 
     fn delete_file(&self, path: &Path) -> Result<(), SftpOpsError> {

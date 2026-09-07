@@ -20,11 +20,12 @@ use sha2::{Digest, Sha256};
 use super::proto::{
     safe_file_request, safe_file_response, FileOperationError, SafeFileBeginUploadBatch,
     SafeFileCreateExclusive, SafeFileDelete, SafeFileEntryKind, SafeFileFlushHandle,
-    SafeFileIdentity, SafeFileInspectHandle, SafeFileInspectResult, SafeFileMutationResult,
-    SafeFileMutationState, SafeFileOpenExisting, SafeFileOpened, SafeFileReadHandle,
-    SafeFileReadResult, SafeFileRecovery, SafeFileRecoveryList, SafeFileRename, SafeFileRenameMode,
-    SafeFileRequest, SafeFileResponse, SafeFileUploadBatchOpened, SafeFileUploadEntry,
-    SafeFileUploadEntryOpened, SafeFileWriteHandle,
+    SafeFileIdentity, SafeFileIdentityBatchEntryResult, SafeFileIdentityBatchResult,
+    SafeFileIdentityBatchStatus, SafeFileInspectHandle, SafeFileInspectResult,
+    SafeFileListIdentities, SafeFileMutationResult, SafeFileMutationState, SafeFileOpenExisting,
+    SafeFileOpened, SafeFileReadHandle, SafeFileReadResult, SafeFileRecovery, SafeFileRecoveryList,
+    SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileResponse,
+    SafeFileUploadBatchOpened, SafeFileUploadEntry, SafeFileUploadEntryOpened, SafeFileWriteHandle,
 };
 #[cfg(test)]
 use super::proto::{SafeFileCleanupUploadBatch, SafeFileRetryRecovery};
@@ -478,6 +479,9 @@ impl SafeFileServer {
             Some(safe_file_request::Operation::CleanupUploadBatch(cleanup)) => self
                 .cleanup_upload_batch(connection_id, &cleanup.batch_handle_id)
                 .map(safe_file_response::Result::Mutation),
+            Some(safe_file_request::Operation::ListIdentities(list)) => self
+                .list_identities(list)
+                .map(safe_file_response::Result::Identities),
             None => Err("Safe-file request has no operation".to_string()),
         };
         SafeFileResponse {
@@ -605,6 +609,63 @@ impl SafeFileServer {
         let path = validated_path(&request.path)?;
         let file = open_nofollow(&path, kind, false).map_err(|error| error.to_string())?;
         self.insert_handle(owner, file, kind, path, None, None)
+    }
+
+    fn list_identities(
+        &self,
+        request: SafeFileListIdentities,
+    ) -> Result<SafeFileIdentityBatchResult, String> {
+        let mut entries = Vec::with_capacity(request.entries.len());
+        for entry in request.entries {
+            let expected_kind = SafeFileEntryKind::try_from(entry.expected_kind)
+                .map_err(|_| "Invalid expected safe-file kind".to_string())?;
+            if expected_kind == SafeFileEntryKind::Unspecified {
+                return Err("Safe-file identity batch requires a concrete kind".to_string());
+            }
+            let path = validated_path(&entry.path)?;
+            let result = match fs::symlink_metadata(&path) {
+                Ok(metadata) => match identity_from_metadata(&metadata, expected_kind) {
+                    Ok(identity) => SafeFileIdentityBatchEntryResult {
+                        path: entry.path,
+                        status: SafeFileIdentityBatchStatus::Found as i32,
+                        identity: Some(identity),
+                    },
+                    Err(error) => {
+                        log::debug!(
+                            "Safe-file listing identity changed for {}: {error}",
+                            path.display()
+                        );
+                        SafeFileIdentityBatchEntryResult {
+                            path: entry.path,
+                            status: SafeFileIdentityBatchStatus::KindChanged as i32,
+                            identity: None,
+                        }
+                    }
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    SafeFileIdentityBatchEntryResult {
+                        path: entry.path,
+                        status: SafeFileIdentityBatchStatus::NotFound as i32,
+                        identity: None,
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    SafeFileIdentityBatchEntryResult {
+                        path: entry.path,
+                        status: SafeFileIdentityBatchStatus::PermissionDenied as i32,
+                        identity: None,
+                    }
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "Failed to inspect safe-file identity for {}: {error}",
+                        path.display()
+                    ));
+                }
+            };
+            entries.push(result);
+        }
+        Ok(SafeFileIdentityBatchResult { entries })
     }
 
     fn create_exclusive(
