@@ -413,7 +413,7 @@ fn live_cursor_query_is_routed_back_as_session_input() {
         event_loop.read(&app, |me, _| {
             assert_eq!(me.pending_input.len(), 1);
             match &me.pending_input[0] {
-                EventLoopMessage::Input(bytes) => assert_eq!(bytes.as_ref(), b"\x1b[1;1R"),
+                EventLoopMessage::Input(bytes) => assert_eq!(&**bytes, b"\x1b[1;1R"),
                 EventLoopMessage::Resize(_)
                 | EventLoopMessage::Shutdown
                 | EventLoopMessage::ChildExited => {
