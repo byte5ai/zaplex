@@ -62,7 +62,7 @@ fn inline_code(value: &str) -> String {
 
 fn fenced_code_block(language: &str, value: &str) -> String {
     let delimiter = "`".repeat((longest_backtick_run(value) + 1).max(3));
-    format!("{delimiter}{language}\n{}{delimiter}\n", value.trim_end())
+    format!("{delimiter}{language}\n{}\n{delimiter}\n", value.trim_end())
 }
 
 /// The exact `git -C <root> add -A && git -C <root> commit -m <message>` the
