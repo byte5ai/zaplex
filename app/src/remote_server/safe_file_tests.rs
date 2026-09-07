@@ -890,6 +890,65 @@ fn started_rename_is_retried_with_the_same_operation_id() {
 }
 
 #[test]
+fn started_rename_recognizes_a_completed_namespace_move() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal_path = directory.path().join("journal");
+    let source = directory.path().join("source.bin");
+    let destination = directory.path().join("destination.bin");
+    fs::write(&source, b"payload").unwrap();
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal_path);
+    let opened = open_regular(&mut server, owner, &source);
+    let identity = opened.identity.clone().unwrap();
+    let operation_id = "rename-after-namespace-move";
+    server
+        .journal()
+        .unwrap()
+        .save(&JournalRecord {
+            operation_id: operation_id.to_string(),
+            state: JournalState::Started,
+            operation: JournalOperation::Rename {
+                old_path: path_string(&source),
+                new_path: path_string(&destination),
+                mode: SafeFileRenameMode::NoReplace as i32,
+                source: JournalIdentity::from(&identity),
+                target: None,
+                boundary: Some(JournalRenameBoundary {
+                    old: Some(JournalIdentity::from(&identity)),
+                    new: None,
+                }),
+            },
+            recovery_paths: vec![path_string(&source), path_string(&destination)],
+            failure: None,
+        })
+        .unwrap();
+    fs::rename(&source, &destination).unwrap();
+
+    let result = call(
+        &mut server,
+        owner,
+        operation_id,
+        safe_file_request::Operation::Rename(SafeFileRename {
+            handle_id: opened.handle_id,
+            old_path: path_string(&source),
+            new_path: path_string(&destination),
+            mode: SafeFileRenameMode::NoReplace as i32,
+            expected_target: None,
+        }),
+    );
+
+    let safe_file_response::Result::Mutation(result) = result else {
+        panic!("expected mutation response");
+    };
+    assert_eq!(
+        SafeFileMutationState::try_from(result.state).unwrap(),
+        SafeFileMutationState::AlreadyApplied
+    );
+    assert!(!source.exists());
+    assert_eq!(fs::read(destination).unwrap(), b"payload");
+}
+
+#[test]
 fn applied_rename_survives_restart_until_client_acknowledgement() {
     let directory = tempfile::tempdir().unwrap();
     let journal_path = directory.path().join("journal");

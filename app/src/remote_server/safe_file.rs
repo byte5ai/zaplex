@@ -2227,6 +2227,12 @@ fn same_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool
         && same_revision(&expected.revision, &actual.revision)
 }
 
+fn same_renamed_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
+    same_object(expected, actual)
+        && expected.size == actual.size
+        && same_content_revision(&expected.revision, &actual.revision)
+}
+
 fn same_revision(expected: &str, actual: &str) -> bool {
     if expected == actual {
         return true;
@@ -2237,6 +2243,26 @@ fn same_revision(expected: &str, actual: &str) -> bool {
         && current.len() == 7
         && legacy[..4] == current[..4]
         && legacy[4] == current[6]
+}
+
+fn same_content_revision(expected: &str, actual: &str) -> bool {
+    fn content_fields(revision: &str) -> Option<[&str; 5]> {
+        let fields = revision.split(':').collect::<Vec<_>>();
+        match fields.as_slice() {
+            [device, inode, modified, modified_nanos, size] => {
+                Some([device, inode, modified, modified_nanos, size])
+            }
+            [device, inode, modified, modified_nanos, _, _, size] => {
+                Some([device, inode, modified, modified_nanos, size])
+            }
+            _ => None,
+        }
+    }
+
+    expected == actual
+        || content_fields(expected)
+            .zip(content_fields(actual))
+            .is_some_and(|(expected, actual)| expected == actual)
 }
 
 fn matches_delete_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
@@ -2259,11 +2285,11 @@ fn rename_was_applied(
 ) -> bool {
     match mode {
         SafeFileRenameMode::NoReplace => {
-            old_absent && new.is_some_and(|actual| same_identity(source, actual))
+            old_absent && new.is_some_and(|actual| same_renamed_identity(source, actual))
         }
         SafeFileRenameMode::Exchange => target.is_some_and(|target| {
-            old.is_some_and(|actual| same_identity(target, actual))
-                && new.is_some_and(|actual| same_identity(source, actual))
+            old.is_some_and(|actual| same_renamed_identity(target, actual))
+                && new.is_some_and(|actual| same_renamed_identity(source, actual))
         }),
         SafeFileRenameMode::Unspecified => false,
     }
@@ -2278,13 +2304,13 @@ fn boundary_state_matches(
     let old_matches = match expected_old {
         Some(expected) => identity_for_path(old_path)
             .as_ref()
-            .is_ok_and(|actual| same_identity(expected, actual)),
+            .is_ok_and(|actual| same_renamed_identity(expected, actual)),
         None => path_is_absent(old_path),
     };
     let new_matches = match expected_new {
         Some(expected) => identity_for_path(new_path)
             .as_ref()
-            .is_ok_and(|actual| same_identity(expected, actual)),
+            .is_ok_and(|actual| same_renamed_identity(expected, actual)),
         None => path_is_absent(new_path),
     };
     old_matches && new_matches
