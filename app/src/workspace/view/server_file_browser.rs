@@ -2652,11 +2652,14 @@ impl ServerFileBrowserView {
                 .flat_map(|batch| &batch.tasks)
                 .filter(|task| matches!(task.status, DownloadTaskStatus::Failed(_)))
                 .count();
+            let overwritten = i32::try_from(overwritten).unwrap_or(i32::MAX);
+            let skipped = i32::try_from(skipped).unwrap_or(i32::MAX);
+            let failed = i32::try_from(failed).unwrap_or(i32::MAX);
             self.status = Some(crate::t!(
                 "server-file-browser-download-summary",
-                overwritten = overwritten as i32,
-                skipped = skipped as i32,
-                failed = failed as i32
+                overwritten = overwritten,
+                skipped = skipped,
+                failed = failed
             ));
         }
         ctx.notify();
@@ -4331,9 +4334,10 @@ fn format_download_conflict_summary(conflicts: &[DownloadConflict]) -> String {
         .map(|conflict| format!("• {}", conflict.display_name))
         .collect::<Vec<_>>();
     if conflicts.len() > 8 {
+        let remaining = i32::try_from(conflicts.len() - 8).unwrap_or(i32::MAX);
         lines.push(crate::t!(
             "server-file-browser-upload-conflict-more",
-            count = (conflicts.len() - 8) as i32
+            count = remaining
         ));
     }
     format!(
