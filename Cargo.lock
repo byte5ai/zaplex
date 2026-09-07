@@ -14587,7 +14587,6 @@ dependencies = [
  "hound",
  "instant",
  "log",
- "parking_lot",
  "rubato",
  "thiserror 2.0.18",
  "warpui",
