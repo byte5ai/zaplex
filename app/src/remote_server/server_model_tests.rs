@@ -7,14 +7,15 @@ use super::super::proto::{
     write_file_chunk_response, AgentProcessSignal, AgentProcessSignalRequest,
     AgentProcessSignalStatus, AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo,
     Authenticate, BindAgentPty, CreateDirectory, Initialize, ListDirectory, ReadFileChunk,
-    ResolvePath, UnbindAgentPty, WriteFileChunk,
+    ResolvePath, ServerMessage, UnbindAgentPty, WriteFileChunk,
 };
 use super::super::protocol::RequestId;
 #[cfg(feature = "local_fs")]
 use super::super::server_buffer_tracker::ServerBufferTracker;
 use super::{
     execute_agent_process_signal_with, server_features_with_runtime_support,
-    AgentTranscriptReadPermit, PendingFileOps, ServerModel, MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
+    AgentTranscriptReadPermit, ConnectionOutbox, PendingFileOps, ServerModel,
+    MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
 };
 #[cfg(unix)]
 use super::{
@@ -65,6 +66,94 @@ fn test_model() -> ServerModel {
         #[cfg(unix)]
         managed_min_available_bytes: Ok(super::super::managed_fleet::DEFAULT_MIN_AVAILABLE_BYTES),
     }
+}
+
+#[test]
+fn full_outbound_queue_deregisters_slow_consumer() {
+    warpui::App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_ctx| test_model());
+        let (sender, _receiver) = async_channel::bounded(1);
+        let shutdown_observed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown = {
+            let shutdown_observed = shutdown_observed.clone();
+            std::sync::Arc::new(move || {
+                shutdown_observed.store(true, std::sync::atomic::Ordering::Release);
+            })
+        };
+        let conn_id = uuid::Uuid::new_v4();
+        let outbox = ConnectionOutbox::with_sender_for_test(sender, usize::MAX, shutdown);
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(conn_id, outbox, ctx);
+            model.send_server_message(
+                Some(conn_id),
+                None,
+                server_message::Message::Error(super::super::proto::ErrorResponse {
+                    code: 0,
+                    message: "first".to_string(),
+                }),
+            );
+            model.send_server_message(
+                Some(conn_id),
+                None,
+                server_message::Message::Error(super::super::proto::ErrorResponse {
+                    code: 0,
+                    message: "second".to_string(),
+                }),
+            );
+        });
+
+        assert!(shutdown_observed.load(std::sync::atomic::Ordering::Acquire));
+        model.read(&app, |model, _ctx| {
+            assert_eq!(
+                model
+                    .connection_senders
+                    .get(&conn_id)
+                    .map(ConnectionOutbox::is_closed),
+                Some(true)
+            );
+        });
+    });
+}
+
+#[test]
+fn outbound_byte_budget_is_released_when_message_is_dequeued() {
+    warpui::App::test((), |_app| async move {
+        let message = ServerMessage {
+            request_id: "budgeted-message".to_string(),
+            message: None,
+        };
+        let byte_budget = prost::Message::encoded_len(&message);
+        let (outbox, drain) = ConnectionOutbox::new(byte_budget, std::sync::Arc::new(|| {}));
+
+        assert_eq!(outbox.try_send(message.clone()), Ok(()));
+        assert_eq!(drain.recv().await.unwrap(), message);
+        assert_eq!(outbox.try_send(message), Ok(()));
+        assert!(!outbox.is_closed());
+    });
+}
+
+#[test]
+fn outbound_byte_budget_disconnects_slow_consumer() {
+    let message = ServerMessage {
+        request_id: "budgeted-message".to_string(),
+        message: None,
+    };
+    let shutdown_observed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let shutdown = {
+        let shutdown_observed = shutdown_observed.clone();
+        std::sync::Arc::new(move || {
+            shutdown_observed.store(true, std::sync::atomic::Ordering::Release);
+        })
+    };
+    let (outbox, _drain) = ConnectionOutbox::new(prost::Message::encoded_len(&message), shutdown);
+
+    assert_eq!(outbox.try_send(message.clone()), Ok(()));
+    assert_eq!(
+        outbox.try_send(message),
+        Err("connection outbox byte budget exceeded")
+    );
+    assert!(outbox.is_closed());
+    assert!(shutdown_observed.load(std::sync::atomic::Ordering::Acquire));
 }
 
 fn request_id() -> RequestId {

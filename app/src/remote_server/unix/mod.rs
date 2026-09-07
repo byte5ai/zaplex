@@ -13,7 +13,9 @@
 
 pub(super) mod proxy;
 
-use super::server_model::{ConnectionId, ServerModel};
+use super::server_model::{
+    ConnectionId, ConnectionOutbox, ServerModel, CONNECTION_OUTBOX_BUDGET_BYTES,
+};
 use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
 use warpui::r#async::executor;
@@ -112,28 +114,35 @@ pub fn run_daemon(identity_key: String) -> anyhow::Result<()> {
 /// `read_client_message` were polled inside a `select!` branch.
 ///
 /// The calling task becomes the **writer loop**: it drains the per-connection
-/// outbound channel (`conn_rx`) and writes each `ServerMessage` to the socket.
+/// outbound queue and writes each `ServerMessage` to the socket.
 /// When the reader exits (EOF / error) it calls `deregister_connection`, which
-/// drops `conn_tx` from `ServerModel` and causes `conn_rx` to close, naturally
-/// terminating the writer loop.
+/// closes the outbox and cancels the writer loop.
 pub(super) async fn handle_daemon_connection(
     conn_id: ConnectionId,
     stream: async_io::Async<std::os::unix::net::UnixStream>,
     spawner: warpui::ModelSpawner<ServerModel>,
     exec: std::sync::Arc<executor::Background>,
 ) {
+    use futures::future::{select, Either};
     use futures::io::{AsyncWriteExt, BufReader, BufWriter};
     use futures::AsyncReadExt as _;
 
-    let (conn_tx, conn_rx) = async_channel::unbounded::<remote_server::proto::ServerMessage>();
+    let shutdown_stream = match stream.get_ref().try_clone() {
+        Ok(stream) => stream,
+        Err(error) => {
+            log::error!("Daemon: failed to clone socket for conn {conn_id}: {error}");
+            return;
+        }
+    };
+    let shutdown = std::sync::Arc::new(move || {
+        let _ = shutdown_stream.shutdown(std::net::Shutdown::Both);
+    });
+    let (conn_outbox, conn_drain) = ConnectionOutbox::new(CONNECTION_OUTBOX_BUDGET_BYTES, shutdown);
 
     // Register with ServerModel (cancels grace timer if running).
     let _ = spawner
-        .spawn({
-            let conn_tx_reg = conn_tx.clone();
-            move |me, ctx| {
-                me.register_connection(conn_id, conn_tx_reg, ctx);
-            }
+        .spawn(move |me, ctx| {
+            me.register_connection(conn_id, conn_outbox, ctx);
         })
         .await;
 
@@ -142,8 +151,8 @@ pub(super) async fn handle_daemon_connection(
 
     // ---- Reader task -------------------------------------------------------
     // Owns the read half; dispatches decoded messages to ServerModel.
-    // On exit it calls deregister_connection, which drops conn_tx from
-    // ServerModel and closes conn_rx, terminating the writer loop below.
+    // On exit it calls deregister_connection, which closes the outbox and
+    // cancels the writer loop below.
     let spawner_reader = spawner.clone();
     exec.spawn(async move {
         let mut reader = BufReader::new(read_half);
@@ -173,8 +182,8 @@ pub(super) async fn handle_daemon_connection(
                 }
             }
         }
-        // Deregistering drops conn_tx from ServerModel, closing conn_rx and
-        // causing the writer loop to exit naturally.
+        // Deregistering closes the outbox, cancels the writer, and shuts down
+        // the shared socket handle.
         let _ = spawner_reader
             .spawn(move |me, ctx| {
                 me.deregister_connection(conn_id, ctx);
@@ -184,22 +193,36 @@ pub(super) async fn handle_daemon_connection(
     .detach();
 
     // ---- Writer loop -------------------------------------------------------
-    // Drains outbound messages until conn_rx closes (reader called
-    // deregister_connection) or a fatal write error occurs.
-    while let Ok(msg) = conn_rx.recv().await {
-        if let Err(e) = remote_server::protocol::write_server_message(&mut writer, &msg).await {
-            log::error!("Daemon: write error on conn {conn_id}: {e}");
-            break;
-        }
-        // Flush after every message so responses reach the proxy without
-        // waiting for the BufWriter's internal buffer to fill up.
-        if let Err(e) = writer.flush().await {
-            log::error!("Daemon: flush error on conn {conn_id}: {e}");
-            break;
+    // Drains outbound messages until the reader deregisters this connection,
+    // the byte budget is exceeded, or a write fails. Cancellation is selected
+    // against both dequeue and socket I/O so a blocked slow consumer exits.
+    loop {
+        let receive = conn_drain.recv();
+        let cancelled = conn_drain.cancelled();
+        futures::pin_mut!(receive, cancelled);
+        let msg = match select(receive, cancelled).await {
+            Either::Left((Ok(message), _)) => message,
+            Either::Left((Err(_), _)) | Either::Right(_) => break,
+        };
+
+        let write_and_flush = async {
+            remote_server::protocol::write_server_message(&mut writer, &msg)
+                .await
+                .map_err(|error| error.to_string())?;
+            writer.flush().await.map_err(|error| error.to_string())?;
+            Ok::<(), String>(())
+        };
+        let cancelled = conn_drain.cancelled();
+        futures::pin_mut!(write_and_flush, cancelled);
+        match select(write_and_flush, cancelled).await {
+            Either::Left((Ok(()), _)) => {}
+            Either::Left((Err(error), _)) => {
+                log::error!("Daemon: write error on conn {conn_id}: {error}");
+                break;
+            }
+            Either::Right(_) => break,
         }
     }
-
-    let _ = writer.flush().await;
 
     // Deregister in case the writer exited due to a write error before the
     // reader task called deregister. This is a no-op if already deregistered.
