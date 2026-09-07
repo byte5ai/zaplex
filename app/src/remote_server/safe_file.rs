@@ -1342,7 +1342,7 @@ impl SafeFileServer {
         let private = identity_for_path(&private_delete_entry(&tombstone)).ok();
         if private
             .as_ref()
-            .is_some_and(|actual| matches_delete_identity(&expected, actual))
+            .is_some_and(|actual| matches_isolated_delete_identity(&expected, actual))
         {
             let outcome = delete_exact_path(
                 &tombstone,
@@ -1388,7 +1388,7 @@ impl SafeFileServer {
         }
         if isolated
             .as_ref()
-            .is_some_and(|actual| matches_delete_identity(&expected, actual))
+            .is_some_and(|actual| matches_isolated_delete_identity(&expected, actual))
         {
             match delete_exact_path(
                 &tombstone,
@@ -1431,7 +1431,7 @@ impl SafeFileServer {
                     }
                     if identity_for_path(&tombstone)
                         .as_ref()
-                        .is_ok_and(|actual| matches_delete_identity(&expected, actual))
+                        .is_ok_and(|actual| matches_isolated_delete_identity(&expected, actual))
                     {
                         record.state = JournalState::Recovery;
                         record.failure = Some(error.clone());
@@ -1487,7 +1487,7 @@ impl SafeFileServer {
                 Ok(()) => {
                     let isolated_matches = identity_for_path(&tombstone)
                         .as_ref()
-                        .is_ok_and(|actual| matches_delete_identity(&expected, actual));
+                        .is_ok_and(|actual| matches_isolated_delete_identity(&expected, actual));
                     if !isolated_matches {
                         let isolated = identity_for_path(&tombstone).ok();
                         let restored = path_is_absent(&path)
@@ -1495,7 +1495,7 @@ impl SafeFileServer {
                             && isolated.as_ref().is_some_and(|isolated| {
                                 identity_for_path(&path)
                                     .as_ref()
-                                    .is_ok_and(|actual| same_identity(isolated, actual))
+                                    .is_ok_and(|actual| same_renamed_identity(isolated, actual))
                             });
                         record.state = if restored {
                             JournalState::Rejected
@@ -2275,6 +2275,23 @@ fn matches_delete_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentit
     }
 }
 
+// A successful isolation rename can advance ctime without changing the object
+// or its contents. Callers use this only after the journaled delete has crossed
+// that namespace boundary; delete_exact_path captures the resulting identity
+// and compares it strictly again immediately before unlinking.
+fn matches_isolated_delete_identity(
+    expected: &SafeFileIdentity,
+    actual: &SafeFileIdentity,
+) -> bool {
+    match SafeFileEntryKind::try_from(expected.kind).ok() {
+        Some(SafeFileEntryKind::Regular) => same_renamed_identity(expected, actual),
+        Some(SafeFileEntryKind::Directory | SafeFileEntryKind::Symlink) => {
+            same_object(expected, actual)
+        }
+        Some(SafeFileEntryKind::Unspecified) | None => false,
+    }
+}
+
 fn rename_was_applied(
     mode: SafeFileRenameMode,
     source: &SafeFileIdentity,
@@ -2372,7 +2389,7 @@ fn delete_exact_path(
         rename_noreplace_into_directory(path, &directory, &name)
             .map_err(|error| error.to_string())?;
         let isolated = identity_for_path(&private_entry)?;
-        if !matches_delete_identity(expected, &isolated) {
+        if !matches_isolated_delete_identity(expected, &isolated) {
             let restored = path_is_absent(path)
                 && rename_noreplace_from_directory(&directory, &name, path).is_ok()
                 && identity_for_path(path)
@@ -2400,7 +2417,7 @@ fn delete_exact_path(
         .map_err(|error| error.to_string())?;
     let file = open_nofollow(&private_entry, kind, false).map_err(|error| error.to_string())?;
     let actual = identity_for_file(&file, kind)?;
-    if !matches_delete_identity(expected, &actual) {
+    if !matches_isolated_delete_identity(expected, &actual) {
         return Err("Safe-file delete identity changed".to_string());
     }
     match kind {
@@ -2431,7 +2448,7 @@ fn delete_exact_path(
         }
     }
     let current = identity_for_path(&private_entry)?;
-    if !matches_delete_identity(expected, &current) {
+    if !matches_delete_identity(&actual, &current) {
         return Err("Private safe-file delete identity changed before removal".to_string());
     }
     let expected_links_before = file.metadata().map_err(|error| error.to_string())?.nlink();

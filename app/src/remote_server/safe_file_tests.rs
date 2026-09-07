@@ -1089,6 +1089,63 @@ fn resumed_delete_removes_only_the_isolated_expected_object() {
 }
 
 #[test]
+fn resumed_identity_only_delete_accepts_its_namespace_ctime_change() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal_path = directory.path().join("journal");
+    let target = directory.path().join("target.bin");
+    let tombstone = directory
+        .path()
+        .join(".zaplex-delete-resumed-identity-only-delete");
+    fs::write(&target, b"expected").unwrap();
+    fs::rename(&target, &tombstone).unwrap();
+    let isolated = identity_for_path(&tombstone).unwrap();
+    let mut expected = isolated.clone();
+    let mut revision = expected
+        .revision
+        .split(':')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(revision.len(), 7);
+    revision[5] = if revision[5] == "0" { "1" } else { "0" }.to_string();
+    expected.revision = revision.join(":");
+    assert!(!same_identity(&expected, &isolated));
+    assert!(matches_isolated_delete_identity(&expected, &isolated));
+
+    fs::write(&target, b"replacement").unwrap();
+    let mut server = SafeFileServer::new_for_test(journal_path);
+    server
+        .journal()
+        .unwrap()
+        .save(&JournalRecord {
+            operation_id: "resumed-identity-only-delete".to_string(),
+            state: JournalState::Started,
+            operation: JournalOperation::Delete {
+                path: path_string(&target),
+                tombstone: path_string(&tombstone),
+                expected: JournalIdentity::from(&expected),
+                expected_sha256: None,
+            },
+            recovery_paths: vec![path_string(&target), path_string(&tombstone)],
+            failure: None,
+        })
+        .unwrap();
+
+    let result = call(
+        &mut server,
+        ConnectionId::new_v4(),
+        "resumed-identity-only-delete",
+        safe_file_request::Operation::DeleteV2(SafeFileDeleteV2 {
+            path: path_string(&target),
+            expected: Some(expected),
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Mutation(_)));
+    assert_eq!(fs::read(target).unwrap(), b"replacement");
+    assert!(!tombstone.exists());
+}
+
+#[test]
 fn fresh_delete_is_applied_once_and_then_reported_as_already_applied() {
     let directory = tempfile::tempdir().unwrap();
     let target = directory.path().join("target.bin");
