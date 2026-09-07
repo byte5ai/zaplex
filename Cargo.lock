@@ -17011,6 +17011,7 @@ name = "zap_sftp"
 version = "0.1.0"
 dependencies = [
  "openssl-sys",
+ "shell-escape",
  "smol",
  "ssh2",
  "tempfile",
