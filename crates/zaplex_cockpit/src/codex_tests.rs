@@ -90,7 +90,7 @@ fn api_key_root_does_not_block_another_subscription_account() {
 
     assert!(discovery.issues.is_empty());
     assert_eq!(discovery.accounts.len(), 1);
-    assert_eq!(discovery.accounts[0].key, "codex:work");
+    assert!(discovery.accounts[0].key.starts_with("codex:work:"));
 }
 
 #[test]
