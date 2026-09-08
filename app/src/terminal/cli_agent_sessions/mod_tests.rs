@@ -7,6 +7,7 @@ use super::{
 use crate::ai::blocklist::{InputConfig, InputType};
 use crate::terminal::CLIAgent;
 use std::collections::HashMap;
+use warp_terminal::shell::ShellType;
 use warpui::{App, EntityId};
 
 #[test]
@@ -1127,7 +1128,7 @@ fn local_restore_binding_preserves_provider_session_cwd_and_account() {
     );
     assert_eq!(
         binding.resume_command().as_deref(),
-        Some("CODEX_HOME=/accounts/work codex resume thread-123")
+        Some("env -u OPENAI_API_KEY CODEX_HOME=/accounts/work codex resume thread-123")
     );
 }
 
@@ -1148,7 +1149,7 @@ fn local_restore_binding_uses_terminal_cwd_fallback() {
     assert_eq!(binding.account, None);
     assert_eq!(
         binding.resume_command().as_deref(),
-        Some("claude --resume session-1")
+        Some("env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude --resume session-1")
     );
 }
 
@@ -1196,7 +1197,7 @@ fn persisted_restore_binding_round_trips_and_rejects_control_characters() {
     assert_eq!(restored, binding);
     assert_eq!(
         restored.resume_command().as_deref(),
-        Some("claude --resume 'session with spaces'")
+        Some("env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude --resume 'session with spaces'")
     );
 
     let invalid = PersistedCLIAgentBinding {
@@ -1353,8 +1354,10 @@ fn prompt_and_auto_share_the_account_pinned_prepare_path() {
     assert!(model.register_pending_restore(terminal_view_id, binding.clone()));
 
     assert_eq!(
-        model.prepare_pending_restore(terminal_view_id).as_deref(),
-        Some("CODEX_HOME=/accounts/work codex resume thread-123")
+        model
+            .prepare_pending_restore(terminal_view_id)
+            .map(|launch| launch.shell_command(ShellType::Bash)),
+        Some("env -u OPENAI_API_KEY CODEX_HOME=/accounts/work codex resume thread-123".to_string())
     );
     assert_eq!(model.pending_restore(terminal_view_id), Some(&binding));
     assert!(model.account_identity_matches(

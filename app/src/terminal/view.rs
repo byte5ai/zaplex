@@ -13425,19 +13425,54 @@ impl TerminalView {
         self.execute_pending_command((), ctx);
     }
 
+    /// Render a routed CLI-agent launch for this terminal's actual shell, then
+    /// execute it or retain it until bootstrap completes.
+    pub(crate) fn execute_routed_agent_launch_or_set_pending(
+        &mut self,
+        launch: &cli_agent::RoutedAgentLaunch,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(shell_type) = self.active_session_shell_type(ctx) else {
+            return false;
+        };
+        let command = launch.shell_command(shell_type);
+        self.execute_command_or_set_pending(&command, ctx);
+        true
+    }
+
+    /// Append a routed launch behind existing setup commands, preserving their
+    /// ordering while still delaying serialization until the shell is known.
+    pub(crate) fn append_routed_agent_launch_to_pending(
+        &mut self,
+        launch: &cli_agent::RoutedAgentLaunch,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(shell_type) = self.active_session_shell_type(ctx) else {
+            return false;
+        };
+        let command = launch.shell_command(shell_type);
+        if self.input.as_ref(ctx).has_pending_command() {
+            self.input.update(ctx, |input, ctx| {
+                input.system_insert(&format!(" && {command}"), ctx)
+            })
+        } else {
+            self.execute_command_or_set_pending(&command, ctx);
+            true
+        }
+    }
+
     /// Resumes the exact local CLI-agent binding restored for this pane.
     /// Prompt and automatic restore modes both call this path so provider,
     /// session, cwd, and account routing cannot diverge between the modes.
     pub fn resume_pending_cli_agent(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let terminal_view_id = ctx.view_id();
-        let command = CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, _| {
+        let launch = CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, _| {
             sessions.prepare_pending_restore(terminal_view_id)
         });
-        let Some(command) = command else {
+        let Some(launch) = launch else {
             return false;
         };
-        self.execute_command_or_set_pending(&command, ctx);
-        true
+        self.execute_routed_agent_launch_or_set_pending(&launch, ctx)
     }
 
     /// Applies the user's restore policy after a persisted binding has been
