@@ -92,18 +92,62 @@ pub struct SshSyncData {
 /// SSH data synchronization provider
 pub struct SshSyncProvider {
     secret_store: Arc<dyn SshSecretStore>,
+    sync_secret: Zeroizing<String>,
 }
 
 impl SshSyncProvider {
     /// Create a new SshSyncProvider instance
-    pub fn new() -> Self {
+    pub fn new(sync_secret: Zeroizing<String>) -> Self {
         Self {
             secret_store: Arc::new(KeychainSecretStore),
+            sync_secret,
         }
     }
 
-    pub fn with_secret_store(secret_store: Arc<dyn SshSecretStore>) -> Self {
-        Self { secret_store }
+    pub fn with_secret_store(
+        secret_store: Arc<dyn SshSecretStore>,
+        sync_secret: Zeroizing<String>,
+    ) -> Self {
+        Self {
+            secret_store,
+            sync_secret,
+        }
+    }
+}
+
+struct SshSecretCrypto<'a> {
+    legacy_transport_token: &'a str,
+    sync_secret: &'a str,
+}
+
+impl<'a> SshSecretCrypto<'a> {
+    fn new(legacy_transport_token: &'a str, sync_secret: &'a str) -> Self {
+        Self {
+            legacy_transport_token,
+            sync_secret,
+        }
+    }
+
+    fn encrypt(&self, plaintext: &str) -> Result<String, SyncEngineError> {
+        crypto::encrypt(self.sync_secret, plaintext).map_err(map_crypto_error)
+    }
+
+    fn decrypt(&self, ciphertext: &str) -> Result<Zeroizing<String>, SyncEngineError> {
+        if crypto::is_current_envelope(ciphertext) {
+            crypto::decrypt(self.sync_secret, ciphertext).map_err(map_crypto_error)
+        } else {
+            crypto::decrypt_legacy(self.legacy_transport_token, ciphertext)
+                .map_err(|_| SyncEngineError::LegacyRecoveryRequired)
+        }
+    }
+}
+
+fn map_crypto_error(error: crypto::CryptoError) -> SyncEngineError {
+    match error {
+        crypto::CryptoError::InvalidSyncSecret => SyncEngineError::InvalidSyncSecret,
+        crypto::CryptoError::Encrypt(_)
+        | crypto::CryptoError::Decrypt(_)
+        | crypto::CryptoError::UnsupportedVersion(_) => SyncEngineError::Crypto(error.to_string()),
     }
 }
 
@@ -113,6 +157,7 @@ impl SyncDataProvider for SshSyncProvider {
     }
 
     fn collect_data(&self, token: &str) -> Result<serde_json::Value, SyncEngineError> {
+        let secret_crypto = SshSecretCrypto::new(token, &self.sync_secret);
         let nodes = with_conn(|conn| Ok(SshRepository::list_nodes(conn)?))
             .map_err(|e| SyncEngineError::Provider(e.to_string()))?;
 
@@ -132,7 +177,10 @@ impl SyncDataProvider for SshSyncProvider {
                 username: credential.username,
                 kind: credential.kind.as_db_str().to_string(),
                 key_path: credential.key_path,
-                password_encrypted: encrypt_optional(token, password.as_deref())?,
+                password_encrypted: encrypt_optional(
+                    &secret_crypto,
+                    password.as_deref().map(String::as_str),
+                )?,
             });
         }
 
@@ -178,9 +226,18 @@ impl SyncDataProvider for SshSyncProvider {
                         credential_id: server.credential_id.clone(),
                         session_resilience: server.session_resilience.as_db_str().to_string(),
                         ring_ceiling_mb: server.ring_ceiling_mb,
-                        password_encrypted: encrypt_optional(token, password.as_deref())?,
-                        passphrase_encrypted: encrypt_optional(token, passphrase.as_deref())?,
-                        root_password_encrypted: encrypt_optional(token, root_password.as_deref())?,
+                        password_encrypted: encrypt_optional(
+                            &secret_crypto,
+                            password.as_deref().map(String::as_str),
+                        )?,
+                        passphrase_encrypted: encrypt_optional(
+                            &secret_crypto,
+                            passphrase.as_deref().map(String::as_str),
+                        )?,
+                        root_password_encrypted: encrypt_optional(
+                            &secret_crypto,
+                            root_password.as_deref().map(String::as_str),
+                        )?,
                     });
                 }
             }
@@ -197,6 +254,7 @@ impl SyncDataProvider for SshSyncProvider {
     }
 
     fn apply_data(&self, token: &str, data: &serde_json::Value) -> Result<(), SyncEngineError> {
+        let secret_crypto = SshSecretCrypto::new(token, &self.sync_secret);
         let ssh_data: SshSyncData = serde_json::from_value(data.clone())
             .map_err(|e: serde_json::Error| SyncEngineError::Serialization(e.to_string()))?;
 
@@ -207,7 +265,7 @@ impl SyncDataProvider for SshSyncProvider {
         struct PendingSecret {
             node_id: String,
             kind: SecretKind,
-            value: String,
+            value: Zeroizing<String>,
         }
         let mut pending_secrets: Vec<PendingSecret> = Vec::new();
         let mut explicit_clears: Vec<(String, SecretKind)> = Vec::new();
@@ -219,8 +277,7 @@ impl SyncDataProvider for SshSyncProvider {
             ] {
                 match enc {
                     Some(enc) => {
-                        let value = crypto::decrypt(token, enc)
-                            .map_err(|e| SyncEngineError::Crypto(e.to_string()))?;
+                        let value = secret_crypto.decrypt(enc)?;
                         pending_secrets.push(PendingSecret {
                             node_id: server.node_id.clone(),
                             kind,
@@ -240,8 +297,7 @@ impl SyncDataProvider for SshSyncProvider {
             );
             match &credential.password_encrypted {
                 Some(enc) => {
-                    let value = crypto::decrypt(token, enc)
-                        .map_err(|e| SyncEngineError::Crypto(e.to_string()))?;
+                    let value = secret_crypto.decrypt(enc)?;
                     pending_secrets.push(PendingSecret {
                         node_id: credential.id.clone(),
                         kind: secret_kind,
@@ -416,6 +472,26 @@ impl SyncDataProvider for SshSyncProvider {
         }
         Ok(())
     }
+
+    fn requires_upload_migration(&self, data: &serde_json::Value) -> bool {
+        let Ok(ssh_data) = serde_json::from_value::<SshSyncData>(data.clone()) else {
+            return false;
+        };
+        ssh_data.servers.iter().any(|server| {
+            [
+                &server.password_encrypted,
+                &server.passphrase_encrypted,
+                &server.root_password_encrypted,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| !crypto::is_current_envelope(value))
+        }) || ssh_data
+            .onekey_credentials
+            .iter()
+            .filter_map(|credential| credential.password_encrypted.as_deref())
+            .any(|value| !crypto::is_current_envelope(value))
+    }
 }
 
 /// apply_data Phase 1 record of keychain entries already written, with prior value snapshot for true rollback.
@@ -472,9 +548,9 @@ fn read_secret(
     store: &dyn SshSecretStore,
     node_id: &str,
     kind: SecretKind,
-) -> Result<Option<String>, SyncEngineError> {
+) -> Result<Option<Zeroizing<String>>, SyncEngineError> {
     match store.get(node_id, kind) {
-        Ok(opt) => Ok(opt.map(|z| z.to_string())),
+        Ok(opt) => Ok(opt),
         Err(e) => Err(SyncEngineError::Provider(format!(
             "Failed to read keychain ({node_id}, {kind:?}): {e}.\
              Keychain may be locked or current environment has no backend (headless Linux / WSL, etc.).\
@@ -484,14 +560,15 @@ fn read_secret(
     }
 }
 
-fn encrypt_optional(token: &str, value: Option<&str>) -> Result<Option<String>, SyncEngineError> {
+fn encrypt_optional(
+    secret_crypto: &SshSecretCrypto<'_>,
+    value: Option<&str>,
+) -> Result<Option<String>, SyncEngineError> {
     match value {
         None => Ok(None),
         // Empty string treated as "no password", don't upload (compatible with past behavior, avoid empty-string ciphertext pollution)
         Some(s) if s.is_empty() => Ok(None),
-        Some(s) => Ok(Some(
-            crypto::encrypt(token, s).map_err(|e| SyncEngineError::Crypto(e.to_string()))?,
-        )),
+        Some(s) => Ok(Some(secret_crypto.encrypt(s)?)),
     }
 }
 

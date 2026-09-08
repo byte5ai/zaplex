@@ -6,6 +6,7 @@
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting;
 use warpui::{
+    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
     elements::{
         ChildAnchor, Container, CrossAxisAlignment, Dismiss, Element, Flex, MainAxisSize,
         MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
@@ -16,24 +17,26 @@ use warpui::{
         components::{Coords, UiComponent, UiComponentStyles},
         switch::SwitchStateHandle,
     },
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use super::settings_page::{
-    render_body_item, AdditionalInfo, LocalOnlyIconState, MatchData, PageType, SettingsPageEvent,
-    SettingsPageMeta, SettingsWidget, ToggleState,
-};
 use super::SettingsSection;
+use super::settings_page::{
+    AdditionalInfo, LocalOnlyIconState, MatchData, PageType, SettingsPageEvent, SettingsPageMeta,
+    SettingsWidget, ToggleState, render_body_item,
+};
 use crate::appearance::Appearance;
 use crate::editor::{EditorView, SingleLineEditorOptions, TextOptions};
 use crate::settings::CloudSyncSettings;
 use crate::settings::SyncPlatformSetting;
-use crate::settings::{CloudSyncTokenStore, GITEE_TOKEN_KEY, GITHUB_TOKEN_KEY};
+use crate::settings::{
+    CloudSyncTokenStore, GITEE_TOKEN_KEY, GITHUB_TOKEN_KEY, SSH_SYNC_SECRET_KEY,
+};
 use crate::ssh_manager::{SshTreeChangedEvent, SshTreeChangedNotifier};
 use crate::view_components::dropdown::{Dropdown, DropdownItem};
 
-use warp_ssh_manager::{with_conn, DbVersionStore, SshSyncProvider, SyncMetaRepository};
+use warp_ssh_manager::{DbVersionStore, SshSyncProvider, SyncMetaRepository, with_conn};
 use zap_sync::{GistClient, SyncEngine, SyncPlatform, SyncResult};
+use zeroize::Zeroizing;
 
 const INPUT_AREA_MAX_WIDTH: f32 = 420.0;
 const BUTTON_PADDING: f32 = 6.0;
@@ -86,6 +89,10 @@ pub enum CloudSyncPageAction {
     SaveToken,
     /// Clear token for current platform.
     ClearToken,
+    /// Save the independent SSH sync encryption passphrase.
+    SaveSyncSecret,
+    /// Clear the SSH sync encryption passphrase.
+    ClearSyncSecret,
     /// Token validation complete. platform/token captured at SaveToken time to avoid race with SetPlatform.
     TokenValidated {
         platform_setting: SyncPlatformSetting,
@@ -123,8 +130,11 @@ pub struct CloudSyncPageView {
     page: PageType<Self>,
     platform_dropdown: ViewHandle<Dropdown<CloudSyncPageAction>>,
     token_editor: ViewHandle<EditorView>,
+    sync_secret_editor: ViewHandle<EditorView>,
     save_state: MouseStateHandle,
     clear_state: MouseStateHandle,
+    save_sync_secret_state: MouseStateHandle,
+    clear_sync_secret_state: MouseStateHandle,
     upload_mouse: MouseStateHandle,
     download_mouse: MouseStateHandle,
     conflict_force_mouse: MouseStateHandle,
@@ -152,6 +162,7 @@ pub struct CloudSyncPageView {
     cached_last_sync_time: String,
     cached_last_sync_platform: String,
     has_valid_token: bool,
+    has_sync_secret: bool,
     /// Auto-sync switch status.
     auto_sync_mouse: MouseStateHandle,
     auto_sync_switch: SwitchStateHandle,
@@ -216,6 +227,25 @@ fn current_token(ctx: &AppContext) -> String {
     token_for_platform(ctx, platform.to_sync_platform())
 }
 
+fn current_sync_secret(ctx: &AppContext) -> Zeroizing<String> {
+    CloudSyncTokenStore::as_ref(ctx)
+        .get_zeroizing(SSH_SYNC_SECRET_KEY)
+        .unwrap_or_else(|| Zeroizing::new(String::new()))
+}
+
+fn load_sync_secret_from_store(
+    me: &mut CloudSyncPageView,
+    ctx: &mut ViewContext<CloudSyncPageView>,
+) {
+    let sync_secret = current_sync_secret(ctx);
+    me.has_sync_secret = !sync_secret.is_empty();
+    me.sync_secret_editor.update(ctx, |editor, ctx| {
+        if editor.buffer_text(ctx) != sync_secret.as_str() {
+            editor.set_buffer_text(sync_secret.as_str(), ctx);
+        }
+    });
+}
+
 /// Get token for specified SyncPlatform, independent of current dropdown selection.
 /// Used for force_upload re-capture scenario: must read token for conflict's platform,
 /// not the new platform user may have switched to during conflict.
@@ -252,6 +282,8 @@ impl CloudSyncPageView {
 
         let token_editor =
             build_token_editor(ctx, &crate::t!("settings-cloud-sync-token-placeholder"));
+        let sync_secret_editor =
+            build_token_editor(ctx, &crate::t!("settings-cloud-sync-secret-placeholder"));
 
         ctx.subscribe_to_model(
             &CloudSyncSettings::handle(ctx),
@@ -265,8 +297,11 @@ impl CloudSyncPageView {
             page: PageType::new_monolith(CloudSyncPageWidget::default(), None, false),
             platform_dropdown,
             token_editor,
+            sync_secret_editor,
             save_state: MouseStateHandle::default(),
             clear_state: MouseStateHandle::default(),
+            save_sync_secret_state: MouseStateHandle::default(),
+            clear_sync_secret_state: MouseStateHandle::default(),
             upload_mouse: MouseStateHandle::default(),
             download_mouse: MouseStateHandle::default(),
             conflict_force_mouse: MouseStateHandle::default(),
@@ -291,6 +326,7 @@ impl CloudSyncPageView {
             cached_last_sync_time: String::new(),
             cached_last_sync_platform: String::new(),
             has_valid_token: false,
+            has_sync_secret: false,
             auto_sync_mouse: MouseStateHandle::default(),
             auto_sync_switch: SwitchStateHandle::default(),
             suppress_auto_upload: 0,
@@ -318,7 +354,8 @@ impl CloudSyncPageView {
                     .get(key)
                     .unwrap_or("")
                     .to_string();
-                if !token.is_empty() {
+                let sync_secret = current_sync_secret(ctx);
+                if !token.is_empty() && !sync_secret.is_empty() {
                     let sync_platform = platform.to_sync_platform();
                     let spawn_token = token.clone();
                     // Pre-save conflict_token, consistent with spawn_download pattern.
@@ -331,7 +368,7 @@ impl CloudSyncPageView {
                     ctx.spawn(
                         async move {
                             let engine = SyncEngine::new();
-                            let provider = SshSyncProvider::new();
+                            let provider = SshSyncProvider::new(sync_secret);
                             let version_store = DbVersionStore;
                             engine
                                 .download(sync_platform, &spawn_token, &[&provider], &version_store)
@@ -388,6 +425,7 @@ impl CloudSyncPageView {
         }
         sync_from_settings(&mut me, ctx);
         load_token_from_store(&mut me, ctx);
+        load_sync_secret_from_store(&mut me, ctx);
         me
     }
 
@@ -396,7 +434,7 @@ impl CloudSyncPageView {
     /// Must be called from this View's render path to ensure click events can route back to handle_action
     /// (rendering overlay from SettingsView would lose view chain).
     fn build_modal_element(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
-        use crate::ui_components::dialog::{dialog_styles, Dialog};
+        use crate::ui_components::dialog::{Dialog, dialog_styles};
         if self.conflict_visible {
             let description_text = if self.conflict_local_version == self.conflict_remote_version {
                 crate::t!("settings-cloud-sync-conflict-description-equal")
@@ -620,7 +658,13 @@ impl CloudSyncPageView {
     }
 
     /// Start upload sync. Token captured by caller when dialog opens, ensures pairing with platform.
-    fn spawn_upload(&mut self, platform: SyncPlatform, token: String, ctx: &mut ViewContext<Self>) {
+    fn spawn_upload(
+        &mut self,
+        platform: SyncPlatform,
+        token: String,
+        sync_secret: Zeroizing<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if token.is_empty() {
             let label = platform.label();
             self.sync_state = SyncState::Failed {
@@ -646,7 +690,7 @@ impl CloudSyncPageView {
         ctx.spawn(
             async move {
                 let engine = SyncEngine::new();
-                let provider = SshSyncProvider::new();
+                let provider = SshSyncProvider::new(sync_secret);
                 let version_store = DbVersionStore;
                 engine
                     .upload(platform, &spawn_token, &[&provider], &version_store)
@@ -671,6 +715,7 @@ impl CloudSyncPageView {
         &mut self,
         platform: SyncPlatform,
         spawn_token: String,
+        sync_secret: Zeroizing<String>,
         ctx: &mut ViewContext<Self>,
     ) {
         let token = spawn_token;
@@ -695,7 +740,7 @@ impl CloudSyncPageView {
         ctx.spawn(
             async move {
                 let engine = SyncEngine::new();
-                let provider = SshSyncProvider::new();
+                let provider = SshSyncProvider::new(sync_secret);
                 let version_store = DbVersionStore;
                 engine
                     .download(platform, &token, &[&provider], &version_store)
@@ -720,6 +765,7 @@ impl CloudSyncPageView {
         &mut self,
         platform: SyncPlatform,
         token: String,
+        sync_secret: Zeroizing<String>,
         ctx: &mut ViewContext<Self>,
     ) {
         if token.is_empty() {
@@ -743,7 +789,7 @@ impl CloudSyncPageView {
         ctx.spawn(
             async move {
                 let engine = SyncEngine::new();
-                let provider = SshSyncProvider::new();
+                let provider = SshSyncProvider::new(sync_secret);
                 let version_store = DbVersionStore;
                 engine
                     .force_upload(platform, &token, &[&provider], &version_store)
@@ -799,7 +845,8 @@ impl CloudSyncPageView {
             .value()
             .to_sync_platform();
         let token = current_token(ctx);
-        if token.is_empty() {
+        let sync_secret = current_sync_secret(ctx);
+        if token.is_empty() || sync_secret.is_empty() {
             return;
         }
 
@@ -813,7 +860,7 @@ impl CloudSyncPageView {
             async move {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 let engine = SyncEngine::new();
-                let provider = SshSyncProvider::new();
+                let provider = SshSyncProvider::new(sync_secret);
                 let version_store = DbVersionStore;
                 engine
                     .upload(platform, &spawn_token, &[&provider], &version_store)
@@ -941,6 +988,30 @@ impl TypedActionView for CloudSyncPageView {
                 self.has_valid_token = false;
                 ctx.notify();
             }
+            CloudSyncPageAction::SaveSyncSecret => {
+                let value = self.sync_secret_editor.as_ref(ctx).buffer_text(ctx);
+                CloudSyncTokenStore::handle(ctx).update(
+                    ctx,
+                    |store: &mut CloudSyncTokenStore, ctx| {
+                        store.set(SSH_SYNC_SECRET_KEY, value.clone(), ctx);
+                    },
+                );
+                self.has_sync_secret = !value.is_empty();
+                ctx.notify();
+            }
+            CloudSyncPageAction::ClearSyncSecret => {
+                CloudSyncTokenStore::handle(ctx).update(
+                    ctx,
+                    |store: &mut CloudSyncTokenStore, ctx| {
+                        store.set(SSH_SYNC_SECRET_KEY, String::new(), ctx);
+                    },
+                );
+                self.sync_secret_editor.update(ctx, |editor, ctx| {
+                    editor.set_buffer_text("", ctx);
+                });
+                self.has_sync_secret = false;
+                ctx.notify();
+            }
             CloudSyncPageAction::Upload => {
                 let platform = CloudSyncSettings::as_ref(ctx)
                     .sync_platform
@@ -955,6 +1026,13 @@ impl TypedActionView for CloudSyncPageView {
                             "settings-cloud-sync-token-not-configured",
                             platform = label.to_string()
                         ),
+                    };
+                    ctx.notify();
+                    return;
+                }
+                if !self.has_sync_secret {
+                    self.sync_state = SyncState::Failed {
+                        message: crate::t!("settings-cloud-sync-secret-not-configured"),
                     };
                     ctx.notify();
                     return;
@@ -980,6 +1058,13 @@ impl TypedActionView for CloudSyncPageView {
                             "settings-cloud-sync-token-not-configured",
                             platform = label.to_string()
                         ),
+                    };
+                    ctx.notify();
+                    return;
+                }
+                if !self.has_sync_secret {
+                    self.sync_state = SyncState::Failed {
+                        message: crate::t!("settings-cloud-sync-secret-not-configured"),
                     };
                     ctx.notify();
                     return;
@@ -1050,7 +1135,8 @@ impl TypedActionView for CloudSyncPageView {
                 let platform = *platform;
                 let token = std::mem::take(&mut self.conflict_token);
                 self.conflict_visible = false;
-                self.spawn_force_upload(platform, token, ctx);
+                let sync_secret = current_sync_secret(ctx);
+                self.spawn_force_upload(platform, token, sync_secret, ctx);
             }
             CloudSyncPageAction::CancelConflict => {
                 self.conflict_visible = false;
@@ -1064,7 +1150,8 @@ impl TypedActionView for CloudSyncPageView {
                 let token = std::mem::take(&mut self.download_confirm_token);
                 self.download_confirm_visible = false;
                 ctx.notify();
-                self.spawn_download(platform, token, ctx);
+                let sync_secret = current_sync_secret(ctx);
+                self.spawn_download(platform, token, sync_secret, ctx);
             }
             CloudSyncPageAction::CancelDownloadConfirm => {
                 self.download_confirm_visible = false;
@@ -1076,7 +1163,8 @@ impl TypedActionView for CloudSyncPageView {
                 let token = std::mem::take(&mut self.upload_confirm_token);
                 self.upload_confirm_visible = false;
                 ctx.notify();
-                self.spawn_upload(platform, token, ctx);
+                let sync_secret = current_sync_secret(ctx);
+                self.spawn_upload(platform, token, sync_secret, ctx);
             }
             CloudSyncPageAction::CancelUploadConfirm => {
                 self.upload_confirm_visible = false;
@@ -1251,6 +1339,65 @@ impl SettingsWidget for CloudSyncPageWidget {
             Some(crate::t!("settings-cloud-sync-token-description")),
         ));
 
+        let sync_secret_editor = appearance
+            .ui_builder()
+            .text_input(view.sync_secret_editor.clone())
+            .with_style(UiComponentStyles::default().set_width(INPUT_AREA_MAX_WIDTH - 120.0))
+            .build()
+            .finish();
+        let save_sync_secret = Container::new(
+            appearance
+                .ui_builder()
+                .button(ButtonVariant::Accent, view.save_sync_secret_state.clone())
+                .with_style(UiComponentStyles {
+                    font_size: Some(appearance.ui_font_body()),
+                    padding: Some(Coords::uniform(BUTTON_PADDING)),
+                    ..Default::default()
+                })
+                .with_text_label(crate::t!("common-save"))
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CloudSyncPageAction::SaveSyncSecret);
+                })
+                .finish(),
+        )
+        .with_margin_left(8.)
+        .finish();
+        let clear_sync_secret = Container::new(
+            appearance
+                .ui_builder()
+                .button(ButtonVariant::Text, view.clear_sync_secret_state.clone())
+                .with_style(UiComponentStyles {
+                    font_size: Some(appearance.ui_font_body()),
+                    padding: Some(Coords::uniform(BUTTON_PADDING)),
+                    ..Default::default()
+                })
+                .with_text_label(crate::t!("settings-cloud-sync-clear"))
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CloudSyncPageAction::ClearSyncSecret);
+                })
+                .finish(),
+        )
+        .with_margin_left(8.)
+        .finish();
+        let sync_secret_input = Flex::row()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(sync_secret_editor)
+            .with_child(save_sync_secret)
+            .with_child(clear_sync_secret)
+            .finish();
+        content.add_child(render_body_item::<CloudSyncPageAction>(
+            crate::t!("settings-cloud-sync-secret-label"),
+            None::<AdditionalInfo<CloudSyncPageAction>>,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            sync_secret_input,
+            Some(crate::t!("settings-cloud-sync-secret-description")),
+        ));
+
         // Auto-sync toggle.
         let auto_sync_enabled = *CloudSyncSettings::as_ref(_app).auto_sync.value();
         let auto_sync_switch = appearance
@@ -1266,7 +1413,7 @@ impl SettingsWidget for CloudSyncPageWidget {
             crate::t!("settings-cloud-sync-auto-sync-label"),
             None::<AdditionalInfo<CloudSyncPageAction>>,
             LocalOnlyIconState::Hidden,
-            if view.has_valid_token {
+            if view.has_valid_token && view.has_sync_secret {
                 ToggleState::Enabled
             } else {
                 ToggleState::Disabled
@@ -1290,7 +1437,7 @@ impl SettingsWidget for CloudSyncPageWidget {
             view.sync_state,
             SyncState::Syncing { .. } | SyncState::Validating
         );
-        let can_sync = view.has_valid_token && !is_syncing;
+        let can_sync = view.has_valid_token && view.has_sync_secret && !is_syncing;
 
         let render_sync_button = |label: &str,
                                   mouse: &MouseStateHandle,

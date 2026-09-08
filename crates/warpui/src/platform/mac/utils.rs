@@ -5,9 +5,7 @@ use core_graphics::sys::CGColorRef;
 use objc::runtime::Object;
 use objc::{msg_send, sel, sel_impl};
 use pathfinder_color::ColorU;
-use std::os::raw::c_char;
 use std::slice;
-use std::str::Utf8Error;
 
 use cocoa::appkit::{
     NSDeleteFunctionKey as DELETE_KEY, NSDownArrowFunctionKey as ARROW_DOWN_KEY,
@@ -87,12 +85,18 @@ pub fn unicode_char_to_key(char: u16) -> Option<&'static str> {
 /// # Safety
 ///
 /// This code is only unsafe since it requires interfacing with platform code.
-pub unsafe fn nsstring_as_str<'a>(nsstring: *const Object) -> Result<&'a str, Utf8Error> {
+pub unsafe fn nsstring_as_str<'a>(nsstring: *const Object) -> Option<&'a str> {
     const UTF8_ENCODING: usize = 4;
 
-    let cstr: *const c_char = msg_send![nsstring, UTF8String];
+    if nsstring.is_null() {
+        return None;
+    }
     let len: usize = msg_send![nsstring, lengthOfBytesUsingEncoding: UTF8_ENCODING];
-    std::str::from_utf8(slice::from_raw_parts(cstr as *const u8, len))
+    let bytes: *const u8 = msg_send![nsstring, UTF8String];
+    if bytes.is_null() {
+        return None;
+    }
+    std::str::from_utf8(slice::from_raw_parts(bytes, len)).ok()
 }
 
 pub fn color_u_to_cg_color(color: ColorU) -> CGColor {
