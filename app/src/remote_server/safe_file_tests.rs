@@ -1,6 +1,6 @@
 use std::fs::{self, File};
-use std::os::unix::fs::symlink;
-use std::path::Path;
+use std::os::unix::fs::{symlink, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
@@ -27,6 +27,36 @@ fn call(
         )
         .result
         .unwrap()
+}
+
+#[test]
+fn transient_operation_lock_is_retried() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = Journal::new_at(directory.path().join("journal")).unwrap();
+    let held = journal.try_lock("transient-lock").unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        drop(held);
+    });
+
+    let acquired = journal.try_lock("transient-lock").unwrap();
+
+    release.join().unwrap();
+    drop(acquired);
+}
+
+#[test]
+fn active_operation_lock_is_still_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = Journal::new_at(directory.path().join("journal")).unwrap();
+    let held = journal.try_lock("active-lock").unwrap();
+
+    let Err(error) = journal.try_lock("active-lock") else {
+        panic!("expected an active operation lock to be rejected");
+    };
+
+    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+    drop(held);
 }
 
 fn open_regular(server: &mut SafeFileServer, owner: ConnectionId, path: &Path) -> SafeFileOpened {
@@ -62,6 +92,263 @@ fn create_regular(
         safe_file_response::Result::Opened(opened) => opened,
         other => panic!("expected created response, got {other:?}"),
     }
+}
+
+#[test]
+fn set_mode_is_handle_bound_and_strips_special_bits() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let stage = directory.path().join("stage.bin");
+    let owner = ConnectionId::new_v4();
+    let other_owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let opened = create_regular(&mut server, owner, "create-mode", &stage);
+
+    assert!(matches!(
+        call(
+            &mut server,
+            other_owner,
+            "",
+            safe_file_request::Operation::SetModeHandle(SafeFileSetModeHandle {
+                handle_id: opened.handle_id.clone(),
+                mode: 0o6755,
+            }),
+        ),
+        safe_file_response::Result::Error(_)
+    ));
+    assert!(matches!(
+        call(
+            &mut server,
+            owner,
+            "",
+            safe_file_request::Operation::SetModeHandle(SafeFileSetModeHandle {
+                handle_id: opened.handle_id,
+                mode: 0o6755,
+            }),
+        ),
+        safe_file_response::Result::Mutation(_)
+    ));
+    assert_eq!(
+        fs::metadata(stage).unwrap().permissions().mode() & 0o7777,
+        0o755
+    );
+}
+
+#[test]
+fn identity_batch_returns_tokens_without_retaining_handles() {
+    let directory = tempfile::tempdir().unwrap();
+    let unreadable = directory.path().join("unreadable.bin");
+    let missing = directory.path().join("missing.bin");
+    fs::write(&unreadable, b"payload").unwrap();
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(directory.path().join("journal"));
+    let result = call(
+        &mut server,
+        owner,
+        "",
+        safe_file_request::Operation::ListIdentities(SafeFileListIdentities {
+            entries: vec![
+                super::super::proto::SafeFileIdentityBatchEntry {
+                    path: path_string(&unreadable),
+                    expected_kind: SafeFileEntryKind::Regular as i32,
+                },
+                super::super::proto::SafeFileIdentityBatchEntry {
+                    path: path_string(&missing),
+                    expected_kind: SafeFileEntryKind::Regular as i32,
+                },
+            ],
+        }),
+    );
+    let safe_file_response::Result::Identities(batch) = result else {
+        panic!("expected identity batch response");
+    };
+
+    assert_eq!(batch.entries.len(), 2);
+    assert_eq!(
+        SafeFileIdentityBatchStatus::try_from(batch.entries[0].status).unwrap(),
+        SafeFileIdentityBatchStatus::Found
+    );
+    assert!(!batch.entries[0]
+        .identity
+        .as_ref()
+        .unwrap()
+        .object_id
+        .is_empty());
+    assert_eq!(
+        SafeFileIdentityBatchStatus::try_from(batch.entries[1].status).unwrap(),
+        SafeFileIdentityBatchStatus::NotFound
+    );
+    assert!(batch.entries[1].identity.is_none());
+    assert!(server.handles.is_empty());
+}
+
+#[test]
+fn upload_batch_uses_private_modes_and_identity_bound_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let destination = directory.path().join("destination");
+    let attacker = directory.path().join("attacker");
+    fs::create_dir(&destination).unwrap();
+    fs::create_dir(&attacker).unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let result = call(
+        &mut server,
+        owner,
+        "",
+        safe_file_request::Operation::BeginUploadBatch(SafeFileBeginUploadBatch {
+            destination_directory: path_string(&destination),
+            batch_id: "batch".to_string(),
+            entries: vec![
+                SafeFileUploadEntry {
+                    relative_path: "folder".to_string(),
+                    kind: SafeFileEntryKind::Directory as i32,
+                },
+                SafeFileUploadEntry {
+                    relative_path: "folder/file.bin".to_string(),
+                    kind: SafeFileEntryKind::Regular as i32,
+                },
+            ],
+        }),
+    );
+    let safe_file_response::Result::UploadBatchOpened(opened) = result else {
+        panic!("expected opened upload batch");
+    };
+    let staging_parent = destination.join(".zap-upload-staging");
+    let staging_root = staging_parent.join("batch");
+    let staged_file = staging_root.join("folder/file.bin");
+    assert_eq!(
+        fs::metadata(&staging_parent).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&staging_root).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&staged_file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    let file_handle = opened
+        .entries
+        .iter()
+        .find(|entry| entry.relative_path == "folder/file.bin")
+        .unwrap();
+    assert!(matches!(
+        call(
+            &mut server,
+            owner,
+            "",
+            safe_file_request::Operation::WriteHandle(SafeFileWriteHandle {
+                handle_id: file_handle.handle_id.clone(),
+                bytes: b"held payload".to_vec(),
+            }),
+        ),
+        safe_file_response::Result::Mutation(_)
+    ));
+
+    let retained_parent = destination.join("retained-staging");
+    fs::rename(&staging_parent, &retained_parent).unwrap();
+    fs::write(attacker.join("batch"), b"attacker sentinel").unwrap();
+    symlink(&attacker, &staging_parent).unwrap();
+    assert!(matches!(
+        call(
+            &mut server,
+            owner,
+            "",
+            safe_file_request::Operation::CleanupUploadBatch(SafeFileCleanupUploadBatch {
+                batch_handle_id: opened.batch_handle_id,
+            }),
+        ),
+        safe_file_response::Result::Mutation(_)
+    ));
+
+    assert!(!retained_parent.join("batch").exists());
+    assert_eq!(
+        fs::read(attacker.join("batch")).unwrap(),
+        b"attacker sentinel"
+    );
+}
+
+#[test]
+fn upload_batch_promotes_the_verified_handle_not_a_path_replacement() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination_directory = directory.path().join("destination");
+    fs::create_dir(&destination_directory).unwrap();
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(directory.path().join("safe-file-journal"));
+    let opened = match call(
+        &mut server,
+        owner,
+        "",
+        safe_file_request::Operation::BeginUploadBatch(SafeFileBeginUploadBatch {
+            destination_directory: path_string(&destination_directory),
+            batch_id: "verified-batch".to_string(),
+            entries: vec![SafeFileUploadEntry {
+                relative_path: "payload.bin".to_string(),
+                kind: SafeFileEntryKind::Regular as i32,
+            }],
+        }),
+    ) {
+        safe_file_response::Result::UploadBatchOpened(opened) => opened,
+        other => panic!("expected upload batch, got {other:?}"),
+    };
+    let file_handle = &opened.entries[0].handle_id;
+    assert!(matches!(
+        call(
+            &mut server,
+            owner,
+            "",
+            safe_file_request::Operation::WriteHandle(SafeFileWriteHandle {
+                handle_id: file_handle.clone(),
+                bytes: b"verified".to_vec(),
+            }),
+        ),
+        safe_file_response::Result::Mutation(_)
+    ));
+    let staging_path = PathBuf::from(&opened.root_path).join("payload.bin");
+    let inspection = call(
+        &mut server,
+        owner,
+        "",
+        safe_file_request::Operation::InspectHandle(SafeFileInspectHandle {
+            handle_id: file_handle.clone(),
+            path: path_string(&staging_path),
+        }),
+    );
+    assert!(matches!(
+        inspection,
+        safe_file_response::Result::Inspected(SafeFileInspectResult {
+            matches_path: true,
+            ..
+        })
+    ));
+
+    let retained = staging_path.with_extension("retained");
+    fs::rename(&staging_path, &retained).unwrap();
+    fs::write(&staging_path, b"replacement").unwrap();
+    let final_path = destination_directory.join("payload.bin");
+    let result = call(
+        &mut server,
+        owner,
+        "promote-verified-upload",
+        safe_file_request::Operation::Rename(SafeFileRename {
+            handle_id: file_handle.clone(),
+            old_path: path_string(&staging_path),
+            new_path: path_string(&final_path),
+            mode: SafeFileRenameMode::NoReplace as i32,
+            expected_target: None,
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Error(_)));
+    assert!(!final_path.exists());
+    assert_eq!(fs::read(staging_path).unwrap(), b"replacement");
+    assert_eq!(fs::read(retained).unwrap(), b"verified");
 }
 
 #[test]
@@ -160,6 +447,44 @@ fn identity_bound_symlink_delete_removes_only_the_link() {
     assert!(matches!(result, safe_file_response::Result::Mutation(_)));
     assert!(fs::symlink_metadata(&link).is_err());
     assert_eq!(fs::read(target.join("keep.txt")).unwrap(), b"keep");
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn identity_only_delete_rejects_a_ctime_change() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let file = directory.path().join("payload.bin");
+    fs::write(&file, b"payload").unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let opened = open_regular(&mut server, owner, &file);
+    let current = opened.identity.expect("open must return an identity");
+    let mut stale = current.clone();
+    let mut revision = stale
+        .revision
+        .split(':')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(revision.len(), 7);
+    revision[5] = if revision[5] == "0" { "1" } else { "0" }.to_string();
+    stale.revision = revision.join(":");
+    assert!(!same_identity(&stale, &current));
+    assert!(same_renamed_identity(&stale, &current));
+
+    let result = call(
+        &mut server,
+        owner,
+        "delete-ctime-change-v2",
+        safe_file_request::Operation::DeleteV2(SafeFileDeleteV2 {
+            path: path_string(&file),
+            expected: Some(stale),
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Error(_)));
+    assert_eq!(fs::read(file).unwrap(), b"payload");
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -641,6 +966,65 @@ fn started_rename_is_retried_with_the_same_operation_id() {
 }
 
 #[test]
+fn started_rename_recognizes_a_completed_namespace_move() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal_path = directory.path().join("journal");
+    let source = directory.path().join("source.bin");
+    let destination = directory.path().join("destination.bin");
+    fs::write(&source, b"payload").unwrap();
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal_path);
+    let opened = open_regular(&mut server, owner, &source);
+    let identity = opened.identity.clone().unwrap();
+    let operation_id = "rename-after-namespace-move";
+    server
+        .journal()
+        .unwrap()
+        .save(&JournalRecord {
+            operation_id: operation_id.to_string(),
+            state: JournalState::Started,
+            operation: JournalOperation::Rename {
+                old_path: path_string(&source),
+                new_path: path_string(&destination),
+                mode: SafeFileRenameMode::NoReplace as i32,
+                source: JournalIdentity::from(&identity),
+                target: None,
+                boundary: Some(JournalRenameBoundary {
+                    old: Some(JournalIdentity::from(&identity)),
+                    new: None,
+                }),
+            },
+            recovery_paths: vec![path_string(&source), path_string(&destination)],
+            failure: None,
+        })
+        .unwrap();
+    fs::rename(&source, &destination).unwrap();
+
+    let result = call(
+        &mut server,
+        owner,
+        operation_id,
+        safe_file_request::Operation::Rename(SafeFileRename {
+            handle_id: opened.handle_id,
+            old_path: path_string(&source),
+            new_path: path_string(&destination),
+            mode: SafeFileRenameMode::NoReplace as i32,
+            expected_target: None,
+        }),
+    );
+
+    let safe_file_response::Result::Mutation(result) = result else {
+        panic!("expected mutation response");
+    };
+    assert_eq!(
+        SafeFileMutationState::try_from(result.state).unwrap(),
+        SafeFileMutationState::AlreadyApplied
+    );
+    assert!(!source.exists());
+    assert_eq!(fs::read(destination).unwrap(), b"payload");
+}
+
+#[test]
 fn applied_rename_survives_restart_until_client_acknowledgement() {
     let directory = tempfile::tempdir().unwrap();
     let journal_path = directory.path().join("journal");
@@ -769,6 +1153,63 @@ fn resumed_delete_removes_only_the_isolated_expected_object() {
             expected_sha256: Some(format!("{:x}", Sha256::digest(b"expected"))),
         }),
     );
+    assert!(matches!(result, safe_file_response::Result::Mutation(_)));
+    assert_eq!(fs::read(target).unwrap(), b"replacement");
+    assert!(!tombstone.exists());
+}
+
+#[test]
+fn resumed_identity_only_delete_accepts_its_namespace_ctime_change() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal_path = directory.path().join("journal");
+    let target = directory.path().join("target.bin");
+    let tombstone = directory
+        .path()
+        .join(".zaplex-delete-resumed-identity-only-delete");
+    fs::write(&target, b"expected").unwrap();
+    fs::rename(&target, &tombstone).unwrap();
+    let isolated = identity_for_path(&tombstone).unwrap();
+    let mut expected = isolated.clone();
+    let mut revision = expected
+        .revision
+        .split(':')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(revision.len(), 7);
+    revision[5] = if revision[5] == "0" { "1" } else { "0" }.to_string();
+    expected.revision = revision.join(":");
+    assert!(!same_identity(&expected, &isolated));
+    assert!(matches_isolated_delete_identity(&expected, &isolated));
+
+    fs::write(&target, b"replacement").unwrap();
+    let mut server = SafeFileServer::new_for_test(journal_path);
+    server
+        .journal()
+        .unwrap()
+        .save(&JournalRecord {
+            operation_id: "resumed-identity-only-delete".to_string(),
+            state: JournalState::Started,
+            operation: JournalOperation::Delete {
+                path: path_string(&target),
+                tombstone: path_string(&tombstone),
+                expected: JournalIdentity::from(&expected),
+                expected_sha256: None,
+            },
+            recovery_paths: vec![path_string(&target), path_string(&tombstone)],
+            failure: None,
+        })
+        .unwrap();
+
+    let result = call(
+        &mut server,
+        ConnectionId::new_v4(),
+        "resumed-identity-only-delete",
+        safe_file_request::Operation::DeleteV2(SafeFileDeleteV2 {
+            path: path_string(&target),
+            expected: Some(expected),
+        }),
+    );
+
     assert!(matches!(result, safe_file_response::Result::Mutation(_)));
     assert_eq!(fs::read(target).unwrap(), b"replacement");
     assert!(!tombstone.exists());

@@ -10,12 +10,13 @@ use std::{
     path::Path,
 };
 
+use warp_terminal::shell::ShellType;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::ai::blocklist::InputConfig;
 
 use self::listener::CLIAgentSessionListener;
-use super::CLIAgent;
+use super::{cli_agent::RoutedAgentLaunch, CLIAgent};
 use event::{CLIAgentEvent, CLIAgentEventType};
 
 /// Status of a tracked CLI agent session.
@@ -273,7 +274,7 @@ impl PersistedCLIAgentBinding {
     ///
     /// Persisted data is treated as untrusted input: empty or control-bearing
     /// coordinates fail closed instead of reaching a shell command line.
-    pub fn resume_command(&self) -> Option<String> {
+    pub(crate) fn resume_launch(&self) -> Option<RoutedAgentLaunch> {
         if !is_valid_persisted_coordinate(&self.session_id)
             || !is_valid_persisted_coordinate(&self.cwd)
             || self
@@ -291,7 +292,11 @@ impl PersistedCLIAgentBinding {
             .and_then(|account| account.config_dir.as_deref())
             .map(Path::new);
         self.provider
-            .resume_command_pinned(&self.session_id, config_dir)
+            .resume_routed_with(&self.session_id, config_dir, None, None)
+    }
+
+    pub fn resume_command(&self) -> Option<String> {
+        Some(self.resume_launch()?.shell_command(ShellType::Bash))
     }
 }
 
@@ -449,7 +454,7 @@ impl CLIAgentSessionsModel {
             cwd,
             account,
         };
-        binding.resume_command()?;
+        binding.resume_launch()?;
         Some(binding)
     }
 
@@ -458,7 +463,7 @@ impl CLIAgentSessionsModel {
         terminal_view_id: EntityId,
         binding: PersistedCLIAgentBinding,
     ) -> bool {
-        if binding.resume_command().is_none() {
+        if binding.resume_launch().is_none() {
             return false;
         }
         self.pending_restores.insert(terminal_view_id, binding);
@@ -479,9 +484,12 @@ impl CLIAgentSessionsModel {
     /// Prepares the one shared resume path used by prompt and automatic
     /// restoration. The pending binding stays registered until native session
     /// detection proves that the provider process actually resumed.
-    pub fn prepare_pending_restore(&mut self, terminal_view_id: EntityId) -> Option<String> {
+    pub(crate) fn prepare_pending_restore(
+        &mut self,
+        terminal_view_id: EntityId,
+    ) -> Option<RoutedAgentLaunch> {
         let binding = self.pending_restores.get(&terminal_view_id)?.clone();
-        let command = binding.resume_command()?;
+        let launch = binding.resume_launch()?;
         let (config_dir, account_email) = binding
             .account
             .as_ref()
@@ -493,7 +501,7 @@ impl CLIAgentSessionsModel {
             config_dir,
             account_email,
         );
-        Some(command)
+        Some(launch)
     }
 
     /// Binds the account selected for a started, resumed, forked, or adopted

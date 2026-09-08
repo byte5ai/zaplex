@@ -5,31 +5,38 @@
 //! descriptors alive across chunk calls. Every path mutation is journaled under
 //! the remote user's home directory and keyed by a caller-supplied operation id.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ffi::{CString, OsStr};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-#[cfg(test)]
-use super::proto::SafeFileRetryRecovery;
 use super::proto::{
-    safe_file_request, safe_file_response, FileOperationError, SafeFileCreateExclusive,
-    SafeFileDelete, SafeFileEntryKind, SafeFileFlushHandle, SafeFileIdentity,
-    SafeFileInspectHandle, SafeFileInspectResult, SafeFileMutationResult, SafeFileMutationState,
-    SafeFileOpenExisting, SafeFileOpened, SafeFileReadHandle, SafeFileReadResult, SafeFileRecovery,
-    SafeFileRecoveryList, SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileResponse,
-    SafeFileWriteHandle,
+    safe_file_request, safe_file_response, FileOperationError, SafeFileBeginUploadBatch,
+    SafeFileCreateExclusive, SafeFileDelete, SafeFileEntryKind, SafeFileFlushHandle,
+    SafeFileIdentity, SafeFileIdentityBatchEntryResult, SafeFileIdentityBatchResult,
+    SafeFileIdentityBatchStatus, SafeFileInspectHandle, SafeFileInspectResult,
+    SafeFileListIdentities, SafeFileMutationResult, SafeFileMutationState, SafeFileOpenExisting,
+    SafeFileOpened, SafeFileReadHandle, SafeFileReadResult, SafeFileRecovery, SafeFileRecoveryList,
+    SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileResponse, SafeFileSetModeHandle,
+    SafeFileUploadBatchOpened, SafeFileUploadEntry, SafeFileUploadEntryOpened, SafeFileWriteHandle,
 };
+#[cfg(test)]
+use super::proto::{SafeFileCleanupUploadBatch, SafeFileDeleteV2, SafeFileRetryRecovery};
 use super::server_model::ConnectionId;
 
 const MAX_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TERMINAL_JOURNAL_RECORDS: usize = 1024;
 const JOURNAL_DIRECTORY: &str = "safe-file-transactions-v1";
+const LOCK_RETRY_ATTEMPTS: usize = 20;
+const LOCK_RETRY_DELAY: Duration = Duration::from_millis(5);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 struct JournalIdentity {
@@ -178,20 +185,13 @@ impl Journal {
     fn try_lock(&self, operation_id: &str) -> std::io::Result<OperationLock> {
         self.prune_terminal_records()?;
         let global = Self::open_lock(&self.global_lock_path())?;
-        let result = unsafe { libc::flock(global.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
-        if result != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        try_flock(&global, libc::LOCK_SH | libc::LOCK_NB)?;
         let operation = Self::open_lock(&self.lock_path(operation_id)?)?;
-        let result = unsafe { libc::flock(operation.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if result == 0 {
-            Ok(OperationLock {
-                _global: global,
-                _operation: operation,
-            })
-        } else {
-            Err(std::io::Error::last_os_error())
-        }
+        try_flock(&operation, libc::LOCK_EX | libc::LOCK_NB)?;
+        Ok(OperationLock {
+            _global: global,
+            _operation: operation,
+        })
     }
 
     fn load(&self, operation_id: &str) -> std::io::Result<Option<JournalRecord>> {
@@ -292,6 +292,24 @@ impl Journal {
     }
 }
 
+fn try_flock(file: &File, flags: libc::c_int) -> std::io::Result<()> {
+    for attempt in 0..LOCK_RETRY_ATTEMPTS {
+        if unsafe { libc::flock(file.as_raw_fd(), flags) } == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        match error.kind() {
+            std::io::ErrorKind::Interrupted => {}
+            std::io::ErrorKind::WouldBlock if attempt + 1 < LOCK_RETRY_ATTEMPTS => {
+                std::thread::sleep(LOCK_RETRY_DELAY);
+            }
+            std::io::ErrorKind::WouldBlock => return Err(error),
+            _ => return Err(error),
+        }
+    }
+    Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
+}
+
 impl JournalRecord {
     fn is_prunable(&self) -> bool {
         matches!(self.state, JournalState::Consumed | JournalState::Rejected)
@@ -307,10 +325,19 @@ struct SafeHandle {
     _artifact_lock: Option<OperationLock>,
 }
 
+struct SafeUploadBatch {
+    owner: ConnectionId,
+    parent: File,
+    root: File,
+    root_name: CString,
+    root_path: PathBuf,
+}
+
 pub struct SafeFileServer {
     journal: Option<Journal>,
     initialization_error: Option<String>,
     handles: HashMap<String, SafeHandle>,
+    upload_batches: HashMap<String, SafeUploadBatch>,
     #[cfg(test)]
     before_rename_mutation: Option<Box<dyn Fn(&Path, &Path) + Send + Sync>>,
     #[cfg(test)]
@@ -329,6 +356,7 @@ impl SafeFileServer {
                     journal: Some(journal),
                     initialization_error: None,
                     handles: HashMap::new(),
+                    upload_batches: HashMap::new(),
                     #[cfg(test)]
                     before_rename_mutation: None,
                     #[cfg(test)]
@@ -345,6 +373,7 @@ impl SafeFileServer {
                 journal: None,
                 initialization_error: Some(error.to_string()),
                 handles: HashMap::new(),
+                upload_batches: HashMap::new(),
                 #[cfg(test)]
                 before_rename_mutation: None,
                 #[cfg(test)]
@@ -367,6 +396,7 @@ impl SafeFileServer {
             journal: None,
             initialization_error: Some("disabled in unrelated unit test".to_string()),
             handles: HashMap::new(),
+            upload_batches: HashMap::new(),
             before_rename_mutation: None,
             after_rename_mutation: None,
             before_delete_isolation: None,
@@ -381,6 +411,7 @@ impl SafeFileServer {
             journal: Some(journal),
             initialization_error: None,
             handles: HashMap::new(),
+            upload_batches: HashMap::new(),
             before_rename_mutation: None,
             after_rename_mutation: None,
             before_delete_isolation: None,
@@ -401,6 +432,18 @@ impl SafeFileServer {
         for handle_id in handles {
             if let Some(handle) = self.handles.remove(&handle_id) {
                 self.cleanup_owned_artifact(&handle);
+            }
+        }
+        let upload_batches = self
+            .upload_batches
+            .iter()
+            .filter_map(|(handle_id, batch)| {
+                (batch.owner == connection_id).then_some(handle_id.clone())
+            })
+            .collect::<Vec<_>>();
+        for handle_id in upload_batches {
+            if let Err(error) = self.cleanup_upload_batch(connection_id, &handle_id) {
+                log::warn!("Failed to clean up disconnected upload batch: {error}");
             }
         }
     }
@@ -426,6 +469,9 @@ impl SafeFileServer {
             Some(safe_file_request::Operation::FlushHandle(flush)) => self
                 .flush_handle(connection_id, flush)
                 .map(safe_file_response::Result::Mutation),
+            Some(safe_file_request::Operation::SetModeHandle(set_mode)) => self
+                .set_mode_handle(connection_id, set_mode)
+                .map(safe_file_response::Result::Mutation),
             Some(safe_file_request::Operation::InspectHandle(inspect)) => self
                 .inspect_handle(connection_id, inspect)
                 .map(safe_file_response::Result::Inspected),
@@ -436,7 +482,18 @@ impl SafeFileServer {
                 .rename(connection_id, &request.operation_id, rename)
                 .map(safe_file_response::Result::Mutation),
             Some(safe_file_request::Operation::Delete(delete)) => self
-                .delete(&request.operation_id, delete)
+                .delete(&request.operation_id, delete, true)
+                .map(safe_file_response::Result::Mutation),
+            Some(safe_file_request::Operation::DeleteV2(delete)) => self
+                .delete(
+                    &request.operation_id,
+                    SafeFileDelete {
+                        path: delete.path,
+                        expected: delete.expected,
+                        expected_sha256: None,
+                    },
+                    false,
+                )
                 .map(safe_file_response::Result::Mutation),
             Some(safe_file_request::Operation::ListRecoveries(_)) => self
                 .list_recoveries()
@@ -444,6 +501,15 @@ impl SafeFileServer {
             Some(safe_file_request::Operation::RetryRecovery(_)) => self
                 .retry_recovery(&request.operation_id)
                 .map(safe_file_response::Result::Mutation),
+            Some(safe_file_request::Operation::BeginUploadBatch(begin)) => self
+                .begin_upload_batch(connection_id, begin)
+                .map(safe_file_response::Result::UploadBatchOpened),
+            Some(safe_file_request::Operation::CleanupUploadBatch(cleanup)) => self
+                .cleanup_upload_batch(connection_id, &cleanup.batch_handle_id)
+                .map(safe_file_response::Result::Mutation),
+            Some(safe_file_request::Operation::ListIdentities(list)) => self
+                .list_identities(list)
+                .map(safe_file_response::Result::Identities),
             None => Err("Safe-file request has no operation".to_string()),
         };
         SafeFileResponse {
@@ -464,6 +530,103 @@ impl SafeFileServer {
         })
     }
 
+    fn begin_upload_batch(
+        &mut self,
+        owner: ConnectionId,
+        request: SafeFileBeginUploadBatch,
+    ) -> Result<SafeFileUploadBatchOpened, String> {
+        Journal::validate_operation_id(&request.batch_id).map_err(|error| error.to_string())?;
+        let destination_path = validated_path(&request.destination_directory)?;
+        let destination = open_nofollow(&destination_path, SafeFileEntryKind::Directory, false)
+            .map_err(|error| error.to_string())?;
+        let staging_name = CString::new(".zap-upload-staging").expect("static name has no NUL");
+        let staging_parent = ensure_private_directory_at(&destination, &staging_name, true)?;
+        let batch_name = CString::new(request.batch_id.as_bytes())
+            .map_err(|_| "Upload batch id contains NUL".to_string())?;
+        let root = ensure_private_directory_at(&staging_parent, &batch_name, false)?;
+        let root_path = destination_path
+            .join(OsStr::from_bytes(staging_name.as_bytes()))
+            .join(OsStr::from_bytes(batch_name.as_bytes()));
+
+        let entries_result = create_upload_entries(&root, &root_path, request.entries);
+        let entries = match entries_result {
+            Ok(entries) => entries,
+            Err(error) => {
+                let _ = remove_directory_contents(&root);
+                let _ = unlink_directory_at(&staging_parent, &batch_name);
+                return Err(error);
+            }
+        };
+
+        let mut opened_entries = Vec::with_capacity(entries.len());
+        for (relative_path, path, kind, file, identity) in entries {
+            let handle_id = uuid::Uuid::new_v4().to_string();
+            self.handles.insert(
+                handle_id.clone(),
+                SafeHandle {
+                    owner,
+                    file,
+                    kind,
+                    path,
+                    artifact_operation_id: None,
+                    _artifact_lock: None,
+                },
+            );
+            opened_entries.push(SafeFileUploadEntryOpened {
+                relative_path,
+                handle_id,
+                identity: Some(identity),
+            });
+        }
+
+        let batch_handle_id = uuid::Uuid::new_v4().to_string();
+        let root_path_string = path_to_string(&root_path)?;
+        self.upload_batches.insert(
+            batch_handle_id.clone(),
+            SafeUploadBatch {
+                owner,
+                parent: staging_parent,
+                root,
+                root_name: batch_name,
+                root_path,
+            },
+        );
+        Ok(SafeFileUploadBatchOpened {
+            batch_handle_id,
+            root_path: root_path_string,
+            entries: opened_entries,
+        })
+    }
+
+    fn cleanup_upload_batch(
+        &mut self,
+        owner: ConnectionId,
+        batch_handle_id: &str,
+    ) -> Result<SafeFileMutationResult, String> {
+        if !self
+            .upload_batches
+            .get(batch_handle_id)
+            .is_some_and(|batch| batch.owner == owner)
+        {
+            return Err("Upload batch is unknown or belongs to another connection".to_string());
+        }
+        let batch = self
+            .upload_batches
+            .remove(batch_handle_id)
+            .expect("owned upload batch disappeared");
+        let result = authenticate_upload_batch(&batch)
+            .and_then(|()| remove_directory_contents(&batch.root))
+            .and_then(|()| unlink_directory_at(&batch.parent, &batch.root_name));
+        match result {
+            Ok(()) => Ok(applied_mutation()),
+            Err(error) => {
+                self.upload_batches
+                    .insert(batch_handle_id.to_string(), batch);
+                Err(error)
+            }
+        }
+    }
+
     fn open_existing(
         &mut self,
         owner: ConnectionId,
@@ -474,6 +637,63 @@ impl SafeFileServer {
         let path = validated_path(&request.path)?;
         let file = open_nofollow(&path, kind, false).map_err(|error| error.to_string())?;
         self.insert_handle(owner, file, kind, path, None, None)
+    }
+
+    fn list_identities(
+        &self,
+        request: SafeFileListIdentities,
+    ) -> Result<SafeFileIdentityBatchResult, String> {
+        let mut entries = Vec::with_capacity(request.entries.len());
+        for entry in request.entries {
+            let expected_kind = SafeFileEntryKind::try_from(entry.expected_kind)
+                .map_err(|_| "Invalid expected safe-file kind".to_string())?;
+            if expected_kind == SafeFileEntryKind::Unspecified {
+                return Err("Safe-file identity batch requires a concrete kind".to_string());
+            }
+            let path = validated_path(&entry.path)?;
+            let result = match fs::symlink_metadata(&path) {
+                Ok(metadata) => match identity_from_metadata(&metadata, expected_kind) {
+                    Ok(identity) => SafeFileIdentityBatchEntryResult {
+                        path: entry.path,
+                        status: SafeFileIdentityBatchStatus::Found as i32,
+                        identity: Some(identity),
+                    },
+                    Err(error) => {
+                        log::debug!(
+                            "Safe-file listing identity changed for {}: {error}",
+                            path.display()
+                        );
+                        SafeFileIdentityBatchEntryResult {
+                            path: entry.path,
+                            status: SafeFileIdentityBatchStatus::KindChanged as i32,
+                            identity: None,
+                        }
+                    }
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    SafeFileIdentityBatchEntryResult {
+                        path: entry.path,
+                        status: SafeFileIdentityBatchStatus::NotFound as i32,
+                        identity: None,
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    SafeFileIdentityBatchEntryResult {
+                        path: entry.path,
+                        status: SafeFileIdentityBatchStatus::PermissionDenied as i32,
+                        identity: None,
+                    }
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "Failed to inspect safe-file identity for {}: {error}",
+                        path.display()
+                    ));
+                }
+            };
+            entries.push(result);
+        }
+        Ok(SafeFileIdentityBatchResult { entries })
     }
 
     fn create_exclusive(
@@ -683,6 +903,22 @@ impl SafeFileServer {
         Ok(applied_mutation())
     }
 
+    fn set_mode_handle(
+        &mut self,
+        owner: ConnectionId,
+        request: SafeFileSetModeHandle,
+    ) -> Result<SafeFileMutationResult, String> {
+        let handle = self.owned_handle_mut(owner, &request.handle_id)?;
+        if handle.kind != SafeFileEntryKind::Regular {
+            return Err("Cannot set a file mode on a directory handle".to_string());
+        }
+        handle
+            .file
+            .set_permissions(fs::Permissions::from_mode(request.mode & 0o777))
+            .map_err(|error| error.to_string())?;
+        Ok(applied_mutation())
+    }
+
     fn inspect_handle(
         &mut self,
         owner: ConnectionId,
@@ -716,6 +952,13 @@ impl SafeFileServer {
         owner: ConnectionId,
         handle_id: &str,
     ) -> Result<SafeFileMutationResult, String> {
+        if self
+            .upload_batches
+            .get(handle_id)
+            .is_some_and(|batch| batch.owner == owner)
+        {
+            return self.cleanup_upload_batch(owner, handle_id);
+        }
         if !self
             .handles
             .get(handle_id)
@@ -852,6 +1095,7 @@ impl SafeFileServer {
         &mut self,
         operation_id: &str,
         request: SafeFileDelete,
+        require_file_digest: bool,
     ) -> Result<SafeFileMutationResult, String> {
         let expected = request
             .expected
@@ -879,9 +1123,14 @@ impl SafeFileServer {
         }
         match kind {
             SafeFileEntryKind::Regular => {
-                let digest = sha256_file(&file)?;
-                if request.expected_sha256.as_deref() != Some(digest.as_str()) {
-                    return Err("Safe-file delete content digest changed".to_string());
+                if require_file_digest {
+                    let expected_digest = request.expected_sha256.as_deref().ok_or_else(|| {
+                        "Safe-file v1 delete requires a content digest".to_string()
+                    })?;
+                    let digest = sha256_file(&file)?;
+                    if expected_digest != digest {
+                        return Err("Safe-file delete content digest changed".to_string());
+                    }
                 }
             }
             SafeFileEntryKind::Directory => {
@@ -1008,16 +1257,16 @@ impl SafeFileServer {
                     && path_is_absent(&old_path)
                     && boundary_old.as_ref().is_some_and(|expected| {
                         new.as_ref()
-                            .is_some_and(|actual| same_identity(expected, actual))
+                            .is_some_and(|actual| same_renamed_identity(expected, actual))
                     })
             }
             SafeFileRenameMode::Exchange => {
                 boundary_old.as_ref().is_some_and(|expected| {
                     new.as_ref()
-                        .is_some_and(|actual| same_identity(expected, actual))
+                        .is_some_and(|actual| same_renamed_identity(expected, actual))
                 }) && boundary_new.as_ref().is_some_and(|expected| {
                     old.as_ref()
-                        .is_some_and(|actual| same_identity(expected, actual))
+                        .is_some_and(|actual| same_renamed_identity(expected, actual))
                 })
             }
             SafeFileRenameMode::Unspecified => false,
@@ -1126,7 +1375,7 @@ impl SafeFileServer {
         let private = identity_for_path(&private_delete_entry(&tombstone)).ok();
         if private
             .as_ref()
-            .is_some_and(|actual| matches_delete_identity(&expected, actual))
+            .is_some_and(|actual| matches_isolated_delete_identity(&expected, actual))
         {
             let outcome = delete_exact_path(
                 &tombstone,
@@ -1172,7 +1421,7 @@ impl SafeFileServer {
         }
         if isolated
             .as_ref()
-            .is_some_and(|actual| matches_delete_identity(&expected, actual))
+            .is_some_and(|actual| matches_isolated_delete_identity(&expected, actual))
         {
             match delete_exact_path(
                 &tombstone,
@@ -1215,7 +1464,7 @@ impl SafeFileServer {
                     }
                     if identity_for_path(&tombstone)
                         .as_ref()
-                        .is_ok_and(|actual| matches_delete_identity(&expected, actual))
+                        .is_ok_and(|actual| matches_isolated_delete_identity(&expected, actual))
                     {
                         record.state = JournalState::Recovery;
                         record.failure = Some(error.clone());
@@ -1267,11 +1516,24 @@ impl SafeFileServer {
             if let Some(hook) = &self.before_delete_isolation {
                 hook(&path);
             }
+            let Some(pre_isolation) = identity_for_path(&path)
+                .ok()
+                .filter(|actual| matches_delete_identity(&expected, actual))
+            else {
+                let error = "Safe-file delete target content changed before isolation".to_string();
+                record.state = JournalState::Rejected;
+                record.failure = Some(error.clone());
+                self.journal()?
+                    .save(record)
+                    .map_err(|save_error| save_error.to_string())?;
+                return Err(error);
+            };
             match rename_noreplace(&path, &tombstone) {
                 Ok(()) => {
-                    let isolated_matches = identity_for_path(&tombstone)
-                        .as_ref()
-                        .is_ok_and(|actual| matches_delete_identity(&expected, actual));
+                    let isolated_matches =
+                        identity_for_path(&tombstone).as_ref().is_ok_and(|actual| {
+                            matches_isolated_delete_identity(&pre_isolation, actual)
+                        });
                     if !isolated_matches {
                         let isolated = identity_for_path(&tombstone).ok();
                         let restored = path_is_absent(&path)
@@ -1279,7 +1541,7 @@ impl SafeFileServer {
                             && isolated.as_ref().is_some_and(|isolated| {
                                 identity_for_path(&path)
                                     .as_ref()
-                                    .is_ok_and(|actual| same_identity(isolated, actual))
+                                    .is_ok_and(|actual| same_renamed_identity(isolated, actual))
                             });
                         record.state = if restored {
                             JournalState::Rejected
@@ -1560,6 +1822,227 @@ fn validated_path(raw: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+type CreatedUploadEntry = (String, PathBuf, SafeFileEntryKind, File, SafeFileIdentity);
+
+fn create_upload_entries(
+    root: &File,
+    root_path: &Path,
+    entries: Vec<SafeFileUploadEntry>,
+) -> Result<Vec<CreatedUploadEntry>, String> {
+    let mut seen = HashSet::new();
+    let mut created = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if !seen.insert(entry.relative_path.clone()) {
+            return Err(format!(
+                "Upload batch contains duplicate entry {:?}",
+                entry.relative_path
+            ));
+        }
+        let kind = SafeFileEntryKind::try_from(entry.kind)
+            .map_err(|_| "Invalid upload entry kind".to_string())?;
+        if !matches!(
+            kind,
+            SafeFileEntryKind::Regular | SafeFileEntryKind::Directory
+        ) {
+            return Err("Upload entries must be regular files or directories".to_string());
+        }
+        let components = validated_upload_components(&entry.relative_path)?;
+        let (leaf, parents) = components
+            .split_last()
+            .ok_or_else(|| "Upload entry path is empty".to_string())?;
+        let mut directory = root.try_clone().map_err(|error| error.to_string())?;
+        for parent in parents {
+            directory = ensure_private_directory_at(&directory, parent, true)?;
+        }
+        let file = match kind {
+            SafeFileEntryKind::Regular => create_private_file_at(&directory, leaf)?,
+            SafeFileEntryKind::Directory => ensure_private_directory_at(&directory, leaf, true)?,
+            SafeFileEntryKind::Symlink | SafeFileEntryKind::Unspecified => unreachable!(),
+        };
+        let identity = identity_for_file(&file, kind)?;
+        let relative_path = entry.relative_path;
+        created.push((
+            relative_path.clone(),
+            root_path.join(relative_path),
+            kind,
+            file,
+            identity,
+        ));
+    }
+    Ok(created)
+}
+
+fn validated_upload_components(path: &str) -> Result<Vec<CString>, String> {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        return Err("Upload entry path must be relative".to_string());
+    }
+    let components = path
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(component) => CString::new(component.as_bytes())
+                .map_err(|_| "Upload entry path contains NUL".to_string()),
+            std::path::Component::RootDir
+            | std::path::Component::CurDir
+            | std::path::Component::ParentDir
+            | std::path::Component::Prefix(_) => {
+                Err("Upload entry path escapes its batch root".to_string())
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if components.is_empty() {
+        return Err("Upload entry path is empty".to_string());
+    }
+    Ok(components)
+}
+
+fn ensure_private_directory_at(
+    parent: &File,
+    name: &CString,
+    allow_existing: bool,
+) -> Result<File, String> {
+    let created = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } == 0;
+    if !created {
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::AlreadyExists || !allow_existing {
+            return Err(error.to_string());
+        }
+    }
+    let result = (|| {
+        let directory = open_directory_at(parent, name)?;
+        if created {
+            let result = unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) };
+            if result != 0 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+        }
+        authenticate_private_directory(&directory)?;
+        Ok(directory)
+    })();
+    if created && result.is_err() {
+        let _ = unlink_directory_at(parent, name);
+    }
+    result
+}
+
+fn open_directory_at(parent: &File, name: &CString) -> Result<File, String> {
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+fn authenticate_private_directory(directory: &File) -> Result<(), String> {
+    let metadata = directory.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o777 != 0o700
+    {
+        return Err("Upload staging directory is not owned private storage".to_string());
+    }
+    Ok(())
+}
+
+fn create_private_file_at(parent: &File, name: &CString) -> Result<File, String> {
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    let result = unsafe { libc::fchmod(file.as_raw_fd(), 0o600) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(file)
+}
+
+fn authenticate_upload_batch(batch: &SafeUploadBatch) -> Result<(), String> {
+    authenticate_private_directory(&batch.parent)?;
+    authenticate_private_directory(&batch.root)?;
+    let current = open_directory_at(&batch.parent, &batch.root_name).map_err(|error| {
+        format!(
+            "Upload batch root {} is inaccessible: {error}",
+            batch.root_path.display()
+        )
+    })?;
+    let expected = identity_for_file(&batch.root, SafeFileEntryKind::Directory)?;
+    let actual = identity_for_file(&current, SafeFileEntryKind::Directory)?;
+    if !same_object(&expected, &actual) {
+        return Err("Upload batch root no longer matches its held handle".to_string());
+    }
+    Ok(())
+}
+
+fn remove_directory_contents(directory: &File) -> Result<(), String> {
+    let reader = directory.try_clone().map_err(|error| error.to_string())?;
+    let mut reader = nix::dir::Dir::from(reader).map_err(|error| error.to_string())?;
+    let names = reader
+        .iter()
+        .filter_map(|entry| match entry {
+            Ok(entry)
+                if entry.file_name().to_bytes() != b"."
+                    && entry.file_name().to_bytes() != b".." =>
+            {
+                Some(Ok(entry.file_name().to_owned()))
+            }
+            Ok(_) => None,
+            Err(error) => Some(Err(error.to_string())),
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    drop(reader);
+
+    for name in names {
+        let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let result = unsafe {
+            libc::fstatat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                metadata.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let metadata = unsafe { metadata.assume_init() };
+        if metadata.st_mode & libc::S_IFMT == libc::S_IFDIR {
+            let child_name = name.to_owned();
+            let child = open_directory_at(directory, &child_name)?;
+            remove_directory_contents(&child)?;
+            unlink_directory_at(directory, &child_name)?;
+        } else {
+            let result = unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) };
+            if result != 0 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn unlink_directory_at(parent: &File, name: &CString) -> Result<(), String> {
+    let result = unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().to_string())
+    }
+}
+
 fn path_to_string(path: &Path) -> Result<String, String> {
     path.to_str()
         .map(ToOwned::to_owned)
@@ -1661,16 +2144,34 @@ fn open_nofollow(
         }
         SafeFileEntryKind::Directory => {
             if create_exclusive {
-                fs::create_dir(path)?;
+                use std::os::unix::fs::DirBuilderExt as _;
+
+                let mut builder = fs::DirBuilder::new();
+                builder.mode(0o700).create(path)?;
             }
-            let result = OpenOptions::new()
+            let directory = OpenOptions::new()
                 .read(true)
                 .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_DIRECTORY)
                 .open(path);
-            if create_exclusive && result.is_err() {
-                let _ = fs::remove_dir(path);
+            let directory = match directory {
+                Ok(directory) => directory,
+                Err(error) => {
+                    if create_exclusive {
+                        let _ = fs::remove_dir(path);
+                    }
+                    return Err(error);
+                }
+            };
+            if create_exclusive {
+                let chmod = unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) };
+                if chmod != 0 {
+                    let error = std::io::Error::last_os_error();
+                    drop(directory);
+                    let _ = fs::remove_dir(path);
+                    return Err(error);
+                }
             }
-            result
+            Ok(directory)
         }
         SafeFileEntryKind::Symlink => {
             if create_exclusive {
@@ -1748,11 +2249,13 @@ fn identity_from_metadata(
         size: metadata.len(),
         object_id: format!("{}:{}", metadata.dev(), metadata.ino()),
         revision: format!(
-            "{}:{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}:{}",
             metadata.dev(),
             metadata.ino(),
             metadata.mtime(),
             metadata.mtime_nsec(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
             metadata.len()
         ),
     })
@@ -1767,12 +2270,67 @@ fn same_object(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
 fn same_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
     same_object(expected, actual)
         && expected.size == actual.size
-        && expected.revision == actual.revision
+        && same_revision(&expected.revision, &actual.revision)
+}
+
+fn same_renamed_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
+    same_object(expected, actual)
+        && expected.size == actual.size
+        && same_content_revision(&expected.revision, &actual.revision)
+}
+
+fn same_revision(expected: &str, actual: &str) -> bool {
+    if expected == actual {
+        return true;
+    }
+    let legacy = expected.split(':').collect::<Vec<_>>();
+    let current = actual.split(':').collect::<Vec<_>>();
+    legacy.len() == 5
+        && current.len() == 7
+        && legacy[..4] == current[..4]
+        && legacy[4] == current[6]
+}
+
+fn same_content_revision(expected: &str, actual: &str) -> bool {
+    fn content_fields(revision: &str) -> Option<[&str; 5]> {
+        let fields = revision.split(':').collect::<Vec<_>>();
+        match fields.as_slice() {
+            [device, inode, modified, modified_nanos, size] => {
+                Some([device, inode, modified, modified_nanos, size])
+            }
+            [device, inode, modified, modified_nanos, _, _, size] => {
+                Some([device, inode, modified, modified_nanos, size])
+            }
+            _ => None,
+        }
+    }
+
+    expected == actual
+        || content_fields(expected)
+            .zip(content_fields(actual))
+            .is_some_and(|(expected, actual)| expected == actual)
 }
 
 fn matches_delete_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
     match SafeFileEntryKind::try_from(expected.kind).ok() {
         Some(SafeFileEntryKind::Regular) => same_identity(expected, actual),
+        Some(SafeFileEntryKind::Directory | SafeFileEntryKind::Symlink) => {
+            same_object(expected, actual)
+        }
+        Some(SafeFileEntryKind::Unspecified) | None => false,
+    }
+}
+
+// A successful isolation rename can advance ctime without changing the object
+// or its contents. Callers use this only after the journaled delete has crossed
+// that namespace boundary; delete_exact_path captures the resulting identity
+// and compares it strictly again immediately before unlinking.
+fn matches_isolated_delete_identity(
+    expected: &SafeFileIdentity,
+    actual: &SafeFileIdentity,
+) -> bool {
+    match SafeFileEntryKind::try_from(expected.kind).ok() {
+        Some(SafeFileEntryKind::Regular) => same_renamed_identity(expected, actual),
         Some(SafeFileEntryKind::Directory | SafeFileEntryKind::Symlink) => {
             same_object(expected, actual)
         }
@@ -1790,11 +2348,11 @@ fn rename_was_applied(
 ) -> bool {
     match mode {
         SafeFileRenameMode::NoReplace => {
-            old_absent && new.is_some_and(|actual| same_identity(source, actual))
+            old_absent && new.is_some_and(|actual| same_renamed_identity(source, actual))
         }
         SafeFileRenameMode::Exchange => target.is_some_and(|target| {
-            old.is_some_and(|actual| same_identity(target, actual))
-                && new.is_some_and(|actual| same_identity(source, actual))
+            old.is_some_and(|actual| same_renamed_identity(target, actual))
+                && new.is_some_and(|actual| same_renamed_identity(source, actual))
         }),
         SafeFileRenameMode::Unspecified => false,
     }
@@ -1809,13 +2367,13 @@ fn boundary_state_matches(
     let old_matches = match expected_old {
         Some(expected) => identity_for_path(old_path)
             .as_ref()
-            .is_ok_and(|actual| same_identity(expected, actual)),
+            .is_ok_and(|actual| same_renamed_identity(expected, actual)),
         None => path_is_absent(old_path),
     };
     let new_matches = match expected_new {
         Some(expected) => identity_for_path(new_path)
             .as_ref()
-            .is_ok_and(|actual| same_identity(expected, actual)),
+            .is_ok_and(|actual| same_renamed_identity(expected, actual)),
         None => path_is_absent(new_path),
     };
     old_matches && new_matches
@@ -1850,6 +2408,10 @@ fn delete_exact_path(
     let private_directory = private_delete_directory(path);
     let private_entry = private_delete_entry(path);
     if path_is_absent(&private_entry) {
+        let boundary = identity_for_path(path)?;
+        if !matches_isolated_delete_identity(expected, &boundary) {
+            return Err("Safe-file delete isolation identity changed".to_string());
+        }
         match fs::create_dir(&private_directory) {
             Ok(()) => fs::set_permissions(&private_directory, fs::Permissions::from_mode(0o700))
                 .map_err(|error| error.to_string())?,
@@ -1874,10 +2436,14 @@ fn delete_exact_path(
         if let Some(hook) = before_isolation {
             hook(path);
         }
+        let pre_isolation = identity_for_path(path)?;
+        if !matches_delete_identity(&boundary, &pre_isolation) {
+            return Err("Safe-file delete identity changed before private isolation".to_string());
+        }
         rename_noreplace_into_directory(path, &directory, &name)
             .map_err(|error| error.to_string())?;
         let isolated = identity_for_path(&private_entry)?;
-        if !matches_delete_identity(expected, &isolated) {
+        if !matches_isolated_delete_identity(&pre_isolation, &isolated) {
             let restored = path_is_absent(path)
                 && rename_noreplace_from_directory(&directory, &name, path).is_ok()
                 && identity_for_path(path)
@@ -1905,14 +2471,16 @@ fn delete_exact_path(
         .map_err(|error| error.to_string())?;
     let file = open_nofollow(&private_entry, kind, false).map_err(|error| error.to_string())?;
     let actual = identity_for_file(&file, kind)?;
-    if !matches_delete_identity(expected, &actual) {
+    if !matches_isolated_delete_identity(expected, &actual) {
         return Err("Safe-file delete identity changed".to_string());
     }
     match kind {
         SafeFileEntryKind::Regular => {
-            let digest = sha256_file(&file)?;
-            if expected_sha256 != Some(digest.as_str()) {
-                return Err("Safe-file delete content digest changed".to_string());
+            if let Some(expected_sha256) = expected_sha256 {
+                let digest = sha256_file(&file)?;
+                if expected_sha256 != digest {
+                    return Err("Safe-file delete content digest changed".to_string());
+                }
             }
         }
         SafeFileEntryKind::Directory => {
@@ -1934,7 +2502,7 @@ fn delete_exact_path(
         }
     }
     let current = identity_for_path(&private_entry)?;
-    if !matches_delete_identity(expected, &current) {
+    if !matches_delete_identity(&actual, &current) {
         return Err("Private safe-file delete identity changed before removal".to_string());
     }
     let expected_links_before = file.metadata().map_err(|error| error.to_string())?.nlink();

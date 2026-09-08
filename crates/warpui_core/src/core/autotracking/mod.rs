@@ -107,7 +107,7 @@ use itertools::Itertools as _;
 pub use tracked::Tracked;
 
 use super::{EntityId, WindowId};
-use std::cell::UnsafeCell;
+use std::cell::RefCell;
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::mem;
 use tracked::TrackedId;
@@ -143,21 +143,23 @@ struct View {
 }
 
 thread_local! {
-    static CACHE: UnsafeCell<Cache> = UnsafeCell::new(Cache::default())
+    static CACHE: RefCell<Cache> = RefCell::new(Cache::default())
 }
 
-/// Helper method for dereferencing the cache value and providing it to the caller via a callback.
+/// Provides a short-lived mutable cache borrow to the callback.
 fn with_cache<F, R>(callback: F) -> R
 where
     F: FnOnce(&mut Cache) -> R,
 {
-    CACHE.with(|cache_cell| {
-        // Safety: The cache is thread-local and only ever accessed by functions in this module.
-        // Therefore, there is only ever one reference active at a time.
-        let cache = unsafe { &mut *cache_cell.get() };
+    CACHE.with(|cache| callback(&mut cache.borrow_mut()))
+}
 
-        callback(cache)
-    })
+struct RenderingGuard;
+
+impl Drop for RenderingGuard {
+    fn drop(&mut self) {
+        with_cache(|cache| cache.rendering_view = None);
+    }
 }
 
 /// Render a View using the provided callback while tracking any reads of `Tracked` values.
@@ -174,19 +176,18 @@ where
     F: FnOnce() -> R,
 {
     with_cache(|cache| {
-        debug_assert!(cache.rendering_view.is_none());
-
+        assert!(
+            cache.rendering_view.is_none(),
+            "autotracking does not support recursive view rendering"
+        );
         let view = View { window_id, view_id };
         // Clear the dependency cache for this view as it is being rendered again
         remove_view_internal(view, cache);
         cache.rendering_view = Some(view);
+    });
 
-        let return_value = render_callback();
-
-        cache.rendering_view = None;
-
-        return_value
-    })
+    let _rendering_guard = RenderingGuard;
+    render_callback()
 }
 
 /// Returns the list of windows that have invalidations caused by the

@@ -2,8 +2,65 @@ use super::*;
 use crate::secrets::test_support::InMemorySecretStore;
 
 #[test]
+fn transport_token_rotation_preserves_encrypted_ssh_data() {
+    let sync_secret = Zeroizing::new("correct horse battery staple".to_string());
+    let uploader = SshSecretCrypto::new("transport-token-a", &sync_secret);
+    let ciphertext = uploader.encrypt("original-password").unwrap();
+    let downloader = SshSecretCrypto::new("transport-token-b", &sync_secret);
+
+    assert_eq!(
+        downloader.decrypt(&ciphertext).unwrap().as_str(),
+        "original-password"
+    );
+}
+
+#[test]
+fn wrong_sync_secret_returns_targeted_error_before_secret_application() {
+    let uploader_secret = Zeroizing::new("correct sync secret".to_string());
+    let uploader = SshSecretCrypto::new("transport-token", &uploader_secret);
+    let ciphertext = uploader.encrypt("original-password").unwrap();
+    let wrong_secret = Zeroizing::new("wrong sync secret".to_string());
+    let downloader = SshSecretCrypto::new("transport-token", &wrong_secret);
+
+    assert!(matches!(
+        downloader.decrypt(&ciphertext),
+        Err(SyncEngineError::InvalidSyncSecret)
+    ));
+}
+
+#[test]
+fn legacy_ciphertext_requests_equal_version_migration_upload() {
+    let sync_secret = Zeroizing::new("sync secret".to_string());
+    let provider = SshSyncProvider::new(sync_secret.clone());
+    let mut data = SshSyncData {
+        servers: vec![SyncServer {
+            node_id: "server".to_string(),
+            host: "example.com".to_string(),
+            port: 22,
+            username: "alice".to_string(),
+            auth_type: "password".to_string(),
+            key_path: None,
+            startup_command: None,
+            notes: None,
+            credential_id: None,
+            session_resilience: "off".to_string(),
+            ring_ceiling_mb: 0,
+            password_encrypted: Some("legacy-ciphertext".to_string()),
+            passphrase_encrypted: None,
+            root_password_encrypted: None,
+        }],
+        ..SshSyncData::default()
+    };
+
+    assert!(provider.requires_upload_migration(&serde_json::to_value(&data).unwrap()));
+
+    data.servers[0].password_encrypted = Some(crypto::encrypt(&sync_secret, "password").unwrap());
+    assert!(!provider.requires_upload_migration(&serde_json::to_value(data).unwrap()));
+}
+
+#[test]
 fn test_section_key() {
-    let provider = SshSyncProvider::new();
+    let provider = SshSyncProvider::new(Zeroizing::new("sync-secret".to_string()));
     assert_eq!(provider.section_key(), "ssh");
 }
 
@@ -276,7 +333,8 @@ fn sync_failure_preserves_recoverable_state() {
         store
             .get("server", SecretKind::Password)
             .unwrap()
-            .as_deref(),
+            .as_deref()
+            .map(String::as_str),
         Some("old-password")
     );
     assert!(
@@ -292,7 +350,8 @@ fn sync_failure_preserves_recoverable_state() {
         store
             .get("server", SecretKind::Password)
             .unwrap()
-            .as_deref(),
+            .as_deref()
+            .map(String::as_str),
         Some("old-password")
     );
     assert!(

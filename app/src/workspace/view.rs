@@ -360,6 +360,8 @@ use warp_core::semantic_selection::SemanticSelection;
 use warp_core::HostId;
 use warp_util::path::{user_friendly_path, LineAndColumnArg};
 use warpui::fonts::Weight;
+#[cfg(unix)]
+use warpui::modals::ModalButton;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
 
 use warp_core::user_preferences::GetUserPreferences as _;
@@ -1292,24 +1294,13 @@ fn forget_daemon_node_session(
 }
 
 #[cfg(unix)]
-fn apply_daemon_server_auth(
-    mut server: warp_ssh_manager::SshServerInfo,
-    auth: warp_ssh_manager::ResolvedSshAuth,
-) -> warp_ssh_manager::SshServerInfo {
-    server.username = auth.username;
-    server.key_path = auth.key_path;
-    server.auth_type = auth.auth_type;
-    server
-}
-
-#[cfg(unix)]
-fn resolved_daemon_server(node_id: &str) -> Option<warp_ssh_manager::SshServerInfo> {
-    warp_ssh_manager::with_conn(|conn| {
-        let Some(server) = warp_ssh_manager::SshRepository::get_server(conn, node_id)? else {
-            return Ok(None);
-        };
-        let auth = warp_ssh_manager::SshRepository::resolve_server_auth(conn, &server)?;
-        Ok(Some(apply_daemon_server_auth(server, auth)))
+fn resolved_daemon_connection(
+    node_id: &str,
+) -> Option<warp_ssh_manager::ResolvedSshConnection> {
+    warp_ssh_manager::with_conn(|database| {
+        Ok(warp_ssh_manager::SshRepository::get_server_with_resolved_auth(
+            database, node_id,
+        )?)
     })
     .ok()
     .flatten()
@@ -1430,6 +1421,22 @@ fn ssh_connect_terminal_event_finishes_attempt(event: &terminal::Event) -> bool 
     )
 }
 
+fn resolve_ssh_connection(
+    server: &warp_ssh_manager::SshServerInfo,
+) -> anyhow::Result<warp_ssh_manager::ResolvedSshConnection> {
+    warp_ssh_manager::with_conn(|database| {
+        Ok(warp_ssh_manager::SshRepository::resolve_server_connection(
+            database, server,
+        )?)
+    })
+}
+
+fn resolved_ssh_secret_owner(
+    connection: &warp_ssh_manager::ResolvedSshConnection,
+) -> (&str, warp_ssh_manager::SecretKind) {
+    (&connection.secret_lookup_id, connection.secret_kind)
+}
+
 fn live_session_unavailable_stop_action(
     session: &zaplex_cockpit::SessionSnapshot,
     host: &str,
@@ -1477,7 +1484,8 @@ pub struct Workspace {
     /// session (the recovery the manager's mismatch branch documents but nobody
     /// caught). Entry is removed on connect or on the one-shot fallback.
     #[cfg(unix)]
-    daemon_session_servers: std::collections::HashMap<SessionId, warp_ssh_manager::SshServerInfo>,
+    daemon_session_servers:
+        std::collections::HashMap<SessionId, warp_ssh_manager::ResolvedSshConnection>,
     /// Authoritative per-host guard for every SSH connect entry point. Daemon
     /// attempts remain here through preflight, install, and initialize; classic
     /// attempts finish when the remote shell bootstraps, the command ends, or
@@ -5129,16 +5137,16 @@ impl Workspace {
             return;
         }
         let _ = (host, host_id);
-        let Some(fork_cmd) = agent.fork_command_pinned(session_id, config_dir) else {
+        let Some(fork_launch) = agent.fork_routed(session_id, config_dir) else {
             return;
         };
         #[cfg(feature = "local_fs")]
         if into_worktree {
-            self.fork_into_worktree(&fork_cmd, cwd, agent, config_dir, account_email, ctx);
+            self.fork_into_worktree(&fork_launch, cwd, agent, config_dir, account_email, ctx);
             return;
         }
         let _ = into_worktree;
-        self.fork_agent_session_in_place(&fork_cmd, cwd, agent, config_dir, account_email, ctx);
+        self.fork_agent_session_in_place(&fork_launch, cwd, agent, config_dir, account_email, ctx);
     }
 
     /// Run `command` on a *remote* agent session's own host: resolve the daemon
@@ -5317,12 +5325,20 @@ impl Workspace {
         account_email: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some(resume_cmd) = agent.resume_command_pinned(session_id, config_dir) else {
+        let Some(resume_launch) = agent.resume_routed_with(session_id, config_dir, None, None)
+        else {
             // Surfaces for agents without a resume mechanism stay disabled; this
             // is the belt-and-braces guard (no fake resume).
             return;
         };
-        self.fork_agent_session_in_place(&resume_cmd, cwd, agent, config_dir, account_email, ctx);
+        self.fork_agent_session_in_place(
+            &resume_launch,
+            cwd,
+            agent,
+            config_dir,
+            account_email,
+            ctx,
+        );
     }
 
     /// Resolves one fleet session with the inventory's explicit local marker or
@@ -5531,27 +5547,24 @@ impl Workspace {
             return;
         };
         let agent = crate::cockpit::agent_of(plan.route.provider);
-        let command = match &plan.resume {
-            ResumeInvocation::LocalShell { command } => command.clone(),
+        let launch = match &plan.resume {
+            ResumeInvocation::LocalShell { launch } => launch.clone(),
             ResumeInvocation::RemoteDaemon {
                 session_id,
                 model,
                 effort,
                 ..
             } => {
-                let Some(command) = agent.resume_command_routed_with(
-                    session_id,
-                    None,
-                    model.as_deref(),
-                    effort.as_deref(),
-                ) else {
+                let Some(launch) =
+                    agent.resume_routed_with(session_id, None, model.as_deref(), effort.as_deref())
+                else {
                     self.show_agent_launch_error(
                         "This provider cannot resume the selected conversation.".to_string(),
                         ctx,
                     );
                     return;
                 };
-                command
+                launch
             }
         };
         let (host, config_dir, account_email, account_id) =
@@ -5613,9 +5626,15 @@ impl Workspace {
             },
         );
         crate::cockpit::launch_registry::attach_terminal(launch_id, terminal_view_id);
-        terminal_view.update(ctx, |view, ctx| {
-            view.execute_command_or_set_pending(&command, ctx);
-        });
+        if !terminal_view.update(ctx, |view, ctx| {
+            view.execute_routed_agent_launch_or_set_pending(&launch, ctx)
+        }) {
+            self.show_agent_launch_error(
+                "Could not determine the terminal shell for the agent restart.".to_string(),
+                ctx,
+            );
+            return;
+        }
         ctx.focus(&terminal_view);
         crate::cockpit::CockpitModel::handle(ctx).update(ctx, |model, ctx| model.rescan(ctx));
     }
@@ -5852,21 +5871,36 @@ impl Workspace {
             );
             return;
         }
-        match zaplex_cockpit::cleanup_claude_stale_registry_entry(candidate) {
-            Ok(
-                zaplex_cockpit::ClaudeRegistryCleanupOutcome::Applied
-                | zaplex_cockpit::ClaudeRegistryCleanupOutcome::AlreadyApplied,
-            ) => {
-                crate::cockpit::CockpitModel::handle(ctx)
-                    .update(ctx, |model, ctx| model.rescan(ctx));
-            }
-            Err(error) => {
-                self.show_agent_launch_error(
-                    format!("Could not clean up the stale session: {error}"),
-                    ctx,
-                );
-            }
-        }
+        let candidate = candidate.clone();
+        ctx.spawn(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    zaplex_cockpit::cleanup_claude_stale_registry_entry(&candidate)
+                })
+                .await
+            },
+            |workspace, result, ctx| match result {
+                Ok(Ok(
+                    zaplex_cockpit::ClaudeRegistryCleanupOutcome::Applied
+                    | zaplex_cockpit::ClaudeRegistryCleanupOutcome::AlreadyApplied,
+                )) => {
+                    crate::cockpit::CockpitModel::handle(ctx)
+                        .update(ctx, |model, ctx| model.rescan(ctx));
+                }
+                Ok(Err(error)) => {
+                    workspace.show_agent_launch_error(
+                        format!("Could not clean up the stale session: {error}"),
+                        ctx,
+                    );
+                }
+                Err(error) => {
+                    workspace.show_agent_launch_error(
+                        format!("The stale-session cleanup worker failed: {error}"),
+                        ctx,
+                    );
+                }
+            },
+        );
     }
 
     /// Run a Claude Code slash command against a discovered session
@@ -5986,11 +6020,19 @@ impl Workspace {
             return;
         }
         let _ = (host, host_id);
-        let Some(resume_cmd) = agent.resume_command_pinned(session_id, config_dir) else {
+        let Some(resume_launch) = agent.resume_routed_with(session_id, config_dir, None, None)
+        else {
             return;
         };
         // Local: resume the session into a fresh local tab (owns the PTY) …
-        self.fork_agent_session_in_place(&resume_cmd, cwd, agent, config_dir, account_email, ctx);
+        self.fork_agent_session_in_place(
+            &resume_launch,
+            cwd,
+            agent,
+            config_dir,
+            account_email,
+            ctx,
+        );
         // … then prefill the slash command, ready for the human to send.
         self.prefill_active_tab_input(command, ctx);
     }
@@ -6220,14 +6262,14 @@ impl Workspace {
                     {
                         let server = host_id
                             .and_then(|host_id| self.node_for_daemon_host(host_id, &*ctx))
-                            .and_then(|node_id| resolved_daemon_server(&node_id));
-                        if let Some(server) = server {
+                            .and_then(|node_id| resolved_daemon_connection(&node_id));
+                        if let Some(connection) = server {
                             let expected_agent_binding =
                                 crate::remote_server::agent_session::snapshot_agent_identity(
                                     &session,
                                 );
                             self.adopt_daemon_session(
-                                server,
+                                connection,
                                 pty_session_id.to_string(),
                                 generation,
                                 Some(expected_agent_binding),
@@ -6326,12 +6368,12 @@ impl Workspace {
                         )
                 })
                 .and_then(|daemon| daemon.registry_node_id);
-            let Some(server) = node_id.as_deref().and_then(resolved_daemon_server) else {
+            let Some(connection) = node_id.as_deref().and_then(resolved_daemon_connection) else {
                 self.session_not_found_toast(&current.host_label, ctx);
                 return;
             };
             self.adopt_daemon_session(
-                server,
+                connection,
                 current.session_id,
                 current.generation,
                 Some(expected_agent_binding),
@@ -7031,14 +7073,18 @@ impl Workspace {
                     ctx.spawn(
                         async move {
                             tokio::task::spawn_blocking(move || {
-                                crate::cockpit::transcript_view::load_local_transcript(
+                                crate::cockpit::transcript_view::refresh_local_transcript(
                                     provider,
                                     &config_root,
                                     &session_id,
                                 )
                             })
                             .await
-                            .map(TranscriptRefreshResult::Modified)
+                            .map(|result| {
+                                result
+                                    .map(TranscriptRefreshResult::Modified)
+                                    .unwrap_or(TranscriptRefreshResult::RetryableFailure)
+                            })
                             .unwrap_or(TranscriptRefreshResult::RetryableFailure)
                         },
                         move |me, result, ctx| {
@@ -7118,15 +7164,16 @@ impl Workspace {
     }
 
     /// The worktree half of [`Self::fork_agent_session`]: builds a one-shot
-    /// worktree tab config (autogenerated branch name, fork command appended
-    /// after the `cd`) and opens it directly — nothing is persisted to the
+    /// worktree tab config (autogenerated branch name) and opens it directly.
+    /// The structured fork launch is appended in the resulting `TerminalView`,
+    /// after that terminal's shell type is known. Nothing is persisted to the
     /// tab-config dir, a fork is a moment, not a template. If `git worktree
     /// add` fails (dirty repo, existing branch), the error is the session's
     /// first output — visible in the block, never swallowed (design §3).
     #[cfg(feature = "local_fs")]
     fn fork_into_worktree(
         &mut self,
-        fork_cmd: &str,
+        fork_launch: &RoutedAgentLaunch,
         cwd: &Path,
         agent: CLIAgent,
         config_dir: Option<&Path>,
@@ -7147,7 +7194,14 @@ impl Workspace {
             // UI already hides the worktree action for non-repo cwds; this
             // covers races (repo deleted between render and click).
             log::warn!("fork into worktree: no git repo above cwd, forking in place");
-            self.fork_agent_session_in_place(fork_cmd, cwd, agent, config_dir, account_email, ctx);
+            self.fork_agent_session_in_place(
+                fork_launch,
+                cwd,
+                agent,
+                config_dir,
+                account_email,
+                ctx,
+            );
             return;
         };
         let repo_str = repo.to_string_lossy().into_owned();
@@ -7164,18 +7218,29 @@ impl Workspace {
 
         // Empty base branch → `git worktree add` branches from HEAD, i.e. the
         // repo's current state — exactly what "try the other approach" means.
-        let toml_content = crate::tab_configs::build_worktree_config_toml(
-            &config_name,
-            &repo_str,
-            "",
-            None,
-            Some(fork_cmd),
-        );
+        let toml_content =
+            crate::tab_configs::build_worktree_config_toml(&config_name, &repo_str, "", None, None);
         match toml::from_str::<crate::tab_configs::TabConfig>(&toml_content) {
             Ok(tab_config) => {
                 let param_values = tab_config.default_param_values();
                 self.open_tab_config_with_params(tab_config, param_values, Some(&branch_hint), ctx);
                 self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
+                let appended = self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                    pane_group
+                        .active_session_view(ctx)
+                        .is_some_and(|terminal_view| {
+                            terminal_view.update(ctx, |view, ctx| {
+                                view.append_routed_agent_launch_to_pending(fork_launch, ctx)
+                            })
+                        })
+                });
+                if !appended {
+                    self.show_agent_launch_error(
+                        "Could not determine the new terminal's shell for the agent fork."
+                            .to_string(),
+                        ctx,
+                    );
+                }
             }
             Err(e) => {
                 log::warn!("fork into worktree: generated config failed to parse: {e:?}");
@@ -7187,7 +7252,7 @@ impl Workspace {
     /// [`Self::fork_agent_session`], reused as its fallback).
     fn fork_agent_session_in_place(
         &mut self,
-        fork_cmd: &str,
+        fork_launch: &RoutedAgentLaunch,
         cwd: &Path,
         agent: CLIAgent,
         config_dir: Option<&Path>,
@@ -7202,13 +7267,21 @@ impl Workspace {
             ctx,
         );
         self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
-        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            if let Some(terminal_view) = pane_group.active_session_view(ctx) {
-                terminal_view.update(ctx, |view, ctx| {
-                    view.execute_command_or_set_pending(fork_cmd, ctx);
-                });
-            }
+        let launched = self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            pane_group
+                .active_session_view(ctx)
+                .is_some_and(|terminal_view| {
+                    terminal_view.update(ctx, |view, ctx| {
+                        view.execute_routed_agent_launch_or_set_pending(fork_launch, ctx)
+                    })
+                })
         });
+        if !launched {
+            self.show_agent_launch_error(
+                "Could not determine the new terminal's shell for the agent launch.".to_string(),
+                ctx,
+            );
+        }
     }
 
     /// Launch a *fresh* CLI agent routed to a subscription (C4 `LaunchAgent`):
@@ -7468,7 +7541,7 @@ impl Workspace {
             }
         }
 
-        let cmd = agent.launch_command_routed_with(config_dir, model, effort);
+        let launch = agent.routed_launch(config_dir, model, effort);
         let launch_id = crate::cockpit::launch_registry::begin_launch(
             agent,
             None,
@@ -7490,13 +7563,18 @@ impl Workspace {
         );
         self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
         self.attach_active_terminal_launch_intent(launch_id, ctx);
-        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            if let Some(terminal_view) = pane_group.active_session_view(ctx) {
-                terminal_view.update(ctx, |view, ctx| {
-                    view.execute_command_or_set_pending(&cmd, ctx);
-                });
-            }
+        let launched = self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            pane_group
+                .active_session_view(ctx)
+                .is_some_and(|terminal_view| {
+                    terminal_view.update(ctx, |view, ctx| {
+                        view.execute_routed_agent_launch_or_set_pending(&launch, ctx)
+                    })
+                })
         });
+        if !launched {
+            return Err("Could not determine the new terminal's shell.".to_string());
+        }
         Ok(format!("local:{}", launch_id.opaque_id()))
     }
 
@@ -9224,13 +9302,19 @@ impl Workspace {
                 pty_generation,
             } => {
                 #[cfg(unix)]
-                self.adopt_daemon_session(
-                    server.clone(),
-                    pty_session_id.clone(),
-                    *pty_generation,
-                    None,
-                    ctx,
-                );
+                match resolve_ssh_connection(server) {
+                    Ok(connection) => self.adopt_daemon_session(
+                        connection,
+                        pty_session_id.clone(),
+                        *pty_generation,
+                        None,
+                        ctx,
+                    ),
+                    Err(error) => self.show_agent_launch_error(
+                        format!("Failed to resolve the SSH credential: {error}"),
+                        ctx,
+                    ),
+                };
                 #[cfg(not(unix))]
                 {
                     let _ = (server, pty_session_id, pty_generation);
@@ -9416,10 +9500,11 @@ impl Workspace {
             return;
         }
 
-        let Some(server) = resolved_daemon_server(node_id) else {
+        let Some(connection) = resolved_daemon_connection(node_id) else {
             log::warn!("SFTP safe-file service: registry node {node_id} is unavailable");
             return;
         };
+        let server = connection.server;
         if !crate::remote_server::headless_connect::is_headless_capable(&server) {
             log::info!(
                 "SFTP safe-file service [{}]: headless daemon authentication is unavailable",
@@ -10006,9 +10091,7 @@ impl Workspace {
         route: remote_server::proto::AgentLaunchRoute,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        if !server.session_resilience.is_enabled()
-            || !crate::remote_server::headless_connect::is_headless_capable(&server)
-        {
+        if !server.session_resilience.is_enabled() {
             self.toast_stack.update(ctx, |view, ctx| {
                 view.add_ephemeral_toast(
                     DismissibleToast::error(
@@ -10020,13 +10103,31 @@ impl Workspace {
             });
             return false;
         }
-        let Some(attempt) = self.begin_ssh_connect(node_id.clone(), server.host.clone(), ctx)
+        let connection = match resolve_ssh_connection(&server) {
+            Ok(connection) => connection,
+            Err(error) => {
+                self.show_agent_launch_error(
+                    format!("Failed to resolve the SSH credential: {error}"),
+                    ctx,
+                );
+                return false;
+            }
+        };
+        if !crate::remote_server::headless_connect::is_agent_route_headless_capable(&connection) {
+            self.show_agent_launch_error(
+                "Remote AI-account routing requires headless key authentication.".to_string(),
+                ctx,
+            );
+            return false;
+        }
+        let Some(attempt) =
+            self.begin_ssh_connect(node_id.clone(), connection.server.host.clone(), ctx)
         else {
             return true;
         };
-        self.open_ssh_terminal_command(
+        self.open_resolved_ssh_terminal_command(
             node_id,
-            server,
+            connection,
             false,
             None,
             Some(route),
@@ -10079,23 +10180,38 @@ impl Workspace {
                         zaplex_remote_session::types::FEATURE_AGENT_ACCOUNT_ROUTING_V1,
                     )
             });
-        if !supported
-            || !server.session_resilience.is_enabled()
-            || !crate::remote_server::headless_connect::is_headless_capable(&server)
-        {
+        if !supported || !server.session_resilience.is_enabled() {
             self.show_agent_launch_error(
                 "Managed agents require a connected, up-to-date persistent host.".to_string(),
                 ctx,
             );
             return false;
         }
-        let Some(attempt) = self.begin_ssh_connect(node_id.clone(), server.host.clone(), ctx)
+        let connection = match resolve_ssh_connection(&server) {
+            Ok(connection) => connection,
+            Err(error) => {
+                self.show_agent_launch_error(
+                    format!("Failed to resolve the SSH credential: {error}"),
+                    ctx,
+                );
+                return false;
+            }
+        };
+        if !crate::remote_server::headless_connect::is_agent_route_headless_capable(&connection) {
+            self.show_agent_launch_error(
+                "Managed agents require headless key authentication.".to_string(),
+                ctx,
+            );
+            return false;
+        }
+        let Some(attempt) =
+            self.begin_ssh_connect(node_id.clone(), connection.server.host.clone(), ctx)
         else {
             return true;
         };
-        self.open_ssh_terminal_command(
+        self.open_resolved_ssh_terminal_command(
             node_id,
-            server,
+            connection,
             false,
             None,
             Some(route),
@@ -10157,32 +10273,52 @@ impl Workspace {
         attempt: Option<SshConnectAttempt>,
         ctx: &mut ViewContext<Self>,
     ) {
-        use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshRepository, SshSecretStore};
-
-        let (server_for_connection, secret_lookup_id, secret_kind) =
-            match warp_ssh_manager::with_conn(|conn| {
-                let resolved_auth = SshRepository::resolve_server_auth(conn, &server)?;
-                let mut server_for_connection = server.clone();
-                server_for_connection.username = resolved_auth.username;
-                server_for_connection.auth_type = resolved_auth.auth_type;
-                server_for_connection.key_path = resolved_auth.key_path;
-                Ok((
-                    server_for_connection,
-                    resolved_auth.secret_lookup_id,
-                    resolved_auth.secret_kind,
-                ))
-            }) {
-                Ok(resolved) => resolved,
-                Err(e) => {
-                    log::warn!("ssh auth resolution failed (will continue without injection): {e}");
-                    let fallback_kind = match server.auth_type {
-                        warp_ssh_manager::AuthType::Password => SecretKind::Password,
-                        warp_ssh_manager::AuthType::Key => SecretKind::Passphrase,
-                        warp_ssh_manager::AuthType::OneKey => SecretKind::OneKeyPassword,
-                    };
-                    (server.clone(), node_id.clone(), fallback_kind)
+        let connection = match resolve_ssh_connection(&server) {
+            Ok(connection) => connection,
+            Err(error) => {
+                log::warn!("SSH auth resolution failed before connect: {error}");
+                self.toast_stack.update(ctx, |view, ctx| {
+                    view.add_ephemeral_toast(
+                        DismissibleToast::error(format!(
+                            "Failed to resolve the SSH credential: {error}"
+                        )),
+                        ctx,
+                    );
+                });
+                if let Some(attempt) = attempt.as_ref() {
+                    self.finish_ssh_connect(attempt, ctx);
                 }
-            };
+                return;
+            }
+        };
+        self.open_resolved_ssh_terminal_command(
+            node_id,
+            connection,
+            force_classic,
+            multiplexer,
+            agent_launch_route,
+            managed_launch,
+            attempt,
+            ctx,
+        );
+    }
+
+    fn open_resolved_ssh_terminal_command(
+        &mut self,
+        node_id: String,
+        connection: warp_ssh_manager::ResolvedSshConnection,
+        force_classic: bool,
+        multiplexer: Option<(warp_ssh_manager::MultiplexerAttachMode, String)>,
+        agent_launch_route: Option<remote_server::proto::AgentLaunchRoute>,
+        managed_launch: Option<remote_server::proto::ManagedLaunch>,
+        attempt: Option<SshConnectAttempt>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshSecretStore};
+
+        let server_for_connection = connection.server.clone();
+        let (secret_lookup_id, secret_kind) = resolved_ssh_secret_owner(&connection);
+        let secret_lookup_id = secret_lookup_id.to_string();
 
         // Native persistent remote-session layer (Option B): a host with
         // `session_resilience` enabled opens directly as a daemon-hosted session
@@ -10192,7 +10328,7 @@ impl Workspace {
         if !force_classic {
             if self.try_open_daemon_ssh_terminal(
                 &node_id,
-                &server_for_connection,
+                &connection,
                 agent_launch_route.clone(),
                 managed_launch.clone(),
                 attempt.clone(),
@@ -10217,19 +10353,33 @@ impl Workspace {
             return;
         }
 
-        let cmd = match multiplexer.as_ref() {
-            Some((mode, target)) => match warp_ssh_manager::build_multiplexer_ssh_command_line(
-                &server_for_connection,
-                *mode,
-                target,
-            ) {
-                Ok(command) => command,
+        let secret = match KeychainSecretStore.get(&secret_lookup_id, secret_kind) {
+            Ok(opt) => opt.unwrap_or_else(|| zeroize::Zeroizing::new(String::new())),
+            Err(e) => {
+                log::warn!("ssh keychain read failed (will continue without injection): {e}");
+                zeroize::Zeroizing::new(String::new())
+            }
+        };
+
+        let prepared_command = if server_for_connection.auth_type == warp_ssh_manager::AuthType::Key
+            && !secret.is_empty()
+        {
+            let result = match multiplexer.as_ref() {
+                Some((mode, target)) => warp_ssh_manager::prepare_key_multiplexer_ssh_command(
+                    &server_for_connection,
+                    *mode,
+                    target,
+                    &secret,
+                ),
+                None => warp_ssh_manager::prepare_key_ssh_command(&server_for_connection, &secret),
+            };
+            match result {
+                Ok(prepared) => Some(prepared),
                 Err(error) => {
                     self.toast_stack.update(ctx, |view, ctx| {
                         view.add_ephemeral_toast(
-                            DismissibleToast::error(crate::t!(
-                                "workspace-left-panel-ssh-manager-multiplexer-attach-error",
-                                detail = error.to_string()
+                            DismissibleToast::error(format!(
+                                "Failed to prepare secure SSH key authentication: {error}"
                             )),
                             ctx,
                         );
@@ -10239,8 +10389,41 @@ impl Workspace {
                     }
                     return;
                 }
-            },
-            None => warp_ssh_manager::build_ssh_command_line(&server_for_connection),
+            }
+        } else {
+            None
+        };
+
+        let cmd = if let Some(prepared) = prepared_command.as_ref() {
+            prepared.command_line().to_string()
+        } else {
+            match multiplexer.as_ref() {
+                Some((mode, target)) => {
+                    match warp_ssh_manager::build_multiplexer_ssh_command_line(
+                        &server_for_connection,
+                        *mode,
+                        target,
+                    ) {
+                        Ok(command) => command,
+                        Err(error) => {
+                            self.toast_stack.update(ctx, |view, ctx| {
+                                view.add_ephemeral_toast(
+                                    DismissibleToast::error(crate::t!(
+                                        "workspace-left-panel-ssh-manager-multiplexer-attach-error",
+                                        detail = error.to_string()
+                                    )),
+                                    ctx,
+                                );
+                            });
+                            if let Some(attempt) = attempt.as_ref() {
+                                self.finish_ssh_connect(attempt, ctx);
+                            }
+                            return;
+                        }
+                    }
+                }
+                None => warp_ssh_manager::build_ssh_command_line(&server_for_connection),
+            }
         };
         let window_id = ctx.window_id();
 
@@ -10285,15 +10468,6 @@ impl Workspace {
             });
         }
 
-        // 1. Read the keychain synchronously (fine on the main thread). A OneKey server uses a shared credential id.
-        let secret = match KeychainSecretStore.get(&secret_lookup_id, secret_kind) {
-            Ok(opt) => opt.unwrap_or_else(|| zeroize::Zeroizing::new(String::new())),
-            Err(e) => {
-                log::warn!("ssh keychain read failed (will continue without injection): {e}");
-                zeroize::Zeroizing::new(String::new())
-            }
-        };
-
         // 2. The injector must be spawned before execute_command — otherwise the password prompt
         //    will have already gone out over the broadcast before the spawn, and the injector won't receive it.
         let pty_reads_rx = terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c));
@@ -10301,12 +10475,21 @@ impl Workspace {
             pty_reads_rx,
             terminal_view.downgrade(),
             secret,
+            server_for_connection.auth_type,
             ctx,
         );
 
+        if let Some(prepared_command) = prepared_command {
+            crate::ssh_manager::secret_injector::retain_key_askpass_until_shell_ready(
+                terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c)),
+                prepared_command,
+                ctx,
+            );
+        }
+
         // Startup command injector — waits for the shell to be ready, then automatically runs startup_command
         if multiplexer.is_none() {
-            if let Some(ref startup_cmd) = server.startup_command {
+            if let Some(ref startup_cmd) = server_for_connection.startup_command {
                 if !startup_cmd.is_empty() {
                     crate::ssh_manager::startup_command_injector::spawn_startup_command_injector(
                         terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c)),
@@ -10377,7 +10560,7 @@ impl Workspace {
     fn try_open_daemon_ssh_terminal(
         &mut self,
         node_id: &str,
-        server: &warp_ssh_manager::SshServerInfo,
+        connection: &warp_ssh_manager::ResolvedSshConnection,
         agent_launch_route: Option<remote_server::proto::AgentLaunchRoute>,
         managed_launch: Option<remote_server::proto::ManagedLaunch>,
         attempt: Option<SshConnectAttempt>,
@@ -10388,6 +10571,8 @@ impl Workspace {
             self, DaemonPreflight, DAEMON_BINARY_MISSING,
         };
         use crate::remote_server::ssh_transport::{InstallProgress, SshTransport};
+
+        let server = &connection.server;
 
         if !server.session_resilience.is_enabled() {
             if agent_launch_route.is_some() || managed_launch.is_some() {
@@ -10441,7 +10626,8 @@ impl Workspace {
         let socket_path = headless_connect::control_socket_path(server);
         let host = server.host.clone();
         let node_id_owned = node_id.to_string();
-        let server_owned = server.clone();
+        let server_owned = connection.server.clone();
+        let connection_owned = connection.clone();
 
         // The progress channel exists from the start (not only for installs): the
         // very first thing the user sees in the new tab is a "Connecting…" line,
@@ -10535,6 +10721,29 @@ impl Workspace {
                 let preflight = match result {
                     Ok(preflight) => preflight,
                     Err(e) => {
+                        if e == headless_connect::HOST_KEY_CHANGED {
+                            let message =
+                                crate::t!("connect-host-key-changed", host = host.clone())
+                                    .to_string();
+                            let _ = progress_tx.try_send(message.clone());
+                            workspace.toast_stack.update(ctx, |stack, ctx| {
+                                stack.add_persistent_toast(DismissibleToast::error(message), ctx);
+                            });
+                            if let Some(attempt) = attempt.as_ref() {
+                                workspace.finish_ssh_connect(attempt, ctx);
+                            }
+                            if let Some(pane_group_id) = pending_pane_group {
+                                workspace.ssh_tab_nodes.remove(&pane_group_id);
+                                if let Some(index) = workspace
+                                    .tabs
+                                    .iter()
+                                    .position(|tab| tab.pane_group.id() == pane_group_id)
+                                {
+                                    workspace.close_tab(index, true, false, ctx);
+                                }
+                            }
+                            return;
+                        }
                         // Daemon unavailable → classic SSH with a prominent warning so
                         // the user KNOWS they have no persistent session (a disconnect
                         // loses open work). Never silent, never a hang.
@@ -10570,7 +10779,7 @@ impl Workspace {
                         // look it up by pane-group id rather than by index.
                         workspace.fall_back_to_classic_ssh(
                             node_id_owned,
-                            server_owned,
+                            connection_owned,
                             warning,
                             ctx,
                         );
@@ -10607,6 +10816,180 @@ impl Workspace {
                 );
 
                 match preflight {
+                    DaemonPreflight::HostKeyConfirmationRequired(host_key) => {
+                        let confirm_server = server_owned.clone();
+                        let confirm_host_key = host_key.clone();
+                        let confirm_node_id = node_id_owned.clone();
+                        let confirm_connection = connection_owned.clone();
+                        let confirm_route = agent_launch_route.clone();
+                        let confirm_managed_launch = managed_launch.clone();
+                        let confirm_attempt = attempt.clone();
+                        let confirm_progress = progress_tx.clone();
+                        let cancel_attempt = attempt.clone();
+                        let cancel_progress = progress_tx.clone();
+                        let cancel_host = host.clone();
+                        let dialog = AlertDialogWithCallbacks::for_view(
+                            crate::t!("connect-host-key-confirm-title"),
+                            crate::t!(
+                                "connect-host-key-confirm-info",
+                                host = host_key.host,
+                                port = host_key.port,
+                                fingerprint = host_key.fingerprint
+                            ),
+                            vec![
+                                ModalButton::for_view(
+                                    crate::t!("common-confirm"),
+                                    move |workspace: &mut Workspace, ctx| {
+                                        let server = confirm_server.clone();
+                                        let host_key = confirm_host_key.clone();
+                                        let server_for_retry = confirm_server.clone();
+                                        let connection_for_retry = confirm_connection.clone();
+                                        let node_id_for_retry = confirm_node_id.clone();
+                                        let route_for_retry = confirm_route.clone();
+                                        let managed_launch_for_retry =
+                                            confirm_managed_launch.clone();
+                                        let attempt_for_retry = confirm_attempt.clone();
+                                        let progress_for_retry = confirm_progress.clone();
+                                        ctx.spawn(
+                                            async move {
+                                                headless_connect::confirm_host_key(
+                                                    &server, &host_key,
+                                                )
+                                            },
+                                            move |workspace, result, ctx| {
+                                                if attempt_for_retry.as_ref().is_some_and(
+                                                    |attempt| {
+                                                        !workspace.ssh_connect_is_active(attempt)
+                                                    },
+                                                ) {
+                                                    return;
+                                                }
+                                                let pending_tab_alive = pending_pane_group
+                                                    .is_some_and(|pane_group_id| {
+                                                        workspace.tabs.iter().any(|tab| {
+                                                            tab.pane_group.id() == pane_group_id
+                                                        })
+                                                    });
+                                                if !pending_tab_alive {
+                                                    if let Some(attempt) =
+                                                        attempt_for_retry.as_ref()
+                                                    {
+                                                        workspace.finish_ssh_connect(attempt, ctx);
+                                                    }
+                                                    return;
+                                                }
+                                                if let Err(error) = result {
+                                                    let message = crate::t!(
+                                                        "connect-host-key-save-failed",
+                                                        host = server_for_retry.host.clone(),
+                                                        error = error
+                                                    )
+                                                    .to_string();
+                                                    let _ = progress_for_retry
+                                                        .try_send(message.clone());
+                                                    workspace.toast_stack.update(
+                                                        ctx,
+                                                        |stack, ctx| {
+                                                            stack.add_persistent_toast(
+                                                                DismissibleToast::error(message),
+                                                                ctx,
+                                                            );
+                                                        },
+                                                    );
+                                                    if let Some(attempt) =
+                                                        attempt_for_retry.as_ref()
+                                                    {
+                                                        workspace.finish_ssh_connect(attempt, ctx);
+                                                    }
+                                                    if let Some(pane_group_id) = pending_pane_group
+                                                    {
+                                                        workspace
+                                                            .ssh_tab_nodes
+                                                            .remove(&pane_group_id);
+                                                        if let Some(index) =
+                                                            workspace.tabs.iter().position(|tab| {
+                                                                tab.pane_group.id() == pane_group_id
+                                                            })
+                                                        {
+                                                            workspace
+                                                                .close_tab(index, true, false, ctx);
+                                                        }
+                                                    }
+                                                    return;
+                                                }
+
+                                                if let Some(attempt) = attempt_for_retry.as_ref() {
+                                                    workspace.finish_ssh_connect(attempt, ctx);
+                                                }
+                                                let Some(retry_attempt) = workspace
+                                                    .begin_ssh_connect(
+                                                        node_id_for_retry.clone(),
+                                                        server_for_retry.host.clone(),
+                                                        ctx,
+                                                    )
+                                                else {
+                                                    return;
+                                                };
+                                                workspace.open_resolved_ssh_terminal_command(
+                                                    node_id_for_retry,
+                                                    connection_for_retry,
+                                                    false,
+                                                    None,
+                                                    route_for_retry,
+                                                    managed_launch_for_retry,
+                                                    Some(retry_attempt),
+                                                    ctx,
+                                                );
+                                                if let Some(pane_group_id) = pending_pane_group {
+                                                    workspace.ssh_tab_nodes.remove(&pane_group_id);
+                                                    if let Some(index) =
+                                                        workspace.tabs.iter().position(|tab| {
+                                                            tab.pane_group.id() == pane_group_id
+                                                        })
+                                                    {
+                                                        workspace
+                                                            .close_tab(index, true, false, ctx);
+                                                    }
+                                                }
+                                            },
+                                        );
+                                    },
+                                ),
+                                ModalButton::for_view(
+                                    crate::t!("common-cancel"),
+                                    move |workspace: &mut Workspace, ctx| {
+                                        let message = crate::t!(
+                                            "connect-host-key-cancelled",
+                                            host = cancel_host.clone()
+                                        )
+                                        .to_string();
+                                        let _ = cancel_progress.try_send(message.clone());
+                                        workspace.toast_stack.update(ctx, |stack, ctx| {
+                                            stack.add_persistent_toast(
+                                                DismissibleToast::error(message),
+                                                ctx,
+                                            );
+                                        });
+                                        if let Some(attempt) = cancel_attempt.as_ref() {
+                                            workspace.finish_ssh_connect(attempt, ctx);
+                                        }
+                                        if let Some(pane_group_id) = pending_pane_group {
+                                            workspace.ssh_tab_nodes.remove(&pane_group_id);
+                                            if let Some(index) =
+                                                workspace.tabs.iter().position(|tab| {
+                                                    tab.pane_group.id() == pane_group_id
+                                                })
+                                            {
+                                                workspace.close_tab(index, true, false, ctx);
+                                            }
+                                        }
+                                    },
+                                ),
+                            ],
+                            |_, _| {},
+                        );
+                        ctx.show_native_platform_modal(dialog);
+                    }
                     // Daemon already installed → connect right away. Dropping the
                     // progress sender ends the tab's progress stream after the
                     // initial "Connecting…" line.
@@ -10616,7 +10999,7 @@ impl Workspace {
                         );
                         drop(progress_tx);
                         workspace.connect_daemon_session(
-                            server_owned,
+                            connection_owned,
                             session_id,
                             socket_path,
                             auth_context,
@@ -10685,7 +11068,7 @@ impl Workspace {
                                         crate::t!("connect-progress-setup-complete").to_string(),
                                     );
                                     workspace.connect_daemon_session(
-                                        server_owned,
+                                        connection_owned,
                                         session_id,
                                         socket_path,
                                         auth_context,
@@ -10720,7 +11103,7 @@ impl Workspace {
                                     }
                                     workspace.fall_back_to_classic_ssh(
                                         node_id_owned,
-                                        server_owned,
+                                        connection_owned,
                                         warning,
                                         ctx,
                                     );
@@ -10744,7 +11127,7 @@ impl Workspace {
     #[cfg(unix)]
     fn connect_daemon_session(
         &mut self,
-        server: warp_ssh_manager::SshServerInfo,
+        connection: warp_ssh_manager::ResolvedSshConnection,
         session_id: SessionId,
         socket_path: std::path::PathBuf,
         auth_context: std::sync::Arc<remote_server::auth::RemoteServerAuthContext>,
@@ -10754,17 +11137,19 @@ impl Workspace {
         use crate::remote_server::manager::RemoteServerManager;
         use crate::remote_server::ssh_transport::SshTransport;
 
+        let server = &connection.server;
         self.daemon_session_hosts
             .insert(session_id, server.host.clone());
         // Remembered so a handshake failure (e.g. version mismatch) can fall back
         // to classic SSH instead of leaving a dead daemon tab.
         if allow_classic_fallback {
             self.daemon_session_servers
-                .insert(session_id, server.clone());
+                .insert(session_id, connection.clone());
         }
         let host_label = server.host.clone();
         let registry_node_id = server.node_id.clone();
-        let transport = SshTransport::new(socket_path, auth_context.clone()).with_self_heal(server);
+        let transport = SshTransport::new(socket_path, auth_context.clone())
+            .with_self_heal(connection.server.clone());
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.mark_session_persistent(session_id);
             mgr.connect_session(
@@ -10824,19 +11209,24 @@ impl Workspace {
         session_id: SessionId,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some(server) = self.daemon_session_servers.remove(&session_id) else {
+        let Some(connection) = self.daemon_session_servers.remove(&session_id) else {
             self.finish_daemon_ssh_connect(session_id, ctx);
             return;
         };
         log::warn!(
             "daemon session {session_id:?} handshake failed; falling back to classic SSH on {}",
-            server.host
+            connection.server.host
         );
         let warning = crate::t!(
             "connect-fallback-handshake-failed",
-            host = server.host.clone()
+            host = connection.server.host.clone()
         );
-        self.fall_back_to_classic_ssh(server.node_id.clone(), server, warning, ctx);
+        self.fall_back_to_classic_ssh(
+            connection.server.node_id.clone(),
+            connection,
+            warning,
+            ctx,
+        );
         self.finish_daemon_ssh_connect(session_id, ctx);
     }
 
@@ -10852,14 +11242,16 @@ impl Workspace {
     fn fall_back_to_classic_ssh(
         &mut self,
         node_id: String,
-        server: warp_ssh_manager::SshServerInfo,
+        connection: warp_ssh_manager::ResolvedSshConnection,
         warning: String,
         ctx: &mut ViewContext<Self>,
     ) {
         self.toast_stack.update(ctx, |stack, ctx| {
             stack.add_persistent_toast(DismissibleToast::error(warning), ctx);
         });
-        self.open_ssh_terminal(node_id, server, true, ctx);
+        self.open_resolved_ssh_terminal_command(
+            node_id, connection, true, None, None, None, None, ctx,
+        );
     }
 
     /// Revalidates an agent row against a fresh daemon inventory snapshot before
@@ -10955,13 +11347,15 @@ impl Workspace {
     #[cfg(unix)]
     pub fn adopt_daemon_session(
         &mut self,
-        server: warp_ssh_manager::SshServerInfo,
+        connection: warp_ssh_manager::ResolvedSshConnection,
         pty_session_id: String,
         pty_generation: u64,
         expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::remote_server::headless_connect;
+
+        let server = connection.server.clone();
 
         // Prune entries whose tab has since closed, then, if this session is
         // already open in a tab, focus that tab instead of opening a second view
@@ -11040,7 +11434,7 @@ impl Workspace {
             session_id,
         );
 
-        self.spawn_daemon_session_connect(server, session_id, ctx);
+        self.spawn_daemon_session_connect(connection, session_id, ctx);
     }
 
     /// Establishes the headless SSH ControlMaster for a daemon session, then
@@ -11049,7 +11443,7 @@ impl Workspace {
     #[cfg(unix)]
     fn spawn_daemon_session_connect(
         &mut self,
-        server: warp_ssh_manager::SshServerInfo,
+        connection: warp_ssh_manager::ResolvedSshConnection,
         session_id: SessionId,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -11058,26 +11452,27 @@ impl Workspace {
         use crate::remote_server::manager::{RemoteServerInitPhase, RemoteServerManager};
         use crate::remote_server::ssh_transport::SshTransport;
 
+        let server = &connection.server;
         let auth_context = std::sync::Arc::new(server_api_auth_context(
             AuthStateProvider::as_ref(ctx).get().clone(),
         ));
-        let socket_path = headless_connect::control_socket_path(&server);
+        let socket_path = headless_connect::control_socket_path(server);
         let host = server.host.clone();
         self.daemon_session_hosts
             .insert(session_id, server.host.clone());
         // Remembered so a handshake failure (e.g. version mismatch) can fall back
         // to classic SSH instead of leaving a dead daemon tab.
         self.daemon_session_servers
-            .insert(session_id, server.clone());
+            .insert(session_id, connection.clone());
         // Kept for the transport so reconnect can re-heal a dead ControlMaster.
-        let server_for_transport = server.clone();
+        let server_for_transport = connection.server.clone();
         let registry_node_id = server.node_id.clone();
 
         // Off the main thread: bring up the ControlMaster + ensure the
         // remote-server binary is installed, then connect the session.
         ctx.spawn(
             headless_connect::prepare_daemon_transport(
-                server,
+                connection.server.clone(),
                 socket_path.clone(),
                 auth_context.clone(),
             ),
@@ -21813,16 +22208,18 @@ impl Workspace {
                         })
                 };
                 let location = match node_id.as_deref() {
-                    Some(node_id) => warp_ssh_manager::with_conn(|connection| {
-                        let server =
-                            warp_ssh_manager::SshRepository::get_server(connection, node_id)?
-                                .ok_or_else(|| {
-                                    warp_ssh_manager::SshRepositoryError::NotFound(
-                                        node_id.to_string(),
-                                    )
-                                })?;
+                    Some(node_id) => warp_ssh_manager::with_conn(|database| {
+                        let connection = warp_ssh_manager::SshRepository::get_server_with_resolved_auth(
+                            database,
+                            node_id,
+                        )?
+                        .ok_or_else(|| {
+                            warp_ssh_manager::SshRepositoryError::NotFound(node_id.to_string())
+                        })?;
                         Ok(crate::ai::subscription_agent::ProcessLocation::Remote {
-                            ssh_argv: warp_ssh_manager::ssh_command::build_ssh_args(&server),
+                            ssh_argv: warp_ssh_manager::ssh_command::build_ssh_args(
+                                &connection.server,
+                            ),
                         })
                     })
                     .map_err(|error| error.to_string()),

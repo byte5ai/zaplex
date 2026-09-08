@@ -13,7 +13,9 @@
 //! row padding 4×8).
 
 use std::collections::HashMap;
+use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::theme::color::internal_colors;
@@ -26,6 +28,7 @@ use warpui::elements::{
     Shrinkable, Stack, Text,
 };
 use warpui::platform::Cursor;
+use warpui::r#async::FutureExt;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
@@ -83,6 +86,7 @@ const CONTEXT_MENU_ITEM_PADDING_H: f32 = 12.0;
 const MAX_CONTEXT_MENU_ITEMS: usize = 6;
 const SSH_PANEL_POSITION_ID: &str = "ssh_manager_panel_root";
 const DELETE_CONFIRM_BODY_MAX_HEIGHT: f32 = 320.0;
+const TAILSCALE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn tree_row_leading_icon(kind: NodeKind) -> Option<crate::ui_components::icons::Icon> {
     match kind {
@@ -148,13 +152,24 @@ fn compose_connection_row_targets(
         .finish()
 }
 
-fn tailscale_status_output(
-    command_factory: &dyn WorkspaceCommandFactory,
-) -> std::io::Result<std::process::Output> {
-    command_factory
-        .blocking_command("tailscale")
+async fn tailscale_status_output(
+    command_factory: Arc<dyn WorkspaceCommandFactory>,
+) -> Result<std::process::Output, String> {
+    let mut command = command_factory.async_command("tailscale");
+    let child = command
         .args(["status", "--json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("Could not start Tailscale discovery: {error}"))?;
+    child
         .output()
+        .with_timeout(TAILSCALE_DISCOVERY_TIMEOUT)
+        .await
+        .map_err(|_| "Tailscale discovery timed out.".to_string())?
+        .map_err(|error| format!("Could not read Tailscale status: {error}"))
 }
 
 #[derive(Clone, Debug)]
@@ -414,6 +429,7 @@ pub struct SshManagerPanel {
     session_row_states: HashMap<String, MouseStateHandle>,
     /// Fixed-width icon actions for existing tmux/byobu sessions.
     multiplexer_open_actions: HashMap<String, CompactRowAction>,
+    tailscale_discovery_in_flight: bool,
     command_factory: Arc<dyn WorkspaceCommandFactory>,
 }
 
@@ -500,6 +516,7 @@ impl SshManagerPanel {
             sessions_error: HashMap::new(),
             session_row_states: HashMap::new(),
             multiplexer_open_actions: HashMap::new(),
+            tailscale_discovery_in_flight: false,
             command_factory,
         };
         // `~/.ssh/config` is read on-demand only when the user opens the "Add a
@@ -911,77 +928,97 @@ impl SshManagerPanel {
     /// the new hosts (tagged in `notes` so they're easy to spot/remove). An
     /// explicit, reversible action — the button is the user's intent.
     fn on_discover_tailscale(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.tailscale_discovery_in_flight {
+            return;
+        }
         self.adding_mode = false;
-        let output = tailscale_status_output(self.command_factory.as_ref());
-        let json = match output {
-            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
-            Ok(_) | Err(_) => {
-                ctx.emit(SshManagerPanelEvent::PersistenceError(
-                    "Tailscale not found or not running (`tailscale status` failed).".to_string(),
-                ));
-                return;
-            }
-        };
-        let candidates: Vec<_> = crate::cockpit::tailscale::parse_tailscale_status(&json)
-            .into_iter()
-            .filter(|c| c.online)
-            .collect();
-
+        self.tailscale_discovery_in_flight = true;
         let parent = self.parent_for_new_node();
-        let result = warp_ssh_manager::with_conn(|conn| {
-            // Existing hosts → skip peers we've already saved (idempotent).
-            let mut existing = std::collections::HashSet::new();
-            for node in SshRepository::list_nodes(conn)? {
-                if matches!(node.kind, NodeKind::Server) {
-                    if let Some(info) = SshRepository::get_server(conn, &node.id)? {
-                        existing.insert(info.host);
+        let command_factory = self.command_factory.clone();
+        ctx.notify();
+        ctx.spawn(
+            async move {
+                let output = tailscale_status_output(command_factory).await?;
+                if !output.status.success() {
+                    return Err(
+                        "Tailscale not found or not running (`tailscale status` failed)."
+                            .to_string(),
+                    );
+                }
+                let json = String::from_utf8_lossy(&output.stdout).into_owned();
+                let candidates = crate::cockpit::tailscale::parse_tailscale_status(&json)
+                    .into_iter()
+                    .filter(|candidate| candidate.online)
+                    .collect::<Vec<_>>();
+                tokio::task::spawn_blocking(move || {
+                    warp_ssh_manager::with_conn(|conn| {
+                        let mut existing = std::collections::HashSet::new();
+                        for node in SshRepository::list_nodes(conn)? {
+                            if matches!(node.kind, NodeKind::Server) {
+                                if let Some(info) = SshRepository::get_server(conn, &node.id)? {
+                                    existing.insert(info.host);
+                                }
+                            }
+                        }
+                        let mut count = 0usize;
+                        for candidate in &candidates {
+                            let host = candidate.connect_host().to_string();
+                            if host.is_empty() || existing.contains(&host) {
+                                continue;
+                            }
+                            let info = SshServerInfo {
+                                node_id: String::new(),
+                                host: host.clone(),
+                                port: 22,
+                                username: String::new(),
+                                auth_type: AuthType::Key,
+                                key_path: None,
+                                credential_id: None,
+                                startup_command: None,
+                                notes: Some(format!(
+                                    "Discovered via Tailscale ({})",
+                                    candidate.os
+                                )),
+                                last_connected_at: None,
+                                session_resilience:
+                                    warp_ssh_manager::SessionResilience::default(),
+                                ring_ceiling_mb: 0,
+                            };
+                            let name = unique_name(conn, parent.as_deref(), &candidate.hostname)?;
+                            SshRepository::create_server(
+                                conn,
+                                parent.as_deref(),
+                                &name,
+                                &info,
+                            )?;
+                            existing.insert(host);
+                            count += 1;
+                        }
+                        Ok(count)
+                    })
+                })
+                .await
+                .map_err(|error| format!("Tailscale import worker failed: {error}"))?
+                .map_err(|error| error.to_string())
+            },
+            |me, result, ctx| {
+                me.tailscale_discovery_in_flight = false;
+                match result {
+                    Ok(count) => {
+                        log::info!("ssh_manager: Tailscale discovery added {count} host(s)");
+                        me.refresh_tree(ctx);
+                        SshTreeChangedNotifier::handle(ctx).update(ctx, |_, ctx| {
+                            ctx.emit(SshTreeChangedEvent::TreeChanged);
+                        });
+                    }
+                    Err(error) => {
+                        log::error!("ssh_manager: Tailscale discovery failed: {error}");
+                        ctx.emit(SshManagerPanelEvent::PersistenceError(error));
                     }
                 }
-            }
-            let mut count = 0usize;
-            for c in &candidates {
-                let host = c.connect_host().to_string();
-                if host.is_empty() || existing.contains(&host) {
-                    continue;
-                }
-                let info = SshServerInfo {
-                    node_id: String::new(),
-                    host: host.clone(),
-                    port: 22,
-                    username: String::new(),
-                    auth_type: AuthType::Key,
-                    key_path: None,
-                    credential_id: None,
-                    startup_command: None,
-                    notes: Some(format!("Discovered via Tailscale ({})", c.os)),
-                    last_connected_at: None,
-                    session_resilience: warp_ssh_manager::SessionResilience::default(),
-                    ring_ceiling_mb: 0,
-                };
-                let name = unique_name(conn, parent.as_deref(), &c.hostname)?;
-                SshRepository::create_server(conn, parent.as_deref(), &name, &info)?;
-                existing.insert(host);
-                count += 1;
-            }
-            Ok(count)
-        });
-        match result {
-            Ok(0) => {
-                log::info!("ssh_manager: Tailscale discovery — no new hosts to add");
-                self.refresh_tree(ctx);
-            }
-            Ok(n) => {
-                log::info!("ssh_manager: Tailscale discovery added {n} host(s)");
-                self.refresh_tree(ctx);
-                SshTreeChangedNotifier::handle(ctx).update(ctx, |_, ctx| {
-                    ctx.emit(SshTreeChangedEvent::TreeChanged);
-                });
-            }
-            Err(e) => {
-                log::error!("ssh_manager: Tailscale discovery failed: {e:?}");
-                ctx.emit(SshManagerPanelEvent::PersistenceError(e.to_string()));
-            }
-        }
+                ctx.notify();
+            },
+        );
     }
 
     fn on_clone_server(&mut self, source_id: &str, ctx: &mut ViewContext<Self>) {

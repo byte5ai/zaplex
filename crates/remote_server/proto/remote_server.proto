@@ -667,6 +667,11 @@ message SafeFileFlushHandle {
   string handle_id = 1;
 }
 
+message SafeFileSetModeHandle {
+  string handle_id = 1;
+  uint32 mode = 2;
+}
+
 message SafeFileInspectHandle {
   string handle_id = 1;
   string path = 2;
@@ -699,9 +704,41 @@ message SafeFileDelete {
   optional string expected_sha256 = 3;
 }
 
+// Identity-only delete negotiated through safe-file-transactions-v2. The
+// daemon isolates the exact object before unlinking, so clients never need to
+// stream file contents merely to authorize deletion.
+message SafeFileDeleteV2 {
+  string path = 1;
+  SafeFileIdentity expected = 2;
+}
+
 message SafeFileListRecoveries {}
 
 message SafeFileRetryRecovery {}
+
+message SafeFileUploadEntry {
+  string relative_path = 1;
+  SafeFileEntryKind kind = 2;
+}
+
+message SafeFileBeginUploadBatch {
+  string destination_directory = 1;
+  string batch_id = 2;
+  repeated SafeFileUploadEntry entries = 3;
+}
+
+message SafeFileCleanupUploadBatch {
+  string batch_handle_id = 1;
+}
+
+message SafeFileIdentityBatchEntry {
+  string path = 1;
+  SafeFileEntryKind expected_kind = 2;
+}
+
+message SafeFileListIdentities {
+  repeated SafeFileIdentityBatchEntry entries = 1;
+}
 
 message SafeFileRequest {
   // Required for create/rename/delete. Reusing an id returns the persisted
@@ -719,6 +756,11 @@ message SafeFileRequest {
     SafeFileDelete delete = 10;
     SafeFileListRecoveries list_recoveries = 11;
     SafeFileRetryRecovery retry_recovery = 12;
+    SafeFileSetModeHandle set_mode_handle = 13;
+    SafeFileBeginUploadBatch begin_upload_batch = 14;
+    SafeFileCleanupUploadBatch cleanup_upload_batch = 15;
+    SafeFileListIdentities list_identities = 16;
+    SafeFileDeleteV2 delete_v2 = 17;
   }
 }
 
@@ -761,6 +803,36 @@ message SafeFileRecoveryList {
   repeated SafeFileRecovery recoveries = 1;
 }
 
+message SafeFileUploadEntryOpened {
+  string relative_path = 1;
+  string handle_id = 2;
+  SafeFileIdentity identity = 3;
+}
+
+message SafeFileUploadBatchOpened {
+  string batch_handle_id = 1;
+  string root_path = 2;
+  repeated SafeFileUploadEntryOpened entries = 3;
+}
+
+enum SafeFileIdentityBatchStatus {
+  SAFE_FILE_IDENTITY_BATCH_STATUS_UNSPECIFIED = 0;
+  SAFE_FILE_IDENTITY_BATCH_STATUS_FOUND = 1;
+  SAFE_FILE_IDENTITY_BATCH_STATUS_NOT_FOUND = 2;
+  SAFE_FILE_IDENTITY_BATCH_STATUS_PERMISSION_DENIED = 3;
+  SAFE_FILE_IDENTITY_BATCH_STATUS_KIND_CHANGED = 4;
+}
+
+message SafeFileIdentityBatchEntryResult {
+  string path = 1;
+  SafeFileIdentityBatchStatus status = 2;
+  optional SafeFileIdentity identity = 3;
+}
+
+message SafeFileIdentityBatchResult {
+  repeated SafeFileIdentityBatchEntryResult entries = 1;
+}
+
 message SafeFileResponse {
   oneof result {
     SafeFileOpened opened = 1;
@@ -768,6 +840,8 @@ message SafeFileResponse {
     SafeFileInspectResult inspected = 3;
     SafeFileMutationResult mutation = 4;
     SafeFileRecoveryList recoveries = 5;
+    SafeFileUploadBatchOpened upload_batch_opened = 6;
+    SafeFileIdentityBatchResult identities = 7;
     FileOperationError error = 15;
   }
 }

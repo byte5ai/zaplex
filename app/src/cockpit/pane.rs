@@ -213,6 +213,11 @@ struct SessionRowLifecycle {
     cleanup_candidate: Option<zaplex_cockpit::ClaudeStaleRegistryCandidate>,
 }
 
+struct ClaudeCleanupLookup {
+    config_dir: PathBuf,
+    session_id: String,
+}
+
 enum SessionLifecycleDialog {
     Rename {
         route: SessionRoute,
@@ -496,6 +501,9 @@ pub struct CockpitPaneView {
     /// The row whose ⋯ drive is open (P5), if any: its row key and where to
     /// anchor the menu.
     row_menu: Option<RowMenu>,
+    /// Invalidates stale background lifecycle lookups, including reopening the
+    /// same row before its previous lookup completes.
+    row_menu_generation: u64,
     /// Hover state per row's ⋯ button, keyed like the row.
     row_dots_states: HashMap<String, MouseStateHandle>,
     /// Hover state per sortable column header.
@@ -800,6 +808,7 @@ impl CockpitPaneView {
             filter_chip_states: HashMap::new(),
             sort: Sort::default(),
             row_menu: None,
+            row_menu_generation: 0,
             row_dots_states: HashMap::new(),
             sort_header_states: HashMap::new(),
             session_lifecycle_dialog: None,
@@ -1657,7 +1666,7 @@ impl CockpitPaneView {
         &self,
         row_key: &str,
         app: &AppContext,
-    ) -> Option<SessionRowLifecycle> {
+    ) -> Option<(SessionRowLifecycle, Option<ClaudeCleanupLookup>)> {
         let account_key = self.account_key.as_deref()?;
         let model = CockpitModel::as_ref(app);
         let acct = model
@@ -1713,7 +1722,7 @@ impl CockpitPaneView {
             crate::cockpit::launch_registry::BoundLaunchLookup::Match(_)
         );
         #[cfg(not(target_family = "wasm"))]
-        let cleanup_candidate = if is_local
+        let cleanup_lookup = if is_local
             && session.provider == Provider::Claude
             && session.state == SessionState::Idle
         {
@@ -1722,31 +1731,32 @@ impl CockpitPaneView {
                 .as_deref()
                 .map(Path::new)
                 .unwrap_or(acct.account.config_dir.as_path());
-            zaplex_cockpit::claude_stale_registry_candidate(config_dir, &session.session_id)
-                .ok()
-                .flatten()
+            Some(ClaudeCleanupLookup {
+                config_dir: config_dir.to_path_buf(),
+                session_id: session.session_id.clone(),
+            })
         } else {
             None
         };
         #[cfg(target_family = "wasm")]
-        let cleanup_candidate = None;
+        let cleanup_lookup = None;
         let capabilities = lifecycle_capabilities(
             &route,
             &restart_presence_for_menu(session),
             exact_launch_bound,
-            cleanup_candidate.is_some(),
+            false,
         );
 
-        Some(SessionRowLifecycle {
-            route,
-            current_name: session.name.clone(),
-            can_restart: capabilities.can_restart,
-            can_rename: capabilities.can_rename,
-            cleanup_candidate: capabilities
-                .can_cleanup_stale
-                .then_some(cleanup_candidate)
-                .flatten(),
-        })
+        Some((
+            SessionRowLifecycle {
+                route,
+                current_name: session.name.clone(),
+                can_restart: capabilities.can_restart,
+                can_rename: capabilities.can_rename,
+                cleanup_candidate: None,
+            },
+            cleanup_lookup,
+        ))
     }
 
     fn render_session_lifecycle_dialog(&self, app: &AppContext) -> Option<Box<dyn Element>> {
@@ -3874,7 +3884,12 @@ impl TypedActionView for CockpitPaneView {
                 ctx.notify();
             }
             CockpitPaneAction::OpenRowMenu { row_key, position } => {
-                let lifecycle = self.session_row_lifecycle(row_key, ctx);
+                self.row_menu_generation = self.row_menu_generation.wrapping_add(1);
+                let generation = self.row_menu_generation;
+                let (lifecycle, cleanup_lookup) = self
+                    .session_row_lifecycle(row_key, ctx)
+                    .map(|(lifecycle, lookup)| (Some(lifecycle), lookup))
+                    .unwrap_or((None, None));
                 self.row_menu = Some(RowMenu {
                     row_key: row_key.clone(),
                     position: *position,
@@ -3888,6 +3903,44 @@ impl TypedActionView for CockpitPaneView {
                 // — the same shape as the spawn card's stale-render bug.
                 self.sync_table_states(ctx);
                 ctx.notify();
+                #[cfg(not(target_family = "wasm"))]
+                if let Some(cleanup_lookup) = cleanup_lookup {
+                    let row_key = row_key.clone();
+                    ctx.spawn(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                zaplex_cockpit::claude_stale_registry_candidate(
+                                    &cleanup_lookup.config_dir,
+                                    &cleanup_lookup.session_id,
+                                )
+                            })
+                            .await
+                        },
+                        move |me, result, ctx| {
+                            if me.row_menu_generation != generation
+                                || me
+                                    .row_menu
+                                    .as_ref()
+                                    .is_none_or(|menu| menu.row_key != row_key)
+                            {
+                                return;
+                            }
+                            let Ok(Ok(Some(candidate))) = result else {
+                                return;
+                            };
+                            let Some(lifecycle) = me
+                                .row_menu
+                                .as_mut()
+                                .and_then(|menu| menu.lifecycle.as_mut())
+                            else {
+                                return;
+                            };
+                            lifecycle.cleanup_candidate = Some(candidate);
+                            me.sync_table_states(ctx);
+                            ctx.notify();
+                        },
+                    );
+                }
             }
             CockpitPaneAction::CloseRowMenu => {
                 self.row_menu = None;

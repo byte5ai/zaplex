@@ -19,9 +19,12 @@ use crate::sftp_manager::types::FileEntry;
 struct InstrumentedBackend {
     inner: InMemorySftpBackend,
     supports_exchange: bool,
+    durable_exchange_recovery: bool,
+    supports_cleanup: bool,
     fail_exchange_preflight: bool,
     writer_creates: Arc<AtomicU64>,
     read_bytes: Arc<AtomicU64>,
+    stage_identity_calls: Arc<AtomicU64>,
     cancel_on_read: Option<Arc<TransferControl>>,
     isolate_cleanup_failure: bool,
     cleanup_failure_applied: AtomicBool,
@@ -57,9 +60,12 @@ impl InstrumentedBackend {
         Self {
             inner: InMemorySftpBackend::new(root.to_path_buf()),
             supports_exchange: true,
+            durable_exchange_recovery: false,
+            supports_cleanup: true,
             fail_exchange_preflight: false,
             writer_creates: Arc::new(AtomicU64::new(0)),
             read_bytes: Arc::new(AtomicU64::new(0)),
+            stage_identity_calls: Arc::new(AtomicU64::new(0)),
             cancel_on_read: None,
             isolate_cleanup_failure: false,
             cleanup_failure_applied: AtomicBool::new(false),
@@ -93,6 +99,16 @@ impl InstrumentedBackend {
 
     fn without_exchange(mut self) -> Self {
         self.supports_exchange = false;
+        self
+    }
+
+    fn with_durable_exchange_recovery(mut self) -> Self {
+        self.durable_exchange_recovery = true;
+        self
+    }
+
+    fn without_identity_bound_cleanup(mut self) -> Self {
+        self.supports_cleanup = false;
         self
     }
 
@@ -317,6 +333,10 @@ impl BackendFileWriter for FailingAfterChunksWriter {
         Ok(())
     }
 
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        self.inner.set_mode(mode)
+    }
+
     fn flush(&mut self) -> Result<(), SftpOpsError> {
         self.inner.flush()
     }
@@ -336,6 +356,13 @@ impl BackendFileWriter for ReplacingFailingWriter {
         Err(SftpOpsError::Operation(
             "injected writer failure after stage replacement".to_string(),
         ))
+    }
+
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        self.inner
+            .as_mut()
+            .ok_or_else(|| SftpOpsError::Operation("replacement writer is closed".to_string()))?
+            .set_mode(mode)
     }
 
     fn flush(&mut self) -> Result<(), SftpOpsError> {
@@ -358,6 +385,13 @@ impl BackendFileWriter for ReplacingOnDropWriter {
             .as_mut()
             .expect("replacement writer is still open")
             .write_chunk(buffer)
+    }
+
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        self.inner
+            .as_mut()
+            .expect("replacement writer is still open")
+            .set_mode(mode)
     }
 
     fn flush(&mut self) -> Result<(), SftpOpsError> {
@@ -420,8 +454,12 @@ impl SftpBackend for InstrumentedBackend {
         self.supports_exchange
     }
 
+    fn supports_durable_exchange_recovery(&self) -> bool {
+        self.durable_exchange_recovery && self.supports_exchange && !self.fail_exchange_preflight
+    }
+
     fn supports_identity_bound_cleanup(&self) -> bool {
-        true
+        self.supports_cleanup
     }
 
     fn entry_exists(&self, path: &Path) -> Result<bool, SftpOpsError> {
@@ -448,6 +486,12 @@ impl SftpBackend for InstrumentedBackend {
         path: &Path,
         require_exchange: bool,
     ) -> Result<(), SftpOpsError> {
+        if !self.supports_cleanup {
+            return Err(SftpOpsError::CapabilityRequired(format!(
+                "injected missing identity-bound cleanup for {}",
+                path.display()
+            )));
+        }
         if require_exchange && self.fail_exchange_preflight {
             return Err(SftpOpsError::Operation(
                 "injected filesystem capability failure".to_string(),
@@ -671,7 +715,14 @@ impl SftpBackend for InstrumentedBackend {
             .or(self.inner.modification_time(path)?))
     }
 
+    fn regular_file_mode(&self, path: &Path) -> Result<Option<u32>, SftpOpsError> {
+        self.inner.regular_file_mode(path)
+    }
+
     fn stable_identity(&self, path: &Path) -> Result<StableEntryIdentity, SftpOpsError> {
+        if path.to_string_lossy().contains(".zaplex-transfer-") {
+            self.stage_identity_calls.fetch_add(1, Ordering::SeqCst);
+        }
         if self.rename_completed.load(Ordering::SeqCst)
             && self.fail_identity_after_rename.as_deref() == Some(path)
         {
@@ -845,6 +896,52 @@ fn job(
         operation,
         conflict,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn copy_preserves_executable_mode() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let source = tempdir().unwrap();
+    let target = tempdir().unwrap();
+    let source_path = source.path().join("source.bin");
+    fs::write(&source_path, b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&source_path, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut observed_private_stage = false;
+
+    let outcome = run_transfer(
+        &job(
+            source.path(),
+            target.path(),
+            TransferOperation::Copy,
+            ConflictDecision::Overwrite,
+        ),
+        &TransferControl::default(),
+        Some(&mut |progress| {
+            if progress.phase == TransferPhase::Transferring && progress.transferred > 0 {
+                let stages = transfer_artifacts(target.path(), "zaplex-transfer");
+                assert_eq!(stages.len(), 1);
+                assert_eq!(
+                    fs::metadata(&stages[0]).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+                observed_private_stage = true;
+            }
+        }),
+    )
+    .unwrap();
+
+    assert_eq!(outcome, TransferOutcome::Completed);
+    assert!(observed_private_stage);
+    assert_eq!(
+        fs::metadata(target.path().join("target.bin"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
 }
 
 fn directory_job(
@@ -1146,10 +1243,10 @@ fn cancel_preserves_source() {
 }
 
 #[test]
-fn cancelled_copy_preserves_previous_destination() {
+fn cancelled_file_transfer_removes_owned_stage_and_returns_cancelled() {
     let source = tempdir().unwrap();
     let target = tempdir().unwrap();
-    let bytes = vec![0x5c; STREAM_CHUNK_SIZE * 2];
+    let bytes = vec![0x5c; STREAM_CHUNK_SIZE * 3 + 1];
     fs::write(source.path().join("source.bin"), &bytes).unwrap();
     fs::write(target.path().join("target.bin"), b"existing").unwrap();
     let control = TransferControl::default();
@@ -1169,11 +1266,15 @@ fn cancelled_copy_preserves_previous_destination() {
         }),
     );
 
-    assert!(matches!(result, Err(SftpOpsError::RecoveryRequired { .. })));
+    assert!(matches!(result, Err(SftpOpsError::Cancelled)));
     assert_eq!(fs::read(source.path().join("source.bin")).unwrap(), bytes);
     assert_eq!(
         fs::read(target.path().join("target.bin")).unwrap(),
         b"existing"
+    );
+    assert!(
+        transfer_artifacts(target.path(), "zaplex-transfer").is_empty(),
+        "cancelling after a staged write must remove the owned stage"
     );
     assert!(control.is_cancelled());
 }
@@ -1367,6 +1468,75 @@ fn stable_identity_is_revalidated_before_move_delete() {
         b"changed while transferring"
     );
     assert!(!target.path().join("target.bin").exists());
+}
+
+#[test]
+fn target_ownership_validation_is_not_per_chunk() {
+    fn validation_calls(chunks: usize) -> u64 {
+        let source = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        fs::write(
+            source.path().join("source.bin"),
+            vec![0x31; STREAM_CHUNK_SIZE * chunks],
+        )
+        .unwrap();
+        let target_backend = Arc::new(InstrumentedBackend::new(target.path()));
+        let calls = target_backend.stage_identity_calls.clone();
+        let transfer = TransferJob {
+            source_backend: backend(source.path()),
+            target_backend,
+            source_path: PathBuf::from("/source.bin"),
+            target_path: PathBuf::from("/target.bin"),
+            operation: TransferOperation::Copy,
+            conflict: ConflictDecision::Overwrite,
+        };
+
+        assert_eq!(
+            run_transfer(&transfer, &TransferControl::default(), None).unwrap(),
+            TransferOutcome::Completed
+        );
+        calls.load(Ordering::SeqCst)
+    }
+
+    assert_eq!(validation_calls(1), validation_calls(32));
+}
+
+#[test]
+fn overwrite_uses_atomic_displaced_entry_without_creating_backup_copy() {
+    let source = tempdir().unwrap();
+    let target = tempdir().unwrap();
+    let contents = vec![0x41; STREAM_CHUNK_SIZE * 3];
+    fs::write(source.path().join("source.bin"), &contents).unwrap();
+    fs::write(target.path().join("target.bin"), b"old").unwrap();
+    let source_backend = Arc::new(InstrumentedBackend::new(source.path()));
+    let source_read_bytes = source_backend.read_bytes.clone();
+    let target_backend =
+        Arc::new(InstrumentedBackend::new(target.path()).with_durable_exchange_recovery());
+    let writer_creates = target_backend.writer_creates.clone();
+    let transfer = TransferJob {
+        source_backend,
+        target_backend,
+        source_path: PathBuf::from("/source.bin"),
+        target_path: PathBuf::from("/target.bin"),
+        operation: TransferOperation::Copy,
+        conflict: ConflictDecision::Overwrite,
+    };
+
+    assert_eq!(
+        run_transfer(&transfer, &TransferControl::default(), None).unwrap(),
+        TransferOutcome::Completed
+    );
+    assert_eq!(
+        fs::read(target.path().join("target.bin")).unwrap(),
+        contents
+    );
+    assert_eq!(
+        source_read_bytes.load(Ordering::SeqCst),
+        contents.len() as u64
+    );
+    assert_eq!(writer_creates.load(Ordering::SeqCst), 1);
+    assert!(transfer_artifacts(target.path(), "zaplex-backup").is_empty());
+    assert!(transfer_artifacts(target.path(), "zaplex-transfer").is_empty());
 }
 
 #[test]
@@ -3748,6 +3918,33 @@ fn filesystem_capability_failure_stops_before_first_writer() {
         fs::read(target.path().join("target.bin")).unwrap(),
         b"target"
     );
+}
+
+#[test]
+fn move_without_identity_bound_cleanup_reports_capability_required() {
+    let source = tempdir().unwrap();
+    let target = tempdir().unwrap();
+    fs::write(source.path().join("source.bin"), b"source").unwrap();
+    let source_backend: Arc<dyn SftpBackend> =
+        Arc::new(InstrumentedBackend::new(source.path()).without_identity_bound_cleanup());
+    let transfer = TransferJob {
+        source_backend,
+        target_backend: backend(target.path()),
+        source_path: PathBuf::from("/source.bin"),
+        target_path: PathBuf::from("/target.bin"),
+        operation: TransferOperation::Move,
+        conflict: ConflictDecision::Overwrite,
+    };
+
+    let error = run_transfer(&transfer, &TransferControl::default(), None)
+        .expect_err("a move must fail before inspecting the source identity");
+
+    assert!(matches!(error, SftpOpsError::CapabilityRequired(_)));
+    assert_eq!(
+        fs::read(source.path().join("source.bin")).unwrap(),
+        b"source"
+    );
+    assert!(!target.path().join("target.bin").exists());
 }
 
 #[test]
