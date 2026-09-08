@@ -154,6 +154,26 @@ fn test_ui_star_partial_patterns() {
 
     let result3 = match_wildcard_pattern_case_insensitive(path, "ui/*.");
     assert!(result3.is_some());
+
+    assert_eq!(result1.unwrap().matched_indices, vec![5, 6, 7, 14, 15, 16]);
+}
+
+#[test]
+fn pathological_multi_star_is_bounded() {
+    let text: Vec<char> = "a/very/long/nested/path/that/does/not/end/in/typescript.txt"
+        .chars()
+        .collect();
+    let pattern: Vec<char> = "**/*.ts".chars().collect();
+    let (matched, visits) = glob_substring_match(&text, &pattern);
+
+    assert!(matched.is_none());
+    assert!(visits <= (text.len() + 1) * (pattern.len() + 1));
+}
+
+#[test]
+fn multi_star_matches_nested_typescript_path() {
+    assert!(match_wildcard_pattern("src/deep/module/file.ts", "**/*.ts").is_some());
+    assert!(match_wildcard_pattern("src/deep/module/file.txt", "**/*.ts").is_none());
 }
 
 use crate::{

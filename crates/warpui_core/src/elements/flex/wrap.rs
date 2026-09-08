@@ -149,7 +149,7 @@ impl Element for Wrap {
                         WrapParentData::FillEntireRun => true,
                     };
 
-                    if should_create_new_run {
+                    if should_create_new_run && current_run.num_children > 0 {
                         let mut new_run = RunBuilder::default();
                         std::mem::swap(&mut new_run, &mut current_run);
                         self.runs.push(new_run.build(

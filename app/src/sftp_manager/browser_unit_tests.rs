@@ -244,17 +244,39 @@ fn test_build_upload_remote_path_normalizes() {
 #[test]
 fn test_build_upload_remote_path_rejects_dangerous() {
     let current = PathBuf::from("/home/user");
-    // file_name() extracts "passwd" from "../etc/passwd", so the path is safe
-    assert_eq!(
-        build_upload_remote_path(&current, "../etc/passwd"),
-        Some(PathBuf::from("/home/user/passwd"))
-    );
+    assert_eq!(build_upload_remote_path(&current, "../etc/passwd"), None);
     assert_eq!(build_upload_remote_path(&current, ""), None);
-    // file_name() extracts "passwd" from "/etc/passwd", so the path is safe
+    assert_eq!(build_upload_remote_path(&current, "/etc/passwd"), None);
+}
+
+#[test]
+fn safe_name_helpers_accept_embedded_double_dots() {
+    let parent = PathBuf::from("/home/user");
+    let original = parent.join("old.txt");
+
     assert_eq!(
-        build_upload_remote_path(&current, "/etc/passwd"),
-        Some(PathBuf::from("/home/user/passwd"))
+        safe_join_name(&parent, "notes..txt"),
+        Some(parent.join("notes..txt"))
     );
+    assert_eq!(
+        build_rename_path(&original, "v1..v2"),
+        Some(parent.join("v1..v2"))
+    );
+    assert_eq!(
+        build_new_folder_path(&parent, "archive.tar..gz"),
+        Some(parent.join("archive.tar..gz"))
+    );
+    assert_eq!(
+        build_upload_remote_path(&parent, "notes..txt"),
+        Some(parent.join("notes..txt"))
+    );
+
+    for unsafe_name in ["", ".", "..", "child/name", "child\\name", "/absolute"] {
+        assert_eq!(safe_join_name(&parent, unsafe_name), None);
+        assert_eq!(build_rename_path(&original, unsafe_name), None);
+        assert_eq!(build_new_folder_path(&parent, unsafe_name), None);
+        assert_eq!(build_upload_remote_path(&parent, unsafe_name), None);
+    }
 }
 
 // ============================================================
