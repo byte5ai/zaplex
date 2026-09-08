@@ -602,3 +602,7 @@ pub fn install_root_tmux_script(
 ) -> Option<String> {
     None
 }
+
+#[cfg(test)]
+#[path = "install_tmux_tests.rs"]
+mod tests;

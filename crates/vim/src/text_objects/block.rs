@@ -67,7 +67,12 @@ where
         }
     }
 
-    Some(block_start..block_end)
+    if block_start > block_end {
+        block_end = block_start;
+    }
+    let range = block_start..block_end;
+    debug_assert!(range.start <= range.end);
+    Some(range)
 }
 
 /// Vim's block-based text objects, e.g. `da{`. This includes a string of text enclosed by any pair
