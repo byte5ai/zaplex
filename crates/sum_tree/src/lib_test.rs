@@ -451,3 +451,99 @@ impl Add<&Self> for Sum {
         self
     }
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Height(f32);
+
+impl Eq for Height {}
+
+impl PartialOrd for Height {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Height {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct MeasuredSummary {
+    height: Height,
+    count: Count,
+}
+
+impl AddAssign<&Self> for MeasuredSummary {
+    fn add_assign(&mut self, other: &Self) {
+        self.height.0 += other.height.0;
+        self.count.0 += other.count.0;
+    }
+}
+
+#[derive(Clone, Debug)]
+struct MeasuredItem;
+
+impl Item for MeasuredItem {
+    type Summary = MeasuredSummary;
+
+    fn summary(&self) -> Self::Summary {
+        MeasuredSummary {
+            height: Height(1.0),
+            count: Count(1),
+        }
+    }
+}
+
+impl Dimension<'_, MeasuredSummary> for Height {
+    fn add_summary(&mut self, summary: &MeasuredSummary) {
+        self.0 += summary.height.0;
+    }
+}
+
+impl Dimension<'_, MeasuredSummary> for Count {
+    fn add_summary(&mut self, summary: &MeasuredSummary) {
+        self.0 += summary.count.0;
+    }
+}
+
+#[test]
+fn test_seek_precision_fallback_counts_last_item_once() {
+    fn leaf(item_count: usize) -> SumTree<MeasuredItem> {
+        let items: ArrayVec<_, { 2 * TREE_BASE }> = (0..item_count).map(|_| MeasuredItem).collect();
+        let item_summaries: ArrayVec<_, { 2 * TREE_BASE }> =
+            items.iter().map(Item::summary).collect();
+        SumTree(Arc::new(Node::Leaf {
+            summary: sum(item_summaries.iter()),
+            items,
+            item_summaries,
+        }))
+    }
+
+    let children: ArrayVec<_, { 2 * TREE_BASE }> = [leaf(2), leaf(1)].into_iter().collect();
+    let child_summaries: ArrayVec<_, { 2 * TREE_BASE }> =
+        children.iter().map(SumTree::summary).collect();
+    let tree = SumTree(Arc::new(Node::Internal {
+        height: 1,
+        summary: MeasuredSummary {
+            height: Height(4.0),
+            count: Count(3),
+        },
+        child_summaries,
+        child_trees: children,
+    }));
+
+    let target = Height(3.5);
+    let mut cursor = tree.cursor::<Height, Count>();
+    assert!(!cursor.seek(&target, SeekBias::Right));
+    assert_eq!(cursor.seek_position(), &Height(3.0));
+    assert_eq!(cursor.start(), &Count(3));
+
+    let mut cursor = tree.cursor::<Height, Count>();
+    assert_eq!(cursor.slice(&target, SeekBias::Right).items().len(), 3);
+    assert_eq!(cursor.start(), &Count(3));
+
+    let mut cursor = tree.cursor::<Height, Count>();
+    assert_eq!(cursor.summary::<Count>(&target, SeekBias::Right), Count(3));
+}

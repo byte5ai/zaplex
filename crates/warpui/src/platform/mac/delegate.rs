@@ -259,7 +259,7 @@ impl platform::Delegate for AppDelegate {
                 return None;
             }
 
-            nsstring_as_str(nsstring).ok()?
+            nsstring_as_str(nsstring)?
         };
 
         let executable_path = unsafe {
@@ -268,7 +268,7 @@ impl platform::Delegate for AppDelegate {
             if nsstring == nil {
                 None
             } else {
-                nsstring_as_str(nsstring).map(Path::new).ok()
+                nsstring_as_str(nsstring).map(Path::new)
             }
         };
 
