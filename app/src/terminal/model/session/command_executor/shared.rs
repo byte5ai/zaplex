@@ -46,3 +46,12 @@ pub fn shell_escape_single_quotes(command: &str, shell_type: ShellType) -> Strin
         }
     }
 }
+
+/// Quotes one complete shell argument so interpolated paths remain data.
+pub fn shell_quote_arg(value: &str, shell_type: ShellType) -> String {
+    format!("'{}'", shell_escape_single_quotes(value, shell_type))
+}
+
+#[cfg(test)]
+#[path = "shared_tests.rs"]
+mod tests;

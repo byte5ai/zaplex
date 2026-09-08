@@ -837,13 +837,22 @@ where
                                     }
                                 }
                             } else {
-                                // If we are at the last item and the target is actually
-                                // beyond the current leaf, add the item_summary to seek
-                                // and sum dimension because the item is past the last leaf item.
-                                // Mark item_after_current_subtree to true.
+                                // If the target is beyond the real end of the last item but still
+                                // inside an inflated parent summary, aggregate that item here and
+                                // leave the cursor dimensions at its start. `next()` below owns the
+                                // single dimension update and moves past the item.
                                 if target_beyond_node {
-                                    self.seek_dimension.add_summary(item_summary);
-                                    self.sum_dimension.add_summary(item_summary);
+                                    match aggregate {
+                                        SeekAggregate::None => {}
+                                        SeekAggregate::Slice(_) => {
+                                            slice_items.push(item.clone());
+                                            *slice_items_summary.as_mut().unwrap() += item_summary;
+                                            slice_item_summaries.push(item_summary.clone());
+                                        }
+                                        SeekAggregate::Summary(summary) => {
+                                            summary.add_summary(item_summary);
+                                        }
+                                    }
                                     is_item_after_current_subtree = true;
                                 }
                                 self.stack.push(StackEntry {

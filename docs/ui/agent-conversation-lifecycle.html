@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="ui-spec-status" content="approved-2026-09-07">
+  <meta name="ui-spec-route" content="/native/agent-conversation-lifecycle">
+  <meta name="ui-spec-viewports" content="1180x820,560x760,1180x900-long">
+  <meta name="ui-spec-issue" content="153">
+  <title>UI specification — Agent conversation lifecycle</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --canvas: #090c12;
+      --app: #0e121a;
+      --surface: #151b25;
+      --surface-raised: #1c2431;
+      --border: #2a3445;
+      --text: #edf1f7;
+      --muted: #9ca8b9;
+      --faint: #6f7b8d;
+      --accent: #8e83fa;
+      --working: #59c995;
+      --waiting: #e1aa55;
+      --error: #e27e88;
+      --user: #202a3a;
+      --tool: #111722;
+      color: var(--text);
+      background: var(--canvas);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; }
+    button { font: inherit; }
+    .spec, .mockups { width: min(1160px, 100%); margin: 0 auto 24px; }
+    .spec {
+      padding: 17px 18px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+    h1 { margin: 0 0 8px; font-size: 18px; }
+    .spec > p { margin: 0; color: var(--muted); }
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 15px;
+    }
+    .state {
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--app);
+    }
+    .state strong { display: block; font-size: 10px; }
+    .state small { color: var(--muted); font-size: 9px; }
+    .state.enabled { border-color: #59c99570; }
+    .mockups { display: grid; gap: 24px; }
+    .viewport {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--app);
+      box-shadow: 0 18px 60px #0008;
+    }
+    .viewport.narrow { width: min(540px, 100%); }
+    .viewport-label {
+      padding: 7px 11px;
+      border-bottom: 1px solid var(--border);
+      color: var(--faint);
+      font-size: 10px;
+    }
+    .window-bar {
+      display: flex;
+      height: 38px;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      background: #121722;
+    }
+    .lights { display: flex; gap: 6px; padding: 0 13px; }
+    .lights i { width: 9px; height: 9px; border-radius: 50%; background: #ed6a64; }
+    .lights i:nth-child(2) { background: #e8b754; }
+    .lights i:nth-child(3) { background: #55bd70; }
+    .title { margin: auto; color: var(--muted); font-size: 11px; }
+    .conversation { min-height: 650px; display: flex; flex-direction: column; }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--border);
+      background: #111722;
+    }
+    .agent-mark { width: 9px; height: 9px; border-radius: 3px; background: var(--accent); }
+    .header strong { font-size: 12px; }
+    .header .host { color: var(--muted); font-size: 10px; }
+    .header .status { margin-left: auto; color: var(--working); font-size: 10px; }
+    .transcript {
+      flex: 1;
+      display: grid;
+      align-content: end;
+      gap: 10px;
+      padding: 18px 15%;
+    }
+    .block {
+      min-width: 0;
+      padding: 10px 11px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: var(--surface);
+    }
+    .block.user { margin-left: 14%; background: var(--user); }
+    .block.tool { background: var(--tool); }
+    .block.approval { border-color: #e1aa5570; }
+    .block.error { border-color: #e27e8870; }
+    .block-head { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
+    .block-head strong { font-size: 10px; }
+    .block-head small { margin-left: auto; color: var(--faint); font-size: 9px; }
+    .block p { margin: 0; color: #ced5df; }
+    .block code { color: #bcc8d8; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+    .action {
+      min-height: 27px;
+      padding: 4px 8px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      background: var(--surface-raised);
+    }
+    .action.primary { border-color: #8e83fa90; background: #8e83fa24; }
+    .composer-zone { border-top: 1px solid var(--border); background: #101620; }
+    .composer {
+      min-height: 70px;
+      margin: 10px 12px 7px;
+      padding: 10px;
+      border: 1px solid #3b4659;
+      border-radius: 8px;
+      color: var(--faint);
+      background: #0d121a;
+    }
+    .composer.disabled { display: flex; align-items: center; color: var(--muted); border-style: dashed; }
+    .identity {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      padding: 0 12px 10px;
+    }
+    .field {
+      min-width: 0;
+      max-width: 100%;
+      padding: 3px 6px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--muted);
+      font: 9px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .field b { color: var(--faint); font-weight: 500; }
+    .footer-actions { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 12px 11px; }
+    .narrow .transcript { padding: 12px; }
+    .narrow .block.user { margin-left: 7%; }
+    .narrow .header { align-items: flex-start; flex-wrap: wrap; }
+    .narrow .header .status { width: 100%; margin-left: 17px; }
+    .narrow .field { max-width: calc(50% - 3px); }
+    .long .transcript { padding: 18px 9%; }
+    .long .field.directory { max-width: 290px; }
+    .long .footer-actions { padding-top: 2px; }
+    @media (max-width: 720px) {
+      .state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <section class="spec" data-testid="lifecycle-contract">
+    <h1>Agent conversation lifecycle</h1>
+    <p>One destination, ten explicit states, one in-flow layout. Only Ready and Turn complete accept a prompt.</p>
+    <div class="state-grid">
+      <div class="state"><strong>1 No agent</strong><small>Settings · Shell</small></div>
+      <div class="state"><strong>2 Signed out</strong><small>Settings · Shell</small></div>
+      <div class="state enabled"><strong>3 Ready</strong><small>Composer enabled</small></div>
+      <div class="state"><strong>4 Starting</strong><small>Composer blocked</small></div>
+      <div class="state"><strong>5 Responding</strong><small>Composer blocked</small></div>
+      <div class="state"><strong>6 Tool running</strong><small>Tool block visible</small></div>
+      <div class="state"><strong>7 Approval</strong><small>Allow · Deny · Cancel</small></div>
+      <div class="state enabled"><strong>8 Turn complete</strong><small>Resume · Restart · End</small></div>
+      <div class="state"><strong>9 Session ended</strong><small>New · Shell</small></div>
+      <div class="state"><strong>10 Recoverable error</strong><small>Diagnostic · Recovery</small></div>
+    </div>
+  </section>
+
+  <main class="mockups">
+    <section class="viewport" data-testid="normal-approval">
+      <div class="viewport-label">Normal · 1180 × 820 · approval state</div>
+      <div class="window-bar"><span class="lights"><i></i><i></i><i></i></span><span class="title">Zaplex — Agent</span></div>
+      <div class="conversation">
+        <header class="header"><span class="agent-mark"></span><strong>Codex</strong><span class="host">Work account · Local machine</span><span class="status">Waiting for approval</span></header>
+        <section class="transcript">
+          <article class="block user"><div class="block-head"><strong>You</strong><small>just now</small></div><p>Update the release notes and keep the existing headings.</p></article>
+          <article class="block"><div class="block-head"><strong>Codex</strong><small>responding</small></div><p>I found the release document and prepared a focused edit.</p></article>
+          <article class="block tool"><div class="block-head"><strong>Tool · apply patch</strong><small>completed</small></div><code>docs/releases/next.md · 4 lines changed</code></article>
+          <article class="block approval"><div class="block-head"><strong>Approval required</strong><small>active request</small></div><p>Allow the agent to update the tracked release document?</p><div class="actions"><button class="action primary">Allow</button><button class="action">Allow for session</button><button class="action">Deny</button><button class="action">Cancel</button></div></article>
+        </section>
+        <footer class="composer-zone">
+          <div class="composer disabled">Resolve the approval request before sending another prompt.</div>
+          <div class="identity">
+            <span class="field"><b>Agent:</b> Codex</span><span class="field"><b>Account:</b> Work account</span><span class="field"><b>Host:</b> Local machine</span><span class="field directory"><b>Directory:</b> /projects/zaplex</span><span class="field"><b>Model:</b> GPT-5</span><span class="field"><b>Session:</b> Codex thread-42</span><span class="field"><b>Status:</b> Waiting for approval</span>
+          </div>
+        </footer>
+      </div>
+    </section>
+
+    <section class="viewport narrow" data-testid="narrow-ended">
+      <div class="viewport-label">Narrow · 540 × 760 · ended state</div>
+      <div class="window-bar"><span class="lights"><i></i><i></i><i></i></span><span class="title">Zaplex — Agent</span></div>
+      <div class="conversation">
+        <header class="header"><span class="agent-mark"></span><strong>Claude Code</strong><span class="host">Personal · build-box</span><span class="status">Session ended</span></header>
+        <section class="transcript">
+          <article class="block user"><div class="block-head"><strong>You</strong></div><p>Explain why this deployment stopped.</p></article>
+          <article class="block"><div class="block-head"><strong>Claude Code</strong><small>complete</small></div><p>The deployment stopped after the health check exhausted its retry budget.</p></article>
+        </section>
+        <footer class="composer-zone">
+          <div class="composer disabled">Start a new conversation or return to the shell.</div>
+          <div class="identity"><span class="field"><b>Agent:</b> Claude Code</span><span class="field"><b>Account:</b> Personal</span><span class="field"><b>Host:</b> build-box</span><span class="field directory"><b>Directory:</b> /srv/application</span><span class="field"><b>Model:</b> Sonnet</span><span class="field"><b>Status:</b> Session ended</span></div>
+          <div class="footer-actions"><button class="action primary">New conversation</button><button class="action">Back to shell</button></div>
+        </footer>
+      </div>
+    </section>
+
+    <section class="viewport long" data-testid="long-error">
+      <div class="viewport-label">Long content · 1180 × 900 · recoverable error</div>
+      <div class="window-bar"><span class="lights"><i></i><i></i><i></i></span><span class="title">Zaplex — Agent</span></div>
+      <div class="conversation">
+        <header class="header"><span class="agent-mark"></span><strong>Codex</strong><span class="host">Engineering account with a long display name · remote-development-host</span><span class="status" style="color: var(--error)">Agent needs attention</span></header>
+        <section class="transcript">
+          <article class="block user"><div class="block-head"><strong>You</strong></div><p>Continue the migration without changing unrelated formatting, and summarize any compatibility risk before applying the final patch.</p></article>
+          <article class="block tool"><div class="block-head"><strong>Tool · terminal command with a deliberately descriptive name</strong><small>interrupted</small></div><code>Connection closed after the remote process acknowledged the previous output boundary.</code></article>
+          <article class="block error"><div class="block-head"><strong>Recoverable error</strong><small>session retained</small></div><p>The remote agent connection closed unexpectedly. The recorded session can be resumed without discarding this transcript.</p></article>
+        </section>
+        <footer class="composer-zone">
+          <div class="composer disabled">Recover or restart the agent session before sending another prompt.</div>
+          <div class="identity"><span class="field"><b>Agent:</b> Codex</span><span class="field"><b>Account:</b> Engineering account with a long display name</span><span class="field"><b>Host:</b> remote-development-host</span><span class="field directory"><b>Directory:</b> /home/developer/projects/a-very-long-monorepo-name/packages/application</span><span class="field"><b>Model:</b> GPT-5 high reasoning</span><span class="field"><b>Session:</b> Codex 0199-session-identifier</span><span class="field"><b>Status:</b> Agent needs attention</span></div>
+          <div class="footer-actions"><button class="action primary">Resume</button><button class="action">Restart</button><button class="action">End</button></div>
+        </footer>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
