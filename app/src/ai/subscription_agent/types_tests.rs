@@ -51,4 +51,11 @@ fn only_states_with_native_session_can_resume() {
         true
     );
     assert_eq!(AgentLifecycle::SessionEnded.can_resume(), false);
+    assert_eq!(
+        AgentLifecycle::NotSignedIn {
+            agent: SubscriptionAgent::ClaudeCode,
+        }
+        .can_resume(),
+        false
+    );
 }

@@ -15,7 +15,6 @@ cpal = "0.17.1"
 hound = "3.5.1"
 instant = { workspace = true }
 log = { workspace = true }
-parking_lot = { workspace = true }
 rubato = "0.16.1"
 warpui.workspace = true
 

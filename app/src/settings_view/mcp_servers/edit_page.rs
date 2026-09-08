@@ -64,6 +64,16 @@ const DEFAULT_JSON_TEXT: &str = r#"{
 }
 "#;
 
+fn validate_parsed_servers(
+    parsed_servers: Vec<ParsedTemplatableMCPServerResult>,
+    mut validate: impl FnMut(&TemplatableMCPServer) -> Result<(), String>,
+) -> Result<Vec<ParsedTemplatableMCPServerResult>, String> {
+    for parsed_server in &parsed_servers {
+        validate(&parsed_server.templatable_mcp_server)?;
+    }
+    Ok(parsed_servers)
+}
+
 #[derive(Debug, Clone)]
 pub enum MCPServersEditPageViewEvent {
     Back,
@@ -508,21 +518,11 @@ impl MCPServersEditPageView {
                 }
             };
 
-        for parsed_templatable_mcp_server_result in parsed_templatable_mcp_servers.iter() {
-            if self
-                .detect_secrets_in_templatable_mcp_server(
-                    ctx,
-                    &parsed_templatable_mcp_server_result.templatable_mcp_server,
-                )
-                .is_err()
-            {
-                return vec![];
-            }
-        }
-
         // TODO(Pei): Stop and start servers
-
-        parsed_templatable_mcp_servers
+        validate_parsed_servers(parsed_templatable_mcp_servers, |server| {
+            self.detect_secrets_in_templatable_mcp_server(ctx, server)
+        })
+        .unwrap_or_default()
     }
 
     fn build_templatable_mcp_server_result_from_json(
@@ -791,6 +791,12 @@ impl TypedActionView for MCPServersEditPageView {
                         return;
                     }
 
+                    let Ok(parsed_servers) = validate_parsed_servers(parsed_servers, |server| {
+                        self.detect_secrets_in_templatable_mcp_server(ctx, server)
+                    }) else {
+                        return;
+                    };
+
                     for parsed_server in parsed_servers {
                         TemplatableMCPServerManager::handle(ctx).update(
                             ctx,
@@ -837,3 +843,7 @@ impl TypedActionView for MCPServersEditPageView {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "edit_page_tests.rs"]
+mod tests;

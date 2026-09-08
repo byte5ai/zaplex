@@ -636,7 +636,15 @@ impl Input {
                 self.open_invoke_skill_selector(ctx);
             }
             models if command.name == commands::MODEL.name => {
-                self.open_model_selector(ctx);
+                if self.is_subscription_agent_view_active(ctx) {
+                    show_error_toast(
+                        "Model selection for this conversation is controlled by the selected agent"
+                            .to_string(),
+                        ctx,
+                    );
+                } else {
+                    self.open_model_selector(ctx);
+                }
             }
             profiles if command.name == commands::PROFILE.name => {
                 if !FeatureFlag::InlineProfileSelector.is_enabled() {

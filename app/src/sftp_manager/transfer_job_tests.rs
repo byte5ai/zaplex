@@ -19,6 +19,7 @@ use crate::sftp_manager::types::FileEntry;
 struct InstrumentedBackend {
     inner: InMemorySftpBackend,
     supports_exchange: bool,
+    supports_cleanup: bool,
     fail_exchange_preflight: bool,
     writer_creates: Arc<AtomicU64>,
     read_bytes: Arc<AtomicU64>,
@@ -57,6 +58,7 @@ impl InstrumentedBackend {
         Self {
             inner: InMemorySftpBackend::new(root.to_path_buf()),
             supports_exchange: true,
+            supports_cleanup: true,
             fail_exchange_preflight: false,
             writer_creates: Arc::new(AtomicU64::new(0)),
             read_bytes: Arc::new(AtomicU64::new(0)),
@@ -93,6 +95,11 @@ impl InstrumentedBackend {
 
     fn without_exchange(mut self) -> Self {
         self.supports_exchange = false;
+        self
+    }
+
+    fn without_identity_bound_cleanup(mut self) -> Self {
+        self.supports_cleanup = false;
         self
     }
 
@@ -421,7 +428,7 @@ impl SftpBackend for InstrumentedBackend {
     }
 
     fn supports_identity_bound_cleanup(&self) -> bool {
-        true
+        self.supports_cleanup
     }
 
     fn entry_exists(&self, path: &Path) -> Result<bool, SftpOpsError> {
@@ -448,6 +455,12 @@ impl SftpBackend for InstrumentedBackend {
         path: &Path,
         require_exchange: bool,
     ) -> Result<(), SftpOpsError> {
+        if !self.supports_cleanup {
+            return Err(SftpOpsError::CapabilityRequired(format!(
+                "injected missing identity-bound cleanup for {}",
+                path.display()
+            )));
+        }
         if require_exchange && self.fail_exchange_preflight {
             return Err(SftpOpsError::Operation(
                 "injected filesystem capability failure".to_string(),
@@ -1146,10 +1159,10 @@ fn cancel_preserves_source() {
 }
 
 #[test]
-fn cancelled_copy_preserves_previous_destination() {
+fn cancelled_file_transfer_removes_owned_stage_and_returns_cancelled() {
     let source = tempdir().unwrap();
     let target = tempdir().unwrap();
-    let bytes = vec![0x5c; STREAM_CHUNK_SIZE * 2];
+    let bytes = vec![0x5c; STREAM_CHUNK_SIZE * 3 + 1];
     fs::write(source.path().join("source.bin"), &bytes).unwrap();
     fs::write(target.path().join("target.bin"), b"existing").unwrap();
     let control = TransferControl::default();
@@ -1169,11 +1182,15 @@ fn cancelled_copy_preserves_previous_destination() {
         }),
     );
 
-    assert!(matches!(result, Err(SftpOpsError::RecoveryRequired { .. })));
+    assert!(matches!(result, Err(SftpOpsError::Cancelled)));
     assert_eq!(fs::read(source.path().join("source.bin")).unwrap(), bytes);
     assert_eq!(
         fs::read(target.path().join("target.bin")).unwrap(),
         b"existing"
+    );
+    assert!(
+        transfer_artifacts(target.path(), "zaplex-transfer").is_empty(),
+        "cancelling after a staged write must remove the owned stage"
     );
     assert!(control.is_cancelled());
 }
@@ -3748,6 +3765,33 @@ fn filesystem_capability_failure_stops_before_first_writer() {
         fs::read(target.path().join("target.bin")).unwrap(),
         b"target"
     );
+}
+
+#[test]
+fn move_without_identity_bound_cleanup_reports_capability_required() {
+    let source = tempdir().unwrap();
+    let target = tempdir().unwrap();
+    fs::write(source.path().join("source.bin"), b"source").unwrap();
+    let source_backend: Arc<dyn SftpBackend> =
+        Arc::new(InstrumentedBackend::new(source.path()).without_identity_bound_cleanup());
+    let transfer = TransferJob {
+        source_backend,
+        target_backend: backend(target.path()),
+        source_path: PathBuf::from("/source.bin"),
+        target_path: PathBuf::from("/target.bin"),
+        operation: TransferOperation::Move,
+        conflict: ConflictDecision::Overwrite,
+    };
+
+    let error = run_transfer(&transfer, &TransferControl::default(), None)
+        .expect_err("a move must fail before inspecting the source identity");
+
+    assert!(matches!(error, SftpOpsError::CapabilityRequired(_)));
+    assert_eq!(
+        fs::read(source.path().join("source.bin")).unwrap(),
+        b"source"
+    );
+    assert!(!target.path().join("target.bin").exists());
 }
 
 #[test]
