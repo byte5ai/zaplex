@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use chrono::Local;
 use smol_str::SmolStr;
 use warp_editor::render::model::LineCount;
+use warp_terminal::shell::ShellType;
 use warp_util::path::EscapeChar;
 use warpui::App;
 
@@ -639,6 +640,28 @@ fn fork_command_pinned_prepends_inline_env_for_non_default_accounts() {
 }
 
 #[test]
+fn routed_fork_scrubs_keys_and_preserves_dynamic_arguments() {
+    let launch = CLIAgent::Claude
+        .fork_routed("session 'one", Some(Path::new("/home/u/Claude's work")))
+        .unwrap();
+    assert_eq!(
+        shell_words::split(&launch.shell_command(ShellType::Fish)).unwrap(),
+        vec![
+            "env",
+            "-u",
+            "ANTHROPIC_API_KEY",
+            "-u",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CONFIG_DIR=/home/u/Claude's work",
+            "claude",
+            "--resume",
+            "session 'one",
+            "--fork-session",
+        ]
+    );
+}
+
+#[test]
 fn resume_command_per_provider_continues_in_place() {
     // Adopt-in-place: same session, no `--fork-session` (verified 2026-07-05).
     assert_eq!(
@@ -706,7 +729,7 @@ fn routed_resume_preserves_account_model_effort_and_scrubs_api_keys() {
             Some("high"),
         ),
         Some(
-            "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; \
+            "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
              CLAUDE_CONFIG_DIR='/home/u/claude work' claude --model opus \
              --resume claude-session"
                 .to_string()
@@ -720,7 +743,7 @@ fn routed_resume_preserves_account_model_effort_and_scrubs_api_keys() {
             Some("high"),
         ),
         Some(
-            "unset OPENAI_API_KEY; CODEX_HOME=/home/u/.codex-alt codex \
+            "env -u OPENAI_API_KEY CODEX_HOME=/home/u/.codex-alt codex \
              --model gpt-5.6-sol -c 'model_reasoning_effort=\"high\"' \
              resume codex-session"
                 .to_string()
@@ -738,7 +761,7 @@ fn routed_resume_quotes_session_id_and_rejects_unsupported_providers() {
             None,
         ),
         Some(
-            "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; \
+            "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
              claude --resume 'id with spaces;$(touch /tmp/nope)'"
                 .to_string()
         )
@@ -754,16 +777,113 @@ fn routed_resume_quotes_session_id_and_rejects_unsupported_providers() {
 }
 
 #[test]
+fn routed_launch_uses_child_scoped_unix_environment_for_bash_zsh_and_fish() {
+    let launch = CLIAgent::Claude.routed_launch(
+        Some(Path::new("/home/u/Claude's work")),
+        Some("opus' preview"),
+        None,
+    );
+    for shell_type in [ShellType::Bash, ShellType::Zsh, ShellType::Fish] {
+        let command = launch.shell_command(shell_type);
+        assert!(!command.split_whitespace().any(|word| word == "unset"));
+        assert_eq!(
+            shell_words::split(&command).unwrap(),
+            vec![
+                "env",
+                "-u",
+                "ANTHROPIC_API_KEY",
+                "-u",
+                "ANTHROPIC_AUTH_TOKEN",
+                "CLAUDE_CONFIG_DIR=/home/u/Claude's work",
+                "claude",
+                "--model",
+                "opus' preview",
+            ]
+        );
+    }
+
+    let powershell = launch.shell_command(ShellType::PowerShell);
+    assert!(powershell.contains("Remove-Item Env:ANTHROPIC_API_KEY"));
+    assert!(powershell.contains("Remove-Item Env:ANTHROPIC_AUTH_TOKEN"));
+    assert!(powershell.contains("$env:CLAUDE_CONFIG_DIR = '/home/u/Claude''s work'"));
+    assert!(powershell.contains("& 'claude' '--model' 'opus'' preview'"));
+    assert!(!powershell.contains("CLAUDE_CONFIG_DIR="));
+}
+
+#[test]
+fn routed_resume_quotes_every_dynamic_argument_for_unix_and_powershell() {
+    let launch = CLIAgent::Codex
+        .resume_routed_with(
+            "thread 'one",
+            Some(Path::new("C:\\Agent's Home")),
+            Some("gpt 'preview"),
+            Some("high'care"),
+        )
+        .unwrap();
+    let unix = launch.shell_command(ShellType::Fish);
+    assert_eq!(
+        shell_words::split(&unix).unwrap(),
+        vec![
+            "env",
+            "-u",
+            "OPENAI_API_KEY",
+            "CODEX_HOME=C:\\Agent's Home",
+            "codex",
+            "--model",
+            "gpt 'preview",
+            "-c",
+            "model_reasoning_effort=\"high'care\"",
+            "resume",
+            "thread 'one",
+        ]
+    );
+
+    let powershell = launch.shell_command(ShellType::PowerShell);
+    assert!(powershell.contains("Remove-Item Env:OPENAI_API_KEY"));
+    assert!(powershell.contains("$env:CODEX_HOME = 'C:\\Agent''s Home'"));
+    assert!(powershell.contains("& 'codex'"));
+    assert!(powershell.contains("'gpt ''preview'"));
+    assert!(powershell.contains("'model_reasoning_effort=\"high''care\"'"));
+    assert!(powershell.contains("'thread ''one'"));
+    assert!(!powershell.contains("CODEX_HOME="));
+}
+
+#[test]
+fn powershell_renderer_pins_supported_subscription_agents() {
+    for (launch, environment, program) in [
+        (
+            CLIAgent::Claude.routed_launch(Some(Path::new("C:\\Claude")), None, None),
+            "$env:CLAUDE_CONFIG_DIR = 'C:\\Claude'",
+            "& 'claude'",
+        ),
+        (
+            CLIAgent::Codex.routed_launch(Some(Path::new("C:\\Codex")), None, None),
+            "$env:CODEX_HOME = 'C:\\Codex'",
+            "& 'codex'",
+        ),
+        (
+            CLIAgent::Grok.routed_launch(Some(Path::new("C:\\Grok")), None, None),
+            "$env:GROK_HOME = 'C:\\Grok'",
+            "& 'grok'",
+        ),
+    ] {
+        let command = launch.shell_command(ShellType::PowerShell);
+        assert!(command.contains(environment));
+        assert!(command.contains(program));
+    }
+}
+
+#[test]
 fn launch_command_routed_scrubs_and_pins_claude() {
     // Default account: scrub the API key env, no config-dir pin, bare `claude`.
     assert_eq!(
         CLIAgent::Claude.launch_command_routed(None),
-        "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; claude"
+        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude"
     );
     // Pinned account: scrub + CLAUDE_CONFIG_DIR before the command.
     assert_eq!(
         CLIAgent::Claude.launch_command_routed(Some(Path::new("/home/u/.claude-work"))),
-        "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; CLAUDE_CONFIG_DIR=/home/u/.claude-work claude"
+        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN CLAUDE_CONFIG_DIR=/home/u/.claude-work claude"
     );
 }
 
@@ -771,7 +891,7 @@ fn launch_command_routed_scrubs_and_pins_claude() {
 fn launch_command_routed_handles_codex_and_bare_agents() {
     assert_eq!(
         CLIAgent::Codex.launch_command_routed(Some(Path::new("/home/u/.codex"))),
-        "unset OPENAI_API_KEY; CODEX_HOME=/home/u/.codex codex"
+        "env -u OPENAI_API_KEY CODEX_HOME=/home/u/.codex codex"
     );
     // An agent with no subscription/config-dir model launches bare (no scrub/pin).
     assert_eq!(CLIAgent::Gemini.launch_command_routed(None), "gemini");
@@ -782,7 +902,7 @@ fn launch_command_routed_handles_codex_and_bare_agents() {
     assert_eq!(CLIAgent::Antigravity.launch_command_routed(None), "agy");
     assert_eq!(
         CLIAgent::Grok.launch_command_routed(Some(Path::new("/home/u/.grok"))),
-        "GROK_HOME=/home/u/.grok grok"
+        "env GROK_HOME=/home/u/.grok grok"
     );
 }
 
@@ -792,7 +912,7 @@ fn launch_command_routed_with_model_claude() {
     // never appear on the command line even when supplied.
     assert_eq!(
         CLIAgent::Claude.launch_command_routed_with(None, Some("opus"), None),
-        "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; claude --model opus"
+        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude --model opus"
     );
     assert_eq!(
         CLIAgent::Claude.launch_command_routed_with(
@@ -800,7 +920,7 @@ fn launch_command_routed_with_model_claude() {
             Some("haiku"),
             Some("low"),
         ),
-        "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; \
+        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
          CLAUDE_CONFIG_DIR=/home/u/.claude-work claude --model haiku"
     );
 }
@@ -817,7 +937,7 @@ fn launch_command_routed_with_model_and_effort_codex() {
     );
     assert_eq!(
         cmd,
-        "unset OPENAI_API_KEY; CODEX_HOME=/home/u/.codex codex \
+        "env -u OPENAI_API_KEY CODEX_HOME=/home/u/.codex codex \
          --model gpt-5-codex -c 'model_reasoning_effort=\"high\"'"
     );
     // The effort value is TOML-double-quoted inside the shell-quoted token.
@@ -826,7 +946,7 @@ fn launch_command_routed_with_model_and_effort_codex() {
     // token is shell-quoted (the `=` triggers quoting) — harmless and safe.
     assert_eq!(
         CLIAgent::Codex.launch_command_routed_with(None, None, Some("medium")),
-        "unset OPENAI_API_KEY; codex -c 'model_reasoning_effort=\"medium\"'"
+        "env -u OPENAI_API_KEY codex -c 'model_reasoning_effort=\"medium\"'"
     );
 }
 
@@ -843,7 +963,7 @@ fn selected_codex_effort_reaches_cli_arguments() {
     );
     assert_eq!(
         CLIAgent::Codex.launch_command_routed_with(None, None, Some("high")),
-        "unset OPENAI_API_KEY; codex -c 'model_reasoning_effort=\"high\"'"
+        "env -u OPENAI_API_KEY codex -c 'model_reasoning_effort=\"high\"'"
     );
 }
 
@@ -875,7 +995,7 @@ fn launch_command_routed_with_model_and_effort_grok() {
             Some("grok-4"),
             Some("high"),
         ),
-        "GROK_HOME='/home/u/grok work' grok --model grok-4 --effort high"
+        "env GROK_HOME='/home/u/grok work' grok --model grok-4 --effort high"
     );
 }
 

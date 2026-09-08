@@ -13,7 +13,8 @@ use remote_server::{
     client::{ClientError, RemoteServerClient},
     proto::{AgentLaunchRoute, AgentPtyBindingStatus, AgentSessionIdentity, SessionAttached},
 };
-use std::io;
+use std::borrow::Cow;
+use std::io::{self, Write};
 use std::sync::Arc;
 use warp_core::SessionId;
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
@@ -38,11 +39,48 @@ const MAX_PENDING_INPUT_BYTES: usize = 256 * 1024;
 /// rather than grow without bound if an open hangs on a chatty session.
 const MAX_PENDING_OUTPUT_BYTES: usize = 1024 * 1024;
 
+/// Terminal query replies are normally a few bytes. Keep a generous hard cap
+/// so malformed output cannot make response collection unbounded.
+const MAX_TERMINAL_REPLY_BYTES: usize = 64 * 1024;
+
+#[derive(Default)]
+struct TerminalReplyBuffer {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+impl Write for TerminalReplyBuffer {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let remaining = MAX_TERMINAL_REPLY_BYTES.saturating_sub(self.bytes.len());
+        let accepted = remaining.min(buffer.len());
+        self.bytes.extend_from_slice(&buffer[..accepted]);
+        self.truncated |= accepted < buffer.len();
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 fn account_route_is_compatible(
     route: Option<&AgentLaunchRoute>,
     supports_account_routing: bool,
 ) -> bool {
     route.is_none() || supports_account_routing
+}
+
+const ATTACH_PARSE_CHUNK_BYTES: usize = 64 * 1024;
+
+struct PendingAttachReplay {
+    bootstrap_preamble: Vec<u8>,
+    preamble_offset: usize,
+    base_seq: u64,
+    replay: Vec<u8>,
+    replay_offset: usize,
+    gap_applied: bool,
+    fed_preamble: bool,
+    pending_exit: Option<Option<i32>>,
 }
 
 /// Drives a terminal backed by a *daemon-hosted* PTY session.
@@ -78,6 +116,10 @@ pub(super) struct EventLoop {
     /// Adopt/reconnect output stays buffered until `SessionAttached` supplies
     /// the capability-checked authoritative binding snapshot.
     awaiting_attach_snapshot: bool,
+    pending_attach_replay: Option<PendingAttachReplay>,
+    /// A transport replacement that arrives while a replay is being parsed is
+    /// deferred until that snapshot is consumed, avoiding overlapping attaches.
+    reattach_after_replay: bool,
     /// Attach/replay request token. A reconnect invalidates an older callback.
     attach_in_flight: Option<u64>,
     next_attach_attempt: u64,
@@ -219,7 +261,7 @@ impl EventLoop {
             .filter(|c| !c.is_control())
             .collect();
         let title_seq = format!("\x1b]0;{safe_label}\x07");
-        event_loop.process_pty_bytes(title_seq.as_bytes());
+        event_loop.process_historical_pty_bytes(title_seq.as_bytes());
         match (adopt_pty_session_id, adopt_pty_generation) {
             // Adopt an existing daemon session: attach + replay on connect.
             (Some(id), generation) if !id.is_empty() => {
@@ -269,10 +311,15 @@ impl EventLoop {
                 ..
             } => {
                 if me.is_our_session(pty_session_id) && !me.awaiting_attach_snapshot {
-                    me.process_pty_bytes(bytes);
-                    me.last_seq = *seq + bytes.len() as u64;
-                    me.maybe_report_bootstrap_boundary(ctx);
-                    me.maybe_dispatch_startup_command(ctx);
+                    let end_seq = seq.saturating_add(bytes.len() as u64);
+                    if end_seq > me.last_seq {
+                        let offset =
+                            me.last_seq.saturating_sub(*seq).min(bytes.len() as u64) as usize;
+                        me.process_live_pty_bytes(&bytes[offset..], ctx);
+                        me.last_seq = end_seq;
+                        me.maybe_report_bootstrap_boundary(ctx);
+                        me.maybe_dispatch_startup_command(ctx);
+                    }
                 } else if (me.is_our_session(pty_session_id) && me.awaiting_attach_snapshot)
                     || (me.pty_session_id.is_none() && *session_id == me.connection_session_id)
                 {
@@ -383,6 +430,8 @@ impl EventLoop {
             pty_generation: None,
             expected_attach_agent_binding: None,
             awaiting_attach_snapshot: false,
+            pending_attach_replay: None,
+            reattach_after_replay: false,
             attach_in_flight: None,
             next_attach_attempt: 0,
             terminal_view_id: None,
@@ -723,6 +772,10 @@ impl EventLoop {
     /// Falls back to opening the session if it was never opened (reconnect raced
     /// the initial open).
     fn reattach(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.pending_attach_replay.is_some() {
+            self.reattach_after_replay = true;
+            return;
+        }
         if self.attach_in_flight.is_some() {
             return;
         }
@@ -829,14 +882,93 @@ impl EventLoop {
             self.apply_authoritative_agent_binding(None, ctx);
         }
         self.expected_attach_agent_binding = None;
-        self.apply_attach(
-            &attached.bootstrap_preamble,
-            attached.base_seq,
-            &attached.replay,
+        let bootstrap_preamble = if self.is_bootstrapped() {
+            Vec::new()
+        } else {
+            attached.bootstrap_preamble
+        };
+        let fed_preamble = !bootstrap_preamble.is_empty();
+        if fed_preamble {
+            self.terminal_model.lock().suppress_next_bootstrap_write();
+        }
+        self.pending_attach_replay = Some(PendingAttachReplay {
+            bootstrap_preamble,
+            preamble_offset: 0,
+            base_seq: attached.base_seq,
+            replay: attached.replay,
+            replay_offset: 0,
+            gap_applied: false,
+            fed_preamble,
+            pending_exit,
+        });
+        self.process_attach_replay_chunk(ctx);
+    }
+
+    fn process_attach_replay_chunk(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(mut pending) = self.pending_attach_replay.take() else {
+            return;
+        };
+
+        if pending.preamble_offset < pending.bootstrap_preamble.len() {
+            let end = (pending.preamble_offset + ATTACH_PARSE_CHUNK_BYTES)
+                .min(pending.bootstrap_preamble.len());
+            self.process_historical_pty_bytes(
+                &pending.bootstrap_preamble[pending.preamble_offset..end],
+            );
+            pending.preamble_offset = end;
+            self.last_seq = end as u64;
+            self.pending_attach_replay = Some(pending);
+            self.schedule_attach_replay_chunk(ctx);
+            return;
+        }
+
+        if !pending.gap_applied {
+            if pending.fed_preamble {
+                self.terminal_model
+                    .lock()
+                    .take_suppress_next_bootstrap_write();
+            }
+            if pending.base_seq > self.last_seq {
+                if pending.fed_preamble {
+                    self.reset_parser();
+                }
+                self.process_historical_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
+                self.write_notice("scrollback truncated during a long disconnect");
+            }
+            pending.gap_applied = true;
+            pending.fed_preamble = false;
+        }
+
+        if pending.replay_offset < pending.replay.len() {
+            let end = (pending.replay_offset + ATTACH_PARSE_CHUNK_BYTES).min(pending.replay.len());
+            self.process_historical_pty_bytes(&pending.replay[pending.replay_offset..end]);
+            pending.replay_offset = end;
+            self.last_seq = pending.base_seq + end as u64;
+            self.pending_attach_replay = Some(pending);
+            self.schedule_attach_replay_chunk(ctx);
+            return;
+        }
+
+        self.last_seq = pending.base_seq + pending.replay.len() as u64;
+        self.finish_attach_replay(pending.pending_exit, ctx);
+    }
+
+    fn schedule_attach_replay_chunk(&mut self, ctx: &mut ModelContext<Self>) {
+        ctx.spawn(
+            async move { futures_lite::future::yield_now().await },
+            |me, _, ctx| me.process_attach_replay_chunk(ctx),
         );
-        let replay_again = self.drain_pending_output();
-        if let Some(exit_code) = pending_exit {
+    }
+
+    fn finish_attach_replay(
+        &mut self,
+        pending_exit: Option<Option<i32>>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let replay_again = self.drain_pending_output(ctx);
+        if let Some(exit_code) = self.pending_exit.take().or(pending_exit) {
             self.awaiting_attach_snapshot = false;
+            self.reattach_after_replay = false;
             if replay_again {
                 self.write_warning(
                     "some final session output was truncated before the exit notification",
@@ -845,7 +977,13 @@ impl EventLoop {
             self.on_session_exited(exit_code);
             return;
         }
-        if replay_again {
+        if self.terminated {
+            self.awaiting_attach_snapshot = false;
+            self.reattach_after_replay = false;
+            return;
+        }
+        let reattach_after_replay = std::mem::take(&mut self.reattach_after_replay);
+        if replay_again || reattach_after_replay {
             self.awaiting_attach_snapshot = true;
             self.reattach(ctx);
             return;
@@ -1165,7 +1303,7 @@ impl EventLoop {
                 );
             }
         }
-        if self.drain_pending_output() {
+        if self.drain_pending_output(ctx) {
             self.awaiting_attach_snapshot = true;
             self.reattach(ctx);
             return;
@@ -1210,7 +1348,7 @@ impl EventLoop {
     /// Drains only a contiguous sequence. `true` means overflow or a gap was
     /// observed and the caller must request another daemon replay before live
     /// output resumes.
-    fn drain_pending_output(&mut self) -> bool {
+    fn drain_pending_output(&mut self, ctx: &mut ModelContext<Self>) -> bool {
         let Some(pty_session_id) = self.pty_session_id.clone() else {
             return false;
         };
@@ -1230,7 +1368,7 @@ impl EventLoop {
                 break;
             }
             let offset = self.last_seq.saturating_sub(seq).min(bytes.len() as u64) as usize;
-            self.process_pty_bytes(&bytes[offset..]);
+            self.process_live_pty_bytes(&bytes[offset..], ctx);
             self.last_seq = end_seq;
         }
         replay_required
@@ -1380,37 +1518,57 @@ impl EventLoop {
     /// in the tab rather than a blank/hung view. Rendered in bold red.
     fn write_notice(&mut self, text: &str) {
         let line = format!("\r\n\x1b[1;31m[zaplex] {text}\x1b[0m\r\n");
-        self.process_pty_bytes(line.as_bytes());
+        self.process_historical_pty_bytes(line.as_bytes());
     }
 
     /// Neutral (non-error) status line, used for install/setup progress. Dim
     /// cyan instead of the red error styling of [`Self::write_notice`].
     fn write_progress(&mut self, text: &str) {
         let line = format!("\r\n\x1b[2;36m[zaplex] {text}\x1b[0m\r\n");
-        self.process_pty_bytes(line.as_bytes());
+        self.process_historical_pty_bytes(line.as_bytes());
     }
 
     /// Advisory (non-fatal) warning line — yellow, between the dim-cyan
     /// progress and the red error notices.
     fn write_warning(&mut self, text: &str) {
         let line = format!("\r\n\x1b[1;33m[zaplex] {text}\x1b[0m\r\n");
-        self.process_pty_bytes(line.as_bytes());
+        self.process_historical_pty_bytes(line.as_bytes());
     }
 
     /// The Zaplexify signature line — bold cyan. Used for the persistent-session
     /// welcome and the reconnect/re-attach payoff moments.
     fn write_zaplexify(&mut self, text: &str) {
         let line = format!("\r\n\x1b[1;36m{text}\x1b[0m\r\n");
-        self.process_pty_bytes(line.as_bytes());
+        self.process_historical_pty_bytes(line.as_bytes());
     }
 
-    /// Processes a byte slice through the [`Processor`], identical to the
-    /// local- and remote-PTY paths.
-    fn process_pty_bytes(&mut self, bytes: &[u8]) {
+    /// Processes replayed or synthetic bytes without answering terminal
+    /// queries. Replaying old output must never write a second reply to the PTY.
+    fn process_historical_pty_bytes(&mut self, bytes: &[u8]) {
         let mut terminal_model = self.terminal_model.lock();
         self.parser
             .parse_bytes(&mut *terminal_model, bytes, &mut io::sink());
         self.channel_event_listener.send_wakeup_event();
+    }
+
+    /// Processes newly observed PTY bytes and routes ANSI query replies back to
+    /// the daemon only after releasing the terminal-model guard.
+    fn process_live_pty_bytes(&mut self, bytes: &[u8], ctx: &mut ModelContext<Self>) {
+        let mut reply = TerminalReplyBuffer::default();
+        {
+            let mut terminal_model = self.terminal_model.lock();
+            self.parser
+                .parse_bytes(&mut *terminal_model, bytes, &mut reply);
+        }
+        self.channel_event_listener.send_wakeup_event();
+        if reply.truncated {
+            log::warn!(
+                "daemon_tty: terminal replies exceeded {MAX_TERMINAL_REPLY_BYTES} bytes and were truncated"
+            );
+        }
+        if !reply.bytes.is_empty() {
+            self.on_event_loop_message(EventLoopMessage::Input(Cow::Owned(reply.bytes)), ctx);
+        }
     }
 
     /// Applies an attach reply's bootstrap preamble and replay to the terminal,
@@ -1439,7 +1597,7 @@ impl EventLoop {
             // the line below — consumes it and stamps *its* event so only that
             // event skips the write.
             self.terminal_model.lock().suppress_next_bootstrap_write();
-            self.process_pty_bytes(bootstrap_preamble);
+            self.process_historical_pty_bytes(bootstrap_preamble);
             // Belt-and-suspenders: if the preamble somehow carried no `InitShell`
             // the latch is still armed; clear it so it can never leak onto a later
             // genuine `InitShell`. (A frozen preamble always contains the
@@ -1453,11 +1611,11 @@ impl EventLoop {
             if fed_preamble {
                 self.reset_parser();
             }
-            self.process_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
+            self.process_historical_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
             self.write_notice("scrollback truncated during a long disconnect");
         }
         if !replay.is_empty() {
-            self.process_pty_bytes(replay);
+            self.process_historical_pty_bytes(replay);
         }
         self.last_seq = base_seq + replay.len() as u64;
     }
@@ -1636,6 +1794,9 @@ impl EventLoop {
         self.allow_startup_command_retry();
         self.allow_agent_binding_retry();
         self.allow_attach_retry();
+        if self.pending_attach_replay.is_some() {
+            self.reattach_after_replay = true;
+        }
         self.awaiting_attach_snapshot = true;
     }
 

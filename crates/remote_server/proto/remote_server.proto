@@ -667,6 +667,11 @@ message SafeFileFlushHandle {
   string handle_id = 1;
 }
 
+message SafeFileSetModeHandle {
+  string handle_id = 1;
+  uint32 mode = 2;
+}
+
 message SafeFileInspectHandle {
   string handle_id = 1;
   string path = 2;
@@ -743,9 +748,10 @@ message SafeFileRequest {
     SafeFileDelete delete = 10;
     SafeFileListRecoveries list_recoveries = 11;
     SafeFileRetryRecovery retry_recovery = 12;
-    SafeFileBeginUploadBatch begin_upload_batch = 13;
-    SafeFileCleanupUploadBatch cleanup_upload_batch = 14;
-    SafeFileListIdentities list_identities = 15;
+    SafeFileSetModeHandle set_mode_handle = 13;
+    SafeFileBeginUploadBatch begin_upload_batch = 14;
+    SafeFileCleanupUploadBatch cleanup_upload_batch = 15;
+    SafeFileListIdentities list_identities = 16;
   }
 }
 

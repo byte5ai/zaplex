@@ -1,5 +1,71 @@
-use super::{legacy_ssh_candidates, ProcessLocation, SubscriptionAgent};
+use super::{
+    discovery_failure_lifecycle, legacy_ssh_candidates, remote_candidates_for_resolved_ssh,
+    AccountIdentity, AgentLifecycle, HostIdentity, InstallationIdentity, ProcessLocation,
+    SubscriptionAgent, SubscriptionSessionRegistry, SubscriptionTarget,
+};
+use crate::ai::subscription_agent::{ModelCapability, SessionIdentity};
 use crate::terminal::ssh::util::InteractiveSshCommand;
+use warp_ssh_manager::{
+    AuthType, ResolvedSshConnection, SecretKind, SessionResilience, SshServerInfo,
+};
+
+fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
+    SubscriptionTarget {
+        installation: InstallationIdentity {
+            agent,
+            host: HostIdentity {
+                id: "local".to_string(),
+                display_name: "Local".to_string(),
+            },
+            account: AccountIdentity {
+                id: "account".to_string(),
+                display_name: "Account".to_string(),
+                config_dir: None,
+            },
+            executable: agent.display_name().into(),
+            version: "1.0.0".to_string(),
+        },
+        working_directory: "/workspace".into(),
+        model: ModelCapability {
+            id: "model".to_string(),
+            display_name: "Model".to_string(),
+            description: None,
+            resolved_model: None,
+            is_default: true,
+            supported_efforts: Vec::new(),
+            default_effort: None,
+            context_window: None,
+        },
+        effort: None,
+    }
+}
+
+#[test]
+fn signed_out_agents_are_not_recoverable_even_with_a_session_identity() {
+    for (agent, message, session) in [
+        (
+            SubscriptionAgent::ClaudeCode,
+            "Not logged in · Please run /login",
+            SessionIdentity::ClaudeCode("session-1".to_string()),
+        ),
+        (
+            SubscriptionAgent::Codex,
+            "Codex is not using a ChatGPT subscription account",
+            SessionIdentity::Codex("thread-1".to_string()),
+        ),
+    ] {
+        let registry = SubscriptionSessionRegistry::default();
+        registry.store("conversation".to_string(), target(agent), session);
+
+        let lifecycle =
+            discovery_failure_lifecycle(&[agent], message.to_string(), &registry, "conversation");
+
+        assert_eq!(lifecycle, AgentLifecycle::NotSignedIn { agent });
+        assert!(!lifecycle.accepts_prompt());
+        assert!(!lifecycle.can_resume());
+        assert!(registry.get("conversation").is_none());
+    }
+}
 
 #[test]
 fn legacy_ssh_candidates_run_both_agents_on_the_active_host() {
@@ -49,4 +115,42 @@ fn legacy_ssh_candidates_require_a_reusable_host() {
         error.to_string(),
         "the active SSH session has no reusable host"
     );
+}
+
+#[test]
+fn remote_onekey_key_uses_shared_credential() {
+    let connection = ResolvedSshConnection {
+        server: SshServerInfo {
+            node_id: "host-1".to_string(),
+            host: "example.test".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            auth_type: AuthType::Key,
+            key_path: Some("/keys/deploy".to_string()),
+            credential_id: Some("cred-1".to_string()),
+            startup_command: None,
+            notes: None,
+            last_connected_at: None,
+            session_resilience: SessionResilience::PersistOnly,
+            ring_ceiling_mb: 0,
+        },
+        secret_lookup_id: "cred-1".to_string(),
+        secret_kind: SecretKind::Passphrase,
+    };
+
+    let candidates = remote_candidates_for_resolved_ssh("daemon-1", "edge", &connection);
+    for candidate in candidates {
+        let ProcessLocation::Remote { ssh_argv } = candidate.location else {
+            panic!("resolved OneKey host must remain remote");
+        };
+        assert!(
+            ssh_argv
+                .windows(2)
+                .any(|args| args == ["-i", "/keys/deploy"])
+        );
+        assert_eq!(
+            ssh_argv.last().map(String::as_str),
+            Some("deploy@example.test")
+        );
+    }
 }

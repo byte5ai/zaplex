@@ -6,6 +6,86 @@ use std::sync::{Arc, Barrier};
 use super::*;
 use tempfile::tempdir;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_open_confined_new_file_falls_back_on_enosys_without_following_symlinks() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("root");
+    let outside = directory.path().join("outside");
+    let retained = directory.path().join("retained-parent");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(root.join("parent")).unwrap();
+    fs::create_dir(&outside).unwrap();
+
+    let file =
+        open_confined_new_file_with_openat2(&root, Path::new("/parent/stage.bin"), |_, _, _| {
+            Err(std::io::Error::from_raw_os_error(libc::ENOSYS))
+        })
+        .expect("ENOSYS must use the component-walk fallback");
+    drop(file);
+    let stage = root.join("parent/stage.bin");
+    assert_eq!(
+        fs::metadata(&stage).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    assert!(
+        open_confined_new_file_with_openat2(&root, Path::new("/parent/stage.bin"), |_, _, _| Err(
+            std::io::Error::from_raw_os_error(libc::ENOSYS)
+        ),)
+        .is_err(),
+        "the fallback must not replace an existing target"
+    );
+
+    fs::remove_file(stage).unwrap();
+    fs::rename(root.join("parent"), &retained).unwrap();
+    symlink(&outside, root.join("parent")).unwrap();
+
+    assert!(open_confined_new_file_with_openat2(
+        &root,
+        Path::new("/parent/stage.bin"),
+        |_, _, _| Err(std::io::Error::from_raw_os_error(libc::ENOSYS)),
+    )
+    .is_err());
+    assert!(!outside.join("stage.bin").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_open_confined_new_file_does_not_fallback_on_other_errors() {
+    let root = tempdir().unwrap();
+    fs::create_dir(root.path().join("parent")).unwrap();
+
+    let result = open_confined_new_file_with_openat2(
+        root.path(),
+        Path::new("/parent/stage.bin"),
+        |_, _, _| Err(std::io::Error::from_raw_os_error(libc::EINVAL)),
+    );
+
+    assert!(matches!(result, Err(SftpOpsError::LocalIo(_))));
+    assert!(!root.path().join("parent/stage.bin").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_component_walk_rejects_parent_components_before_opening() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("root");
+    let outside = directory.path().join("outside");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&outside).unwrap();
+
+    assert!(open_confined_new_file_with_openat2(
+        &root,
+        Path::new("/../outside/escaped.bin"),
+        |_, _, _| Err(std::io::Error::from_raw_os_error(libc::ENOSYS)),
+    )
+    .is_err());
+    assert!(!outside.join("escaped.bin").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn identity_bound_delete_preserves_replacement_at_mutation_boundary() {
@@ -141,10 +221,47 @@ fn legacy_listing_without_object_id_never_authorizes_mutation() {
         revision: "same-metadata".to_string(),
     };
 
-    require_mutation_ready_remote_listing(Path::new("/replacement.bin"), &legacy_listing)
+    require_mutation_ready_remote_listing(true, Path::new("/replacement.bin"), &legacy_listing)
         .expect_err("legacy path-derived metadata must not authorize a mutation");
 
     assert_eq!(fs::read(replacement).unwrap(), b"replacement");
+}
+
+#[test]
+fn tokenless_remote_listing_reports_missing_secure_capability() {
+    let tokenless_listing = StableEntryIdentity {
+        file_type: FileEntryType::File,
+        size: 11,
+        object_id: String::new(),
+        revision: "same-metadata".to_string(),
+    };
+
+    let error = require_mutation_ready_remote_listing(
+        false,
+        Path::new("/replacement.bin"),
+        &tokenless_listing,
+    )
+    .expect_err("the missing service must be reported before the missing object token");
+
+    assert!(matches!(error, SftpOpsError::CapabilityRequired(_)));
+}
+
+#[test]
+fn tokenless_remote_listing_with_secure_capability_requires_refresh() {
+    let tokenless_listing = StableEntryIdentity {
+        file_type: FileEntryType::File,
+        size: 11,
+        object_id: String::new(),
+        revision: "same-metadata".to_string(),
+    };
+    let error = require_mutation_ready_remote_listing(
+        true,
+        Path::new("/replacement.bin"),
+        &tokenless_listing,
+    )
+    .expect_err("a tokenless listing must remain distinguishable when the service is present");
+
+    assert!(matches!(error, SftpOpsError::Operation(_)));
 }
 
 #[cfg(unix)]
@@ -5093,6 +5210,78 @@ async fn live_sftp_remote_safe_rename_replays_when_request_was_not_applied() {
 #[ignore = "requires the isolated OpenSSH fixture from live-sftp-safety.yml"]
 async fn live_sftp_remote_safe_rename_recovers_when_response_was_lost() {
     verify_live_sftp_rename_recovery(LiveRenameFault::AfterMutation).await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the isolated OpenSSH fixture from live-sftp-safety.yml"]
+async fn live_sftp_copy_file_keeps_destination_after_handles_drop() {
+    let (host, port, username, key_path, root) = live_sftp_configuration();
+    let case_root = root.join(format!("zaplex-live-sftp-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&case_root).unwrap();
+    let source = case_root.join("source.bin");
+    let destination = case_root.join("destination.bin");
+    fs::write(&source, b"live-sftp-copy-payload").unwrap();
+
+    let session = zap_sftp::SftpSession::connect(
+        &host,
+        port,
+        &username,
+        zap_sftp::AuthMethod::PublicKey {
+            key_path,
+            passphrase: None,
+        },
+        Some(std::time::Duration::from_secs(10)),
+    )
+    .expect("the CI OpenSSH fixture must accept the configured key");
+    let sftp = session.sftp().expect("the live SFTP subsystem must open");
+    let journal = tempdir().unwrap();
+    let slot = SafeFileClientSlot::default();
+    let (client, _executor, server) =
+        spawn_live_safe_file_client(journal.path().to_path_buf(), None);
+    slot.set(Some(client));
+    let backend = LiveSftpBackend::new_with_safe_file_slot(sftp, slot.clone());
+
+    backend
+        .copy_file(&source, &destination)
+        .expect("copy_file must publish the completed stage");
+
+    fs::write(&source, b"replacement-payload").unwrap();
+    backend
+        .copy_file(&source, &destination)
+        .expect_err("copy_file must not replace an existing destination");
+
+    let source_tree = case_root.join("source-tree");
+    let destination_tree = case_root.join("destination-tree");
+    fs::create_dir_all(source_tree.join("nested")).unwrap();
+    fs::write(source_tree.join("first.bin"), b"first").unwrap();
+    fs::write(source_tree.join("nested/second.bin"), b"second").unwrap();
+    backend
+        .copy_dir_recursive(&source_tree, &destination_tree)
+        .expect("recursive copy must retain every published file");
+    drop(backend);
+
+    assert_eq!(fs::read(&destination).unwrap(), b"live-sftp-copy-payload");
+    assert_eq!(
+        fs::read(destination_tree.join("first.bin")).unwrap(),
+        b"first"
+    );
+    assert_eq!(
+        fs::read(destination_tree.join("nested/second.bin")).unwrap(),
+        b"second"
+    );
+    assert!(fs::read_dir(&case_root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".zaplex-copy-")
+    }));
+
+    slot.set(None);
+    server.abort();
+    let _ = server.await;
+    fs::remove_dir_all(case_root).unwrap();
 }
 
 #[cfg(unix)]

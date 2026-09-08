@@ -38,6 +38,10 @@ pub(super) const RING_CEILING_BYTES: usize = 4 * 1024 * 1024;
 /// a chatty pre-prompt), capture is abandoned rather than growing unbounded.
 pub(super) const BOOTSTRAP_PREAMBLE_CAP_BYTES: usize = 512 * 1024;
 
+/// Maximum retained output delivered in one attach response. Retention may be
+/// much larger, but transport frames and foreground parsing must stay bounded.
+pub(super) const ATTACH_REPLAY_MAX_BYTES: usize = 8 * 1024 * 1024;
+
 /// Maximum retry-safe startup deliveries remembered for one PTY session.
 /// Legitimate sessions normally use one; the small fixed ceiling prevents a
 /// client from growing the deduplication ledger for the session lifetime.
@@ -226,19 +230,27 @@ pub(super) fn plan_attach(
     last_seq: u64,
     client_supports_preamble: bool,
 ) -> (u64, Vec<u8>, Vec<u8>) {
+    let tail_start = ring
+        .end_seq()
+        .saturating_sub(ATTACH_REPLAY_MAX_BYTES as u64);
     if client_supports_preamble && last_seq == 0 && ring.base_seq() > 0 {
         if let Some(preamble) = preamble.frozen() {
-            let (base_seq, replay) = ring.replay_from(preamble.len() as u64);
+            let replay_start = (preamble.len() as u64).max(tail_start);
+            let (base_seq, replay) = ring.replay_from(replay_start);
             return (base_seq, replay, preamble.to_vec());
         }
     }
-    let (base_seq, replay) = ring.replay_from(last_seq);
+    let (base_seq, replay) = ring.replay_from(last_seq.max(tail_start));
     (base_seq, replay, Vec::new())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prost::Message;
+
+    use super::super::proto::{server_message, ServerMessage, SessionAttached};
+    use ::remote_server::protocol::MAX_MESSAGE_SIZE;
 
     fn frozen_at(bytes: &[u8], end_seq: u64) -> BootstrapPreamble {
         let mut p = BootstrapPreamble::new(1024);
@@ -445,6 +457,37 @@ mod tests {
         assert!(sent.is_empty(), "no preamble to serve");
         assert_eq!(base_seq, ring.base_seq());
         assert_eq!(replay.len(), ring.len());
+    }
+
+    #[test]
+    fn maximum_ring_attach_response_stays_within_transport_limit() {
+        const HOST_RING_CAP_BYTES: usize = 256 * 1024 * 1024;
+        let extra = 4096;
+        let mut ring = OutputRing::new(HOST_RING_CAP_BYTES);
+        let output: Vec<u8> = (0..ATTACH_REPLAY_MAX_BYTES + extra)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        ring.append(&output);
+
+        let (base_seq, replay, preamble) = plan_attach(&ring, &BootstrapPreamble::new(1), 0, false);
+        let response = ServerMessage {
+            request_id: "attach-request".to_string(),
+            message: Some(server_message::Message::SessionAttached(SessionAttached {
+                session_id: "session-at-maximum-ring-capacity".to_string(),
+                size: None,
+                base_seq,
+                replay: replay.clone(),
+                bootstrap_preamble: preamble.clone(),
+                generation: u64::MAX,
+                agent_binding: None,
+            })),
+        };
+
+        assert_eq!(ring.capacity(), HOST_RING_CAP_BYTES);
+        assert!(preamble.is_empty());
+        assert_eq!(base_seq, extra as u64);
+        assert_eq!(replay, output[extra..]);
+        assert!(response.encoded_len() <= MAX_MESSAGE_SIZE);
     }
 }
 

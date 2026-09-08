@@ -230,8 +230,8 @@ fn server(id: &str, parent_id: Option<&str>, name: &str, sort_order: i32) -> Ssh
 }
 
 #[cfg(unix)]
-#[test]
-fn tailscale_lookup_uses_injected_workspace_command_factory() {
+#[tokio::test]
+async fn discover_tailscale_action_never_calls_blocking_factory() {
     use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt as _;
     use std::sync::Mutex;
@@ -251,10 +251,7 @@ fn tailscale_lookup_uses_injected_workspace_command_factory() {
         }
 
         fn blocking_command(&self, program: &str) -> command::blocking::Command {
-            self.programs.lock().unwrap().push(program.to_string());
-            let mut command = command::blocking::Command::new(&self.script);
-            command.arg(program);
-            command
+            panic!("blocking command factory must not be called for {program}")
         }
     }
 
@@ -267,12 +264,12 @@ fn tailscale_lookup_uses_injected_workspace_command_factory() {
     permissions.set_mode(0o700);
     std::fs::set_permissions(&script, permissions).unwrap();
     drop(file);
-    let factory = RecordingCommandFactory {
+    let factory = Arc::new(RecordingCommandFactory {
         script,
         programs: Mutex::new(Vec::new()),
-    };
+    });
 
-    let output = tailscale_status_output(&factory).unwrap();
+    let output = tailscale_status_output(factory.clone()).await.unwrap();
 
     assert!(output.status.success());
     assert_eq!(factory.programs.lock().unwrap().as_slice(), ["tailscale"]);

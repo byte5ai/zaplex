@@ -61,6 +61,26 @@ fn current_codex_models_use_their_exact_prices() {
 }
 
 #[test]
+fn custom_keys_are_matched_case_insensitively() {
+    let price = ModelPrice {
+        input: 1.0,
+        output: 2.0,
+        cache_write: 3.0,
+        cache_read: 4.0,
+    };
+    let table = PricingTable::new(vec![("Custom-MODEL".to_string(), price)]);
+
+    assert_eq!(table.price_for("prefix-custom-model-suffix"), Some(price));
+    assert_eq!(
+        table
+            .estimate_for("CUSTOM-MODEL", 1_000_000, 0, 0, 0)
+            .unwrap()
+            .source,
+        PricingSource::CustomStatic
+    );
+}
+
+#[test]
 fn opus_golden_cost_from_verified_transcript_block() {
     // Verified 2026-07-31 against Anthropic's public API list price.
     let t = PricingTable::default();
