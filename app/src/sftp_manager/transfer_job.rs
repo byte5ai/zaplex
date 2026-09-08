@@ -1122,6 +1122,10 @@ pub fn run_transfer(
             },
         )]),
         children: BTreeMap::new(),
+        file_modes: BTreeMap::from([(
+            job.source_path.clone(),
+            source_snapshot.file_mode(&job.source_path),
+        )]),
     };
     let staged_snapshot = match capture_snapshot(&*job.target_backend, &staged_path) {
         Ok(snapshot) => snapshot,
@@ -4494,7 +4498,6 @@ fn copy_open_file_without_progress(
         written = written.saturating_add(read as u64);
     }
     writer.set_mode(source_mode)?;
-    refresh_owned_mutation(target_backend, target_path, ownership)?;
     writer.flush()?;
     if written != source_identity.size
         || stable_identity_now(source_backend, source_path)? != *source_identity

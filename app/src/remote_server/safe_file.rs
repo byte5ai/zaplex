@@ -20,16 +20,16 @@ use sha2::{Digest, Sha256};
 
 use super::proto::{
     safe_file_request, safe_file_response, FileOperationError, SafeFileBeginUploadBatch,
-    SafeFileCreateExclusive, SafeFileDelete, SafeFileDeleteV2, SafeFileEntryKind,
-    SafeFileFlushHandle, SafeFileIdentity, SafeFileIdentityBatchEntryResult,
-    SafeFileIdentityBatchResult, SafeFileIdentityBatchStatus, SafeFileInspectHandle,
-    SafeFileInspectResult, SafeFileListIdentities, SafeFileMutationResult, SafeFileMutationState,
-    SafeFileOpenExisting, SafeFileOpened, SafeFileReadHandle, SafeFileReadResult, SafeFileRecovery,
+    SafeFileCreateExclusive, SafeFileDelete, SafeFileEntryKind, SafeFileFlushHandle,
+    SafeFileIdentity, SafeFileIdentityBatchEntryResult, SafeFileIdentityBatchResult,
+    SafeFileIdentityBatchStatus, SafeFileInspectHandle, SafeFileInspectResult,
+    SafeFileListIdentities, SafeFileMutationResult, SafeFileMutationState, SafeFileOpenExisting,
+    SafeFileOpened, SafeFileReadHandle, SafeFileReadResult, SafeFileRecovery, SafeFileRecoveryList,
     SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileResponse, SafeFileSetModeHandle,
     SafeFileUploadBatchOpened, SafeFileUploadEntry, SafeFileUploadEntryOpened, SafeFileWriteHandle,
 };
 #[cfg(test)]
-use super::proto::{SafeFileCleanupUploadBatch, SafeFileRetryRecovery};
+use super::proto::{SafeFileCleanupUploadBatch, SafeFileDeleteV2, SafeFileRetryRecovery};
 use super::server_model::ConnectionId;
 
 const MAX_CHUNK_BYTES: usize = 8 * 1024 * 1024;
