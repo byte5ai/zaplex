@@ -1,7 +1,11 @@
 use std::time::Duration;
 
 use super::{
-    ssh_connect_terminal_event_finishes_attempt, ClassicSshConnectAttempts, SshConnectRegistry,
+    ClassicSshConnectAttempts, SshConnectRegistry, resolved_ssh_secret_owner,
+    ssh_connect_terminal_event_finishes_attempt,
+};
+use warp_ssh_manager::{
+    AuthType, ResolvedSshConnection, SecretKind, SessionResilience, SshServerInfo,
 };
 use warpui::EntityId;
 
@@ -114,4 +118,34 @@ fn closing_an_old_classic_tab_cannot_release_a_new_retry() {
         .take_for_tab(old_pane_group_id)
         .is_none());
     assert!(registry.contains(&retry));
+}
+
+#[test]
+fn onekey_key_fallback_preserves_credential_secret_owner() {
+    let resolved = ResolvedSshConnection {
+        server: SshServerInfo {
+            node_id: "host-1".to_string(),
+            host: "example.test".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            auth_type: AuthType::Key,
+            key_path: Some("/keys/deploy".to_string()),
+            credential_id: Some("cred-1".to_string()),
+            startup_command: None,
+            notes: None,
+            last_connected_at: None,
+            session_resilience: SessionResilience::PersistOnly,
+            ring_ceiling_mb: 0,
+        },
+        secret_lookup_id: "cred-1".to_string(),
+        secret_kind: SecretKind::Passphrase,
+    };
+
+    let fallback = resolved.clone();
+    let (secret_owner, secret_kind) = resolved_ssh_secret_owner(&fallback);
+    assert_eq!(secret_owner, "cred-1");
+    assert_eq!(secret_kind, SecretKind::Passphrase);
+    let argv = warp_ssh_manager::build_ssh_args(&fallback.server);
+    assert!(argv.windows(2).any(|args| args == ["-i", "/keys/deploy"]));
+    assert_eq!(argv.last().map(String::as_str), Some("deploy@example.test"));
 }
