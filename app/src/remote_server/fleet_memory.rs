@@ -359,7 +359,14 @@ fn read_process_stat_optional(
     let path = PathBuf::from(format!("/proc/{pid}/stat"));
     match reader.read_to_string(&path) {
         Ok(contents) => parse_process_stat(&contents).map(Some),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        // A task can exit between /proc enumeration and reading its stat file;
+        // procfs may report ESRCH for that race instead of ENOENT.
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                || error.raw_os_error() == Some(libc::ESRCH) =>
+        {
+            Ok(None)
+        }
         Err(_) => Err(MemoryDiagnostic::ReadFailed),
     }
 }

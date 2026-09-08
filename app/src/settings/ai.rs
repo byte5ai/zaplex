@@ -786,7 +786,7 @@ impl AgentProviderApiType {
             Self::OpenAiResp => "https://api.openai.com/v1/",
             Self::Gemini => "https://generativelanguage.googleapis.com/v1beta/",
             Self::Anthropic => "https://api.anthropic.com/v1/",
-            Self::Ollama => "http://localhost:11434/v1/",
+            Self::Ollama => "http://localhost:11434/",
             Self::DeepSeek => "https://api.deepseek.com/v1/",
         }
     }
@@ -815,7 +815,7 @@ pub struct AgentProvider {
     #[serde(default)]
     pub api_type: AgentProviderApiType,
 
-    /// API base URL, e.g. `https://api.deepseek.com/v1`, `http://localhost:11434/v1`.
+    /// API base URL, e.g. `https://api.deepseek.com/v1`, `http://localhost:11434`.
     /// Do not include a trailing slash, but the code side handles it tolerantly.
     pub base_url: String,
 

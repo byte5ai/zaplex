@@ -169,6 +169,9 @@ impl SessionContext {
 }
 
 pub enum BlocklistAIControllerEvent {
+    /// The local subscription-agent preflight changed lifecycle state. The
+    /// terminal/input views use this to refresh the disabled composer/status.
+    SubscriptionPreflightUpdated,
     /// Emitted when a request is sent to the AI agent API.
     SentRequest {
         contains_user_query: bool,
@@ -957,6 +960,55 @@ impl BlocklistAIController {
             EntrypointType::AgentInitiated,
             /*is_queued_prompt*/ false,
             ctx,
+        );
+    }
+
+    /// Checks installation, account and model readiness before the first local
+    /// subscription-agent prompt is accepted.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn preflight_subscription_agent(
+        &mut self,
+        conversation_id: AIConversationId,
+        pending_query: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let conversation_id_string = conversation_id.to_string();
+        let registry = crate::ai::subscription_agent::SubscriptionSessionRegistry::as_ref(ctx);
+        if registry
+            .lifecycle(&conversation_id_string)
+            .is_some_and(|lifecycle| {
+                matches!(
+                    lifecycle,
+                    crate::ai::subscription_agent::AgentLifecycle::Starting
+                )
+            })
+        {
+            return;
+        }
+        let session_context = SessionContext::from_session(self.active_session.as_ref(ctx), ctx);
+        let preflight = crate::ai::subscription_agent::subscription_preflight_info(
+            conversation_id_string,
+            &session_context,
+            ctx,
+        );
+        ctx.emit(BlocklistAIControllerEvent::SubscriptionPreflightUpdated);
+        let preflight = match preflight {
+            Ok(preflight) => preflight,
+            Err(error) => {
+                log::warn!("subscription agent preflight could not start: {error}");
+                return;
+            }
+        };
+        let _ = ctx.spawn(
+            crate::ai::subscription_agent::preflight_subscription_target(preflight),
+            move |me, result, ctx| {
+                if let Err(error) = result {
+                    log::warn!("subscription agent preflight failed: {error}");
+                } else if let Some(query) = pending_query {
+                    me.send_user_query_in_conversation(query, conversation_id, None, ctx);
+                }
+                ctx.emit(BlocklistAIControllerEvent::SubscriptionPreflightUpdated);
+            },
         );
     }
 

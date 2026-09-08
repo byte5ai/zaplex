@@ -187,9 +187,11 @@ impl SubscriptionSession {
         }
     }
 
-    pub(crate) fn end(&mut self) -> Result<()> {
+    pub(crate) async fn end(&mut self) -> Result<()> {
         self.pending_approvals.clear();
-        self.process.terminate()
+        let termination = self.process.terminate().await?;
+        log::debug!("Subscription-agent process ended: {termination:?}");
+        Ok(())
     }
 
     async fn initialize_claude(&mut self) -> Result<()> {
