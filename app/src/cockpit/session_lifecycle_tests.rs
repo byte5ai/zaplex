@@ -1,4 +1,5 @@
 use chrono::Utc;
+use warp_terminal::shell::ShellType;
 use zaplex_cockpit::{Provider, SessionSnapshot, SessionState};
 
 use super::*;
@@ -94,13 +95,14 @@ fn local_restart_preserves_conversation_account_and_intent() {
             fingerprint: "process-1".to_string(),
         }
     );
-    let ResumeInvocation::LocalShell { command } = plan.resume else {
+    let ResumeInvocation::LocalShell { launch } = plan.resume else {
         panic!("local restart must stay local");
     };
+    let command = launch.shell_command(ShellType::Bash);
     assert!(command.contains("CLAUDE_CONFIG_DIR=/accounts/work"));
     assert!(command.contains("--model opus"));
     assert!(command.contains("--resume session-1"));
-    assert!(command.contains("unset ANTHROPIC_API_KEY"));
+    assert!(command.contains("env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN"));
 }
 
 #[test]

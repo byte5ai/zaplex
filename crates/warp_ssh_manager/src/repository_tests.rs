@@ -189,6 +189,51 @@ fn onekey_key_credential_resolves_to_key_auth() {
 }
 
 #[test]
+fn resolved_connection_keeps_onekey_owner_and_connection_fields() {
+    let mut conn = setup_in_memory();
+    let credential = SshRepository::create_onekey_credential(
+        &mut conn,
+        "shared-key",
+        "deploy",
+        OneKeyCredentialKind::Key,
+        Some("/keys/deploy"),
+    )
+    .unwrap();
+    let mut info = sample_server("edge");
+    info.auth_type = AuthType::OneKey;
+    info.username.clear();
+    info.key_path = None;
+    info.credential_id = Some(credential.id.clone());
+    let node = SshRepository::create_server(&mut conn, None, "edge", &info).unwrap();
+
+    let resolved = SshRepository::get_server_with_resolved_auth(&mut conn, &node.id)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(resolved.server.username, "deploy");
+    assert_eq!(resolved.server.auth_type, AuthType::Key);
+    assert_eq!(resolved.server.key_path.as_deref(), Some("/keys/deploy"));
+    assert_eq!(
+        resolved.server.credential_id.as_deref(),
+        Some(credential.id.as_str())
+    );
+    assert_eq!(resolved.secret_lookup_id, credential.id);
+    assert_eq!(resolved.secret_kind, SecretKind::Passphrase);
+}
+
+#[test]
+fn resolved_connection_rejects_missing_onekey_credential() {
+    let mut conn = setup_in_memory();
+    let mut info = sample_server("edge");
+    info.auth_type = AuthType::OneKey;
+    info.credential_id = Some("missing-credential".to_string());
+
+    let error = SshRepository::resolve_server_connection(&mut conn, &info).unwrap_err();
+
+    assert!(matches!(error, SshRepositoryError::NotFound(_)));
+}
+
+#[test]
 fn delete_onekey_credential_is_blocked_while_hosts_reference_it() {
     let mut conn = setup_in_memory();
     let credential = SshRepository::create_onekey_credential(

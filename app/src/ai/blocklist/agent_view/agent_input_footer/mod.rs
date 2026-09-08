@@ -14,8 +14,9 @@ use crate::{
         },
         execution_profiles::profiles::AIExecutionProfilesModel,
         subscription_agent::{
-            AgentLifecycle, ApprovalDecision, SessionIdentity, SubscriptionAgent,
-            SubscriptionSessionRegistry, SubscriptionTarget,
+            conversation_identity_fields, AgentLifecycle, ApprovalDecision, ConversationAction,
+            ConversationPresentation, SubscriptionAgent, SubscriptionSessionRegistry,
+            SubscriptionTarget,
         },
         AIRequestUsageModel,
     },
@@ -140,8 +141,12 @@ use crate::workspace::WorkspaceAction;
 enum CLIVoiceInputState {
     #[default]
     Stopped,
-    Listening,
-    Transcribing,
+    Listening {
+        session_id: voice_input::VoiceSessionId,
+    },
+    Transcribing {
+        session_id: voice_input::VoiceSessionId,
+    },
 }
 
 /// How long to wait after session creation before showing the install chip.
@@ -1437,19 +1442,23 @@ impl AgentInputFooter {
             return;
         }
 
-        if matches!(self.cli_voice_input_state, CLIVoiceInputState::Listening) {
+        if matches!(
+            self.cli_voice_input_state,
+            CLIVoiceInputState::Listening { .. }
+        ) {
             voice_input::VoiceInput::handle(ctx).update(ctx, |voice_input, _| {
                 voice_input.abort_listening();
             });
         }
 
-        if matches!(self.cli_voice_input_state, CLIVoiceInputState::Transcribing) {
+        if let CLIVoiceInputState::Transcribing { session_id } = &self.cli_voice_input_state {
+            let session_id = *session_id;
             if let Some(handle) = self.cli_transcription_handle.take() {
                 handle.abort();
             }
 
             voice_input::VoiceInput::handle(ctx).update(ctx, |voice, _| {
-                voice.set_transcribing_active(false);
+                voice.set_transcribing_active(session_id, false);
             });
         }
 
@@ -1480,7 +1489,7 @@ impl AgentInputFooter {
         if let voice_input::VoiceInputToggledFrom::Key { state } = source {
             match (&self.cli_voice_input_state, state) {
                 (CLIVoiceInputState::Stopped, warpui::event::KeyState::Released) => return,
-                (CLIVoiceInputState::Listening, warpui::event::KeyState::Pressed) => return,
+                (CLIVoiceInputState::Listening { .. }, warpui::event::KeyState::Pressed) => return,
                 _ => {}
             }
         }
@@ -1497,7 +1506,8 @@ impl AgentInputFooter {
 
                 match session_result {
                     Ok(session) => {
-                        self.cli_voice_input_state = CLIVoiceInputState::Listening;
+                        let session_id = session.id();
+                        self.cli_voice_input_state = CLIVoiceInputState::Listening { session_id };
                         self.update_cli_mic_button_state(ctx);
 
                         if let Some(agent) = self.cli_agent(ctx) {
@@ -1526,14 +1536,14 @@ impl AgentInputFooter {
                     }
                 }
             }
-            CLIVoiceInputState::Listening => {
+            CLIVoiceInputState::Listening { .. } => {
                 voice_input::VoiceInput::handle(ctx).update(ctx, |voice_input, ctx| {
                     if let Err(e) = voice_input.stop_listening(ctx) {
                         log::error!("Failed to stop CLI voice input: {e:?}");
                     }
                 });
             }
-            CLIVoiceInputState::Transcribing => {
+            CLIVoiceInputState::Transcribing { .. } => {
                 // Don't allow toggling while transcribing.
             }
         }
@@ -1548,29 +1558,44 @@ impl AgentInputFooter {
     ) {
         use crate::editor::VoiceTranscriber;
 
+        let session_id = result.session_id();
+        if !voice_input::VoiceInput::handle(ctx)
+            .as_ref(ctx)
+            .is_current_session(session_id)
+        {
+            return;
+        }
+
         match result {
             VoiceSessionResult::Audio {
+                session_id: _,
                 wav_base64,
                 session_duration_ms: _,
             } => {
                 let voice_transcriber = VoiceTranscriber::as_ref(ctx);
                 if let Some(transcriber) = voice_transcriber.transcriber() {
                     let transcriber = transcriber.clone();
-                    self.cli_voice_input_state = CLIVoiceInputState::Transcribing;
+                    self.cli_voice_input_state = CLIVoiceInputState::Transcribing { session_id };
 
                     voice_input::VoiceInput::handle(ctx).update(ctx, |voice, _| {
-                        voice.set_transcribing_active(true);
+                        voice.set_transcribing_active(session_id, true);
                     });
 
                     self.cli_transcription_handle = Some(ctx.spawn(
-                        async move { transcriber.transcribe(wav_base64).await },
+                        async move { (session_id, transcriber.transcribe(wav_base64).await) },
                         Self::apply_cli_transcribed_voice_input,
                     ));
                 } else {
+                    voice_input::VoiceInput::handle(ctx).update(ctx, |voice, _| {
+                        voice.set_transcribing_active(session_id, false);
+                    });
                     self.cli_voice_input_state = CLIVoiceInputState::Stopped;
                 }
             }
             VoiceSessionResult::Aborted { .. } => {
+                voice_input::VoiceInput::handle(ctx).update(ctx, |voice, _| {
+                    voice.set_transcribing_active(session_id, false);
+                });
                 self.cli_voice_input_state = CLIVoiceInputState::Stopped;
             }
         }
@@ -1581,11 +1606,22 @@ impl AgentInputFooter {
     #[cfg(feature = "voice_input")]
     fn apply_cli_transcribed_voice_input(
         &mut self,
-        result: Result<String, TranscribeError>,
+        (session_id, result): (voice_input::VoiceSessionId, Result<String, TranscribeError>),
         ctx: &mut ViewContext<Self>,
     ) {
+        if !matches!(
+            &self.cli_voice_input_state,
+            CLIVoiceInputState::Transcribing {
+                session_id: active_session_id,
+            } if *active_session_id == session_id
+        ) || !voice_input::VoiceInput::handle(ctx)
+            .as_ref(ctx)
+            .is_current_session(session_id)
+        {
+            return;
+        }
         voice_input::VoiceInput::handle(ctx).update(ctx, |voice, _| {
-            voice.set_transcribing_active(false);
+            voice.set_transcribing_active(session_id, false);
         });
 
         match result {
@@ -1624,11 +1660,13 @@ impl AgentInputFooter {
     fn update_cli_mic_button_state(&self, ctx: &mut ViewContext<Self>) {
         let icon = match &self.cli_voice_input_state {
             CLIVoiceInputState::Stopped => Icon::Microphone,
-            CLIVoiceInputState::Listening => Icon::Stop,
-            CLIVoiceInputState::Transcribing => Icon::DotsHorizontal,
+            CLIVoiceInputState::Listening { .. } => Icon::Stop,
+            CLIVoiceInputState::Transcribing { .. } => Icon::DotsHorizontal,
         };
-        let is_transcribing =
-            matches!(self.cli_voice_input_state, CLIVoiceInputState::Transcribing);
+        let is_transcribing = matches!(
+            self.cli_voice_input_state,
+            CLIVoiceInputState::Transcribing { .. }
+        );
 
         self.mic_button.update(ctx, |button, ctx| {
             button.set_icon(Some(icon), ctx);
@@ -1825,53 +1863,38 @@ impl AgentInputFooter {
 
 fn subscription_target_status(
     target: &SubscriptionTarget,
-    session: Option<&SessionIdentity>,
+    session: Option<&crate::ai::subscription_agent::SessionIdentity>,
     lifecycle: &AgentLifecycle,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
-    let lifecycle = subscription_lifecycle_label(lifecycle);
-    let session = match session {
-        Some(SessionIdentity::ClaudeCode(id)) => format!("Claude session {id}"),
-        Some(SessionIdentity::Codex(id)) => format!("Codex thread {id}"),
-        None => "new session".to_string(),
-    };
-    let label = format!(
-        "{} · {} · {} · {} · {} · {session} · {lifecycle}",
-        target.installation.agent.display_name(),
-        target.installation.account.display_name,
-        target.installation.host.display_name,
-        target.working_directory.display(),
-        target.model.display_name,
-    );
-    subscription_status_text(label, appearance)
-}
-
-fn subscription_lifecycle_status(
-    lifecycle: &AgentLifecycle,
-    app: &AppContext,
-) -> Box<dyn Element> {
-    subscription_status_text(
-        subscription_lifecycle_label(lifecycle),
-        Appearance::as_ref(app),
-    )
-}
-
-fn subscription_lifecycle_label(lifecycle: &AgentLifecycle) -> String {
-    match lifecycle {
-        AgentLifecycle::NoAgentInstalled => "No agent installed".to_string(),
-        AgentLifecycle::NotSignedIn { agent } => {
-            format!("{} not signed in", agent.display_name())
-        }
-        AgentLifecycle::Ready => "Ready".to_string(),
-        AgentLifecycle::Starting => "Starting".to_string(),
-        AgentLifecycle::Responding => "Responding".to_string(),
-        AgentLifecycle::RunningTool { name } => format!("Running {name}"),
-        AgentLifecycle::WaitingForApproval { .. } => "Waiting for approval".to_string(),
-        AgentLifecycle::TurnCompleted { .. } => "Turn completed".to_string(),
-        AgentLifecycle::SessionEnded => "Session ended".to_string(),
-        AgentLifecycle::RecoverableError { .. } => "Retry available".to_string(),
+    let presentation = ConversationPresentation::for_lifecycle(lifecycle);
+    let mut fields = Wrap::row()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_run_spacing(4.)
+        .with_spacing(4.);
+    for field in conversation_identity_fields(target, session, lifecycle) {
+        fields.add_child(subscription_status_text(
+            format!("{}: {}", field.label, field.value),
+            appearance,
+        ));
     }
+    if !presentation.composer.accepts_prompt() {
+        if let Some(detail) = presentation.detail {
+            fields.add_child(subscription_status_text(detail, appearance));
+        }
+    }
+    fields.finish()
+}
+
+fn subscription_lifecycle_status(lifecycle: &AgentLifecycle, app: &AppContext) -> Box<dyn Element> {
+    let presentation = ConversationPresentation::for_lifecycle(lifecycle);
+    let label = match presentation.detail {
+        Some(detail) => format!("{} — {detail}", presentation.status),
+        None => presentation.status,
+    };
+    subscription_status_text(label, Appearance::as_ref(app))
 }
 
 fn subscription_status_text(label: String, appearance: &Appearance) -> Box<dyn Element> {
@@ -1952,33 +1975,83 @@ fn subscription_approval_button(
     subscription_action_button(label, action, app)
 }
 
-fn subscription_session_actions(conversation_id: &str, app: &AppContext) -> Box<dyn Element> {
-    Flex::row()
+fn subscription_lifecycle_actions(
+    conversation_id: &str,
+    lifecycle: &AgentLifecycle,
+    agent: Option<SubscriptionAgent>,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let presentation = ConversationPresentation::for_lifecycle(lifecycle);
+    let mut actions = Wrap::row()
         .with_main_axis_size(MainAxisSize::Min)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_spacing(4.)
-        .with_child(subscription_action_button(
-            "Resume",
-            AgentInputFooterAction::ResumeSubscriptionSession {
-                conversation_id: conversation_id.to_string(),
-            },
-            app,
-        ))
-        .with_child(subscription_action_button(
-            "Restart",
-            AgentInputFooterAction::RestartSubscriptionSession {
-                conversation_id: conversation_id.to_string(),
-            },
-            app,
-        ))
-        .with_child(subscription_action_button(
-            "End",
-            AgentInputFooterAction::EndSubscriptionSession {
-                conversation_id: conversation_id.to_string(),
-            },
-            app,
-        ))
-        .finish()
+        .with_run_spacing(4.)
+        .with_spacing(4.);
+    for action in presentation.actions {
+        match action {
+            ConversationAction::OpenAgentSettings => {
+                actions.add_child(subscription_action_button(
+                    "Agent settings",
+                    AgentInputFooterAction::OpenCodingAgentSettings,
+                    app,
+                ));
+            }
+            ConversationAction::ResolveApproval => {
+                if let AgentLifecycle::WaitingForApproval { request_id } = lifecycle {
+                    if let Some(agent) = agent {
+                        actions.add_child(subscription_approval_actions(
+                            conversation_id,
+                            request_id,
+                            agent,
+                            app,
+                        ));
+                    }
+                }
+            }
+            ConversationAction::Resume => {
+                actions.add_child(subscription_action_button(
+                    "Resume",
+                    AgentInputFooterAction::ResumeSubscriptionSession {
+                        conversation_id: conversation_id.to_string(),
+                    },
+                    app,
+                ));
+            }
+            ConversationAction::Restart => {
+                actions.add_child(subscription_action_button(
+                    "Restart",
+                    AgentInputFooterAction::RestartSubscriptionSession {
+                        conversation_id: conversation_id.to_string(),
+                    },
+                    app,
+                ));
+            }
+            ConversationAction::End => {
+                actions.add_child(subscription_action_button(
+                    "End",
+                    AgentInputFooterAction::EndSubscriptionSession {
+                        conversation_id: conversation_id.to_string(),
+                    },
+                    app,
+                ));
+            }
+            ConversationAction::NewConversation => {
+                actions.add_child(subscription_action_button(
+                    "New conversation",
+                    AgentInputFooterAction::StartNewAgentConversation,
+                    app,
+                ));
+            }
+            ConversationAction::BackToShell => {
+                actions.add_child(subscription_action_button(
+                    "Back to shell",
+                    AgentInputFooterAction::BackToShell,
+                    app,
+                ));
+            }
+        }
+    }
+    actions.finish()
 }
 
 fn subscription_agent_choices(
@@ -2093,9 +2166,10 @@ impl View for AgentInputFooter {
             }
         }
 
-        let mut right_buttons = Flex::row()
+        let mut right_buttons = Wrap::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min)
+            .with_run_spacing(4.)
             .with_spacing(4.);
 
         let active_conversation_id = BlocklistAIHistoryModel::as_ref(app)
@@ -2114,32 +2188,12 @@ impl View for AgentInputFooter {
                     &lifecycle,
                     app,
                 ));
-                match &lifecycle {
-                    AgentLifecycle::WaitingForApproval { request_id } => {
-                        right_buttons.add_child(subscription_approval_actions(
-                            conversation_id,
-                            request_id,
-                            target.installation.agent,
-                            app,
-                        ));
-                    }
-                    AgentLifecycle::TurnCompleted { .. }
-                    | AgentLifecycle::RecoverableError {
-                        session: Some(_),
-                        ..
-                    } => {
-                        right_buttons
-                            .add_child(subscription_session_actions(conversation_id, app));
-                    }
-                    AgentLifecycle::NoAgentInstalled
-                    | AgentLifecycle::NotSignedIn { .. }
-                    | AgentLifecycle::Ready
-                    | AgentLifecycle::Starting
-                    | AgentLifecycle::Responding
-                    | AgentLifecycle::RunningTool { .. }
-                    | AgentLifecycle::SessionEnded
-                    | AgentLifecycle::RecoverableError { session: None, .. } => {}
-                }
+                right_buttons.add_child(subscription_lifecycle_actions(
+                    conversation_id,
+                    &lifecycle,
+                    Some(target.installation.agent),
+                    app,
+                ));
             } else if let Some(lifecycle) = registry.lifecycle(conversation_id) {
                 let choices = registry.agent_choices(conversation_id);
                 let models = registry.model_choices(conversation_id);
@@ -2166,6 +2220,12 @@ impl View for AgentInputFooter {
                 } else {
                     left_buttons.add_child(subscription_lifecycle_status(&lifecycle, app));
                 }
+                right_buttons.add_child(subscription_lifecycle_actions(
+                    conversation_id,
+                    &lifecycle,
+                    None,
+                    app,
+                ));
             }
         }
 
@@ -2351,6 +2411,8 @@ pub enum AgentInputFooterAction {
     EndSubscriptionSession {
         conversation_id: String,
     },
+    StartNewAgentConversation,
+    BackToShell,
     SelectSubscriptionAgent {
         conversation_id: String,
         agent: SubscriptionAgent,
@@ -2572,6 +2634,12 @@ impl TypedActionView for AgentInputFooter {
             AgentInputFooterAction::EndSubscriptionSession { conversation_id } => {
                 SubscriptionSessionRegistry::as_ref(ctx).remove(conversation_id);
                 ctx.notify();
+            }
+            AgentInputFooterAction::StartNewAgentConversation => {
+                ctx.dispatch_typed_action(&TerminalAction::StartNewAgentConversation);
+            }
+            AgentInputFooterAction::BackToShell => {
+                ctx.dispatch_typed_action(&TerminalAction::ExitAgentView);
             }
             AgentInputFooterAction::SelectSubscriptionAgent {
                 conversation_id,

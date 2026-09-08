@@ -2,8 +2,9 @@
 //!
 //! A missing process is not enough on its own: the transcript must remain
 //! independently addressable, the registry entry must be unique, and its
-//! content revision must be unchanged when cleanup executes. PID reuse and any
-//! uncertainty keep the entry visible and untouched.
+//! content revision must be unchanged when cleanup executes. Missing or
+//! unparseable identity stays untouched, while a previous-boot registration or
+//! verified pid reuse can be removed without acting on the occupying process.
 
 use std::path::{Path, PathBuf};
 
@@ -202,10 +203,10 @@ pub fn claude_stale_registry_candidate(
     };
     let process =
         crate::probe_registered_process(entry.pid, entry.proc_start.as_deref(), entry.started_at);
-    if process.alive || process.fingerprint.is_some() {
+    if !process.presence.allows_registry_cleanup() {
         return Ok(None);
     }
-    if crate::sessions::load_transcript_with_revision(config_dir, session_id)?.is_none() {
+    if !crate::sessions::transcript_is_independently_addressable(config_dir, session_id)? {
         return Err(ClaudeRegistryLifecycleError::MissingTranscript);
     }
     Ok(Some(ClaudeStaleRegistryCandidate {
@@ -235,12 +236,13 @@ pub fn cleanup_claude_stale_registry_entry(
     }
     let process =
         crate::probe_registered_process(entry.pid, entry.proc_start.as_deref(), entry.started_at);
-    if process.alive || process.fingerprint.is_some() {
+    if !process.presence.allows_registry_cleanup() {
         return Err(ClaudeRegistryLifecycleError::ProcessIdentityUnverifiable);
     }
-    if crate::sessions::load_transcript_with_revision(&candidate.config_dir, &candidate.session_id)?
-        .is_none()
-    {
+    if !crate::sessions::transcript_is_independently_addressable(
+        &candidate.config_dir,
+        &candidate.session_id,
+    )? {
         return Err(ClaudeRegistryLifecycleError::MissingTranscript);
     }
     std::fs::remove_file(entry.path)?;
