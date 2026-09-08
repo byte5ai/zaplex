@@ -5238,7 +5238,7 @@ async fn live_sftp_copy_file_keeps_destination_after_handles_drop() {
     let journal = tempdir().unwrap();
     let slot = SafeFileClientSlot::default();
     let (client, _executor, server) =
-        spawn_live_safe_file_client(journal.path().to_path_buf(), None);
+        spawn_live_safe_file_client(journal.path().to_path_buf(), None, None);
     slot.set(Some(client));
     let backend = LiveSftpBackend::new_with_safe_file_slot(sftp, slot.clone());
 
