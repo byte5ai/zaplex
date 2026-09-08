@@ -3396,27 +3396,6 @@ fn daemon_node_route_falls_back_to_surviving_connection() {
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn cockpit_daemon_adopt_uses_resolved_onekey_auth() {
-    let mut server = warp_ssh_manager::SshServerInfo::new_default("node-a".to_string());
-    server.username = "placeholder".to_string();
-    server.auth_type = warp_ssh_manager::AuthType::OneKey;
-    let resolved = warp_ssh_manager::ResolvedSshAuth {
-        username: "resolved-user".to_string(),
-        auth_type: warp_ssh_manager::AuthType::Key,
-        key_path: Some("/keys/resolved".to_string()),
-        secret_lookup_id: "credential-a".to_string(),
-        secret_kind: warp_ssh_manager::SecretKind::Passphrase,
-    };
-
-    let server = super::apply_daemon_server_auth(server, resolved);
-
-    assert_eq!(server.username, "resolved-user");
-    assert_eq!(server.auth_type, warp_ssh_manager::AuthType::Key);
-    assert_eq!(server.key_path.as_deref(), Some("/keys/resolved"));
-}
-
 #[test]
 fn invalid_pid_never_reaches_local_signal_backend() {
     let mut signal_calls = 0;

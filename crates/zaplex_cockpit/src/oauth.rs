@@ -11,9 +11,10 @@
 //!
 //! Schema verified 2026-07-03 against the claudeplex-desktop reference
 //! (`electron/usage.ts`): windows carry `used_percentage` (0..100) or
-//! `utilization` (0..1 or 0..100); `resets_at` is epoch seconds, epoch
-//! milliseconds, or ISO 8601; `five_hour` is the validity gate; optional
-//! `seven_day_opus` / `seven_day_sonnet` plan sublimits.
+//! `utilization` with a response-wide scale supplied by the endpoint contract;
+//! `resets_at` is epoch seconds, epoch milliseconds, or ISO 8601; `five_hour`
+//! is the validity gate; optional `seven_day_opus` / `seven_day_sonnet` plan
+//! sublimits.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -45,16 +46,36 @@ pub struct OauthUsage {
     pub sonnet_fraction: Option<f64>,
 }
 
-/// Window object → utilization fraction. Handles both observed field variants:
-/// `used_percentage` (always 0..100) and `utilization` (0..1 or 0..100 scale).
-fn fraction_of(window: &serde_json::Value) -> f64 {
+/// Scale used by every `utilization` field in one endpoint response.
+///
+/// The caller chooses this once from the endpoint contract. `Unknown` fails
+/// closed when a response contains `utilization`, because values at or below
+/// one are valid in both supported scales and cannot be inferred safely.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UtilizationScale {
+    /// Values are fractions where 1.0 means 100%.
+    Fraction,
+    /// Values are percentages where 100.0 means 100%.
+    Percent,
+    /// No authoritative scale is available.
+    Unknown,
+}
+
+/// Window object → utilization fraction. `used_percentage` is explicitly
+/// percent-scaled; `utilization` uses the response-wide scale selected once by
+/// the caller.
+fn fraction_of(window: &serde_json::Value, utilization_scale: UtilizationScale) -> Option<f64> {
     if let Some(p) = window.get("used_percentage").and_then(|v| v.as_f64()) {
-        return p / 100.0;
+        return Some(p / 100.0);
     }
     if let Some(u) = window.get("utilization").and_then(|v| v.as_f64()) {
-        return if u <= 1.0 { u } else { u / 100.0 };
+        return match utilization_scale {
+            UtilizationScale::Fraction => Some(u),
+            UtilizationScale::Percent => Some(u / 100.0),
+            UtilizationScale::Unknown => None,
+        };
     }
-    0.0
+    Some(0.0)
 }
 
 /// `resets_at` → UTC time. Accepts epoch seconds, epoch milliseconds (split at
@@ -73,27 +94,39 @@ fn resets_at_of(window: &serde_json::Value) -> Option<DateTime<Utc>> {
     }
 }
 
-fn window_of(v: &serde_json::Value, key: &str) -> OauthWindow {
+fn window_of(
+    v: &serde_json::Value,
+    key: &str,
+    utilization_scale: UtilizationScale,
+) -> Option<OauthWindow> {
     match v.get(key) {
-        Some(w) => OauthWindow {
-            fraction: fraction_of(w),
+        Some(w) => Some(OauthWindow {
+            fraction: fraction_of(w, utilization_scale)?,
             resets_at: resets_at_of(w),
-        },
-        None => OauthWindow::default(),
+        }),
+        None => Some(OauthWindow::default()),
     }
 }
 
 /// Parse the endpoint's JSON body into [`OauthUsage`]. Returns `None` when the
 /// body is not JSON or lacks the `five_hour` window (the same validity gate the
 /// reference implementation uses) — the caller then keeps the estimate.
-pub fn parse_oauth_usage(body: &str) -> Option<OauthUsage> {
+pub fn parse_oauth_usage(body: &str, utilization_scale: UtilizationScale) -> Option<OauthUsage> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     v.get("five_hour")?;
+    let opus_fraction = match v.get("seven_day_opus") {
+        Some(window) => Some(fraction_of(window, utilization_scale)?),
+        None => None,
+    };
+    let sonnet_fraction = match v.get("seven_day_sonnet") {
+        Some(window) => Some(fraction_of(window, utilization_scale)?),
+        None => None,
+    };
     Some(OauthUsage {
-        five_hour: window_of(&v, "five_hour"),
-        seven_day: window_of(&v, "seven_day"),
-        opus_fraction: v.get("seven_day_opus").map(fraction_of),
-        sonnet_fraction: v.get("seven_day_sonnet").map(fraction_of),
+        five_hour: window_of(&v, "five_hour", utilization_scale)?,
+        seven_day: window_of(&v, "seven_day", utilization_scale)?,
+        opus_fraction,
+        sonnet_fraction,
     })
 }
 
