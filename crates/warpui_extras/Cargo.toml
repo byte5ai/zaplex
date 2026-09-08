@@ -36,10 +36,12 @@ objc = { workspace = true, optional = true }
 security-framework = { version = "2.0.0", optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+libc.workspace = true
 ouroboros = { version = "0.18", optional = true }
 rand = "0.8.5"
 ring = "0.17.13"
 secret-service = {version = "5.0.0", features = ["rt-async-io-crypto-rust"], optional = true}
+zeroize = "1.8"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 gloo-storage = { version = "0.3.0", optional = true }
