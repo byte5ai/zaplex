@@ -1,5 +1,6 @@
 use crate::entry::{DirectoryEntry, Entry, FileId, FileMetadata};
-use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState};
+use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
+use ignore::gitignore::GitignoreBuilder;
 use std::sync::Arc;
 use warp_util::standardized_path::StandardizedPath;
 
@@ -24,6 +25,29 @@ fn create_dir_entry(path: &str) -> Entry {
         ignored: false,
         loaded: true,
     })
+}
+
+#[test]
+fn cloning_watcher_gitignores_shares_compiled_rules() {
+    const RULE_SET_COUNT: usize = 64;
+
+    let gitignores = (0..RULE_SET_COUNT)
+        .map(|index| {
+            let mut builder = GitignoreBuilder::new(format!("/repo/nested-{index}"));
+            builder
+                .add_line(None, format!("ignored-{index}/**"))
+                .expect("test gitignore rule should be valid");
+            builder.build().expect("test gitignore should compile")
+        })
+        .collect();
+    let state = FileTreeState::new(create_dir_entry("/repo"), gitignores, None);
+
+    assert_eq!(Arc::strong_count(&state.gitignores), 1);
+    let watcher_snapshot = state.gitignores.clone();
+
+    assert_eq!(watcher_snapshot.len(), RULE_SET_COUNT);
+    assert!(Arc::ptr_eq(&state.gitignores, &watcher_snapshot));
+    assert_eq!(Arc::strong_count(&state.gitignores), 2);
 }
 
 #[test]
