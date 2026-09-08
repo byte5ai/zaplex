@@ -420,3 +420,11 @@ fn known_ssh_transport_errors_never_fall_through_to_raw_copy() {
         );
     }
 }
+
+#[test]
+fn ring_ceiling_presets_do_not_exceed_the_daemon_limit() {
+    assert_eq!(RING_CEILING_PRESETS.last(), Some(&(256, "256 MB")));
+    assert!(RING_CEILING_PRESETS
+        .iter()
+        .all(|(megabytes, _)| *megabytes <= 256));
+}
