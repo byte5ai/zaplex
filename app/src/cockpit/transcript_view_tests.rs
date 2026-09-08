@@ -150,6 +150,15 @@ fn local_codex_errors_map_to_safe_provider_neutral_states() {
 }
 
 #[test]
+fn claude_changed_during_read_is_retryable_for_live_refresh() {
+    let result = project_claude_transcript(Err(
+        zaplex_cockpit::sessions::TranscriptError::ChangedDuringRead,
+    ));
+
+    assert_eq!(result, Err(()));
+}
+
+#[test]
 fn local_projection_keeps_only_the_last_bounded_turn_window() {
     let mut turns = vec![local_turn("oldest-private-turn".into())];
     turns.extend((0..MAX_TRANSCRIPT_TURNS).map(|index| local_turn(format!("recent-{index}"))));
