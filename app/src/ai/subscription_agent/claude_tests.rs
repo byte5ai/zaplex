@@ -168,4 +168,23 @@ fn approval_response_never_bypasses_the_protocol() {
             }
         })
     );
+
+    assert_eq!(
+        ClaudeProtocol::approval_response(
+            "approval-2",
+            ApprovalDecision::Cancel,
+            &json!({"command": "rm file"}),
+        ),
+        json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "approval-2",
+                "response": {
+                    "behavior": "deny",
+                    "message": "Cancelled by user"
+                }
+            }
+        })
+    );
 }

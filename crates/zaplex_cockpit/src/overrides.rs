@@ -36,18 +36,31 @@ pub struct AccountOverride {
 
 /// The full override set, keyed by account key. Deserializes directly from an
 /// `instances.json` object: `{ "claude:work": { "label": "...", "hidden": true } }`.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, Default)]
 pub struct AccountOverrides {
     entries: HashMap<String, AccountOverride>,
 }
 
 impl AccountOverrides {
-    /// Parse instances.json-style overrides. **Lenient**: returns an empty set
-    /// (no overrides) on any parse failure — a broken overrides file must never
-    /// hide the user's accounts or blank the cockpit.
+    /// Parse instances.json-style overrides. A malformed top-level object
+    /// yields an empty set, while malformed entries are skipped independently
+    /// so one bad account cannot discard valid sibling overrides.
     pub fn parse(json: &str) -> Self {
-        serde_json::from_str(json).unwrap_or_default()
+        let Ok(raw_entries) = serde_json::from_str::<HashMap<String, serde_json::Value>>(json)
+        else {
+            return Self::default();
+        };
+        let entries = raw_entries
+            .into_iter()
+            .filter_map(|(key, value)| match serde_json::from_value(value) {
+                Ok(entry) => Some((key, entry)),
+                Err(err) => {
+                    log::warn!("skipping invalid account override for {key}: {err}");
+                    None
+                }
+            })
+            .collect();
+        Self { entries }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -57,6 +70,35 @@ impl AccountOverrides {
     /// The overridden display color for an account key, if any.
     pub fn color_for(&self, key: &str) -> Option<&str> {
         self.entries.get(key).and_then(|o| o.color.as_deref())
+    }
+
+    /// Move legacy basename-only overrides to a root-bound key only when the
+    /// legacy key identifies exactly one currently discovered account.
+    pub fn migrate_legacy_keys(&mut self, accounts: &[AccountUsage]) {
+        let mut targets: HashMap<String, Vec<String>> = HashMap::new();
+        for account in accounts {
+            let legacy_key = crate::account_key::legacy_account_key(
+                account.account.provider,
+                &account.account.config_dir,
+                account.account.is_default,
+            );
+            targets
+                .entry(legacy_key)
+                .or_default()
+                .push(account.account.key.clone());
+        }
+
+        for (legacy_key, new_keys) in targets {
+            let [new_key] = new_keys.as_slice() else {
+                continue;
+            };
+            if &legacy_key == new_key || self.entries.contains_key(new_key) {
+                continue;
+            }
+            if let Some(account_override) = self.entries.remove(&legacy_key) {
+                self.entries.insert(new_key.clone(), account_override);
+            }
+        }
     }
 
     /// Apply the overrides to a discovered account list:

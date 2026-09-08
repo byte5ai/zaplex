@@ -641,6 +641,18 @@ fn test_parse_code_block_with_backticks() {
 }
 
 #[test]
+fn test_longer_code_fence_keeps_shorter_fence_in_body() {
+    let source = "````diff\n context\n ```\n more context\n````";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::CodeBlock(CodeBlockText {
+            lang: "diff".to_string(),
+            code: " context\n ```\n more context\n".to_string()
+        })]
+    );
+}
+
+#[test]
 fn test_parse_code_block_body() {
     let source = "```json
         {
@@ -1328,6 +1340,31 @@ fn test_parse_inline() {
     assert_eq!(
         parse_all("**foo* bar*", parse_inline),
         vec![FormattedTextFragment::italic("foo bar")]
+    );
+}
+
+#[test]
+fn test_long_delimiter_runs_preserve_text() {
+    for delimiter in ["*", "_", "~"] {
+        for count in [256, 300, 1024] {
+            let source = format!("Result: {}", delimiter.repeat(count));
+            let fragments = parse_all(source.as_str(), parse_inline);
+            let parsed_text = fragments
+                .into_iter()
+                .map(|fragment| fragment.text)
+                .collect::<String>();
+            assert_eq!(parsed_text, source);
+        }
+    }
+
+    let paired = format!("{}content{}", "*".repeat(300), "*".repeat(300));
+    let fragments = parse_all(paired.as_str(), parse_inline);
+    assert_eq!(
+        fragments
+            .into_iter()
+            .map(|fragment| fragment.text)
+            .collect::<String>(),
+        "content"
     );
 }
 
