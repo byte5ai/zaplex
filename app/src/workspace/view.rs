@@ -7031,14 +7031,18 @@ impl Workspace {
                     ctx.spawn(
                         async move {
                             tokio::task::spawn_blocking(move || {
-                                crate::cockpit::transcript_view::load_local_transcript(
+                                crate::cockpit::transcript_view::refresh_local_transcript(
                                     provider,
                                     &config_root,
                                     &session_id,
                                 )
                             })
                             .await
-                            .map(TranscriptRefreshResult::Modified)
+                            .map(|result| {
+                                result
+                                    .map(TranscriptRefreshResult::Modified)
+                                    .unwrap_or(TranscriptRefreshResult::RetryableFailure)
+                            })
                             .unwrap_or(TranscriptRefreshResult::RetryableFailure)
                         },
                         move |me, result, ctx| {

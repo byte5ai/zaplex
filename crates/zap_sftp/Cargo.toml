@@ -4,10 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+base64.workspace = true
+dirs.workspace = true
+sha2.workspace = true
 ssh2 = { version = "0.9", features = ["openssl-on-win32"] }
 openssl-sys = { version = "*", features = ["vendored"] }
 smol = "2"
 thiserror = "2"
+zeroize = "1.8"
 
 [dev-dependencies]
 tempfile = "3"
