@@ -95,6 +95,43 @@ fn fresh_model_starts_without_auth_token() {
     assert_eq!(model.auth_token(), None);
 }
 
+#[cfg(unix)]
+#[test]
+fn upload_staging_rejects_precreated_symlink_parent() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    let victim = directory.path().join("victim");
+    let attacker = directory.path().join("attacker");
+    fs::create_dir(&victim).unwrap();
+    fs::create_dir(&attacker).unwrap();
+    symlink(&attacker, victim.join(".zap-upload-staging")).unwrap();
+
+    let mut safe_files =
+        super::super::safe_file::SafeFileServer::new_for_test(directory.path().join("journal"));
+    let response = safe_files.handle(
+        uuid::Uuid::new_v4(),
+        super::super::proto::SafeFileRequest {
+            operation_id: String::new(),
+            operation: Some(
+                super::super::proto::safe_file_request::Operation::BeginUploadBatch(
+                    super::super::proto::SafeFileBeginUploadBatch {
+                        destination_directory: victim.to_str().unwrap().to_string(),
+                        batch_id: "batch".to_string(),
+                        entries: Vec::new(),
+                    },
+                ),
+            ),
+        },
+    );
+
+    assert!(matches!(
+        response.result,
+        Some(super::super::proto::safe_file_response::Result::Error(_))
+    ));
+    assert!(!attacker.join("batch").exists());
+}
+
 #[test]
 fn deregister_connection_removes_its_session_executors() {
     warpui::App::test((), |mut app| async move {
