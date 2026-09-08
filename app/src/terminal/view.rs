@@ -23141,7 +23141,7 @@ impl TerminalView {
             let Some(ref ssh_host) = ssh_connection_info.host else {
                 return;
             };
-            self.ssh_file_upload.update(ctx, |file_upload, ctx| {
+            let result = self.ssh_file_upload.update(ctx, |file_upload, ctx| {
                 file_upload.start_file_upload(
                     ssh_host,
                     paths,
@@ -23150,6 +23150,9 @@ impl TerminalView {
                     ctx,
                 )
             });
+            if let Err(error) = result {
+                log::error!("SSH file upload was rejected before launch: {error}");
+            }
         }
     }
 
