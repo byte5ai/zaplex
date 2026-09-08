@@ -2,7 +2,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Barrier,
     },
 };
 
@@ -40,7 +40,8 @@ fn register_resolved_path_reuses_stale_entries_after_drop() {
     let logger = manager
         .register_resolved_path(log_path.clone(), executor)
         .expect("stale entry should be reclaimed after the logger is dropped");
-    drop(logger);
+    logger.close();
+    futures::executor::block_on(logger.wait_closed());
     cleanup_log_path(&log_path);
 }
 
@@ -60,7 +61,8 @@ fn register_resolved_path_rejects_duplicate_active_loggers() {
         "live logger should block duplicate registration"
     );
 
-    drop(logger);
+    logger.close();
+    futures::executor::block_on(logger.wait_closed());
     cleanup_log_path(&log_path);
 }
 
@@ -81,7 +83,57 @@ fn register_reclaims_closed_logger() {
         .register_resolved_path(log_path.clone(), executor)
         .expect("closed logger should be reclaimed even when Arc is still alive");
 
-    drop(logger);
-    drop(new_logger);
+    new_logger.close();
+    futures::executor::block_on(async {
+        futures::join!(logger.wait_closed(), new_logger.wait_closed());
+    });
+    cleanup_log_path(&log_path);
+}
+
+#[test]
+fn closed_logger_is_drained_before_path_reuse() {
+    let mut manager = LogManager::new();
+    let executor = Arc::new(Background::default());
+    let log_path = temp_path("drain-before-reuse").join("server.log");
+    let received = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let received_by_worker = received.clone();
+    let release_worker = release.clone();
+
+    let old_logger = manager
+        .register_resolved_path_with_hook(
+            log_path.clone(),
+            executor.clone(),
+            Some(Arc::new(move |line| {
+                if line == "old-final" {
+                    received_by_worker.wait();
+                    release_worker.wait();
+                }
+            })),
+        )
+        .expect("initial registration should succeed");
+    old_logger.log("old-final".to_string());
+    received.wait();
+    old_logger.close();
+
+    let new_logger = manager
+        .register_resolved_path(log_path.clone(), executor)
+        .expect("a closed generation should be replaced transparently");
+    new_logger.log("new-first".to_string());
+    new_logger.close();
+    release.wait();
+
+    futures::executor::block_on(async {
+        futures::join!(old_logger.wait_closed(), new_logger.wait_closed());
+    });
+
+    let contents = std::fs::read(&log_path).unwrap();
+    assert!(
+        !contents.contains(&0),
+        "the new generation must not contain NUL gaps"
+    );
+    let contents = String::from_utf8(contents).unwrap();
+    assert!(contents.contains("new-first"));
+    assert!(!contents.contains("old-final"));
     cleanup_log_path(&log_path);
 }

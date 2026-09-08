@@ -12,13 +12,15 @@
 //! caller in `app/src/workspace/view.rs`. See
 //! `docs/superpowers/specs/2026-06-27-stage2-increment3c-daemon-trigger-design.md`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use futures::lock::Mutex as AsyncMutex;
 use remote_server::auth::RemoteServerAuthContext;
 use remote_server::proto::{InitializeResponse, MultiplexerSessionList, SessionList};
 use remote_server::transport::{Connection, RemoteTransport};
@@ -39,6 +41,8 @@ use super::ssh_transport::SshTransport;
 /// sessions — interactive and daemon — by `SessionId`, so uniqueness matters.
 const DAEMON_SESSION_ID_BASE: u64 = 1 << 63;
 static NEXT_DAEMON_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+static CONTROL_MASTER_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>> =
+    LazyLock::new(Mutex::default);
 
 /// Session inventory returned by one authenticated daemon connection.
 ///
@@ -154,6 +158,31 @@ async fn control_master_alive(
     )
 }
 
+fn normalized_socket_path(socket_path: &Path) -> PathBuf {
+    let Some(file_name) = socket_path.file_name() else {
+        return socket_path.to_path_buf();
+    };
+    socket_path
+        .parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .map(|parent| parent.join(file_name))
+        .unwrap_or_else(|| socket_path.to_path_buf())
+}
+
+fn control_master_lock(socket_path: &Path) -> Arc<AsyncMutex<()>> {
+    let key = normalized_socket_path(socket_path);
+    let mut locks = CONTROL_MASTER_LOCKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(AsyncMutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
+}
+
 fn control_master_args(
     server: &SshServerInfo,
     socket_path: &Path,
@@ -233,16 +262,18 @@ async fn ensure_control_master_with_factory(
     command_factory: &dyn WorkspaceCommandFactory,
 ) -> Result<()> {
     let args = control_master_args(server, socket_path, known_hosts_path)?;
+    let lock = control_master_lock(socket_path);
+    let _guard = lock.lock().await;
 
+    if control_master_alive(socket_path, command_factory).await {
+        return Ok(());
+    }
     if socket_path.exists() {
         // A socket file is present, but the master may have died on an SSH drop,
         // leaving a stale socket. Verify it's actually serving: reuse a live
         // master, otherwise remove the stale socket and spawn a fresh one. This
         // is what lets a daemon session's transport be re-established after a
         // connection loss (the session itself kept running daemon-side).
-        if control_master_alive(socket_path, command_factory).await {
-            return Ok(());
-        }
         log::info!(
             "ControlMaster socket {} is stale; re-establishing",
             socket_path.display()
@@ -257,13 +288,10 @@ async fn ensure_control_master_with_factory(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let child = command
-        .spawn()
-        .map_err(|error| anyhow!("failed to spawn ssh: {error}"))?;
-    let output = tokio::time::timeout(Duration::from_secs(20), child.output())
+    let output = tokio::time::timeout(Duration::from_secs(20), command.output())
         .await
         .map_err(|_| anyhow!("ControlMaster setup timed out"))?
-        .map_err(|error| anyhow!("failed to read ssh output: {error}"))?;
+        .map_err(|error| anyhow!("failed to spawn ssh: {error}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -276,16 +304,16 @@ async fn ensure_control_master_with_factory(
         return Err(anyhow!("ControlMaster setup failed: {}", stderr.trim()));
     }
 
-    // `-f` returns once the master is backgrounded; the socket should exist now.
-    // Poll briefly to absorb any small filesystem-visibility lag.
+    // `-f` returns once the master is backgrounded. Verify the new master instead
+    // of trusting socket visibility, which can also describe a stale endpoint.
     for _ in 0..20 {
-        if socket_path.exists() {
+        if control_master_alive(socket_path, command_factory).await {
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Err(anyhow!(
-        "ControlMaster socket did not appear at {}",
+        "ControlMaster did not become responsive at {}",
         socket_path.display()
     ))
 }

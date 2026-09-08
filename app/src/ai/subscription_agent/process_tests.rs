@@ -2,6 +2,12 @@ use super::*;
 use crate::ai::subscription_agent::{
     AccountIdentity, HostIdentity, InstallationIdentity, ModelCapability, SubscriptionAgent,
 };
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::PermissionsExt as _;
+#[cfg(target_os = "linux")]
+use std::time::{Duration, Instant};
+#[cfg(target_os = "linux")]
+use warpui::r#async::FutureExt as _;
 
 fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
     SubscriptionTarget {
@@ -92,7 +98,7 @@ fn remote_launch_quotes_working_directory_environment_and_model() {
         &target(SubscriptionAgent::ClaudeCode),
         None,
         ProcessLocation::Remote {
-            ssh_argv: vec!["ssh".to_string(), "host".to_string()],
+            ssh_argv: vec!["ssh".to_string(), "--".to_string(), "host".to_string()],
         },
     );
     let command = launch.remote_command();
@@ -104,4 +110,95 @@ fn remote_launch_quotes_working_directory_environment_and_model() {
         true
     );
     assert_eq!(command.contains("--model reported-model"), true);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn remote_version_probe_uses_noninteractive_ssh_options() {
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("ssh-probe");
+    let args_file = directory.path().join("args");
+    std::fs::write(
+        &executable,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf '1.2.3\\n'\n",
+            args_file.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&executable, permissions).unwrap();
+
+    let installation = target(SubscriptionAgent::ClaudeCode).installation;
+    let version = futures_lite::future::block_on(query_cli_version(
+        &installation,
+        directory.path().to_path_buf(),
+        ProcessLocation::Remote {
+            ssh_argv: vec![
+                executable.to_string_lossy().into_owned(),
+                "--".to_string(),
+                "host".to_string(),
+            ],
+        },
+    ))
+    .unwrap();
+    assert_eq!(version, "1.2.3");
+
+    let args = std::fs::read_to_string(args_file)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let delimiter = args.iter().position(|arg| arg == "--").unwrap();
+    assert!(args[..delimiter]
+        .windows(2)
+        .any(|args| args == ["-o", "BatchMode=yes"]));
+    assert!(args[..delimiter]
+        .windows(2)
+        .any(|args| args == ["-o", "ConnectTimeout=10"]));
+    assert!(args[..delimiter]
+        .windows(2)
+        .any(|args| args == ["-o", "ConnectionAttempts=1"]));
+    assert_eq!(args.get(delimiter + 1).map(String::as_str), Some("host"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn timed_out_version_probe_kills_child() {
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("version-probe");
+    let pid_file = directory.path().join("pid");
+    std::fs::write(
+        &executable,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec sleep 60\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&executable, permissions).unwrap();
+
+    let mut installation = target(SubscriptionAgent::ClaudeCode).installation;
+    installation.executable = executable;
+    let result = futures_lite::future::block_on(
+        query_cli_version(
+            &installation,
+            directory.path().to_path_buf(),
+            ProcessLocation::Local,
+        )
+        .with_timeout(Duration::from_millis(50)),
+    );
+    assert!(result.is_err());
+
+    let pid = std::fs::read_to_string(pid_file).unwrap();
+    let process_path = std::path::PathBuf::from(format!("/proc/{}", pid.trim()));
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while process_path.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(!process_path.exists(), "timed-out child was not reaped");
 }
