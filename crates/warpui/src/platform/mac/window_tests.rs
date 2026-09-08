@@ -1,8 +1,9 @@
 use cocoa::base::{id, nil};
 use cocoa::foundation::NSAutoreleasePool;
 use objc::{class, msg_send, sel, sel_impl};
+use objc::runtime::{NO, YES};
 
-use super::to_string;
+use super::{to_string, warp_should_dispatch_native_window_chrome_event};
 
 unsafe fn string_from_utf16(code_units: &[u16]) -> id {
     let string: id = msg_send![class!(NSString), alloc];
@@ -32,5 +33,18 @@ fn to_string_preserves_embedded_null() {
 
         let _: () = msg_send![string, release];
         pool.drain();
+    }
+}
+
+#[test]
+fn native_chrome_dispatch_requires_supported_os_and_matching_mouse_down() {
+    unsafe {
+        assert_eq!(
+            warp_should_dispatch_native_window_chrome_event(YES, YES),
+            YES
+        );
+        assert_eq!(warp_should_dispatch_native_window_chrome_event(YES, NO), NO);
+        assert_eq!(warp_should_dispatch_native_window_chrome_event(NO, YES), NO);
+        assert_eq!(warp_should_dispatch_native_window_chrome_event(NO, NO), NO);
     }
 }
