@@ -211,9 +211,10 @@ impl Element for WaitingPulseElement {
     }
 }
 
-fn host_display_label(host: &HostNode, removed_label: &str) -> String {
+fn host_display_label(host: &HostNode, removed_label: &str, unverified_label: &str) -> String {
     match host.availability {
         HostAvailability::Available => host.host.clone(),
+        HostAvailability::Unverified => format!("{} — {unverified_label}", host.host),
         HostAvailability::Removed => format!("{} — {removed_label}", host.host),
     }
 }
@@ -796,7 +797,11 @@ impl CockpitPanel {
         } else {
             icons::Icon::ChevronRight
         };
-        let label = host_display_label(host, &crate::t!("cockpit-host-removed"));
+        let label = host_display_label(
+            host,
+            &crate::t!("cockpit-host-removed"),
+            &crate::t!("cockpit-host-unverified"),
+        );
         let count = host_conductor_session_count(host);
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)

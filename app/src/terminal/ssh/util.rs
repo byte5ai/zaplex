@@ -1,7 +1,10 @@
-use std::path::Path;
+use std::{io::Write as _, path::Path};
 
 use lazy_static::lazy_static;
 use regex::Regex;
+use tempfile::NamedTempFile;
+use thiserror::Error;
+use warp_util::path::ShellFamily;
 
 /// Converts a multiline bash or zsh script to one line by turning newlines into semicolons or
 /// deleting them, as appropriate.
@@ -231,46 +234,174 @@ fn parse_ssh_command_tokens(command: &str) -> Option<Vec<String>> {
     Some(tokens)
 }
 
-/// Creates an sftp command that copies a given local file into the pwd in the zaplexified ssh session.
+#[derive(Debug, Error)]
+pub enum SftpUploadError {
+    #[error("the SFTP upload requires at least one local path")]
+    NoLocalPaths,
+    #[error("the {field} contains a forbidden NUL, carriage return, or newline")]
+    InvalidBatchPath { field: &'static str },
+    #[error("the SSH host is not a valid destination argument")]
+    InvalidHost,
+    #[error("the SSH port is not a valid non-zero TCP port")]
+    InvalidPort,
+    #[error("the temporary SFTP batch path is not valid UTF-8")]
+    InvalidBatchFilePath,
+    #[error("failed to prepare the private SFTP batch file: {0}")]
+    BatchFile(#[from] std::io::Error),
+}
+
+/// Separates data interpreted by SFTP from arguments interpreted by the local
+/// shell. Local and remote paths only occur in `batch`, never in `argv`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SftpUploadPlan {
+    argv: Vec<String>,
+    batch: Vec<u8>,
+}
+
+impl SftpUploadPlan {
+    pub fn new(
+        local_file_paths: &[String],
+        ssh_host: &str,
+        ssh_port: Option<&str>,
+        remote_dest_path: Option<&str>,
+    ) -> Result<Self, SftpUploadError> {
+        if local_file_paths.is_empty() {
+            return Err(SftpUploadError::NoLocalPaths);
+        }
+        if ssh_host.is_empty()
+            || ssh_host.starts_with('-')
+            || contains_forbidden_record_character(ssh_host)
+        {
+            return Err(SftpUploadError::InvalidHost);
+        }
+
+        let mut argv = vec!["sftp".to_string()];
+        if let Some(port) = ssh_port {
+            if port.parse::<u16>().ok().filter(|port| *port != 0).is_none() {
+                return Err(SftpUploadError::InvalidPort);
+            }
+            argv.extend(["-P".to_string(), port.to_string()]);
+        }
+        argv.push(ssh_host.to_string());
+
+        let remote_dest_path = remote_dest_path
+            .map(|path| quote_sftp_batch_path(path, "remote destination"))
+            .transpose()?;
+        let mut commands = Vec::with_capacity(local_file_paths.len());
+        for local_file_path in local_file_paths {
+            let recursive = Path::new(local_file_path)
+                .metadata()
+                .is_ok_and(|metadata| metadata.is_dir());
+            let local_file_path = quote_sftp_batch_path(local_file_path, "local path")?;
+            let mut command = if recursive {
+                format!("put -r {local_file_path}")
+            } else {
+                format!("put {local_file_path}")
+            };
+            if let Some(remote_dest_path) = &remote_dest_path {
+                command.push(' ');
+                command.push_str(remote_dest_path);
+            }
+            commands.push(command);
+        }
+
+        let mut batch = commands.join("\n").into_bytes();
+        batch.push(b'\n');
+        Ok(Self { argv, batch })
+    }
+
+    pub fn materialize(
+        &self,
+        shell_family: ShellFamily,
+    ) -> Result<MaterializedSftpUpload, SftpUploadError> {
+        let mut batch_file = NamedTempFile::new()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            batch_file
+                .as_file()
+                .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        batch_file.write_all(&self.batch)?;
+        batch_file.flush()?;
+
+        let batch_path = batch_file
+            .path()
+            .to_str()
+            .ok_or(SftpUploadError::InvalidBatchFilePath)?;
+        let argv = self
+            .argv
+            .iter()
+            .map(|arg| shell_family.escape(arg).into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let batch_path = shell_family.escape(batch_path);
+        let command = match shell_family {
+            ShellFamily::Posix => format!("{argv} < {batch_path}"),
+            ShellFamily::PowerShell => {
+                format!("Get-Content -Raw -LiteralPath {batch_path} | & {argv}")
+            }
+        };
+
+        Ok(MaterializedSftpUpload {
+            command,
+            _batch_file: batch_file,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn batch(&self) -> &[u8] {
+        &self.batch
+    }
+}
+
+#[derive(Debug)]
+pub struct MaterializedSftpUpload {
+    command: String,
+    _batch_file: NamedTempFile,
+}
+
+impl MaterializedSftpUpload {
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    #[cfg(test)]
+    pub(crate) fn batch_path(&self) -> std::path::PathBuf {
+        self._batch_file.path().to_path_buf()
+    }
+}
+
+fn contains_forbidden_record_character(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| matches!(character, '\0' | '\r' | '\n'))
+}
+
+fn quote_sftp_batch_path(path: &str, field: &'static str) -> Result<String, SftpUploadError> {
+    if contains_forbidden_record_character(path) {
+        return Err(SftpUploadError::InvalidBatchPath { field });
+    }
+    Ok(format!(
+        "\"{}\"",
+        path.replace('\\', "\\\\").replace('"', "\\\"")
+    ))
+}
+
+/// Creates the shared two-stage SFTP upload plan for one local file.
 pub fn transfer_file_sftp_command(
     local_file_path: String,
     ssh_host: String,
     ssh_port: Option<String>,
     pwd: Option<String>,
-) -> Option<String> {
-    // "sftp "
-    let mut command = String::from("sftp ");
-
-    // "sftp -P 2222"
-    if let Some(port) = ssh_port {
-        command += &format!("-P {port} ");
-    }
-
-    // "sftp -P 2222 sshuser@127.0.0.1 <<< "put "
-    command += &ssh_host;
-    command += " <<< \"put ";
-
-    // "sftp -P 2222 sshuser@127.0.0.1 <<< "put -r"
-    let is_dir = Path::new(&local_file_path)
-        .metadata()
-        .is_ok_and(|m| m.is_dir());
-    if is_dir {
-        command += "-r "
-    }
-
-    // "sftp -P 2222 sshuser@127.0.0.1 <<< "put -r \"path/to/local/file\""
-    command += &format!("\\\"{}\\\"", &local_file_path);
-
-    // "sftp -P 2222 sshuser@127.0.0.1 <<< "put -r path/to/local/file pwd/on/remote"
-    if let Some(pwd) = pwd {
-        command += " ";
-        command += &format!("\\\"{}\\\"", &pwd);
-    }
-
-    // "sftp -P 2222 sshuser@127.0.0.1 <<< "put -r path/to/local/file pwd/on/remote""
-    command += "\"";
-
-    Some(command)
+) -> Result<SftpUploadPlan, SftpUploadError> {
+    SftpUploadPlan::new(
+        &[local_file_path],
+        &ssh_host,
+        ssh_port.as_deref(),
+        pwd.as_deref(),
+    )
 }
 
 #[cfg(test)]

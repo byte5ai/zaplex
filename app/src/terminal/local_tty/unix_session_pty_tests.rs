@@ -9,6 +9,21 @@ use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+fn open_pty_master_fds() -> std::collections::HashSet<i32> {
+    fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let target = fs::read_link(entry.path()).ok()?;
+            (target == std::path::Path::new("/dev/ptmx")
+                || target == std::path::Path::new("/dev/pts/ptmx"))
+            .then(|| entry.file_name().to_string_lossy().parse().ok())
+            .flatten()
+        })
+        .collect()
+}
+
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
@@ -177,6 +192,27 @@ fn spawn_session_pty_streams_and_resizes() {
         text.contains("30 100"),
         "stty size should reflect the TIOCSWINSZ resize; got:\n{text}"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[serial_test::serial]
+fn failed_spawn_session_pty_does_not_leak_master_fds() {
+    let env = HashMap::new();
+    let before = open_pty_master_fds();
+
+    for _ in 0..32 {
+        let result = spawn_session_pty(
+            Some(std::path::Path::new("/definitely-missing-zaplex-cwd")),
+            "/bin/sh",
+            &env,
+            24,
+            80,
+        );
+        assert!(result.is_err());
+    }
+
+    assert_eq!(open_pty_master_fds(), before);
 }
 
 /// Starting a bash session must not dump the bootstrap into the terminal.
