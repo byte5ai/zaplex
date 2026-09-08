@@ -932,6 +932,9 @@ settings-cloud-sync-platform-description = Select the cloud service for synchron
 settings-cloud-sync-token-label = Access Token
 settings-cloud-sync-token-description = Personal access token with gist scope
 settings-cloud-sync-token-placeholder = Enter access token...
+settings-cloud-sync-secret-label = Sync Passphrase
+settings-cloud-sync-secret-description = Encrypts SSH secrets independently of the transport token. Use the same passphrase on every device. For legacy recovery, download once with the original token, then upload again.
+settings-cloud-sync-secret-placeholder = Enter sync passphrase...
 settings-cloud-sync-operations-header = Sync Operations
 settings-cloud-sync-upload-label = Upload
 settings-cloud-sync-download-label = Download
@@ -953,6 +956,7 @@ settings-cloud-sync-failed = Failed: {$error}
 settings-cloud-sync-conflict-status = Conflict: local v{$local} vs remote v{$remote}
 settings-cloud-sync-conflict-status-equal = Versions are equal: local v{$local} = remote v{$remote}
 settings-cloud-sync-token-not-configured = {$platform} Token not configured
+settings-cloud-sync-secret-not-configured = Sync passphrase not configured
 settings-cloud-sync-conflict-title = Version Conflict
 settings-cloud-sync-conflict-description = Remote version (v{$remote}) is newer than local (v{$local}). Forcing upload will overwrite the remote data.
 settings-cloud-sync-conflict-description-equal = Remote and local versions are identical. Forcing upload will overwrite the remote data.

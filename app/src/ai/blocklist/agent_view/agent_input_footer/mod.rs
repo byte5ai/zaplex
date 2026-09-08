@@ -141,8 +141,12 @@ use crate::workspace::WorkspaceAction;
 enum CLIVoiceInputState {
     #[default]
     Stopped,
-    Listening,
-    Transcribing,
+    Listening {
+        session_id: voice_input::VoiceSessionId,
+    },
+    Transcribing {
+        session_id: voice_input::VoiceSessionId,
+    },
 }
 
 /// How long to wait after session creation before showing the install chip.
@@ -1438,19 +1442,23 @@ impl AgentInputFooter {
             return;
         }
 
-        if matches!(self.cli_voice_input_state, CLIVoiceInputState::Listening) {
+        if matches!(
+            self.cli_voice_input_state,
+            CLIVoiceInputState::Listening { .. }
+        ) {
             voice_input::VoiceInput::handle(ctx).update(ctx, |voice_input, _| {
                 voice_input.abort_listening();
             });
         }
 
-        if matches!(self.cli_voice_input_state, CLIVoiceInputState::Transcribing) {
+        if let CLIVoiceInputState::Transcribing { session_id } = &self.cli_voice_input_state {
+            let session_id = *session_id;
             if let Some(handle) = self.cli_transcription_handle.take() {
                 handle.abort();
             }
 
             voice_input::VoiceInput::handle(ctx).update(ctx, |voice, _| {
-                voice.set_transcribing_active(false);
+                voice.set_transcribing_active(session_id, false);
             });
         }
 
@@ -1481,7 +1489,7 @@ impl AgentInputFooter {
         if let voice_input::VoiceInputToggledFrom::Key { state } = source {
             match (&self.cli_voice_input_state, state) {
                 (CLIVoiceInputState::Stopped, warpui::event::KeyState::Released) => return,
-                (CLIVoiceInputState::Listening, warpui::event::KeyState::Pressed) => return,
+                (CLIVoiceInputState::Listening { .. }, warpui::event::KeyState::Pressed) => return,
                 _ => {}
             }
         }
@@ -1498,7 +1506,8 @@ impl AgentInputFooter {
 
                 match session_result {
                     Ok(session) => {
-                        self.cli_voice_input_state = CLIVoiceInputState::Listening;
+                        let session_id = session.id();
+                        self.cli_voice_input_state = CLIVoiceInputState::Listening { session_id };
                         self.update_cli_mic_button_state(ctx);
 
                         if let Some(agent) = self.cli_agent(ctx) {
@@ -1527,14 +1536,14 @@ impl AgentInputFooter {
                     }
                 }
             }
-            CLIVoiceInputState::Listening => {
+            CLIVoiceInputState::Listening { .. } => {
                 voice_input::VoiceInput::handle(ctx).update(ctx, |voice_input, ctx| {
                     if let Err(e) = voice_input.stop_listening(ctx) {
                         log::error!("Failed to stop CLI voice input: {e:?}");
                     }
                 });
             }
-            CLIVoiceInputState::Transcribing => {
+            CLIVoiceInputState::Transcribing { .. } => {
                 // Don't allow toggling while transcribing.
             }
         }
@@ -1549,29 +1558,44 @@ impl AgentInputFooter {
     ) {
         use crate::editor::VoiceTranscriber;
 
+        let session_id = result.session_id();
+        if !voice_input::VoiceInput::handle(ctx)
+            .as_ref(ctx)
+            .is_current_session(session_id)
+        {
+            return;
+        }
+
         match result {
             VoiceSessionResult::Audio {
+                session_id: _,
                 wav_base64,
                 session_duration_ms: _,
             } => {
                 let voice_transcriber = VoiceTranscriber::as_ref(ctx);
                 if let Some(transcriber) = voice_transcriber.transcriber() {
                     let transcriber = transcriber.clone();
-                    self.cli_voice_input_state = CLIVoiceInputState::Transcribing;
+                    self.cli_voice_input_state = CLIVoiceInputState::Transcribing { session_id };
 
                     voice_input::VoiceInput::handle(ctx).update(ctx, |voice, _| {
-                        voice.set_transcribing_active(true);
+                        voice.set_transcribing_active(session_id, true);
                     });
 
                     self.cli_transcription_handle = Some(ctx.spawn(
-                        async move { transcriber.transcribe(wav_base64).await },
+                        async move { (session_id, transcriber.transcribe(wav_base64).await) },
                         Self::apply_cli_transcribed_voice_input,
                     ));
                 } else {
+                    voice_input::VoiceInput::handle(ctx).update(ctx, |voice, _| {
+                        voice.set_transcribing_active(session_id, false);
+                    });
                     self.cli_voice_input_state = CLIVoiceInputState::Stopped;
                 }
             }
             VoiceSessionResult::Aborted { .. } => {
+                voice_input::VoiceInput::handle(ctx).update(ctx, |voice, _| {
+                    voice.set_transcribing_active(session_id, false);
+                });
                 self.cli_voice_input_state = CLIVoiceInputState::Stopped;
             }
         }
@@ -1582,11 +1606,22 @@ impl AgentInputFooter {
     #[cfg(feature = "voice_input")]
     fn apply_cli_transcribed_voice_input(
         &mut self,
-        result: Result<String, TranscribeError>,
+        (session_id, result): (voice_input::VoiceSessionId, Result<String, TranscribeError>),
         ctx: &mut ViewContext<Self>,
     ) {
+        if !matches!(
+            &self.cli_voice_input_state,
+            CLIVoiceInputState::Transcribing {
+                session_id: active_session_id,
+            } if *active_session_id == session_id
+        ) || !voice_input::VoiceInput::handle(ctx)
+            .as_ref(ctx)
+            .is_current_session(session_id)
+        {
+            return;
+        }
         voice_input::VoiceInput::handle(ctx).update(ctx, |voice, _| {
-            voice.set_transcribing_active(false);
+            voice.set_transcribing_active(session_id, false);
         });
 
         match result {
@@ -1625,11 +1660,13 @@ impl AgentInputFooter {
     fn update_cli_mic_button_state(&self, ctx: &mut ViewContext<Self>) {
         let icon = match &self.cli_voice_input_state {
             CLIVoiceInputState::Stopped => Icon::Microphone,
-            CLIVoiceInputState::Listening => Icon::Stop,
-            CLIVoiceInputState::Transcribing => Icon::DotsHorizontal,
+            CLIVoiceInputState::Listening { .. } => Icon::Stop,
+            CLIVoiceInputState::Transcribing { .. } => Icon::DotsHorizontal,
         };
-        let is_transcribing =
-            matches!(self.cli_voice_input_state, CLIVoiceInputState::Transcribing);
+        let is_transcribing = matches!(
+            self.cli_voice_input_state,
+            CLIVoiceInputState::Transcribing { .. }
+        );
 
         self.mic_button.update(ctx, |button, ctx| {
             button.set_icon(Some(icon), ctx);
