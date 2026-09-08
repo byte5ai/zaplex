@@ -1313,6 +1313,20 @@ fn build_chat_request(
     // `unexpected tool_use_id ... no corresponding tool_use block`.
     let mut skipped_subagent_call_ids: std::collections::HashSet<String> =
         std::collections::HashSet::new();
+    // Fallback tool JSON is persisted as AgentOutput before its synthesized ToolCall.
+    // Filter that raw transport representation only when the same request already
+    // contains the resulting structured call.
+    let turns_with_tool_calls: HashSet<(&str, &str)> = all_msgs
+        .iter()
+        .filter(|msg| {
+            !msg.request_id.is_empty()
+                && matches!(
+                    msg.message.as_ref(),
+                    Some(api::message::Message::ToolCall(_))
+                )
+        })
+        .map(|msg| (msg.task_id.as_str(), msg.request_id.as_str()))
+        .collect();
 
     for (idx, msg) in all_msgs.iter().enumerate() {
         // Summary request: the tail range is not sent upstream (only head + the SUMMARY_TEMPLATE appended at the end)
@@ -1403,6 +1417,17 @@ fn build_chat_request(
                 }
             }
             api::message::Message::AgentOutput(a) => {
+                let same_turn_has_tool_call = !msg.request_id.is_empty()
+                    && turns_with_tool_calls
+                        .contains(&(msg.task_id.as_str(), msg.request_id.as_str()));
+                if super::content_tool_calls::is_persisted_ollama_fallback_text(
+                    api_type,
+                    same_turn_has_tool_call,
+                    &a.text,
+                    &tool_names,
+                ) {
+                    continue;
+                }
                 if buf.text.is_some() || !buf.tool_calls.is_empty() {
                     flush_assistant_buffer(&mut buf, &mut messages, &mut outbound_tool_groups);
                 }
@@ -3331,6 +3356,7 @@ pub async fn generate_byop_output(
     let client = build_client(api_type, &base_url, api_key);
     let request_id = Uuid::new_v4().to_string();
     let mcp_context = params.mcp_context.clone();
+    let fallback_tool_names = available_tool_names(&params);
 
     // ⚠️ BYOP persistence key point: on warp's own path, the following ClientActions are all emitted server-side
     // to make the client write "non-model-produced" messages like UserQuery / ToolCallResult
@@ -3684,6 +3710,10 @@ pub async fn generate_byop_output(
         let mut tool_chunk_count: u32 = 0;
         let mut end_count: u32 = 0;
         let mut other_count: u32 = 0;
+        // Only assistant-visible text is collected. ReasoningChunk events and text
+        // extracted from <think> blocks never enter the fallback parser.
+        let mut streamed_assistant_text = String::new();
+        let mut captured_assistant_text: Option<String> = None;
         // Accumulate this turn's token usage. genai carries captured_usage (Option<Usage>) in the
         // ChatStreamEvent::End event, whose prompt_tokens is the entire history for this turn
         // (Anthropic / OpenAI both count by "full request prompt"), and completion_tokens is the model output.
@@ -3784,6 +3814,7 @@ pub async fn generate_byop_output(
                                         think_active = true;
                                         rest = &rest[start + "<think>".len()..];
                                         if !before.is_empty() {
+                                            streamed_assistant_text.push_str(&before);
                                             if let Some(id) = text_msg_id.clone() {
                                                 yield Ok(make_append_event(&current_task_id, &id, AppendKind::Text(before)));
                                             } else {
@@ -3798,6 +3829,7 @@ pub async fn generate_byop_output(
                                     None => {
                                         let text = rest.to_owned();
                                         if !text.is_empty() {
+                                            streamed_assistant_text.push_str(&text);
                                             if let Some(id) = text_msg_id.clone() {
                                                 yield Ok(make_append_event(&current_task_id, &id, AppendKind::Text(text)));
                                             } else {
@@ -3814,6 +3846,7 @@ pub async fn generate_byop_output(
                             }
                         }
                     } else {
+                        streamed_assistant_text.push_str(&c.content);
                         if let Some(id) = text_msg_id.clone() {
                             yield Ok(make_append_event(&current_task_id, &id, AppendKind::Text(c.content)));
                         } else {
@@ -3934,6 +3967,11 @@ pub async fn generate_byop_output(
                     // Prefer the tool_calls in captured_content (more complete),
                     // otherwise use the tool_bufs accumulated during streaming.
                     if let Some(content) = end.captured_content.as_ref() {
+                        if let Some(text) = content.first_text() {
+                            if !text.is_empty() {
+                                captured_assistant_text = Some(text.to_owned());
+                            }
+                        }
                         let mut captured_order: Vec<String> = Vec::new();
                         for call in content.tool_calls() {
                             if !captured_order.contains(&call.call_id) {
@@ -3980,6 +4018,32 @@ pub async fn generate_byop_output(
                     // ThoughtSignatureChunk etc. are not handled for now (Gemini 3 thoughts need to be echoed back to subsequent turns,
                     // but current BYOP does not persist thought_signatures, so we accept the degradation)
                 }
+            }
+        }
+
+        let fallback_text = if streamed_assistant_text.is_empty() {
+            captured_assistant_text.as_deref().unwrap_or("")
+        } else {
+            streamed_assistant_text.as_str()
+        };
+        let fallback_calls = super::content_tool_calls::extract_ollama_fallback_tool_calls(
+            api_type,
+            !tool_bufs.is_empty(),
+            fallback_text,
+            &fallback_tool_names,
+        );
+        if !fallback_calls.is_empty() {
+            log::info!(
+                "[byop] extracted {} Ollama fallback tool call(s): {:?}",
+                fallback_calls.len(),
+                fallback_calls
+                    .iter()
+                    .map(|call| call.fn_name.as_str())
+                    .collect::<Vec<_>>(),
+            );
+            for call in fallback_calls {
+                tool_order.push(call.call_id.clone());
+                tool_bufs.insert(call.call_id.clone(), call);
             }
         }
 

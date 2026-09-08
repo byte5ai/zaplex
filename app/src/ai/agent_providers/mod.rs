@@ -12,6 +12,7 @@
 pub mod active_ai;
 pub mod attachment_caps;
 pub mod chat_stream;
+mod content_tool_calls;
 pub mod llm_id;
 pub mod oneshot;
 pub mod openai_compatible;
