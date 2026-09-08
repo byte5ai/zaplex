@@ -14,7 +14,7 @@ use warp_ssh_manager::secrets::SshSecretStore;
 use warp_ssh_manager::types::{AuthType, ResolvedSshAuth, SshServerInfo};
 use warp_ssh_manager::SshRepository;
 use zap_sftp::session::{AuthMethod, HostKeyConfirmation, SftpSession};
-use zap_sftp::types::OpenOptions;
+use zap_sftp::types::{FileType, OpenOptions};
 use zap_sftp::Sftp;
 
 use super::types::{FileEntry, FileEntryType, StableEntryIdentity};
@@ -441,12 +441,7 @@ pub fn rename(sftp: &Sftp, old_path: &Path, new_path: &Path) -> Result<(), SftpO
 /// falling back to a remove or backup dance would leave the destination absent
 /// across a crash boundary.
 pub fn replace_atomic(sftp: &Sftp, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
-    let opts = zap_sftp::types::RenameOptions {
-        overwrite: true,
-        atomic: true,
-        native: false,
-    };
-    sftp.rename(old_path, new_path, opts)?;
+    sftp.replace_atomically(old_path, new_path)?;
     Ok(())
 }
 
@@ -501,6 +496,24 @@ fn upload_file_streaming_with_mode(
         fs::File::open(local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
     let total_size = local_file.metadata().map(|m| m.len()).unwrap_or(0);
 
+    let destination_existed = if overwrite_destination {
+        match sftp.lstat(remote_path) {
+            Ok(metadata) => match metadata.file_type {
+                FileType::File | FileType::Symlink => true,
+                FileType::Dir | FileType::Other => {
+                    return Err(SftpOpsError::Operation(format!(
+                        "Remote destination is not a replaceable file: {}",
+                        remote_path.display()
+                    )))
+                }
+            },
+            Err(error) if error.is_not_found() => false,
+            Err(error) => return Err(error.into()),
+        }
+    } else {
+        false
+    };
+
     // Each in-flight transfer owns its temporary path. Two writes to the same
     // destination must never truncate, finalize, or clean up each other's data.
     let (temp_remote_path, mut remote_file) =
@@ -533,7 +546,7 @@ fn upload_file_streaming_with_mode(
 
     match &result {
         Ok(()) => {
-            if !overwrite_destination {
+            if !overwrite_destination || !destination_existed {
                 if let Err(error) = sftp.rename(
                     &temp_remote_path,
                     remote_path,
@@ -552,15 +565,7 @@ fn upload_file_streaming_with_mode(
             }
             // Publish in one atomic replacement. If the server cannot provide
             // that guarantee, fail safely and keep the existing destination.
-            if let Err(error) = sftp.rename(
-                &temp_remote_path,
-                remote_path,
-                zap_sftp::types::RenameOptions {
-                    overwrite: true,
-                    atomic: true,
-                    native: false,
-                },
-            ) {
+            if let Err(error) = replace_atomic(sftp, &temp_remote_path, remote_path) {
                 let _ = sftp.remove_file(&temp_remote_path);
                 return Err(SftpOpsError::Operation(format!(
                     "Failed to atomically replace remote file: {error}"

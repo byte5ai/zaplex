@@ -17046,6 +17046,7 @@ dependencies = [
  "base64 0.22.1",
  "dirs 6.0.0",
  "openssl-sys",
+ "shell-escape",
  "sha2 0.10.9",
  "smol",
  "ssh2",
