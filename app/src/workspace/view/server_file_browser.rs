@@ -1283,25 +1283,29 @@ impl ServerFileBrowserView {
             ctx.notify();
             return;
         }
-        if new_name.contains('/') {
+        if validate_remote_entry_name(&new_name).is_err() {
             self.status = Some(crate::t!("server-file-browser-rename-invalid-name"));
             ctx.focus_self();
             ctx.notify();
             return;
         }
 
-        let session = self.session.clone();
-        let client = self.client(ctx);
-        let remote_session_id = self.remote_session_id(ctx);
-        let can_rename = session.is_some() || (client.is_some() && remote_session_id.is_some());
-        if !can_rename {
-            self.set_listing_error(
-                crate::t!("server-file-browser-rename-requires-session"),
-                ctx,
-            );
-            ctx.focus_self();
-            return;
-        }
+        let client = match self.transfer_client(ctx) {
+            Ok(client) => client,
+            Err(error) => {
+                self.apply_operation_error(error, ctx);
+                ctx.focus_self();
+                return;
+            }
+        };
+        let safe_kind = match safe_file_kind_for_entry(entry.kind, &entry.path) {
+            Ok(kind) => kind,
+            Err(error) => {
+                self.apply_operation_error(error, ctx);
+                ctx.focus_self();
+                return;
+            }
+        };
 
         let from_path = entry.path.clone();
         let is_directory = entry.kind == FileSystemEntryKind::Directory;
@@ -1312,12 +1316,11 @@ impl ServerFileBrowserView {
         ctx.notify();
         ctx.spawn(
             async move {
-                rename_remote_path(
-                    session,
+                rename_remote_path_with_safe_file(
                     client,
-                    remote_session_id,
                     from_path_for_rename,
                     new_name_for_rename,
+                    safe_kind,
                 )
                 .await
             },
@@ -5195,13 +5198,13 @@ async fn delete_remote_path(
     execute_remote_shell_script(session, client, remote_session_id, script).await
 }
 
-async fn rename_remote_path(
-    session: Option<Arc<Session>>,
-    client: Option<Arc<RemoteServerClient>>,
-    remote_session_id: Option<SessionId>,
+async fn rename_remote_path_with_safe_file(
+    client: Arc<RemoteServerClient>,
     from_path: String,
     new_name: String,
+    expected_kind: SafeFileEntryKind,
 ) -> Result<(), String> {
+    validate_remote_entry_name(&new_name)?;
     let parent = remote_parent(&from_path).ok_or_else(|| {
         crate::t!(
             "server-file-browser-operation-failed",
@@ -5209,10 +5212,56 @@ async fn rename_remote_path(
         )
     })?;
     let new_path = join_remote_path(&parent, &new_name);
-    let escaped_from = warp_util::path::ShellFamily::Posix.shell_escape(&from_path);
-    let escaped_to = warp_util::path::ShellFamily::Posix.shell_escape(&new_path);
-    let script = format!("mv -- {escaped_from} {escaped_to}");
-    execute_remote_shell_script(session, client, remote_session_id, script).await
+    let source = open_safe_remote_file(client, from_path.clone(), expected_kind).await?;
+    let operation_id = format!("server-file-browser-rename-{}", Uuid::new_v4());
+    let result = safe_file_operation(
+        &source.client,
+        operation_id.clone(),
+        safe_file_request::Operation::Rename(SafeFileRename {
+            handle_id: source.handle_id.clone(),
+            old_path: from_path,
+            new_path: new_path.clone(),
+            mode: SafeFileRenameMode::NoReplace as i32,
+            expected_target: None,
+        }),
+    )
+    .await?;
+    let safe_file_response::Result::Mutation(mutation) = result else {
+        return Err(crate::t!("server-file-browser-empty-response"));
+    };
+    match SafeFileMutationState::try_from(mutation.state) {
+        Ok(SafeFileMutationState::Applied | SafeFileMutationState::AlreadyApplied) => {}
+        Ok(SafeFileMutationState::Unspecified) | Err(_) => {
+            return Err(crate::t!("server-file-browser-empty-response"));
+        }
+    }
+
+    let inspection = inspect_safe_remote_file(&source, new_path.clone()).await?;
+    let identity = inspection
+        .identity
+        .ok_or_else(|| crate::t!("server-file-browser-empty-response"))?;
+    if !inspection.matches_path || !same_safe_file_identity(&source.identity, &identity) {
+        return Err(crate::t!(
+            "server-file-browser-operation-failed",
+            error = format!("renamed source does not match {new_path:?}")
+        ));
+    }
+
+    let acknowledgement = safe_file_operation(
+        &source.client,
+        operation_id,
+        safe_file_request::Operation::RetryRecovery(SafeFileRetryRecovery {}),
+    )
+    .await?;
+    let safe_file_response::Result::Mutation(acknowledgement) = acknowledgement else {
+        return Err(crate::t!("server-file-browser-empty-response"));
+    };
+    match SafeFileMutationState::try_from(acknowledgement.state) {
+        Ok(SafeFileMutationState::Applied | SafeFileMutationState::AlreadyApplied) => Ok(()),
+        Ok(SafeFileMutationState::Unspecified) | Err(_) => {
+            Err(crate::t!("server-file-browser-empty-response"))
+        }
+    }
 }
 
 async fn execute_remote_shell_script(
