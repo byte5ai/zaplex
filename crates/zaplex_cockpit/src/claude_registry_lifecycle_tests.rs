@@ -126,6 +126,23 @@ fn missing_transcript_is_not_a_cleanup_candidate() {
 }
 
 #[test]
+fn large_transcript_can_be_a_stale_cleanup_candidate() {
+    const VIEWER_MAX_BYTES: u64 = 64 * 1024 * 1024;
+    let (_temp, config, _registry) = fixture(u32::MAX, None);
+    let transcript = config.join("projects/-work-zaplex/session-1.jsonl");
+    fs::OpenOptions::new()
+        .write(true)
+        .open(transcript)
+        .unwrap()
+        .set_len(VIEWER_MAX_BYTES + 1)
+        .unwrap();
+
+    assert!(claude_stale_registry_candidate(&config, "session-1")
+        .unwrap()
+        .is_some());
+}
+
+#[test]
 fn malformed_process_identity_is_never_treated_as_dead() {
     let (_temp, config, registry) = fixture(u32::MAX, None);
     let mut value: Value = serde_json::from_slice(&fs::read(&registry).unwrap()).unwrap();

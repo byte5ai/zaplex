@@ -5860,21 +5860,36 @@ impl Workspace {
             );
             return;
         }
-        match zaplex_cockpit::cleanup_claude_stale_registry_entry(candidate) {
-            Ok(
-                zaplex_cockpit::ClaudeRegistryCleanupOutcome::Applied
-                | zaplex_cockpit::ClaudeRegistryCleanupOutcome::AlreadyApplied,
-            ) => {
-                crate::cockpit::CockpitModel::handle(ctx)
-                    .update(ctx, |model, ctx| model.rescan(ctx));
-            }
-            Err(error) => {
-                self.show_agent_launch_error(
-                    format!("Could not clean up the stale session: {error}"),
-                    ctx,
-                );
-            }
-        }
+        let candidate = candidate.clone();
+        ctx.spawn(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    zaplex_cockpit::cleanup_claude_stale_registry_entry(&candidate)
+                })
+                .await
+            },
+            |workspace, result, ctx| match result {
+                Ok(Ok(
+                    zaplex_cockpit::ClaudeRegistryCleanupOutcome::Applied
+                    | zaplex_cockpit::ClaudeRegistryCleanupOutcome::AlreadyApplied,
+                )) => {
+                    crate::cockpit::CockpitModel::handle(ctx)
+                        .update(ctx, |model, ctx| model.rescan(ctx));
+                }
+                Ok(Err(error)) => {
+                    workspace.show_agent_launch_error(
+                        format!("Could not clean up the stale session: {error}"),
+                        ctx,
+                    );
+                }
+                Err(error) => {
+                    workspace.show_agent_launch_error(
+                        format!("The stale-session cleanup worker failed: {error}"),
+                        ctx,
+                    );
+                }
+            },
+        );
     }
 
     /// Run a Claude Code slash command against a discovered session
