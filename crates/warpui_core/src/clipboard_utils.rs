@@ -354,6 +354,21 @@ pub fn read_images_from_clipboard(
     }
 }
 
+/// Read image data from the requested Linux clipboard selection.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub fn read_images_from_linux_clipboard(
+    clipboard: &mut arboard::Clipboard,
+    clipboard_kind: arboard::LinuxClipboardKind,
+    html_content: &Option<String>,
+    text_content: &str,
+) -> Result<Option<Vec<crate::clipboard::ImageData>>, arboard::Error> {
+    use arboard::GetExtLinux as _;
+
+    let arboard_image = clipboard.get().clipboard(clipboard_kind).image()?;
+    let filename = extract_filename_from_clipboard_content(html_content, text_content);
+    Ok(process_clipboard_image(&arboard_image, filename).map(|image| vec![image]))
+}
+
 /// Windows-specific fallback: enumerate only clipboard formats that look like images,
 /// and search for known image byte signatures like PNG/JPEG/GIF/WebP.
 ///

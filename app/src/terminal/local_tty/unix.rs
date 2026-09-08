@@ -108,58 +108,127 @@ fn docker_sandbox_run_args(starter: &DockerSandboxShellStarter) -> Vec<std::ffi:
 }
 
 #[derive(Debug)]
-struct Passwd<'a> {
-    name: &'a str,
-    dir: &'a str,
-    shell: &'a str,
+struct Passwd {
+    name: OsString,
+    dir: PathBuf,
+    shell: PathBuf,
 }
 
 pub fn get_pw_shell() -> String {
-    let mut buf = [0; 1024];
-    let pw = get_pw_entry(&mut buf);
-    pw.shell.to_string()
+    std::env::var_os("SHELL")
+        .or_else(|| {
+            get_pw_entry()
+                .ok()
+                .flatten()
+                .map(|passwd| passwd.shell.into_os_string())
+        })
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
 }
 
-/// Return a Passwd struct with pointers into the provided buf.
-///
-/// # Unsafety
-///
-/// If `buf` is changed while `Passwd` is alive, bad things will almost certainly happen.
-fn get_pw_entry(buf: &mut [i8; 1024]) -> Passwd<'_> {
-    // Create zeroed passwd struct.
+fn get_pw_entry_once(uid: libc::uid_t, buffer: &mut [u8]) -> io::Result<Option<Passwd>> {
     let mut entry: MaybeUninit<libc::passwd> = MaybeUninit::uninit();
-
     let mut res: *mut libc::passwd = ptr::null_mut();
-
-    // Try and read the pw file.
-    let uid = unsafe { libc::getuid() };
     let status = unsafe {
         libc::getpwuid_r(
             uid,
             entry.as_mut_ptr(),
-            buf.as_mut_ptr() as *mut _,
-            buf.len(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
             &mut res,
         )
     };
-    let entry = unsafe { entry.assume_init() };
-
-    if status < 0 {
-        panic!("getpwuid_r failed");
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status));
     }
-
     if res.is_null() {
-        panic!("pw not found");
+        return Ok(None);
     }
 
-    // Sanity check.
-    assert_eq!(entry.pw_uid, uid);
+    let entry = unsafe { entry.assume_init() };
+    if entry.pw_uid != uid {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "getpwuid_r returned a different user ID",
+        ));
+    }
 
-    // Build a borrowed Passwd struct.
-    Passwd {
-        name: unsafe { CStr::from_ptr(entry.pw_name).to_str().unwrap() },
-        dir: unsafe { CStr::from_ptr(entry.pw_dir).to_str().unwrap() },
-        shell: unsafe { CStr::from_ptr(entry.pw_shell).to_str().unwrap() },
+    fn field_to_os_string(field: *const libc::c_char, name: &str) -> io::Result<OsString> {
+        if field.is_null() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("getpwuid_r returned a null {name} field"),
+            ));
+        }
+        Ok(OsString::from_vec(
+            unsafe { CStr::from_ptr(field) }.to_bytes().to_vec(),
+        ))
+    }
+
+    Ok(Some(Passwd {
+        name: field_to_os_string(entry.pw_name, "pw_name")?,
+        dir: PathBuf::from(field_to_os_string(entry.pw_dir, "pw_dir")?),
+        shell: PathBuf::from(field_to_os_string(entry.pw_shell, "pw_shell")?),
+    }))
+}
+
+fn get_pw_entry() -> io::Result<Option<Passwd>> {
+    let configured_size = unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) };
+    let mut buffer_size = usize::try_from(configured_size)
+        .ok()
+        .filter(|size| *size > 0)
+        .unwrap_or(1024);
+    let uid = unsafe { libc::getuid() };
+
+    loop {
+        let mut buffer = Vec::new();
+        buffer.try_reserve_exact(buffer_size).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                format!("unable to allocate passwd buffer: {error}"),
+            )
+        })?;
+        buffer.resize(buffer_size, 0);
+        match get_pw_entry_once(uid, &mut buffer) {
+            Err(error) if error.raw_os_error() == Some(libc::ERANGE) => {
+                buffer_size = buffer_size.checked_mul(2).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::OutOfMemory, "passwd buffer is too large")
+                })?;
+            }
+            result => return result,
+        }
+    }
+}
+
+struct UserEnvironment {
+    home: PathBuf,
+    user: Option<OsString>,
+    logname: Option<OsString>,
+}
+
+fn current_user_environment() -> UserEnvironment {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let user = std::env::var_os("USER");
+    let logname = std::env::var_os("LOGNAME");
+    let passwd = if home.is_none() || user.is_none() || logname.is_none() {
+        match get_pw_entry() {
+            Ok(passwd) => passwd,
+            Err(error) => {
+                log::warn!("Unable to read the current passwd entry: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    UserEnvironment {
+        home: home
+            .or_else(|| passwd.as_ref().map(|passwd| passwd.dir.clone()))
+            .unwrap_or_else(|| PathBuf::from("/")),
+        user: user.or_else(|| passwd.as_ref().map(|passwd| passwd.name.clone())),
+        logname: logname.or_else(|| passwd.map(|passwd| passwd.name)),
     }
 }
 
@@ -235,8 +304,7 @@ fn build_host_shell_command(
     shell_debug_mode: bool,
     honor_ps1: bool,
 ) -> Command {
-    let mut buf = [0; 1024];
-    let pw = get_pw_entry(&mut buf);
+    let user_environment = current_user_environment();
 
     log::info!(
         "Starting shell {}",
@@ -248,11 +316,6 @@ fn build_host_shell_command(
         builder.arg(arg);
     }
 
-    // Support an overridden home directory for integration tests, which
-    // should execute in a more hermetic environment than one where the home
-    // directory contains whatever happens to already exist there.
-    let home_dir = std::env::var("HOME").unwrap_or_else(|_| pw.dir.to_owned());
-
     // Unfortunately process::Command has no facility for using the same fd for in/out/err.
     // The issue is that Stdio wants to close its fd. Previously we tried Stdio::from_raw_fd(follower)
     // for all 3 fds, and hoped that the error on close would be ignored.
@@ -261,9 +324,13 @@ fn build_host_shell_command(
     // in the tests. Therefore we do NOT set stdin, stdout, stderr here; instead we
     // do it in the pre_exec hook.
     // Setup shell environment.
-    builder.env("LOGNAME", pw.name);
-    builder.env("USER", pw.name);
-    builder.env("HOME", &home_dir);
+    if let Some(logname) = user_environment.logname {
+        builder.env("LOGNAME", logname);
+    }
+    if let Some(user) = user_environment.user {
+        builder.env("USER", user);
+    }
+    builder.env("HOME", &user_environment.home);
 
     // Specify terminal name and capabilities.
     builder.env("TERM", "xterm-256color");
@@ -372,7 +439,7 @@ fn build_host_shell_command(
     // Set the initial working directory to the user's home directory.  If
     // `start_dir` is Some, we'll attempt to cd to that directory at the
     // start of bootstrap.
-    builder.current_dir(home_dir);
+    builder.current_dir(user_environment.home);
 
     builder
 }
@@ -946,8 +1013,7 @@ fn build_docker_sandbox_command(
     shell_debug_mode: bool,
     honor_ps1: bool,
 ) -> Command {
-    let mut buf = [0; 1024];
-    let pw = get_pw_entry(&mut buf);
+    let user_environment = current_user_environment();
 
     log::info!(
         "Starting Docker sandbox via {}",
@@ -958,8 +1024,6 @@ fn build_docker_sandbox_command(
     for arg in docker_sandbox_run_args(docker_starter) {
         builder.arg(arg);
     }
-
-    let home_dir = std::env::var("HOME").unwrap_or_else(|_| pw.dir.to_owned());
 
     // Environment variables set on the host-side `sbx` process.
     //
@@ -973,9 +1037,13 @@ fn build_docker_sandbox_command(
     // Once we've validated what the container bootstrap actually needs,
     // we can trim this list down to the variables the in-container bash
     // session actually consumes.
-    builder.env("LOGNAME", pw.name);
-    builder.env("USER", pw.name);
-    builder.env("HOME", &home_dir);
+    if let Some(logname) = user_environment.logname {
+        builder.env("LOGNAME", logname);
+    }
+    if let Some(user) = user_environment.user {
+        builder.env("USER", user);
+    }
+    builder.env("HOME", &user_environment.home);
     builder.env("TERM", "xterm-256color");
     builder.env("TERM_PROGRAM", "ZaplexTerminal");
     builder.env("COLORTERM", "truecolor");
@@ -1024,7 +1092,7 @@ fn build_docker_sandbox_command(
         builder.env(key, value);
     }
 
-    builder.current_dir(home_dir);
+    builder.current_dir(user_environment.home);
 
     builder
 }
@@ -1111,11 +1179,9 @@ mod utils {
     }
 }
 
-#[test]
-fn test_get_pw_entry() {
-    let mut buf: [i8; 1024] = [0; 1024];
-    let _pw = get_pw_entry(&mut buf);
-}
+#[cfg(test)]
+#[path = "unix_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "unix_session_pty_tests.rs"]

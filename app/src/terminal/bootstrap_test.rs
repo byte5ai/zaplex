@@ -126,6 +126,28 @@ fn fish_bootstrap_body_is_delivered_idempotently() {
 }
 
 #[test]
+fn bash_and_fish_hex_encoding_does_not_append_a_newline() {
+    let bash = bundled_script("bundled/bootstrap/bash_body.sh");
+    assert!(
+        bash.contains("printf '%s' \"$1\" | command -p od -An -v -tx1 | command -p tr -d ' \\n'")
+    );
+
+    let fish = bundled_script("bundled/bootstrap/fish.sh");
+    assert!(fish.contains("printf '%s' \"$argv\" | od -An -v -tx1 | command tr -d ' \\n'"));
+}
+
+#[test]
+fn fish_preexec_kills_only_recorded_generator_pids_for_user_commands() {
+    let fish = bundled_script("bundled/bootstrap/fish.sh");
+
+    assert!(fish.contains(
+        "if not string match -q \"warp_run_generator_command*\" -- (string trim -- $argv[1])"
+    ));
+    assert!(fish.contains("kill -9 $pid >/dev/null 2>/dev/null"));
+    assert!(!fish.contains("kill -9 $pids >/dev/null 2>/dev/null"));
+}
+
+#[test]
 fn pwsh_bootstrap_body_is_delivered_idempotently() {
     let script = bundled_script("bundled/bootstrap/pwsh.ps1");
     let lines = significant_lines(&script);
