@@ -24,9 +24,10 @@ use watcher::HomeDirectoryWatcher;
 #[cfg(test)]
 use zaplex_cockpit::HostNode;
 use zaplex_cockpit::{
-    apply_oauth_usage, build_snapshot_with_cache, fold_inventory, session_key, AccountOverrides,
-    AgentInventoryStatus, CockpitSnapshot, FleetTree, PricingTable, Provider, RegisteredHost,
-    RemoteHost, ScanHealth, SessionSnapshot, TranscriptScanCache,
+    apply_oauth_usage, build_snapshot_with_cache, fold_inventory,
+    mark_registry_bound_hosts_unverified, session_key, AccountOverrides, AgentInventoryStatus,
+    CockpitSnapshot, FleetTree, PricingTable, Provider, RegisteredHost, RemoteHost, ScanHealth,
+    SessionSnapshot, TranscriptScanCache,
 };
 // Cross-host daemon fold is a native-only concern: the `agent_session` module
 // (and the whole remote-daemon layer it lives in) is `#[cfg(not(wasm))]`, and a
@@ -133,6 +134,74 @@ impl RefreshSingleFlight {
     }
 }
 
+/// Result of one SSH-registry read. A failed read is deliberately distinct
+/// from an authoritative empty registry snapshot.
+#[derive(Debug)]
+enum RegistryRead {
+    Current(Vec<RegisteredHost>),
+    Cached {
+        hosts: Vec<RegisteredHost>,
+        error: String,
+    },
+    Unavailable {
+        error: String,
+    },
+}
+
+fn resolve_registry_read(
+    result: Result<Vec<RegisteredHost>, String>,
+    cached: Option<&[RegisteredHost]>,
+) -> RegistryRead {
+    match result {
+        Ok(hosts) => RegistryRead::Current(hosts),
+        Err(error) => match cached {
+            Some(hosts) => RegistryRead::Cached {
+                hosts: hosts.to_vec(),
+                error,
+            },
+            None => RegistryRead::Unavailable { error },
+        },
+    }
+}
+
+fn bind_live_registry_hosts(
+    registered: &[RegisteredHost],
+    live_hosts_by_registry_node: &HashMap<String, String>,
+) -> Vec<RegisteredHost> {
+    registered
+        .iter()
+        .map(|host| RegisteredHost {
+            node_id: host.node_id.clone(),
+            label: host.label.clone(),
+            live_host_id: live_hosts_by_registry_node.get(&host.node_id).cloned(),
+        })
+        .collect()
+}
+
+fn reconcile_registry_read(
+    inventory: &mut FleetTree,
+    read: &RegistryRead,
+    live_hosts_by_registry_node: &HashMap<String, String>,
+) {
+    match read {
+        RegistryRead::Current(registered) => {
+            let registered = bind_live_registry_hosts(registered, live_hosts_by_registry_node);
+            zaplex_cockpit::reconcile_connected_hosts(inventory, &registered);
+        }
+        RegistryRead::Cached { hosts, error } => {
+            log::warn!("cockpit registry read failed; using the last successful snapshot: {error}");
+            let registered = bind_live_registry_hosts(hosts, live_hosts_by_registry_node);
+            zaplex_cockpit::reconcile_connected_hosts(inventory, &registered);
+        }
+        RegistryRead::Unavailable { error } => {
+            log::warn!(
+                "cockpit registry read failed without a cached snapshot; registry-bound hosts are unverified: {error}"
+            );
+            mark_registry_bound_hosts_unverified(inventory);
+        }
+    }
+}
+
 pub struct CockpitModel {
     snapshot: CockpitSnapshot,
     /// Monotonic identity of the newest requested refresh. Background scans can
@@ -159,6 +228,9 @@ pub struct CockpitModel {
     /// metadata. Survives reconcile ticks so unchanged transcripts are not
     /// reopened every 45 seconds.
     transcript_cache: TranscriptScanCache,
+    /// Last authoritative SSH-registry snapshot. `Some(Vec::new())` is a valid
+    /// successful empty read; `None` means no successful read has completed.
+    registry_hosts: Option<Vec<RegisteredHost>>,
     /// User overrides (instances.json: label/color/order/hide), applied to every
     /// snapshot. Kept here so the card renderer can look up per-account colors
     /// (color isn't an `Account` field). Empty when the file is absent/broken.
@@ -191,6 +263,9 @@ struct RefreshInputs {
     /// Transcript parse cache moved through the background scan and returned
     /// with the accepted refresh result.
     transcript_cache: TranscriptScanCache,
+    /// Last authoritative registry snapshot captured for fallback if the next
+    /// background read fails transiently.
+    registry_hosts: Option<Vec<RegisteredHost>>,
     /// Path to the user's `instances.json` account overrides (read off-thread).
     instances_path: PathBuf,
     /// Live daemon connections captured on the model thread, moved into the
@@ -261,6 +336,7 @@ impl CockpitModel {
             pricing: PricingTable::default(),
             oauth_cache: OauthCache::default(),
             transcript_cache: TranscriptScanCache::default(),
+            registry_hosts: None,
             overrides: AccountOverrides::default(),
             local_label: "local".to_string(),
             selected_account: None,
@@ -335,6 +411,7 @@ impl CockpitModel {
             oauth_enabled: *CockpitSettings::as_ref(ctx).oauth_usage,
             oauth_cache: self.oauth_cache.clone(),
             transcript_cache: self.transcript_cache.clone(),
+            registry_hosts: self.registry_hosts.clone(),
             daemons,
             local_label,
         })
@@ -564,22 +641,30 @@ impl CockpitModel {
                 // Validate only the connected roots against the SSH registry.
                 // Registry-only/offline hosts belong to Connections and are never
                 // appended to the Cockpit tree. Display labels never join identities.
-                let registered: Vec<RegisteredHost> = warp_ssh_manager::with_conn(|c| {
+                let registry_result = warp_ssh_manager::with_conn(|c| {
                     Ok(warp_ssh_manager::SshRepository::list_nodes(c)?)
                 })
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|n| matches!(n.kind, warp_ssh_manager::types::NodeKind::Server))
-                .map(|n| {
-                    let live_host_id = live_hosts_by_registry_node.get(&n.id).cloned();
-                    RegisteredHost {
-                        node_id: n.id,
-                        label: n.name,
-                        live_host_id,
-                    }
+                .map(|nodes| {
+                    nodes
+                        .into_iter()
+                        .filter(|node| {
+                            matches!(node.kind, warp_ssh_manager::types::NodeKind::Server)
+                        })
+                        .map(|node| RegisteredHost {
+                            node_id: node.id,
+                            label: node.name,
+                            live_host_id: None,
+                        })
+                        .collect()
                 })
-                .collect();
-                zaplex_cockpit::reconcile_connected_hosts(&mut inventory, &registered);
+                .map_err(|error| error.to_string());
+                let registry_read =
+                    resolve_registry_read(registry_result, inputs.registry_hosts.as_deref());
+                reconcile_registry_read(
+                    &mut inventory,
+                    &registry_read,
+                    &live_hosts_by_registry_node,
+                );
                 session_names.apply_to_inventory(&mut inventory);
                 let mut managed_fleet = managed_fleet;
                 managed_fleet.enrich_account_labels(&inventory);
@@ -591,6 +676,9 @@ impl CockpitModel {
                             me.refresh_flight.stop();
                             me.clear_for_disabled(ctx);
                             return;
+                        }
+                        if let RegistryRead::Current(registered) = registry_read {
+                            me.registry_hosts = Some(registered);
                         }
                         if should_apply_refresh_result(me.refresh_generation, generation) {
                             me.apply(
@@ -658,6 +746,7 @@ impl CockpitModel {
         // early there would leave every open pane showing "loading…" forever.
         if is_blank(&self.snapshot, &self.inventory)
             && self.managed_fleet.sessions().is_empty()
+            && self.registry_hosts.is_none()
             && self.selected_account.is_none()
             && self.snapshot.health.is_loaded()
         {
@@ -672,6 +761,7 @@ impl CockpitModel {
         self.inventory = FleetTree::default();
         self.managed_fleet = ManagedFleetInventory::default();
         self.transcript_cache = TranscriptScanCache::default();
+        self.registry_hosts = None;
         self.selected_account = None;
         ctx.emit(CockpitEvent::Updated);
     }
