@@ -450,12 +450,16 @@ def release_workflows_bundle_version_matched_remote_server(root: Path) -> None:
 
     required_release_markers = (
         "build_remote_server:",
-        "name: zap-cli-linux-x86_64",
+        "name: zap-remote-server-linux-x86_64",
         "path: resources/bundled/remote-server/",
         "GIT_RELEASE_TAG: ${{ needs.prepare_metadata.outputs.release_tag }}",
         'git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main',
         'elif [[ "$GITHUB_REF" != "refs/heads/main" ]]',
-        'tar -czf zap-linux-x86_64.tar.gz -C "$staging" zaplex resources',
+        'tar -czf zap-remote-server-linux-x86_64.tar.gz -C "$staging" zaplex resources',
+        "zap-remote-server-linux-x86_64.tar.gz.sha256",
+        "zap-remote-server-macos-${{ matrix.arch }}.tar.gz.sha256",
+        "resources/bundled/remote-server/SHA256SUMS",
+        "remote-server-SHA256SUMS",
         "hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources')",
     )
     for marker in required_release_markers:
@@ -468,6 +472,8 @@ def release_workflows_bundle_version_matched_remote_server(root: Path) -> None:
         "build_remote_server:",
         "path: resources/bundled/remote-server/",
         "GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}",
+        "zap-remote-server-linux-x86_64.tar.gz.sha256",
+        "resources/bundled/remote-server/SHA256SUMS",
         "hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources')",
     )
     for marker in required_test_markers:
@@ -480,6 +486,13 @@ def release_workflows_bundle_version_matched_remote_server(root: Path) -> None:
         raise ReadinessError("remote-server fallback does not use byte5ai/zaplex releases")
     if "https://github.com/zerx-lab/warp/releases/" in setup_source:
         raise ReadinessError("remote-server fallback still references the upstream release repo")
+
+    install_script = read_text(root / "crates/remote_server/src/install_remote_server.sh")
+    transport_source = read_text(root / "app/src/remote_server/ssh_transport.rs")
+    if "{expected_sha256}" not in install_script or "SHA-256 mismatch" not in install_script:
+        raise ReadinessError("host-side remote-server install does not verify its archive digest")
+    if "verify_remote_server_tarball" not in transport_source:
+        raise ReadinessError("client relay does not verify the remote-server archive digest")
 
 
 def macos_distribution_uses_developer_id_and_api_key_notarization(root: Path) -> None:

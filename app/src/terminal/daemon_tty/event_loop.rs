@@ -70,6 +70,19 @@ fn account_route_is_compatible(
     route.is_none() || supports_account_routing
 }
 
+const ATTACH_PARSE_CHUNK_BYTES: usize = 64 * 1024;
+
+struct PendingAttachReplay {
+    bootstrap_preamble: Vec<u8>,
+    preamble_offset: usize,
+    base_seq: u64,
+    replay: Vec<u8>,
+    replay_offset: usize,
+    gap_applied: bool,
+    fed_preamble: bool,
+    pending_exit: Option<Option<i32>>,
+}
+
 /// Drives a terminal backed by a *daemon-hosted* PTY session.
 ///
 /// Unlike [`crate::terminal::remote_tty`]'s event loop, which speaks the
@@ -103,6 +116,10 @@ pub(super) struct EventLoop {
     /// Adopt/reconnect output stays buffered until `SessionAttached` supplies
     /// the capability-checked authoritative binding snapshot.
     awaiting_attach_snapshot: bool,
+    pending_attach_replay: Option<PendingAttachReplay>,
+    /// A transport replacement that arrives while a replay is being parsed is
+    /// deferred until that snapshot is consumed, avoiding overlapping attaches.
+    reattach_after_replay: bool,
     /// Attach/replay request token. A reconnect invalidates an older callback.
     attach_in_flight: Option<u64>,
     next_attach_attempt: u64,
@@ -413,6 +430,8 @@ impl EventLoop {
             pty_generation: None,
             expected_attach_agent_binding: None,
             awaiting_attach_snapshot: false,
+            pending_attach_replay: None,
+            reattach_after_replay: false,
             attach_in_flight: None,
             next_attach_attempt: 0,
             terminal_view_id: None,
@@ -753,6 +772,10 @@ impl EventLoop {
     /// Falls back to opening the session if it was never opened (reconnect raced
     /// the initial open).
     fn reattach(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.pending_attach_replay.is_some() {
+            self.reattach_after_replay = true;
+            return;
+        }
         if self.attach_in_flight.is_some() {
             return;
         }
@@ -859,14 +882,91 @@ impl EventLoop {
             self.apply_authoritative_agent_binding(None, ctx);
         }
         self.expected_attach_agent_binding = None;
-        self.apply_attach(
-            &attached.bootstrap_preamble,
-            attached.base_seq,
-            &attached.replay,
+        let bootstrap_preamble = if self.is_bootstrapped() {
+            Vec::new()
+        } else {
+            attached.bootstrap_preamble
+        };
+        let fed_preamble = !bootstrap_preamble.is_empty();
+        if fed_preamble {
+            self.terminal_model.lock().suppress_next_bootstrap_write();
+        }
+        self.pending_attach_replay = Some(PendingAttachReplay {
+            bootstrap_preamble,
+            preamble_offset: 0,
+            base_seq: attached.base_seq,
+            replay: attached.replay,
+            replay_offset: 0,
+            gap_applied: false,
+            fed_preamble,
+            pending_exit,
+        });
+        self.process_attach_replay_chunk(ctx);
+    }
+
+    fn process_attach_replay_chunk(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(mut pending) = self.pending_attach_replay.take() else {
+            return;
+        };
+
+        if pending.preamble_offset < pending.bootstrap_preamble.len() {
+            let end = (pending.preamble_offset + ATTACH_PARSE_CHUNK_BYTES)
+                .min(pending.bootstrap_preamble.len());
+            self.process_pty_bytes(&pending.bootstrap_preamble[pending.preamble_offset..end]);
+            pending.preamble_offset = end;
+            self.last_seq = end as u64;
+            self.pending_attach_replay = Some(pending);
+            self.schedule_attach_replay_chunk(ctx);
+            return;
+        }
+
+        if !pending.gap_applied {
+            if pending.fed_preamble {
+                self.terminal_model
+                    .lock()
+                    .take_suppress_next_bootstrap_write();
+            }
+            if pending.base_seq > self.last_seq {
+                if pending.fed_preamble {
+                    self.reset_parser();
+                }
+                self.process_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
+                self.write_notice("scrollback truncated during a long disconnect");
+            }
+            pending.gap_applied = true;
+            pending.fed_preamble = false;
+        }
+
+        if pending.replay_offset < pending.replay.len() {
+            let end = (pending.replay_offset + ATTACH_PARSE_CHUNK_BYTES).min(pending.replay.len());
+            self.process_pty_bytes(&pending.replay[pending.replay_offset..end]);
+            pending.replay_offset = end;
+            self.last_seq = pending.base_seq + end as u64;
+            self.pending_attach_replay = Some(pending);
+            self.schedule_attach_replay_chunk(ctx);
+            return;
+        }
+
+        self.last_seq = pending.base_seq + pending.replay.len() as u64;
+        self.finish_attach_replay(pending.pending_exit, ctx);
+    }
+
+    fn schedule_attach_replay_chunk(&mut self, ctx: &mut ModelContext<Self>) {
+        ctx.spawn(
+            async move { futures_lite::future::yield_now().await },
+            |me, _, ctx| me.process_attach_replay_chunk(ctx),
         );
+    }
+
+    fn finish_attach_replay(
+        &mut self,
+        pending_exit: Option<Option<i32>>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let replay_again = self.drain_pending_output(ctx);
-        if let Some(exit_code) = pending_exit {
+        if let Some(exit_code) = self.pending_exit.take().or(pending_exit) {
             self.awaiting_attach_snapshot = false;
+            self.reattach_after_replay = false;
             if replay_again {
                 self.write_warning(
                     "some final session output was truncated before the exit notification",
@@ -875,7 +975,13 @@ impl EventLoop {
             self.on_session_exited(exit_code);
             return;
         }
-        if replay_again {
+        if self.terminated {
+            self.awaiting_attach_snapshot = false;
+            self.reattach_after_replay = false;
+            return;
+        }
+        let reattach_after_replay = std::mem::take(&mut self.reattach_after_replay);
+        if replay_again || reattach_after_replay {
             self.awaiting_attach_snapshot = true;
             self.reattach(ctx);
             return;
@@ -1686,6 +1792,9 @@ impl EventLoop {
         self.allow_startup_command_retry();
         self.allow_agent_binding_retry();
         self.allow_attach_retry();
+        if self.pending_attach_replay.is_some() {
+            self.reattach_after_replay = true;
+        }
         self.awaiting_attach_snapshot = true;
     }
 

@@ -14,10 +14,20 @@ use warp_ssh_manager::secrets::SshSecretStore;
 use warp_ssh_manager::types::{AuthType, ResolvedSshAuth, SshServerInfo};
 use warp_ssh_manager::SshRepository;
 use zap_sftp::session::{AuthMethod, HostKeyConfirmation, SftpSession};
-use zap_sftp::types::OpenOptions;
+use zap_sftp::types::{FileType, OpenOptions};
 use zap_sftp::Sftp;
 
 use super::types::{FileEntry, FileEntryType, StableEntryIdentity};
+
+/// Whether `name` is one safe child component in a remote directory.
+pub(super) fn is_valid_remote_child_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name
+            .chars()
+            .any(|character| matches!(character, '/' | '\\'))
+}
 
 /// SFTP operation error
 #[derive(Clone, Debug)]
@@ -227,10 +237,15 @@ fn unique_transfer_sibling(path: &Path, marker: &str) -> PathBuf {
 }
 
 fn open_new_local_transfer_file(path: &Path) -> std::io::Result<fs::File> {
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 fn create_unique_local_transfer_file(
@@ -258,7 +273,9 @@ fn create_unique_remote_transfer_file(
 ) -> Result<(PathBuf, zap_sftp::File), SftpOpsError> {
     for _ in 0..128 {
         let candidate = unique_transfer_sibling(path, marker);
-        match sftp.open(&candidate, OpenOptions::create_new()) {
+        let mut options = OpenOptions::create_new();
+        options.mode = Some(0o600);
+        match sftp.open(&candidate, options) {
             Ok(file) => return Ok((candidate, file)),
             Err(_) if sftp.lstat(&candidate).is_ok() => continue,
             Err(error) => return Err(error.into()),
@@ -431,12 +448,7 @@ pub fn rename(sftp: &Sftp, old_path: &Path, new_path: &Path) -> Result<(), SftpO
 /// falling back to a remove or backup dance would leave the destination absent
 /// across a crash boundary.
 pub fn replace_atomic(sftp: &Sftp, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
-    let opts = zap_sftp::types::RenameOptions {
-        overwrite: true,
-        atomic: true,
-        native: false,
-    };
-    sftp.rename(old_path, new_path, opts)?;
+    sftp.replace_atomically(old_path, new_path)?;
     Ok(())
 }
 
@@ -489,7 +501,36 @@ fn upload_file_streaming_with_mode(
 ) -> Result<(), SftpOpsError> {
     let mut local_file =
         fs::File::open(local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
-    let total_size = local_file.metadata().map(|m| m.len()).unwrap_or(0);
+    let local_metadata = local_file
+        .metadata()
+        .map_err(|error| SftpOpsError::LocalIo(error.to_string()))?;
+    let total_size = local_metadata.len();
+    #[cfg(unix)]
+    let source_mode = {
+        use std::os::unix::fs::PermissionsExt;
+
+        local_metadata.permissions().mode() & 0o777
+    };
+    #[cfg(not(unix))]
+    let source_mode = 0o600;
+
+    let destination_existed = if overwrite_destination {
+        match sftp.lstat(remote_path) {
+            Ok(metadata) => match metadata.file_type {
+                FileType::File | FileType::Symlink => true,
+                FileType::Dir | FileType::Other => {
+                    return Err(SftpOpsError::Operation(format!(
+                        "Remote destination is not a replaceable file: {}",
+                        remote_path.display()
+                    )))
+                }
+            },
+            Err(error) if error.is_not_found() => false,
+            Err(error) => return Err(error.into()),
+        }
+    } else {
+        false
+    };
 
     // Each in-flight transfer owns its temporary path. Two writes to the same
     // destination must never truncate, finalize, or clean up each other's data.
@@ -516,6 +557,7 @@ fn upload_file_streaming_with_mode(
                 cb(transferred, total_size);
             }
         }
+        remote_file.set_mode(source_mode)?;
         remote_file.flush()?;
         Ok(())
     })();
@@ -523,7 +565,7 @@ fn upload_file_streaming_with_mode(
 
     match &result {
         Ok(()) => {
-            if !overwrite_destination {
+            if !overwrite_destination || !destination_existed {
                 if let Err(error) = sftp.rename(
                     &temp_remote_path,
                     remote_path,
@@ -542,15 +584,7 @@ fn upload_file_streaming_with_mode(
             }
             // Publish in one atomic replacement. If the server cannot provide
             // that guarantee, fail safely and keep the existing destination.
-            if let Err(error) = sftp.rename(
-                &temp_remote_path,
-                remote_path,
-                zap_sftp::types::RenameOptions {
-                    overwrite: true,
-                    atomic: true,
-                    native: false,
-                },
-            ) {
+            if let Err(error) = replace_atomic(sftp, &temp_remote_path, remote_path) {
                 let _ = sftp.remove_file(&temp_remote_path);
                 return Err(SftpOpsError::Operation(format!(
                     "Failed to atomically replace remote file: {error}"
@@ -616,6 +650,8 @@ fn download_file_streaming_with_mode(
     let mut remote_file = sftp.open(remote_path, OpenOptions::read())?;
     let metadata = remote_file.stat()?;
     let total_size = metadata.size;
+    #[cfg(unix)]
+    let source_mode = metadata.mode.unwrap_or(0o600) & 0o777;
 
     if let Some(parent) = local_path.parent() {
         fs::create_dir_all(parent).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
@@ -646,6 +682,14 @@ fn download_file_streaming_with_mode(
             if let Some(cb) = progress_cb {
                 cb(transferred, total_size);
             }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            local_file
+                .set_permissions(fs::Permissions::from_mode(source_mode))
+                .map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
         }
         local_file
             .flush()
@@ -750,13 +794,7 @@ pub fn download_dir_recursive(
         }
 
         // Path traversal protection: verify safety of filenames returned by remote server
-        if entry.name.is_empty()
-            || entry.name.starts_with('/')
-            || entry.name.starts_with('\\')
-            || entry.name.contains("..")
-            || entry.name.contains('/')
-            || entry.name.contains('\\')
-        {
+        if !is_valid_remote_child_name(&entry.name) {
             return Err(SftpOpsError::Operation(format!(
                 "Refusing unsafe remote directory entry: {}",
                 entry.name

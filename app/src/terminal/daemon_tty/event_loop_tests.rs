@@ -1659,6 +1659,67 @@ fn apply_attach_without_preamble_replays_plainly() {
     });
 }
 
+#[test]
+fn large_attach_replay_yields_with_model_unlocked_between_chunks() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(42u64);
+        let (manager, event_loop, model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
+        let replay = vec![b'x'; ATTACH_PARSE_CHUNK_BYTES * 3 + 17];
+        let replay_len = replay.len() as u64;
+        let live_output = b"live-after-snapshot";
+
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: 0,
+                    replay,
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+
+        event_loop.read(&app, |me, _| {
+            assert!(me.pending_attach_replay.is_some());
+            assert_eq!(me.last_seq, ATTACH_PARSE_CHUNK_BYTES as u64);
+            assert!(me.awaiting_attach_snapshot);
+        });
+        assert!(
+            model.try_lock().is_some(),
+            "the terminal model must be unlocked between replay chunks"
+        );
+        manager.update(&mut app, |_manager, ctx| {
+            ctx.emit(output_event(conn, OUR_PTY, replay_len, live_output));
+            ctx.emit(RemoteServerManagerEvent::SessionExited {
+                session_id: conn,
+                host_id: HostId::new(HOST.to_string()),
+                pty_session_id: OUR_PTY.to_string(),
+                exit_code: Some(0),
+            });
+        });
+        event_loop.read(&app, |me, _| {
+            assert_eq!(me.pending_output.len(), 1);
+            assert_eq!(me.pending_exit, Some(Some(0)));
+            assert!(!me.terminated, "exit stays ordered behind the replay");
+        });
+
+        for _ in 0..8 {
+            futures_lite::future::yield_now().await;
+        }
+        event_loop.read(&app, |me, _| {
+            assert!(me.pending_attach_replay.is_none());
+            assert_eq!(me.last_seq, replay_len + live_output.len() as u64);
+            assert!(!me.awaiting_attach_snapshot);
+            assert!(me.terminated, "the buffered exit applies after all output");
+        });
+    });
+}
+
 /// A reconnect (already-advanced cursor, no preamble, no gap) replays only
 /// what was missed and advances from its own cursor — the daemon never ships a
 /// preamble here, and `apply_attach` must not fabricate a gap.

@@ -11,6 +11,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -23,13 +24,15 @@ use super::proto::{
     SafeFileInspectHandle, SafeFileInspectResult, SafeFileMutationResult, SafeFileMutationState,
     SafeFileOpenExisting, SafeFileOpened, SafeFileReadHandle, SafeFileReadResult, SafeFileRecovery,
     SafeFileRecoveryList, SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileResponse,
-    SafeFileWriteHandle,
+    SafeFileSetModeHandle, SafeFileWriteHandle,
 };
 use super::server_model::ConnectionId;
 
 const MAX_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TERMINAL_JOURNAL_RECORDS: usize = 1024;
 const JOURNAL_DIRECTORY: &str = "safe-file-transactions-v1";
+const LOCK_RETRY_ATTEMPTS: usize = 20;
+const LOCK_RETRY_DELAY: Duration = Duration::from_millis(5);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 struct JournalIdentity {
@@ -178,20 +181,13 @@ impl Journal {
     fn try_lock(&self, operation_id: &str) -> std::io::Result<OperationLock> {
         self.prune_terminal_records()?;
         let global = Self::open_lock(&self.global_lock_path())?;
-        let result = unsafe { libc::flock(global.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
-        if result != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        try_flock(&global, libc::LOCK_SH | libc::LOCK_NB)?;
         let operation = Self::open_lock(&self.lock_path(operation_id)?)?;
-        let result = unsafe { libc::flock(operation.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if result == 0 {
-            Ok(OperationLock {
-                _global: global,
-                _operation: operation,
-            })
-        } else {
-            Err(std::io::Error::last_os_error())
-        }
+        try_flock(&operation, libc::LOCK_EX | libc::LOCK_NB)?;
+        Ok(OperationLock {
+            _global: global,
+            _operation: operation,
+        })
     }
 
     fn load(&self, operation_id: &str) -> std::io::Result<Option<JournalRecord>> {
@@ -290,6 +286,24 @@ impl Journal {
         }
         Ok(())
     }
+}
+
+fn try_flock(file: &File, flags: libc::c_int) -> std::io::Result<()> {
+    for attempt in 0..LOCK_RETRY_ATTEMPTS {
+        if unsafe { libc::flock(file.as_raw_fd(), flags) } == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        match error.kind() {
+            std::io::ErrorKind::Interrupted => {}
+            std::io::ErrorKind::WouldBlock if attempt + 1 < LOCK_RETRY_ATTEMPTS => {
+                std::thread::sleep(LOCK_RETRY_DELAY);
+            }
+            std::io::ErrorKind::WouldBlock => return Err(error),
+            _ => return Err(error),
+        }
+    }
+    Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
 }
 
 impl JournalRecord {
@@ -425,6 +439,9 @@ impl SafeFileServer {
                 .map(safe_file_response::Result::Mutation),
             Some(safe_file_request::Operation::FlushHandle(flush)) => self
                 .flush_handle(connection_id, flush)
+                .map(safe_file_response::Result::Mutation),
+            Some(safe_file_request::Operation::SetModeHandle(set_mode)) => self
+                .set_mode_handle(connection_id, set_mode)
                 .map(safe_file_response::Result::Mutation),
             Some(safe_file_request::Operation::InspectHandle(inspect)) => self
                 .inspect_handle(connection_id, inspect)
@@ -680,6 +697,22 @@ impl SafeFileServer {
     ) -> Result<SafeFileMutationResult, String> {
         let handle = self.owned_handle_mut(owner, &request.handle_id)?;
         handle.file.sync_all().map_err(|error| error.to_string())?;
+        Ok(applied_mutation())
+    }
+
+    fn set_mode_handle(
+        &mut self,
+        owner: ConnectionId,
+        request: SafeFileSetModeHandle,
+    ) -> Result<SafeFileMutationResult, String> {
+        let handle = self.owned_handle_mut(owner, &request.handle_id)?;
+        if handle.kind != SafeFileEntryKind::Regular {
+            return Err("Cannot set a file mode on a directory handle".to_string());
+        }
+        handle
+            .file
+            .set_permissions(fs::Permissions::from_mode(request.mode & 0o777))
+            .map_err(|error| error.to_string())?;
         Ok(applied_mutation())
     }
 
