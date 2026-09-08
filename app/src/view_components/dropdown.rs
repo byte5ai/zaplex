@@ -391,8 +391,8 @@ where
     }
 
     fn select_action_and_close(&mut self, action: &A, ctx: &mut ViewContext<Self>) {
-        ctx.dispatch_typed_action(action);
         self.close(ctx);
+        ctx.dispatch_typed_action_deferred(action.clone());
     }
 
     fn close(&mut self, ctx: &mut ViewContext<Self>) {

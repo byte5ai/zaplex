@@ -111,6 +111,9 @@ Cause:\n{cause}
 		serde_error: serde_json::Error,
 	},
 
+	#[display("Invalid stream protocol data for model '{model_iden}'.\nCause: {cause}")]
+	StreamProtocol { model_iden: ModelIden, cause: String },
+
 	#[display("Web stream error for model '{model_iden}'.\nCause: {cause}")]
 	WebStream {
 		model_iden: ModelIden,

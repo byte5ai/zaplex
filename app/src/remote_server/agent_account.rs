@@ -158,6 +158,7 @@ pub(crate) fn session_account_id(
     matches.next().is_none().then(|| key.account_id.clone())
 }
 
+#[derive(Clone)]
 pub(crate) struct AccountInventoryScan {
     pub(crate) inventory: AgentAccountInventory,
     pub(crate) routes: AccountRoutes,

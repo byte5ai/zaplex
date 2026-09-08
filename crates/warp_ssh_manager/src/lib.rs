@@ -24,10 +24,11 @@ pub use secrets::{KeychainSecretStore, SecretKind, SshSecretStore, SshSecretStor
 pub use ssh_command::persist_confirmed_host_key;
 pub use ssh_command::{
     ConnectionTestResult, DefaultWorkspaceCommandFactory, HostKeyPreflight,
-    InvalidMultiplexerTarget, MultiplexerAttachMode, UnknownHostKey, WorkspaceCommandFactory,
-    build_multiplexer_ssh_command_line, build_ssh_args, build_ssh_command_line, preflight_host_key,
-    preflight_host_key_with_factory, test_connection, test_connection_confirm_host_key,
-    test_connection_with_factory,
+    InvalidMultiplexerTarget, MultiplexerAttachMode, PreparedSshCommand, UnknownHostKey,
+    WorkspaceCommandFactory, build_multiplexer_ssh_command_line, build_ssh_args,
+    build_ssh_command_line, prepare_key_multiplexer_ssh_command, prepare_key_ssh_command,
+    preflight_host_key, preflight_host_key_with_factory, test_connection,
+    test_connection_confirm_host_key, test_connection_with_factory,
 };
 pub use ssh_config_parser::{
     LoadOutcome, LoadResult, SshConfigCandidate, default_ssh_config_path, load_candidates,

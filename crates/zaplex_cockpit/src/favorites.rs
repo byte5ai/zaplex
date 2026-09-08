@@ -14,7 +14,8 @@
 //! greys out and is one-click removable (staleness is tolerated by design, so no
 //! referential integrity is enforced here).
 
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The kind of tree object a favorite points at. `target` (on [`Favorite`]) is
 /// interpreted per kind; the app resolves it to a concrete action.
@@ -74,15 +75,88 @@ impl Favorite {
     }
 }
 
-/// The ordered, user-curated favorites store. Order is the user's curation order
-/// (append-on-add), preserved verbatim on disk.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PersistedFavorite {
+    Known(Favorite),
+    Unknown(serde_json::Value),
+}
+
+/// The ordered, user-curated favorites store. Unknown persisted records remain
+/// opaque and keep their place, while only known favorites reach the runtime
+/// API.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Favorites {
-    #[serde(default)]
-    pub items: Vec<Favorite>,
+    items: Vec<Favorite>,
+    persisted_items: Vec<PersistedFavorite>,
+}
+
+impl Serialize for Favorites {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let items = self
+            .persisted_items
+            .iter()
+            .map(|item| match item {
+                PersistedFavorite::Known(favorite) => {
+                    serde_json::to_value(favorite).map_err(serde::ser::Error::custom)
+                }
+                PersistedFavorite::Unknown(value) => Ok(value.clone()),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut state = serializer.serialize_struct("Favorites", 1)?;
+        state.serialize_field("items", &items)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Favorites {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct PersistedFavorites {
+            #[serde(default)]
+            items: Vec<serde_json::Value>,
+        }
+
+        let persisted = PersistedFavorites::deserialize(deserializer)?;
+        let persisted_items = persisted
+            .items
+            .into_iter()
+            .map(|value| match serde_json::from_value(value.clone()) {
+                Ok(favorite) => PersistedFavorite::Known(favorite),
+                Err(_) => PersistedFavorite::Unknown(value),
+            })
+            .collect();
+        let mut favorites = Self {
+            items: Vec::new(),
+            persisted_items,
+        };
+        favorites.rebuild_items();
+        Ok(favorites)
+    }
 }
 
 impl Favorites {
+    pub fn from_items(items: Vec<Favorite>) -> Self {
+        let persisted_items = items
+            .iter()
+            .cloned()
+            .map(PersistedFavorite::Known)
+            .collect();
+        Self {
+            items,
+            persisted_items,
+        }
+    }
+
+    pub fn items(&self) -> &[Favorite] {
+        &self.items
+    }
+
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -109,15 +183,18 @@ impl Favorites {
     /// (idempotent, preserves order). Returns `true` when newly added. A re-add
     /// with a changed label refreshes the existing entry's label in place.
     pub fn add(&mut self, fav: Favorite) -> bool {
-        if let Some(existing) = self
-            .items
-            .iter_mut()
-            .find(|f| f.same_target(fav.kind, &fav.target))
-        {
+        if let Some(existing) = self.persisted_items.iter_mut().find_map(|item| match item {
+            PersistedFavorite::Known(existing) if existing.same_target(fav.kind, &fav.target) => {
+                Some(existing)
+            }
+            PersistedFavorite::Known(_) | PersistedFavorite::Unknown(_) => None,
+        }) {
             existing.label = fav.label;
+            self.rebuild_items();
             false
         } else {
-            self.items.push(fav);
+            self.persisted_items.push(PersistedFavorite::Known(fav));
+            self.rebuild_items();
             true
         }
     }
@@ -125,7 +202,11 @@ impl Favorites {
     /// Remove the favorite with this `(kind, target)`. Returns `true` if removed.
     pub fn remove(&mut self, kind: FavoriteKind, target: &str) -> bool {
         let before = self.items.len();
-        self.items.retain(|f| !f.same_target(kind, target));
+        self.persisted_items.retain(|item| match item {
+            PersistedFavorite::Known(favorite) => !favorite.same_target(kind, target),
+            PersistedFavorite::Unknown(_) => true,
+        });
+        self.rebuild_items();
         self.items.len() != before
     }
 
@@ -135,7 +216,8 @@ impl Favorites {
         if self.remove(fav.kind, &fav.target) {
             false
         } else {
-            self.items.push(fav);
+            self.persisted_items.push(PersistedFavorite::Known(fav));
+            self.rebuild_items();
             true
         }
     }
@@ -150,8 +232,42 @@ impl Favorites {
         if from == to {
             return;
         }
-        let item = self.items.remove(from);
-        self.items.insert(to, item);
+        let source = self
+            .persisted_items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| matches!(item, PersistedFavorite::Known(_)))
+            .nth(from)
+            .map(|(index, _)| index)
+            .expect("the source index was checked against known items");
+        let item = self.persisted_items.remove(source);
+        let known_positions: Vec<usize> = self
+            .persisted_items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| match item {
+                PersistedFavorite::Known(_) => Some(index),
+                PersistedFavorite::Unknown(_) => None,
+            })
+            .collect();
+        let destination = known_positions.get(to).copied().unwrap_or_else(|| {
+            known_positions
+                .last()
+                .map_or(0, |last_known| last_known + 1)
+        });
+        self.persisted_items.insert(destination, item);
+        self.rebuild_items();
+    }
+
+    fn rebuild_items(&mut self) {
+        self.items = self
+            .persisted_items
+            .iter()
+            .filter_map(|item| match item {
+                PersistedFavorite::Known(favorite) => Some(favorite.clone()),
+                PersistedFavorite::Unknown(_) => None,
+            })
+            .collect();
     }
 }
 
