@@ -43,6 +43,74 @@ fn missing_auth_json_yields_no_accounts() {
 }
 
 #[test]
+fn legacy_api_key_auth_is_valid_but_not_a_subscription_account() {
+    let tmp = tempfile::tempdir().unwrap();
+    let credential = "sk-test-value-must-never-be-exposed";
+    write(
+        &tmp.path().join(".codex/auth.json"),
+        &format!(r#"{{"OPENAI_API_KEY":"{credential}"}}"#),
+    );
+
+    let discovery = discover_account_roots(tmp.path(), None);
+
+    assert!(discovery.issues.is_empty());
+    assert!(discovery.accounts.is_empty());
+    assert!(!format!("{discovery:?}").contains(credential));
+}
+
+#[test]
+fn explicit_api_key_auth_is_valid_but_not_a_subscription_account() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(
+        &tmp.path().join(".codex/auth.json"),
+        r#"{"auth_mode":"apikey"}"#,
+    );
+
+    let discovery = discover_account_roots(tmp.path(), None);
+
+    assert!(discovery.issues.is_empty());
+    assert!(discovery.accounts.is_empty());
+}
+
+#[test]
+fn api_key_root_does_not_block_another_subscription_account() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let pinned_root = tmp.path().join("accounts/work");
+    write(
+        &home.join(".codex/auth.json"),
+        r#"{"OPENAI_API_KEY":"sk-test-only"}"#,
+    );
+    write(
+        &pinned_root.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"work-account"}}"#,
+    );
+
+    let discovery = discover_account_roots(&home, Some(&pinned_root));
+
+    assert!(discovery.issues.is_empty());
+    assert_eq!(discovery.accounts.len(), 1);
+    assert!(discovery.accounts[0].key.starts_with("codex:work:"));
+}
+
+#[test]
+fn empty_legacy_api_key_is_still_malformed() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(
+        &tmp.path().join(".codex/auth.json"),
+        r#"{"OPENAI_API_KEY":"  "}"#,
+    );
+
+    let discovery = discover_account_roots(tmp.path(), None);
+
+    assert!(discovery.accounts.is_empty());
+    assert_eq!(
+        discovery.issues,
+        vec!["Codex account sign-in file is malformed"]
+    );
+}
+
+#[test]
 fn discovers_default_and_pinned_roots_with_distinct_routing() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
@@ -72,7 +140,7 @@ fn discovers_default_and_pinned_roots_with_distinct_routing() {
         .iter()
         .find(|account| !account.is_default)
         .unwrap();
-    assert_eq!(pinned.key, "codex:work");
+    assert!(pinned.key.starts_with("codex:work:"));
     assert_eq!(
         pinned.config_dir_pin(),
         Some(
@@ -101,6 +169,59 @@ fn duplicate_stable_codex_identity_is_emitted_once() {
     assert!(discovery.issues.is_empty());
     assert_eq!(discovery.accounts.len(), 1);
     assert!(discovery.accounts[0].is_default);
+}
+
+#[test]
+fn reserved_external_codex_root_has_a_stable_distinct_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let default_root = home.join(".codex");
+    let external_root = tmp.path().join("accounts/default");
+    write(
+        &default_root.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"default-account"}}"#,
+    );
+    write(
+        &external_root.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"external-account"}}"#,
+    );
+
+    let discovery = discover_account_roots(&home, Some(&external_root));
+    assert!(discovery.issues.is_empty());
+    assert_eq!(discovery.accounts.len(), 2);
+    let external_key = discovery
+        .accounts
+        .iter()
+        .find(|account| !account.is_default)
+        .unwrap()
+        .key
+        .clone();
+    assert_eq!(discovery.accounts[0].key, "codex:default");
+    assert!(external_key.starts_with("codex:default:"));
+
+    fs::remove_file(default_root.join("auth.json")).unwrap();
+    let without_default = discover_account_roots(&home, Some(&external_root));
+    assert!(without_default.issues.is_empty());
+    assert_eq!(without_default.accounts.len(), 1);
+    assert_eq!(without_default.accounts[0].key, external_key);
+}
+
+#[test]
+fn direct_codex_home_sibling_keeps_legacy_friendly_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let sibling_root = home.join(".codex-work");
+    fs::create_dir_all(&home).unwrap();
+    write(
+        &sibling_root.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"work-account"}}"#,
+    );
+
+    let discovery = discover_account_roots(&home, Some(&sibling_root));
+
+    assert!(discovery.issues.is_empty());
+    assert_eq!(discovery.accounts.len(), 1);
+    assert_eq!(discovery.accounts[0].key, "codex:work");
 }
 
 #[cfg(unix)]
