@@ -294,6 +294,8 @@ pub enum SftpBrowserAction {
     ConfirmNewFolder,
     /// Confirm overwrite
     ConfirmOverwrite,
+    /// Confirm the exact host key shown by the preceding handshake.
+    ConfirmUnknownHostKey,
     /// Open the context menu
     ContextMenu {
         entry: EntryReference,
@@ -1281,6 +1283,14 @@ impl SftpBrowserView {
 
     /// Connect to the SSH server and establish an SFTP channel
     fn connect_to_server(&mut self, ctx: &mut ViewContext<Self>) {
+        self.connect_to_server_with_confirmation(None, ctx);
+    }
+
+    fn connect_to_server_with_confirmation(
+        &mut self,
+        confirmation: Option<zap_sftp::HostKeyConfirmation>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let node_id = self.node_id.clone();
         // Local mode (`new_local`) has no server node; the caller installs the
         // local backend instead of connecting.
@@ -1308,7 +1318,14 @@ impl SftpBrowserView {
                 let secret_store = KeychainSecretStore;
                 self.connect_handle = self.run_blocking(
                     ctx,
-                    move || sftp_ops::connect_from_server(&server, &secret_store),
+                    move || match confirmation {
+                        Some(confirmation) => sftp_ops::connect_from_server_confirmed(
+                            &server,
+                            &secret_store,
+                            &confirmation,
+                        ),
+                        None => sftp_ops::connect_from_server(&server, &secret_store),
+                    },
                     move |me, result, ctx| {
                         me.is_loading = false;
                         match result {
@@ -1347,8 +1364,23 @@ impl SftpBrowserView {
                                     }
                                 }
                             }
-                            Ok(Err(e)) => {
-                                let message = e.user_message();
+                            Ok(Err(sftp_ops::SftpOpsError::UnknownHostKey {
+                                host,
+                                port,
+                                fingerprint_sha256,
+                                key_type,
+                            })) => {
+                                me.connection =
+                                    ConnectionState::Failed(crate::t!("fm-error-unknown-host-key"));
+                                me.dialog = Some(Dialog::ConfirmUnknownHostKey {
+                                    host,
+                                    port,
+                                    fingerprint_sha256,
+                                    key_type,
+                                });
+                            }
+                            Ok(Err(error)) => {
+                                let message = error.user_message();
                                 me.connection = ConnectionState::Failed(message.clone());
                                 me.show_error_toast(message, ctx);
                             }
@@ -3658,6 +3690,7 @@ impl SftpBrowserView {
             | Some(Dialog::CreateFolder { .. })
             | Some(Dialog::Move { .. })
             | Some(Dialog::OverwriteConfirm { .. })
+            | Some(Dialog::ConfirmUnknownHostKey { .. })
             | Some(Dialog::CopyMoveConflict { .. })
             | Some(Dialog::CopyMoveTargetPicker { .. })
             | Some(Dialog::CrossConnConflict { .. })
@@ -5216,6 +5249,7 @@ impl TypedActionView for SftpBrowserView {
                     | Some(Dialog::CreateFolder { .. })
                     | Some(Dialog::Move { .. })
                     | Some(Dialog::OverwriteConfirm { .. })
+                    | Some(Dialog::ConfirmUnknownHostKey { .. })
                     | Some(Dialog::CopyMoveConflict { .. })
                     | Some(Dialog::CopyMoveTargetPicker { .. })
                     | Some(Dialog::CrossConnConflict { .. })
@@ -5356,6 +5390,7 @@ impl TypedActionView for SftpBrowserView {
                     | Some(Dialog::Rename { .. })
                     | Some(Dialog::CreateFolder { .. })
                     | Some(Dialog::Move { .. })
+                    | Some(Dialog::ConfirmUnknownHostKey { .. })
                     | Some(Dialog::CopyMoveConflict { .. })
                     | Some(Dialog::CopyMoveTargetPicker { .. })
                     | Some(Dialog::CrossConnConflict { .. })
@@ -5383,6 +5418,37 @@ impl TypedActionView for SftpBrowserView {
                 }
                 // Batch upload queue: continue with the next file after confirming the current one
                 self.process_pending_uploads(ctx);
+            }
+            SftpBrowserAction::ConfirmUnknownHostKey => {
+                let confirmation = match &self.dialog {
+                    Some(Dialog::ConfirmUnknownHostKey {
+                        host,
+                        port,
+                        fingerprint_sha256,
+                        ..
+                    }) => Some(zap_sftp::HostKeyConfirmation::new(
+                        host.clone(),
+                        *port,
+                        fingerprint_sha256.clone(),
+                    )),
+                    Some(Dialog::DeleteConfirm { .. })
+                    | Some(Dialog::Rename { .. })
+                    | Some(Dialog::CreateFolder { .. })
+                    | Some(Dialog::Move { .. })
+                    | Some(Dialog::OverwriteConfirm { .. })
+                    | Some(Dialog::CopyMoveConflict { .. })
+                    | Some(Dialog::CopyMoveTargetPicker { .. })
+                    | Some(Dialog::CrossConnConflict { .. })
+                    | Some(Dialog::FileDetails { .. })
+                    | Some(Dialog::CloseTransferPanelConfirm)
+                    | None => None,
+                };
+                self.dialog = None;
+                if let Some(confirmation) = confirmation {
+                    self.connect_to_server_with_confirmation(Some(confirmation), ctx);
+                } else {
+                    ctx.notify();
+                }
             }
             SftpBrowserAction::ContextMenu { entry, position } => {
                 let position = *position;

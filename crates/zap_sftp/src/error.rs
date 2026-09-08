@@ -22,6 +22,18 @@ pub enum SftpError {
     #[error("Authentication failed: {0}")]
     AuthFailed(String),
 
+    #[error("Unknown {key_type} host key ({fingerprint_sha256})")]
+    UnknownHostKey {
+        fingerprint_sha256: String,
+        key_type: String,
+    },
+
+    #[error("{key_type} host key mismatch ({fingerprint_sha256})")]
+    HostKeyMismatch {
+        fingerprint_sha256: String,
+        key_type: String,
+    },
+
     #[error("Operation timed out")]
     Timeout,
 
@@ -48,6 +60,8 @@ impl SftpError {
             SftpError::NoSuchFile(_) => true,
             SftpError::ConnectionFailed(_)
             | SftpError::AuthFailed(_)
+            | SftpError::UnknownHostKey { .. }
+            | SftpError::HostKeyMismatch { .. }
             | SftpError::Timeout
             | SftpError::PermissionDenied(_)
             | SftpError::General(_) => false,
@@ -73,3 +87,7 @@ impl From<ssh2::Error> for SftpChannelError {
         SftpChannelError::Sftp(SftpError::Ssh2(e))
     }
 }
+
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod tests;
