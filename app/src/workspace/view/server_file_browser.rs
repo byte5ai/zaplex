@@ -174,7 +174,15 @@ enum DownloadTaskStatus {
     Pending,
     Downloading,
     Completed,
+    Overwritten,
+    Skipped,
     Failed(String),
+}
+
+#[derive(Clone, Debug)]
+enum DownloadConflictPolicy {
+    NoReplace,
+    Overwrite(LocalDownloadTargetIdentity),
 }
 
 struct ServerFileDownloadTask {
@@ -183,6 +191,7 @@ struct ServerFileDownloadTask {
     file_name: String,
     total_bytes: u64,
     downloaded_bytes: Arc<AtomicU64>,
+    conflict_policy: DownloadConflictPolicy,
     status: DownloadTaskStatus,
 }
 
@@ -198,6 +207,36 @@ struct PendingDownloadFile {
     local_path: PathBuf,
     display_name: String,
     total_bytes: u64,
+}
+
+#[derive(Clone, Debug)]
+struct DownloadConflict {
+    local_path: PathBuf,
+    display_name: String,
+    identity: LocalDownloadTargetIdentity,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocalDownloadTargetIdentity {
+    kind: LocalDownloadTargetKind,
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(windows)]
+    volume_serial_number: Option<u32>,
+    #[cfg(windows)]
+    file_index: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalDownloadTargetKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
 }
 
 #[derive(Clone)]
@@ -2390,9 +2429,14 @@ impl ServerFileBrowserView {
         }
         self.upload_batches.retain(|batch| !batch.tasks.is_empty());
         for batch in &mut self.download_batches {
-            batch
-                .tasks
-                .retain(|task| !matches!(task.status, DownloadTaskStatus::Completed));
+            batch.tasks.retain(|task| {
+                !matches!(
+                    task.status,
+                    DownloadTaskStatus::Completed
+                        | DownloadTaskStatus::Overwritten
+                        | DownloadTaskStatus::Skipped
+                )
+            });
         }
         self.download_batches
             .retain(|batch| !batch.tasks.is_empty());
@@ -2456,10 +2500,14 @@ impl ServerFileBrowserView {
 
     fn has_completed_download_tasks(&self) -> bool {
         self.download_batches.iter().any(|batch| {
-            batch
-                .tasks
-                .iter()
-                .any(|task| matches!(task.status, DownloadTaskStatus::Completed))
+            batch.tasks.iter().any(|task| {
+                matches!(
+                    task.status,
+                    DownloadTaskStatus::Completed
+                        | DownloadTaskStatus::Overwritten
+                        | DownloadTaskStatus::Skipped
+                )
+            })
         })
     }
 
@@ -2489,6 +2537,15 @@ impl ServerFileBrowserView {
         let Some(batch_index) = self.active_download_batch_index else {
             return;
         };
+        if let Some(batch) = self.download_batches.get_mut(batch_index) {
+            while batch
+                .tasks
+                .get(batch.next_task_index)
+                .is_some_and(|task| matches!(task.status, DownloadTaskStatus::Skipped))
+            {
+                batch.next_task_index += 1;
+            }
+        }
         if self
             .download_batches
             .get(batch_index)
@@ -2511,7 +2568,7 @@ impl ServerFileBrowserView {
             batch.next_task_index += 1;
         }
 
-        let (remote_path, local_path, downloaded_bytes, total_bytes) = {
+        let (remote_path, local_path, downloaded_bytes, total_bytes, conflict_policy) = {
             let batch = self
                 .download_batches
                 .get(batch_index)
@@ -2522,11 +2579,13 @@ impl ServerFileBrowserView {
                 task.local_path.clone(),
                 task.downloaded_bytes.clone(),
                 task.total_bytes,
+                task.conflict_policy.clone(),
             )
         };
 
         self.schedule_progress_poll(ctx);
         let client_for_next = client.clone();
+        let overwrites_target = matches!(&conflict_policy, DownloadConflictPolicy::Overwrite(_));
         ctx.spawn(
             async move {
                 download_file_with_progress(
@@ -2535,12 +2594,14 @@ impl ServerFileBrowserView {
                     local_path,
                     downloaded_bytes,
                     total_bytes,
+                    conflict_policy,
                 )
                 .await
             },
             move |me, result, ctx| {
                 if let Some(batch) = me.download_batches.get_mut(batch_index) {
                     batch.tasks[index].status = match result {
+                        Ok(()) if overwrites_target => DownloadTaskStatus::Overwritten,
                         Ok(()) => DownloadTaskStatus::Completed,
                         Err(error) => DownloadTaskStatus::Failed(error),
                     };
@@ -2572,16 +2633,90 @@ impl ServerFileBrowserView {
         if !self.has_active_upload() {
             self.stop_progress_poll();
         }
-        let all_succeeded = self.download_batches.iter().all(|batch| {
-            batch
-                .tasks
+        if !self.download_batches.is_empty() {
+            let overwritten = self
+                .download_batches
                 .iter()
-                .all(|task| matches!(task.status, DownloadTaskStatus::Completed))
-        });
-        if all_succeeded && !self.download_batches.is_empty() {
-            self.status = Some(crate::t!("server-file-browser-transfer-complete"));
+                .flat_map(|batch| &batch.tasks)
+                .filter(|task| matches!(task.status, DownloadTaskStatus::Overwritten))
+                .count();
+            let skipped = self
+                .download_batches
+                .iter()
+                .flat_map(|batch| &batch.tasks)
+                .filter(|task| matches!(task.status, DownloadTaskStatus::Skipped))
+                .count();
+            let failed = self
+                .download_batches
+                .iter()
+                .flat_map(|batch| &batch.tasks)
+                .filter(|task| matches!(task.status, DownloadTaskStatus::Failed(_)))
+                .count();
+            let overwritten = i32::try_from(overwritten).unwrap_or(i32::MAX);
+            let skipped = i32::try_from(skipped).unwrap_or(i32::MAX);
+            let failed = i32::try_from(failed).unwrap_or(i32::MAX);
+            self.status = Some(crate::t!(
+                "server-file-browser-download-summary",
+                overwritten = overwritten,
+                skipped = skipped,
+                failed = failed
+            ));
         }
         ctx.notify();
+    }
+
+    fn start_download_after_conflict_scan(
+        &mut self,
+        client: Arc<RemoteServerClient>,
+        files: Vec<PendingDownloadFile>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let conflicts = match scan_local_download_conflicts(&files) {
+            Ok(conflicts) => conflicts,
+            Err(error) => {
+                self.set_error(error, ctx);
+                return;
+            }
+        };
+        if conflicts.is_empty() {
+            let tasks = build_download_tasks(files, &conflicts, false);
+            self.begin_download_batch(client, tasks, ctx);
+            return;
+        }
+
+        let summary = format_download_conflict_summary(&conflicts);
+        let overwrite_files = files.clone();
+        let skip_files = files;
+        let overwrite_conflicts = conflicts.clone();
+        let skip_conflicts = conflicts;
+        let overwrite_client = client.clone();
+        let dialog = AlertDialogWithCallbacks::for_view(
+            crate::t!("server-file-browser-download-conflict-title"),
+            summary,
+            vec![
+                ModalButton::for_view(
+                    crate::t!("server-file-browser-download-conflict-overwrite"),
+                    move |me: &mut ServerFileBrowserView, ctx| {
+                        let tasks =
+                            build_download_tasks(overwrite_files, &overwrite_conflicts, true);
+                        me.begin_download_batch(overwrite_client, tasks, ctx);
+                    },
+                ),
+                ModalButton::for_view(
+                    crate::t!("server-file-browser-download-conflict-skip"),
+                    move |me: &mut ServerFileBrowserView, ctx| {
+                        let tasks = build_download_tasks(skip_files, &skip_conflicts, false);
+                        me.begin_download_batch(client, tasks, ctx);
+                    },
+                ),
+                ModalButton::for_view(
+                    crate::t!("common-cancel"),
+                    |_: &mut ServerFileBrowserView, _| {},
+                ),
+            ],
+            |_, _| {},
+        );
+        ctx.show_native_platform_modal(dialog);
     }
 
     fn start_download_from_entry(
@@ -2618,11 +2753,11 @@ impl ServerFileBrowserView {
                                 move |me, result, ctx| match result {
                                     Ok(files) if files.is_empty() => {}
                                     Ok(files) => {
-                                        let tasks = files
-                                            .into_iter()
-                                            .map(download_task_from_pending)
-                                            .collect();
-                                        me.begin_download_batch(client_for_batch, tasks, ctx);
+                                        me.start_download_after_conflict_scan(
+                                            client_for_batch,
+                                            files,
+                                            ctx,
+                                        );
                                     }
                                     Err(error) => me.set_error(error, ctx),
                                 },
@@ -2645,15 +2780,13 @@ impl ServerFileBrowserView {
                 ctx.open_save_file_picker(
                     move |path, me, ctx| {
                         if let Some(path) = path {
-                            let task = ServerFileDownloadTask {
+                            let file = PendingDownloadFile {
                                 remote_path,
                                 local_path: PathBuf::from(path),
-                                file_name: default_filename,
+                                display_name: default_filename,
                                 total_bytes,
-                                downloaded_bytes: Arc::new(AtomicU64::new(0)),
-                                status: DownloadTaskStatus::Pending,
                             };
-                            me.begin_download_batch(client, vec![task], ctx);
+                            me.start_download_after_conflict_scan(client, vec![file], ctx);
                         }
                     },
                     SaveFilePickerConfiguration::new().with_default_filename(picker_filename),
@@ -2817,7 +2950,10 @@ impl ServerFileBrowserView {
             .filter(|task| {
                 matches!(
                     task.status,
-                    DownloadTaskStatus::Completed | DownloadTaskStatus::Failed(_)
+                    DownloadTaskStatus::Completed
+                        | DownloadTaskStatus::Overwritten
+                        | DownloadTaskStatus::Skipped
+                        | DownloadTaskStatus::Failed(_)
                 )
             })
             .count();
@@ -4130,22 +4266,139 @@ fn open_local_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
-fn download_task_from_pending(file: PendingDownloadFile) -> ServerFileDownloadTask {
-    ServerFileDownloadTask {
-        remote_path: file.remote_path,
-        local_path: file.local_path,
-        file_name: file.display_name,
-        total_bytes: file.total_bytes,
-        downloaded_bytes: Arc::new(AtomicU64::new(0)),
-        status: DownloadTaskStatus::Pending,
+fn build_download_tasks(
+    files: Vec<PendingDownloadFile>,
+    conflicts: &[DownloadConflict],
+    overwrite: bool,
+) -> Vec<ServerFileDownloadTask> {
+    files
+        .into_iter()
+        .map(|file| {
+            let conflict = conflicts
+                .iter()
+                .find(|conflict| conflict.local_path == file.local_path);
+            let conflict_policy = if overwrite {
+                conflict
+                    .map(|conflict| DownloadConflictPolicy::Overwrite(conflict.identity.clone()))
+                    .unwrap_or(DownloadConflictPolicy::NoReplace)
+            } else {
+                DownloadConflictPolicy::NoReplace
+            };
+            let status = if !overwrite && conflict.is_some() {
+                DownloadTaskStatus::Skipped
+            } else {
+                DownloadTaskStatus::Pending
+            };
+            ServerFileDownloadTask {
+                remote_path: file.remote_path,
+                local_path: file.local_path,
+                file_name: file.display_name,
+                total_bytes: file.total_bytes,
+                downloaded_bytes: Arc::new(AtomicU64::new(0)),
+                conflict_policy,
+                status,
+            }
+        })
+        .collect()
+}
+
+fn scan_local_download_conflicts(
+    files: &[PendingDownloadFile],
+) -> Result<Vec<DownloadConflict>, String> {
+    let mut conflicts = Vec::new();
+    for file in files {
+        let Some(identity) = local_download_target_identity(&file.local_path)? else {
+            continue;
+        };
+        if matches!(
+            identity.kind,
+            LocalDownloadTargetKind::Directory | LocalDownloadTargetKind::Other
+        ) {
+            return Err(crate::t!(
+                "server-file-browser-operation-failed",
+                error = format!(
+                    "download destination is not a regular file or symlink: {}",
+                    file.local_path.display()
+                )
+            ));
+        }
+        conflicts.push(DownloadConflict {
+            local_path: file.local_path.clone(),
+            display_name: file.display_name.clone(),
+            identity,
+        });
     }
+    Ok(conflicts)
+}
+
+fn format_download_conflict_summary(conflicts: &[DownloadConflict]) -> String {
+    let mut lines = conflicts
+        .iter()
+        .take(8)
+        .map(|conflict| format!("• {}", conflict.display_name))
+        .collect::<Vec<_>>();
+    if conflicts.len() > 8 {
+        let remaining = i32::try_from(conflicts.len() - 8).unwrap_or(i32::MAX);
+        lines.push(crate::t!(
+            "server-file-browser-upload-conflict-more",
+            count = remaining
+        ));
+    }
+    format!(
+        "{}\n\n{}",
+        crate::t!("server-file-browser-download-conflict-info"),
+        lines.join("\n")
+    )
+}
+
+fn local_download_target_identity(
+    path: &Path,
+) -> Result<Option<LocalDownloadTargetIdentity>, String> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(crate::t!(
+                "server-file-browser-operation-failed",
+                error = format!("{}: {error}", path.display())
+            ));
+        }
+    };
+    let file_type = metadata.file_type();
+    let kind = if file_type.is_file() {
+        LocalDownloadTargetKind::File
+    } else if file_type.is_dir() {
+        LocalDownloadTargetKind::Directory
+    } else if file_type.is_symlink() {
+        LocalDownloadTargetKind::Symlink
+    } else {
+        LocalDownloadTargetKind::Other
+    };
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt as _;
+    #[cfg(windows)]
+    use std::os::windows::fs::MetadataExt as _;
+
+    Ok(Some(LocalDownloadTargetIdentity {
+        kind,
+        length: metadata.len(),
+        modified: metadata.modified().ok(),
+        #[cfg(unix)]
+        device: metadata.dev(),
+        #[cfg(unix)]
+        inode: metadata.ino(),
+        #[cfg(windows)]
+        volume_serial_number: metadata.volume_serial_number(),
+        #[cfg(windows)]
+        file_index: metadata.file_index(),
+    }))
 }
 
 fn download_task_progress(task: &ServerFileDownloadTask) -> f32 {
     match &task.status {
         DownloadTaskStatus::Pending => 0.0,
-        DownloadTaskStatus::Completed => 1.0,
-        DownloadTaskStatus::Failed(_) => 0.0,
+        DownloadTaskStatus::Completed | DownloadTaskStatus::Overwritten => 1.0,
+        DownloadTaskStatus::Failed(_) | DownloadTaskStatus::Skipped => 0.0,
         DownloadTaskStatus::Downloading => {
             if task.total_bytes == 0 {
                 0.0
@@ -4168,6 +4421,10 @@ fn download_task_status_label(task: &ServerFileDownloadTask) -> String {
             )
         }
         DownloadTaskStatus::Completed => crate::t!("server-file-browser-download-status-completed"),
+        DownloadTaskStatus::Overwritten => {
+            crate::t!("server-file-browser-download-status-overwritten")
+        }
+        DownloadTaskStatus::Skipped => crate::t!("server-file-browser-download-status-skipped"),
         DownloadTaskStatus::Failed(error) => {
             crate::t!(
                 "server-file-browser-download-status-failed",
@@ -4806,9 +5063,9 @@ async fn collect_download_files(
     display_root: String,
 ) -> Result<Vec<PendingDownloadFile>, String> {
     if let Some(parent) = local_directory.parent() {
-        ensure_local_transfer_directory(parent)?;
+        validate_local_transfer_directory_if_exists(parent)?;
     }
-    ensure_local_transfer_directory(&local_directory)?;
+    validate_local_transfer_directory_if_exists(&local_directory)?;
     let mut files = Vec::new();
     collect_download_files_into_prefixed(
         client,
@@ -4839,7 +5096,7 @@ async fn collect_download_files_into_prefixed(
         };
         match entry.kind {
             FileSystemEntryKind::Directory => {
-                ensure_local_transfer_directory(&local_path)?;
+                validate_local_transfer_directory_if_exists(&local_path)?;
                 Box::pin(collect_download_files_into_prefixed(
                     client.clone(),
                     entry.path,
@@ -4873,6 +5130,7 @@ async fn download_file_with_progress(
     local_path: PathBuf,
     downloaded_bytes: Arc<AtomicU64>,
     total_bytes: u64,
+    conflict_policy: DownloadConflictPolicy,
 ) -> Result<(), String> {
     use tokio::io::AsyncWriteExt as _;
 
@@ -4936,7 +5194,12 @@ async fn download_file_with_progress(
             path = remote_path
         ));
     }
-    output.commit(&local_path).await?;
+    match conflict_policy {
+        DownloadConflictPolicy::NoReplace => output.commit(&local_path).await?,
+        DownloadConflictPolicy::Overwrite(identity) => {
+            output.commit_overwriting(&local_path, &identity).await?
+        }
+    }
     downloaded_bytes.store(offset, Ordering::Relaxed);
     Ok(())
 }
@@ -4976,7 +5239,39 @@ impl AtomicDownloadFile {
         })
     }
 
-    async fn commit(mut self, destination: &Path) -> Result<(), String> {
+    async fn commit(self, destination: &Path) -> Result<(), String> {
+        let temporary = self.into_temporary().await?;
+        temporary
+            .persist_noclobber(destination)
+            .map_err(|error| error.error)
+            .map_err(|error| persist_download_error(destination, error))?;
+        Ok(())
+    }
+
+    async fn commit_overwriting(
+        self,
+        destination: &Path,
+        expected: &LocalDownloadTargetIdentity,
+    ) -> Result<(), String> {
+        let temporary = self.into_temporary().await?;
+        let actual = local_download_target_identity(destination)?;
+        if actual.as_ref() != Some(expected) {
+            return Err(crate::t!(
+                "server-file-browser-operation-failed",
+                error = format!(
+                    "download destination changed before overwrite: {}",
+                    destination.display()
+                )
+            ));
+        }
+        temporary
+            .persist(destination)
+            .map_err(|error| error.error)
+            .map_err(|error| persist_download_error(destination, error))?;
+        Ok(())
+    }
+
+    async fn into_temporary(mut self) -> Result<tempfile::NamedTempFile, String> {
         use tokio::io::AsyncWriteExt as _;
 
         self.output
@@ -4988,17 +5283,15 @@ impl AtomicDownloadFile {
             .await
             .map_err(|error| error.to_string())?;
         drop(self.output);
-        self.temporary
-            .persist(destination)
-            .map_err(|error| error.error)
-            .map_err(|error| {
-                crate::t!(
-                    "server-file-browser-operation-failed",
-                    error = format!("{}: {error}", destination.display())
-                )
-            })?;
-        Ok(())
+        Ok(self.temporary)
     }
+}
+
+fn persist_download_error(destination: &Path, error: std::io::Error) -> String {
+    crate::t!(
+        "server-file-browser-operation-failed",
+        error = format!("{}: {error}", destination.display())
+    )
 }
 
 fn ensure_local_transfer_directory(path: &Path) -> Result<(), String> {
@@ -5024,6 +5317,12 @@ fn ensure_local_transfer_directory(path: &Path) -> Result<(), String> {
     match std::fs::symlink_metadata(path) {
         Ok(_) => validate(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty() && *parent != path)
+            {
+                ensure_local_transfer_directory(parent)?;
+            }
             match std::fs::create_dir(path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -5036,6 +5335,24 @@ fn ensure_local_transfer_directory(path: &Path) -> Result<(), String> {
             }
             validate()
         }
+        Err(error) => Err(crate::t!(
+            "server-file-browser-operation-failed",
+            error = format!("{}: {error}", path.display())
+        )),
+    }
+}
+
+fn validate_local_transfer_directory_if_exists(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_dir() => Ok(()),
+        Ok(_) => Err(crate::t!(
+            "server-file-browser-operation-failed",
+            error = format!(
+                "transfer destination is not a non-symlink directory: {}",
+                path.display()
+            )
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(crate::t!(
             "server-file-browser-operation-failed",
             error = format!("{}: {error}", path.display())

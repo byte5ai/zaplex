@@ -503,8 +503,9 @@ struct OpenedTranscriptSnapshot {
     length: u64,
 }
 
-fn open_transcript_for_viewer(
+fn open_resolved_transcript(
     resolved: &ResolvedTranscript,
+    max_bytes: Option<u64>,
 ) -> Result<(File, OpenedTranscriptSnapshot), TranscriptError> {
     let link_metadata = std::fs::symlink_metadata(&resolved.path)?;
     if !link_metadata.file_type().is_file() || link_metadata.file_type().is_symlink() {
@@ -516,7 +517,18 @@ fn open_transcript_for_viewer(
     options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     let file = options.open(&resolved.path)?;
     let snapshot = checked_transcript_identity(resolved, &file)?;
+    if let Some(max_bytes) = max_bytes {
+        if snapshot.length > max_bytes {
+            return Err(TranscriptError::TranscriptTooLarge { max_bytes });
+        }
+    }
     Ok((file, snapshot))
+}
+
+fn open_transcript_for_viewer(
+    resolved: &ResolvedTranscript,
+) -> Result<(File, OpenedTranscriptSnapshot), TranscriptError> {
+    open_resolved_transcript(resolved, Some(VIEWER_MAX_BYTES))
 }
 
 /// Bind provider-root validation to the file descriptor that will actually be
@@ -527,14 +539,8 @@ fn checked_transcript_identity(
     file: &File,
 ) -> Result<OpenedTranscriptSnapshot, TranscriptError> {
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > VIEWER_MAX_BYTES {
-        return if metadata.len() > VIEWER_MAX_BYTES {
-            Err(TranscriptError::TranscriptTooLarge {
-                max_bytes: VIEWER_MAX_BYTES,
-            })
-        } else {
-            Err(TranscriptError::MalformedTranscript)
-        };
+    if !metadata.is_file() {
+        return Err(TranscriptError::MalformedTranscript);
     }
     let identity = TranscriptFileIdentity::from_metadata(&metadata);
     if identity != resolved.identity {
@@ -598,6 +604,19 @@ fn accepted_jsonl_content(mut bytes: Vec<u8>) -> Result<String, TranscriptError>
     }
     bytes.truncate(final_line_start);
     String::from_utf8(bytes).map_err(|_| TranscriptError::MalformedTranscript)
+}
+
+/// Check that one Claude transcript remains uniquely and safely addressable
+/// without reading, parsing, counting, or hashing its contents.
+pub fn transcript_is_independently_addressable(
+    config_dir: &Path,
+    session_id: &str,
+) -> Result<bool, TranscriptError> {
+    let Some(resolved) = resolve_transcript_for_viewer(config_dir, session_id)? else {
+        return Ok(false);
+    };
+    open_resolved_transcript(&resolved, None)?;
+    Ok(true)
 }
 
 fn parse_viewer_transcript(content: &str) -> Result<Vec<crate::TranscriptTurn>, TranscriptError> {
