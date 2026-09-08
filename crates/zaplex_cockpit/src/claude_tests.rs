@@ -1,5 +1,5 @@
 use super::*;
-use std::fs;
+use std::{collections::HashSet, fs};
 
 fn write(path: &Path, content: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -181,6 +181,88 @@ fn duplicate_stable_claude_identity_is_emitted_once() {
     assert!(discovery.issues.is_empty());
     assert_eq!(discovery.accounts.len(), 1);
     assert_eq!(discovery.accounts[0].key, "claude:a");
+}
+
+#[test]
+fn distinct_roots_with_same_basename_have_distinct_keys() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let sibling_root = home.join(".claude-work");
+    let external_root = tmp.path().join("accounts/work");
+    write(
+        &sibling_root.join(".claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"home-work"}}"#,
+    );
+    write(
+        &external_root.join(".claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"external-work"}}"#,
+    );
+
+    let discovery = discover_accounts_with_process_roots(
+        &home,
+        None,
+        ProcessAccountDiscovery {
+            roots: vec![external_root.clone()],
+            issues: Vec::new(),
+        },
+    );
+
+    assert!(discovery.issues.is_empty());
+    assert_eq!(discovery.accounts.len(), 2);
+    let sibling_key = discovery
+        .accounts
+        .iter()
+        .find(|account| account.config_dir == fs::canonicalize(&sibling_root).unwrap())
+        .unwrap()
+        .key
+        .clone();
+    let external_key = discovery
+        .accounts
+        .iter()
+        .find(|account| account.config_dir == fs::canonicalize(&external_root).unwrap())
+        .unwrap()
+        .key
+        .clone();
+    assert_eq!(sibling_key, "claude:work");
+    assert!(external_key.starts_with("claude:work:"));
+    assert_ne!(sibling_key, external_key);
+
+    fs::remove_dir_all(sibling_root).unwrap();
+    let without_sibling = discover_accounts_with_process_roots(
+        &home,
+        None,
+        ProcessAccountDiscovery {
+            roots: vec![external_root],
+            issues: Vec::new(),
+        },
+    );
+    assert_eq!(without_sibling.accounts[0].key, external_key);
+}
+
+#[test]
+fn default_named_home_sibling_never_uses_the_reserved_default_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    write(
+        &home.join(".claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"real-default"}}"#,
+    );
+    write(
+        &home.join(".claude-default/.claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"named-default"}}"#,
+    );
+
+    let discovery = discover_without_process(home, None);
+    let keys: HashSet<_> = discovery
+        .accounts
+        .iter()
+        .map(|account| account.key.as_str())
+        .collect();
+
+    assert!(discovery.issues.is_empty());
+    assert_eq!(keys.len(), 2);
+    assert!(keys.contains("claude:default"));
+    assert!(keys.iter().any(|key| key.starts_with("claude:default:")));
 }
 
 #[cfg(unix)]
@@ -487,6 +569,88 @@ fn parse_transcript_extracts_only_assistant_usage() {
     let second = &entries[1];
     assert_eq!(second.model, "claude-sonnet-4-6");
     assert_eq!(second.cache_create, 0); // missing fields default to 0
+}
+
+#[test]
+fn parse_transcript_keeps_one_final_usage_snapshot_per_request() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("session.jsonl");
+    write(
+        &path,
+        concat!(
+            r#"{"type":"assistant","requestId":"req-1","timestamp":"2026-06-30T10:00:00Z","message":{"id":"msg-1","model":"claude-opus-4-8","stop_reason":null,"usage":{"input_tokens":100,"output_tokens":2,"cache_creation_input_tokens":10,"cache_read_input_tokens":5}}}"#,
+            "\n",
+            r#"{"type":"assistant","requestId":"req-1","timestamp":"2026-06-30T10:00:01Z","message":{"id":"msg-1","model":"claude-opus-4-8","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":1093,"cache_creation_input_tokens":10,"cache_read_input_tokens":5}}}"#,
+            "\n",
+        ),
+    );
+
+    let entries = parse_transcript(&path);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].input, 100);
+    assert_eq!(entries[0].output, 1093);
+    assert_eq!(entries[0].cache_create, 10);
+    assert_eq!(entries[0].cache_read, 5);
+
+    let mut totals = crate::types::WindowTotals::default();
+    for entry in &entries {
+        totals.add(entry, &crate::pricing::PricingTable::default());
+    }
+    assert_eq!(totals.messages, 1);
+    assert_eq!(totals.input, 100);
+    assert_eq!(totals.output, 1093);
+    assert_eq!(totals.work, 1203);
+    assert_eq!(totals.total, 1208);
+    assert!(totals.cost_usd > 0.0);
+}
+
+#[test]
+fn parse_transcript_keeps_distinct_requests_and_unkeyed_snapshots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("session.jsonl");
+    write(
+        &path,
+        concat!(
+            r#"{"type":"assistant","requestId":"req-1","timestamp":"2026-06-30T10:00:00Z","message":{"id":"msg-shared","model":"claude-opus-4-8","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            "\n",
+            r#"{"type":"assistant","requestId":"req-2","timestamp":"2026-06-30T10:01:00Z","message":{"id":"msg-shared","model":"claude-opus-4-8","stop_reason":"end_turn","usage":{"input_tokens":20,"output_tokens":2}}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-06-30T10:02:00Z","message":{"id":"msg-shared","model":"claude-opus-4-8","stop_reason":"end_turn","usage":{"input_tokens":30,"output_tokens":3}}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-06-30T10:03:00Z","message":{"id":"msg-shared","model":"claude-opus-4-8","stop_reason":"end_turn","usage":{"input_tokens":40,"output_tokens":4}}}"#,
+            "\n",
+        ),
+    );
+
+    let entries = parse_transcript(&path);
+    assert_eq!(entries.len(), 4);
+    assert_eq!(
+        entries.iter().map(|entry| entry.input).collect::<Vec<_>>(),
+        vec![10, 20, 30, 40]
+    );
+}
+
+#[test]
+fn parse_transcript_selects_one_whole_highest_output_provisional_snapshot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("session.jsonl");
+    write(
+        &path,
+        concat!(
+            r#"{"type":"assistant","requestId":"req-1","timestamp":"2026-06-30T10:00:00Z","message":{"id":"msg-1","model":"first","stop_reason":null,"usage":{"input_tokens":900,"output_tokens":20}}}"#,
+            "\n",
+            r#"{"type":"assistant","requestId":"req-1","timestamp":"2026-06-30T10:01:00Z","message":{"id":"msg-1","model":"second","stop_reason":null,"usage":{"input_tokens":100,"output_tokens":30}}}"#,
+            "\n",
+            r#"{"type":"assistant","requestId":"req-1","timestamp":"2026-06-30T10:02:00Z","message":{"id":"msg-1","model":"last","stop_reason":null,"usage":{"input_tokens":50,"output_tokens":30}}}"#,
+            "\n",
+        ),
+    );
+
+    let entries = parse_transcript(&path);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].model, "last");
+    assert_eq!(entries[0].input, 50);
+    assert_eq!(entries[0].output, 30);
 }
 
 #[test]

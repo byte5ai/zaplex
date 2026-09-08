@@ -13,6 +13,7 @@
 //!
 //! See `docs/superpowers/specs/2026-06-30-cockpit-increment1-account-usage-design.md`.
 
+mod account_key;
 pub mod antigravity_sessions;
 pub mod claude;
 pub mod claude_registry_lifecycle;
@@ -51,9 +52,10 @@ pub use conductor::{
 };
 pub use favorites::{Favorite, FavoriteKind, Favorites};
 pub use fleet::{
-    build_fleet_tree, fold_inventory, reconcile_connected_hosts, sessions_of_account,
-    AccountSession, AgentInventoryStatus, AgentSession, FleetTree, HostAvailability, HostNode,
-    HostSessions, ProjectNode, RegisteredHost, RemoteHost,
+    build_fleet_tree, fold_inventory, mark_registry_bound_hosts_unverified,
+    reconcile_connected_hosts, sessions_of_account, AccountSession, AgentInventoryStatus,
+    AgentSession, FleetTree, HostAvailability, HostNode, HostSessions, ProjectNode, RegisteredHost,
+    RemoteHost,
 };
 pub use format::{
     binding_window, context_fill, context_window, format_cost, format_relative, format_reset,
@@ -64,12 +66,14 @@ pub use guardrails::{
     pid_signalable, remote_unsupported_toast, sent_toast, session_label, stop_all_confirm_message,
     stop_all_summary_toast, unsignalable_toast, GuardrailSignal, GuardrailTarget,
 };
-pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
+pub use oauth::{
+    apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow, UtilizationScale,
+};
 pub use overrides::{set_label_override, AccountOverride, AccountOverrides};
 pub use pricing::{ModelPrice, PricingSource, PricingTable};
 pub use process_identity::{
     current_process_fingerprint, local_process_signalling_supported, probe_registered_process,
-    send_verified_process_signal, ProcessProbe, ProcessSignalError,
+    send_verified_process_signal, ProcessPresence, ProcessProbe, ProcessSignalError,
 };
 pub use project::{resolve_project, ResolvedProject};
 pub use review::{git_commit_all_cmd, git_diff_cmd, render_review_markdown, WorkingChanges};
@@ -215,10 +219,7 @@ pub fn build_snapshot_with_cache(
     let codex_discovery = codex::discover_account_roots(home, pinned_codex_home);
     degraded.extend(codex_discovery.issues);
     for account in codex_discovery.accounts {
-        let (entries, io_error) = codex::usage_for_account(&account, since);
-        if io_error {
-            degraded.push(format!("{}: usage history unreadable", account.label));
-        }
+        let (entries, usage_io_error) = codex::usage_for_account(&account, since);
         let b5h = if budget_5h > 0 {
             budget_5h
         } else {
@@ -240,6 +241,9 @@ pub fn build_snapshot_with_cache(
             IDLE_SESSION_LIMIT,
             &mut transcript_cache.codex_rollouts,
         );
+        if usage_io_error || scan.io_error {
+            degraded.push(format!("{}: transcript history unreadable", account.label));
+        }
         let stamp = |mut s: SessionSnapshot| {
             account.stamp(&mut s);
             s
@@ -287,14 +291,17 @@ pub fn live_codex_sessions_with_cache(
     now: DateTime<Utc>,
     transcript_cache: &mut TranscriptScanCache,
 ) -> Vec<SessionSnapshot> {
-    codex_sessions::scan_sessions_with_cache(
+    let scan = codex_sessions::scan_sessions_with_cache(
         config_dir,
         now,
         Duration::zero(),
         0,
         &mut transcript_cache.codex_rollouts,
-    )
-    .live
+    );
+    if scan.io_error {
+        log::warn!("Codex session discovery was incomplete");
+    }
+    scan.live
 }
 
 #[cfg(test)]
@@ -388,3 +395,7 @@ mod build_snapshot_health_tests {
 #[cfg(test)]
 #[path = "snapshot_platform_tests.rs"]
 mod snapshot_platform_tests;
+
+#[cfg(test)]
+#[path = "snapshot_health_tests.rs"]
+mod snapshot_health_tests;

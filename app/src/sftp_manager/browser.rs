@@ -294,6 +294,8 @@ pub enum SftpBrowserAction {
     ConfirmNewFolder,
     /// Confirm overwrite
     ConfirmOverwrite,
+    /// Confirm the exact host key shown by the preceding handshake.
+    ConfirmUnknownHostKey,
     /// Open the context menu
     ContextMenu {
         entry: EntryReference,
@@ -1281,6 +1283,14 @@ impl SftpBrowserView {
 
     /// Connect to the SSH server and establish an SFTP channel
     fn connect_to_server(&mut self, ctx: &mut ViewContext<Self>) {
+        self.connect_to_server_with_confirmation(None, ctx);
+    }
+
+    fn connect_to_server_with_confirmation(
+        &mut self,
+        confirmation: Option<zap_sftp::HostKeyConfirmation>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let node_id = self.node_id.clone();
         // Local mode (`new_local`) has no server node; the caller installs the
         // local backend instead of connecting.
@@ -1308,7 +1318,14 @@ impl SftpBrowserView {
                 let secret_store = KeychainSecretStore;
                 self.connect_handle = self.run_blocking(
                     ctx,
-                    move || sftp_ops::connect_from_server(&server, &secret_store),
+                    move || match confirmation {
+                        Some(confirmation) => sftp_ops::connect_from_server_confirmed(
+                            &server,
+                            &secret_store,
+                            &confirmation,
+                        ),
+                        None => sftp_ops::connect_from_server(&server, &secret_store),
+                    },
                     move |me, result, ctx| {
                         me.is_loading = false;
                         match result {
@@ -1347,8 +1364,23 @@ impl SftpBrowserView {
                                     }
                                 }
                             }
-                            Ok(Err(e)) => {
-                                let message = e.user_message();
+                            Ok(Err(sftp_ops::SftpOpsError::UnknownHostKey {
+                                host,
+                                port,
+                                fingerprint_sha256,
+                                key_type,
+                            })) => {
+                                me.connection =
+                                    ConnectionState::Failed(crate::t!("fm-error-unknown-host-key"));
+                                me.dialog = Some(Dialog::ConfirmUnknownHostKey {
+                                    host,
+                                    port,
+                                    fingerprint_sha256,
+                                    key_type,
+                                });
+                            }
+                            Ok(Err(error)) => {
+                                let message = error.user_message();
                                 me.connection = ConnectionState::Failed(message.clone());
                                 me.show_error_toast(message, ctx);
                             }
@@ -1388,13 +1420,17 @@ impl SftpBrowserView {
                     && has_feature(&daemon.features, FEATURE_SAFE_FILE_TRANSACTIONS_V1)
             })
             .map(|daemon| daemon.client);
+        let became_available = client.is_some();
         if self.safe_file_client.set(client) {
-            self.dialog = None;
-            self.selected.clear();
-            if let Some(backend) = self.sftp.clone() {
-                super::transfer_queue::TransferQueue::as_ref(ctx)
-                    .register_backend_recoveries_async(backend);
-                self.refresh_dir(ctx);
+            ctx.notify();
+            if became_available {
+                self.dialog = None;
+                self.selected.clear();
+                if let Some(backend) = self.sftp.clone() {
+                    super::transfer_queue::TransferQueue::as_ref(ctx)
+                        .register_backend_recoveries_async(backend);
+                    self.refresh_dir(ctx);
+                }
             }
         }
     }
@@ -2030,6 +2066,21 @@ impl SftpBrowserView {
         }
     }
 
+    fn identity_bound_mutations_available(&self) -> bool {
+        self.sftp
+            .as_ref()
+            .is_some_and(|backend| backend.supports_identity_bound_cleanup())
+    }
+
+    fn require_identity_bound_mutation(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        if self.identity_bound_mutations_available() {
+            true
+        } else {
+            self.show_error_toast(crate::t!("fm-error-secure-transfer-required"), ctx);
+            false
+        }
+    }
+
     // ---- Cross-pane copy/move (MC F5/F6) --------------------------------
 
     /// Which filesystem this pane browses — local, or a specific remote host.
@@ -2129,6 +2180,9 @@ impl SftpBrowserView {
         choose_target: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        if is_move && !self.require_identity_bound_mutation(ctx) {
+            return;
+        }
         let sources = self.operation_sources();
         if sources.is_empty() {
             let msg = if is_move {
@@ -3608,6 +3662,9 @@ impl SftpBrowserView {
 
     /// Open the delete confirmation dialog
     fn delete_selected(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        if !self.require_identity_bound_mutation(ctx) {
+            return;
+        }
         if let Some(entry) = self.entries.get(index) {
             let selected_entries: Vec<&FileEntry> =
                 if self.selected.contains(&entry.entry_identity()) {
@@ -3658,6 +3715,7 @@ impl SftpBrowserView {
             | Some(Dialog::CreateFolder { .. })
             | Some(Dialog::Move { .. })
             | Some(Dialog::OverwriteConfirm { .. })
+            | Some(Dialog::ConfirmUnknownHostKey { .. })
             | Some(Dialog::CopyMoveConflict { .. })
             | Some(Dialog::CopyMoveTargetPicker { .. })
             | Some(Dialog::CrossConnConflict { .. })
@@ -3794,6 +3852,9 @@ impl SftpBrowserView {
 
     /// Open the rename dialog
     fn rename_entry(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        if !self.require_identity_bound_mutation(ctx) {
+            return;
+        }
         if let Some(entry) = self.entries.get(index) {
             self.dialog = Some(Dialog::Rename {
                 entry: entry.entry_reference(self.refresh_generation),
@@ -4108,6 +4169,23 @@ impl SftpBrowserView {
             let handle = self.fn_bar_handles.get(i).cloned().unwrap_or_default();
             let key = *key;
             let make_action = *make_action;
+            let action = make_action();
+            let enabled = !matches!(
+                &action,
+                SftpBrowserAction::RenameCursor
+                    | SftpBrowserAction::MoveToOtherPane
+                    | SftpBrowserAction::DeleteSelected
+            ) || self.identity_bound_mutations_available();
+            let item_key_color = if enabled {
+                key_color
+            } else {
+                theme.disabled_ui_text_color()
+            };
+            let item_caption_color = if enabled {
+                caption_color
+            } else {
+                theme.disabled_ui_text_color()
+            };
             let cell = Hoverable::new(handle, move |mouse| {
                 // The key renders as a quiet keycap chip (surface_2, hairline
                 // border, small radius) instead of a bare accent "F3" shouting
@@ -4116,7 +4194,7 @@ impl SftpBrowserView {
                 // captions.
                 let keycap = Container::new(
                     Text::new_inline(key.to_string(), family, size)
-                        .with_color(key_color.into())
+                        .with_color(item_key_color.into())
                         .finish(),
                 )
                 .with_padding_left(4.0)
@@ -4134,7 +4212,7 @@ impl SftpBrowserView {
                 if mode == FunctionLegendMode::Full {
                     content.add_child(
                         Text::new_inline(function_bar_caption(key), family, size)
-                            .with_color(caption_color.into())
+                            .with_color(item_caption_color.into())
                             .finish(),
                     );
                 }
@@ -4144,14 +4222,22 @@ impl SftpBrowserView {
                     .with_padding_top(2.0)
                     .with_padding_bottom(2.0)
                     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
-                if mouse.is_hovered() {
+                if enabled && mouse.is_hovered() {
                     container = container.with_background(internal_colors::fg_overlay_1(theme));
                 }
                 container.finish()
             })
-            .with_cursor(Cursor::PointingHand)
-            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(make_action()))
-            .finish();
+            .with_cursor(if enabled {
+                Cursor::PointingHand
+            } else {
+                Cursor::NotAllowed
+            });
+            let cell = if enabled {
+                cell.on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                    .finish()
+            } else {
+                cell.finish()
+            };
             row.add_child(Expanded::new(1.0, cell).finish());
         }
 
@@ -5035,10 +5121,7 @@ impl SftpBrowserView {
 
 /// Safely join a file name to a parent path, preventing path injection and path traversal
 fn safe_join_name(parent: &Path, name: &str) -> Option<PathBuf> {
-    if name.is_empty() || name.starts_with('/') || name.starts_with('\\') {
-        return None;
-    }
-    if name.contains("..") || name.contains('/') || name.contains('\\') {
+    if !sftp_ops::is_valid_remote_child_name(name) {
         return None;
     }
     Some(parent.join(name))
@@ -5065,11 +5148,7 @@ fn build_new_folder_path(parent_path: &PathBuf, folder_name: &str) -> Option<Pat
 
 /// Build the remote path for an uploaded file
 fn build_upload_remote_path(current_path: &PathBuf, local_file_name: &str) -> Option<PathBuf> {
-    let name = Path::new(local_file_name)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| local_file_name.to_string());
-    safe_join_name(current_path, &name).map(|p| normalize_remote_path(&p))
+    safe_join_name(current_path, local_file_name).map(|p| normalize_remote_path(&p))
 }
 
 impl Entity for SftpBrowserView {
@@ -5216,6 +5295,7 @@ impl TypedActionView for SftpBrowserView {
                     | Some(Dialog::CreateFolder { .. })
                     | Some(Dialog::Move { .. })
                     | Some(Dialog::OverwriteConfirm { .. })
+                    | Some(Dialog::ConfirmUnknownHostKey { .. })
                     | Some(Dialog::CopyMoveConflict { .. })
                     | Some(Dialog::CopyMoveTargetPicker { .. })
                     | Some(Dialog::CrossConnConflict { .. })
@@ -5356,6 +5436,7 @@ impl TypedActionView for SftpBrowserView {
                     | Some(Dialog::Rename { .. })
                     | Some(Dialog::CreateFolder { .. })
                     | Some(Dialog::Move { .. })
+                    | Some(Dialog::ConfirmUnknownHostKey { .. })
                     | Some(Dialog::CopyMoveConflict { .. })
                     | Some(Dialog::CopyMoveTargetPicker { .. })
                     | Some(Dialog::CrossConnConflict { .. })
@@ -5383,6 +5464,37 @@ impl TypedActionView for SftpBrowserView {
                 }
                 // Batch upload queue: continue with the next file after confirming the current one
                 self.process_pending_uploads(ctx);
+            }
+            SftpBrowserAction::ConfirmUnknownHostKey => {
+                let confirmation = match &self.dialog {
+                    Some(Dialog::ConfirmUnknownHostKey {
+                        host,
+                        port,
+                        fingerprint_sha256,
+                        ..
+                    }) => Some(zap_sftp::HostKeyConfirmation::new(
+                        host.clone(),
+                        *port,
+                        fingerprint_sha256.clone(),
+                    )),
+                    Some(Dialog::DeleteConfirm { .. })
+                    | Some(Dialog::Rename { .. })
+                    | Some(Dialog::CreateFolder { .. })
+                    | Some(Dialog::Move { .. })
+                    | Some(Dialog::OverwriteConfirm { .. })
+                    | Some(Dialog::CopyMoveConflict { .. })
+                    | Some(Dialog::CopyMoveTargetPicker { .. })
+                    | Some(Dialog::CrossConnConflict { .. })
+                    | Some(Dialog::FileDetails { .. })
+                    | Some(Dialog::CloseTransferPanelConfirm)
+                    | None => None,
+                };
+                self.dialog = None;
+                if let Some(confirmation) = confirmation {
+                    self.connect_to_server_with_confirmation(Some(confirmation), ctx);
+                } else {
+                    ctx.notify();
+                }
             }
             SftpBrowserAction::ContextMenu { entry, position } => {
                 let position = *position;
@@ -5962,7 +6074,11 @@ impl View for SftpBrowserView {
 
         // 9. Context menu
         if let Some(ref cm_state) = self.context_menu {
-            let menu_el = super::context_menu::render_context_menu(cm_state, appearance);
+            let menu_el = super::context_menu::render_context_menu(
+                cm_state,
+                self.identity_bound_mutations_available(),
+                appearance,
+            );
             let positioning = OffsetPositioning::offset_from_parent(
                 cm_state.position,
                 ParentOffsetBounds::ParentByPosition,
