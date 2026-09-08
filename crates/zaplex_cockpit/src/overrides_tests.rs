@@ -33,6 +33,13 @@ fn account(key: &str) -> AccountUsage {
     }
 }
 
+fn account_at(key: &str, config_dir: &str) -> AccountUsage {
+    let mut account = account(key);
+    account.account.config_dir = config_dir.into();
+    account.account.is_default = false;
+    account
+}
+
 fn keys(v: &[AccountUsage]) -> Vec<String> {
     v.iter().map(|a| a.account.key.clone()).collect()
 }
@@ -87,6 +94,37 @@ fn color_lookup_by_key() {
 }
 
 #[test]
+fn unique_legacy_override_migrates_to_root_bound_key() {
+    let new_key = "claude:work:0123456789ab";
+    let accounts = vec![account_at(new_key, "/srv/accounts/work")];
+    let mut overrides =
+        AccountOverrides::parse(r##"{"claude:work": {"label": "External", "color": "#22C55E"}}"##);
+
+    overrides.migrate_legacy_keys(&accounts);
+    let applied = overrides.apply(accounts);
+
+    assert_eq!(applied[0].account.label, "External");
+    assert_eq!(overrides.color_for(new_key), Some("#22C55E"));
+    assert_eq!(overrides.color_for("claude:work"), None);
+}
+
+#[test]
+fn ambiguous_legacy_override_is_not_copied_to_external_root() {
+    let external_key = "claude:work:0123456789ab";
+    let accounts = vec![
+        account_at("claude:work", "/home/user/.claude-work"),
+        account_at(external_key, "/srv/accounts/work"),
+    ];
+    let mut overrides = AccountOverrides::parse(r#"{"claude:work": {"label": "Legacy"}}"#);
+
+    overrides.migrate_legacy_keys(&accounts);
+    let applied = overrides.apply(accounts);
+
+    assert_eq!(applied[0].account.label, "Legacy");
+    assert_eq!(applied[1].account.label, external_key);
+}
+
+#[test]
 fn combined_override_hide_relabel_recolor_reorder() {
     let ov = AccountOverrides::parse(
         r##"{
@@ -117,6 +155,21 @@ fn broken_json_yields_no_overrides_never_hides_accounts() {
         let out = ov.apply(vec![account("claude:a")]);
         assert_eq!(keys(&out), vec!["claude:a"]);
     }
+}
+
+#[test]
+fn malformed_entry_does_not_discard_valid_overrides() {
+    let overrides = AccountOverrides::parse(
+        r#"{
+            "claude:good": {"label": "Work"},
+            "claude:bad": {"order": "two"}
+        }"#,
+    );
+
+    let accounts = overrides.apply(vec![account("claude:good"), account("claude:bad")]);
+
+    assert_eq!(accounts[0].account.label, "Work");
+    assert_eq!(accounts[1].account.label, "claude:bad");
 }
 
 // ── Writing an alias back (A1) ──────────────────────────────────────────────

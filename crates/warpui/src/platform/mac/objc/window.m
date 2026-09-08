@@ -22,6 +22,11 @@ NSWindowStyleMask warpWindowMask = NSWindowStyleMaskClosable | NSWindowStyleMask
 // The default macOS titlebar height (in points).
 static const CGFloat DEFAULT_TITLEBAR_HEIGHT = 28.0;
 
+BOOL warp_should_dispatch_native_window_chrome_event(BOOL mouseDownStartedInNativeChrome,
+                                                     BOOL nativeChromeDispatchIsSupported) {
+    return mouseDownStartedInNativeChrome && nativeChromeDispatchIsSupported;
+}
+
 // A back-to-front ordered array of windows, identified by their `windowNumber`
 // property.
 NSMutableArray<NSNumber *> *windowOrderForTests;
@@ -300,6 +305,15 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     window.titleVisibility = hideTitleBar ? NSWindowTitleHidden : NSWindowTitleVisible;
 }
 
+@interface NSWindow (PrivateAPI)
+- (NSInteger)_resizeDirectionForMouseLocation:(NSPoint)location;
+@end
+
+@interface WarpWindow ()
+- (NSButton *)standardWindowButtonAtEvent:(NSEvent *)event;
+- (BOOL)eventIsOverResizeEdge:(NSEvent *)event;
+@end
+
 @implementation WarpWindow {
     // The windowState is managed on the Rust side.
     void *windowState;
@@ -316,6 +330,7 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     // macOS from cascading or clamping the window position while a tab-drag preview window is
     // being created and positioned under the cursor.
     BOOL _suppressFrameConstraintsDuringDrag;
+    BOOL _leftMouseDownStartedInNativeWindowChrome;
 }
 
 @synthesize testMode;
@@ -385,8 +400,49 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     return [super constrainFrameRect:frameRect toScreen:screen];
 }
 
+- (NSButton *)standardWindowButtonAtEvent:(NSEvent *)event {
+    NSWindowButton buttons[] = {
+        NSWindowCloseButton,
+        NSWindowMiniaturizeButton,
+        NSWindowZoomButton,
+    };
+
+    for (NSUInteger i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
+        NSButton *button = [self standardWindowButton:buttons[i]];
+        if (button && !button.hidden) {
+            NSPoint point = [button convertPoint:event.locationInWindow fromView:nil];
+            if (NSPointInRect(point, button.bounds)) {
+                return button;
+            }
+        }
+    }
+
+    return nil;
+}
+
+- (BOOL)eventIsOverResizeEdge:(NSEvent *)event {
+    if ((self.styleMask & NSWindowStyleMaskResizable) == 0) {
+        return NO;
+    }
+    if ([self respondsToSelector:@selector(_resizeDirectionForMouseLocation:)]) {
+        return [self _resizeDirectionForMouseLocation:event.locationInWindow] != -1;
+    }
+    return NO;
+}
+
 - (void)sendEvent:(NSEvent *)event {
     switch (event.type) {
+        case NSEventTypeLeftMouseDown: {
+            NSButton *windowButton = [self standardWindowButtonAtEvent:event];
+            if (windowButton) {
+                _leftMouseDownStartedInNativeWindowChrome = NO;
+                [windowButton mouseDown:event];
+                break;
+            }
+            _leftMouseDownStartedInNativeWindowChrome = [self eventIsOverResizeEdge:event];
+            [super sendEvent:event];
+            break;
+        }
         // In some cases, NSWindow's default sendEvent: implementation will dispatch a MouseDown
         // event and subsequent MouseDragged events to the content view, but then dispatch the
         // remaining MouseDragged events and MouseUp event elsewhere.
@@ -395,12 +451,33 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         // but it's unclear how or why the events get redirected.
         // This breaks drag-and-drop for panes and tabs (see CLD-2581), so we work around it with
         // custom dispatching.
-        case NSEventTypeLeftMouseUp:
-            [self.contentView mouseUp:event];
+        case NSEventTypeLeftMouseUp: {
+            BOOL nativeChromeDispatchIsSupported = NO;
+            if (@available(macOS 27, *)) {
+                nativeChromeDispatchIsSupported = YES;
+            }
+            if (warp_should_dispatch_native_window_chrome_event(
+                    _leftMouseDownStartedInNativeWindowChrome, nativeChromeDispatchIsSupported)) {
+                [super sendEvent:event];
+            } else {
+                [self.contentView mouseUp:event];
+            }
+            _leftMouseDownStartedInNativeWindowChrome = NO;
             break;
-        case NSEventTypeLeftMouseDragged:
-            [self.contentView mouseDragged:event];
+        }
+        case NSEventTypeLeftMouseDragged: {
+            BOOL nativeChromeDispatchIsSupported = NO;
+            if (@available(macOS 27, *)) {
+                nativeChromeDispatchIsSupported = YES;
+            }
+            if (warp_should_dispatch_native_window_chrome_event(
+                    _leftMouseDownStartedInNativeWindowChrome, nativeChromeDispatchIsSupported)) {
+                [super sendEvent:event];
+            } else {
+                [self.contentView mouseDragged:event];
+            }
             break;
+        }
 
         // The NSWindow's default sendEvent: implementation does not propagate RightMouseDown events
         // from the application title bar to the content view when running a development build

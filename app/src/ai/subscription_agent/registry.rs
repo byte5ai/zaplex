@@ -46,6 +46,10 @@ impl SubscriptionSessionRegistry {
         );
     }
 
+    pub(crate) fn clear_session_identity(&self, conversation_id: &str) {
+        self.sessions.lock().remove(conversation_id);
+    }
+
     pub(crate) fn remove(&self, conversation_id: &str) {
         self.sessions.lock().remove(conversation_id);
         self.targets.lock().remove(conversation_id);

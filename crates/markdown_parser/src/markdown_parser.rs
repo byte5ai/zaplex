@@ -844,11 +844,12 @@ fn parse_code_block<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 ) -> IResult<&'a str, (&'a str, String), E> {
     context("code_block", |input| {
         let (input, indentation) = parse_indentation(input)?;
-        let (input, _) = tag("```")(input)?;
+        let (input, opening_fence) = recognize(pair(tag("```"), take_while(|c| c == '`')))(input)?;
+        let opening_fence_len = opening_fence.len();
         let (input, lang) = parse_code_block_lang(input)?;
         let (input, lines) = terminated(
-            |i| parse_code_block_lines(i, indentation),
-            |i| parse_closing_fence(i, indentation),
+            |i| parse_code_block_lines(i, indentation, opening_fence_len),
+            |i| parse_closing_fence(i, indentation, opening_fence_len),
         )(input)?;
 
         let content = strip_indentation_from_lines(&lines, indentation);
@@ -884,50 +885,49 @@ fn strip_indentation_from_lines(lines: &[&str], indentation: usize) -> String {
 fn parse_code_block_lines<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
     opening_fence_indent: usize,
+    opening_fence_len: usize,
 ) -> IResult<&'a str, Vec<&'a str>, E> {
-    many0(|i| parse_code_block_line(i, opening_fence_indent))(input)
+    many0(|i| parse_code_block_line(i, opening_fence_indent, opening_fence_len))(input)
 }
 
 /// Parse a single line of code block content (not a closing fence).
 fn parse_code_block_line<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
     opening_fence_indent: usize,
+    opening_fence_len: usize,
 ) -> IResult<&'a str, &'a str, E> {
     // Parse a line that is not a closing fence
     verify(parse_line, move |line: &str| {
-        let line_indent = line.chars().take_while(|c| *c == ' ').count();
-        let trimmed_line = line.trim_start();
-
-        // A line is a closing fence if it starts with ``` and contains only backticks
-        // and is indented less than 4 spaces relative to the opening fence
-        if trimmed_line.starts_with("```") {
-            let fence_content = trimmed_line.trim_end();
-            let is_fence = fence_content.chars().all(|c| c == '`') && fence_content.len() >= 3;
-            let relative_indent = line_indent.saturating_sub(opening_fence_indent);
-            let properly_indented = relative_indent < 4;
-            !(is_fence && properly_indented)
-        } else {
-            true
-        }
+        !is_closing_fence_line(line, opening_fence_indent, opening_fence_len)
     })(input)
+}
+
+fn is_closing_fence_line(
+    line: &str,
+    opening_fence_indent: usize,
+    opening_fence_len: usize,
+) -> bool {
+    let line_indent = line.chars().take_while(|c| *c == ' ').count();
+    let relative_indent = line_indent.saturating_sub(opening_fence_indent);
+    if relative_indent >= 4 {
+        return false;
+    }
+
+    let fence_content = line[line_indent..].trim_end();
+    fence_content.len() >= opening_fence_len && fence_content.chars().all(|c| c == '`')
 }
 
 /// Parse the closing fence of a code block.
 fn parse_closing_fence<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
     opening_fence_indent: usize,
+    opening_fence_len: usize,
 ) -> IResult<&'a str, (), E> {
-    // Closing fence can be indented up to 3 spaces more than the opening fence
-    let max_indent = opening_fence_indent + 3;
     value(
         (),
-        tuple((
-            take_while_m_n(0, max_indent, |c| c == ' '),
-            tag("```"),
-            take_while(|c| c == '`'),
-            space0,
-            alt((parse_line_ending, eof)),
-        )),
+        verify(parse_line, move |line: &str| {
+            is_closing_fence_line(line, opening_fence_indent, opening_fence_len)
+        }),
     )(input)
 }
 
@@ -1476,7 +1476,7 @@ fn process_emphasis(state: &mut InlineState, stack_bottom: Option<usize>) {
 /// Helper for [`process_emphasis`] that removes `count` delimiters of `kind` from `node`.
 ///
 /// In debug builds, this panics if `node` is not a run of `kind` delimiters.
-fn truncate_delimiters(node: &mut FormattedTextFragment, kind: DelimiterKind, count: u8) {
+fn truncate_delimiters(node: &mut FormattedTextFragment, kind: DelimiterKind, count: usize) {
     let delimiter = kind.as_str();
     if cfg!(debug_assertions) {
         let text = &node.text;
@@ -1488,7 +1488,7 @@ fn truncate_delimiters(node: &mut FormattedTextFragment, kind: DelimiterKind, co
     }
 
     node.text
-        .truncate(node.text.len() - count as usize * delimiter.len());
+        .truncate(node.text.len() - count * delimiter.len());
 }
 
 /// Helper to merge adjacent text fragments with the same styling. Such fragments might come from:
@@ -1654,7 +1654,7 @@ fn parse_delimiter_run<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     kind: DelimiterKind,
 ) -> impl FnMut(&'a str) -> IResult<&'a str, InlineToken<'a>, E> {
     map(
-        fold_many1(tag(kind.as_str()), || 0, |counter, _| counter + 1),
+        fold_many1(tag(kind.as_str()), || 0usize, |counter, _| counter + 1),
         move |count| InlineToken::Delimiter { kind, count },
     )
 }
@@ -1678,7 +1678,7 @@ fn parse_code_span<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InlineToken<'a> {
     /// A run of `count` delimiter characters of `kind`.
-    Delimiter { kind: DelimiterKind, count: u8 },
+    Delimiter { kind: DelimiterKind, count: usize },
     /// A run of non-delimiter text.
     Text(&'a str),
     /// A backslash-escaped character.
@@ -1703,9 +1703,9 @@ struct Delimiter {
     kind: DelimiterKind,
     /// The count of repeated delimiter units. This is modified during parsing as delimiters are
     /// consumed.
-    count: u8,
+    count: usize,
     /// The count at the time the delimiter was parsed.
-    original_count: u8,
+    original_count: usize,
     /// Whether or not this delimiter is active (only applies to link delimiters).
     active: bool,
     /// The index of the [`FormattedTextFragment`] corresponding to this delimiter.
@@ -1724,7 +1724,7 @@ impl Delimiter {
     fn new(
         node_index: usize,
         kind: DelimiterKind,
-        count: u8,
+        count: usize,
         preceding_char: Option<char>,
         following_char: Option<char>,
     ) -> Self {
@@ -1777,7 +1777,7 @@ impl Delimiter {
 
     /// Convert this delimiter to literal text.
     fn to_text(&self) -> String {
-        self.kind.as_str().repeat(self.count as usize)
+        self.kind.as_str().repeat(self.count)
     }
 
     /// Whether or not this delimiter can open for the given closing delimiter.
@@ -1817,7 +1817,7 @@ enum DelimiterKind {
 
 impl DelimiterKind {
     /// Whether or not `count` is a valid run length for this delimiter.
-    fn valid_count(self, count: u8) -> bool {
+    fn valid_count(self, count: usize) -> bool {
         match self {
             // Emphasis and strong emphasis may be repeated arbitrarily.
             DelimiterKind::Asterisk | DelimiterKind::Underscore => true,

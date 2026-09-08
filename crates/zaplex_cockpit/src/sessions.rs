@@ -55,6 +55,7 @@ pub enum TranscriptError {
     TranscriptTooLarge { max_bytes: u64 },
     MalformedTranscript,
     UnsupportedTranscript,
+    ChangedDuringRead,
     Io(std::io::Error),
 }
 
@@ -76,6 +77,9 @@ impl fmt::Display for TranscriptError {
             Self::UnsupportedTranscript => {
                 formatter.write_str("unsupported Claude transcript format")
             }
+            Self::ChangedDuringRead => {
+                formatter.write_str("Claude transcript changed while it was read")
+            }
             Self::Io(error) => write!(formatter, "Claude transcript I/O failed: {error}"),
         }
     }
@@ -90,7 +94,8 @@ impl std::error::Error for TranscriptError {
             | Self::HistoryLimitExceeded
             | Self::TranscriptTooLarge { .. }
             | Self::MalformedTranscript
-            | Self::UnsupportedTranscript => None,
+            | Self::UnsupportedTranscript
+            | Self::ChangedDuringRead => None,
         }
     }
 }
@@ -431,19 +436,24 @@ fn resolve_transcript_for_viewer(
                 continue;
             }
             if matched
-                .replace((path, TranscriptFileIdentity::from_metadata(&metadata)))
+                .replace((
+                    path,
+                    TranscriptFileIdentity::from_metadata(&metadata),
+                    metadata.len(),
+                ))
                 .is_some()
             {
                 return Err(TranscriptError::AmbiguousSessionId);
             }
         }
     }
-    let Some((path, identity)) = matched else {
+    let Some((path, identity, length)) = matched else {
         return Ok(None);
     };
     Ok(Some(ResolvedTranscript {
         path,
         identity,
+        length,
         provider_root: std::fs::canonicalize(config_dir)?,
     }))
 }
@@ -453,9 +463,6 @@ fn resolve_transcript_for_viewer(
 struct TranscriptFileIdentity {
     device: u64,
     inode: u64,
-    length: u64,
-    modified_seconds: i64,
-    modified_nanoseconds: i64,
 }
 
 #[cfg(not(unix))]
@@ -471,9 +478,6 @@ impl TranscriptFileIdentity {
         Self {
             device: metadata.dev(),
             inode: metadata.ino(),
-            length: metadata.len(),
-            modified_seconds: metadata.mtime(),
-            modified_nanoseconds: metadata.mtime_nsec(),
         }
     }
 
@@ -489,13 +493,20 @@ impl TranscriptFileIdentity {
 struct ResolvedTranscript {
     path: PathBuf,
     identity: TranscriptFileIdentity,
+    length: u64,
     provider_root: PathBuf,
+}
+
+#[derive(Clone, Copy)]
+struct OpenedTranscriptSnapshot {
+    identity: TranscriptFileIdentity,
+    length: u64,
 }
 
 fn open_resolved_transcript(
     resolved: &ResolvedTranscript,
     max_bytes: Option<u64>,
-) -> Result<(File, TranscriptFileIdentity), TranscriptError> {
+) -> Result<(File, OpenedTranscriptSnapshot), TranscriptError> {
     let link_metadata = std::fs::symlink_metadata(&resolved.path)?;
     if !link_metadata.file_type().is_file() || link_metadata.file_type().is_symlink() {
         return Err(TranscriptError::MalformedTranscript);
@@ -505,18 +516,18 @@ fn open_resolved_transcript(
     #[cfg(unix)]
     options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     let file = options.open(&resolved.path)?;
+    let snapshot = checked_transcript_identity(resolved, &file)?;
     if let Some(max_bytes) = max_bytes {
-        if file.metadata()?.len() > max_bytes {
+        if snapshot.length > max_bytes {
             return Err(TranscriptError::TranscriptTooLarge { max_bytes });
         }
     }
-    let identity = checked_transcript_identity(resolved, &file)?;
-    Ok((file, identity))
+    Ok((file, snapshot))
 }
 
 fn open_transcript_for_viewer(
     resolved: &ResolvedTranscript,
-) -> Result<(File, TranscriptFileIdentity), TranscriptError> {
+) -> Result<(File, OpenedTranscriptSnapshot), TranscriptError> {
     open_resolved_transcript(resolved, Some(VIEWER_MAX_BYTES))
 }
 
@@ -526,29 +537,73 @@ fn open_transcript_for_viewer(
 fn checked_transcript_identity(
     resolved: &ResolvedTranscript,
     file: &File,
-) -> Result<TranscriptFileIdentity, TranscriptError> {
+) -> Result<OpenedTranscriptSnapshot, TranscriptError> {
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         return Err(TranscriptError::MalformedTranscript);
     }
     let identity = TranscriptFileIdentity::from_metadata(&metadata);
     if identity != resolved.identity {
-        return Err(TranscriptError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Claude transcript changed after resolution",
-        )));
+        return Err(TranscriptError::ChangedDuringRead);
+    }
+    if metadata.len() < resolved.length {
+        return Err(TranscriptError::ChangedDuringRead);
     }
     let canonical = std::fs::canonicalize(&resolved.path)?;
     if !canonical.starts_with(&resolved.provider_root) {
         return Err(TranscriptError::MalformedTranscript);
     }
     if TranscriptFileIdentity::from_metadata(&canonical.metadata()?) != identity {
-        return Err(TranscriptError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Claude transcript changed during resolution",
-        )));
+        return Err(TranscriptError::ChangedDuringRead);
     }
-    Ok(identity)
+    Ok(OpenedTranscriptSnapshot {
+        identity,
+        length: metadata.len(),
+    })
+}
+
+fn validate_transcript_after_read(
+    resolved: &ResolvedTranscript,
+    file: &File,
+    snapshot: OpenedTranscriptSnapshot,
+) -> Result<(), TranscriptError> {
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || TranscriptFileIdentity::from_metadata(&metadata) != snapshot.identity
+        || metadata.len() < snapshot.length
+    {
+        return Err(TranscriptError::ChangedDuringRead);
+    }
+    let link_metadata = std::fs::symlink_metadata(&resolved.path)?;
+    if !link_metadata.file_type().is_file() || link_metadata.file_type().is_symlink() {
+        return Err(TranscriptError::MalformedTranscript);
+    }
+    let canonical = std::fs::canonicalize(&resolved.path)?;
+    if !canonical.starts_with(&resolved.provider_root) {
+        return Err(TranscriptError::MalformedTranscript);
+    }
+    if TranscriptFileIdentity::from_metadata(&canonical.metadata()?) != snapshot.identity {
+        return Err(TranscriptError::ChangedDuringRead);
+    }
+    Ok(())
+}
+
+fn accepted_jsonl_content(mut bytes: Vec<u8>) -> Result<String, TranscriptError> {
+    if bytes.is_empty() || bytes.ends_with(b"\n") {
+        return String::from_utf8(bytes).map_err(|_| TranscriptError::MalformedTranscript);
+    }
+    let final_line_start = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |index| index + 1);
+    if serde_json::from_slice::<Value>(&bytes[final_line_start..]).is_ok() {
+        return String::from_utf8(bytes).map_err(|_| TranscriptError::MalformedTranscript);
+    }
+    if final_line_start == 0 {
+        return Err(TranscriptError::ChangedDuringRead);
+    }
+    bytes.truncate(final_line_start);
+    String::from_utf8(bytes).map_err(|_| TranscriptError::MalformedTranscript)
 }
 
 /// Check that one Claude transcript remains uniquely and safely addressable
@@ -595,26 +650,26 @@ pub fn load_transcript_with_revision(
     config_dir: &Path,
     session_id: &str,
 ) -> Result<Option<LoadedTranscript>, TranscriptError> {
+    load_transcript_with_revision_after_read(config_dir, session_id, |_| {})
+}
+
+fn load_transcript_with_revision_after_read(
+    config_dir: &Path,
+    session_id: &str,
+    after_read: impl FnOnce(&Path),
+) -> Result<Option<LoadedTranscript>, TranscriptError> {
     let Some(resolved) = resolve_transcript_for_viewer(config_dir, session_id)? else {
         return Ok(None);
     };
-    let (mut file, identity) = open_transcript_for_viewer(&resolved)?;
-    let mut bytes = Vec::new();
-    (&mut file)
-        .take(VIEWER_MAX_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > VIEWER_MAX_BYTES {
-        return Err(TranscriptError::TranscriptTooLarge {
-            max_bytes: VIEWER_MAX_BYTES,
-        });
+    let (mut file, snapshot) = open_transcript_for_viewer(&resolved)?;
+    let mut bytes = Vec::with_capacity(snapshot.length as usize);
+    (&mut file).take(snapshot.length).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != snapshot.length {
+        return Err(TranscriptError::ChangedDuringRead);
     }
-    if TranscriptFileIdentity::from_metadata(&file.metadata()?) != identity {
-        return Err(TranscriptError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Claude transcript changed while it was read",
-        )));
-    }
-    let content = String::from_utf8(bytes).map_err(|_| TranscriptError::MalformedTranscript)?;
+    after_read(&resolved.path);
+    validate_transcript_after_read(&resolved, &file, snapshot)?;
+    let content = accepted_jsonl_content(bytes)?;
     if content.lines().count() > VIEWER_MAX_LINES {
         return Err(TranscriptError::TranscriptTooLarge {
             max_bytes: VIEWER_MAX_BYTES,
@@ -735,8 +790,9 @@ pub struct SessionScan {
 ///   such an entry stays live and is never claimed dormant — we don't assert
 ///   "resumable" where we cannot show the process is gone.
 /// - A live pid is signalable only when its exact process start matches Claude's
-///   registry `procStart`. Missing/mismatching identity keeps the row visible
-///   with no fingerprint, so Stop/Kill fails closed without hiding the session.
+///   registry `procStart`. Missing or unparseable identity keeps the row visible
+///   with no fingerprint. A previous-boot registration or numeric start-tick
+///   mismatch is dormant even when the pid has been reused.
 /// - Only the last `max_age` counts; older conversations are not usefully
 ///   resumable and would only be noise.
 /// - At most `limit`, most-recent first.
@@ -784,7 +840,7 @@ pub(crate) fn scan_sessions_with_cache(
             r.proc_start.as_deref(),
             r.started_at,
         );
-        if process.alive {
+        if process.presence.is_live() {
             live_entries.push((r, path, process.fingerprint));
         } else if limit > 0 {
             let est = recency_estimate(&r, &path, now);
