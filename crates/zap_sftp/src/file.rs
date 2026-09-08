@@ -69,6 +69,19 @@ impl File {
         Ok(())
     }
 
+    /// Set Unix permission bits through the open file handle.
+    pub fn set_mode(&mut self, mode: u32) -> Result<(), SftpError> {
+        self.handle.setstat(ssh2::FileStat {
+            size: None,
+            uid: None,
+            gid: None,
+            perm: Some(mode & 0o777),
+            atime: None,
+            mtime: None,
+        })?;
+        Ok(())
+    }
+
     /// Get file metadata.
     pub fn stat(&mut self) -> Result<crate::types::Metadata, SftpError> {
         let stat = self.handle.stat()?;

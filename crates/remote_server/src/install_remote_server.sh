@@ -7,6 +7,7 @@
 #   {binary_name}           - e.g. zaplex
 #   {version_suffix}        - e.g. -v0.2026..., empty when no release tag
 #   {staging_tarball_path}  - SCP fallback pre-uploaded tarball path, empty for normal download path
+#   {expected_sha256}       - authenticated digest embedded in the client build
 set -e
 
 arch=$(uname -m)
@@ -45,7 +46,7 @@ if [ -n "$staging_tarball_path" ]; then
   esac
   mv "$staging_tarball_path" "$tmpdir/zap.tar.gz"
 else
-  url="{download_base_url}/zap-$os_name-$arch_name.tar.gz"
+  url="{download_base_url}/zap-remote-server-$os_name-$arch_name.tar.gz"
   if command -v curl >/dev/null 2>&1; then
     curl -fSL --connect-timeout 15 "$url" -o "$tmpdir/zap.tar.gz"
   elif command -v wget >/dev/null 2>&1; then
@@ -54,6 +55,25 @@ else
     echo "error: neither curl nor wget is available" >&2
     exit 3
   fi
+fi
+
+expected_sha256="{expected_sha256}"
+case "$expected_sha256" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+  *) echo "error: missing or invalid authenticated archive digest" >&2; exit 4 ;;
+esac
+
+if command -v sha256sum >/dev/null 2>&1; then
+  actual_sha256=$(sha256sum "$tmpdir/zap.tar.gz" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  actual_sha256=$(shasum -a 256 "$tmpdir/zap.tar.gz" | awk '{print $1}')
+else
+  echo "error: neither sha256sum nor shasum is available" >&2
+  exit 4
+fi
+if [ "$actual_sha256" != "$expected_sha256" ]; then
+  echo "error: remote-server archive SHA-256 mismatch" >&2
+  exit 4
 fi
 
 tar -xzf "$tmpdir/zap.tar.gz" -C "$tmpdir"

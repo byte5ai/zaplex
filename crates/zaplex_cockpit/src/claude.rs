@@ -3,7 +3,7 @@
 //! Mirrors `claudeplex` `discover.ts`/`collect.ts`. Reads only account metadata
 //! (`oauthAccount`) and per-message token counts — never tokens or message content.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -344,22 +344,9 @@ fn store_exists(config_dir: &Path, name: &str) -> Result<bool, String> {
     }
 }
 
-/// Stable account key from the config dir, e.g. `claude:default`, `claude:work`.
-fn account_key(config_dir: &Path, is_default: bool) -> String {
-    if is_default {
-        return "claude:default".to_string();
-    }
-    let name = config_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("account");
-    // ".claude-work" → "work"; otherwise the raw dir name.
-    let suffix = name
-        .strip_prefix(".claude-")
-        .or_else(|| name.strip_prefix(".claude"))
-        .filter(|s| !s.is_empty())
-        .unwrap_or(name);
-    format!("claude:{suffix}")
+/// Stable account key from the canonical config root.
+fn account_key(config_dir: &Path, home: &Path, is_default: bool) -> String {
+    crate::account_key::stable_account_key(Provider::Claude, config_dir, home, is_default)
 }
 
 /// Derive a plan label from `organizationRateLimitTier` / `organizationType`.
@@ -425,11 +412,12 @@ fn account_from_dir(
         None => (None, None, None, None, None),
     };
 
+    let key = account_key(config_dir, home, is_default);
     let label = email
         .clone()
         .or_else(|| display.clone())
         .or_else(|| org.clone())
-        .unwrap_or_else(|| account_key(config_dir, is_default));
+        .unwrap_or_else(|| key.clone());
 
     let stable_identity = oauth.as_ref().and_then(|o| {
         s(o, "accountUuid")
@@ -451,7 +439,7 @@ fn account_from_dir(
     Ok(Some((
         Account {
             provider: Provider::Claude,
-            key: account_key(config_dir, is_default),
+            key,
             config_dir: config_dir.to_path_buf(),
             label,
             email,
@@ -532,6 +520,7 @@ fn discover_accounts_with_process_roots(
     let mut accounts = Vec::new();
     let mut seen_roots = HashSet::new();
     let mut seen_identities = HashSet::new();
+    let mut seen_keys = HashSet::new();
     for (dir, is_default, is_pinned) in candidates {
         let root = match fs::canonicalize(&dir) {
             Ok(root) => root,
@@ -557,6 +546,10 @@ fn discover_accounts_with_process_roots(
                     .as_ref()
                     .is_some_and(|identity| !seen_identities.insert(identity.clone()))
                 {
+                    continue;
+                }
+                if !seen_keys.insert(account.key.clone()) {
+                    push_unique_issue(&mut issues, "Claude account key collision");
                     continue;
                 }
                 accounts.push(account);
@@ -585,10 +578,31 @@ pub fn discover_accounts(home: &Path, config_dir_env: Option<&str>) -> Vec<Accou
     discover_accounts_with_health(home, config_dir_env).accounts
 }
 
-/// Extract a [`UsageEntry`] from one parsed transcript line, or `None` if the line
-/// is not an assistant turn with usage. Reads counts + model + timestamp only.
+struct AssistantUsageSnapshot {
+    entry: UsageEntry,
+    request_id: Option<String>,
+    message_id: Option<String>,
+    stop_reason: Option<String>,
+}
+
+impl AssistantUsageSnapshot {
+    fn request_key(&self) -> Option<(&str, &str)> {
+        Some((self.request_id.as_deref()?, self.message_id.as_deref()?))
+    }
+
+    fn should_replace(&self, candidate: &Self) -> bool {
+        match (self.stop_reason.is_some(), candidate.stop_reason.is_some()) {
+            (false, true) => true,
+            (true, false) => false,
+            (true, true) => true,
+            (false, false) => candidate.entry.output >= self.entry.output,
+        }
+    }
+}
+
+/// Extract an assistant usage snapshot from one parsed transcript line.
 /// `session_id` is supplied by the caller — see [`parse_transcript`].
-fn parse_line(v: &Value, session_id: &str) -> Option<UsageEntry> {
+fn parse_line(v: &Value, session_id: &str) -> Option<AssistantUsageSnapshot> {
     if v.get("type")?.as_str()? != "assistant" {
         return None;
     }
@@ -607,16 +621,27 @@ fn parse_line(v: &Value, session_id: &str) -> Option<UsageEntry> {
         .ok()?
         .with_timezone(&Utc);
     let n = |k: &str| usage.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-    Some(UsageEntry {
-        ts,
-        provider: Provider::Claude,
-        model,
-        input: n("input_tokens"),
-        output: n("output_tokens"),
-        cache_create: n("cache_creation_input_tokens"),
-        cache_read: n("cache_read_input_tokens"),
-        reasoning: 0,
-        session_id: session_id.to_string(),
+    let non_empty_string = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    Some(AssistantUsageSnapshot {
+        entry: UsageEntry {
+            ts,
+            provider: Provider::Claude,
+            model,
+            input: n("input_tokens"),
+            output: n("output_tokens"),
+            cache_create: n("cache_creation_input_tokens"),
+            cache_read: n("cache_read_input_tokens"),
+            reasoning: 0,
+            session_id: session_id.to_string(),
+        },
+        request_id: non_empty_string(v.get("requestId")),
+        message_id: non_empty_string(message.and_then(|message| message.get("id"))),
+        stop_reason: non_empty_string(message.and_then(|message| message.get("stop_reason"))),
     })
 }
 
@@ -636,11 +661,31 @@ pub fn parse_transcript(path: &Path) -> Vec<UsageEntry> {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or_default();
-    content
+    let mut snapshots = Vec::<AssistantUsageSnapshot>::new();
+    let mut keyed_snapshots = HashMap::<(String, String), usize>::new();
+    for snapshot in content
         .lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter_map(|v| parse_line(&v, session_id))
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|value| parse_line(&value, session_id))
+    {
+        let Some((request_id, message_id)) = snapshot.request_key() else {
+            snapshots.push(snapshot);
+            continue;
+        };
+        let key = (request_id.to_string(), message_id.to_string());
+        if let Some(index) = keyed_snapshots.get(&key).copied() {
+            if snapshots[index].should_replace(&snapshot) {
+                snapshots[index] = snapshot;
+            }
+        } else {
+            keyed_snapshots.insert(key, snapshots.len());
+            snapshots.push(snapshot);
+        }
+    }
+    snapshots
+        .into_iter()
+        .map(|snapshot| snapshot.entry)
         .collect()
 }
 

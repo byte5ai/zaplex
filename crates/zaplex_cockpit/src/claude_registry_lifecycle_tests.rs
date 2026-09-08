@@ -69,8 +69,9 @@ fn changed_registry_revision_fails_closed() {
     assert!(registry.exists());
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn live_or_pid_reused_process_never_becomes_candidate() {
+fn unparseable_process_binding_never_becomes_candidate() {
     let (_temp, config, registry) = fixture(std::process::id(), Some("definitely-wrong-start"));
 
     assert_eq!(
@@ -78,6 +79,38 @@ fn live_or_pid_reused_process_never_becomes_candidate() {
         None
     );
     assert!(registry.exists());
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn previous_boot_registration_can_be_cleaned_without_touching_reused_pid() {
+    let pid = std::process::id();
+    let proc_start = crate::process_identity::registry_start_for_process(pid)
+        .expect("current process is inspectable");
+    let (_temp, config, registry) = fixture(pid, Some(&proc_start));
+    let mut value: Value = serde_json::from_slice(&fs::read(&registry).unwrap()).unwrap();
+    value["startedAt"] = Value::from(
+        sysinfo::System::boot_time()
+            .saturating_sub(1)
+            .saturating_mul(1_000),
+    );
+    fs::write(&registry, serde_json::to_vec(&value).unwrap()).unwrap();
+
+    let candidate = claude_stale_registry_candidate(&config, "session-1")
+        .unwrap()
+        .expect("a previous-boot registration is stale");
+    assert_eq!(
+        cleanup_claude_stale_registry_entry(&candidate).unwrap(),
+        ClaudeRegistryCleanupOutcome::Applied
+    );
+    assert!(!registry.exists());
+
+    let current =
+        crate::probe_registered_process(pid, Some(&proc_start), Utc::now().timestamp_millis());
+    assert!(
+        current.presence.is_live(),
+        "cleanup must not signal the process"
+    );
 }
 
 #[test]
@@ -90,6 +123,23 @@ fn missing_transcript_is_not_a_cleanup_candidate() {
         Err(ClaudeRegistryLifecycleError::MissingTranscript)
     ));
     assert!(registry.exists());
+}
+
+#[test]
+fn large_transcript_can_be_a_stale_cleanup_candidate() {
+    const VIEWER_MAX_BYTES: u64 = 64 * 1024 * 1024;
+    let (_temp, config, _registry) = fixture(u32::MAX, None);
+    let transcript = config.join("projects/-work-zaplex/session-1.jsonl");
+    fs::OpenOptions::new()
+        .write(true)
+        .open(transcript)
+        .unwrap()
+        .set_len(VIEWER_MAX_BYTES + 1)
+        .unwrap();
+
+    assert!(claude_stale_registry_candidate(&config, "session-1")
+        .unwrap()
+        .is_some());
 }
 
 #[test]

@@ -43,6 +43,74 @@ fn missing_auth_json_yields_no_accounts() {
 }
 
 #[test]
+fn legacy_api_key_auth_is_valid_but_not_a_subscription_account() {
+    let tmp = tempfile::tempdir().unwrap();
+    let credential = "sk-test-value-must-never-be-exposed";
+    write(
+        &tmp.path().join(".codex/auth.json"),
+        &format!(r#"{{"OPENAI_API_KEY":"{credential}"}}"#),
+    );
+
+    let discovery = discover_account_roots(tmp.path(), None);
+
+    assert!(discovery.issues.is_empty());
+    assert!(discovery.accounts.is_empty());
+    assert!(!format!("{discovery:?}").contains(credential));
+}
+
+#[test]
+fn explicit_api_key_auth_is_valid_but_not_a_subscription_account() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(
+        &tmp.path().join(".codex/auth.json"),
+        r#"{"auth_mode":"apikey"}"#,
+    );
+
+    let discovery = discover_account_roots(tmp.path(), None);
+
+    assert!(discovery.issues.is_empty());
+    assert!(discovery.accounts.is_empty());
+}
+
+#[test]
+fn api_key_root_does_not_block_another_subscription_account() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let pinned_root = tmp.path().join("accounts/work");
+    write(
+        &home.join(".codex/auth.json"),
+        r#"{"OPENAI_API_KEY":"sk-test-only"}"#,
+    );
+    write(
+        &pinned_root.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"work-account"}}"#,
+    );
+
+    let discovery = discover_account_roots(&home, Some(&pinned_root));
+
+    assert!(discovery.issues.is_empty());
+    assert_eq!(discovery.accounts.len(), 1);
+    assert!(discovery.accounts[0].key.starts_with("codex:work:"));
+}
+
+#[test]
+fn empty_legacy_api_key_is_still_malformed() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(
+        &tmp.path().join(".codex/auth.json"),
+        r#"{"OPENAI_API_KEY":"  "}"#,
+    );
+
+    let discovery = discover_account_roots(tmp.path(), None);
+
+    assert!(discovery.accounts.is_empty());
+    assert_eq!(
+        discovery.issues,
+        vec!["Codex account sign-in file is malformed"]
+    );
+}
+
+#[test]
 fn discovers_default_and_pinned_roots_with_distinct_routing() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
@@ -72,7 +140,7 @@ fn discovers_default_and_pinned_roots_with_distinct_routing() {
         .iter()
         .find(|account| !account.is_default)
         .unwrap();
-    assert_eq!(pinned.key, "codex:work");
+    assert!(pinned.key.starts_with("codex:work:"));
     assert_eq!(
         pinned.config_dir_pin(),
         Some(
@@ -101,6 +169,59 @@ fn duplicate_stable_codex_identity_is_emitted_once() {
     assert!(discovery.issues.is_empty());
     assert_eq!(discovery.accounts.len(), 1);
     assert!(discovery.accounts[0].is_default);
+}
+
+#[test]
+fn reserved_external_codex_root_has_a_stable_distinct_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let default_root = home.join(".codex");
+    let external_root = tmp.path().join("accounts/default");
+    write(
+        &default_root.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"default-account"}}"#,
+    );
+    write(
+        &external_root.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"external-account"}}"#,
+    );
+
+    let discovery = discover_account_roots(&home, Some(&external_root));
+    assert!(discovery.issues.is_empty());
+    assert_eq!(discovery.accounts.len(), 2);
+    let external_key = discovery
+        .accounts
+        .iter()
+        .find(|account| !account.is_default)
+        .unwrap()
+        .key
+        .clone();
+    assert_eq!(discovery.accounts[0].key, "codex:default");
+    assert!(external_key.starts_with("codex:default:"));
+
+    fs::remove_file(default_root.join("auth.json")).unwrap();
+    let without_default = discover_account_roots(&home, Some(&external_root));
+    assert!(without_default.issues.is_empty());
+    assert_eq!(without_default.accounts.len(), 1);
+    assert_eq!(without_default.accounts[0].key, external_key);
+}
+
+#[test]
+fn direct_codex_home_sibling_keeps_legacy_friendly_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let sibling_root = home.join(".codex-work");
+    fs::create_dir_all(&home).unwrap();
+    write(
+        &sibling_root.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"work-account"}}"#,
+    );
+
+    let discovery = discover_account_roots(&home, Some(&sibling_root));
+
+    assert!(discovery.issues.is_empty());
+    assert_eq!(discovery.accounts.len(), 1);
+    assert_eq!(discovery.accounts[0].key, "codex:work");
 }
 
 #[cfg(unix)]
@@ -177,7 +298,7 @@ fn unavailable_pinned_codex_root_is_degraded_not_successfully_empty() {
 }
 
 #[test]
-fn parse_transcript_sums_per_turn_and_ignores_cumulative_envelope() {
+fn parse_transcript_uses_per_turn_usage_from_token_count_events() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("rollout-x.jsonl");
     write(
@@ -185,11 +306,10 @@ fn parse_transcript_sums_per_turn_and_ignores_cumulative_envelope() {
         concat!(
             r#"{"type":"turn_context","model":"gpt-5-codex","timestamp":"2026-06-30T10:00:00Z"}"#,
             "\n",
-            // last_token_usage nested under "info" — exercises the recursive finder.
-            r#"{"type":"event_msg","timestamp":"2026-06-30T10:01:00Z","info":{"last_token_usage":{"input_tokens":200,"output_tokens":40,"cached_input_tokens":15,"reasoning_output_tokens":30}}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-06-30T10:01:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200,"output_tokens":40,"cached_input_tokens":15,"reasoning_output_tokens":30},"total_token_usage":{"input_tokens":200,"output_tokens":40,"cached_input_tokens":15,"reasoning_output_tokens":30,"total_tokens":240}}}}"#,
             "\n",
-            // cumulative envelope must be ignored to avoid double-counting.
-            r#"{"type":"event_msg","timestamp":"2026-06-30T10:02:00Z","total_token_usage":{"input_tokens":999,"output_tokens":999}}"#,
+            // Usage attached to a different event type is not a completed turn.
+            r#"{"type":"event_msg","timestamp":"2026-06-30T10:02:00Z","payload":{"type":"rate_limits","info":{"last_token_usage":{"input_tokens":999,"output_tokens":999},"total_token_usage":{"input_tokens":999,"output_tokens":999}}}}"#,
             "\n",
         ),
     );
@@ -215,12 +335,185 @@ fn parse_transcript_sums_per_turn_and_ignores_cumulative_envelope() {
 }
 
 #[test]
+fn parse_transcript_skips_rate_limit_rebroadcast_without_dropping_equal_real_turns() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("rollout-x.jsonl");
+    let token_count = |timestamp: &str, total_tokens: u64, rate_limit_update: bool| {
+        serde_json::json!({
+            "type": "event_msg",
+            "timestamp": timestamp,
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "last_token_usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "cached_input_tokens": 10,
+                        "reasoning_output_tokens": 5
+                    },
+                    "total_token_usage": {
+                        "input_tokens": total_tokens - 20,
+                        "output_tokens": 20,
+                        "cached_input_tokens": 10,
+                        "reasoning_output_tokens": 5,
+                        "total_tokens": total_tokens
+                    },
+                    "rate_limits": rate_limit_update.then_some(serde_json::json!({
+                        "primary": {"used_percent": 42.0}
+                    }))
+                }
+            }
+        })
+    };
+    write(
+        &path,
+        &[
+            token_count("2026-06-30T10:01:00Z", 120, false),
+            token_count("2026-06-30T10:01:01Z", 120, true),
+            token_count("2026-06-30T10:02:00Z", 240, false),
+            token_count("2026-06-30T10:03:00Z", 360, false),
+        ]
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n"),
+    );
+
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+
+    assert_eq!(entries.len(), 3);
+    assert!(entries.iter().all(|entry| entry.input == 90));
+    assert!(entries.iter().all(|entry| entry.output == 20));
+    assert!(entries.iter().all(|entry| entry.cache_read == 10));
+    assert!(entries.iter().all(|entry| entry.reasoning == 5));
+}
+
+#[test]
+fn parse_transcript_uses_cumulative_delta_when_last_usage_is_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("rollout-x.jsonl");
+    write(
+        &path,
+        &[
+            serde_json::json!({
+                "type": "event_msg",
+                "timestamp": "2026-06-30T10:01:00Z",
+                "payload": {"type": "token_count", "info": {
+                    "total_token_usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 10,
+                        "cached_input_tokens": 20,
+                        "total_tokens": 110
+                    }
+                }}
+            }),
+            serde_json::json!({
+                "type": "event_msg",
+                "timestamp": "2026-06-30T10:02:00Z",
+                "payload": {"type": "token_count", "info": {
+                    "total_token_usage": {
+                        "input_tokens": 160,
+                        "output_tokens": 15,
+                        "cached_input_tokens": 30,
+                        "total_tokens": 175
+                    }
+                }}
+            }),
+        ]
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n"),
+    );
+
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+    assert_eq!(entries.len(), 2);
+    assert_eq!((entries[0].input, entries[0].output), (80, 10));
+    assert_eq!(entries[0].cache_read, 20);
+    assert_eq!((entries[1].input, entries[1].output), (50, 5));
+    assert_eq!(entries[1].cache_read, 10);
+}
+
+#[test]
+fn parse_transcript_rebaselines_after_cumulative_reset() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("rollout-x.jsonl");
+    let token_count = |timestamp: &str, total_tokens: u64, input: u64, output: u64| {
+        serde_json::json!({
+            "type": "event_msg",
+            "timestamp": timestamp,
+            "payload": {"type": "token_count", "info": {
+                "last_token_usage": {
+                    "input_tokens": input,
+                    "output_tokens": output
+                },
+                "total_token_usage": {
+                    "input_tokens": total_tokens,
+                    "output_tokens": 0,
+                    "total_tokens": total_tokens
+                }
+            }}
+        })
+    };
+    write(
+        &path,
+        &[
+            token_count("2026-06-30T10:01:00Z", 100, 80, 20),
+            token_count("2026-06-30T10:02:00Z", 10, 999, 999),
+            token_count("2026-06-30T10:03:00Z", 30, 15, 5),
+        ]
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n"),
+    );
+
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+    assert_eq!(entries.len(), 2);
+    assert_eq!((entries[0].input, entries[0].output), (80, 20));
+    assert_eq!((entries[1].input, entries[1].output), (15, 5));
+}
+
+#[test]
+fn legacy_token_count_without_totals_keeps_equal_real_turns() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("rollout-x.jsonl");
+    let line = r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10}}}}"#;
+    write(&path, &format!("{line}\n{line}\n"));
+
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().all(|entry| entry.input == 10));
+    assert!(entries.iter().all(|entry| entry.cache_read == 90));
+}
+
+#[test]
 fn codex_usage_subtracts_cached_tokens_from_input_total() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("rollout-x.jsonl");
     write(
         &path,
-        r#"{"type":"event_msg","last_token_usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10,"reasoning_output_tokens":5}}"#,
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10,"reasoning_output_tokens":5}}}}"#,
     );
 
     let entries = parse_transcript(
@@ -240,7 +533,7 @@ fn codex_usage_fixture_reports_total_110_and_work_20() {
     let path = tmp.path().join("rollout-x.jsonl");
     write(
         &path,
-        r#"{"type":"event_msg","last_token_usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10,"reasoning_output_tokens":5}}"#,
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10,"reasoning_output_tokens":5}}}}"#,
     );
     let entries = parse_transcript(
         &path,
@@ -265,7 +558,7 @@ fn cached_input_larger_than_input_saturates_at_zero() {
     let path = tmp.path().join("rollout-x.jsonl");
     write(
         &path,
-        r#"{"type":"event_msg","last_token_usage":{"input_tokens":10,"cached_input_tokens":90}}"#,
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":90}}}}"#,
     );
 
     let entries = parse_transcript(
@@ -284,7 +577,7 @@ fn missing_usage_fields_are_zero_without_dropping_present_tokens() {
     let path = tmp.path().join("rollout-x.jsonl");
     write(
         &path,
-        r#"{"type":"event_msg","last_token_usage":{"cached_input_tokens":90,"reasoning_output_tokens":5}}"#,
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"cached_input_tokens":90,"reasoning_output_tokens":5}}}}"#,
     );
 
     let entries = parse_transcript(
@@ -314,7 +607,7 @@ fn usage_for_account_walks_sessions_tree() {
         concat!(
             r#"{"type":"turn_context","model":"gpt-5-codex","timestamp":"2026-06-30T10:00:00Z"}"#,
             "\n",
-            r#"{"type":"event_msg","timestamp":"2026-06-30T10:01:00Z","last_token_usage":{"input_tokens":10,"output_tokens":5}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-06-30T10:01:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":5}}}}"#,
             "\n",
         ),
     );

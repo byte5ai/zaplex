@@ -9,7 +9,7 @@
 //!
 //! Rather than forcing every provider through the OpenAI-compatible path, a
 //! `ServiceTargetResolver` maps the `AgentProviderApiType` the user picked in the
-//! settings UI one-to-one onto a genai `AdapterKind`:
+//! settings UI onto a genai `AdapterKind`:
 //!
 //! | ApiType        | AdapterKind  | default endpoint                               |
 //! |----------------|--------------|------------------------------------------------|
@@ -21,7 +21,9 @@
 //!
 //! The `base_url` the user fills in always overrides the default. This way:
 //! - OpenAI-compatible providers such as DeepSeek / SiliconFlow / OpenRouter pick `OpenAi` with a custom base_url
-//! - Explicitly selecting the adapter completely bypasses genai's "identify by model name" default behavior, avoiding misidentification
+//! - Official OpenAI GPT-5/Codex models use the Responses API automatically
+//! - Claude models on the official Anthropic host use the Anthropic adapter automatically
+//! - Relay and custom hosts retain the explicitly selected protocol
 //!
 //! ## Multi-turn message conversion
 //!
@@ -2786,6 +2788,62 @@ fn adapter_kind_for(api_type: AgentProviderApiType) -> AdapterKind {
     }
 }
 
+fn openai_model_requires_responses_api(model_id: &str) -> bool {
+    let id = model_id.to_ascii_lowercase();
+    id.starts_with("gpt-5") || id.starts_with("codex")
+}
+
+fn is_claude_model(model_id: &str) -> bool {
+    let id = model_id.to_ascii_lowercase();
+    let bare = id.rsplit('/').next().unwrap_or(&id);
+    bare.contains("claude-") || bare.starts_with("claude")
+}
+
+fn is_anthropic_api_host(base_url: &str) -> bool {
+    url::Url::parse(base_url.trim())
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == "api.anthropic.com" || host.ends_with(".anthropic.com"))
+}
+
+fn is_openai_api_host(base_url: &str) -> bool {
+    url::Url::parse(base_url.trim())
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == "api.openai.com" || host.ends_with(".openai.com"))
+}
+
+fn effective_adapter_kind_for(
+    api_type: AgentProviderApiType,
+    model_id: &str,
+    base_url: &str,
+) -> AdapterKind {
+    if api_type == AgentProviderApiType::OpenAi {
+        if is_anthropic_api_host(base_url) && is_claude_model(model_id) {
+            return AdapterKind::Anthropic;
+        }
+        if is_openai_api_host(base_url) && openai_model_requires_responses_api(model_id) {
+            return AdapterKind::OpenAIResp;
+        }
+    }
+    adapter_kind_for(api_type)
+}
+
+pub(super) fn effective_api_type_for(
+    api_type: AgentProviderApiType,
+    model_id: &str,
+    base_url: &str,
+) -> AgentProviderApiType {
+    let adapter_kind = effective_adapter_kind_for(api_type, model_id, base_url);
+    if adapter_kind == AdapterKind::Anthropic {
+        AgentProviderApiType::Anthropic
+    } else if adapter_kind == AdapterKind::OpenAIResp {
+        AgentProviderApiType::OpenAiResp
+    } else {
+        api_type
+    }
+}
+
 /// Normalize the user-provided `base_url` into an endpoint URL for the genai adapter to splice the service path onto.
 ///
 /// All genai 0.6.x adapters assume the endpoint ends with `/` and already contains the version path segment:
@@ -2800,6 +2858,9 @@ fn adapter_kind_for(api_type: AgentProviderApiType) -> AdapterKind {
 ///    Gemini → `/v1beta/`, Ollama appends nothing).
 /// 2. complete with version path (`https://ai.zerx.dev/v1`) — only append a trailing `/`, do not touch the path.
 /// 3. left empty — use [`AgentProviderApiType::default_base_url`].
+///
+/// A pasted Anthropic `…/v1/messages` endpoint is reduced to its base path. Ollama's
+/// legacy `/v1` default is reduced to the host root because its native endpoint is `/api/chat`.
 fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> String {
     let trimmed = base_url.trim();
     if trimmed.is_empty() {
@@ -2807,13 +2868,29 @@ fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> Str
     }
 
     // Parse failure (the user filled in a malformed URL) → degrade to the original "append trailing /" behavior, letting the upstream error rather than panicking here.
-    let parsed = match url::Url::parse(trimmed) {
+    let mut parsed = match url::Url::parse(trimmed) {
         Ok(u) => u,
         Err(_) => {
             let stripped = trimmed.trim_end_matches('/');
             return format!("{stripped}/");
         }
     };
+
+    if api_type == AgentProviderApiType::Anthropic || is_anthropic_api_host(trimmed) {
+        let path = parsed.path().trim_end_matches('/');
+        if let Some(prefix) = path.strip_suffix("/messages") {
+            let new_path = if prefix.is_empty() { "/" } else { prefix };
+            parsed.set_path(&format!("{new_path}/"));
+        }
+    }
+
+    if api_type == AgentProviderApiType::Ollama {
+        let path = parsed.path().trim_end_matches('/');
+        if path.is_empty() || path == "/" || path == "/v1" {
+            parsed.set_path("/");
+            return parsed.to_string();
+        }
+    }
 
     // path == "/" or empty → the user only filled in the host; automatically append the api_type default version path segment.
     if parsed.path() == "/" || parsed.path().is_empty() {
@@ -2827,7 +2904,8 @@ fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> Str
     }
 
     // The user already has a path → only ensure a trailing `/` (genai format!/Url::join both rely on it).
-    let stripped = trimmed.trim_end_matches('/');
+    let normalized = parsed.to_string();
+    let stripped = normalized.trim_end_matches('/');
     format!("{stripped}/")
 }
 
@@ -2836,18 +2914,19 @@ fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> Str
 /// to the specified AdapterKind, completely bypassing genai's default "identify by model name".
 pub(super) fn build_client(
     api_type: AgentProviderApiType,
-    base_url: String,
+    base_url: &str,
     api_key: String,
 ) -> Client {
-    let adapter_kind = adapter_kind_for(api_type);
-    let endpoint_url = normalize_endpoint_url(api_type, &base_url);
-    log::info!("[byop] build_client: adapter={adapter_kind:?} endpoint_url={endpoint_url}");
+    let endpoint_url = normalize_endpoint_url(api_type, base_url);
+    log::info!("[byop] build_client: api_type={api_type:?} endpoint_url={endpoint_url}");
     let key_for_resolver = api_key.clone();
     let resolver = ServiceTargetResolver::from_resolver_fn(
         move |service_target: ServiceTarget| -> Result<ServiceTarget, genai::resolver::Error> {
             let ServiceTarget { model, .. } = service_target;
             let endpoint = Endpoint::from_owned(endpoint_url.clone());
             let auth = AuthData::from_single(key_for_resolver.clone());
+            let adapter_kind =
+                effective_adapter_kind_for(api_type, &model.model_name, &endpoint_url);
             // Override genai's "by model name" identification result with our specified AdapterKind,
             // but keep model_name so the upstream service addresses the model correctly.
             let model = ModelIden::new(adapter_kind, model.model_name);
@@ -3220,18 +3299,25 @@ pub async fn generate_byop_output(
         attachment_caps,
     } = input;
 
-    let force_echo_reasoning = super::reasoning::model_requires_reasoning_echo(api_type, &model_id);
+    let request_api_type = effective_api_type_for(api_type, &model_id, &base_url);
+    let force_echo_reasoning =
+        super::reasoning::model_requires_reasoning_echo(request_api_type, &model_id);
     // Activate streaming extraction only for models known to wrap reasoning in <think> tags (e.g. MiniMax M3).
     // Other models keep the raw Chunk output behavior, to avoid wrongly swallowing normal text that contains a literal <think>.
     let use_think_extraction = super::reasoning::model_uses_think_tags_in_content(&model_id);
-    let chat_req = build_chat_request(&params, force_echo_reasoning, api_type, attachment_caps)?;
+    let chat_req = build_chat_request(
+        &params,
+        force_echo_reasoning,
+        request_api_type,
+        attachment_caps,
+    )?;
     let conversation_id = params
         .conversation_token
         .as_ref()
         .map(|t| t.as_str().to_string())
         .unwrap_or_default();
     let chat_opts = build_chat_options(
-        api_type,
+        request_api_type,
         &base_url,
         &model_id,
         reasoning_effort,
@@ -3242,7 +3328,7 @@ pub async fn generate_byop_output(
             Some(conversation_id.as_str())
         },
     );
-    let client = build_client(api_type, base_url, api_key);
+    let client = build_client(api_type, &base_url, api_key);
     let request_id = Uuid::new_v4().to_string();
     let mcp_context = params.mcp_context.clone();
 
@@ -3286,7 +3372,7 @@ pub async fn generate_byop_output(
     // into messages[0] in order to apply `cache_control`, so `chat_req.system` will be None and `system_len`
     // shows as 0; the actual system content is still in messages[0] (see the per-message report below). To avoid misleading
     // the diagnostician, we add a `system_in_messages_head` hint here.
-    log_chat_request_details(&chat_req, &model_id, api_type);
+    log_chat_request_details(&chat_req, &model_id, request_api_type);
 
     // Diagnostic: construct a full ChatRequest JSON dump including system / messages / tools, saved to
     // the stream closure. The real Anthropic wire body goes through another transformation layer by the genai adapter, but this already
@@ -7391,3 +7477,7 @@ mod issue_94_task_linearization_tests {
         assert_eq!(message_ids(&out), vec!["m1", "m2", "m3"]);
     }
 }
+
+#[cfg(test)]
+#[path = "chat_stream_tests.rs"]
+mod routing_tests;
