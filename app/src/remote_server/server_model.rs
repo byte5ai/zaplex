@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use warp_core::channel::ChannelState;
@@ -18,6 +18,8 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::platform::TerminationMode;
 use warpui::r#async::{Spawnable, SpawnableOutput, SpawnedFutureHandle};
 use warpui::{Entity, ModelContext, SingletonEntity};
+
+use prost::Message as _;
 
 use warp_files::{FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
@@ -81,6 +83,9 @@ use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent
 
 /// How long the daemon waits with no connections before exiting.
 pub const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+/// Maximum protobuf payload bytes queued for one proxy connection. A slow
+/// consumer is disconnected before its outbox can grow beyond this budget.
+pub(super) const CONNECTION_OUTBOX_BUDGET_BYTES: usize = 8 * 1024 * 1024;
 
 /// Reap a session that has had no attached connection for this long. Detached
 /// sessions otherwise live indefinitely so a client can reconnect (laptop
@@ -111,6 +116,159 @@ fn normalize_pty_dimensions(rows: u32, cols: u32) -> (u16, u16) {
 
 /// Unique identifier for a connected proxy session in daemon mode.
 pub type ConnectionId = uuid::Uuid;
+
+pub(super) type ConnectionShutdown = Arc<dyn Fn() + Send + Sync>;
+
+/// The bounded-by-bytes producer side of one daemon connection's outbound
+/// queue. Closing an outbox also wakes a blocked writer and shuts down its
+/// socket, so a slow consumer cannot retain queued output indefinitely.
+pub(super) struct ConnectionOutbox {
+    sender: async_channel::Sender<ServerMessage>,
+    buffered_bytes: Arc<AtomicUsize>,
+    byte_budget: usize,
+    closed: Arc<AtomicBool>,
+    cancel_sender: async_channel::Sender<()>,
+    shutdown: ConnectionShutdown,
+}
+
+/// The consumer side kept by the socket writer task. Bytes are released from
+/// the connection budget as soon as a message leaves the queue.
+pub(super) struct ConnectionOutboxDrain {
+    receiver: async_channel::Receiver<ServerMessage>,
+    buffered_bytes: Arc<AtomicUsize>,
+    cancel_receiver: async_channel::Receiver<()>,
+}
+
+impl ConnectionOutbox {
+    pub(super) fn new(
+        byte_budget: usize,
+        shutdown: ConnectionShutdown,
+    ) -> (Self, ConnectionOutboxDrain) {
+        let (sender, receiver) = async_channel::unbounded();
+        let (cancel_sender, cancel_receiver) = async_channel::bounded(1);
+        let buffered_bytes = Arc::new(AtomicUsize::new(0));
+        let closed = Arc::new(AtomicBool::new(false));
+        (
+            Self {
+                sender,
+                buffered_bytes: buffered_bytes.clone(),
+                byte_budget,
+                closed,
+                cancel_sender,
+                shutdown,
+            },
+            ConnectionOutboxDrain {
+                receiver,
+                buffered_bytes,
+                cancel_receiver,
+            },
+        )
+    }
+
+    fn try_send(&self, message: ServerMessage) -> Result<(), &'static str> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err("connection outbox is closed");
+        }
+
+        let message_bytes = message.encoded_len();
+        if self
+            .buffered_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |buffered| {
+                buffered
+                    .checked_add(message_bytes)
+                    .filter(|total| *total <= self.byte_budget)
+            })
+            .is_err()
+        {
+            self.close();
+            return Err("connection outbox byte budget exceeded");
+        }
+
+        if self.sender.try_send(message).is_err() {
+            self.release(message_bytes);
+            self.close();
+            return Err("connection outbox channel rejected the message");
+        }
+
+        Ok(())
+    }
+
+    fn release(&self, message_bytes: usize) {
+        let _ = self
+            .buffered_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |buffered| {
+                Some(buffered.saturating_sub(message_bytes))
+            });
+    }
+
+    fn close(&self) {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.sender.close();
+        let _ = self.cancel_sender.try_send(());
+        (self.shutdown)();
+    }
+
+    #[cfg(test)]
+    fn with_sender_for_test(
+        sender: async_channel::Sender<ServerMessage>,
+        byte_budget: usize,
+        shutdown: ConnectionShutdown,
+    ) -> Self {
+        let (cancel_sender, _cancel_receiver) = async_channel::bounded(1);
+        Self {
+            sender,
+            buffered_bytes: Arc::new(AtomicUsize::new(0)),
+            byte_budget,
+            closed: Arc::new(AtomicBool::new(false)),
+            cancel_sender,
+            shutdown,
+        }
+    }
+
+    #[cfg(test)]
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for ConnectionOutbox {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+impl From<async_channel::Sender<ServerMessage>> for ConnectionOutbox {
+    fn from(sender: async_channel::Sender<ServerMessage>) -> Self {
+        let (cancel_sender, _cancel_receiver) = async_channel::bounded(1);
+        Self {
+            sender,
+            buffered_bytes: Arc::new(AtomicUsize::new(0)),
+            byte_budget: usize::MAX,
+            closed: Arc::new(AtomicBool::new(false)),
+            cancel_sender,
+            shutdown: Arc::new(|| {}),
+        }
+    }
+}
+
+impl ConnectionOutboxDrain {
+    pub(super) async fn recv(&self) -> Result<ServerMessage, async_channel::RecvError> {
+        let message = self.receiver.recv().await?;
+        let message_bytes = message.encoded_len();
+        let _ = self
+            .buffered_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |buffered| {
+                Some(buffered.saturating_sub(message_bytes))
+            });
+        Ok(message)
+    }
+
+    pub(super) async fn cancelled(&self) {
+        let _ = self.cancel_receiver.recv().await;
+    }
+}
 use super::protocol::RequestId;
 use crate::ai::agent::FileLocations;
 use crate::ai::blocklist::{read_local_file_context, ReadFileContextResult};
@@ -524,7 +682,7 @@ pub struct ServerModel {
     /// per SSH session / Zaplex tab connecting to this host.  Each entry maps
     /// a connection's `Uuid` to the channel the connection task drains to
     /// write `ServerMessage`s back to its proxy.
-    connection_senders: HashMap<ConnectionId, async_channel::Sender<ServerMessage>>,
+    connection_senders: HashMap<ConnectionId, ConnectionOutbox>,
     /// Capabilities advertised by each connected client during Initialize.
     connection_features: HashMap<ConnectionId, HashSet<String>>,
     /// Per-connection set of repo roots for which we've already sent a
@@ -937,10 +1095,10 @@ impl ServerModel {
     /// Called when a proxy connects.  Inserts `conn_tx` into the connection
     /// map so `send_server_message` can route responses to this proxy, and
     /// cancels the grace timer if it was running.
-    pub fn register_connection(
+    pub(super) fn register_connection(
         &mut self,
         conn_id: ConnectionId,
-        conn_tx: async_channel::Sender<ServerMessage>,
+        conn_tx: impl Into<ConnectionOutbox>,
         ctx: &mut ModelContext<Self>,
     ) {
         log::info!(
@@ -951,7 +1109,7 @@ impl ServerModel {
         if let Some(handle) = self.grace_timer_cancel.take() {
             handle.abort();
         }
-        self.connection_senders.insert(conn_id, conn_tx);
+        self.connection_senders.insert(conn_id, conn_tx.into());
         self.connection_features.insert(conn_id, HashSet::new());
         self.snapshot_sent_roots_by_connection
             .insert(conn_id, HashSet::new());
