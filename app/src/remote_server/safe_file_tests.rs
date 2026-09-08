@@ -29,6 +29,36 @@ fn call(
         .unwrap()
 }
 
+#[test]
+fn transient_operation_lock_is_retried() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = Journal::new_at(directory.path().join("journal")).unwrap();
+    let held = journal.try_lock("transient-lock").unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        drop(held);
+    });
+
+    let acquired = journal.try_lock("transient-lock").unwrap();
+
+    release.join().unwrap();
+    drop(acquired);
+}
+
+#[test]
+fn active_operation_lock_is_still_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = Journal::new_at(directory.path().join("journal")).unwrap();
+    let held = journal.try_lock("active-lock").unwrap();
+
+    let Err(error) = journal.try_lock("active-lock") else {
+        panic!("expected an active operation lock to be rejected");
+    };
+
+    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+    drop(held);
+}
+
 fn open_regular(server: &mut SafeFileServer, owner: ConnectionId, path: &Path) -> SafeFileOpened {
     match call(
         server,
