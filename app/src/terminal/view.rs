@@ -376,7 +376,9 @@ use warpui::platform::{Cursor, OperatingSystem};
 use warpui::r#async::Timer;
 use warpui::windowing::WindowManager;
 
-use warpui::assets::asset_cache::{Asset as _, AssetCache, AssetCacheEvent, AssetSource, AssetState};
+use warpui::assets::asset_cache::{
+    Asset as _, AssetCache, AssetCacheEvent, AssetSource, AssetState,
+};
 use warpui::image_cache::{AnimatedImage, ImageType, StaticImage};
 use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
 use warpui::{
