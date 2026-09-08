@@ -3,6 +3,8 @@
 // Windows).
 #![allow(clippy::disallowed_types)]
 
+mod build_git;
+
 use cfg_aliases::cfg_aliases;
 
 use anyhow::Result;
@@ -30,7 +32,9 @@ fn main() -> Result<()> {
     // to an exact commit — the release tag alone is reused across test builds.
     // Prefer the CI-provided SHA; fall back to a local git query; else "unknown".
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
-    println!("cargo:rerun-if-changed=.git/HEAD");
+    for path in build_git::watch_paths(Path::new(env!("CARGO_MANIFEST_DIR"))) {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
     let git_sha = env::var("GITHUB_SHA")
         .ok()
         .map(|s| s.chars().take(8).collect::<String>())

@@ -44,7 +44,7 @@
 //! The wildcard matching is optimized for file search use cases:
 //! - **Fast paths** for common patterns like `*.rs` and `src/*`
 //! - **Substring matching** for file paths (patterns match anywhere in the path)
-//! - **No regex compilation** - uses efficient recursive algorithms
+//! - **No regex compilation** - uses bounded iterative algorithms
 //! - **Progressive typing** support for better user experience
 //!
 //! ## Wildcard Characters
@@ -205,7 +205,7 @@ pub fn contains_wildcards(query: &str) -> bool {
 /// This function is optimized for common file search patterns:
 /// - Simple suffix patterns like `*.rs` use O(1) string operations
 /// - Simple prefix patterns like `src/*` use O(1) string operations  
-/// - Complex patterns use efficient recursive matching without regex
+/// - Complex patterns use bounded iterative matching without regex
 ///
 /// # Returns
 ///
@@ -348,8 +348,7 @@ fn find_partial_suffix_match(text: &str, partial_suffix: &str) -> Option<Vec<usi
 
 /// Fast glob pattern matching without regex.
 ///
-/// Implements a simple recursive algorithm for glob patterns that avoids
-/// the overhead of regex compilation and matching.
+/// Implements a bounded, non-recursive glob matcher without regex compilation.
 ///
 /// # Arguments
 ///
@@ -365,7 +364,37 @@ fn find_partial_suffix_match(text: &str, partial_suffix: &str) -> Option<Vec<usi
 /// This function requires the pattern to match the entire text, unlike
 /// [`find_substring_glob_match`] which finds patterns anywhere in the text.
 fn is_glob_match(text: &str, pattern: &str) -> bool {
-    is_glob_match_recursive(text.as_bytes(), pattern.as_bytes(), 0, 0)
+    let text: Vec<char> = text.chars().collect();
+    let pattern: Vec<char> = pattern.chars().collect();
+    let (mut text_index, mut pattern_index) = (0, 0);
+    let mut last_star = None;
+    let mut star_text_index = 0;
+
+    while text_index < text.len() {
+        if pattern_index < pattern.len()
+            && pattern[pattern_index] != '*'
+            && (pattern[pattern_index] == '?'
+                || text[text_index].eq_ignore_ascii_case(&pattern[pattern_index]))
+        {
+            text_index += 1;
+            pattern_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == '*' {
+            last_star = Some(pattern_index);
+            pattern_index += 1;
+            star_text_index = text_index;
+        } else if let Some(star_index) = last_star {
+            star_text_index += 1;
+            text_index = star_text_index;
+            pattern_index = star_index + 1;
+        } else {
+            return false;
+        }
+    }
+
+    while pattern_index < pattern.len() && pattern[pattern_index] == '*' {
+        pattern_index += 1;
+    }
+    pattern_index == pattern.len()
 }
 
 /// Finds a glob pattern as a substring anywhere in the text.
@@ -379,7 +408,7 @@ fn is_glob_match(text: &str, pattern: &str) -> bool {
 /// - **Substring matching**: `ui/*` matches `/src/ui/button.rs`
 /// - **Complex patterns**: `ui/*.r` matches `/src/ui/button.rs` (progressive typing)
 /// - **Performance optimized**: Uses fast paths for common patterns
-/// - **Recursion safe**: Prevents infinite recursion for complex patterns
+/// - **Bounded work**: Visits each text/pattern state at most once
 ///
 /// # Arguments
 ///
@@ -399,226 +428,100 @@ fn is_glob_match(text: &str, pattern: &str) -> bool {
 /// // Some([5, 6, 7, 14, 15, 16])
 /// ```
 fn find_substring_glob_match(text: &str, pattern: &str) -> Option<Vec<usize>> {
-    // Handle patterns like "ui/*.r" - need to find the prefix and match the suffix pattern
     if let Some(star_pos) = pattern.find('*') {
         let prefix = &pattern[..star_pos];
-        let suffix_pattern = &pattern[star_pos..];
-
-        // Find the prefix in the text
-        if let Some(prefix_start) = text.find(prefix) {
-            let prefix_end = prefix_start + prefix.len();
-            let remaining_text = &text[prefix_end..];
-
-            // Try to match the suffix pattern against the remaining text
-            // Use a non-recursive approach for simple suffix patterns to avoid infinite recursion
-            let suffix_result = if suffix_pattern.starts_with('*')
-                && !suffix_pattern[1..].contains('*')
-                && !suffix_pattern[1..].contains('?')
-            {
-                // Handle simple suffix patterns directly
-                let suffix_part = &suffix_pattern[1..];
-                if remaining_text.ends_with(suffix_part) {
-                    let remaining_char_count = remaining_text.chars().count();
-                    let suffix_char_count = suffix_part.chars().count();
-                    let start_idx = remaining_char_count - suffix_char_count;
-                    Some(FuzzyMatchResult {
-                        score: 1000,
-                        matched_indices: (start_idx..remaining_char_count).collect(),
-                    })
+        let suffix_pattern = &pattern[star_pos + 1..];
+        if !suffix_pattern.contains('*') && !suffix_pattern.contains('?') {
+            if let Some(prefix_start_byte) = text.find(prefix) {
+                let prefix_end_byte = prefix_start_byte + prefix.len();
+                let remaining_text = &text[prefix_end_byte..];
+                let suffix_indices = if remaining_text.ends_with(suffix_pattern) {
+                    let end = remaining_text.chars().count();
+                    let start = end - suffix_pattern.chars().count();
+                    Some((start..end).collect::<Vec<_>>())
                 } else {
-                    find_partial_suffix_match(remaining_text, suffix_part).map(|partial_match| {
-                        FuzzyMatchResult {
-                            score: 800,
-                            matched_indices: partial_match,
-                        }
-                    })
+                    find_partial_suffix_match(remaining_text, suffix_pattern)
+                };
+
+                if let Some(suffix_indices) = suffix_indices {
+                    let prefix_start = text[..prefix_start_byte].chars().count();
+                    let prefix_end = prefix_start + prefix.chars().count();
+                    let remaining_start = text[..prefix_end_byte].chars().count();
+                    let mut matched_indices: Vec<_> = (prefix_start..prefix_end).collect();
+                    matched_indices.extend(
+                        suffix_indices
+                            .into_iter()
+                            .map(|index| remaining_start + index),
+                    );
+                    return Some(matched_indices);
                 }
-            } else {
-                // For complex patterns, use the full matching but prevent recursion
-                if is_glob_match(remaining_text, suffix_pattern) {
-                    Some(FuzzyMatchResult {
-                        score: 1000,
-                        matched_indices: (0..remaining_text.chars().count()).collect(),
-                    })
-                } else {
-                    None
-                }
-            };
-
-            if let Some(suffix_result) = suffix_result {
-                // Combine the matched indices
-                let prefix_start_char = text[..prefix_start].chars().count();
-                let prefix_char_count = prefix.chars().count();
-                let remaining_start_char = text[..prefix_end].chars().count();
-
-                let mut combined_indices: Vec<usize> =
-                    (prefix_start_char..prefix_start_char + prefix_char_count).collect();
-
-                // Add suffix match indices, adjusted for position
-                for idx in suffix_result.matched_indices {
-                    combined_indices.push(remaining_start_char + idx);
-                }
-
-                return Some(combined_indices);
             }
         }
     }
 
-    // For simple patterns like "ui/*", try to find "ui/" substring and match the rest
-    if pattern.ends_with('*')
-        && !pattern[..pattern.len() - 1].contains('*')
-        && !pattern[..pattern.len() - 1].contains('?')
-    {
-        let prefix = &pattern[..pattern.len() - 1];
-        if let Some(start_pos) = text.find(prefix) {
-            // Found the prefix as a substring, create indices for the matched part
-            let start_char_idx = text[..start_pos].chars().count();
-            let prefix_char_count = prefix.chars().count();
-            let matched_indices: Vec<usize> =
-                (start_char_idx..start_char_idx + prefix_char_count).collect();
-            return Some(matched_indices);
-        }
-    }
-
-    // For more complex patterns, try to find any substring that matches
     let text_chars: Vec<char> = text.chars().collect();
     let pattern_chars: Vec<char> = pattern.chars().collect();
+    glob_substring_match(&text_chars, &pattern_chars).0
+}
 
-    // Try matching the pattern starting at each position in the text
-    for start_idx in 0..text_chars.len() {
-        if is_glob_match_at_position(&text_chars, &pattern_chars, start_idx) {
-            // Found a match starting at start_idx
-            // For simplicity, return indices from start_idx to end of match
-            // In a more sophisticated implementation, we'd track exact matched characters
-            let end_idx = find_glob_match_end(&text_chars, &pattern_chars, start_idx)
-                .unwrap_or(text_chars.len());
-            let matched_indices: Vec<usize> = (start_idx..end_idx.min(text_chars.len())).collect();
-            return Some(matched_indices);
+/// Dynamic-programming substring matcher. Each `(text_index, pattern_index)` state is visited at
+/// most once, and the stored start index is the backpointer needed to reconstruct the match span.
+fn glob_substring_match(text: &[char], pattern: &[char]) -> (Option<Vec<usize>>, usize) {
+    let columns = pattern.len() + 1;
+    let mut starts = vec![None; (text.len() + 1) * columns];
+    let mut visits = 0;
+
+    let state_index =
+        |text_index: usize, pattern_index: usize| text_index * columns + pattern_index;
+    let update = |slot: &mut Option<usize>, start: usize| {
+        if slot.is_none_or(|existing| start < existing) {
+            *slot = Some(start);
         }
-    }
+    };
 
-    None
-}
-
-/// Check if a glob pattern matches starting at a specific position
-fn is_glob_match_at_position(
-    text_chars: &[char],
-    pattern_chars: &[char],
-    start_idx: usize,
-) -> bool {
-    is_glob_match_chars(&text_chars[start_idx..], pattern_chars)
-}
-
-/// Find the end position of a glob match
-fn find_glob_match_end(
-    text_chars: &[char],
-    pattern_chars: &[char],
-    start_idx: usize,
-) -> Option<usize> {
-    // This is a simplified version - for complex patterns we'd need more sophisticated tracking
-    // For now, assume the entire remaining text after start_idx
-    if is_glob_match_at_position(text_chars, pattern_chars, start_idx) {
-        Some(text_chars.len())
-    } else {
-        None
-    }
-}
-
-/// Glob matching for character slices
-fn is_glob_match_chars(text: &[char], pattern: &[char]) -> bool {
-    is_glob_match_chars_recursive(text, pattern, 0, 0)
-}
-
-fn is_glob_match_chars_recursive(
-    text: &[char],
-    pattern: &[char],
-    text_idx: usize,
-    pattern_idx: usize,
-) -> bool {
-    // If we've consumed the entire pattern
-    if pattern_idx >= pattern.len() {
-        return text_idx >= text.len();
-    }
-
-    // If we've consumed the entire text but pattern remains
-    if text_idx >= text.len() {
-        // Only match if the remaining pattern is all '*'
-        return pattern[pattern_idx..].iter().all(|&c| c == '*');
-    }
-
-    match pattern[pattern_idx] {
-        '*' => {
-            // Try matching zero characters (skip the *)
-            if is_glob_match_chars_recursive(text, pattern, text_idx, pattern_idx + 1) {
-                return true;
-            }
-            // Try matching one or more characters
-            for i in text_idx..text.len() {
-                if is_glob_match_chars_recursive(text, pattern, i + 1, pattern_idx + 1) {
-                    return true;
+    for text_index in 0..=text.len() {
+        update(&mut starts[state_index(text_index, 0)], text_index);
+        for pattern_index in 0..pattern.len() {
+            let Some(start) = starts[state_index(text_index, pattern_index)] else {
+                continue;
+            };
+            visits += 1;
+            match pattern[pattern_index] {
+                '*' => {
+                    update(
+                        &mut starts[state_index(text_index, pattern_index + 1)],
+                        start,
+                    );
+                    if text_index < text.len() {
+                        update(
+                            &mut starts[state_index(text_index + 1, pattern_index)],
+                            start,
+                        );
+                    }
                 }
-            }
-            false
-        }
-        '?' => {
-            // ? matches exactly one character
-            is_glob_match_chars_recursive(text, pattern, text_idx + 1, pattern_idx + 1)
-        }
-        c => {
-            // Regular character - must match exactly (case insensitive)
-            if text[text_idx].eq_ignore_ascii_case(&c) {
-                is_glob_match_chars_recursive(text, pattern, text_idx + 1, pattern_idx + 1)
-            } else {
-                false
-            }
-        }
-    }
-}
-
-fn is_glob_match_recursive(
-    text: &[u8],
-    pattern: &[u8],
-    text_idx: usize,
-    pattern_idx: usize,
-) -> bool {
-    // If we've consumed the entire pattern
-    if pattern_idx >= pattern.len() {
-        return text_idx >= text.len();
-    }
-
-    // If we've consumed the entire text but pattern remains
-    if text_idx >= text.len() {
-        // Only match if the remaining pattern is all '*'
-        return pattern[pattern_idx..].iter().all(|&c| c == b'*');
-    }
-
-    match pattern[pattern_idx] {
-        b'*' => {
-            // Try matching zero characters (skip the *)
-            if is_glob_match_recursive(text, pattern, text_idx, pattern_idx + 1) {
-                return true;
-            }
-            // Try matching one or more characters
-            for i in text_idx..text.len() {
-                if is_glob_match_recursive(text, pattern, i + 1, pattern_idx + 1) {
-                    return true;
+                '?' if text_index < text.len() => update(
+                    &mut starts[state_index(text_index + 1, pattern_index + 1)],
+                    start,
+                ),
+                literal
+                    if text_index < text.len()
+                        && text[text_index].eq_ignore_ascii_case(&literal) =>
+                {
+                    update(
+                        &mut starts[state_index(text_index + 1, pattern_index + 1)],
+                        start,
+                    );
                 }
-            }
-            false
-        }
-        b'?' => {
-            // ? matches exactly one character
-            is_glob_match_recursive(text, pattern, text_idx + 1, pattern_idx + 1)
-        }
-        c => {
-            // Regular character - must match exactly (case insensitive)
-            if text[text_idx].eq_ignore_ascii_case(&c) {
-                is_glob_match_recursive(text, pattern, text_idx + 1, pattern_idx + 1)
-            } else {
-                false
+                _ => {}
             }
         }
     }
+
+    let matched_span = (0..=text.len())
+        .filter_map(|end| starts[state_index(end, pattern.len())].map(|start| (start, end)))
+        .min_by_key(|(start, end)| (*start, *end))
+        .map(|(start, end)| (start..end).collect());
+    (matched_span, visits)
 }
 
 /// Performs case insensitive pattern matching with wildcard support.

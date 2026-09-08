@@ -65,6 +65,11 @@ jobs:
           chmod 700 "${HOME}/.ssh"
           ssh-keygen -y -f "${test_key}" > "${authorized_keys}"
           chmod 600 "${authorized_keys}"
+          printf '[127.0.0.1]:%s %s\n' \
+            "${test_port}" \
+            "$(ssh-keygen -y -f "${RUNNER_TEMP}/live-sftp-host-key")" \
+            > "${HOME}/.ssh/known_hosts"
+          chmod 600 "${HOME}/.ssh/known_hosts"
 
           {
             echo "Port ${test_port}"
@@ -120,3 +125,4 @@ jobs:
           export ZAPLEX_LIVE_SFTP_KEY_PATH="${test_key}"
           export ZAPLEX_LIVE_SFTP_ROOT="${test_root}"
           cargo test --locked -p warp --lib live_sftp_remote_safe_rename -- --ignored
+          cargo test --locked -p warp --lib live_sftp_copy_file_keeps_destination_after_handles_drop -- --ignored

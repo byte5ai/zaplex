@@ -30,6 +30,27 @@ use crate::{
 
 pub const ENTER_AGAIN_TO_SEND_MESSAGE_ID: &str = "enter_again_to_send";
 
+#[derive(Debug, PartialEq, Eq)]
+struct SubscriptionPreflightRequest {
+    pending_prompt: Option<String>,
+}
+
+fn subscription_entry_preflight(
+    origin: AgentViewEntryOrigin,
+    should_auto_submit: bool,
+    initial_prompt: Option<&str>,
+) -> Option<SubscriptionPreflightRequest> {
+    (cfg!(not(target_family = "wasm"))
+        && matches!(origin, AgentViewEntryOrigin::SlashCommand { .. }))
+    .then(|| SubscriptionPreflightRequest {
+        pending_prompt: if should_auto_submit {
+            initial_prompt.map(str::to_string)
+        } else {
+            None
+        },
+    })
+}
+
 impl TerminalView {
     pub fn enter_agent_view(
         &mut self,
@@ -213,14 +234,16 @@ impl TerminalView {
             }
         }
 
+        let should_auto_submit = match origin.should_autotrigger_request() {
+            AutoTriggerBehavior::Always => true,
+            AutoTriggerBehavior::InAgentView => was_in_agent_view_already,
+            AutoTriggerBehavior::Never => false,
+        };
+        let subscription_preflight =
+            subscription_entry_preflight(origin, should_auto_submit, initial_prompt.as_deref());
         let mut did_auto_trigger_request = false;
         // Show ephemeral message when entering agent view via input with a prompt
         if let Some(initial_prompt) = initial_prompt {
-            let should_auto_submit = match origin.should_autotrigger_request() {
-                AutoTriggerBehavior::Always => true,
-                AutoTriggerBehavior::InAgentView => was_in_agent_view_already,
-                AutoTriggerBehavior::Never => false,
-            };
             if should_auto_submit {
                 // Clear the "enter again to send" ephemeral message if it's currently showing
                 self.ephemeral_message_model.update(ctx, |model, ctx| {
@@ -233,14 +256,16 @@ impl TerminalView {
                     }
                 });
 
-                self.ai_controller.update(ctx, |controller, ctx| {
-                    controller.send_user_query_in_conversation(
-                        initial_prompt,
-                        conversation_id,
-                        None,
-                        ctx,
-                    );
-                });
+                if subscription_preflight.is_none() {
+                    self.ai_controller.update(ctx, |controller, ctx| {
+                        controller.send_user_query_in_conversation(
+                            initial_prompt,
+                            conversation_id,
+                            None,
+                            ctx,
+                        );
+                    });
+                }
                 did_auto_trigger_request = true;
             } else {
                 let appearance = Appearance::handle(ctx).as_ref(ctx);
@@ -269,6 +294,17 @@ impl TerminalView {
                     input.replace_buffer_content(&initial_prompt, ctx);
                 });
             }
+        }
+
+        if let Some(preflight) = subscription_preflight {
+            #[cfg(not(target_family = "wasm"))]
+            self.ai_controller.update(ctx, |controller, ctx| {
+                controller.preflight_subscription_agent(
+                    conversation_id,
+                    preflight.pending_prompt,
+                    ctx,
+                );
+            });
         }
 
         send_telemetry_from_ctx!(
@@ -359,3 +395,7 @@ impl TerminalView {
             );
     }
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "agent_view_tests.rs"]
+mod tests;
