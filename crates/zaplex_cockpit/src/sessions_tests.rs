@@ -874,6 +874,119 @@ fn transcript_viewer_returns_stable_content_revision_and_updates_on_append() {
 }
 
 #[test]
+fn append_during_read_does_not_make_claude_transcript_unavailable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "viewer-growing-session";
+    fake_account(
+        tmp.path(),
+        session_id,
+        "idle",
+        "",
+        &[assistant_line("end_turn")],
+    );
+
+    let loaded = load_transcript_with_revision_after_read(tmp.path(), session_id, |path| {
+        let mut file = OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::to_string(&json!({
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "appended reply"}],
+                    "stop_reason": "end_turn"
+                }
+            }))
+            .unwrap()
+        )
+        .unwrap();
+    });
+
+    let loaded = loaded.expect("append-only growth is accepted").unwrap();
+    assert!(
+        loaded
+            .turns
+            .iter()
+            .all(|turn| turn.text != "appended reply"),
+        "the in-flight append must not extend the bounded snapshot"
+    );
+    let refreshed = load_transcript_with_revision(tmp.path(), session_id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        refreshed
+            .turns
+            .iter()
+            .any(|turn| turn.text == "appended reply"),
+        "a later snapshot must include the completed append"
+    );
+    assert_ne!(
+        loaded.source_revision, refreshed.source_revision,
+        "the revision identifies the accepted byte extent"
+    );
+}
+
+#[test]
+fn transcript_viewer_ignores_an_incomplete_final_jsonl_record() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "viewer-partial-session";
+    fake_account(
+        tmp.path(),
+        session_id,
+        "idle",
+        "",
+        &[assistant_line("end_turn")],
+    );
+    let complete = load_transcript_with_revision(tmp.path(), session_id)
+        .unwrap()
+        .unwrap();
+    let path = tmp
+        .path()
+        .join("projects/-tmp-proj")
+        .join(format!("{session_id}.jsonl"));
+    let mut file = OpenOptions::new().append(true).open(path).unwrap();
+    write!(
+        file,
+        r#"{{"type":"assistant","message":{{"content":"unfinished"#
+    )
+    .unwrap();
+    file.write_all(&[0xf0, 0x9f]).unwrap();
+
+    let partial = load_transcript_with_revision(tmp.path(), session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(partial.turns, complete.turns);
+    assert_eq!(partial.source_revision, complete.source_revision);
+}
+
+#[test]
+fn transcript_viewer_retries_a_truncation_detected_after_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "viewer-truncated-session";
+    fake_account(
+        tmp.path(),
+        session_id,
+        "idle",
+        "",
+        &[assistant_line("end_turn")],
+    );
+
+    let loaded = load_transcript_with_revision_after_read(tmp.path(), session_id, |path| {
+        OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_len(0)
+            .unwrap();
+    });
+
+    assert!(
+        matches!(loaded, Err(TranscriptError::ChangedDuringRead)),
+        "truncation invalidates the accepted extent"
+    );
+}
+
+#[test]
 fn transcript_viewer_rejects_ambiguous_and_invalid_session_identity() {
     let tmp = tempfile::tempdir().unwrap();
     let session_id = "duplicate-session";
@@ -946,7 +1059,7 @@ fn transcript_viewer_rejects_a_path_replaced_after_resolution() {
 
     assert!(matches!(
         open_transcript_for_viewer(&resolved),
-        Err(TranscriptError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidData
+        Err(TranscriptError::ChangedDuringRead)
     ));
 }
 
