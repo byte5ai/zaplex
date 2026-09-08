@@ -953,6 +953,7 @@ fn confirmed_host_key_reuses_ssh_transport_and_exact_fingerprint() {
         host: "1.2.3.4".to_string(),
         port: 22,
         fingerprint: "SHA256:confirmed".to_string(),
+        key: "1.2.3.4 ssh-ed25519 AAAA".to_string(),
     };
 
     let result =
@@ -1036,6 +1037,7 @@ fn unknown_host_key_is_captured_from_the_probe_transport() {
             host: "1.2.3.4".to_string(),
             port: 22,
             fingerprint: "SHA256:captured".to_string(),
+            key: "1.2.3.4 ssh-ed25519 AAAA".to_string(),
         })
     );
     assert_eq!(

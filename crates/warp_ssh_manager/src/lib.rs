@@ -20,11 +20,14 @@ pub use credential_lifecycle::{
 pub use db::{set_database_path, with_conn};
 pub use repository::{SshRepository, SshRepositoryError, SyncMetaRepository};
 pub use secrets::{KeychainSecretStore, SecretKind, SshSecretStore, SshSecretStoreError};
+#[cfg(unix)]
+pub use ssh_command::persist_confirmed_host_key;
 pub use ssh_command::{
-    ConnectionTestResult, DefaultWorkspaceCommandFactory, InvalidMultiplexerTarget,
-    MultiplexerAttachMode, PreparedSshCommand, UnknownHostKey, WorkspaceCommandFactory,
-    build_multiplexer_ssh_command_line, build_ssh_args, build_ssh_command_line,
-    prepare_key_multiplexer_ssh_command, prepare_key_ssh_command, test_connection,
+    ConnectionTestResult, DefaultWorkspaceCommandFactory, HostKeyPreflight,
+    InvalidMultiplexerTarget, MultiplexerAttachMode, PreparedSshCommand, UnknownHostKey,
+    WorkspaceCommandFactory, build_multiplexer_ssh_command_line, build_ssh_args,
+    build_ssh_command_line, prepare_key_multiplexer_ssh_command, prepare_key_ssh_command,
+    preflight_host_key, preflight_host_key_with_factory, test_connection,
     test_connection_confirm_host_key, test_connection_with_factory,
 };
 pub use ssh_config_parser::{

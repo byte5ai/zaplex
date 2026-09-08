@@ -26,8 +26,9 @@ use remote_server::proto::{InitializeResponse, MultiplexerSessionList, SessionLi
 use remote_server::transport::{Connection, RemoteTransport};
 use warp_core::SessionId;
 use warp_ssh_manager::{
-    build_ssh_args, validate_ssh_endpoint, AuthType, DefaultWorkspaceCommandFactory, EndpointUse,
-    SshServerInfo, WorkspaceCommandFactory,
+    build_ssh_args, preflight_host_key_with_factory, validate_ssh_endpoint, AuthType,
+    DefaultWorkspaceCommandFactory, EndpointUse, HostKeyPreflight, SshServerInfo,
+    WorkspaceCommandFactory,
 };
 use warpui::r#async::executor::Background;
 use zaplex_remote_session::types::{has_feature, FEATURE_MULTIPLEXER_INVENTORY_V1};
@@ -96,6 +97,37 @@ pub fn control_socket_path(server: &SshServerInfo) -> PathBuf {
         .join(format!("zaplex-daemon-{:016x}", stable_hash(&key)))
 }
 
+fn managed_known_hosts_path(server: &SshServerInfo) -> Result<PathBuf> {
+    let endpoint =
+        validate_ssh_endpoint(EndpointUse::Connect, &server.host, &server.port.to_string())
+            .map_err(|error| anyhow!(error))?;
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("HOME is unavailable for managed SSH host keys"))?;
+    let key = format!("{}:{}", endpoint.host, endpoint.port);
+    Ok(home
+        .join(".ssh")
+        .join(format!("zaplex-known-host-{:016x}", stable_hash(&key))))
+}
+
+pub fn confirm_host_key(
+    server: &SshServerInfo,
+    host_key: &warp_ssh_manager::UnknownHostKey,
+) -> std::result::Result<PathBuf, String> {
+    let path = managed_known_hosts_path(server)
+        .map_err(|error| format!("Failed to resolve managed SSH host-key path: {error:#}"))?;
+    confirm_host_key_at(server, host_key, &path)?;
+    Ok(path)
+}
+
+fn confirm_host_key_at(
+    server: &SshServerInfo,
+    host_key: &warp_ssh_manager::UnknownHostKey,
+    path: &Path,
+) -> std::result::Result<(), String> {
+    warp_ssh_manager::persist_confirmed_host_key(server, host_key, path)
+}
+
 /// Whether a live ControlMaster is serving `socket_path` — `ssh -O check`
 /// returns success only when the master process is actually alive (a stale
 /// socket file fails the check). Runs entirely over the local Unix socket, so
@@ -145,7 +177,11 @@ fn control_master_lock(socket_path: &Path) -> Arc<AsyncMutex<()>> {
     lock
 }
 
-fn control_master_args(server: &SshServerInfo, socket_path: &Path) -> Result<Vec<String>> {
+fn control_master_args(
+    server: &SshServerInfo,
+    socket_path: &Path,
+    known_hosts_path: Option<&Path>,
+) -> Result<Vec<String>> {
     let endpoint =
         validate_ssh_endpoint(EndpointUse::Connect, &server.host, &server.port.to_string())
             .map_err(|error| anyhow!(error))?;
@@ -161,29 +197,39 @@ fn control_master_args(server: &SshServerInfo, socket_path: &Path) -> Result<Vec
         .iter()
         .position(|arg| arg == "--")
         .ok_or_else(|| anyhow!("SSH destination delimiter is missing"))?;
-    args.splice(
-        destination_delimiter..destination_delimiter,
-        [
-            "-f".into(), // background after authentication
-            "-N".into(), // no remote command — pure multiplexing master
-            "-o".into(),
-            "ControlMaster=auto".into(),
-            "-o".into(),
-            // Idle timeout, NOT `yes`: `yes` keeps the backgrounded master alive
-            // forever (it even survives app exit, since `-f` detaches it), and daemon
-            // sessions no longer stop it on tab close (it's a shared per-host master).
-            // A timeout lets it self-retire after the last client goes idle, while
-            // still being reused for reconnects / new tabs within the window. The
-            // remote daemon session is independent of the master and survives either way.
-            "ControlPersist=600".into(),
-            "-o".into(),
-            format!("ControlPath={}", socket_path.display()),
-            "-o".into(),
-            "BatchMode=yes".into(),
-            "-o".into(),
-            "ConnectTimeout=10".into(),
-        ],
-    );
+    let mut master_args = Vec::new();
+    if let Some(known_hosts_path) = known_hosts_path {
+        let strict_host_key_checking = args
+            .iter_mut()
+            .find(|arg| arg.starts_with("StrictHostKeyChecking="))
+            .ok_or_else(|| anyhow!("SSH host-key policy is missing"))?;
+        *strict_host_key_checking = "StrictHostKeyChecking=yes".to_string();
+        master_args.extend([
+            "-o".to_string(),
+            format!("UserKnownHostsFile={}", known_hosts_path.display()),
+        ]);
+    }
+    master_args.extend([
+        "-f".into(), // background after authentication
+        "-N".into(), // no remote command — pure multiplexing master
+        "-o".into(),
+        "ControlMaster=auto".into(),
+        "-o".into(),
+        // Idle timeout, NOT `yes`: `yes` keeps the backgrounded master alive
+        // forever (it even survives app exit, since `-f` detaches it), and daemon
+        // sessions no longer stop it on tab close (it's a shared per-host master).
+        // A timeout lets it self-retire after the last client goes idle, while
+        // still being reused for reconnects / new tabs within the window. The
+        // remote daemon session is independent of the master and survives either way.
+        "ControlPersist=600".into(),
+        "-o".into(),
+        format!("ControlPath={}", socket_path.display()),
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        "ConnectTimeout=10".into(),
+    ]);
+    args.splice(destination_delimiter..destination_delimiter, master_args);
     Ok(args)
 }
 
@@ -192,15 +238,24 @@ fn control_master_args(server: &SshServerInfo, socket_path: &Path) -> Result<Vec
 /// authenticates and then backgrounds itself; the master socket exists by the
 /// time the foreground process exits. Key/agent auth only (`BatchMode=yes`).
 pub async fn ensure_control_master(server: &SshServerInfo, socket_path: &Path) -> Result<()> {
-    ensure_control_master_with_factory(server, socket_path, &DefaultWorkspaceCommandFactory).await
+    let managed_known_hosts = managed_known_hosts_path(server)?;
+    let managed_known_hosts = managed_known_hosts.exists().then_some(managed_known_hosts);
+    ensure_control_master_with_factory(
+        server,
+        socket_path,
+        managed_known_hosts.as_deref(),
+        &DefaultWorkspaceCommandFactory,
+    )
+    .await
 }
 
 async fn ensure_control_master_with_factory(
     server: &SshServerInfo,
     socket_path: &Path,
+    known_hosts_path: Option<&Path>,
     command_factory: &dyn WorkspaceCommandFactory,
 ) -> Result<()> {
-    let args = control_master_args(server, socket_path)?;
+    let args = control_master_args(server, socket_path, known_hosts_path)?;
     let lock = control_master_lock(socket_path);
     let _guard = lock.lock().await;
 
@@ -230,10 +285,16 @@ async fn ensure_control_master_with_factory(
     let output = tokio::time::timeout(Duration::from_secs(20), command.output())
         .await
         .map_err(|_| anyhow!("ControlMaster setup timed out"))?
-        .map_err(|e| anyhow!("failed to spawn ssh: {e}"))?;
+        .map_err(|error| anyhow!("failed to spawn ssh: {error}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        if known_hosts_path.is_some()
+            && (stderr.contains("REMOTE HOST IDENTIFICATION HAS CHANGED")
+                || stderr.contains("Host key verification failed"))
+        {
+            return Err(anyhow!(HOST_KEY_CHANGED));
+        }
         return Err(anyhow!("ControlMaster setup failed: {}", stderr.trim()));
     }
 
@@ -255,9 +316,10 @@ async fn ensure_control_master_with_factory(
 /// binary is not present on the host. The caller uses this to fall back to a classic
 /// SSH session (with a warning) instead of hanging on an install-on-connect.
 pub const DAEMON_BINARY_MISSING: &str = "daemon-binary-missing";
+pub const HOST_KEY_CHANGED: &str = "SSH host key changed; connection blocked";
 
-/// Outcome of [`preflight_daemon_transport`]: the daemon is either ready to
-/// connect, or absent but installable (an install source exists).
+/// Outcome of [`preflight_daemon_transport`]: the daemon is ready to connect,
+/// absent but installable, or waiting for explicit host-key confirmation.
 pub enum DaemonPreflight {
     /// The remote-server binary is present — connect right away.
     Ready,
@@ -265,22 +327,61 @@ pub enum DaemonPreflight {
     /// tarball, or reachable release asset) — run the auto-install, showing
     /// progress in the daemon tab, then connect.
     NeedsInstall,
+    /// The endpoint presented an unknown key. The ControlMaster has not been
+    /// started; the caller must obtain explicit confirmation first.
+    HostKeyConfirmationRequired(warp_ssh_manager::UnknownHostKey),
 }
 
-/// Fast, bounded preflight for a daemon connect: brings up the headless
-/// ControlMaster and classifies the host (binary present / installable /
-/// unavailable). No install work happens here, so the caller can create the
-/// daemon tab *first* and stream install progress into it.
+async fn preflight_control_master_host_key_with_factory(
+    server: &SshServerInfo,
+    known_hosts_path: &Path,
+    command_factory: &dyn WorkspaceCommandFactory,
+) -> std::result::Result<HostKeyPreflight, String> {
+    if known_hosts_path.exists() {
+        return Ok(HostKeyPreflight::Verified);
+    }
+    preflight_host_key_with_factory(server, command_factory).await
+}
+
+/// Fast, bounded preflight for a daemon connect: verifies the endpoint identity,
+/// brings up the headless ControlMaster only after that succeeds, and classifies
+/// the host (binary present / installable / unavailable). No install work happens
+/// here, so the caller can create the daemon tab *first* and stream install
+/// progress into it.
 pub async fn preflight_daemon_transport(
     server: SshServerInfo,
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
 ) -> std::result::Result<DaemonPreflight, String> {
     let host = server.host.clone();
+    let known_hosts_path = managed_known_hosts_path(&server)
+        .map_err(|error| format!("SSH host-key preflight failed: {error:#}"))?;
+    match preflight_control_master_host_key_with_factory(
+        &server,
+        &known_hosts_path,
+        &DefaultWorkspaceCommandFactory,
+    )
+    .await
+    .map_err(|error| format!("SSH host-key preflight failed: {error}"))?
+    {
+        HostKeyPreflight::Verified => {}
+        HostKeyPreflight::ConfirmationRequired(host_key) => {
+            return Ok(DaemonPreflight::HostKeyConfirmationRequired(host_key));
+        }
+        HostKeyPreflight::Changed => {
+            return Err(HOST_KEY_CHANGED.to_string());
+        }
+    }
     log::info!("daemon connect [{host}]: establishing ControlMaster");
     ensure_control_master(&server, &socket_path)
         .await
-        .map_err(|e| format!("ControlMaster setup failed: {e:#}"))?;
+        .map_err(|error| {
+            if error.to_string().contains(HOST_KEY_CHANGED) {
+                HOST_KEY_CHANGED.to_string()
+            } else {
+                format!("ControlMaster setup failed: {error:#}")
+            }
+        })?;
     let transport = SshTransport::new(socket_path, auth_context);
     log::info!("daemon connect [{host}]: checking remote-server binary");
     match transport.check_binary().await {
@@ -332,6 +433,10 @@ pub async fn prepare_daemon_transport(
             log::info!("daemon connect [{host}]: install complete");
             Ok(())
         }
+        DaemonPreflight::HostKeyConfirmationRequired(host_key) => Err(format!(
+            "SSH host-key confirmation required for {}:{} ({})",
+            host_key.host, host_key.port, host_key.fingerprint
+        )),
     }
 }
 
