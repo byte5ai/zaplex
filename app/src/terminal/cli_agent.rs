@@ -17,6 +17,7 @@ use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
 use warp_editor::content::{buffer::Buffer, markdown::MarkdownStyle};
+use warp_terminal::shell::ShellType;
 
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
@@ -172,16 +173,30 @@ pub(crate) struct RoutedAgentLaunch {
 }
 
 impl RoutedAgentLaunch {
-    fn shell_command(&self) -> String {
-        let mut command = String::new();
-        if !self.unset_environment.is_empty() {
-            command.push_str("unset ");
-            command.push_str(&self.unset_environment.join(" "));
-            command.push_str("; ");
+    /// Serialize at the terminal boundary, after the active shell is known.
+    pub(crate) fn shell_command(&self, shell_type: ShellType) -> String {
+        match shell_type {
+            ShellType::Bash | ShellType::Zsh => self.unix_shell_command(),
+            ShellType::Fish => self.unix_shell_command(),
+            ShellType::PowerShell => self.powershell_command(),
         }
-        for (name, value) in &self.environment {
-            let value = shell_words::quote(value).into_owned();
-            command.push_str(&format!("{name}={value} "));
+    }
+
+    fn unix_shell_command(&self) -> String {
+        let mut command = String::new();
+        if !self.unset_environment.is_empty() || !self.environment.is_empty() {
+            command.push_str("env");
+            for name in &self.unset_environment {
+                command.push_str(" -u ");
+                command.push_str(name);
+            }
+            for (name, value) in &self.environment {
+                command.push(' ');
+                command.push_str(name);
+                command.push('=');
+                command.push_str(&shell_words::quote(value));
+            }
+            command.push(' ');
         }
         command.push_str(&shell_words::quote(&self.program));
         for arg in &self.args {
@@ -190,6 +205,31 @@ impl RoutedAgentLaunch {
         }
         command
     }
+
+    fn powershell_command(&self) -> String {
+        let mut statements = Vec::new();
+        statements.extend(
+            self.unset_environment
+                .iter()
+                .map(|name| format!("Remove-Item Env:{name} -ErrorAction SilentlyContinue")),
+        );
+        statements.extend(
+            self.environment
+                .iter()
+                .map(|(name, value)| format!("$env:{name} = {}", powershell_quote(value))),
+        );
+        let mut invocation = format!("& {}", powershell_quote(&self.program));
+        for arg in &self.args {
+            invocation.push(' ');
+            invocation.push_str(&powershell_quote(arg));
+        }
+        statements.push(invocation);
+        statements.join("; ")
+    }
+}
+
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 impl CLIAgent {
@@ -265,13 +305,9 @@ impl CLIAgent {
         }
     }
 
-    /// [`Self::fork_command`] with account pinning: a non-default account's
-    /// config dir is prepended as an inline env assignment
-    /// (`CLAUDE_CONFIG_DIR=… claude …` / `CODEX_HOME=… codex …`), so the fork
-    /// runs on the same subscription as the source session. Inline env is used
-    /// (not per-launch env injection) so the same string works verbatim in
-    /// local tabs, worktree tab-configs, and daemon `startup_command`s — and
-    /// the pinning stays visible in the block.
+    /// [`Self::fork_command`] with legacy POSIX account pinning for remote
+    /// daemon fallbacks. Local terminals use [`Self::fork_routed`] so their
+    /// actual shell selects the final syntax.
     pub fn fork_command_pinned(
         &self,
         session_id: &str,
@@ -303,9 +339,8 @@ impl CLIAgent {
         }
     }
 
-    /// [`Self::resume_command`] with account pinning (see
-    /// [`Self::fork_command_pinned`] for the inline-env rationale), so the
-    /// adopted session resumes on its original subscription.
+    /// [`Self::resume_command`] with legacy POSIX account pinning for remote
+    /// daemon fallbacks. Local terminals use [`Self::resume_routed_with`].
     pub fn resume_command_pinned(
         &self,
         session_id: &str,
@@ -325,6 +360,19 @@ impl CLIAgent {
         model: Option<&str>,
         effort: Option<&str>,
     ) -> Option<String> {
+        Some(
+            self.resume_routed_with(session_id, config_dir, model, effort)?
+                .shell_command(ShellType::Bash),
+        )
+    }
+
+    pub(crate) fn resume_routed_with(
+        &self,
+        session_id: &str,
+        config_dir: Option<&Path>,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> Option<RoutedAgentLaunch> {
         if session_id.trim().is_empty() {
             return None;
         }
@@ -341,7 +389,30 @@ impl CLIAgent {
                 .extend(["--conversation".to_string(), session_id.to_string()]),
             _ => return None,
         }
-        Some(launch.shell_command())
+        Some(launch)
+    }
+
+    pub(crate) fn fork_routed(
+        &self,
+        session_id: &str,
+        config_dir: Option<&Path>,
+    ) -> Option<RoutedAgentLaunch> {
+        if session_id.trim().is_empty() {
+            return None;
+        }
+        let mut launch = self.routed_launch(config_dir, None, None);
+        match self {
+            CLIAgent::Claude | CLIAgent::Grok => launch.args.extend([
+                "--resume".to_string(),
+                session_id.to_string(),
+                "--fork-session".to_string(),
+            ]),
+            CLIAgent::Codex => launch
+                .args
+                .extend(["fork".to_string(), session_id.to_string()]),
+            _ => return None,
+        }
+        Some(launch)
     }
 
     /// Whether this CLI takes **in-conversation slash commands** (`/compact`,
@@ -356,13 +427,9 @@ impl CLIAgent {
         matches!(self, CLIAgent::Claude | CLIAgent::Grok)
     }
 
-    /// Prepend an account's config dir as an inline env assignment
-    /// (`CLAUDE_CONFIG_DIR=… <cmd>` / `CODEX_HOME=… <cmd>`) so `<cmd>` runs on a
-    /// specific subscription. Inline env (not per-launch injection) keeps the
-    /// same string working verbatim in local tabs, worktree tab-configs, and
-    /// daemon `startup_command`s — and keeps the pin visible in the block.
-    /// Shared by fork/resume pinning. No-op when `config_dir` is `None` or the
-    /// agent has no config-dir model.
+    /// Prepend an account's config dir for legacy POSIX remote commands. Local
+    /// launches retain this data in [`RoutedAgentLaunch`] until their terminal
+    /// shell is known.
     fn pin_config_dir(&self, cmd: String, config_dir: Option<&Path>) -> String {
         let Some(dir) = config_dir else {
             return cmd;
@@ -377,10 +444,14 @@ impl CLIAgent {
         format!("{var}={dir} {cmd}")
     }
 
-    /// The **subscription-routed launch command** (C4): start this agent *fresh*,
+    /// A Bash-compatible **subscription-routed launch command** (C4).
+    /// Local launch paths retain [`RoutedAgentLaunch`] until the terminal's
+    /// concrete shell is known; this convenience representation remains useful
+    /// to tests and POSIX-only boundaries.
+    ///
+    /// Start this agent *fresh*,
     /// authenticated via a *subscription* rather than a pay-per-token API key —
-    /// the plexing model. Two parts, both inline so the string works verbatim in
-    /// local tabs, worktree tab-configs, and daemon `startup_command`s:
+    /// the plexing model. Two parts:
     /// 1. **API-key scrub** — `unset` any inherited key env, so the config-dir /
     ///    default login wins (a set `ANTHROPIC_API_KEY` would otherwise override
     ///    the pin, silently defeating account routing *and* subscription billing).
@@ -397,8 +468,7 @@ impl CLIAgent {
     /// be unmistakable about *which* model + effort it starts — Haiku/Low vs a
     /// top model/Extra-High is a huge difference).
     ///
-    /// Flags are appended to the same scrub+pin prefix, so the string still works
-    /// verbatim in local tabs, worktree tab-configs, and daemon `startup_command`s.
+    /// Flags are appended to the same scrub+pin launch.
     /// Provider-correct injection (verified against the current CLIs, 2026-07-06):
     /// - **Claude Code:** `--model <model>` (e.g. `opus`/`sonnet`/`haiku`). Claude
     ///   Code has **no** CLI flag for reasoning effort, so `effort` is intentionally
@@ -419,7 +489,7 @@ impl CLIAgent {
         effort: Option<&str>,
     ) -> String {
         self.routed_launch(config_dir, model, effort)
-            .shell_command()
+            .shell_command(ShellType::Bash)
     }
 
     /// The provider-correct launch as structured environment, program and argv.

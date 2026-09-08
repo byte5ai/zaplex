@@ -1,6 +1,78 @@
 use regex::Regex;
+use serial_test::serial;
+use std::{
+    sync::{Arc, Barrier},
+    thread,
+};
+
+use crate::ai::blocklist::block::secret_redaction::find_secrets_in_text_with_levels;
 
 use super::*;
+
+fn metadata(enterprise_count: usize, user_count: usize) -> RegexLevelMetadata {
+    RegexLevelMetadata {
+        enterprise_count,
+        user_count,
+    }
+}
+
+#[test]
+#[serial]
+fn invalid_update_keeps_the_published_snapshot() {
+    replace_secret_regex_snapshot(&["CURRENT"], metadata(1, 0)).unwrap();
+    let before = SECRETS_REGEX.lock().clone();
+
+    assert!(replace_secret_regex_snapshot(&["("], metadata(0, 1)).is_err());
+
+    let after = SECRETS_REGEX.lock().clone();
+    assert!(Arc::ptr_eq(&before, &after));
+    assert!(after.regex.is_match("CURRENT"));
+    assert!(!after.regex.is_match("replacement"));
+    replace_secret_regex_snapshot(&[], metadata(0, 0)).unwrap();
+}
+
+#[test]
+#[serial]
+fn concurrent_readers_observe_complete_snapshot_generations() {
+    replace_secret_regex_snapshot(&["ENTERPRISE"], metadata(1, 0)).unwrap();
+    let barrier = Arc::new(Barrier::new(3));
+
+    let writer_barrier = barrier.clone();
+    let writer = thread::spawn(move || {
+        let enterprise = Regex::new("ENTERPRISE").unwrap();
+        let user_one = Regex::new("USER_ONE").unwrap();
+        let user_two = Regex::new("USER_TWO").unwrap();
+        writer_barrier.wait();
+        for index in 0..64 {
+            if index % 2 == 0 {
+                set_user_and_enterprise_secret_regexes(std::iter::empty(), [&enterprise]);
+            } else {
+                set_user_and_enterprise_secret_regexes([&user_one, &user_two], std::iter::empty());
+            }
+        }
+    });
+
+    let reader_barrier = barrier.clone();
+    let reader = thread::spawn(move || {
+        reader_barrier.wait();
+        for _ in 0..256 {
+            let levels: Vec<SecretLevel> =
+                find_secrets_in_text_with_levels("ENTERPRISE USER_ONE USER_TWO")
+                    .into_iter()
+                    .map(|(_, level)| level)
+                    .collect();
+            assert!(matches!(
+                levels.as_slice(),
+                [SecretLevel::Enterprise] | [SecretLevel::User, SecretLevel::User]
+            ));
+        }
+    });
+
+    barrier.wait();
+    writer.join().unwrap();
+    reader.join().unwrap();
+    replace_secret_regex_snapshot(&[], metadata(0, 0)).unwrap();
+}
 
 #[test]
 fn test_firebase_domain() {

@@ -23,7 +23,7 @@ use remote_server::proto::{
     SafeFileIdentityBatchEntry, SafeFileIdentityBatchStatus, SafeFileInspectHandle,
     SafeFileInspectResult, SafeFileListIdentities, SafeFileListRecoveries, SafeFileOpenExisting,
     SafeFileReadHandle, SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileRetryRecovery,
-    SafeFileWriteHandle,
+    SafeFileSetModeHandle, SafeFileWriteHandle,
 };
 use sha2::{Digest, Sha256};
 
@@ -149,9 +149,16 @@ fn has_immutable_object_token(identity: &StableEntryIdentity) -> bool {
 }
 
 fn require_mutation_ready_remote_listing(
+    safe_file_capability_available: bool,
     path: &Path,
     identity: &StableEntryIdentity,
 ) -> Result<(), SftpOpsError> {
+    if !safe_file_capability_available {
+        return Err(SftpOpsError::CapabilityRequired(format!(
+            "Secure remote file transactions are unavailable for {}",
+            path.display()
+        )));
+    }
     if !has_immutable_object_token(identity) {
         return Err(SftpOpsError::Operation(format!(
             "Remote listing identity requires refresh before mutation at {}",
@@ -175,6 +182,11 @@ pub trait BackendFileReader: Send {
 /// Chunk writer used by the cross-backend transfer engine.
 pub trait BackendFileWriter: Send {
     fn write_chunk(&mut self, buffer: &[u8]) -> Result<(), SftpOpsError>;
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        Err(SftpOpsError::Operation(format!(
+            "Handle-bound file modes are unsupported for mode {mode:o}"
+        )))
+    }
     fn flush(&mut self) -> Result<(), SftpOpsError>;
 
     /// Returns a live handle to the exclusively reserved file. Path-only
@@ -795,6 +807,12 @@ pub trait SftpBackend: Send + Sync {
         Ok(None)
     }
 
+    /// Returns the regular file's Unix permission bits when the backend can
+    /// observe them. Special bits are never part of a transfer mode.
+    fn regular_file_mode(&self, _path: &Path) -> Result<Option<u32>, SftpOpsError> {
+        Ok(None)
+    }
+
     fn entry_exists(&self, path: &Path) -> Result<bool, SftpOpsError> {
         match self.lstat(path) {
             Ok(_) => Ok(true),
@@ -1180,78 +1198,125 @@ fn create_local_directory_with_anchor(
 }
 
 #[cfg(target_os = "linux")]
-fn open_confined_new_file(root: &Path, path: &Path) -> Result<fs::File, SftpOpsError> {
-    use std::os::fd::{AsRawFd, FromRawFd};
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::OpenOptionsExt;
+#[repr(C)]
+struct OpenHow {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
 
-    #[repr(C)]
-    struct OpenHow {
-        flags: u64,
-        mode: u64,
-        resolve: u64,
-    }
-
-    const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
-    const RESOLVE_NO_SYMLINKS: u64 = 0x04;
-    const RESOLVE_BENEATH: u64 = 0x08;
-
+#[cfg(unix)]
+fn confined_relative_path<'a>(path: &'a Path) -> Result<&'a Path, SftpOpsError> {
     let relative = path.strip_prefix("/").unwrap_or(path);
     if relative.as_os_str().is_empty()
         || relative
             .components()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            .any(|component| !matches!(component, Component::Normal(_)))
     {
         return Err(SftpOpsError::Operation(format!(
             "Writer path is not a confined relative path: {}",
             path.display()
         )));
     }
+    Ok(relative)
+}
+
+#[cfg(unix)]
+fn open_confined_root(root: &Path) -> Result<fs::File, SftpOpsError> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "linux")]
+    options.custom_flags(libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    #[cfg(not(target_os = "linux"))]
+    options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    options.open(root).map_err(Into::into)
+}
+
+#[cfg(target_os = "linux")]
+fn open_confined_new_file(root: &Path, path: &Path) -> Result<fs::File, SftpOpsError> {
+    open_confined_new_file_with_openat2(root, path, |root_fd, relative, how| {
+        let descriptor = unsafe {
+            libc::syscall(
+                libc::SYS_openat2,
+                root_fd,
+                relative.as_ptr(),
+                how,
+                std::mem::size_of::<OpenHow>(),
+            )
+        };
+        if descriptor < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(descriptor as std::os::fd::RawFd)
+        }
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn open_confined_new_file_with_openat2(
+    root: &Path,
+    path: &Path,
+    openat2: impl FnOnce(
+        std::os::fd::RawFd,
+        &std::ffi::CStr,
+        &OpenHow,
+    ) -> std::io::Result<std::os::fd::RawFd>,
+) -> Result<fs::File, SftpOpsError> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+    const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+    const RESOLVE_BENEATH: u64 = 0x08;
+
+    let relative = confined_relative_path(path)?;
     let relative = CString::new(relative.as_os_str().as_bytes()).map_err(|_| {
         SftpOpsError::Operation(format!("Writer path contains NUL: {}", path.display()))
     })?;
-    let mut root_options = fs::OpenOptions::new();
-    root_options
-        .read(true)
-        .custom_flags(libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW);
-    let root = root_options.open(root)?;
+    let root_file = open_confined_root(root)?;
     let how = OpenHow {
         flags: (libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC)
             as u64,
         mode: 0o600,
         resolve: RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
     };
-    let descriptor = unsafe {
-        libc::syscall(
-            libc::SYS_openat2,
-            root.as_raw_fd(),
-            relative.as_ptr(),
-            &how,
-            std::mem::size_of::<OpenHow>(),
-        )
-    };
-    if descriptor < 0 {
-        return Err(std::io::Error::last_os_error().into());
+    match openat2(root_file.as_raw_fd(), &relative, &how) {
+        Ok(descriptor) => Ok(unsafe { fs::File::from_raw_fd(descriptor) }),
+        Err(error) if error.raw_os_error() == Some(libc::ENOSYS) => {
+            open_confined_new_file_with_component_walk_from_root(root_file, path)
+        }
+        Err(error) => Err(error.into()),
     }
-    Ok(unsafe { fs::File::from_raw_fd(descriptor as i32) })
 }
 
-#[cfg(all(unix, not(target_os = "linux")))]
-fn open_confined_new_file(root: &Path, path: &Path) -> Result<fs::File, SftpOpsError> {
+#[cfg(unix)]
+fn open_confined_new_file_with_component_walk(
+    root: &Path,
+    path: &Path,
+) -> Result<fs::File, SftpOpsError> {
+    open_confined_new_file_with_component_walk_from_root(open_confined_root(root)?, path)
+}
+
+#[cfg(unix)]
+fn open_confined_new_file_with_component_walk_from_root(
+    mut directory: fs::File,
+    path: &Path,
+) -> Result<fs::File, SftpOpsError> {
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::OpenOptionsExt;
 
-    let relative = path.strip_prefix("/").unwrap_or(path);
+    let relative = confined_relative_path(path)?;
     let components = relative
         .components()
         .map(|component| match component {
-            std::path::Component::Normal(component) => CString::new(component.as_bytes())
+            Component::Normal(component) => CString::new(component.as_bytes())
                 .map_err(|_| SftpOpsError::Operation("Writer path contains NUL".to_string())),
-            std::path::Component::RootDir
-            | std::path::Component::CurDir
-            | std::path::Component::ParentDir
-            | std::path::Component::Prefix(_) => Err(SftpOpsError::Operation(format!(
+            Component::RootDir
+            | Component::CurDir
+            | Component::ParentDir
+            | Component::Prefix(_) => Err(SftpOpsError::Operation(format!(
                 "Writer path escapes the backend root: {}",
                 path.display()
             ))),
@@ -1260,19 +1325,12 @@ fn open_confined_new_file(root: &Path, path: &Path) -> Result<fs::File, SftpOpsE
     let (leaf, parents) = components.split_last().ok_or_else(|| {
         SftpOpsError::Operation(format!("Writer path has no file name: {}", path.display()))
     })?;
-    let mut root_options = fs::OpenOptions::new();
-    root_options
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
-    let mut directory = root_options.open(root)?;
     for parent in parents {
-        let descriptor = unsafe {
-            libc::openat(
-                directory.as_raw_fd(),
-                parent.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
+        #[cfg(target_os = "linux")]
+        let flags = libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        #[cfg(not(target_os = "linux"))]
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        let descriptor = unsafe { libc::openat(directory.as_raw_fd(), parent.as_ptr(), flags) };
         if descriptor < 0 {
             return Err(std::io::Error::last_os_error().into());
         }
@@ -1290,6 +1348,11 @@ fn open_confined_new_file(root: &Path, path: &Path) -> Result<fs::File, SftpOpsE
         return Err(std::io::Error::last_os_error().into());
     }
     Ok(unsafe { fs::File::from_raw_fd(descriptor) })
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn open_confined_new_file(root: &Path, path: &Path) -> Result<fs::File, SftpOpsError> {
+    open_confined_new_file_with_component_walk(root, path)
 }
 
 #[cfg(not(unix))]
@@ -1380,8 +1443,7 @@ impl SafeFileClientSlot {
         slot
     }
 
-    /// Replaces the live client and reports a transition from unavailable to
-    /// available, which is when durable remote recovery records need scanning.
+    /// Replaces the live client and reports whether its availability changed.
     pub(crate) fn set(&self, client: Option<Arc<RemoteServerClient>>) -> bool {
         self.set_with_capabilities(client, false, false)
     }
@@ -1401,13 +1463,13 @@ impl SafeFileClientSlot {
         transactions_v2: bool,
     ) -> bool {
         let mut current = self.client.write();
-        let became_available = current.is_none() && client.is_some();
+        let availability_changed = current.is_some() != client.is_some();
         *current = client;
         self.identity_batch
             .store(identity_batch && current.is_some(), Ordering::Release);
         self.transactions_v2
             .store(transactions_v2 && current.is_some(), Ordering::Release);
-        became_available
+        availability_changed
     }
 
     fn get(&self) -> Option<Arc<RemoteServerClient>> {
@@ -2074,6 +2136,21 @@ impl BackendFileWriter for RemoteSafeFileWriter {
         }
     }
 
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        let response = safe_file_call(
+            &self.handle.client,
+            String::new(),
+            safe_file_request::Operation::SetModeHandle(SafeFileSetModeHandle {
+                handle_id: self.handle.handle_id.clone(),
+                mode: mode & 0o777,
+            }),
+        )?;
+        match response {
+            safe_file_response::Result::Mutation(_) => Ok(()),
+            _ => Err(unexpected_safe_file_response("set mode")),
+        }
+    }
+
     fn flush(&mut self) -> Result<(), SftpOpsError> {
         let response = safe_file_call(
             &self.handle.client,
@@ -2359,7 +2436,8 @@ impl SftpBackend for LiveSftpBackend {
         path: &Path,
         expected: &StableEntryIdentity,
     ) -> Result<Arc<dyn BackendOwnershipAnchor>, SftpOpsError> {
-        require_mutation_ready_remote_listing(path, expected)?;
+        self.safe_client()?;
+        require_mutation_ready_remote_listing(true, path, expected)?;
         let raw_before = stable_identity_from_remote_metadata(&self.sftp.lstat(path)?);
         let expected_kind = raw_before.file_type;
         let anchor = self.open_safe_handle(path, expected_kind)?;
@@ -2756,6 +2834,16 @@ impl SftpBackend for LiveSftpBackend {
         Ok(self.sftp.lstat(path)?.modified)
     }
 
+    fn regular_file_mode(&self, path: &Path) -> Result<Option<u32>, SftpOpsError> {
+        let metadata = self.sftp.lstat(path)?;
+        match metadata.file_type {
+            zap_sftp::types::FileType::File => Ok(metadata.mode),
+            zap_sftp::types::FileType::Dir
+            | zap_sftp::types::FileType::Symlink
+            | zap_sftp::types::FileType::Other => Ok(None),
+        }
+    }
+
     fn stable_identity(&self, path: &Path) -> Result<StableEntryIdentity, SftpOpsError> {
         let metadata = self.sftp.lstat(path)?;
         let kind = match metadata.file_type {
@@ -2847,8 +2935,9 @@ impl SftpBackend for LiveSftpBackend {
 
     fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
         validate_copy_destination(src, dst, false)?;
+        let staged_path = super::transfer_job::temporary_target_path(dst, "copy")?;
         let mut reader = self.open_file_reader(src)?;
-        let mut writer = self.create_file_writer(dst)?;
+        let mut writer = self.create_file_writer(&staged_path)?;
         let mut buffer = vec![0_u8; super::transfer_job::STREAM_CHUNK_SIZE];
         loop {
             let read = reader.read_chunk(&mut buffer)?;
@@ -2857,7 +2946,14 @@ impl SftpBackend for LiveSftpBackend {
             }
             writer.write_chunk(&buffer[..read])?;
         }
-        writer.flush()
+        writer.flush()?;
+        let anchor = writer.ownership_anchor()?.ok_or_else(|| {
+            SftpOpsError::Operation(format!(
+                "Remote copy stage has no ownership anchor: {}",
+                staged_path.display()
+            ))
+        })?;
+        self.rename_if_matches(&staged_path, dst, anchor)
     }
 }
 
@@ -3222,8 +3318,27 @@ impl BackendFileWriter for LocalFileWriter {
         self.file.write_all(buffer).map_err(Into::into)
     }
 
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            self.file
+                .set_permissions(fs::Permissions::from_mode(mode & 0o777))?;
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = mode;
+            Err(SftpOpsError::Operation(
+                "Handle-bound Unix file modes are unsupported on this platform".to_string(),
+            ))
+        }
+    }
+
     fn flush(&mut self) -> Result<(), SftpOpsError> {
-        self.file.flush().map_err(Into::into)
+        self.file.flush()?;
+        self.file.sync_all().map_err(Into::into)
     }
 
     fn ownership_anchor(
@@ -3245,6 +3360,24 @@ impl BackendFileWriter for FailingFileWriter {
         Err(SftpOpsError::Operation(
             "injected streaming writer failure".to_string(),
         ))
+    }
+
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            self.file
+                .set_permissions(fs::Permissions::from_mode(mode & 0o777))?;
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = mode;
+            Err(SftpOpsError::Operation(
+                "Handle-bound Unix file modes are unsupported on this platform".to_string(),
+            ))
+        }
     }
 
     fn flush(&mut self) -> Result<(), SftpOpsError> {
@@ -3276,8 +3409,27 @@ impl BackendFileWriter for CorruptingFileWriter {
         self.file.write_all(&bytes).map_err(Into::into)
     }
 
+    fn set_mode(&mut self, mode: u32) -> Result<(), SftpOpsError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            self.file
+                .set_permissions(fs::Permissions::from_mode(mode & 0o777))?;
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = mode;
+            Err(SftpOpsError::Operation(
+                "Handle-bound Unix file modes are unsupported on this platform".to_string(),
+            ))
+        }
+    }
+
     fn flush(&mut self) -> Result<(), SftpOpsError> {
-        self.file.flush().map_err(Into::into)
+        self.file.flush()?;
+        self.file.sync_all().map_err(Into::into)
     }
 
     fn ownership_anchor(
@@ -11555,6 +11707,23 @@ impl SftpBackend for InMemorySftpBackend {
         Ok(metadata.modified().ok())
     }
 
+    fn regular_file_mode(&self, path: &Path) -> Result<Option<u32>, SftpOpsError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let metadata = fs::symlink_metadata(self.to_local(path)?)?;
+            Ok(metadata
+                .is_file()
+                .then_some(metadata.permissions().mode() & 0o777))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Ok(None)
+        }
+    }
+
     fn stable_identity(&self, path: &Path) -> Result<StableEntryIdentity, SftpOpsError> {
         #[cfg(test)]
         if self.fail_staged_identity
@@ -11654,10 +11823,12 @@ impl SftpBackend for InMemorySftpBackend {
         cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError> {
         let total = self.lstat(remote_path)?.size;
+        let mode = self.regular_file_mode(remote_path)?;
         let mut reader = self.open_file_reader(remote_path)?;
         copy_reader_into_place(
             &mut *reader,
             total,
+            mode,
             local_path,
             progress_cb,
             cancel_flag,
@@ -11684,10 +11855,12 @@ impl SftpBackend for InMemorySftpBackend {
         cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError> {
         let total = self.lstat(remote_path)?.size;
+        let mode = self.regular_file_mode(remote_path)?;
         let mut reader = self.open_file_reader(remote_path)?;
         copy_reader_into_place(
             &mut *reader,
             total,
+            mode,
             local_path,
             progress_cb,
             cancel_flag,
@@ -11698,9 +11871,10 @@ impl SftpBackend for InMemorySftpBackend {
     fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
         validate_copy_destination(src, dst, false)?;
         let total = self.lstat(src)?.size;
+        let mode = self.regular_file_mode(src)?;
         let mut reader = self.open_file_reader(src)?;
         let dst_local = self.to_local(dst)?;
-        copy_reader_into_place(&mut *reader, total, &dst_local, None, None, true)
+        copy_reader_into_place(&mut *reader, total, mode, &dst_local, None, None, true)
     }
 }
 
@@ -11734,11 +11908,15 @@ fn create_copy_temp(dest: &Path) -> Result<(PathBuf, fs::File), SftpOpsError> {
 
     for _ in 0..MAX_ATTEMPTS {
         let temp = temp_sibling(dest)?;
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+        match options.open(&temp) {
             Ok(file) => return Ok((temp, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => {
@@ -11785,6 +11963,7 @@ fn copy_into_place_no_replace(
 fn copy_reader_into_place(
     reader: &mut dyn BackendFileReader,
     total: u64,
+    mode: Option<u32>,
     dest: &Path,
     progress_cb: Option<&ProgressCallback>,
     cancel_flag: Option<&AtomicBool>,
@@ -11815,6 +11994,14 @@ fn copy_reader_into_place(
                 callback(copied, total);
             }
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            temp_file.set_permissions(fs::Permissions::from_mode(mode.unwrap_or(0o600) & 0o777))?;
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
         temp_file.flush()?;
         temp_file.sync_all()?;
         drop(temp_file);
@@ -11846,7 +12033,15 @@ fn copy_into_place_with_mode(
             .map_err(|e| SftpOpsError::LocalIo(format!("Failed to create directory: {e}")))?;
     }
 
-    let total = fs::metadata(src).map(|m| m.len()).unwrap_or(0);
+    let source_metadata = fs::metadata(src)
+        .map_err(|error| SftpOpsError::LocalIo(format!("Failed to get source info: {error}")))?;
+    let total = source_metadata.len();
+    #[cfg(unix)]
+    let source_mode = {
+        use std::os::unix::fs::PermissionsExt;
+
+        source_metadata.permissions().mode() & 0o777
+    };
     let (temp, mut temp_file) = create_copy_temp(dest)?;
 
     let result = (|| -> Result<(), SftpOpsError> {
@@ -11873,6 +12068,14 @@ fn copy_into_place_with_mode(
             if let Some(cb) = progress_cb {
                 cb(copied, total);
             }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            temp_file
+                .set_permissions(fs::Permissions::from_mode(source_mode))
+                .map_err(|e| SftpOpsError::LocalIo(format!("Setting file mode failed: {e}")))?;
         }
         temp_file
             .flush()

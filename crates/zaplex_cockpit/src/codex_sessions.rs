@@ -174,9 +174,9 @@ struct RolloutInfo {
     /// (`last_token_usage.input_tokens`, which already includes the cached part).
     ctx_tokens: u64,
     last_ts: Option<DateTime<Utc>>,
-    /// The last turn-level event was `task_complete` (agent handed back).
+    /// The last turn-level event handed control back to the user.
     ended: bool,
-    /// A real turn was observed (a `task_started`/`task_complete`/usage line) —
+    /// A real turn was observed (a lifecycle or usage line) —
     /// guards against listing an empty/aborted rollout as a session.
     has_turn: bool,
     task_state: Option<TaskState>,
@@ -199,22 +199,29 @@ struct CachedRollout {
 pub(crate) struct RolloutCache {
     entries: HashMap<PathBuf, CachedRollout>,
     clock: u64,
+    #[cfg(test)]
+    fail_next_parse: bool,
 }
 
 impl RolloutCache {
-    fn parse_file(&mut self, path: &Path) -> RolloutInfo {
+    fn parse_file(&mut self, path: &Path) -> Result<RolloutInfo, ()> {
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_next_parse) {
+            self.entries.remove(path);
+            return Err(());
+        }
         let fingerprint = match crate::transcript::file_fingerprint(path) {
             Ok(fingerprint) => fingerprint,
             Err(_) => {
                 self.entries.remove(path);
-                return RolloutInfo::default();
+                return Err(());
             }
         };
         self.clock = self.clock.wrapping_add(1);
         if let Some(cached) = self.entries.get_mut(path) {
             if cached.fingerprint == fingerprint {
                 cached.last_used = self.clock;
-                return cached.info.clone();
+                return Ok(cached.info.clone());
             }
         }
 
@@ -222,7 +229,7 @@ impl RolloutCache {
             Ok(content) => parse_rollout_content(path, &content),
             Err(_) => {
                 self.entries.remove(path);
-                return RolloutInfo::default();
+                return Err(());
             }
         };
         self.entries.insert(
@@ -234,7 +241,7 @@ impl RolloutCache {
             },
         );
         self.evict_lru();
-        info
+        Ok(info)
     }
 
     fn evict_lru(&mut self) {
@@ -249,6 +256,11 @@ impl RolloutCache {
             };
             self.entries.remove(&oldest);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_parse(&mut self) {
+        self.fail_next_parse = true;
     }
 }
 
@@ -864,6 +876,7 @@ fn parse_rollout_content(path: &Path, content: &str) -> RolloutInfo {
     let mut info = RolloutInfo::default();
     info.session_id = session_id_from_path(path);
     info.task_state = crate::transcript::parse_task_state(Provider::Codex, content);
+    let mut active_turn_id: Option<String> = None;
 
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
@@ -915,12 +928,30 @@ fn parse_rollout_content(path: &Path, content: &str) -> RolloutInfo {
                     Some("task_started") => {
                         info.ended = false;
                         info.has_turn = true;
+                        active_turn_id = v
+                            .get("payload")
+                            .and_then(|payload| payload.get("turn_id"))
+                            .and_then(Value::as_str)
+                            .filter(|turn_id| !turn_id.is_empty())
+                            .map(str::to_string);
                     }
-                    Some("task_complete") => {
+                    Some("task_complete" | "turn_aborted") => {
                         info.ended = true;
                         info.has_turn = true;
+                        active_turn_id = None;
                     }
-                    _ => {}
+                    Some("error") => {
+                        let error_turn_id = v
+                            .get("payload")
+                            .and_then(|payload| payload.get("turn_id"))
+                            .and_then(Value::as_str);
+                        if active_turn_id.as_deref() == error_turn_id && active_turn_id.is_some() {
+                            info.ended = true;
+                            info.has_turn = true;
+                            active_turn_id = None;
+                        }
+                    }
+                    Some(_) | None => {}
                 }
                 // Current context size: the latest per-turn prompt tokens.
                 if let Some(last) = find(&v, "last_token_usage") {
@@ -947,30 +978,73 @@ fn state_of(ended: bool) -> SessionState {
     }
 }
 
-/// Collect the live Codex agent-sessions of a `<codex_home>`: rollout
-/// transcripts touched within [`CODEX_LIVE_WINDOW`], each distilled to
-/// (model, effort, context, state, project) with `provider = Codex` and a `0`
-/// pid (Codex records none). Sorted waiting-first, like the Claude path.
+/// Rollout candidates plus the completeness of their discovery walk.
+struct RolloutFileScan {
+    files: Vec<(PathBuf, DateTime<Utc>)>,
+    io_error: bool,
+}
+
 /// Every rollout transcript under `<codex_home>/sessions` with its mtime.
-/// Rollouts whose mtime is unreadable are skipped: recency is the only liveness
-/// proxy Codex offers, and a session we cannot date cannot be classified.
-fn rollout_files(codex_home: &Path) -> impl Iterator<Item = (PathBuf, DateTime<Utc>)> {
-    WalkDir::new(codex_home.join("sessions"))
-        .into_iter()
-        .flatten()
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            let name = e.file_name().to_str().unwrap_or("");
-            name.starts_with("rollout-") && name.ends_with(".jsonl")
-        })
-        .filter_map(|e| {
-            let mtime = e
-                .metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .map(DateTime::<Utc>::from)?;
-            Some((e.into_path(), mtime))
-        })
+/// A missing root is a normal empty history; any inaccessible descendant or
+/// eligible file marks the result incomplete while preserving reachable rows.
+fn rollout_files(codex_home: &Path) -> RolloutFileScan {
+    let root = codex_home.join("sessions");
+    match std::fs::symlink_metadata(&root) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => {
+            return RolloutFileScan {
+                files: Vec::new(),
+                io_error: true,
+            };
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return RolloutFileScan {
+                files: Vec::new(),
+                io_error: false,
+            };
+        }
+        Err(_) => {
+            return RolloutFileScan {
+                files: Vec::new(),
+                io_error: true,
+            };
+        }
+    }
+
+    let mut files = Vec::new();
+    let mut io_error = false;
+    for entry in WalkDir::new(root) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                io_error = true;
+                continue;
+            }
+        };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_str().unwrap_or("");
+        if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                io_error = true;
+                continue;
+            }
+        };
+        let mtime = match metadata.modified() {
+            Ok(mtime) => DateTime::<Utc>::from(mtime),
+            Err(_) => {
+                io_error = true;
+                continue;
+            }
+        };
+        files.push((entry.into_path(), mtime));
+    }
+    RolloutFileScan { files, io_error }
 }
 
 /// Parse one rollout into a snapshot. `None` when it holds no real turn — an
@@ -982,13 +1056,13 @@ fn snapshot_of(
     now: DateTime<Utc>,
     force_state: Option<SessionState>,
     cache: &mut RolloutCache,
-) -> Option<SessionSnapshot> {
-    let info = cache.parse_file(path);
+) -> Result<Option<SessionSnapshot>, ()> {
+    let info = cache.parse_file(path)?;
     if !info.has_turn {
-        return None;
+        return Ok(None);
     }
     let project = crate::project::resolve_project(Path::new(&info.cwd));
-    Some(SessionSnapshot {
+    Ok(Some(SessionSnapshot {
         session_id: info.session_id,
         cwd: info.cwd,
         // Codex rollouts carry no session name.
@@ -1016,7 +1090,7 @@ fn snapshot_of(
         last_activity: info.last_ts.or(Some(mtime)).unwrap_or(now),
         // Codex records no pid — guardrail signalling can't target it.
         pid: 0,
-    })
+    }))
 }
 
 /// Both halves of a `<codex_home>`'s sessions, classified in one walk.
@@ -1026,6 +1100,8 @@ pub struct SessionScan {
     pub live: Vec<SessionSnapshot>,
     /// Dormant but resumable, most-recent first and capped.
     pub idle: Vec<SessionSnapshot>,
+    /// At least one eligible rollout or subtree could not be inspected.
+    pub io_error: bool,
 }
 
 /// Walk the rollouts once and put each on exactly one side of
@@ -1056,12 +1132,14 @@ pub(crate) fn scan_sessions_with_cache(
 ) -> SessionScan {
     let live_cutoff = now - CODEX_LIVE_WINDOW;
     let age_cutoff = now - max_age;
+    let rollout_scan = rollout_files(codex_home);
+    let mut io_error = rollout_scan.io_error;
 
     // Cheap split. `fresh` is bounded by how much was touched in the last few
     // minutes; `dormant` is the open-ended history, so it gets capped here.
     let mut fresh: Vec<(PathBuf, DateTime<Utc>)> = Vec::new();
     let mut dormant: Vec<(PathBuf, DateTime<Utc>)> = Vec::new();
-    for (path, mtime) in rollout_files(codex_home) {
+    for (path, mtime) in rollout_scan.files {
         if mtime >= live_cutoff {
             fresh.push((path, mtime));
         } else if limit > 0 && mtime >= age_cutoff {
@@ -1078,8 +1156,13 @@ pub(crate) fn scan_sessions_with_cache(
     // through: the transcript's own last timestamp decides. mtime only chose who
     // got parsed — deciding *with* it as well would let the two disagree.
     for (path, mtime) in fresh.into_iter().chain(dormant) {
-        let Some(mut s) = snapshot_of(&path, mtime, now, None, cache) else {
-            continue;
+        let mut s = match snapshot_of(&path, mtime, now, None, cache) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => continue,
+            Err(()) => {
+                io_error = true;
+                continue;
+            }
         };
         if s.last_activity >= live_cutoff {
             live.push(s);
@@ -1108,7 +1191,11 @@ pub(crate) fn scan_sessions_with_cache(
     // touched-but-stale ones have joined.
     idle.truncate(limit);
 
-    SessionScan { live, idle }
+    SessionScan {
+        live,
+        idle,
+        io_error,
+    }
 }
 
 pub fn scan_sessions(
