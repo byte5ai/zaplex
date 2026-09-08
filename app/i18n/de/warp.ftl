@@ -101,6 +101,7 @@ cockpit-host-no-local-agents = Keine lokalen KI-Sessions
 cockpit-host-inventory-unsupported = Host-Dienst aktualisieren, um KI-Sessions anzuzeigen
 cockpit-host-inventory-unavailable = KI-Sessions sind vorübergehend nicht verfügbar
 cockpit-host-removed = aus Verbindungen entfernt
+cockpit-host-unverified = Verbindungsregister nicht verfügbar
 cockpit-conductor-rest-show-both = { $running } laufend · { $idle } ruhend — zeigen
 cockpit-conductor-rest-show-running = { $running } laufend — zeigen
 cockpit-conductor-rest-show-idle = { $idle } ruhend — zeigen
