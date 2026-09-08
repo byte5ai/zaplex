@@ -2,6 +2,7 @@
 //! builders (shell-safe), and the read-only Markdown renderer.
 
 use super::*;
+use markdown_parser::FormattedTextLine;
 
 // ── WorkingChanges::is_empty ────────────────────────────────────────────────
 
@@ -108,4 +109,33 @@ fn renders_untracked_only_without_diff_fence() {
     assert!(!md.contains("Branch:"));
     assert!(md.contains("only untracked files"));
     assert!(!md.contains("```diff"));
+}
+
+#[test]
+fn rendered_review_keeps_context_fence_inside_diff_block() {
+    let diff =
+        "diff --git a/README.md b/README.md\n@@ -1,3 +1,3 @@\n context\n ```\n-context\n+updated\n";
+    let markdown = render_review_markdown(
+        "zaplex",
+        "fix/branch`name",
+        &WorkingChanges {
+            diff: diff.to_string(),
+            untracked: vec!["file`name.md".to_string()],
+        },
+        "",
+    );
+    let parsed = markdown_parser::parse_markdown(&markdown).unwrap();
+    let diff_blocks: Vec<_> = parsed
+        .lines
+        .iter()
+        .filter_map(|line| match line {
+            FormattedTextLine::CodeBlock(block) if block.lang == "diff" => Some(block),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(diff_blocks.len(), 1);
+    assert_eq!(diff_blocks[0].code, diff);
+    assert!(markdown.contains("``fix/branch`name``"));
+    assert!(markdown.contains("``file`name.md``"));
 }

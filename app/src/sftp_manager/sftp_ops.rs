@@ -13,11 +13,21 @@ use std::time::Duration;
 use warp_ssh_manager::secrets::SshSecretStore;
 use warp_ssh_manager::types::{AuthType, ResolvedSshAuth, SshServerInfo};
 use warp_ssh_manager::SshRepository;
-use zap_sftp::session::{AuthMethod, SftpSession};
-use zap_sftp::types::OpenOptions;
+use zap_sftp::session::{AuthMethod, HostKeyConfirmation, SftpSession};
+use zap_sftp::types::{FileType, OpenOptions};
 use zap_sftp::Sftp;
 
 use super::types::{FileEntry, FileEntryType, StableEntryIdentity};
+
+/// Whether `name` is one safe child component in a remote directory.
+pub(super) fn is_valid_remote_child_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name
+            .chars()
+            .any(|character| matches!(character, '/' | '\\'))
+}
 
 /// SFTP operation error
 #[derive(Clone, Debug)]
@@ -32,6 +42,19 @@ pub enum SftpOpsError {
     LocalIo(String),
     /// Credentials not found
     NoCredentials(String),
+    /// A server key is not present in known_hosts and needs explicit approval.
+    UnknownHostKey {
+        host: String,
+        port: u16,
+        fingerprint_sha256: String,
+        key_type: String,
+    },
+    /// A known host presented a different key.
+    HostKeyMismatch(String),
+    /// Authentication was attempted only after host-key verification and failed.
+    Authentication(String),
+    /// The SSH transport failed before authentication completed.
+    Transport(String),
     /// Transfer cancelled
     Cancelled,
     /// The destination is committed even though the final acknowledgement failed.
@@ -61,6 +84,18 @@ impl std::fmt::Display for SftpOpsError {
             }
             SftpOpsError::LocalIo(msg) => write!(f, "Local I/O error: {msg}"),
             SftpOpsError::NoCredentials(msg) => write!(f, "Credentials not found: {msg}"),
+            SftpOpsError::UnknownHostKey {
+                host,
+                port,
+                fingerprint_sha256,
+                key_type,
+            } => write!(
+                f,
+                "Unknown {key_type} host key for {host}:{port} ({fingerprint_sha256})"
+            ),
+            SftpOpsError::HostKeyMismatch(msg) => write!(f, "Host key mismatch: {msg}"),
+            SftpOpsError::Authentication(msg) => write!(f, "Authentication failed: {msg}"),
+            SftpOpsError::Transport(msg) => write!(f, "Transport error: {msg}"),
             SftpOpsError::Cancelled => write!(f, "Transfer cancelled"),
             SftpOpsError::Committed(msg) => write!(f, "{msg}"),
             SftpOpsError::NotFound(path) => write!(f, "Path not found: {path}"),
@@ -91,6 +126,10 @@ impl SftpOpsError {
             Self::CapabilityRequired(_) => crate::t!("fm-error-secure-transfer-required"),
             Self::LocalIo(_) => crate::t!("fm-error-local-io"),
             Self::NoCredentials(_) => crate::t!("fm-error-credentials"),
+            Self::UnknownHostKey { .. } => crate::t!("fm-error-unknown-host-key"),
+            Self::HostKeyMismatch(_) => crate::t!("fm-error-host-key-mismatch"),
+            Self::Authentication(_) => crate::t!("fm-error-authentication"),
+            Self::Transport(_) => crate::t!("fm-error-transport"),
             Self::Cancelled => crate::t!("fm-error-cancelled"),
             Self::Committed(_) => crate::t!("fm-error-committed"),
             Self::NotFound(_) => crate::t!("fm-error-not-found"),
@@ -106,6 +145,10 @@ impl SftpOpsError {
             | Self::CapabilityRequired(_)
             | Self::LocalIo(_)
             | Self::NoCredentials(_)
+            | Self::UnknownHostKey { .. }
+            | Self::HostKeyMismatch(_)
+            | Self::Authentication(_)
+            | Self::Transport(_)
             | Self::Cancelled
             | Self::Committed(_)
             | Self::NotFound(_) => None,
@@ -120,6 +163,10 @@ impl SftpOpsError {
             | Self::CapabilityRequired(_)
             | Self::LocalIo(_)
             | Self::NoCredentials(_)
+            | Self::UnknownHostKey { .. }
+            | Self::HostKeyMismatch(_)
+            | Self::Authentication(_)
+            | Self::Transport(_)
             | Self::Cancelled
             | Self::Committed(_)
             | Self::NotFound(_) => &[],
@@ -140,10 +187,27 @@ impl SftpOpsError {
 
 impl From<zap_sftp::SftpError> for SftpOpsError {
     fn from(e: zap_sftp::SftpError) -> Self {
+        let message = e.to_string();
         if e.is_not_found() {
-            SftpOpsError::NotFound(e.to_string())
-        } else {
-            SftpOpsError::Operation(e.to_string())
+            return Self::NotFound(message);
+        }
+        match e {
+            zap_sftp::SftpError::UnknownHostKey {
+                fingerprint_sha256,
+                key_type,
+            } => Self::Transport(format!(
+                "Host-key confirmation for {key_type} {fingerprint_sha256} requires the original endpoint context"
+            )),
+            zap_sftp::SftpError::HostKeyMismatch { .. } => Self::HostKeyMismatch(message),
+            zap_sftp::SftpError::AuthFailed(_) => Self::Authentication(message),
+            zap_sftp::SftpError::ConnectionFailed(_) | zap_sftp::SftpError::Timeout => {
+                Self::Transport(message)
+            }
+            zap_sftp::SftpError::NoSuchFile(_) => Self::NotFound(message),
+            zap_sftp::SftpError::PermissionDenied(_)
+            | zap_sftp::SftpError::General(_)
+            | zap_sftp::SftpError::Io(_)
+            | zap_sftp::SftpError::Ssh2(_) => Self::Operation(message),
         }
     }
 }
@@ -173,10 +237,15 @@ fn unique_transfer_sibling(path: &Path, marker: &str) -> PathBuf {
 }
 
 fn open_new_local_transfer_file(path: &Path) -> std::io::Result<fs::File> {
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 fn create_unique_local_transfer_file(
@@ -204,7 +273,9 @@ fn create_unique_remote_transfer_file(
 ) -> Result<(PathBuf, zap_sftp::File), SftpOpsError> {
     for _ in 0..128 {
         let candidate = unique_transfer_sibling(path, marker);
-        match sftp.open(&candidate, OpenOptions::create_new()) {
+        let mut options = OpenOptions::create_new();
+        options.mode = Some(0o600);
+        match sftp.open(&candidate, options) {
             Ok(file) => return Ok((candidate, file)),
             Err(_) if sftp.lstat(&candidate).is_ok() => continue,
             Err(error) => return Err(error.into()),
@@ -221,16 +292,58 @@ pub fn connect_from_server(
     server: &SshServerInfo,
     secret_store: &dyn SshSecretStore,
 ) -> Result<SftpSession, SftpOpsError> {
+    connect_from_server_with_confirmation(server, secret_store, None)
+}
+
+/// Connect after the user approved the exact fingerprint from the preceding handshake.
+pub fn connect_from_server_confirmed(
+    server: &SshServerInfo,
+    secret_store: &dyn SshSecretStore,
+    confirmation: &HostKeyConfirmation,
+) -> Result<SftpSession, SftpOpsError> {
+    connect_from_server_with_confirmation(server, secret_store, Some(confirmation))
+}
+
+fn connect_from_server_with_confirmation(
+    server: &SshServerInfo,
+    secret_store: &dyn SshSecretStore,
+    confirmation: Option<&HostKeyConfirmation>,
+) -> Result<SftpSession, SftpOpsError> {
     let resolved_auth = resolve_sftp_auth(server)?;
     let auth = build_auth_method(server, &resolved_auth, secret_store)?;
-    SftpSession::connect(
-        &server.host,
-        server.port,
-        &resolved_auth.username,
-        auth,
-        Some(CONNECT_TIMEOUT),
-    )
-    .map_err(|e| SftpOpsError::Connection(e.to_string()))
+    let result = match confirmation {
+        Some(confirmation) => SftpSession::connect_confirmed(
+            &server.host,
+            server.port,
+            &resolved_auth.username,
+            auth,
+            Some(CONNECT_TIMEOUT),
+            confirmation,
+        ),
+        None => SftpSession::connect(
+            &server.host,
+            server.port,
+            &resolved_auth.username,
+            auth,
+            Some(CONNECT_TIMEOUT),
+        ),
+    };
+    result.map_err(|error| match error {
+        zap_sftp::SftpError::UnknownHostKey {
+            fingerprint_sha256,
+            key_type,
+        } => SftpOpsError::UnknownHostKey {
+            host: server.host.clone(),
+            port: server.port,
+            fingerprint_sha256,
+            key_type,
+        },
+        zap_sftp::SftpError::ConnectionFailed(_)
+        | zap_sftp::SftpError::Timeout
+        | zap_sftp::SftpError::Io(_)
+        | zap_sftp::SftpError::Ssh2(_) => SftpOpsError::Transport(error.to_string()),
+        error => error.into(),
+    })
 }
 
 fn resolve_sftp_auth(server: &SshServerInfo) -> Result<ResolvedSshAuth, SftpOpsError> {
@@ -335,12 +448,7 @@ pub fn rename(sftp: &Sftp, old_path: &Path, new_path: &Path) -> Result<(), SftpO
 /// falling back to a remove or backup dance would leave the destination absent
 /// across a crash boundary.
 pub fn replace_atomic(sftp: &Sftp, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
-    let opts = zap_sftp::types::RenameOptions {
-        overwrite: true,
-        atomic: true,
-        native: false,
-    };
-    sftp.rename(old_path, new_path, opts)?;
+    sftp.replace_atomically(old_path, new_path)?;
     Ok(())
 }
 
@@ -393,7 +501,36 @@ fn upload_file_streaming_with_mode(
 ) -> Result<(), SftpOpsError> {
     let mut local_file =
         fs::File::open(local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
-    let total_size = local_file.metadata().map(|m| m.len()).unwrap_or(0);
+    let local_metadata = local_file
+        .metadata()
+        .map_err(|error| SftpOpsError::LocalIo(error.to_string()))?;
+    let total_size = local_metadata.len();
+    #[cfg(unix)]
+    let source_mode = {
+        use std::os::unix::fs::PermissionsExt;
+
+        local_metadata.permissions().mode() & 0o777
+    };
+    #[cfg(not(unix))]
+    let source_mode = 0o600;
+
+    let destination_existed = if overwrite_destination {
+        match sftp.lstat(remote_path) {
+            Ok(metadata) => match metadata.file_type {
+                FileType::File | FileType::Symlink => true,
+                FileType::Dir | FileType::Other => {
+                    return Err(SftpOpsError::Operation(format!(
+                        "Remote destination is not a replaceable file: {}",
+                        remote_path.display()
+                    )))
+                }
+            },
+            Err(error) if error.is_not_found() => false,
+            Err(error) => return Err(error.into()),
+        }
+    } else {
+        false
+    };
 
     // Each in-flight transfer owns its temporary path. Two writes to the same
     // destination must never truncate, finalize, or clean up each other's data.
@@ -420,6 +557,7 @@ fn upload_file_streaming_with_mode(
                 cb(transferred, total_size);
             }
         }
+        remote_file.set_mode(source_mode)?;
         remote_file.flush()?;
         Ok(())
     })();
@@ -427,7 +565,7 @@ fn upload_file_streaming_with_mode(
 
     match &result {
         Ok(()) => {
-            if !overwrite_destination {
+            if !overwrite_destination || !destination_existed {
                 if let Err(error) = sftp.rename(
                     &temp_remote_path,
                     remote_path,
@@ -446,15 +584,7 @@ fn upload_file_streaming_with_mode(
             }
             // Publish in one atomic replacement. If the server cannot provide
             // that guarantee, fail safely and keep the existing destination.
-            if let Err(error) = sftp.rename(
-                &temp_remote_path,
-                remote_path,
-                zap_sftp::types::RenameOptions {
-                    overwrite: true,
-                    atomic: true,
-                    native: false,
-                },
-            ) {
+            if let Err(error) = replace_atomic(sftp, &temp_remote_path, remote_path) {
                 let _ = sftp.remove_file(&temp_remote_path);
                 return Err(SftpOpsError::Operation(format!(
                     "Failed to atomically replace remote file: {error}"
@@ -520,6 +650,8 @@ fn download_file_streaming_with_mode(
     let mut remote_file = sftp.open(remote_path, OpenOptions::read())?;
     let metadata = remote_file.stat()?;
     let total_size = metadata.size;
+    #[cfg(unix)]
+    let source_mode = metadata.mode.unwrap_or(0o600) & 0o777;
 
     if let Some(parent) = local_path.parent() {
         fs::create_dir_all(parent).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
@@ -550,6 +682,14 @@ fn download_file_streaming_with_mode(
             if let Some(cb) = progress_cb {
                 cb(transferred, total_size);
             }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            local_file
+                .set_permissions(fs::Permissions::from_mode(source_mode))
+                .map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
         }
         local_file
             .flush()
@@ -654,13 +794,7 @@ pub fn download_dir_recursive(
         }
 
         // Path traversal protection: verify safety of filenames returned by remote server
-        if entry.name.is_empty()
-            || entry.name.starts_with('/')
-            || entry.name.starts_with('\\')
-            || entry.name.contains("..")
-            || entry.name.contains('/')
-            || entry.name.contains('\\')
-        {
+        if !is_valid_remote_child_name(&entry.name) {
             return Err(SftpOpsError::Operation(format!(
                 "Refusing unsafe remote directory entry: {}",
                 entry.name
@@ -724,16 +858,13 @@ fn build_auth_method(
                         server.host
                     ))
                 })?;
-            Ok(AuthMethod::Password {
-                password: password.to_string(),
-            })
+            Ok(AuthMethod::Password { password })
         }
         AuthType::Key => {
             let passphrase = secret_store
                 .get(&resolved_auth.secret_lookup_id, resolved_auth.secret_kind)
                 .ok()
-                .flatten()
-                .map(|p| p.to_string());
+                .flatten();
             // A host configured for key auth without an explicit key file is
             // the normal case for anyone relying on `~/.ssh/config` +
             // `ssh-agent`: the terminal path shells out to `ssh` and just

@@ -57,6 +57,7 @@ impl FilePermissions {
             other_exec: mode & 0o001 != 0,
         }
     }
+
 }
 
 /// File metadata
@@ -64,6 +65,7 @@ impl FilePermissions {
 pub struct Metadata {
     pub file_type: FileType,
     pub permissions: FilePermissions,
+    pub mode: Option<u32>,
     pub size: u64,
     pub uid: u32,
     pub gid: u32,
@@ -78,6 +80,7 @@ impl Metadata {
         Self {
             file_type,
             permissions: FilePermissions::from_mode(m.perm.unwrap_or(0)),
+            mode: m.perm.map(|mode| mode & 0o777),
             size: m.size.unwrap_or(0),
             uid: m.uid.unwrap_or(0),
             gid: m.gid.unwrap_or(0),

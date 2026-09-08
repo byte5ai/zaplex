@@ -110,6 +110,38 @@ fn key_auth_without_path_is_skipped() {
 }
 
 #[test]
+fn key_runtime_command_uses_askpass_and_publickey_only() {
+    let mut s = server();
+    s.auth_type = AuthType::Key;
+    s.key_path = Some("/home/u/.ssh/id_ed25519".into());
+    let passphrase = Zeroizing::new("marker-secret-never-in-command".to_string());
+
+    let prepared = prepare_key_ssh_command(&s, &passphrase).unwrap();
+    let command_line = prepared.command_line().to_string();
+    let launcher_path = prepared.launcher_path.clone();
+    let helper_path = prepared._askpass.script_path.clone();
+    let secret_path = prepared._askpass.password_path.clone();
+    let launcher = std::fs::read_to_string(&launcher_path).unwrap();
+
+    assert!(!command_line.contains(passphrase.as_str()));
+    assert!(!launcher.contains(passphrase.as_str()));
+    assert!(launcher.contains("PreferredAuthentications=publickey"));
+    assert!(launcher.contains("PasswordAuthentication=no"));
+    assert!(launcher.contains("KbdInteractiveAuthentication=no"));
+    #[cfg(windows)]
+    assert!(!launcher.contains("& 'ssh' 'ssh'"));
+    assert_eq!(
+        std::fs::read_to_string(&secret_path).unwrap(),
+        passphrase.as_str()
+    );
+
+    drop(prepared);
+    assert!(!launcher_path.exists());
+    assert!(!helper_path.exists());
+    assert!(!secret_path.exists());
+}
+
+#[test]
 fn empty_username_yields_host_only() {
     let mut s = server();
     s.username = String::new();
@@ -921,6 +953,7 @@ fn confirmed_host_key_reuses_ssh_transport_and_exact_fingerprint() {
         host: "1.2.3.4".to_string(),
         port: 22,
         fingerprint: "SHA256:confirmed".to_string(),
+        key: "1.2.3.4 ssh-ed25519 AAAA".to_string(),
     };
 
     let result =
@@ -1004,6 +1037,7 @@ fn unknown_host_key_is_captured_from_the_probe_transport() {
             host: "1.2.3.4".to_string(),
             port: 22,
             fingerprint: "SHA256:captured".to_string(),
+            key: "1.2.3.4 ssh-ed25519 AAAA".to_string(),
         })
     );
     assert_eq!(
