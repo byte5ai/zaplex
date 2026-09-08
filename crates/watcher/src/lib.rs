@@ -254,6 +254,32 @@ impl DebounceEventHandler for WatcherEventHandler {
 }
 
 /// Dedupe and standardize the raw notifier events into a BulkFilesystemWatcherEvent.
+fn record_removed_path(
+    update: &mut BulkFilesystemWatcherEvent,
+    created: &mut HashSet<PathBuf>,
+    modified: &mut HashSet<PathBuf>,
+    path: &Path,
+) {
+    if created.remove(path) {
+        return;
+    }
+
+    modified.remove(path);
+
+    // If a path was moved, remove its original source instead of the target name.
+    update.deleted.insert(match update.moved.remove(path) {
+        Some(source) => source,
+        None => path.to_path_buf(),
+    });
+}
+
+fn record_moved_path(update: &mut BulkFilesystemWatcherEvent, from: PathBuf, to: PathBuf) {
+    match update.moved.remove(&from) {
+        Some(source) => update.moved.insert(to, source),
+        None => update.moved.insert(to, from),
+    };
+}
+
 fn deduplicate_and_merge_raw_notifier_events(
     raw_fs_events: &[DebouncedEvent],
 ) -> Result<BulkFilesystemWatcherEvent> {
@@ -262,7 +288,6 @@ fn deduplicate_and_merge_raw_notifier_events(
     let mut created: HashSet<PathBuf> = HashSet::new();
     let mut modified: HashSet<PathBuf> = HashSet::new();
 
-    let mut rename_from = None;
     for fs_event in raw_fs_events {
         match fs_event.event.kind {
             // Create and modify should always be preserved.
@@ -277,17 +302,7 @@ fn deduplicate_and_merge_raw_notifier_events(
             // If a path is modified / moved and then removed, we should only keep the remove event.
             EventKind::Remove(_) => {
                 for path in &fs_event.event.paths {
-                    if created.remove(path) {
-                        continue;
-                    }
-
-                    modified.remove(path);
-
-                    // If a path is modified, remove the source instead of the target name.
-                    update.deleted.insert(match update.moved.remove(path) {
-                        Some(source) => source,
-                        None => path.clone(),
-                    });
+                    record_removed_path(&mut update, &mut created, &mut modified, path);
                 }
             }
 
@@ -318,45 +333,29 @@ fn deduplicate_and_merge_raw_notifier_events(
                         continue;
                     }
 
-                    if created.remove(path) {
-                        continue;
-                    }
-
-                    modified.remove(path);
-
-                    // If a path is modified, remove the source instead of the target name.
-                    update.deleted.insert(match update.moved.remove(path) {
-                        Some(source) => source,
-                        None => path.clone(),
-                    });
+                    record_removed_path(&mut update, &mut created, &mut modified, path);
                 }
             }
 
-            // If a path is renamed, we should check if it has been renamed in this update before and squash
-            // any sequential renames.
-            EventKind::Modify(ModifyKind::Name(rename_mode)) => 'rename: {
+            EventKind::Modify(ModifyKind::Name(rename_mode)) => {
                 let paths = &fs_event.event.paths;
-
-                let (from, to) = match rename_mode {
-                    RenameMode::From if !paths.is_empty() => {
-                        rename_from = Some(paths.first().expect("Checked above").clone());
-                        break 'rename;
+                match rename_mode {
+                    // The full debouncer emits `Both` only when it has correlated the
+                    // source and target. A lone `From` therefore means the path left
+                    // the watched tree, and a lone `To` means it entered the tree.
+                    RenameMode::From => {
+                        for path in paths {
+                            record_removed_path(&mut update, &mut created, &mut modified, path);
+                        }
                     }
-                    RenameMode::To if !paths.is_empty() && rename_from.is_some() => (
-                        rename_from.take().expect("Checked above"),
-                        paths.first().expect("Checked above").clone(),
-                    ),
-                    RenameMode::Both if paths.len() > 1 => (
+                    RenameMode::To => created.extend(paths.iter().cloned()),
+                    RenameMode::Both if paths.len() > 1 => record_moved_path(
+                        &mut update,
                         paths.first().expect("Checked above").clone(),
                         paths.get(1).expect("Checked above").clone(),
                     ),
-                    _ => break 'rename,
-                };
-
-                match update.moved.remove(&from) {
-                    Some(source) => update.moved.insert(to, source),
-                    None => update.moved.insert(to, from),
-                };
+                    RenameMode::Both | RenameMode::Any | RenameMode::Other => {}
+                }
             }
             _ => (),
         }
@@ -376,3 +375,7 @@ fn deduplicate_and_merge_raw_notifier_events(
 
     Ok(update)
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;

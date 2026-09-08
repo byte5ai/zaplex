@@ -15,6 +15,6 @@ pub mod types;
 pub use dir::Dir;
 pub use error::{SftpChannelError, SftpError};
 pub use file::File;
-pub use session::{AuthMethod, SftpSession};
+pub use session::{AuthMethod, HostKeyConfirmation, SftpSession};
 pub use sftp::Sftp;
 pub use types::*;
