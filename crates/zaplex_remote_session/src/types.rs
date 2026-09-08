@@ -91,6 +91,11 @@ pub const FEATURE_AGENT_PTY_BINDING_V2: &str = "agent-pty-binding-v2";
 /// older daemon must never be treated as an equivalent fallback.
 pub const FEATURE_SAFE_FILE_TRANSACTIONS_V1: &str = "safe-file-transactions-v1";
 
+/// Identity-only deletion and phase-bound transfer validation for safe-file
+/// transactions. Clients may omit file digests only when both peers advertise
+/// this exact capability; otherwise they retain the v1 digest-bound fallback.
+pub const FEATURE_SAFE_FILE_TRANSACTIONS_V2: &str = "safe-file-transactions-v2";
+
 /// Versioned batched metadata lookup for safe-file directory listings.
 ///
 /// Clients use one request per listing and retain no daemon handles. Older
@@ -193,6 +198,7 @@ pub fn supported_features() -> Vec<String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         features.push(FEATURE_SAFE_FILE_TRANSACTIONS_V1.to_string());
+        features.push(FEATURE_SAFE_FILE_TRANSACTIONS_V2.to_string());
         features.push(FEATURE_SAFE_FILE_IDENTITY_BATCH_V1.to_string());
     }
     features
@@ -215,6 +221,7 @@ pub fn supported_client_features() -> Vec<String> {
         FEATURE_AGENT_PTY_BINDING.to_string(),
         FEATURE_AGENT_PTY_BINDING_V2.to_string(),
         FEATURE_SAFE_FILE_TRANSACTIONS_V1.to_string(),
+        FEATURE_SAFE_FILE_TRANSACTIONS_V2.to_string(),
         FEATURE_SAFE_FILE_IDENTITY_BATCH_V1.to_string(),
         FEATURE_HOST_EXEC.to_string(),
         FEATURE_MULTIPLEXER_INVENTORY_V1.to_string(),

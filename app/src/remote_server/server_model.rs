@@ -57,6 +57,7 @@ use zaplex_remote_session::types::{
     supported_features, FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PROCESS_SIGNAL_V1,
     FEATURE_AGENT_PTY_BINDING_V2, FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
     FEATURE_SAFE_FILE_IDENTITY_BATCH_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
+    FEATURE_SAFE_FILE_TRANSACTIONS_V2,
 };
 
 // Buffer-sync related: depends on GlobalBufferModel, which server-local operations are only
@@ -434,6 +435,7 @@ fn server_features_with_runtime_support(
     if !safe_file_transactions_supported {
         features.retain(|feature| {
             feature != FEATURE_SAFE_FILE_TRANSACTIONS_V1
+                && feature != FEATURE_SAFE_FILE_TRANSACTIONS_V2
                 && feature != FEATURE_SAFE_FILE_IDENTITY_BATCH_V1
         });
     }
@@ -1183,9 +1185,14 @@ impl ServerModel {
                         ..
                     ))
                 );
+                let is_v2_delete = matches!(
+                    request.operation.as_ref(),
+                    Some(super::proto::safe_file_request::Operation::DeleteV2(..))
+                );
                 if self.client_supports_safe_file_transactions(conn_id)
                     && (!is_identity_batch
                         || self.client_supports_safe_file_identity_batch(conn_id))
+                    && (!is_v2_delete || self.client_supports_safe_file_transactions_v2(conn_id))
                     && self.safe_files.is_available()
                 {
                     let response = self.safe_files.handle(conn_id, request);
@@ -1572,6 +1579,13 @@ impl ServerModel {
         self.connection_features
             .get(&conn_id)
             .is_some_and(|features| features.contains(FEATURE_SAFE_FILE_TRANSACTIONS_V1))
+    }
+
+    #[cfg(unix)]
+    fn client_supports_safe_file_transactions_v2(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_SAFE_FILE_TRANSACTIONS_V2))
     }
 
     #[cfg(unix)]

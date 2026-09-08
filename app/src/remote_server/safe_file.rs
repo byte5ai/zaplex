@@ -29,7 +29,7 @@ use super::proto::{
     SafeFileUploadBatchOpened, SafeFileUploadEntry, SafeFileUploadEntryOpened, SafeFileWriteHandle,
 };
 #[cfg(test)]
-use super::proto::{SafeFileCleanupUploadBatch, SafeFileRetryRecovery};
+use super::proto::{SafeFileCleanupUploadBatch, SafeFileDeleteV2, SafeFileRetryRecovery};
 use super::server_model::ConnectionId;
 
 const MAX_CHUNK_BYTES: usize = 8 * 1024 * 1024;
@@ -482,7 +482,18 @@ impl SafeFileServer {
                 .rename(connection_id, &request.operation_id, rename)
                 .map(safe_file_response::Result::Mutation),
             Some(safe_file_request::Operation::Delete(delete)) => self
-                .delete(&request.operation_id, delete)
+                .delete(&request.operation_id, delete, true)
+                .map(safe_file_response::Result::Mutation),
+            Some(safe_file_request::Operation::DeleteV2(delete)) => self
+                .delete(
+                    &request.operation_id,
+                    SafeFileDelete {
+                        path: delete.path,
+                        expected: delete.expected,
+                        expected_sha256: None,
+                    },
+                    false,
+                )
                 .map(safe_file_response::Result::Mutation),
             Some(safe_file_request::Operation::ListRecoveries(_)) => self
                 .list_recoveries()
@@ -1084,6 +1095,7 @@ impl SafeFileServer {
         &mut self,
         operation_id: &str,
         request: SafeFileDelete,
+        require_file_digest: bool,
     ) -> Result<SafeFileMutationResult, String> {
         let expected = request
             .expected
@@ -1111,9 +1123,14 @@ impl SafeFileServer {
         }
         match kind {
             SafeFileEntryKind::Regular => {
-                let digest = sha256_file(&file)?;
-                if request.expected_sha256.as_deref() != Some(digest.as_str()) {
-                    return Err("Safe-file delete content digest changed".to_string());
+                if require_file_digest {
+                    let expected_digest = request.expected_sha256.as_deref().ok_or_else(|| {
+                        "Safe-file v1 delete requires a content digest".to_string()
+                    })?;
+                    let digest = sha256_file(&file)?;
+                    if expected_digest != digest {
+                        return Err("Safe-file delete content digest changed".to_string());
+                    }
                 }
             }
             SafeFileEntryKind::Directory => {
@@ -1240,16 +1257,16 @@ impl SafeFileServer {
                     && path_is_absent(&old_path)
                     && boundary_old.as_ref().is_some_and(|expected| {
                         new.as_ref()
-                            .is_some_and(|actual| same_identity(expected, actual))
+                            .is_some_and(|actual| same_renamed_identity(expected, actual))
                     })
             }
             SafeFileRenameMode::Exchange => {
                 boundary_old.as_ref().is_some_and(|expected| {
                     new.as_ref()
-                        .is_some_and(|actual| same_identity(expected, actual))
+                        .is_some_and(|actual| same_renamed_identity(expected, actual))
                 }) && boundary_new.as_ref().is_some_and(|expected| {
                     old.as_ref()
-                        .is_some_and(|actual| same_identity(expected, actual))
+                        .is_some_and(|actual| same_renamed_identity(expected, actual))
                 })
             }
             SafeFileRenameMode::Unspecified => false,
@@ -1358,7 +1375,7 @@ impl SafeFileServer {
         let private = identity_for_path(&private_delete_entry(&tombstone)).ok();
         if private
             .as_ref()
-            .is_some_and(|actual| matches_delete_identity(&expected, actual))
+            .is_some_and(|actual| matches_isolated_delete_identity(&expected, actual))
         {
             let outcome = delete_exact_path(
                 &tombstone,
@@ -1404,7 +1421,7 @@ impl SafeFileServer {
         }
         if isolated
             .as_ref()
-            .is_some_and(|actual| matches_delete_identity(&expected, actual))
+            .is_some_and(|actual| matches_isolated_delete_identity(&expected, actual))
         {
             match delete_exact_path(
                 &tombstone,
@@ -1447,7 +1464,7 @@ impl SafeFileServer {
                     }
                     if identity_for_path(&tombstone)
                         .as_ref()
-                        .is_ok_and(|actual| matches_delete_identity(&expected, actual))
+                        .is_ok_and(|actual| matches_isolated_delete_identity(&expected, actual))
                     {
                         record.state = JournalState::Recovery;
                         record.failure = Some(error.clone());
@@ -1499,11 +1516,24 @@ impl SafeFileServer {
             if let Some(hook) = &self.before_delete_isolation {
                 hook(&path);
             }
+            let Some(pre_isolation) = identity_for_path(&path)
+                .ok()
+                .filter(|actual| matches_delete_identity(&expected, actual))
+            else {
+                let error = "Safe-file delete target content changed before isolation".to_string();
+                record.state = JournalState::Rejected;
+                record.failure = Some(error.clone());
+                self.journal()?
+                    .save(record)
+                    .map_err(|save_error| save_error.to_string())?;
+                return Err(error);
+            };
             match rename_noreplace(&path, &tombstone) {
                 Ok(()) => {
-                    let isolated_matches = identity_for_path(&tombstone)
-                        .as_ref()
-                        .is_ok_and(|actual| matches_delete_identity(&expected, actual));
+                    let isolated_matches =
+                        identity_for_path(&tombstone).as_ref().is_ok_and(|actual| {
+                            matches_isolated_delete_identity(&pre_isolation, actual)
+                        });
                     if !isolated_matches {
                         let isolated = identity_for_path(&tombstone).ok();
                         let restored = path_is_absent(&path)
@@ -1511,7 +1541,7 @@ impl SafeFileServer {
                             && isolated.as_ref().is_some_and(|isolated| {
                                 identity_for_path(&path)
                                     .as_ref()
-                                    .is_ok_and(|actual| same_identity(isolated, actual))
+                                    .is_ok_and(|actual| same_renamed_identity(isolated, actual))
                             });
                         record.state = if restored {
                             JournalState::Rejected
@@ -2219,11 +2249,13 @@ fn identity_from_metadata(
         size: metadata.len(),
         object_id: format!("{}:{}", metadata.dev(), metadata.ino()),
         revision: format!(
-            "{}:{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}:{}",
             metadata.dev(),
             metadata.ino(),
             metadata.mtime(),
             metadata.mtime_nsec(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
             metadata.len()
         ),
     })
@@ -2238,12 +2270,67 @@ fn same_object(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
 fn same_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
     same_object(expected, actual)
         && expected.size == actual.size
-        && expected.revision == actual.revision
+        && same_revision(&expected.revision, &actual.revision)
+}
+
+fn same_renamed_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
+    same_object(expected, actual)
+        && expected.size == actual.size
+        && same_content_revision(&expected.revision, &actual.revision)
+}
+
+fn same_revision(expected: &str, actual: &str) -> bool {
+    if expected == actual {
+        return true;
+    }
+    let legacy = expected.split(':').collect::<Vec<_>>();
+    let current = actual.split(':').collect::<Vec<_>>();
+    legacy.len() == 5
+        && current.len() == 7
+        && legacy[..4] == current[..4]
+        && legacy[4] == current[6]
+}
+
+fn same_content_revision(expected: &str, actual: &str) -> bool {
+    fn content_fields(revision: &str) -> Option<[&str; 5]> {
+        let fields = revision.split(':').collect::<Vec<_>>();
+        match fields.as_slice() {
+            [device, inode, modified, modified_nanos, size] => {
+                Some([device, inode, modified, modified_nanos, size])
+            }
+            [device, inode, modified, modified_nanos, _, _, size] => {
+                Some([device, inode, modified, modified_nanos, size])
+            }
+            _ => None,
+        }
+    }
+
+    expected == actual
+        || content_fields(expected)
+            .zip(content_fields(actual))
+            .is_some_and(|(expected, actual)| expected == actual)
 }
 
 fn matches_delete_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
     match SafeFileEntryKind::try_from(expected.kind).ok() {
         Some(SafeFileEntryKind::Regular) => same_identity(expected, actual),
+        Some(SafeFileEntryKind::Directory | SafeFileEntryKind::Symlink) => {
+            same_object(expected, actual)
+        }
+        Some(SafeFileEntryKind::Unspecified) | None => false,
+    }
+}
+
+// A successful isolation rename can advance ctime without changing the object
+// or its contents. Callers use this only after the journaled delete has crossed
+// that namespace boundary; delete_exact_path captures the resulting identity
+// and compares it strictly again immediately before unlinking.
+fn matches_isolated_delete_identity(
+    expected: &SafeFileIdentity,
+    actual: &SafeFileIdentity,
+) -> bool {
+    match SafeFileEntryKind::try_from(expected.kind).ok() {
+        Some(SafeFileEntryKind::Regular) => same_renamed_identity(expected, actual),
         Some(SafeFileEntryKind::Directory | SafeFileEntryKind::Symlink) => {
             same_object(expected, actual)
         }
@@ -2261,11 +2348,11 @@ fn rename_was_applied(
 ) -> bool {
     match mode {
         SafeFileRenameMode::NoReplace => {
-            old_absent && new.is_some_and(|actual| same_identity(source, actual))
+            old_absent && new.is_some_and(|actual| same_renamed_identity(source, actual))
         }
         SafeFileRenameMode::Exchange => target.is_some_and(|target| {
-            old.is_some_and(|actual| same_identity(target, actual))
-                && new.is_some_and(|actual| same_identity(source, actual))
+            old.is_some_and(|actual| same_renamed_identity(target, actual))
+                && new.is_some_and(|actual| same_renamed_identity(source, actual))
         }),
         SafeFileRenameMode::Unspecified => false,
     }
@@ -2280,13 +2367,13 @@ fn boundary_state_matches(
     let old_matches = match expected_old {
         Some(expected) => identity_for_path(old_path)
             .as_ref()
-            .is_ok_and(|actual| same_identity(expected, actual)),
+            .is_ok_and(|actual| same_renamed_identity(expected, actual)),
         None => path_is_absent(old_path),
     };
     let new_matches = match expected_new {
         Some(expected) => identity_for_path(new_path)
             .as_ref()
-            .is_ok_and(|actual| same_identity(expected, actual)),
+            .is_ok_and(|actual| same_renamed_identity(expected, actual)),
         None => path_is_absent(new_path),
     };
     old_matches && new_matches
@@ -2321,6 +2408,10 @@ fn delete_exact_path(
     let private_directory = private_delete_directory(path);
     let private_entry = private_delete_entry(path);
     if path_is_absent(&private_entry) {
+        let boundary = identity_for_path(path)?;
+        if !matches_isolated_delete_identity(expected, &boundary) {
+            return Err("Safe-file delete isolation identity changed".to_string());
+        }
         match fs::create_dir(&private_directory) {
             Ok(()) => fs::set_permissions(&private_directory, fs::Permissions::from_mode(0o700))
                 .map_err(|error| error.to_string())?,
@@ -2345,10 +2436,14 @@ fn delete_exact_path(
         if let Some(hook) = before_isolation {
             hook(path);
         }
+        let pre_isolation = identity_for_path(path)?;
+        if !matches_delete_identity(&boundary, &pre_isolation) {
+            return Err("Safe-file delete identity changed before private isolation".to_string());
+        }
         rename_noreplace_into_directory(path, &directory, &name)
             .map_err(|error| error.to_string())?;
         let isolated = identity_for_path(&private_entry)?;
-        if !matches_delete_identity(expected, &isolated) {
+        if !matches_isolated_delete_identity(&pre_isolation, &isolated) {
             let restored = path_is_absent(path)
                 && rename_noreplace_from_directory(&directory, &name, path).is_ok()
                 && identity_for_path(path)
@@ -2376,14 +2471,16 @@ fn delete_exact_path(
         .map_err(|error| error.to_string())?;
     let file = open_nofollow(&private_entry, kind, false).map_err(|error| error.to_string())?;
     let actual = identity_for_file(&file, kind)?;
-    if !matches_delete_identity(expected, &actual) {
+    if !matches_isolated_delete_identity(expected, &actual) {
         return Err("Safe-file delete identity changed".to_string());
     }
     match kind {
         SafeFileEntryKind::Regular => {
-            let digest = sha256_file(&file)?;
-            if expected_sha256 != Some(digest.as_str()) {
-                return Err("Safe-file delete content digest changed".to_string());
+            if let Some(expected_sha256) = expected_sha256 {
+                let digest = sha256_file(&file)?;
+                if expected_sha256 != digest {
+                    return Err("Safe-file delete content digest changed".to_string());
+                }
             }
         }
         SafeFileEntryKind::Directory => {
@@ -2405,7 +2502,7 @@ fn delete_exact_path(
         }
     }
     let current = identity_for_path(&private_entry)?;
-    if !matches_delete_identity(expected, &current) {
+    if !matches_delete_identity(&actual, &current) {
         return Err("Private safe-file delete identity changed before removal".to_string());
     }
     let expected_links_before = file.metadata().map_err(|error| error.to_string())?.nlink();

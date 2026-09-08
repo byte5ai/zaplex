@@ -704,6 +704,14 @@ message SafeFileDelete {
   optional string expected_sha256 = 3;
 }
 
+// Identity-only delete negotiated through safe-file-transactions-v2. The
+// daemon isolates the exact object before unlinking, so clients never need to
+// stream file contents merely to authorize deletion.
+message SafeFileDeleteV2 {
+  string path = 1;
+  SafeFileIdentity expected = 2;
+}
+
 message SafeFileListRecoveries {}
 
 message SafeFileRetryRecovery {}
@@ -752,6 +760,7 @@ message SafeFileRequest {
     SafeFileBeginUploadBatch begin_upload_batch = 14;
     SafeFileCleanupUploadBatch cleanup_upload_batch = 15;
     SafeFileListIdentities list_identities = 16;
+    SafeFileDeleteV2 delete_v2 = 17;
   }
 }
 

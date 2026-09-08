@@ -4903,8 +4903,10 @@ enum LiveRenameFault {
 struct LiveSafeFileRequestCounts {
     identity_batches: AtomicUsize,
     open_existing: AtomicUsize,
+    read_handle: AtomicUsize,
     inspect_handle: AtomicUsize,
     close_handle: AtomicUsize,
+    delete_v2: AtomicUsize,
 }
 
 #[cfg(unix)]
@@ -4974,6 +4976,12 @@ fn spawn_live_safe_file_client(
                 }
                 if matches!(
                     request.operation.as_ref(),
+                    Some(safe_file_request::Operation::ReadHandle(..))
+                ) {
+                    counts.read_handle.fetch_add(1, Ordering::Relaxed);
+                }
+                if matches!(
+                    request.operation.as_ref(),
                     Some(safe_file_request::Operation::InspectHandle(..))
                 ) {
                     counts.inspect_handle.fetch_add(1, Ordering::Relaxed);
@@ -4983,6 +4991,12 @@ fn spawn_live_safe_file_client(
                     Some(safe_file_request::Operation::CloseHandle(..))
                 ) {
                     counts.close_handle.fetch_add(1, Ordering::Relaxed);
+                }
+                if matches!(
+                    request.operation.as_ref(),
+                    Some(safe_file_request::Operation::DeleteV2(..))
+                ) {
+                    counts.delete_v2.fetch_add(1, Ordering::Relaxed);
                 }
             }
             let is_rename = matches!(
@@ -5111,6 +5125,54 @@ async fn live_sftp_list_dir_keeps_unreadable_entries_visible() {
     server.abort();
     let _ = server.await;
     fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::remove_dir_all(case_root).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the isolated OpenSSH fixture from live-sftp-safety.yml"]
+async fn live_delete_does_not_stream_file_to_client() {
+    let (host, port, username, key_path, root) = live_sftp_configuration();
+    let case_root = root.join(format!("zaplex-live-sftp-delete-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&case_root).unwrap();
+    let file = case_root.join("large.bin");
+    fs::write(&file, vec![0x5a; 3 * 64 * 1024]).unwrap();
+
+    let session = zap_sftp::SftpSession::connect(
+        &host,
+        port,
+        &username,
+        zap_sftp::AuthMethod::PublicKey {
+            key_path,
+            passphrase: None,
+        },
+        Some(std::time::Duration::from_secs(10)),
+    )
+    .expect("the CI OpenSSH fixture must accept the configured key");
+    let sftp = session.sftp().expect("the live SFTP subsystem must open");
+    let journal = tempdir().unwrap();
+    let counts = Arc::new(LiveSafeFileRequestCounts::default());
+    let slot = SafeFileClientSlot::default();
+    let (client, _executor, server) =
+        spawn_live_safe_file_client(journal.path().to_path_buf(), None, Some(counts.clone()));
+    slot.set_with_capabilities(Some(client), true, true);
+    let backend = LiveSftpBackend::new_with_safe_file_slot(sftp, slot.clone());
+    let anchor = backend
+        .existing_entry_ownership_anchor(&file)
+        .unwrap()
+        .expect("the current daemon must provide a stable file anchor");
+
+    backend
+        .delete_entry_if_matches(&file, anchor, false)
+        .expect("the v2 identity-only delete must succeed");
+
+    assert!(!file.exists());
+    assert_eq!(counts.delete_v2.load(Ordering::Relaxed), 1);
+    assert_eq!(counts.read_handle.load(Ordering::Relaxed), 0);
+
+    slot.set(None);
+    server.abort();
+    let _ = server.await;
     fs::remove_dir_all(case_root).unwrap();
 }
 

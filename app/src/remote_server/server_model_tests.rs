@@ -32,6 +32,7 @@ use zaplex_remote_session::types::{
     FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PROCESS_SIGNAL_V1,
     FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
     FEATURE_SAFE_FILE_IDENTITY_BATCH_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
+    FEATURE_SAFE_FILE_TRANSACTIONS_V2,
 };
 
 fn test_model() -> ServerModel {
@@ -670,6 +671,9 @@ fn safe_file_identity_batch_advertisement_requires_runtime_backend_support() {
     assert!(!unsupported
         .iter()
         .any(|feature| feature == FEATURE_SAFE_FILE_TRANSACTIONS_V1));
+    assert!(!unsupported
+        .iter()
+        .any(|feature| feature == FEATURE_SAFE_FILE_TRANSACTIONS_V2));
     assert!(!unsupported
         .iter()
         .any(|feature| feature == FEATURE_SAFE_FILE_IDENTITY_BATCH_V1));

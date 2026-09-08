@@ -19,10 +19,10 @@ use parking_lot::RwLock;
 use remote_server::client::RemoteServerClient;
 use remote_server::proto::{
     safe_file_request, safe_file_response, SafeFileCreateExclusive, SafeFileDelete,
-    SafeFileEntryKind, SafeFileFlushHandle, SafeFileIdentity, SafeFileIdentityBatchEntry,
-    SafeFileIdentityBatchStatus, SafeFileInspectHandle, SafeFileInspectResult,
-    SafeFileListIdentities, SafeFileListRecoveries, SafeFileOpenExisting, SafeFileReadHandle,
-    SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileRetryRecovery,
+    SafeFileDeleteV2, SafeFileEntryKind, SafeFileFlushHandle, SafeFileIdentity,
+    SafeFileIdentityBatchEntry, SafeFileIdentityBatchStatus, SafeFileInspectHandle,
+    SafeFileInspectResult, SafeFileListIdentities, SafeFileListRecoveries, SafeFileOpenExisting,
+    SafeFileReadHandle, SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileRetryRecovery,
     SafeFileSetModeHandle, SafeFileWriteHandle,
 };
 use sha2::{Digest, Sha256};
@@ -452,8 +452,20 @@ pub trait SftpBackend: Send + Sync {
         false
     }
 
+    /// Whether an atomic exchange durably journals the displaced destination
+    /// so it is sufficient as the sole rollback copy.
+    fn supports_durable_exchange_recovery(&self) -> bool {
+        false
+    }
+
     /// Whether cleanup can be bound to a stable identity without path races.
     fn supports_identity_bound_cleanup(&self) -> bool {
+        false
+    }
+
+    /// Whether regular files can be deleted from their stable identity alone,
+    /// without streaming their contents back through the client.
+    fn supports_identity_only_delete(&self) -> bool {
         false
     }
 
@@ -649,6 +661,15 @@ pub trait SftpBackend: Send + Sync {
         }
         match (identity.file_type, recursive) {
             (FileEntryType::File, false) => {
+                if self.supports_identity_only_delete() {
+                    if anchor.identity()? != identity || !anchor.matches_path(path)? {
+                        return Err(SftpOpsError::Operation(format!(
+                            "File ownership changed before deletion at {}",
+                            path.display()
+                        )));
+                    }
+                    return self.delete_file_if_matches_identity(path, &identity);
+                }
                 let mut reader = self.open_file_reader(path)?;
                 let mut digest = Sha256::new();
                 let mut buffer = [0_u8; 64 * 1024];
@@ -735,6 +756,19 @@ pub trait SftpBackend: Send + Sync {
             path.display(),
             expected.object_id,
             expected_sha256
+        )))
+    }
+
+    /// Deletes a regular file using only its immutable identity. Backends must
+    /// override this together with `supports_identity_only_delete`.
+    fn delete_file_if_matches_identity(
+        &self,
+        path: &Path,
+        _expected: &StableEntryIdentity,
+    ) -> Result<(), SftpOpsError> {
+        Err(SftpOpsError::Operation(format!(
+            "Identity-only file deletion is unsupported for {}",
+            path.display()
         )))
     }
 
@@ -1379,6 +1413,7 @@ enum RemoteRecoveryAction {
         source_is_owned_artifact: bool,
     },
     Delete(SafeFileDelete),
+    DeleteV2(SafeFileDeleteV2),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1398,6 +1433,7 @@ enum RemoteRecoveryResolution {
 pub(crate) struct SafeFileClientSlot {
     client: Arc<RwLock<Option<Arc<RemoteServerClient>>>>,
     identity_batch: Arc<AtomicBool>,
+    transactions_v2: Arc<AtomicBool>,
 }
 
 impl SafeFileClientSlot {
@@ -1409,7 +1445,7 @@ impl SafeFileClientSlot {
 
     /// Replaces the live client and reports whether its availability changed.
     pub(crate) fn set(&self, client: Option<Arc<RemoteServerClient>>) -> bool {
-        self.set_with_identity_batch(client, false)
+        self.set_with_capabilities(client, false, false)
     }
 
     pub(crate) fn set_with_identity_batch(
@@ -1417,11 +1453,22 @@ impl SafeFileClientSlot {
         client: Option<Arc<RemoteServerClient>>,
         identity_batch: bool,
     ) -> bool {
+        self.set_with_capabilities(client, identity_batch, false)
+    }
+
+    pub(crate) fn set_with_capabilities(
+        &self,
+        client: Option<Arc<RemoteServerClient>>,
+        identity_batch: bool,
+        transactions_v2: bool,
+    ) -> bool {
         let mut current = self.client.write();
         let availability_changed = current.is_some() != client.is_some();
         *current = client;
         self.identity_batch
             .store(identity_batch && current.is_some(), Ordering::Release);
+        self.transactions_v2
+            .store(transactions_v2 && current.is_some(), Ordering::Release);
         availability_changed
     }
 
@@ -1435,6 +1482,10 @@ impl SafeFileClientSlot {
 
     fn supports_identity_batch(&self) -> bool {
         self.identity_batch.load(Ordering::Acquire)
+    }
+
+    fn supports_transactions_v2(&self) -> bool {
+        self.transactions_v2.load(Ordering::Acquire)
     }
 }
 
@@ -1728,6 +1779,9 @@ impl LiveSftpBackend {
             RemoteRecoveryAction::Delete(delete) => {
                 (safe_file_request::Operation::Delete(delete.clone()), None)
             }
+            RemoteRecoveryAction::DeleteV2(delete) => {
+                (safe_file_request::Operation::DeleteV2(delete.clone()), None)
+            }
         };
         let response = journaled_safe_file_call(client, operation.operation_id.clone(), request)?;
         if !matches!(response, safe_file_response::Result::Mutation(_)) {
@@ -1738,9 +1792,9 @@ impl LiveSftpBackend {
             RemoteRecoveryAction::Rename { .. } => {
                 RemoteRecoveryResolution::DestinationCommittedSourcePreserved
             }
-            RemoteRecoveryAction::Acknowledge | RemoteRecoveryAction::Delete(_) => {
-                RemoteRecoveryResolution::MutationApplied
-            }
+            RemoteRecoveryAction::Acknowledge
+            | RemoteRecoveryAction::Delete(_)
+            | RemoteRecoveryAction::DeleteV2(_) => RemoteRecoveryResolution::MutationApplied,
         })
     }
 
@@ -2249,8 +2303,16 @@ impl SftpBackend for LiveSftpBackend {
         self.safe_files.is_available()
     }
 
+    fn supports_durable_exchange_recovery(&self) -> bool {
+        self.safe_files.is_available()
+    }
+
     fn supports_identity_bound_cleanup(&self) -> bool {
         self.safe_files.is_available()
+    }
+
+    fn supports_identity_only_delete(&self) -> bool {
+        self.safe_files.supports_transactions_v2()
     }
 
     fn startup_recovery_paths(&self) -> Vec<PathBuf> {
@@ -2585,6 +2647,84 @@ impl SftpBackend for LiveSftpBackend {
                 Ok(())
             }
             _ => Err(unexpected_safe_file_response("delete")),
+        }
+    }
+
+    fn delete_file_if_matches_identity(
+        &self,
+        path: &Path,
+        expected: &StableEntryIdentity,
+    ) -> Result<(), SftpOpsError> {
+        if !self.safe_files.supports_transactions_v2() {
+            return Err(SftpOpsError::CapabilityRequired(
+                "safe-file-transactions-v2 was not negotiated".to_string(),
+            ));
+        }
+        let client = self.safe_client()?;
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let delete = SafeFileDeleteV2 {
+            path: remote_path_string(path)?,
+            expected: Some(safe_identity_from_stable(expected)?),
+        };
+        let replay = RemoteRecoveryOperation {
+            operation_id: operation_id.clone(),
+            source_preserved_after_commit: false,
+            action: RemoteRecoveryAction::DeleteV2(delete.clone()),
+        };
+        let response = journaled_safe_file_call(
+            &client,
+            operation_id.clone(),
+            safe_file_request::Operation::DeleteV2(delete),
+        );
+        let response = match response {
+            Ok(response) => response,
+            Err(SftpOpsError::Connection(message)) => {
+                self.retain_remote_recovery(path.to_path_buf(), replay);
+                return Err(SftpOpsError::RecoveryRequired {
+                    message: format!("Remote v2 delete acknowledgement was lost: {message}"),
+                    recovery_id: None,
+                    paths: vec![path.to_path_buf()],
+                    committed: false,
+                });
+            }
+            Err(error) => {
+                if let Some((operation, recovery_path)) =
+                    pending_remote_recovery(&client, &operation_id)?
+                {
+                    self.retain_remote_recovery(recovery_path.clone(), operation);
+                    return Err(SftpOpsError::RecoveryRequired {
+                        message: error.to_string(),
+                        recovery_id: None,
+                        paths: vec![recovery_path],
+                        committed: false,
+                    });
+                }
+                return Err(error);
+            }
+        };
+        match response {
+            safe_file_response::Result::Mutation(_) => {
+                if let Err(error) = acknowledge_safe_file_mutation(&client, &operation_id) {
+                    self.retain_remote_recovery(
+                        path.to_path_buf(),
+                        RemoteRecoveryOperation {
+                            operation_id,
+                            source_preserved_after_commit: false,
+                            action: RemoteRecoveryAction::Acknowledge,
+                        },
+                    );
+                    return Err(SftpOpsError::RecoveryRequired {
+                        message: format!(
+                            "Remote v2 delete committed but acknowledgement was lost: {error}"
+                        ),
+                        recovery_id: None,
+                        paths: vec![path.to_path_buf()],
+                        committed: true,
+                    });
+                }
+                Ok(())
+            }
+            _ => Err(unexpected_safe_file_response("v2 delete")),
         }
     }
 

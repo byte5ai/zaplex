@@ -451,6 +451,44 @@ fn identity_bound_symlink_delete_removes_only_the_link() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn identity_only_delete_rejects_a_ctime_change() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let file = directory.path().join("payload.bin");
+    fs::write(&file, b"payload").unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let opened = open_regular(&mut server, owner, &file);
+    let current = opened.identity.expect("open must return an identity");
+    let mut stale = current.clone();
+    let mut revision = stale
+        .revision
+        .split(':')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(revision.len(), 7);
+    revision[5] = if revision[5] == "0" { "1" } else { "0" }.to_string();
+    stale.revision = revision.join(":");
+    assert!(!same_identity(&stale, &current));
+    assert!(same_renamed_identity(&stale, &current));
+
+    let result = call(
+        &mut server,
+        owner,
+        "delete-ctime-change-v2",
+        safe_file_request::Operation::DeleteV2(SafeFileDeleteV2 {
+            path: path_string(&file),
+            expected: Some(stale),
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Error(_)));
+    assert_eq!(fs::read(file).unwrap(), b"payload");
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn identity_bound_symlink_delete_preserves_a_replacement() {
     let directory = tempfile::tempdir().unwrap();
     let journal = directory.path().join("journal");
@@ -928,6 +966,65 @@ fn started_rename_is_retried_with_the_same_operation_id() {
 }
 
 #[test]
+fn started_rename_recognizes_a_completed_namespace_move() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal_path = directory.path().join("journal");
+    let source = directory.path().join("source.bin");
+    let destination = directory.path().join("destination.bin");
+    fs::write(&source, b"payload").unwrap();
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal_path);
+    let opened = open_regular(&mut server, owner, &source);
+    let identity = opened.identity.clone().unwrap();
+    let operation_id = "rename-after-namespace-move";
+    server
+        .journal()
+        .unwrap()
+        .save(&JournalRecord {
+            operation_id: operation_id.to_string(),
+            state: JournalState::Started,
+            operation: JournalOperation::Rename {
+                old_path: path_string(&source),
+                new_path: path_string(&destination),
+                mode: SafeFileRenameMode::NoReplace as i32,
+                source: JournalIdentity::from(&identity),
+                target: None,
+                boundary: Some(JournalRenameBoundary {
+                    old: Some(JournalIdentity::from(&identity)),
+                    new: None,
+                }),
+            },
+            recovery_paths: vec![path_string(&source), path_string(&destination)],
+            failure: None,
+        })
+        .unwrap();
+    fs::rename(&source, &destination).unwrap();
+
+    let result = call(
+        &mut server,
+        owner,
+        operation_id,
+        safe_file_request::Operation::Rename(SafeFileRename {
+            handle_id: opened.handle_id,
+            old_path: path_string(&source),
+            new_path: path_string(&destination),
+            mode: SafeFileRenameMode::NoReplace as i32,
+            expected_target: None,
+        }),
+    );
+
+    let safe_file_response::Result::Mutation(result) = result else {
+        panic!("expected mutation response");
+    };
+    assert_eq!(
+        SafeFileMutationState::try_from(result.state).unwrap(),
+        SafeFileMutationState::AlreadyApplied
+    );
+    assert!(!source.exists());
+    assert_eq!(fs::read(destination).unwrap(), b"payload");
+}
+
+#[test]
 fn applied_rename_survives_restart_until_client_acknowledgement() {
     let directory = tempfile::tempdir().unwrap();
     let journal_path = directory.path().join("journal");
@@ -1056,6 +1153,63 @@ fn resumed_delete_removes_only_the_isolated_expected_object() {
             expected_sha256: Some(format!("{:x}", Sha256::digest(b"expected"))),
         }),
     );
+    assert!(matches!(result, safe_file_response::Result::Mutation(_)));
+    assert_eq!(fs::read(target).unwrap(), b"replacement");
+    assert!(!tombstone.exists());
+}
+
+#[test]
+fn resumed_identity_only_delete_accepts_its_namespace_ctime_change() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal_path = directory.path().join("journal");
+    let target = directory.path().join("target.bin");
+    let tombstone = directory
+        .path()
+        .join(".zaplex-delete-resumed-identity-only-delete");
+    fs::write(&target, b"expected").unwrap();
+    fs::rename(&target, &tombstone).unwrap();
+    let isolated = identity_for_path(&tombstone).unwrap();
+    let mut expected = isolated.clone();
+    let mut revision = expected
+        .revision
+        .split(':')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(revision.len(), 7);
+    revision[5] = if revision[5] == "0" { "1" } else { "0" }.to_string();
+    expected.revision = revision.join(":");
+    assert!(!same_identity(&expected, &isolated));
+    assert!(matches_isolated_delete_identity(&expected, &isolated));
+
+    fs::write(&target, b"replacement").unwrap();
+    let mut server = SafeFileServer::new_for_test(journal_path);
+    server
+        .journal()
+        .unwrap()
+        .save(&JournalRecord {
+            operation_id: "resumed-identity-only-delete".to_string(),
+            state: JournalState::Started,
+            operation: JournalOperation::Delete {
+                path: path_string(&target),
+                tombstone: path_string(&tombstone),
+                expected: JournalIdentity::from(&expected),
+                expected_sha256: None,
+            },
+            recovery_paths: vec![path_string(&target), path_string(&tombstone)],
+            failure: None,
+        })
+        .unwrap();
+
+    let result = call(
+        &mut server,
+        ConnectionId::new_v4(),
+        "resumed-identity-only-delete",
+        safe_file_request::Operation::DeleteV2(SafeFileDeleteV2 {
+            path: path_string(&target),
+            expected: Some(expected),
+        }),
+    );
+
     assert!(matches!(result, safe_file_response::Result::Mutation(_)));
     assert_eq!(fs::read(target).unwrap(), b"replacement");
     assert!(!tombstone.exists());

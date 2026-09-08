@@ -19,10 +19,12 @@ use crate::sftp_manager::types::FileEntry;
 struct InstrumentedBackend {
     inner: InMemorySftpBackend,
     supports_exchange: bool,
+    durable_exchange_recovery: bool,
     supports_cleanup: bool,
     fail_exchange_preflight: bool,
     writer_creates: Arc<AtomicU64>,
     read_bytes: Arc<AtomicU64>,
+    stage_identity_calls: Arc<AtomicU64>,
     cancel_on_read: Option<Arc<TransferControl>>,
     isolate_cleanup_failure: bool,
     cleanup_failure_applied: AtomicBool,
@@ -58,10 +60,12 @@ impl InstrumentedBackend {
         Self {
             inner: InMemorySftpBackend::new(root.to_path_buf()),
             supports_exchange: true,
+            durable_exchange_recovery: false,
             supports_cleanup: true,
             fail_exchange_preflight: false,
             writer_creates: Arc::new(AtomicU64::new(0)),
             read_bytes: Arc::new(AtomicU64::new(0)),
+            stage_identity_calls: Arc::new(AtomicU64::new(0)),
             cancel_on_read: None,
             isolate_cleanup_failure: false,
             cleanup_failure_applied: AtomicBool::new(false),
@@ -95,6 +99,11 @@ impl InstrumentedBackend {
 
     fn without_exchange(mut self) -> Self {
         self.supports_exchange = false;
+        self
+    }
+
+    fn with_durable_exchange_recovery(mut self) -> Self {
+        self.durable_exchange_recovery = true;
         self
     }
 
@@ -445,6 +454,10 @@ impl SftpBackend for InstrumentedBackend {
         self.supports_exchange
     }
 
+    fn supports_durable_exchange_recovery(&self) -> bool {
+        self.durable_exchange_recovery && self.supports_exchange && !self.fail_exchange_preflight
+    }
+
     fn supports_identity_bound_cleanup(&self) -> bool {
         self.supports_cleanup
     }
@@ -707,6 +720,9 @@ impl SftpBackend for InstrumentedBackend {
     }
 
     fn stable_identity(&self, path: &Path) -> Result<StableEntryIdentity, SftpOpsError> {
+        if path.to_string_lossy().contains(".zaplex-transfer-") {
+            self.stage_identity_calls.fetch_add(1, Ordering::SeqCst);
+        }
         if self.rename_completed.load(Ordering::SeqCst)
             && self.fail_identity_after_rename.as_deref() == Some(path)
         {
@@ -1452,6 +1468,75 @@ fn stable_identity_is_revalidated_before_move_delete() {
         b"changed while transferring"
     );
     assert!(!target.path().join("target.bin").exists());
+}
+
+#[test]
+fn target_ownership_validation_is_not_per_chunk() {
+    fn validation_calls(chunks: usize) -> u64 {
+        let source = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        fs::write(
+            source.path().join("source.bin"),
+            vec![0x31; STREAM_CHUNK_SIZE * chunks],
+        )
+        .unwrap();
+        let target_backend = Arc::new(InstrumentedBackend::new(target.path()));
+        let calls = target_backend.stage_identity_calls.clone();
+        let transfer = TransferJob {
+            source_backend: backend(source.path()),
+            target_backend,
+            source_path: PathBuf::from("/source.bin"),
+            target_path: PathBuf::from("/target.bin"),
+            operation: TransferOperation::Copy,
+            conflict: ConflictDecision::Overwrite,
+        };
+
+        assert_eq!(
+            run_transfer(&transfer, &TransferControl::default(), None).unwrap(),
+            TransferOutcome::Completed
+        );
+        calls.load(Ordering::SeqCst)
+    }
+
+    assert_eq!(validation_calls(1), validation_calls(32));
+}
+
+#[test]
+fn overwrite_uses_atomic_displaced_entry_without_creating_backup_copy() {
+    let source = tempdir().unwrap();
+    let target = tempdir().unwrap();
+    let contents = vec![0x41; STREAM_CHUNK_SIZE * 3];
+    fs::write(source.path().join("source.bin"), &contents).unwrap();
+    fs::write(target.path().join("target.bin"), b"old").unwrap();
+    let source_backend = Arc::new(InstrumentedBackend::new(source.path()));
+    let source_read_bytes = source_backend.read_bytes.clone();
+    let target_backend =
+        Arc::new(InstrumentedBackend::new(target.path()).with_durable_exchange_recovery());
+    let writer_creates = target_backend.writer_creates.clone();
+    let transfer = TransferJob {
+        source_backend,
+        target_backend,
+        source_path: PathBuf::from("/source.bin"),
+        target_path: PathBuf::from("/target.bin"),
+        operation: TransferOperation::Copy,
+        conflict: ConflictDecision::Overwrite,
+    };
+
+    assert_eq!(
+        run_transfer(&transfer, &TransferControl::default(), None).unwrap(),
+        TransferOutcome::Completed
+    );
+    assert_eq!(
+        fs::read(target.path().join("target.bin")).unwrap(),
+        contents
+    );
+    assert_eq!(
+        source_read_bytes.load(Ordering::SeqCst),
+        contents.len() as u64
+    );
+    assert_eq!(writer_creates.load(Ordering::SeqCst), 1);
+    assert!(transfer_artifacts(target.path(), "zaplex-backup").is_empty());
+    assert!(transfer_artifacts(target.path(), "zaplex-transfer").is_empty());
 }
 
 #[test]
