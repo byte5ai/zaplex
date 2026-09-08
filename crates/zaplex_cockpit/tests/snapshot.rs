@@ -46,7 +46,7 @@ fn build_snapshot_aggregates_both_providers() {
         concat!(
             r#"{"type":"turn_context","model":"gpt-5-codex","timestamp":"2026-06-30T10:30:00Z"}"#,
             "\n",
-            r#"{"type":"event_msg","timestamp":"2026-06-30T10:31:00Z","last_token_usage":{"input_tokens":200,"output_tokens":50}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-06-30T10:31:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200,"output_tokens":50},"total_token_usage":{"input_tokens":200,"output_tokens":50,"total_tokens":250}}}}"#,
             "\n",
         ),
     );

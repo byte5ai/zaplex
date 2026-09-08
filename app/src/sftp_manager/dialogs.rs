@@ -949,6 +949,34 @@ fn render_overwrite_confirm(
     )
 }
 
+fn render_unknown_host_key_confirm(
+    host: &str,
+    port: u16,
+    fingerprint_sha256: &str,
+    key_type: &str,
+    appearance: &Appearance,
+    confirm_btn_state: MouseStateHandle,
+    cancel_btn_state: MouseStateHandle,
+    close_btn_state: MouseStateHandle,
+) -> Box<dyn Element> {
+    render_confirm_dialog(
+        &crate::t!("fm-dlg-host-key-title"),
+        &crate::t!(
+            "fm-dlg-host-key-body",
+            host = host,
+            port = port,
+            key_type = key_type,
+            fingerprint = fingerprint_sha256
+        ),
+        &crate::t!("fm-dlg-host-key-confirm"),
+        SftpBrowserAction::ConfirmUnknownHostKey,
+        appearance,
+        confirm_btn_state,
+        cancel_btn_state,
+        close_btn_state,
+    )
+}
+
 /// Render dialog (main entry point).
 ///
 /// Dispatch to the corresponding render function based on dialog type.
@@ -1048,6 +1076,21 @@ pub fn render_dialog(
             target,
             *file_size,
             *direction,
+            appearance,
+            confirm_btn_state,
+            cancel_btn_state,
+            close_btn_state,
+        ),
+        Dialog::ConfirmUnknownHostKey {
+            host,
+            port,
+            fingerprint_sha256,
+            key_type,
+        } => render_unknown_host_key_confirm(
+            host,
+            *port,
+            fingerprint_sha256,
+            key_type,
             appearance,
             confirm_btn_state,
             cancel_btn_state,

@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use line_ending::LineEnding;
 use markdown_parser::{
-    FormattedIndentTextInline, FormattedText, FormattedTextFragment, FormattedTextLine, parse_html,
-    parse_markdown,
+    FormattedIndentTextInline, FormattedText, FormattedTextFragment, FormattedTextHeader,
+    FormattedTextLine, parse_html, parse_markdown,
 };
 use pathfinder_color::ColorU;
 use rand::SeedableRng;
@@ -6808,6 +6808,93 @@ fn test_edit_in_header() {
             );
         });
     });
+}
+
+#[test]
+fn test_multiline_insert_in_header_preserves_each_line_once() {
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "test\nline\nsecond",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.block_style_range(
+                CharOffset::from(6)..CharOffset::from(10),
+                BufferBlockStyle::Header {
+                    header_size: BlockHeaderSize::Header1,
+                },
+                selection.clone(),
+                ctx,
+            );
+            assert_eq!(
+                buffer.content.debug(),
+                "<text>test<header1>line<text>second"
+            );
+
+            buffer.edit_internal_first_selection(
+                CharOffset::from(8)..CharOffset::from(8),
+                "a\nb",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+
+            assert_eq!(
+                buffer.content.debug(),
+                "<text>test<header1>lia<text>bne\nsecond"
+            );
+            assert_eq!(buffer.text().matches('a').count(), 1);
+            assert_eq!(buffer.text().matches('b').count(), 1);
+        });
+
+        selection.read(&app, |selection, _| {
+            buffer.read(&app, |buffer, _| {
+                buffer.validate(&selection.anchors);
+            });
+        });
+    });
+}
+
+#[test]
+fn test_header_text_conversion_defines_multiline_boundaries() {
+    let heading = |text| {
+        FormattedTextLine::Heading(FormattedTextHeader {
+            heading_size: BlockHeaderSize::Header1.into(),
+            text: vec![FormattedTextFragment::plain_text(text)],
+        })
+    };
+    let line = |text| FormattedTextLine::Line(vec![FormattedTextFragment::plain_text(text)]);
+    let convert = |text| {
+        super::convert_text_with_style_to_formatted_text(
+            text,
+            TextStyles::default(),
+            BufferBlockStyle::Header {
+                header_size: BlockHeaderSize::Header1,
+            },
+        )
+        .lines
+    };
+
+    assert_eq!(convert("a\nb"), vec![heading("a"), line("b")].into());
+    assert_eq!(
+        convert("\na"),
+        vec![FormattedTextLine::LineBreak, line("a")].into()
+    );
+    assert_eq!(convert("a\n"), vec![heading("a")].into());
+    assert_eq!(
+        convert("a\n\nb"),
+        vec![heading("a"), FormattedTextLine::LineBreak, line("b")].into()
+    );
+    assert_eq!(
+        convert("a\n\n"),
+        vec![heading("a"), FormattedTextLine::LineBreak].into()
+    );
 }
 
 #[test]
