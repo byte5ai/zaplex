@@ -9,6 +9,7 @@ use crate::ai::api_error::AIApiError;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, SessionContext};
 use crate::cockpit::CockpitModel;
 use crate::remote_server::manager::RemoteServerManager;
+use crate::report_if_error;
 use crate::terminal::ssh::util::InteractiveSshCommand;
 use anyhow::{anyhow, bail, Context, Result};
 use futures::channel::oneshot;
@@ -413,7 +414,16 @@ pub(crate) async fn generate_subscription_output(
             ));
         }
     };
-    if let Err(error) = session.send_prompt(&prompt).await {
+    if let Some(identity) = session.identity().cloned() {
+        registry.store(conversation_id.clone(), target.clone(), identity);
+    }
+    if let Err(error) = with_timeout(
+        "subscription agent prompt delivery",
+        session.send_prompt(&prompt),
+    )
+    .await
+    {
+        end_session(&mut session, &registry, &conversation_id).await;
         registry.set_lifecycle(
             conversation_id.clone(),
             runtime_error_lifecycle(
@@ -451,14 +461,29 @@ pub(crate) async fn generate_subscription_output(
             };
             let event = match event {
                 None => {
-                    let _ = session.cancel().await;
-                    registry.clear_approvals(&conversation_id);
+                    report_if_error!(with_timeout(
+                        "subscription agent cancellation",
+                        session.cancel()
+                    )
+                    .await);
                     mark_cancelled(&registry, &conversation_id);
+                    end_session(&mut session, &registry, &conversation_id).await;
                     break;
                 }
                 Some(event) => match event {
                     Ok(Some(event)) => event,
-                    Ok(None) => break,
+                    Ok(None) => {
+                        registry.set_lifecycle(
+                            conversation_id.clone(),
+                            recoverable_lifecycle(
+                                &registry,
+                                &conversation_id,
+                                "Subscription agent ended without a terminal event".to_string(),
+                            ),
+                        );
+                        end_session(&mut session, &registry, &conversation_id).await;
+                        break;
+                    }
                     Err(error) => {
                         registry.set_lifecycle(
                             conversation_id.clone(),
@@ -469,6 +494,7 @@ pub(crate) async fn generate_subscription_output(
                                 error.to_string(),
                             ),
                         );
+                        end_session(&mut session, &registry, &conversation_id).await;
                         yield Err(Arc::new(subscription_api_error(error)));
                         break;
                     }
@@ -544,6 +570,10 @@ pub(crate) async fn generate_subscription_output(
                 | super::SubscriptionEvent::TurnCompleted { .. }
                 | super::SubscriptionEvent::Error { .. } => None,
             };
+            let turn_completed = matches!(&event, super::SubscriptionEvent::TurnCompleted { .. });
+            if turn_completed {
+                end_session(&mut session, &registry, &conversation_id).await;
+            }
             for response in adapter.adapt(event.clone()) {
                 yield Ok(response);
             }
@@ -552,14 +582,23 @@ pub(crate) async fn generate_subscription_output(
                 futures_util::pin_mut!(approval);
                 let decision = select! {
                     _ = cancellation => {
-                        let _ = session.cancel().await;
-                        registry.clear_approvals(&conversation_id);
+                        report_if_error!(with_timeout(
+                            "subscription agent cancellation",
+                            session.cancel()
+                        )
+                        .await);
                         mark_cancelled(&registry, &conversation_id);
+                        end_session(&mut session, &registry, &conversation_id).await;
                         break;
                     }
                     decision = approval => decision.unwrap_or(super::ApprovalDecision::Deny),
                 };
-                if let Err(error) = session.respond_to_approval(&request_id, decision).await {
+                if let Err(error) = with_timeout(
+                    "subscription agent approval response",
+                    session.respond_to_approval(&request_id, decision),
+                )
+                .await
+                {
                     registry.set_lifecycle(
                         conversation_id.clone(),
                         runtime_error_lifecycle(
@@ -569,13 +608,25 @@ pub(crate) async fn generate_subscription_output(
                             error.to_string(),
                         ),
                     );
+                    end_session(&mut session, &registry, &conversation_id).await;
                     yield Err(Arc::new(subscription_api_error(error)));
                     break;
                 }
+                if decision == super::ApprovalDecision::Cancel {
+                    report_if_error!(with_timeout(
+                        "subscription agent cancellation",
+                        session.cancel()
+                    )
+                    .await);
+                    mark_cancelled(&registry, &conversation_id);
+                    end_session(&mut session, &registry, &conversation_id).await;
+                    break;
+                }
                 registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Responding);
-            } else if matches!(event, super::SubscriptionEvent::TurnCompleted { .. }) {
+            } else if turn_completed {
                 break;
             } else if let super::SubscriptionEvent::Error { message, .. } = event {
+                end_session(&mut session, &registry, &conversation_id).await;
                 let error = if is_authentication_failure(&message) {
                     AIApiError::Other(SubscriptionAuthenticationError { message }.into())
                 } else {
@@ -608,6 +659,17 @@ fn mark_cancelled(registry: &SubscriptionSessionRegistry, conversation_id: &str)
         })
         .unwrap_or(AgentLifecycle::Ready);
     registry.set_lifecycle(conversation_id.to_string(), lifecycle);
+}
+
+async fn end_session(
+    session: &mut SubscriptionSession,
+    registry: &SubscriptionSessionRegistry,
+    conversation_id: &str,
+) {
+    registry.clear_approvals(conversation_id);
+    if let Err(error) = session.end().await {
+        log::warn!("Failed to end subscription-agent process: {error:#}");
+    }
 }
 
 async fn discover_candidate(
