@@ -4,8 +4,9 @@
 //! confirmed (design doc §10), so parsing is deliberately **defensive**: it searches
 //! each JSONL line for a token-usage object rather than assuming a fixed path.
 //!
-//! Privacy: reads `auth.json` only for `auth_mode` and decodes the **unverified**
-//! `id_token` JWT payload for an `email` claim. Token strings are never stored.
+//! Privacy: reads `auth.json` only to classify the auth form and decodes the
+//! **unverified** `id_token` JWT payload for an `email` claim. API-key values
+//! and token strings are never stored.
 
 use std::collections::HashSet;
 use std::fs;
@@ -49,24 +50,13 @@ fn jwt_payload(token: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-fn account_key(codex_home: &Path, is_default: bool) -> String {
-    if is_default {
-        return "codex:default".to_string();
-    }
-    let name = codex_home
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("account");
-    let suffix = name
-        .strip_prefix(".codex-")
-        .or_else(|| name.strip_prefix(".codex"))
-        .filter(|suffix| !suffix.is_empty())
-        .unwrap_or(name);
-    format!("codex:{suffix}")
+fn account_key(codex_home: &Path, home: &Path, is_default: bool) -> String {
+    crate::account_key::stable_account_key(Provider::Codex, codex_home, home, is_default)
 }
 
 fn account_from_root(
     codex_home: &Path,
+    home: &Path,
     is_default: bool,
 ) -> Result<Option<(Account, Option<String>)>, String> {
     let auth_path = codex_home.join("auth.json");
@@ -103,7 +93,20 @@ fn account_from_root(
         .filter(|id| !id.is_empty())
         .map(str::to_string);
 
-    if auth_mode.is_none() && account_id.is_none() && email.is_none() {
+    let has_legacy_api_key = auth
+        .get("OPENAI_API_KEY")
+        .and_then(Value::as_str)
+        .is_some_and(|key| !key.trim().is_empty());
+    if auth_mode.as_deref() == Some("apikey") {
+        return Ok(None);
+    }
+
+    let has_subscription_identity =
+        auth_mode.as_deref() == Some("chatgpt") || account_id.is_some() || email.is_some();
+    if !has_subscription_identity && has_legacy_api_key {
+        return Ok(None);
+    }
+    if !has_subscription_identity {
         return Err("Codex account sign-in file is malformed".to_string());
     }
 
@@ -115,7 +118,7 @@ fn account_from_root(
     Ok(Some((
         Account {
             provider: Provider::Codex,
-            key: account_key(codex_home, is_default),
+            key: account_key(codex_home, home, is_default),
             config_dir: codex_home.to_path_buf(),
             label,
             email,
@@ -149,6 +152,7 @@ pub fn discover_account_roots(home: &Path, codex_home_env: Option<&Path>) -> Acc
     let mut issues = Vec::new();
     let mut seen_roots = HashSet::new();
     let mut seen_identities = HashSet::new();
+    let mut seen_keys = HashSet::new();
     for (root, is_default, is_pinned) in candidates {
         let canonical_root = match fs::canonicalize(&root) {
             Ok(canonical_root) => canonical_root,
@@ -168,12 +172,16 @@ pub fn discover_account_roots(home: &Path, codex_home_env: Option<&Path>) -> Acc
             }
             continue;
         }
-        match account_from_root(&canonical_root, is_default) {
+        match account_from_root(&canonical_root, home, is_default) {
             Ok(Some((account, stable_identity))) => {
                 if stable_identity
                     .as_ref()
                     .is_some_and(|identity| !seen_identities.insert(identity.clone()))
                 {
+                    continue;
+                }
+                if !seen_keys.insert(account.key.clone()) {
+                    issues.push("Codex account key collision".to_string());
                     continue;
                 }
                 accounts.push(account);
@@ -191,35 +199,144 @@ pub fn discover_account_roots(home: &Path, codex_home_env: Option<&Path>) -> Acc
 /// Compatibility helper for callers that already resolved one root.
 pub fn discover_accounts(codex_home: &Path) -> Vec<Account> {
     let root = fs::canonicalize(codex_home).unwrap_or_else(|_| codex_home.to_path_buf());
-    account_from_root(&root, true)
+    let home = root.parent().unwrap_or(&root);
+    account_from_root(&root, home, true)
         .ok()
         .flatten()
         .map(|(account, _)| vec![account])
         .unwrap_or_default()
 }
 
-/// Read `input_tokens` / `output_tokens` / `cached_input_tokens` /
-/// `reasoning_output_tokens` from a token-usage object.
-fn tokens_from(obj: &Value) -> (u64, u64, u64, u64) {
-    let n = |k: &str| obj.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-    let input = n("input_tokens");
-    let cached = n("cached_input_tokens");
-    (
-        // Codex reports cached input as part of `input_tokens`. Store only the
-        // uncached remainder here; `cache_read` owns the cached part so totals,
-        // work, and pricing each count every token once.
-        input.saturating_sub(cached),
-        n("output_tokens"),
-        cached,
-        n("reasoning_output_tokens"),
-    )
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TokenCounts {
+    input: u64,
+    output: u64,
+    cached: u64,
+    reasoning: u64,
+}
+
+impl TokenCounts {
+    fn from_value(obj: &Value) -> Self {
+        let n = |key: &str| obj.get(key).and_then(Value::as_u64).unwrap_or(0);
+        Self {
+            input: n("input_tokens"),
+            output: n("output_tokens"),
+            cached: n("cached_input_tokens"),
+            reasoning: n("reasoning_output_tokens"),
+        }
+    }
+
+    fn delta_from(self, previous: Self) -> Self {
+        Self {
+            input: self.input.saturating_sub(previous.input),
+            output: self.output.saturating_sub(previous.output),
+            cached: self.cached.saturating_sub(previous.cached),
+            reasoning: self.reasoning.saturating_sub(previous.reasoning),
+        }
+    }
+
+    fn normalized(self) -> (u64, u64, u64, u64) {
+        (
+            self.input.saturating_sub(self.cached),
+            self.output,
+            self.cached,
+            self.reasoning,
+        )
+    }
+
+    fn is_empty(self) -> bool {
+        self.input == 0 && self.output == 0 && self.cached == 0 && self.reasoning == 0
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CumulativeUsage {
+    counts: TokenCounts,
+    total: u64,
+}
+
+impl CumulativeUsage {
+    fn from_value(obj: &Value) -> Option<Self> {
+        let counts = TokenCounts::from_value(obj);
+        let total = obj
+            .get("total_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| counts.input.saturating_add(counts.output));
+        (total > 0 || !counts.is_empty()).then_some(Self { counts, total })
+    }
+}
+
+fn token_count_info(v: &Value) -> Option<&Value> {
+    if v.get("type").and_then(Value::as_str) != Some("event_msg") {
+        return None;
+    }
+    let payload = v.get("payload")?;
+    if payload.get("type").and_then(Value::as_str) != Some("token_count") {
+        return None;
+    }
+    Some(payload.get("info").unwrap_or(payload))
+}
+
+fn usage_entry(
+    counts: TokenCounts,
+    ts: DateTime<Utc>,
+    model: &str,
+    session_id: &str,
+) -> Option<UsageEntry> {
+    let (input, output, cached, reasoning) = counts.normalized();
+    [input, output, cached, reasoning]
+        .into_iter()
+        .any(|count| count > 0)
+        .then(|| UsageEntry {
+            ts,
+            provider: Provider::Codex,
+            model: model.to_string(),
+            input,
+            output,
+            cache_create: 0,
+            cache_read: cached,
+            reasoning,
+            session_id: session_id.to_string(),
+        })
+}
+
+fn confirmed_usage(
+    info: &Value,
+    previous_total: &mut Option<CumulativeUsage>,
+) -> Option<TokenCounts> {
+    let last = info
+        .get("last_token_usage")
+        .map(TokenCounts::from_value)
+        .filter(|counts| !counts.is_empty());
+    let Some(current) = info
+        .get("total_token_usage")
+        .and_then(CumulativeUsage::from_value)
+    else {
+        // Older token_count records did not include cumulative totals. They cannot
+        // be deduplicated without also dropping equal-sized real turns.
+        return last;
+    };
+
+    let selected = match *previous_total {
+        None => last.or(Some(current.counts)),
+        Some(previous) if current.total > previous.total => {
+            last.or_else(|| Some(current.counts.delta_from(previous.counts)))
+        }
+        Some(previous) if current.total == previous.total => None,
+        Some(previous) => {
+            debug_assert!(current.total < previous.total);
+            None
+        }
+    };
+    *previous_total = Some(current);
+    selected
 }
 
 /// Parse a Codex `rollout-*.jsonl` session into per-turn usage entries.
 ///
-/// Sums **per-turn** deltas (`last_token_usage`) to avoid double-counting the
-/// cumulative `total_token_usage` envelope. `file_date` (from the `YYYY/MM/DD` path)
-/// is the timestamp fallback when a line carries none.
+/// Emits per-turn usage only for `token_count` events whose cumulative snapshot
+/// advances. `file_date` (from the `YYYY/MM/DD` path) is the timestamp fallback
+/// when a line carries none.
 pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry> {
     let Ok(content) = fs::read_to_string(path) else {
         return Vec::new();
@@ -231,6 +348,7 @@ pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry
     // way here would stamp spend with an id no session row carries.
     let mut session_id = crate::codex_sessions::session_id_from_path(path);
     let mut entries = Vec::new();
+    let mut previous_total = None;
 
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
@@ -250,24 +368,12 @@ pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry
         {
             current_ts = ts.with_timezone(&Utc);
         }
-        // Per-turn usage; ignore cumulative `total_token_usage` to avoid double counts.
-        if let Some(usage) = find(&v, "last_token_usage") {
-            let (input, output, cached, reasoning) = tokens_from(usage);
-            if [input, output, cached, reasoning]
-                .into_iter()
-                .any(|n| n > 0)
-            {
-                entries.push(UsageEntry {
-                    ts: current_ts,
-                    provider: Provider::Codex,
-                    model: current_model.clone(),
-                    input,
-                    output,
-                    cache_create: 0, // Codex has no separate cache-write concept
-                    cache_read: cached,
-                    reasoning,
-                    session_id: session_id.clone(),
-                });
+        let Some(info) = token_count_info(&v) else {
+            continue;
+        };
+        if let Some(counts) = confirmed_usage(info, &mut previous_total) {
+            if let Some(entry) = usage_entry(counts, current_ts, &current_model, &session_id) {
+                entries.push(entry);
             }
         }
     }
