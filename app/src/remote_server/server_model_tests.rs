@@ -3,11 +3,12 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use super::super::proto::{
-    list_directory_response, read_file_chunk_response, resolve_path_response, server_message,
-    write_file_chunk_response, AgentProcessSignal, AgentProcessSignalRequest,
-    AgentProcessSignalStatus, AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo,
-    Authenticate, BindAgentPty, CreateDirectory, Initialize, ListDirectory, ReadFileChunk,
-    ResolvePath, UnbindAgentPty, WriteFileChunk,
+    client_message, list_directory_response, read_file_chunk_response, resolve_path_response,
+    server_message, write_file_chunk_response, Abort, AgentProcessSignal,
+    AgentProcessSignalRequest, AgentProcessSignalStatus, AgentPtyBindingStatus,
+    AgentSessionIdentity, AgentSessionInfo, Authenticate, BindAgentPty, ClientMessage,
+    CreateDirectory, ErrorCode, Initialize, ListDirectory, ReadFileChunk, ResolvePath,
+    SessionBootstrapped, UnbindAgentPty, WriteFileChunk,
 };
 use super::super::protocol::RequestId;
 #[cfg(feature = "local_fs")]
@@ -16,7 +17,8 @@ use super::super::server_buffer_tracker::ServerBufferTracker;
 use super::collect_directory_entries;
 use super::{
     execute_agent_process_signal_with, server_features_with_runtime_support,
-    AgentTranscriptReadPermit, PendingFileOps, ServerModel, MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
+    AgentInventoryScanCache, AgentTranscriptReadPermit, PendingFileOps, ServerModel,
+    MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
 };
 #[cfg(unix)]
 use super::{
@@ -52,8 +54,8 @@ fn test_model() -> ServerModel {
         next_pty_generation: 1,
         #[cfg(unix)]
         safe_files: super::super::safe_file::SafeFileServer::unavailable_for_test(),
-        agent_transcript_cache: std::sync::Arc::new(std::sync::Mutex::new(
-            zaplex_cockpit::TranscriptScanCache::default(),
+        agent_inventory_scan_cache: std::sync::Arc::new(std::sync::Mutex::new(
+            super::AgentInventoryScanCache::default(),
         )),
         agent_account_routes: Default::default(),
         fresh_agent_account_routes_for_test: None,
@@ -73,11 +75,69 @@ fn request_id() -> RequestId {
     RequestId::from("test-request".to_string())
 }
 
+fn session_bootstrapped_message(session_id: u64) -> ClientMessage {
+    ClientMessage {
+        request_id: String::new(),
+        message: Some(client_message::Message::SessionBootstrapped(
+            SessionBootstrapped {
+                session_id,
+                shell_type: "bash".to_string(),
+                shell_path: Some("/bin/bash".to_string()),
+            },
+        )),
+    }
+}
+
 #[test]
 fn fresh_model_starts_without_auth_token() {
     let model = test_model();
 
     assert_eq!(model.auth_token(), None);
+}
+
+#[test]
+fn deregister_connection_removes_its_session_executors() {
+    warpui::App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_ctx| test_model());
+        let (first_tx, _first_rx) = async_channel::unbounded();
+        let (second_tx, _second_rx) = async_channel::unbounded();
+        let first = uuid::Uuid::new_v4();
+        let second = uuid::Uuid::new_v4();
+
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(first, first_tx, ctx);
+            model.register_connection(second, second_tx, ctx);
+            model.handle_message(first, session_bootstrapped_message(7), ctx);
+            assert_eq!(model.executors.len(), 1);
+
+            model.deregister_connection(first, ctx);
+
+            assert!(model.connection_senders.contains_key(&second));
+            assert!(model.executors.is_empty());
+        });
+    });
+}
+
+#[test]
+fn identical_client_session_ids_do_not_collide_across_connections() {
+    warpui::App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_ctx| test_model());
+        let (first_tx, _first_rx) = async_channel::unbounded();
+        let (second_tx, _second_rx) = async_channel::unbounded();
+        let first = uuid::Uuid::new_v4();
+        let second = uuid::Uuid::new_v4();
+
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(first, first_tx, ctx);
+            model.register_connection(second, second_tx, ctx);
+            model.handle_message(first, session_bootstrapped_message(7), ctx);
+            model.handle_message(second, session_bootstrapped_message(7), ctx);
+
+            assert_eq!(model.executors.len(), 2);
+            model.deregister_connection(first, ctx);
+            assert_eq!(model.executors.len(), 1);
+        });
+    });
 }
 
 #[test]
@@ -90,6 +150,219 @@ fn transcript_read_permits_cap_parallel_work_and_release_on_drop() {
     assert!(AgentTranscriptReadPermit::try_acquire(std::sync::Arc::clone(&in_flight)).is_none());
     drop(permits);
     assert!(AgentTranscriptReadPermit::try_acquire(in_flight).is_some());
+}
+
+#[test]
+fn overlapping_inventory_requests_reuse_the_completed_scan() {
+    let mut cache = AgentInventoryScanCache::default();
+    let requested_at = std::time::Instant::now();
+    let mut scan_count = 0;
+    let make_scan = || super::super::agent_account::AccountInventoryScan {
+        inventory: super::super::proto::AgentAccountInventory::default(),
+        routes: HashMap::new(),
+        sessions: Vec::new(),
+    };
+
+    cache.scan_with(requested_at, |_| {
+        scan_count += 1;
+        make_scan()
+    });
+    cache.scan_with(requested_at, |_| {
+        scan_count += 1;
+        make_scan()
+    });
+
+    assert_eq!(scan_count, 1);
+}
+
+#[test]
+fn blocking_inventory_scan_does_not_starve_single_worker_io() {
+    use warpui::r#async::FutureExt as _;
+
+    warpui::App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_ctx| test_model());
+        let request_id = RequestId::from("blocking-inventory".to_string());
+        let conn_id = uuid::Uuid::new_v4();
+        let released =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let released_for_scan = std::sync::Arc::clone(&released);
+        let (started_tx, started_rx) = async_channel::bounded(1);
+        let (completed_tx, completed_rx) = async_channel::bounded(1);
+
+        model.update(&mut app, |model, ctx| {
+            let handle = model.spawn_blocking_request_handler(
+                request_id.clone(),
+                conn_id,
+                move || {
+                    started_tx.try_send(()).unwrap();
+                    let (lock, condition) = &*released_for_scan;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = condition.wait(released).unwrap();
+                    }
+                },
+                move |_model, (), _ctx| {
+                    completed_tx.try_send(()).unwrap();
+                },
+                ctx,
+            );
+            model.in_progress.insert(request_id, handle);
+        });
+
+        assert!(matches!(
+            started_rx
+                .recv()
+                .with_timeout(std::time::Duration::from_secs(1))
+                .await,
+            Ok(Ok(()))
+        ));
+
+        let (sentinel_tx, sentinel_rx) = async_channel::bounded(1);
+        app.background_executor()
+            .spawn(async move {
+                sentinel_tx.send(()).await.unwrap();
+            })
+            .detach();
+        let io_progressed = matches!(
+            sentinel_rx
+                .recv()
+                .with_timeout(std::time::Duration::from_millis(250))
+                .await,
+            Ok(Ok(()))
+        );
+
+        let (lock, condition) = &*released;
+        *lock.lock().unwrap() = true;
+        condition.notify_all();
+
+        assert!(io_progressed, "blocking scan starved the async worker");
+        assert!(matches!(
+            completed_rx
+                .recv()
+                .with_timeout(std::time::Duration::from_secs(1))
+                .await,
+            Ok(Ok(()))
+        ));
+        model.update(&mut app, |model, _ctx| {
+            assert!(!model
+                .in_progress
+                .contains_key(&RequestId::from("blocking-inventory".to_string())));
+        });
+    });
+}
+
+#[test]
+fn blocking_handler_join_error_is_correlated_and_cleans_up() {
+    use warpui::r#async::FutureExt as _;
+
+    warpui::App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_ctx| test_model());
+        let request_id = RequestId::from("panicking-inventory".to_string());
+        let conn_id = uuid::Uuid::new_v4();
+        let (conn_tx, conn_rx) = async_channel::unbounded();
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(conn_id, conn_tx, ctx);
+            let handle = model.spawn_blocking_request_handler(
+                request_id.clone(),
+                conn_id,
+                || panic!("simulated inventory scanner panic"),
+                |_model, (), _ctx| unreachable!("panicking scanner must not resolve"),
+                ctx,
+            );
+            model.in_progress.insert(request_id, handle);
+        });
+
+        let response = conn_rx
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("join error response timed out")
+            .expect("connection closed before join error response");
+        assert_eq!(response.request_id, "panicking-inventory");
+        let Some(server_message::Message::Error(error)) = response.message else {
+            panic!("expected correlated internal error");
+        };
+        assert_eq!(error.code, ErrorCode::Internal as i32);
+        model.update(&mut app, |model, _ctx| {
+            assert!(!model
+                .in_progress
+                .contains_key(&RequestId::from("panicking-inventory".to_string())));
+        });
+    });
+}
+
+#[test]
+fn abort_detaches_blocking_result_and_cleans_up_in_progress() {
+    use warpui::r#async::FutureExt as _;
+
+    warpui::App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_ctx| test_model());
+        let request_id = RequestId::from("aborted-inventory".to_string());
+        let conn_id = uuid::Uuid::new_v4();
+        let released =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let released_for_scan = std::sync::Arc::clone(&released);
+        let (started_tx, started_rx) = async_channel::bounded(1);
+        let (finished_tx, finished_rx) = async_channel::bounded(1);
+        let (stale_tx, stale_rx) = async_channel::bounded(1);
+        model.update(&mut app, |model, ctx| {
+            let handle = model.spawn_blocking_request_handler(
+                request_id.clone(),
+                conn_id,
+                move || {
+                    started_tx.try_send(()).unwrap();
+                    let (lock, condition) = &*released_for_scan;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = condition.wait(released).unwrap();
+                    }
+                    finished_tx.try_send(()).unwrap();
+                },
+                move |_model, (), _ctx| {
+                    stale_tx.try_send(()).unwrap();
+                },
+                ctx,
+            );
+            model.in_progress.insert(request_id, handle);
+        });
+        assert!(matches!(
+            started_rx
+                .recv()
+                .with_timeout(std::time::Duration::from_secs(1))
+                .await,
+            Ok(Ok(()))
+        ));
+
+        model.update(&mut app, |model, _ctx| {
+            model.handle_abort(
+                Abort {
+                    request_id_to_abort: "aborted-inventory".to_string(),
+                },
+                &RequestId::from("abort-notification".to_string()),
+            );
+            assert!(!model
+                .in_progress
+                .contains_key(&RequestId::from("aborted-inventory".to_string())));
+        });
+        let (lock, condition) = &*released;
+        *lock.lock().unwrap() = true;
+        condition.notify_all();
+        assert!(matches!(
+            finished_rx
+                .recv()
+                .with_timeout(std::time::Duration::from_secs(1))
+                .await,
+            Ok(Ok(()))
+        ));
+        match stale_rx
+            .recv()
+            .with_timeout(std::time::Duration::from_millis(100))
+            .await
+        {
+            Ok(Ok(())) => panic!("aborted request resolved with a stale result"),
+            Ok(Err(_)) | Err(_) => {}
+        }
+    });
 }
 
 #[cfg(unix)]

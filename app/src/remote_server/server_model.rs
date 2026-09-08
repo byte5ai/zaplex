@@ -9,6 +9,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use warp_core::channel::ChannelState;
 use warp_core::SessionId;
 #[cfg(unix)]
@@ -151,6 +152,48 @@ impl Drop for AgentTranscriptReadPermit {
     fn drop(&mut self) {
         let previous = self.in_flight.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(previous > 0);
+    }
+}
+
+struct CachedAgentInventoryScan {
+    completed_at: Instant,
+    scan: super::agent_account::AccountInventoryScan,
+}
+
+#[derive(Default)]
+struct AgentInventoryScanCache {
+    transcripts: zaplex_cockpit::TranscriptScanCache,
+    latest: Option<CachedAgentInventoryScan>,
+}
+
+impl AgentInventoryScanCache {
+    fn scan(&mut self, requested_at: Instant) -> super::agent_account::AccountInventoryScan {
+        self.scan_with(requested_at, |transcripts| {
+            super::agent_account::scan_agent_accounts_with_cache(transcripts)
+        })
+    }
+
+    fn scan_with(
+        &mut self,
+        requested_at: Instant,
+        scanner: impl FnOnce(
+            &mut zaplex_cockpit::TranscriptScanCache,
+        ) -> super::agent_account::AccountInventoryScan,
+    ) -> super::agent_account::AccountInventoryScan {
+        if let Some(cached) = self
+            .latest
+            .as_ref()
+            .filter(|cached| cached.completed_at >= requested_at)
+        {
+            return cached.scan.clone();
+        }
+
+        let scan = scanner(&mut self.transcripts);
+        self.latest = Some(CachedAgentInventoryScan {
+            completed_at: Instant::now(),
+            scan: scan.clone(),
+        });
+        scan
     }
 }
 
@@ -490,8 +533,9 @@ pub struct ServerModel {
     /// Returned in every `InitializeResponse` so clients can deduplicate
     /// host-scoped models.
     host_id: String,
-    /// Per-session command executors created from `SessionBootstrapped` notifications.
-    executors: HashMap<SessionId, Arc<LocalCommandExecutor>>,
+    /// Per-connection, per-session command executors created from `SessionBootstrapped`
+    /// notifications. Client-local session ids may overlap across proxy connections.
+    executors: HashMap<(ConnectionId, SessionId), Arc<LocalCommandExecutor>>,
     /// Tracks in-flight file write/delete operations and handles cleanup.
     pending_file_ops: PendingFileOps,
     /// Tracks open server-local buffers, their connections, and pending
@@ -518,10 +562,11 @@ pub struct ServerModel {
     /// safe file-manager transfer protocol.
     #[cfg(unix)]
     safe_files: super::safe_file::SafeFileServer,
-    /// Bounded transcript parse cache shared by all agent-inventory requests.
-    /// The scan itself stays off the model thread; the mutex only serializes
-    /// concurrent readers of the process-local cache.
-    agent_transcript_cache: Arc<Mutex<zaplex_cockpit::TranscriptScanCache>>,
+    /// Single-flight inventory cache shared by all agent-inventory requests.
+    /// The mutex and every filesystem operation guarded by it run only on the
+    /// blocking pool. Requests that overlap reuse the scan that completed
+    /// after they were submitted instead of repeating the same walk.
+    agent_inventory_scan_cache: Arc<Mutex<AgentInventoryScanCache>>,
     /// Opaque account ids from the latest daemon-local inventory mapped to
     /// provider config roots that never cross the wire.
     agent_account_routes: super::agent_account::AccountRouteCache,
@@ -581,9 +626,7 @@ impl ServerModel {
             next_pty_generation: 1,
             #[cfg(unix)]
             safe_files: super::safe_file::SafeFileServer::new(),
-            agent_transcript_cache: Arc::new(Mutex::new(
-                zaplex_cockpit::TranscriptScanCache::default(),
-            )),
+            agent_inventory_scan_cache: Arc::new(Mutex::new(AgentInventoryScanCache::default())),
             agent_account_routes: Default::default(),
             #[cfg(test)]
             fresh_agent_account_routes_for_test: None,
@@ -914,6 +957,8 @@ impl ServerModel {
         if self.connection_senders.remove(&conn_id).is_none() {
             return;
         }
+        self.executors
+            .retain(|(executor_conn_id, _), _| *executor_conn_id != conn_id);
         #[cfg(unix)]
         self.safe_files.close_connection(conn_id);
         // Drop this connection from all open server-local buffers; orphaned
@@ -995,7 +1040,7 @@ impl ServerModel {
                 return;
             }
             Some(client_message::Message::SessionBootstrapped(msg)) => {
-                self.handle_session_bootstrapped(msg);
+                self.handle_session_bootstrapped(conn_id, msg);
                 return;
             }
             Some(client_message::Message::Abort(abort)) => {
@@ -1368,6 +1413,48 @@ impl ServerModel {
         )
     }
 
+    /// Runs a synchronous request operation on Tokio's blocking pool while
+    /// retaining the request correlation and abort cleanup of
+    /// [`Self::spawn_request_handler`]. A cancelled outer request may leave an
+    /// already-started blocking closure running to completion, but its result
+    /// is detached and can no longer emit a stale response.
+    fn spawn_blocking_request_handler<T, B, F>(
+        &mut self,
+        request_id: RequestId,
+        conn_id: ConnectionId,
+        operation: B,
+        on_resolve: F,
+        ctx: &mut ModelContext<Self>,
+    ) -> SpawnedFutureHandle
+    where
+        T: Send + 'static,
+        B: FnOnce() -> T + Send + 'static,
+        F: 'static + FnOnce(&mut Self, T, &mut ModelContext<Self>),
+    {
+        let request_id_for_error = request_id.clone();
+        self.spawn_request_handler(
+            request_id,
+            async move { tokio::task::spawn_blocking(operation).await },
+            move |me, result, ctx| match result {
+                Ok(output) => on_resolve(me, output, ctx),
+                Err(error) => {
+                    log::error!(
+                        "Blocking request handler failed (request_id={request_id_for_error}): {error}"
+                    );
+                    me.send_server_message(
+                        Some(conn_id),
+                        Some(&request_id_for_error),
+                        server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::Internal.into(),
+                            message: "Internal blocking operation failed".to_string(),
+                        }),
+                    );
+                }
+            },
+            ctx,
+        )
+    }
+
     /// Handles `Initialize` by returning the server version and host id.
     ///
     /// `server_version` is the release tag the daemon was built from
@@ -1504,7 +1591,7 @@ impl ServerModel {
 
     /// Handles `SessionBootstrapped` by creating a `LocalCommandExecutor` for
     /// the session. This is a notification — no response is sent.
-    fn handle_session_bootstrapped(&mut self, msg: SessionBootstrapped) {
+    fn handle_session_bootstrapped(&mut self, conn_id: ConnectionId, msg: SessionBootstrapped) {
         let session_id = SessionId::from(msg.session_id);
         log::info!(
             "Handling SessionBootstrapped: session_id={session_id:?}, \
@@ -1529,7 +1616,11 @@ impl ServerModel {
             );
         }
         let executor = Arc::new(LocalCommandExecutor::new(shell_path, shell_type));
-        if self.executors.insert(session_id, executor).is_some() {
+        if self
+            .executors
+            .insert((conn_id, session_id), executor)
+            .is_some()
+        {
             log::warn!(
                 "Overwriting existing executor for session {session_id:?} \
                  (re-SessionBootstrapped with shell_type={:?})",
@@ -1566,7 +1657,7 @@ impl ServerModel {
             Some(req.environment_variables)
         };
 
-        let Some(executor) = self.executors.get(&session_id).cloned() else {
+        let Some(executor) = self.executors.get(&(conn_id, session_id)).cloned() else {
             log::error!("No executor for session {session_id:?}, session was never initialized");
             return HandlerOutcome::Sync(server_message::Message::RunCommandResponse(
                 RunCommandResponse {
@@ -1656,17 +1747,19 @@ impl ServerModel {
         }
 
         let request_id_for_response = request_id.clone();
-        let transcript_cache = Arc::clone(&self.agent_transcript_cache);
-        let handle = self.spawn_request_handler(
+        let inventory_cache = Arc::clone(&self.agent_inventory_scan_cache);
+        let requested_at = Instant::now();
+        let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
-            async move {
-                let mut cache = transcript_cache.lock().unwrap_or_else(|poisoned| {
+            conn_id,
+            move || {
+                let mut cache = inventory_cache.lock().unwrap_or_else(|poisoned| {
                     log::warn!(
-                        "Daemon: agent transcript cache mutex was poisoned; recovering its state"
+                        "Daemon: agent inventory cache mutex was poisoned; recovering its state"
                     );
                     poisoned.into_inner()
                 });
-                let current_sessions = collect_agent_sessions(&mut cache);
+                let current_sessions = collect_agent_sessions(&mut cache, requested_at);
                 drop(cache);
                 execute_agent_process_signal_with(
                     req,
@@ -2729,14 +2822,15 @@ struct CollectedAgentSessions {
 }
 
 fn collect_agent_sessions_for_peer(
-    transcript_cache: &mut zaplex_cockpit::TranscriptScanCache,
+    inventory_cache: &mut AgentInventoryScanCache,
+    requested_at: Instant,
     supports_account_routing: bool,
 ) -> CollectedAgentSessions {
     let now = chrono::Utc::now();
     // Build account inventory and session inventory in one discovery pass. This
     // keeps CLAUDE_CONFIG_DIR/CODEX_HOME and process-discovered plexed roots
     // identical to the opaque route cache that assigns account ids.
-    let scan = super::agent_account::scan_agent_accounts_with_cache(transcript_cache);
+    let scan = inventory_cache.scan(requested_at);
     let mut snapshots = scan.sessions;
     if let Some(home) = dirs::home_dir() {
         snapshots.extend(zaplex_cockpit::antigravity_idle_sessions(
@@ -2773,9 +2867,10 @@ fn collect_agent_sessions_for_peer(
 }
 
 fn collect_agent_sessions(
-    transcript_cache: &mut zaplex_cockpit::TranscriptScanCache,
+    inventory_cache: &mut AgentInventoryScanCache,
+    requested_at: Instant,
 ) -> Vec<super::proto::AgentSessionInfo> {
-    collect_agent_sessions_for_peer(transcript_cache, false).sessions
+    collect_agent_sessions_for_peer(inventory_cache, requested_at, false).sessions
 }
 
 /// Daemon-side agent-session inventory handler (Agent-Cockpit). Cross-platform:
@@ -2797,9 +2892,22 @@ impl ServerModel {
             }));
         }
         let request_id_for_response = request_id.clone();
-        let handle = self.spawn_request_handler(
+        let inventory_cache = Arc::clone(&self.agent_inventory_scan_cache);
+        let requested_at = Instant::now();
+        let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
-            async { super::agent_account::scan_agent_accounts() },
+            conn_id,
+            move || {
+                inventory_cache
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        log::warn!(
+                            "Daemon: agent inventory cache mutex was poisoned; recovering its state"
+                        );
+                        poisoned.into_inner()
+                    })
+                    .scan(requested_at)
+            },
             move |me, scan, _ctx| {
                 me.agent_account_routes.replace(scan.routes);
                 me.send_server_message(
@@ -2840,9 +2948,10 @@ impl ServerModel {
         let request_id_for_response = request_id.clone();
         #[cfg(test)]
         let fresh_routes_for_test = self.fresh_agent_account_routes_for_test.clone();
-        let handle = self.spawn_request_handler(
+        let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
-            async move {
+            conn_id,
+            move || {
                 let _permit = permit;
                 #[cfg(test)]
                 let routes = match fresh_routes_for_test {
@@ -2879,11 +2988,10 @@ impl ServerModel {
     /// transcripts or a slow home dir. Antigravity adds only one small bounded
     /// registry read. Running it inline on the model thread
     /// would stall PTY/session servicing (`SessionInput`/`SessionOutput`/attach)
-    /// for the duration of every cockpit inventory poll. So we offload the work
-    /// off the model thread: [`Self::spawn_request_handler`] runs the future on
-    /// the background executor (see `ModelContext::spawn_abortable`) and invokes
-    /// `on_resolve` back on the model thread, where we send the response
-    /// correlated to the originating `request_id`/`conn_id`.
+    /// for the duration of every cockpit inventory poll. The blocking helper
+    /// runs the complete scan, including the cache lock, on Tokio's blocking
+    /// pool and invokes `on_resolve` back on the model thread. Overlapping
+    /// requests reuse the scan that completed after they were submitted.
     fn handle_list_agent_sessions(
         &mut self,
         request_id: &RequestId,
@@ -2893,22 +3001,19 @@ impl ServerModel {
         let request_id_for_response = request_id.clone();
         let conn_id_for_response = conn_id;
         let supports_account_routing = self.client_supports_agent_account_routing(conn_id);
-        let transcript_cache = Arc::clone(&self.agent_transcript_cache);
-        // `collect_agent_sessions` performs blocking filesystem/JSON work with no
-        // await points; because `spawn_request_handler` schedules this future on
-        // the background executor, that blocking work never touches the model
-        // thread. The "no home dir → empty list, never error" behavior is
-        // preserved inside `collect_agent_sessions`.
-        let handle = self.spawn_request_handler(
+        let inventory_cache = Arc::clone(&self.agent_inventory_scan_cache);
+        let requested_at = Instant::now();
+        let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
-            async move {
-                let mut cache = transcript_cache.lock().unwrap_or_else(|poisoned| {
+            conn_id,
+            move || {
+                let mut cache = inventory_cache.lock().unwrap_or_else(|poisoned| {
                     log::warn!(
-                        "Daemon: agent transcript cache mutex was poisoned; recovering its state"
+                        "Daemon: agent inventory cache mutex was poisoned; recovering its state"
                     );
                     poisoned.into_inner()
                 });
-                collect_agent_sessions_for_peer(&mut cache, supports_account_routing)
+                collect_agent_sessions_for_peer(&mut cache, requested_at, supports_account_routing)
             },
             move |me, collected, _ctx| {
                 let CollectedAgentSessions {
@@ -3502,9 +3607,10 @@ impl ServerModel {
         let request_for_response = request.clone();
         #[cfg(test)]
         let fresh_routes_for_test = self.fresh_agent_account_routes_for_test.clone();
-        let handle = self.spawn_request_handler(
+        let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
-            async move {
+            conn_id,
+            move || {
                 #[cfg(test)]
                 let routes = match fresh_routes_for_test {
                     Some(routes) => routes,
@@ -3669,18 +3775,23 @@ impl ServerModel {
         }
         let request_id_for_response = request_id.clone();
         let supports_account_routing = self.client_supports_agent_account_routing(conn_id);
-        let transcript_cache = Arc::clone(&self.agent_transcript_cache);
-        let handle = self.spawn_request_handler(
+        let inventory_cache = Arc::clone(&self.agent_inventory_scan_cache);
+        let requested_at = Instant::now();
+        let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
-            async move {
-                let mut cache = transcript_cache.lock().unwrap_or_else(|poisoned| {
+            conn_id,
+            move || {
+                let mut cache = inventory_cache.lock().unwrap_or_else(|poisoned| {
                     log::warn!(
-                        "Daemon: agent transcript cache mutex was poisoned; recovering its state"
+                        "Daemon: agent inventory cache mutex was poisoned; recovering its state"
                     );
                     poisoned.into_inner()
                 });
-                let collected =
-                    collect_agent_sessions_for_peer(&mut cache, supports_account_routing);
+                let collected = collect_agent_sessions_for_peer(
+                    &mut cache,
+                    requested_at,
+                    supports_account_routing,
+                );
                 let live_agents = live_agent_identities(&collected.sessions);
                 (live_agents, collected.account_routes)
             },
@@ -3941,9 +4052,10 @@ impl ServerModel {
         let plan_for_preflight = plan.clone();
         #[cfg(test)]
         let fresh_routes_for_test = self.fresh_agent_account_routes_for_test.clone();
-        let handle = self.spawn_request_handler(
+        let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
-            async move {
+            conn_id,
+            move || {
                 #[cfg(test)]
                 let routes = match fresh_routes_for_test {
                     Some(routes) => routes,
@@ -4534,18 +4646,23 @@ impl ServerModel {
         }
         let request_id_for_response = request_id.clone();
         let supports_account_routing = self.client_supports_agent_account_routing(conn_id);
-        let transcript_cache = Arc::clone(&self.agent_transcript_cache);
-        let handle = self.spawn_request_handler(
+        let inventory_cache = Arc::clone(&self.agent_inventory_scan_cache);
+        let requested_at = Instant::now();
+        let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
-            async move {
-                let mut cache = transcript_cache.lock().unwrap_or_else(|poisoned| {
+            conn_id,
+            move || {
+                let mut cache = inventory_cache.lock().unwrap_or_else(|poisoned| {
                     log::warn!(
-                        "Daemon: agent transcript cache mutex was poisoned; recovering its state"
+                        "Daemon: agent inventory cache mutex was poisoned; recovering its state"
                     );
                     poisoned.into_inner()
                 });
-                let collected =
-                    collect_agent_sessions_for_peer(&mut cache, supports_account_routing);
+                let collected = collect_agent_sessions_for_peer(
+                    &mut cache,
+                    requested_at,
+                    supports_account_routing,
+                );
                 let live_agents = live_agent_identities(&collected.sessions);
                 (live_agents, collected.account_routes)
             },
@@ -4887,9 +5004,10 @@ impl ServerModel {
             }));
         };
         let request_id_for_response = request_id.clone();
-        let handle = self.spawn_request_handler(
+        let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
-            async move {
+            conn_id,
+            move || {
                 let _memory_permit = memory_permit;
                 let host = super::fleet_memory::collect_host_memory(collected_at_epoch_millis);
                 let sessions = sessions

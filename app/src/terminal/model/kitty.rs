@@ -5,6 +5,8 @@ use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
 use std::cmp::min;
 use std::io::Read;
+#[cfg(all(feature = "local_fs", unix))]
+use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 #[cfg(feature = "local_fs")]
 use std::{env, fs, str};
 use warpui::image_cache::{resize_dimensions, FitType};
@@ -809,6 +811,7 @@ fn read_shared_memory(
             )))
         }
     };
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
 
     let bytes_per_pixel = match control_data.pixel_data_format {
         KittyPixelDataFormat::Rgb24Bit => Some(3),
@@ -820,7 +823,7 @@ fn read_shared_memory(
         (bytes_per_pixel * control_data.width * control_data.height) as usize
     });
 
-    let data = read_from_shared_memory_fd(fd, size);
+    let data = read_from_shared_memory_fd(&fd, size);
 
     if let Err(err) = shm_unlink(path) {
         log::warn!("Failed to unlink kitty shm file (path = {path}): {err:?}");
@@ -830,8 +833,30 @@ fn read_shared_memory(
 }
 
 #[cfg(all(feature = "local_fs", unix))]
+struct MappedRegion {
+    pointer: *mut libc::c_void,
+    len: usize,
+}
+
+#[cfg(all(feature = "local_fs", unix))]
+impl MappedRegion {
+    unsafe fn as_slice(&self) -> &[u8] {
+        std::slice::from_raw_parts(self.pointer.cast(), self.len)
+    }
+}
+
+#[cfg(all(feature = "local_fs", unix))]
+impl Drop for MappedRegion {
+    fn drop(&mut self) {
+        if let Err(error) = unsafe { nix::sys::mman::munmap(self.pointer, self.len) } {
+            log::error!("Failed to unmap kitty shared memory: {error}");
+        }
+    }
+}
+
+#[cfg(all(feature = "local_fs", unix))]
 fn read_from_shared_memory_fd(
-    fd: i32,
+    fd: &OwnedFd,
     size: Option<usize>,
 ) -> Result<Vec<u8>, InvalidKittyPayload> {
     use nix::sys::{
@@ -840,7 +865,7 @@ fn read_from_shared_memory_fd(
     };
     use std::num::NonZero;
 
-    let file_size = match fstat(fd) {
+    let file_size = match fstat(fd.as_raw_fd()) {
         Ok(stat) => stat.st_size,
         Err(err) => {
             return Err(InvalidKittyPayload::ShmError(ShmError::FileStatError(
@@ -872,7 +897,7 @@ fn read_from_shared_memory_fd(
             size,
             ProtFlags::PROT_READ,
             MapFlags::MAP_SHARED,
-            fd,
+            fd.as_raw_fd(),
             0,
         )
     };
@@ -881,8 +906,11 @@ fn read_from_shared_memory_fd(
         return Err(InvalidKittyPayload::ShmError(ShmError::MmapError));
     };
 
-    let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, size.into()) };
-    let data = slice.to_vec();
+    let region = MappedRegion {
+        pointer: ptr,
+        len: size.into(),
+    };
+    let data = unsafe { region.as_slice() }.to_vec();
 
     Ok(data)
 }
@@ -897,6 +925,10 @@ fn base64_decode_padding_agnostic(data: &[u8]) -> Result<Vec<u8>, KittyDecodeErr
         Err(err) => Err(KittyDecodeError::InvalidBase64(err.to_string())),
     }
 }
+
+#[cfg(test)]
+#[path = "kitty_tests.rs"]
+mod tests;
 
 pub fn decode_kitty_image_data(
     payload: Vec<u8>,
