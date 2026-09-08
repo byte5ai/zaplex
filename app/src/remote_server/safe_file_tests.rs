@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -62,6 +62,46 @@ fn create_regular(
         safe_file_response::Result::Opened(opened) => opened,
         other => panic!("expected created response, got {other:?}"),
     }
+}
+
+#[test]
+fn set_mode_is_handle_bound_and_strips_special_bits() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let stage = directory.path().join("stage.bin");
+    let owner = ConnectionId::new_v4();
+    let other_owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let opened = create_regular(&mut server, owner, "create-mode", &stage);
+
+    assert!(matches!(
+        call(
+            &mut server,
+            other_owner,
+            "",
+            safe_file_request::Operation::SetModeHandle(SafeFileSetModeHandle {
+                handle_id: opened.handle_id.clone(),
+                mode: 0o6755,
+            }),
+        ),
+        safe_file_response::Result::Error(_)
+    ));
+    assert!(matches!(
+        call(
+            &mut server,
+            owner,
+            "",
+            safe_file_request::Operation::SetModeHandle(SafeFileSetModeHandle {
+                handle_id: opened.handle_id,
+                mode: 0o6755,
+            }),
+        ),
+        safe_file_response::Result::Mutation(_)
+    ));
+    assert_eq!(
+        fs::metadata(stage).unwrap().permissions().mode() & 0o7777,
+        0o755
+    );
 }
 
 #[test]

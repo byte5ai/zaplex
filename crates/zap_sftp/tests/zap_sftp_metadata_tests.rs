@@ -67,6 +67,7 @@ fn test_metadata_from_ssh2_perm_none() {
     };
     let meta = Metadata::from_ssh2(stat);
     assert_eq!(meta.file_type, FileType::Other);
+    assert_eq!(meta.mode, None);
 }
 
 /// Verify file_type is Other for unknown mode bit combinations
@@ -98,6 +99,7 @@ fn test_metadata_from_ssh2_permissions() {
     assert!(meta.permissions.group_read);
     assert!(!meta.permissions.group_write);
     assert!(meta.permissions.group_exec);
+    assert_eq!(meta.mode, Some(0o755));
 }
 
 /// Verify all permissions are false when perm is None
@@ -110,6 +112,7 @@ fn test_metadata_from_ssh2_permissions_none() {
     let meta = Metadata::from_ssh2(stat);
     assert!(!meta.permissions.owner_read);
     assert!(!meta.permissions.owner_write);
+    assert_eq!(meta.mode, None);
 }
 
 // ============================================================

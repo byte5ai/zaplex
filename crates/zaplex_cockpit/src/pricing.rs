@@ -72,7 +72,7 @@ impl PricingTable {
         Self {
             entries: entries
                 .into_iter()
-                .map(|(key, price)| (key, price, PricingSource::CustomStatic))
+                .map(|(key, price)| (key.to_ascii_lowercase(), price, PricingSource::CustomStatic))
                 .collect(),
         }
     }
@@ -81,7 +81,13 @@ impl PricingTable {
         Self {
             entries: entries
                 .into_iter()
-                .map(|(key, price)| (key, price, PricingSource::BundledListPrice))
+                .map(|(key, price)| {
+                    (
+                        key.to_ascii_lowercase(),
+                        price,
+                        PricingSource::BundledListPrice,
+                    )
+                })
                 .collect(),
         }
     }
