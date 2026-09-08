@@ -1,19 +1,18 @@
-use std::{io::Cursor, sync::Arc, time::Duration};
+use std::{io::Cursor, time::Duration};
 
 use base64::Engine;
 use cpal::{
-    Sample, StreamConfig,
     traits::{DeviceTrait, HostTrait},
+    Sample, StreamConfig,
 };
 use futures::channel::oneshot;
-use parking_lot::Mutex;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use thiserror::Error;
 
 use warpui::event::KeyState;
-use warpui::{Entity, ModelContext, SingletonEntity, platform::MicrophoneAccessState};
+use warpui::{platform::MicrophoneAccessState, Entity, ModelContext, SingletonEntity};
 
 const DEFAULT_CHUNK_SIZE: u32 = 512;
 // We only support mono for now.
@@ -22,8 +21,111 @@ const NUM_CHANNELS: u16 = 1;
 const TARGET_SAMPLE_RATE: f32 = 16000.0;
 const STREAM_TIMEOUT: Duration = Duration::from_secs(60 * 6);
 
+fn make_resampler(
+    sample_rate: f64,
+    chunk_size: usize,
+) -> Result<SincFixedIn<f32>, rubato::ResamplerConstructionError> {
+    SincFixedIn::new(
+        TARGET_SAMPLE_RATE as f64 / sample_rate,
+        2.0,
+        SincInterpolationParameters {
+            interpolation: SincInterpolationType::Linear,
+            window: WindowFunction::Hann,
+            sinc_len: chunk_size,
+            f_cutoff: 0.95,
+            oversampling_factor: 1,
+        },
+        chunk_size,
+        NUM_CHANNELS as usize,
+    )
+}
+
+struct AudioAccumulator {
+    resampler: SincFixedIn<f32>,
+    pending: Vec<f32>,
+    output: Vec<f32>,
+}
+
+impl AudioAccumulator {
+    fn new(resampler: SincFixedIn<f32>) -> Self {
+        Self {
+            resampler,
+            pending: Vec::new(),
+            output: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, frame: Vec<f32>) -> anyhow::Result<()> {
+        self.pending.extend(frame);
+        self.process_complete_chunks()
+    }
+
+    fn process_complete_chunks(&mut self) -> anyhow::Result<()> {
+        loop {
+            let input_frames = self.resampler.input_frames_next();
+            if self.pending.len() < input_frames {
+                return Ok(());
+            }
+            let chunk = self.pending.drain(..input_frames).collect::<Vec<_>>();
+            self.output
+                .extend(self.resampler.process(&[chunk], None)?[0].iter().copied());
+        }
+    }
+
+    fn finish(mut self) -> anyhow::Result<Vec<f32>> {
+        self.process_complete_chunks()?;
+        if !self.pending.is_empty() {
+            let pending = std::mem::take(&mut self.pending);
+            self.output.extend(
+                self.resampler.process_partial(Some(&[pending]), None)?[0]
+                    .iter()
+                    .copied(),
+            );
+        }
+        Ok(self.output)
+    }
+}
+
+async fn run_audio_pipeline(
+    audio_frame_rx: async_channel::Receiver<Vec<f32>>,
+    resampler: SincFixedIn<f32>,
+) -> anyhow::Result<String> {
+    encode_wav(collect_resampled_audio(audio_frame_rx, resampler).await?)
+}
+
+async fn collect_resampled_audio(
+    audio_frame_rx: async_channel::Receiver<Vec<f32>>,
+    resampler: SincFixedIn<f32>,
+) -> anyhow::Result<Vec<f32>> {
+    let mut accumulator = AudioAccumulator::new(resampler);
+    while let Ok(frame) = audio_frame_rx.recv().await {
+        accumulator.push(frame)?;
+    }
+    accumulator.finish()
+}
+
+fn encode_wav(resampled: Vec<f32>) -> anyhow::Result<String> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: TARGET_SAMPLE_RATE as u32,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let mut wav_cursor = Cursor::new(Vec::with_capacity(resampled.len() * 2));
+    let mut wav_writer = hound::WavWriter::new(&mut wav_cursor, spec)?;
+    for sample in resampled {
+        wav_writer.write_sample(sample.to_sample::<i16>())?;
+    }
+    wav_writer.finalize()?;
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(wav_cursor.into_inner()))
+}
+
 pub struct VoiceInput {
     state: VoiceInputState,
+    next_session_id: u64,
+    current_session_id: Option<VoiceSessionId>,
     pub should_suppress_new_feature_popup: bool,
     voice_session_start: Option<instant::Instant>,
 }
@@ -34,17 +136,21 @@ pub enum VoiceInputState {
     Idle,
 
     Listening {
+        session_id: VoiceSessionId,
         stream: cpal::Stream,
-        chunk_size: usize,
+        audio_frame_tx: async_channel::Sender<Vec<f32>>,
         enabled_from: VoiceInputToggledFrom,
-        resampler: Arc<Mutex<SincFixedIn<f32>>>,
-        resampled: Arc<Mutex<Vec<f32>>>,
-        /// Channel to send the result when recording stops.
         result_tx: Option<oneshot::Sender<VoiceSessionResult>>,
     },
 
-    Transcribing,
+    Transcribing {
+        session_id: VoiceSessionId,
+        result_tx: Option<oneshot::Sender<VoiceSessionResult>>,
+        session_duration_ms: Option<u64>,
+    },
 }
+
+pub type VoiceSessionId = u64;
 
 #[derive(Debug, Clone)]
 pub enum VoiceInputToggledFrom {
@@ -57,11 +163,24 @@ pub enum VoiceInputToggledFrom {
 pub enum VoiceSessionResult {
     /// Recording completed successfully with audio data.
     Audio {
+        session_id: VoiceSessionId,
         wav_base64: String,
         session_duration_ms: u64,
     },
     /// Recording was aborted without producing audio.
-    Aborted { session_duration_ms: Option<u64> },
+    Aborted {
+        session_id: VoiceSessionId,
+        session_duration_ms: Option<u64>,
+    },
+}
+
+impl VoiceSessionResult {
+    pub fn session_id(&self) -> VoiceSessionId {
+        match self {
+            VoiceSessionResult::Audio { session_id, .. }
+            | VoiceSessionResult::Aborted { session_id, .. } => *session_id,
+        }
+    }
 }
 
 /// Represents an active voice recording session.
@@ -70,10 +189,15 @@ pub enum VoiceSessionResult {
 /// Dropping the session will prevent the caller from receiving the result,
 /// but does not itself stop or abort the underlying recording.
 pub struct VoiceSession {
+    session_id: VoiceSessionId,
     result_rx: oneshot::Receiver<VoiceSessionResult>,
 }
 
 impl VoiceSession {
+    pub fn id(&self) -> VoiceSessionId {
+        self.session_id
+    }
+
     /// Awaits the result of the voice recording session.
     ///
     /// Returns `VoiceSessionResult::Audio` if recording completed successfully,
@@ -83,6 +207,7 @@ impl VoiceSession {
             Ok(result) => result,
             // Channel closed without sending - treat as aborted
             Err(_) => VoiceSessionResult::Aborted {
+                session_id: self.session_id,
                 session_duration_ms: None,
             },
         }
@@ -107,6 +232,8 @@ impl VoiceInput {
     pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
         Self {
             state: VoiceInputState::Idle,
+            next_session_id: 0,
+            current_session_id: None,
             should_suppress_new_feature_popup: false,
             voice_session_start: None,
         }
@@ -117,7 +244,7 @@ impl VoiceInput {
     }
 
     pub fn is_transcribing(&self) -> bool {
-        matches!(self.state, VoiceInputState::Transcribing)
+        matches!(self.state, VoiceInputState::Transcribing { .. })
     }
 
     /// Returns true if voice is currently recording or transcribing.
@@ -129,6 +256,10 @@ impl VoiceInput {
         &self.state
     }
 
+    pub fn is_current_session(&self, session_id: VoiceSessionId) -> bool {
+        self.current_session_id == Some(session_id)
+    }
+
     /// Starts listening for voice input and returns a session that will receive the result.
     ///
     /// The returned `VoiceSession` can be awaited to receive the audio data when recording
@@ -138,16 +269,13 @@ impl VoiceInput {
         ctx: &mut ModelContext<Self>,
         source: VoiceInputToggledFrom,
     ) -> Result<VoiceSession, StartListeningError> {
-        if self.is_listening() {
-            log::debug!("Already listening, not starting again");
+        if self.is_active() {
+            log::debug!("Voice input is already active, not starting again");
             return Err(StartListeningError::AlreadyRunning);
         }
 
         log::debug!("Enabling voice input");
         let (audio_frame_tx, audio_frame_rx) = async_channel::unbounded();
-        let _ = ctx.spawn_stream_local(audio_frame_rx.clone(), Self::on_audio_frame, |_, _| {
-            log::debug!("Stream done");
-        });
 
         let host = cpal::default_host();
         let Some(input_device) = host.default_input_device() else {
@@ -186,23 +314,11 @@ impl VoiceInput {
         log::debug!("Stream config: {stream_config:?}");
 
         // Set up the resampler to resample the audio to 16000Hz, which is typical for voice input.
-        let resampler = SincFixedIn::new(
-            TARGET_SAMPLE_RATE as f64 / sample_rate,
-            2.0,
-            SincInterpolationParameters {
-                interpolation: SincInterpolationType::Linear,
-                window: WindowFunction::Hann,
-                sinc_len: buffer_size as usize,
-                f_cutoff: 0.95,
-                oversampling_factor: 1,
-            },
-            buffer_size as usize,
-            NUM_CHANNELS as usize,
-        )
-        .map_err(|e| {
+        let resampler = make_resampler(sample_rate, buffer_size as usize).map_err(|e| {
             StartListeningError::Other(anyhow::anyhow!("Resampler construction failed: {e}"))
         })?;
 
+        let callback_audio_frame_tx = audio_frame_tx.clone();
         let stream = input_device
             .build_input_stream(
                 &stream_config,
@@ -217,7 +333,7 @@ impl VoiceInput {
                         .collect();
 
                     // This is blocking, but we aren't on the main thread.
-                    let _ = warpui::r#async::block_on(audio_frame_tx.send(mono_samples));
+                    let _ = warpui::r#async::block_on(callback_audio_frame_tx.send(mono_samples));
                 },
                 |err| {
                     log::error!("Error in voice input stream: {err}");
@@ -233,6 +349,12 @@ impl VoiceInput {
 
         log::debug!("Starting voice input stream with chunk size {buffer_size}");
 
+        self.next_session_id = self.next_session_id.checked_add(1).ok_or_else(|| {
+            StartListeningError::Other(anyhow::anyhow!("Voice session ID space exhausted"))
+        })?;
+        let session_id = self.next_session_id;
+        self.current_session_id = Some(session_id);
+
         // Track voice session start time
         self.voice_session_start = Some(instant::Instant::now());
 
@@ -240,26 +362,41 @@ impl VoiceInput {
         let (result_tx, result_rx) = oneshot::channel();
 
         self.state = VoiceInputState::Listening {
-            resampler: Arc::new(Mutex::new(resampler)),
-            resampled: Arc::new(Mutex::new(vec![])),
-            chunk_size: buffer_size as usize,
+            session_id,
+            audio_frame_tx,
             enabled_from: source,
             result_tx: Some(result_tx),
             // We need to keep the stream around to keep the audio flowing.
             stream,
         };
 
-        Ok(VoiceSession { result_rx })
+        ctx.spawn(
+            run_audio_pipeline(audio_frame_rx, resampler),
+            move |me, wav_result, _ctx| me.complete_audio_session(session_id, wav_result),
+        );
+
+        Ok(VoiceSession {
+            session_id,
+            result_rx,
+        })
     }
 
     pub fn start_time(&self) -> Option<instant::Instant> {
         self.voice_session_start
     }
 
-    pub fn set_transcribing_active(&mut self, active: bool) {
+    pub fn set_transcribing_active(&mut self, session_id: VoiceSessionId, active: bool) {
+        if !self.is_current_session(session_id) {
+            return;
+        }
         if active {
-            self.state = VoiceInputState::Transcribing;
+            self.state = VoiceInputState::Transcribing {
+                session_id,
+                result_tx: None,
+                session_duration_ms: None,
+            };
         } else {
+            self.current_session_id = None;
             self.state = VoiceInputState::Idle;
         }
     }
@@ -267,13 +404,7 @@ impl VoiceInput {
     /// Stops listening and triggers WAV conversion. The result will be sent through
     /// the VoiceSession returned from start_listening.
     pub fn stop_listening(&mut self, ctx: &mut ModelContext<Self>) -> Result<(), anyhow::Error> {
-        if let VoiceInputState::Listening {
-            stream,
-            resampled,
-            result_tx,
-            ..
-        } = &mut self.state
-        {
+        if let VoiceInputState::Listening { stream, .. } = &mut self.state {
             cpal::traits::StreamTrait::pause(stream)?;
 
             // Calculate session duration before conversion
@@ -285,35 +416,25 @@ impl VoiceInput {
 
             log::debug!("Disabling voice input and converting to WAV");
 
-            // Take the result_tx out to use in the spawn closure
-            let result_tx = result_tx.take();
-
-            // Spawn WAV conversion and send result through channel
-            let _ = ctx.spawn(
-                Self::convert_to_wav(resampled.clone()),
-                move |me, wav_result, _ctx| {
-                    if let Some(tx) = result_tx {
-                        let result = match wav_result {
-                            Ok(wav_base64) => VoiceSessionResult::Audio {
-                                wav_base64,
-                                session_duration_ms,
-                            },
-                            Err(e) => {
-                                log::error!("Failed to convert to WAV: {e}");
-                                VoiceSessionResult::Aborted {
-                                    session_duration_ms: Some(session_duration_ms),
-                                }
-                            }
-                        };
-                        let _ = tx.send(result);
-                    }
-                    // Move to Idle after sending result
-                    me.state = VoiceInputState::Idle;
-                },
-            );
-
-            // Move to Transcribing state while conversion is happening
-            self.state = VoiceInputState::Transcribing;
+            let old_state = std::mem::take(&mut self.state);
+            let VoiceInputState::Listening {
+                session_id,
+                stream,
+                audio_frame_tx,
+                result_tx,
+                ..
+            } = old_state
+            else {
+                unreachable!("voice state changed while stopping");
+            };
+            drop(stream);
+            drop(audio_frame_tx);
+            self.state = VoiceInputState::Transcribing {
+                session_id,
+                result_tx,
+                session_duration_ms: Some(session_duration_ms),
+            };
+            ctx.notify();
         } else {
             log::debug!("Not currently listening for voice input");
         }
@@ -331,15 +452,26 @@ impl VoiceInput {
             .take()
             .map(|start| start.elapsed().as_millis() as u64);
 
-        // Take ownership and send abort result through channel
+        // Take ownership and send abort result through channel.
         let old_state = std::mem::take(&mut self.state);
-        if let VoiceInputState::Listening {
-            result_tx: Some(tx),
-            ..
-        } = old_state
-        {
+        let (session_id, result_tx, duration) = match old_state {
+            VoiceInputState::Listening {
+                session_id,
+                result_tx,
+                ..
+            } => (Some(session_id), result_tx, session_duration_ms),
+            VoiceInputState::Transcribing {
+                session_id,
+                result_tx,
+                session_duration_ms: conversion_duration,
+            } => (Some(session_id), result_tx, conversion_duration),
+            VoiceInputState::Idle => (None, None, session_duration_ms),
+        };
+        self.current_session_id = None;
+        if let (Some(session_id), Some(tx)) = (session_id, result_tx) {
             let _ = tx.send(VoiceSessionResult::Aborted {
-                session_duration_ms,
+                session_id,
+                session_duration_ms: duration,
             });
         }
 
@@ -347,71 +479,54 @@ impl VoiceInput {
         self.state = VoiceInputState::Idle;
     }
 
-    // Enqueues a single audio frame to be processed on a background thread.
-    fn on_audio_frame(&mut self, mut input_buffer: Vec<f32>, ctx: &mut ModelContext<Self>) {
-        let VoiceInputState::Listening {
-            resampler,
-            resampled,
-            chunk_size,
-            ..
-        } = &mut self.state
-        else {
+    fn complete_audio_session(
+        &mut self,
+        session_id: VoiceSessionId,
+        wav_result: anyhow::Result<String>,
+    ) {
+        if !self.is_current_session(session_id) {
             return;
-        };
-
-        if input_buffer.len() < *chunk_size {
-            input_buffer.resize(*chunk_size, 0.0); // Zero-pad if too short.
         }
-
-        let resampler = resampler.clone();
-        let resampled = resampled.clone();
-        ctx.spawn(
-            async move {
-                if let Err(e) = Self::resample_audio_frame(resampler, resampled, input_buffer).await
-                {
-                    log::error!("Failed to resample audio frame: {e}");
+        let (active_session_id, result_tx, session_duration_ms) =
+            match std::mem::take(&mut self.state) {
+                VoiceInputState::Transcribing {
+                    session_id,
+                    result_tx,
+                    session_duration_ms,
+                } => (session_id, result_tx, session_duration_ms),
+                state => {
+                    self.state = state;
+                    return;
                 }
-            },
-            |_, _, _| {},
-        );
-    }
-
-    // Processes a single audio frame, resampling it to 16000Hz and adding it to the resampled buffer.
-    async fn resample_audio_frame(
-        resampler: Arc<Mutex<SincFixedIn<f32>>>,
-        resampled: Arc<Mutex<Vec<f32>>>,
-        input_buffer: Vec<f32>,
-    ) -> Result<(), anyhow::Error> {
-        let mut resampler = resampler.lock();
-        let mut resampled = resampled.lock();
-        resampled.extend(resampler.process(&[input_buffer], None)?[0].to_vec());
-        Ok(())
-    }
-
-    // Converts the resampled audio to a WAV file and returns the base64 encoded WAV data.
-    // Should be called on a background thread.
-    async fn convert_to_wav(resampled: Arc<Mutex<Vec<f32>>>) -> Result<String, anyhow::Error> {
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: 16000,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-
-        let resampled = resampled.lock();
-        let mut wav_cursor = Cursor::new(Vec::with_capacity(resampled.len() * 2));
-        let mut wav_writer = hound::WavWriter::new(&mut wav_cursor, spec)?;
-
-        for sample in resampled.as_slice() {
-            let amplitude = sample.to_sample::<i16>();
-            wav_writer.write_sample(amplitude)?;
+            };
+        if active_session_id != session_id {
+            self.state = VoiceInputState::Transcribing {
+                session_id: active_session_id,
+                result_tx,
+                session_duration_ms,
+            };
+            return;
         }
 
-        wav_writer.finalize()?;
-
-        let wav_bytes = wav_cursor.into_inner();
-        let wav_base64 = base64::engine::general_purpose::STANDARD.encode(wav_bytes);
-        Ok(wav_base64)
+        if let Some(tx) = result_tx {
+            let duration = session_duration_ms.unwrap_or(0);
+            let result = match wav_result {
+                Ok(wav_base64) => VoiceSessionResult::Audio {
+                    session_id,
+                    wav_base64,
+                    session_duration_ms: duration,
+                },
+                Err(error) => {
+                    log::error!("Failed to convert to WAV: {error}");
+                    VoiceSessionResult::Aborted {
+                        session_id,
+                        session_duration_ms,
+                    }
+                }
+            };
+            let _ = tx.send(result);
+        }
+        self.state = VoiceInputState::Idle;
     }
 }
 
@@ -420,3 +535,110 @@ impl Entity for VoiceInput {
 }
 
 impl SingletonEntity for VoiceInput {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn samples(count: usize) -> Vec<f32> {
+        (0..count)
+            .map(|index| ((index as f32) * 0.013).sin() * 0.5)
+            .collect()
+    }
+
+    fn reference_output(input: &[f32], chunk_size: usize) -> Vec<f32> {
+        let mut resampler = make_resampler(48_000.0, chunk_size).unwrap();
+        let complete_len = input.len() / chunk_size * chunk_size;
+        let mut output = Vec::new();
+        for chunk in input[..complete_len].chunks_exact(chunk_size) {
+            output.extend(
+                resampler.process(&[chunk], None).unwrap()[0]
+                    .iter()
+                    .copied(),
+            );
+        }
+        if complete_len < input.len() {
+            output.extend(
+                resampler
+                    .process_partial(Some(&[&input[complete_len..]]), None)
+                    .unwrap()[0]
+                    .iter()
+                    .copied(),
+            );
+        }
+        output
+    }
+
+    #[test]
+    fn accumulator_is_invariant_to_callback_sizes() {
+        let input = samples(1_504);
+        let mut accumulator = AudioAccumulator::new(make_resampler(48_000.0, 512).unwrap());
+        accumulator.push(input[..480].to_vec()).unwrap();
+        accumulator.push(input[480..].to_vec()).unwrap();
+
+        assert_eq!(accumulator.finish().unwrap(), reference_output(&input, 512));
+    }
+
+    #[test]
+    fn worker_drains_queued_frames_before_finishing() {
+        let input = samples(1_504);
+        let (frame_tx, frame_rx) = async_channel::unbounded();
+        frame_tx.try_send(input[..480].to_vec()).unwrap();
+        frame_tx.try_send(input[480..].to_vec()).unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = warpui::r#async::block_on(collect_resampled_audio(
+                frame_rx,
+                make_resampler(48_000.0, 512).unwrap(),
+            ));
+            done_tx.send(result).unwrap();
+        });
+
+        assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        drop(frame_tx);
+        let output = done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        worker.join().unwrap();
+
+        assert_eq!(output, reference_output(&input, 512));
+    }
+
+    #[test]
+    fn cancelled_session_completion_does_not_replace_newer_session_state() {
+        let (result_tx, result_rx) = oneshot::channel();
+        let mut voice = VoiceInput {
+            state: VoiceInputState::Transcribing {
+                session_id: 1,
+                result_tx: Some(result_tx),
+                session_duration_ms: Some(10),
+            },
+            next_session_id: 1,
+            current_session_id: Some(1),
+            should_suppress_new_feature_popup: false,
+            voice_session_start: None,
+        };
+
+        voice.abort_listening();
+        let aborted = warpui::r#async::block_on(result_rx).unwrap();
+        assert_eq!(aborted.session_id(), 1);
+
+        voice.next_session_id = 2;
+        voice.current_session_id = Some(2);
+        voice.state = VoiceInputState::Transcribing {
+            session_id: 2,
+            result_tx: None,
+            session_duration_ms: None,
+        };
+
+        voice.complete_audio_session(1, Ok(String::new()));
+
+        assert!(matches!(
+            voice.state,
+            VoiceInputState::Transcribing { session_id: 2, .. }
+        ));
+        assert_eq!(voice.current_session_id, Some(2));
+    }
+}

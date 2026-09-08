@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path};
+use std::collections::HashMap;
 
 use itertools::Itertools;
 use markdown_parser::{
@@ -6,6 +6,7 @@ use markdown_parser::{
 };
 use warp_core::command::ExitCode;
 use warp_core::ui::{appearance::Appearance, color::blend::Blend as _};
+use warp_util::path::ShellFamily;
 use warpui::{
     elements::{
         Border, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
@@ -16,7 +17,10 @@ use warpui::{
 };
 
 use crate::{
-    terminal::ssh::util::InteractiveSshCommand, ui_components::buttons::icon_button,
+    terminal::ssh::util::{
+        InteractiveSshCommand, MaterializedSftpUpload, SftpUploadError, SftpUploadPlan,
+    },
+    ui_components::buttons::icon_button,
     ui_components::icons::Icon,
 };
 
@@ -34,6 +38,7 @@ struct FileUploadInfo {
     clear_button: MouseStateHandle,
     local_session_open: bool,
     upload_id: FileUploadId,
+    upload_command: Option<MaterializedSftpUpload>,
 }
 
 #[derive(Debug, Default)]
@@ -143,7 +148,19 @@ impl FileUpload {
         remote_dest_path: &Option<String>,
         ssh_connection: &InteractiveSshCommand,
         ctx: &mut ViewContext<Self>,
-    ) -> (FileUploadId, String) {
+    ) -> Result<(FileUploadId, String), SftpUploadError> {
+        let upload_command = SftpUploadPlan::new(
+            local_file_paths,
+            remote_host,
+            ssh_connection.port.as_deref(),
+            remote_dest_path.as_deref(),
+        )?
+        .materialize(if cfg!(windows) {
+            ShellFamily::PowerShell
+        } else {
+            ShellFamily::Posix
+        })?;
+        let command = upload_command.command().to_string();
         let upload_id = self.generate_upload_id();
         let file_upload_info = self.transfer_details(
             remote_host,
@@ -151,15 +168,15 @@ impl FileUpload {
             remote_dest_path,
             ssh_connection,
             upload_id,
+            upload_command,
         );
-        let command = self.transfer_file_sftp_command(&file_upload_info);
         self.uploads.insert(upload_id, file_upload_info);
         ctx.emit(FileUploadEvent::CopyFileToRemote {
             command: command.clone(),
             upload_id,
         });
         ctx.notify();
-        (upload_id, command)
+        Ok((upload_id, command))
     }
 
     /// Retrieve the SSH connection information needed to start the file upload.
@@ -170,6 +187,7 @@ impl FileUpload {
         remote_dest_path: &Option<String>,
         ssh_connection: &InteractiveSshCommand,
         upload_id: FileUploadId,
+        upload_command: MaterializedSftpUpload,
     ) -> FileUploadInfo {
         // If there's an ssh connection in a subshell, retrieve the relevant connection details.
         let remote_port = ssh_connection.port.clone();
@@ -184,68 +202,8 @@ impl FileUpload {
             clear_button: MouseStateHandle::default(),
             local_session_open: false,
             upload_id,
+            upload_command: Some(upload_command),
         }
-    }
-
-    /// Creates an sftp command that copies a given local file into the PWD of the zaplexified ssh session, if any.
-    fn transfer_file_sftp_command(&self, file_upload: &FileUploadInfo) -> String {
-        // "sftp "
-        let mut command = String::from("sftp ");
-
-        // "sftp -P 2222"
-        if let Some(port) = &file_upload.remote_port {
-            command += &format!("-P {port} ");
-        }
-
-        // "sftp -P 2222 sshuser@127.0.0.1 <<< "
-        command += &file_upload.remote_host;
-
-        // "sftp -P 2222 sshuser@127.0.0.1 <<< "<put_commands>""
-        command += " <<< \"";
-        command += &self.sftp_put_commands(file_upload);
-        command += "\"";
-
-        command
-    }
-
-    /// Produces SFTP `put` commands for the local files given in `file_upload`,
-    /// joined by newlines.
-    fn sftp_put_commands(&self, file_upload: &FileUploadInfo) -> String {
-        file_upload
-            .local_file_paths
-            .iter()
-            .map(|local_file_path| {
-                self.sftp_put_command(local_file_path, &file_upload.remote_dest_path)
-            })
-            .join("\n")
-    }
-
-    /// Produces a single SFTP `put` command for a given local file and remote destination.
-    fn sftp_put_command(
-        &self,
-        local_file_path: &String,
-        remote_dest_path: &Option<String>,
-    ) -> String {
-        let mut command = String::from("put ");
-
-        // "put -r"
-        let is_dir = Path::new(local_file_path)
-            .metadata()
-            .is_ok_and(|m| m.is_dir());
-        if is_dir {
-            command += "-r "
-        }
-
-        // "put -r \"path/to/local/file\"
-        command += &format!("\\\"{local_file_path}\\\"");
-
-        //"put -r path/to/local/file pwd/on/remote"
-        if let Some(pwd) = remote_dest_path {
-            command += " ";
-            command += &format!("\\\"{}\\\"", &pwd);
-        }
-
-        command
     }
 
     pub fn prompt_for_file_upload_password(
@@ -268,6 +226,7 @@ impl FileUpload {
         self.uploads.entry(upload_id).and_modify(|upload_info| {
             let successful = exit_code.was_successful();
             upload_info.status = FileUploadStatus::Completed { successful };
+            upload_info.upload_command = None;
             ctx.notify();
         });
     }
@@ -515,3 +474,7 @@ impl FileUpload {
             .finish()
     }
 }
+
+#[cfg(test)]
+#[path = "ssh_file_upload_tests.rs"]
+mod tests;
