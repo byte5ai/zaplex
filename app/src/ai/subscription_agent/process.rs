@@ -6,6 +6,17 @@ use futures_lite::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Duration;
+use warpui::r#async::FutureExt as _;
+
+const PROCESS_GRACEFUL_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+const PROCESS_FORCED_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ProcessTermination {
+    Graceful,
+    Forced,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ProcessLocation {
@@ -252,10 +263,55 @@ impl JsonLineProcess {
             .map(Some)
     }
 
-    pub(crate) fn terminate(&mut self) -> Result<()> {
-        self.child
-            .kill()
-            .context("failed to terminate subscription-agent process")
+    pub(super) async fn terminate(&mut self) -> Result<ProcessTermination> {
+        self.terminate_with_timeouts(PROCESS_GRACEFUL_EXIT_TIMEOUT, PROCESS_FORCED_EXIT_TIMEOUT)
+            .await
+    }
+
+    async fn terminate_with_timeouts(
+        &mut self,
+        graceful_timeout: Duration,
+        forced_timeout: Duration,
+    ) -> Result<ProcessTermination> {
+        if let Err(error) = self.stdin.close().await {
+            log::debug!("Failed to close subscription-agent stdin before exit: {error}");
+        }
+
+        match wait_for_exit(&mut self.child, graceful_timeout).await {
+            Ok(true) => return Ok(ProcessTermination::Graceful),
+            Ok(false) => {}
+            Err(error) => {
+                log::warn!(
+                    "Failed while waiting for subscription-agent exit; forcing termination: {error:#}"
+                );
+            }
+        }
+
+        match self.child.kill() {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {}
+            Err(error) => {
+                return Err(error).context("failed to force-stop subscription-agent process");
+            }
+        }
+
+        if wait_for_exit(&mut self.child, forced_timeout).await? {
+            Ok(ProcessTermination::Forced)
+        } else {
+            Err(anyhow::anyhow!(
+                "subscription-agent process did not exit after forced termination"
+            ))
+        }
+    }
+}
+
+async fn wait_for_exit(child: &mut Child, timeout: Duration) -> Result<bool> {
+    match child.status().with_timeout(timeout).await {
+        Ok(status) => {
+            status.context("failed to wait for subscription-agent process")?;
+            Ok(true)
+        }
+        Err(_) => Ok(false),
     }
 }
 
@@ -294,3 +350,7 @@ pub(crate) async fn query_cli_version(
 #[cfg(test)]
 #[path = "process_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "process_lifecycle_tests.rs"]
+mod lifecycle_tests;

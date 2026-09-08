@@ -1,4 +1,4 @@
-use crate::{LogFileWriter, SimpleLogger};
+use crate::{LogFileWriter, LogWorker, SimpleLogger};
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -49,8 +49,8 @@ fn log_directory_path(namespace: &str) -> PathBuf {
 /// Singleton that owns all file-based loggers in the app.
 ///
 /// Enforces that at most one active [`SimpleLogger`] exists per log file path.
-/// Stale registrations are reclaimed automatically on the next
-/// [`register`](LogManager::register) call for that path.
+/// Each path retains one worker that serializes successive logger generations.
+/// Stale registrations are reclaimed automatically on the next registration.
 ///
 /// A registration is considered stale in two cases:
 /// - all [`SimpleLogger`] clones have been dropped, so the [`Weak`] entry can no
@@ -59,11 +59,16 @@ fn log_directory_path(namespace: &str) -> PathBuf {
 ///   [`SimpleLogger::close`], which means the writer is logically dead even if
 ///   some [`Arc`] handles still exist briefly
 ///
-/// Supporting both cases lets callers opt into eager, explicit shutdown without
-/// tying path reuse strictly to the last clone being dropped.
+/// A replacement generation is queued behind the old generation's final flush,
+/// so reopening with truncation can never race the old writer.
 pub struct LogManager {
     namespaces: HashSet<String>,
-    loggers: HashMap<PathBuf, Weak<LogFileWriter>>,
+    loggers: HashMap<PathBuf, ManagedLogPath>,
+}
+
+struct ManagedLogPath {
+    worker: Arc<LogWorker>,
+    active_writer: Weak<LogFileWriter>,
 }
 
 impl Default for LogManager {
@@ -127,8 +132,17 @@ impl LogManager {
         path: PathBuf,
         executor: Arc<Background>,
     ) -> Result<SimpleLogger, LogManagerError> {
-        if let Some(existing) = self.loggers.get(&path) {
-            if let Some(writer) = existing.upgrade() {
+        self.register_resolved_path_with_hook(path, executor, None)
+    }
+
+    fn register_resolved_path_with_hook(
+        &mut self,
+        path: PathBuf,
+        executor: Arc<Background>,
+        after_receive: Option<crate::AfterReceiveHook>,
+    ) -> Result<SimpleLogger, LogManagerError> {
+        if let Some(existing) = self.loggers.get_mut(&path) {
+            if let Some(writer) = existing.active_writer.upgrade() {
                 // A live `Arc` alone is not enough to keep the path reserved.
                 // Callers may explicitly close a logger to mark the stream as
                 // finished before every clone has been dropped.
@@ -136,12 +150,21 @@ impl LogManager {
                     return Err(LogManagerError::LoggerAlreadyActive { path });
                 }
             }
+
+            let logger = SimpleLogger::new_generation(existing.worker.clone());
+            existing.active_writer = logger.downgrade();
+            return Ok(logger);
         }
 
-        // In the absence of an active logger at this path, initialize and return a new logger,
-        // which truncates any existing log file on creation.
-        let logger = SimpleLogger::new(path.clone(), executor);
-        self.loggers.insert(path, logger.downgrade());
+        let worker = LogWorker::new(path.clone(), executor, after_receive);
+        let logger = SimpleLogger::new_generation(worker.clone());
+        self.loggers.insert(
+            path,
+            ManagedLogPath {
+                worker,
+                active_writer: logger.downgrade(),
+            },
+        );
         Ok(logger)
     }
 }

@@ -1,5 +1,3 @@
-use std::slice;
-
 use cocoa::{
     base::{id, nil, BOOL},
     foundation::{NSArray, NSString, NSUInteger},
@@ -8,7 +6,7 @@ use objc::{msg_send, sel, sel_impl};
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
 
-use super::make_nsstring;
+use super::{make_nsstring, utils::nsstring_as_str};
 
 // Modifier key mask values for the Carbon API.
 pub const CMD_KEY: u16 = 256;
@@ -36,10 +34,7 @@ impl Keycode {
                 return None;
             }
 
-            let cstr = key.UTF8String() as *const u8;
-            std::str::from_utf8(slice::from_raw_parts(cstr, key.len()))
-                .ok()
-                .map(|s| s.to_string())
+            nsstring_as_str(key).map(str::to_owned)
         }
     }
 
