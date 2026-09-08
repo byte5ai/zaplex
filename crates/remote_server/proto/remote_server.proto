@@ -723,6 +723,15 @@ message SafeFileCleanupUploadBatch {
   string batch_handle_id = 1;
 }
 
+message SafeFileIdentityBatchEntry {
+  string path = 1;
+  SafeFileEntryKind expected_kind = 2;
+}
+
+message SafeFileListIdentities {
+  repeated SafeFileIdentityBatchEntry entries = 1;
+}
+
 message SafeFileRequest {
   // Required for create/rename/delete. Reusing an id returns the persisted
   // result instead of executing a second mutation.
@@ -742,6 +751,7 @@ message SafeFileRequest {
     SafeFileSetModeHandle set_mode_handle = 13;
     SafeFileBeginUploadBatch begin_upload_batch = 14;
     SafeFileCleanupUploadBatch cleanup_upload_batch = 15;
+    SafeFileListIdentities list_identities = 16;
   }
 }
 
@@ -796,6 +806,24 @@ message SafeFileUploadBatchOpened {
   repeated SafeFileUploadEntryOpened entries = 3;
 }
 
+enum SafeFileIdentityBatchStatus {
+  SAFE_FILE_IDENTITY_BATCH_STATUS_UNSPECIFIED = 0;
+  SAFE_FILE_IDENTITY_BATCH_STATUS_FOUND = 1;
+  SAFE_FILE_IDENTITY_BATCH_STATUS_NOT_FOUND = 2;
+  SAFE_FILE_IDENTITY_BATCH_STATUS_PERMISSION_DENIED = 3;
+  SAFE_FILE_IDENTITY_BATCH_STATUS_KIND_CHANGED = 4;
+}
+
+message SafeFileIdentityBatchEntryResult {
+  string path = 1;
+  SafeFileIdentityBatchStatus status = 2;
+  optional SafeFileIdentity identity = 3;
+}
+
+message SafeFileIdentityBatchResult {
+  repeated SafeFileIdentityBatchEntryResult entries = 1;
+}
+
 message SafeFileResponse {
   oneof result {
     SafeFileOpened opened = 1;
@@ -804,6 +832,7 @@ message SafeFileResponse {
     SafeFileMutationResult mutation = 4;
     SafeFileRecoveryList recoveries = 5;
     SafeFileUploadBatchOpened upload_batch_opened = 6;
+    SafeFileIdentityBatchResult identities = 7;
     FileOperationError error = 15;
   }
 }

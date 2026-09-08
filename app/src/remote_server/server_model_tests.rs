@@ -31,6 +31,7 @@ use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
     FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PROCESS_SIGNAL_V1,
     FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
+    FEATURE_SAFE_FILE_IDENTITY_BATCH_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
 };
 
 fn test_model() -> ServerModel {
@@ -660,6 +661,25 @@ fn daemon_signal_advertisement_requires_runtime_backend_support() {
             .iter()
             .any(|feature| feature == FEATURE_MANAGED_AGENT_FLEET_V1),
         cfg!(target_os = "linux")
+    );
+}
+
+#[test]
+fn safe_file_identity_batch_advertisement_requires_runtime_backend_support() {
+    let unsupported = server_features_with_runtime_support(true, false);
+    assert!(!unsupported
+        .iter()
+        .any(|feature| feature == FEATURE_SAFE_FILE_TRANSACTIONS_V1));
+    assert!(!unsupported
+        .iter()
+        .any(|feature| feature == FEATURE_SAFE_FILE_IDENTITY_BATCH_V1));
+
+    let supported = server_features_with_runtime_support(true, true);
+    assert_eq!(
+        supported
+            .iter()
+            .any(|feature| feature == FEATURE_SAFE_FILE_IDENTITY_BATCH_V1),
+        cfg!(any(target_os = "linux", target_os = "macos"))
     );
 }
 

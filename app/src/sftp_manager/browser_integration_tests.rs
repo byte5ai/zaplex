@@ -560,6 +560,7 @@ struct TracingBackend {
     inner: InMemorySftpBackend,
     listed_paths: Mutex<Vec<PathBuf>>,
     stat_paths: Mutex<Vec<PathBuf>>,
+    realpath_paths: Mutex<Vec<PathBuf>>,
     fail_copy: AtomicBool,
     fail_replace: AtomicBool,
     create_after_next_list: Mutex<Option<(PathBuf, Vec<u8>)>>,
@@ -571,6 +572,7 @@ impl TracingBackend {
             inner: InMemorySftpBackend::new(root),
             listed_paths: Mutex::new(Vec::new()),
             stat_paths: Mutex::new(Vec::new()),
+            realpath_paths: Mutex::new(Vec::new()),
             fail_copy: AtomicBool::new(false),
             fail_replace: AtomicBool::new(false),
             create_after_next_list: Mutex::new(None),
@@ -667,6 +669,7 @@ impl SftpBackend for TracingBackend {
     }
 
     fn realpath(&self, path: &std::path::Path) -> Result<PathBuf, super::sftp_ops::SftpOpsError> {
+        self.realpath_paths.lock().unwrap().push(path.to_path_buf());
         self.inner.realpath(path)
     }
 
@@ -859,6 +862,30 @@ fn test_connect_finalize_none_falls_back_to_home() {
         assert_eq!(current_path, expected_home);
         assert_eq!(path_history, vec![expected_home]);
         assert_eq!(history_index, 0);
+    });
+}
+
+#[test]
+fn connect_callback_stays_responsive_while_sftp_subsystem_is_delayed() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp_dir = create_temp_dir_with_files(&[("prepared/hello.txt", b"hi")]);
+        let backend = Arc::new(TracingBackend::new(temp_dir.path().to_path_buf()));
+        let (_, view) = create_view(&mut app);
+
+        view.update(&mut app, |view, ctx| {
+            view.apply_connected_backend_at(
+                backend.clone() as Arc<dyn SftpBackend>,
+                PathBuf::from("/prepared"),
+                ctx,
+            );
+        });
+
+        assert!(backend.realpath_paths.lock().unwrap().is_empty());
+        view.read(&app, |view, _ctx| {
+            assert_eq!(view.current_path, PathBuf::from("/prepared"));
+            assert!(view.entries.iter().any(|entry| entry.name == "hello.txt"));
+        });
     });
 }
 
@@ -3990,6 +4017,44 @@ fn test_render_after_multiple_operations() {
 // ============================================================
 // Cross-pane copy/move (MC F5/F6, increment B)
 // ============================================================
+
+#[test]
+fn cross_connection_download_uses_listed_size_without_sync_stat() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("remote/payload.bin", &[7; 123])]);
+        let root = temp.path().to_path_buf();
+        std::fs::create_dir_all(root.join("local")).unwrap();
+
+        let source_backend = Arc::new(TracingBackend::new(root.clone()));
+        let (_, source_view) = create_view_with_node(&mut app, "host");
+        source_view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(
+                source_backend.clone() as Arc<dyn SftpBackend>,
+                PathBuf::from("/remote"),
+                ctx,
+            );
+        });
+        let (_, target_view) = create_view_with_node(&mut app, "");
+        target_view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(
+                Arc::new(InMemorySftpBackend::new(PathBuf::from("/"))),
+                root.join("local"),
+                ctx,
+            );
+        });
+
+        source_view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+
+        source_view.read(&app, |view, _ctx| {
+            assert_eq!(view.transfers.len(), 1);
+            assert_eq!(view.transfers[0].total_size, 123);
+        });
+        assert!(source_backend.stat_paths.lock().unwrap().is_empty());
+    });
+}
 
 #[cfg(unix)]
 struct RecordingDeleteBackend {

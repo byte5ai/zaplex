@@ -56,7 +56,7 @@ use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
     supported_features, FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PROCESS_SIGNAL_V1,
     FEATURE_AGENT_PTY_BINDING_V2, FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
-    FEATURE_SAFE_FILE_TRANSACTIONS_V1,
+    FEATURE_SAFE_FILE_IDENTITY_BATCH_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
 };
 
 // Buffer-sync related: depends on GlobalBufferModel, which server-local operations are only
@@ -432,7 +432,10 @@ fn server_features_with_runtime_support(
         });
     }
     if !safe_file_transactions_supported {
-        features.retain(|feature| feature != FEATURE_SAFE_FILE_TRANSACTIONS_V1);
+        features.retain(|feature| {
+            feature != FEATURE_SAFE_FILE_TRANSACTIONS_V1
+                && feature != FEATURE_SAFE_FILE_IDENTITY_BATCH_V1
+        });
     }
     features
 }
@@ -1172,9 +1175,17 @@ impl ServerModel {
                 let is_close_notification = request_id.is_empty()
                     && matches!(
                         request.operation.as_ref(),
-                        Some(super::proto::safe_file_request::Operation::CloseHandle(_))
+                        Some(super::proto::safe_file_request::Operation::CloseHandle(..))
                     );
+                let is_identity_batch = matches!(
+                    request.operation.as_ref(),
+                    Some(super::proto::safe_file_request::Operation::ListIdentities(
+                        ..
+                    ))
+                );
                 if self.client_supports_safe_file_transactions(conn_id)
+                    && (!is_identity_batch
+                        || self.client_supports_safe_file_identity_batch(conn_id))
                     && self.safe_files.is_available()
                 {
                     let response = self.safe_files.handle(conn_id, request);
@@ -1561,6 +1572,13 @@ impl ServerModel {
         self.connection_features
             .get(&conn_id)
             .is_some_and(|features| features.contains(FEATURE_SAFE_FILE_TRANSACTIONS_V1))
+    }
+
+    #[cfg(unix)]
+    fn client_supports_safe_file_identity_batch(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_SAFE_FILE_IDENTITY_BATCH_V1))
     }
 
     /// Handles `Authenticate` by replacing the daemon-wide credential.

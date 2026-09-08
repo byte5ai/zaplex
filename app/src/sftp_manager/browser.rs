@@ -37,7 +37,9 @@ use warpui::{
     AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
-use zaplex_remote_session::types::{has_feature, FEATURE_SAFE_FILE_TRANSACTIONS_V1};
+use zaplex_remote_session::types::{
+    has_feature, FEATURE_SAFE_FILE_IDENTITY_BATCH_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
+};
 
 use super::context_menu::ContextMenuState;
 use super::fm_registry::{
@@ -410,6 +412,8 @@ struct CopyMoveOp {
     source: PathBuf,
     dest: PathBuf,
     is_dir: bool,
+    total_size: u64,
+    destination_probe: Option<Result<bool, sftp_ops::SftpOpsError>>,
 }
 
 /// The in-progress state of a same-filesystem copy/move batch, paused whenever
@@ -597,6 +601,14 @@ struct CrossConnConflictFile {
     remote_path: PathBuf,
     /// Original source path — deleted through the source backend on a move.
     source: PathBuf,
+    total_size: u64,
+}
+
+struct CrossConnFilePlan {
+    local_path: PathBuf,
+    remote_path: PathBuf,
+    source: PathBuf,
+    total_size: u64,
 }
 
 /// The conflicting transfers of a cross-connection copy/move, paused on the
@@ -613,6 +625,17 @@ struct PendingCrossConn {
     source_backend: Option<Arc<dyn SftpBackend>>,
     /// Destination label for the summary toast.
     target_label: String,
+}
+
+struct PreparedSftpConnection {
+    session: zap_sftp::SftpSession,
+    sftp: zap_sftp::Sftp,
+    initial_path: PathBuf,
+}
+
+enum PrepareSftpConnectionError {
+    Connect(sftp_ops::SftpOpsError),
+    SftpChannel(sftp_ops::SftpOpsError),
 }
 
 /// State that becomes current only after the requested directory has been
@@ -1316,60 +1339,59 @@ impl SftpBrowserView {
                 ctx.notify();
 
                 let secret_store = KeychainSecretStore;
+                let requested_start_path = self.requested_start_path.clone();
                 self.connect_handle = self.run_blocking(
                     ctx,
-                    move || match confirmation {
-                        Some(confirmation) => sftp_ops::connect_from_server_confirmed(
-                            &server,
-                            &secret_store,
-                            &confirmation,
-                        ),
-                        None => sftp_ops::connect_from_server(&server, &secret_store),
+                    move || {
+                        let session = match confirmation {
+                            Some(confirmation) => sftp_ops::connect_from_server_confirmed(
+                                &server,
+                                &secret_store,
+                                &confirmation,
+                            ),
+                            None => sftp_ops::connect_from_server(&server, &secret_store),
+                        }
+                        .map_err(PrepareSftpConnectionError::Connect)?;
+                        let sftp = session.sftp().map_err(|error| {
+                            PrepareSftpConnectionError::SftpChannel(
+                                super::sftp_ops::SftpOpsError::from(error),
+                            )
+                        })?;
+                        let initial_path =
+                            Self::initial_connect_path(&requested_start_path, || {
+                                sftp.realpath(Path::new("."))
+                                    .ok()
+                                    .map(|home| normalize_remote_path(&home))
+                            });
+                        Ok(PreparedSftpConnection {
+                            session,
+                            sftp,
+                            initial_path,
+                        })
                     },
                     move |me, result, ctx| {
                         me.is_loading = false;
                         match result {
-                            Ok(Ok(session)) => {
-                                match session.sftp() {
-                                    Ok(sftp) => {
-                                        me.refresh_safe_file_client(ctx);
-                                        let backend =
-                                            Arc::new(LiveSftpBackend::new_with_safe_file_slot(
-                                                sftp,
-                                                me.safe_file_client.clone(),
-                                            ))
-                                                as Arc<dyn SftpBackend>;
-                                        super::transfer_queue::TransferQueue::as_ref(ctx)
-                                            .register_backend_recoveries_async(backend.clone());
-                                        me._session = Some(session);
-                                        // Land on the caller's requested `start_path`
-                                        // (the FM pane-mode toggle's cwd) when given;
-                                        // the plain "SFTP Browse" (`None`) falls back
-                                        // to the remote home, then `/`.
-                                        me.apply_connected_backend(backend, ctx);
-                                    }
-                                    Err(e) => {
-                                        let error = super::sftp_ops::SftpOpsError::from(e);
-                                        me.connection = ConnectionState::Failed(crate::t!(
-                                            "fm-toast-sftp-channel-failed",
-                                            err = error.user_message()
-                                        ));
-                                        me.show_error_toast(
-                                            crate::t!(
-                                                "fm-toast-sftp-channel-failed",
-                                                err = error.user_message()
-                                            ),
-                                            ctx,
-                                        );
-                                    }
-                                }
+                            Ok(Ok(prepared)) => {
+                                me.refresh_safe_file_client(ctx);
+                                let backend = Arc::new(LiveSftpBackend::new_with_safe_file_slot(
+                                    prepared.sftp,
+                                    me.safe_file_client.clone(),
+                                ))
+                                    as Arc<dyn SftpBackend>;
+                                super::transfer_queue::TransferQueue::as_ref(ctx)
+                                    .register_backend_recoveries_async(backend.clone());
+                                me._session = Some(prepared.session);
+                                me.apply_connected_backend_at(backend, prepared.initial_path, ctx);
                             }
-                            Ok(Err(sftp_ops::SftpOpsError::UnknownHostKey {
-                                host,
-                                port,
-                                fingerprint_sha256,
-                                key_type,
-                            })) => {
+                            Ok(Err(PrepareSftpConnectionError::Connect(
+                                sftp_ops::SftpOpsError::UnknownHostKey {
+                                    host,
+                                    port,
+                                    fingerprint_sha256,
+                                    key_type,
+                                },
+                            ))) => {
                                 me.connection =
                                     ConnectionState::Failed(crate::t!("fm-error-unknown-host-key"));
                                 me.dialog = Some(Dialog::ConfirmUnknownHostKey {
@@ -1379,8 +1401,16 @@ impl SftpBrowserView {
                                     key_type,
                                 });
                             }
-                            Ok(Err(error)) => {
+                            Ok(Err(PrepareSftpConnectionError::Connect(error))) => {
                                 let message = error.user_message();
+                                me.connection = ConnectionState::Failed(message.clone());
+                                me.show_error_toast(message, ctx);
+                            }
+                            Ok(Err(PrepareSftpConnectionError::SftpChannel(error))) => {
+                                let message = crate::t!(
+                                    "fm-toast-sftp-channel-failed",
+                                    err = error.user_message()
+                                );
                                 me.connection = ConnectionState::Failed(message.clone());
                                 me.show_error_toast(message, ctx);
                             }
@@ -1412,16 +1442,27 @@ impl SftpBrowserView {
     }
 
     fn refresh_safe_file_client(&mut self, ctx: &mut ViewContext<Self>) {
-        let client = RemoteServerManager::as_ref(ctx)
+        let negotiated = RemoteServerManager::as_ref(ctx)
             .connected_daemons()
             .into_iter()
             .find(|daemon| {
                 daemon.registry_node_id.as_deref() == Some(self.node_id.as_str())
                     && has_feature(&daemon.features, FEATURE_SAFE_FILE_TRANSACTIONS_V1)
             })
-            .map(|daemon| daemon.client);
+            .map(|daemon| {
+                let identity_batch =
+                    has_feature(&daemon.features, FEATURE_SAFE_FILE_IDENTITY_BATCH_V1);
+                (daemon.client, identity_batch)
+            });
+        let (client, identity_batch) = match negotiated {
+            Some((client, identity_batch)) => (Some(client), identity_batch),
+            None => (None, false),
+        };
         let became_available = client.is_some();
-        if self.safe_file_client.set(client) {
+        if self
+            .safe_file_client
+            .set_with_identity_batch(client, identity_batch)
+        {
             ctx.notify();
             if became_available {
                 self.dialog = None;
@@ -1458,17 +1499,30 @@ impl SftpBrowserView {
     /// async callback so the path-selection + initial-listing behavior is
     /// unit-testable with a mock backend (the live session handling stays in the
     /// callback). Honoring `start_path` also skips the `realpath(".")` round-trip.
+    #[cfg(test)]
     pub(crate) fn apply_connected_backend(
         &mut self,
         backend: Arc<dyn SftpBackend>,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.current_path = Self::initial_connect_path(&self.requested_start_path, || {
+        let initial_path = Self::initial_connect_path(&self.requested_start_path, || {
             backend
                 .realpath(Path::new("."))
                 .ok()
                 .map(|home| normalize_remote_path(&home))
         });
+        self.apply_connected_backend_at(backend, initial_path, ctx);
+    }
+
+    /// Installs a connection whose SFTP channel and initial path were prepared
+    /// off-thread. This callback performs no network I/O.
+    pub(crate) fn apply_connected_backend_at(
+        &mut self,
+        backend: Arc<dyn SftpBackend>,
+        initial_path: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.current_path = initial_path;
         self.sync_breadcrumb_mouse_handles();
         self.path_history = vec![self.current_path.clone()];
         self.history_index = 0;
@@ -2286,15 +2340,10 @@ impl SftpBrowserView {
             let Some(name) = source.file_name() else {
                 continue;
             };
-            let Some(source_type) = self
-                .entries
-                .iter()
-                .find(|e| &e.path == source)
-                .map(|entry| entry.file_type)
-            else {
+            let Some(source_entry) = self.entries.iter().find(|entry| &entry.path == source) else {
                 continue;
             };
-            let is_dir = match source_type {
+            let is_dir = match source_entry.file_type {
                 FileEntryType::Directory => true,
                 FileEntryType::File => false,
                 FileEntryType::Symlink | FileEntryType::Other => {
@@ -2320,6 +2369,7 @@ impl SftpBrowserView {
                     super::transfer_job::ConflictDecision::Skip
                 },
                 true,
+                source_entry.size,
                 label,
                 ctx,
             );
@@ -2355,13 +2405,10 @@ impl SftpBrowserView {
         is_move: bool,
         conflict: super::transfer_job::ConflictDecision,
         is_relay: bool,
+        total_size: u64,
         label: String,
         ctx: &mut ViewContext<Self>,
     ) {
-        let total = source_backend
-            .lstat(&source_path)
-            .map(|entry| entry.size)
-            .unwrap_or(0);
         let Some(next_task_id) = self.next_transfer_id.checked_add(1) else {
             self.show_error_toast(
                 crate::t!(
@@ -2396,7 +2443,7 @@ impl SftpBrowserView {
                     operation,
                     conflict,
                     topology,
-                    total,
+                    total_size,
                 );
                 ctx.notify();
                 id
@@ -2418,7 +2465,7 @@ impl SftpBrowserView {
             source_path.clone(),
             target_path.clone(),
             TransferDirection::Copy,
-            total,
+            total_size,
         ));
         self.transfer_cancel_handles
             .insert(task_id, MouseStateHandle::default());
@@ -2562,29 +2609,47 @@ impl SftpBrowserView {
                 continue;
             };
             let dest = normalize_remote_path(&target_dir.join(name));
-            let is_dir = self
-                .entries
-                .iter()
-                .find(|e| &e.path == source)
-                .map(|e| matches!(e.file_type, FileEntryType::Directory))
-                .unwrap_or(false);
+            let Some(source_entry) = self.entries.iter().find(|entry| &entry.path == source) else {
+                continue;
+            };
             ops.push_back(CopyMoveOp {
                 source: source.clone(),
                 dest,
-                is_dir,
+                is_dir: matches!(source_entry.file_type, FileEntryType::Directory),
+                total_size: source_entry.size,
+                destination_probe: None,
             });
         }
 
-        self.pending_copy_move = Some(PendingCopyMove {
-            ops,
-            backend,
-            target_label: target.label.clone(),
-            is_move,
-            conflict_default: None,
-            queued: 0,
-            skipped: 0,
-        });
-        self.process_pending_copy_move(ctx);
+        let probe_backend = backend.clone();
+        let target_label = target.label.clone();
+        let _ = self.run_blocking(
+            ctx,
+            move || {
+                for op in &mut ops {
+                    op.destination_probe = Some(probe_backend.entry_exists(&op.dest));
+                }
+                ops
+            },
+            move |me, result, ctx| match result {
+                Ok(ops) => {
+                    me.pending_copy_move = Some(PendingCopyMove {
+                        ops,
+                        backend,
+                        target_label,
+                        is_move,
+                        conflict_default: None,
+                        queued: 0,
+                        skipped: 0,
+                    });
+                    me.process_pending_copy_move(ctx);
+                }
+                Err(_) => {
+                    me.show_error_toast(crate::t!("fm-transfer-cancelled"), ctx);
+                    ctx.notify();
+                }
+            },
+        );
     }
 
     /// Drive the current copy/move batch until it finishes or hits a conflict
@@ -2603,7 +2668,7 @@ impl SftpBrowserView {
             Execute {
                 conflict: super::transfer_job::ConflictDecision,
             },
-            ProbeError(super::sftp_ops::SftpOpsError),
+            ProbeError(String),
         }
         loop {
             // Decide the next step under a short immutable borrow.
@@ -2613,7 +2678,11 @@ impl SftpBrowserView {
                 };
                 match pending.ops.front() {
                     None => Step::Done,
-                    Some(op) => match pending.backend.entry_exists(&op.dest) {
+                    Some(op) => match op
+                        .destination_probe
+                        .as_ref()
+                        .expect("copy/move operation must be probed off-thread")
+                    {
                         Ok(false) => Step::Execute {
                             conflict: super::transfer_job::ConflictDecision::Overwrite,
                         },
@@ -2630,7 +2699,7 @@ impl SftpBrowserView {
                                 is_move: pending.is_move,
                             },
                         },
-                        Err(error) => Step::ProbeError(error),
+                        Err(error) => Step::ProbeError(error.user_message()),
                     },
                 }
             };
@@ -2667,15 +2736,14 @@ impl SftpBrowserView {
                         self.execute_copy_move_op(&op, conflict, ctx);
                     }
                 }
-                Step::ProbeError(error) => {
-                    self.pending_copy_move = None;
-                    self.dialog = None;
+                Step::ProbeError(message) => {
+                    if let Some(pending) = self.pending_copy_move.as_mut() {
+                        pending.ops.pop_front();
+                    }
                     self.show_error_toast(
-                        crate::t!("fm-toast-transfer-failed", err = error.user_message()),
+                        crate::t!("fm-toast-transfer-failed", err = message),
                         ctx,
                     );
-                    ctx.notify();
-                    return;
                 }
             }
         }
@@ -2710,6 +2778,7 @@ impl SftpBrowserView {
             is_move,
             conflict,
             false,
+            op.total_size,
             label,
             ctx,
         );
@@ -2826,24 +2895,16 @@ impl SftpBrowserView {
         let source_backend = self.sftp.clone();
 
         let target_dir = target.current_path.clone();
-        let mut started_files = 0usize;
         let mut started_dirs = 0usize;
-        // Files whose destination already exists — collected for one overwrite
-        // prompt rather than being silently skipped.
-        let mut conflicts: Vec<CrossConnConflictFile> = Vec::new();
+        let mut file_plans = Vec::new();
         for source in sources {
             let Some(name) = source.file_name() else {
                 continue;
             };
-            let Some(source_type) = self
-                .entries
-                .iter()
-                .find(|e| &e.path == source)
-                .map(|entry| entry.file_type)
-            else {
+            let Some(source_entry) = self.entries.iter().find(|entry| &entry.path == source) else {
                 continue;
             };
-            let is_dir = match source_type {
+            let is_dir = match source_entry.file_type {
                 FileEntryType::Directory => true,
                 FileEntryType::File => false,
                 FileEntryType::Symlink | FileEntryType::Other => {
@@ -2869,23 +2930,6 @@ impl SftpBrowserView {
                 started_dirs += 1;
                 continue;
             }
-            let exists = match direction {
-                TransferDirection::Upload => backend.entry_exists(&dest),
-                TransferDirection::Download => local_entry_exists(&dest),
-                TransferDirection::Copy => {
-                    unreachable!("copy direction is not used by upload/download preparation")
-                }
-            };
-            let exists = match exists {
-                Ok(exists) => exists,
-                Err(error) => {
-                    self.show_error_toast(
-                        crate::t!("fm-toast-transfer-failed", err = error.user_message()),
-                        ctx,
-                    );
-                    continue;
-                }
-            };
             let (local_path, remote_path) = match direction {
                 TransferDirection::Upload => (source.clone(), dest),
                 TransferDirection::Download => (dest, source.clone()),
@@ -2893,32 +2937,123 @@ impl SftpBrowserView {
                     unreachable!("copy direction is not used by upload/download preparation")
                 }
             };
-            if exists {
-                conflicts.push(CrossConnConflictFile {
-                    local_path,
-                    remote_path,
-                    source: source.clone(),
-                });
-                continue;
-            }
-            let delete_after = match (is_move, &source_backend) {
-                (true, Some(b)) => Some((b.clone(), source.clone())),
-                _ => None,
-            };
-            self.spawn_transfer_with_backend(
+            file_plans.push(CrossConnFilePlan {
                 local_path,
                 remote_path,
-                backend.clone(),
+                source: source.clone(),
+                total_size: source_entry.size,
+            });
+        }
+        self.selected.clear();
+
+        let target_label = target.label.clone();
+        if file_plans.is_empty() {
+            self.finish_cross_connection_preparation(
+                Vec::new(),
+                started_dirs,
+                is_move,
                 direction,
-                false,
-                delete_after,
-                None,
+                backend,
+                source_backend,
+                target_label,
                 ctx,
             );
-            started_files += 1;
+            return;
         }
 
-        // Report what started right away.
+        let probe_backend = backend.clone();
+        let _ = self.run_blocking(
+            ctx,
+            move || {
+                file_plans
+                    .into_iter()
+                    .map(|plan| {
+                        let exists = match direction {
+                            TransferDirection::Upload => {
+                                probe_backend.entry_exists(&plan.remote_path)
+                            }
+                            TransferDirection::Download => local_entry_exists(&plan.local_path),
+                            TransferDirection::Copy => unreachable!(
+                                "copy direction is not used by upload/download preparation"
+                            ),
+                        };
+                        (plan, exists)
+                    })
+                    .collect()
+            },
+            move |me, result, ctx| match result {
+                Ok(probes) => me.finish_cross_connection_preparation(
+                    probes,
+                    started_dirs,
+                    is_move,
+                    direction,
+                    backend,
+                    source_backend,
+                    target_label,
+                    ctx,
+                ),
+                Err(_) => {
+                    me.show_error_toast(crate::t!("fm-transfer-cancelled"), ctx);
+                    ctx.notify();
+                }
+            },
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_cross_connection_preparation(
+        &mut self,
+        probes: Vec<(CrossConnFilePlan, Result<bool, sftp_ops::SftpOpsError>)>,
+        started_dirs: usize,
+        is_move: bool,
+        direction: TransferDirection,
+        backend: Arc<dyn SftpBackend>,
+        source_backend: Option<Arc<dyn SftpBackend>>,
+        target_label: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let mut started_files = 0usize;
+        let mut probe_errors = 0usize;
+        let mut conflicts = Vec::new();
+        for (plan, exists) in probes {
+            match exists {
+                Ok(true) => conflicts.push(CrossConnConflictFile {
+                    local_path: plan.local_path,
+                    remote_path: plan.remote_path,
+                    source: plan.source,
+                    total_size: plan.total_size,
+                }),
+                Ok(false) => {
+                    let delete_after = if is_move {
+                        source_backend
+                            .as_ref()
+                            .map(|source_backend| (source_backend.clone(), plan.source))
+                    } else {
+                        None
+                    };
+                    self.spawn_transfer_with_backend(
+                        plan.local_path,
+                        plan.remote_path,
+                        backend.clone(),
+                        direction,
+                        false,
+                        delete_after,
+                        None,
+                        plan.total_size,
+                        ctx,
+                    );
+                    started_files += 1;
+                }
+                Err(error) => {
+                    probe_errors += 1;
+                    self.show_error_toast(
+                        crate::t!("fm-toast-transfer-failed", err = error.user_message()),
+                        ctx,
+                    );
+                }
+            }
+        }
+
         let mut parts = Vec::new();
         if started_files > 0 {
             parts.push(if is_move {
@@ -2939,7 +3074,7 @@ impl SftpBrowserView {
                 crate::t!(
                     "fm-summary-to-target",
                     parts = parts.join(", "),
-                    target = target.label.clone()
+                    target = target_label.clone()
                 ),
                 ctx,
             );
@@ -2947,16 +3082,16 @@ impl SftpBrowserView {
 
         // Ask once about any files that already exist on the destination.
         if conflicts.is_empty() {
-            if parts.is_empty() {
+            if parts.is_empty() && probe_errors == 0 {
                 let msg = if is_move {
                     crate::t!(
                         "fm-toast-nothing-to-move-target",
-                        target = target.label.clone()
+                        target = target_label.clone()
                     )
                 } else {
                     crate::t!(
                         "fm-toast-nothing-to-copy-target",
-                        target = target.label.clone()
+                        target = target_label.clone()
                     )
                 };
                 self.show_info_toast(msg, ctx);
@@ -2967,13 +3102,13 @@ impl SftpBrowserView {
                 files: conflicts,
                 is_move,
                 direction,
-                backend: backend.clone(),
-                source_backend: source_backend.clone(),
-                target_label: target.label.clone(),
+                backend,
+                source_backend,
+                target_label,
             });
             self.dialog = Some(Dialog::CrossConnConflict { existing, is_move });
         }
-        self.selected.clear();
+        ctx.notify();
     }
 
     /// Resolve the cross-connection overwrite prompt: `overwrite` spawns the
@@ -3010,6 +3145,7 @@ impl SftpBrowserView {
                 true,
                 delete_after,
                 None,
+                file.total_size,
                 ctx,
             );
         }
@@ -3331,17 +3467,9 @@ impl SftpBrowserView {
         overwrite_destination: bool,
         delete_after: Option<(Arc<dyn SftpBackend>, PathBuf)>,
         dir_move_batch: Option<u64>,
+        total_size: u64,
         ctx: &mut ViewContext<Self>,
     ) -> usize {
-        let total_size = match direction {
-            TransferDirection::Upload => {
-                std::fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0)
-            }
-            TransferDirection::Download => backend.stat(&remote_path).map(|e| e.size).unwrap_or(0),
-            TransferDirection::Copy => {
-                unreachable!("copy direction is not used by individual upload/download jobs")
-            }
-        };
         let Some(next_task_id) = self.next_transfer_id.checked_add(1) else {
             self.show_error_toast(
                 crate::t!(
@@ -4480,6 +4608,9 @@ impl SftpBrowserView {
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(backend) = self.sftp.clone() {
+            let total_size = std::fs::metadata(local_path)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
             self.spawn_transfer_with_backend(
                 local_path.to_path_buf(),
                 remote_path.to_path_buf(),
@@ -4488,6 +4619,7 @@ impl SftpBrowserView {
                 overwrite_destination,
                 None,
                 None,
+                total_size,
                 ctx,
             );
         } else {
@@ -4501,7 +4633,7 @@ impl SftpBrowserView {
         &mut self,
         remote_path: &Path,
         local_path: &Path,
-        _file_size: u64,
+        file_size: u64,
         overwrite_destination: bool,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -4514,6 +4646,7 @@ impl SftpBrowserView {
                 overwrite_destination,
                 None,
                 None,
+                file_size,
                 ctx,
             );
         } else {
@@ -5032,6 +5165,7 @@ impl SftpBrowserView {
             false,
             conflict,
             false,
+            0,
             label,
             ctx,
         );

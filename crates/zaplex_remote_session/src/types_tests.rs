@@ -86,6 +86,10 @@ fn supported_features_advertises_safe_file_transactions_on_supported_unix() {
         &supported_features(),
         FEATURE_SAFE_FILE_TRANSACTIONS_V1
     ));
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_SAFE_FILE_IDENTITY_BATCH_V1
+    ));
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -94,6 +98,10 @@ fn supported_features_omits_safe_file_transactions_when_unsupported() {
     assert!(!has_feature(
         &supported_features(),
         FEATURE_SAFE_FILE_TRANSACTIONS_V1
+    ));
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_SAFE_FILE_IDENTITY_BATCH_V1
     ));
 }
 
@@ -158,6 +166,7 @@ fn supported_client_features_are_explicit_and_platform_independent() {
         FEATURE_AGENT_PTY_BINDING,
         FEATURE_AGENT_PTY_BINDING_V2,
         FEATURE_SAFE_FILE_TRANSACTIONS_V1,
+        FEATURE_SAFE_FILE_IDENTITY_BATCH_V1,
         FEATURE_HOST_EXEC,
         FEATURE_MULTIPLEXER_INVENTORY_V1,
         FEATURE_MANAGED_AGENT_FLEET_V1,
@@ -188,6 +197,10 @@ fn supported_features_omits_session_host_on_non_unix() {
     assert!(!has_feature(
         &supported_features(),
         FEATURE_SAFE_FILE_TRANSACTIONS_V1
+    ));
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_SAFE_FILE_IDENTITY_BATCH_V1
     ));
     assert!(!has_feature(
         &supported_features(),

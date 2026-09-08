@@ -4899,6 +4899,15 @@ enum LiveRenameFault {
 }
 
 #[cfg(unix)]
+#[derive(Default)]
+struct LiveSafeFileRequestCounts {
+    identity_batches: AtomicUsize,
+    open_existing: AtomicUsize,
+    inspect_handle: AtomicUsize,
+    close_handle: AtomicUsize,
+}
+
+#[cfg(unix)]
 fn live_sftp_configuration() -> (String, u16, String, PathBuf, PathBuf) {
     let host = std::env::var("ZAPLEX_LIVE_SFTP_HOST")
         .expect("ZAPLEX_LIVE_SFTP_HOST is required for the ignored live SFTP tests");
@@ -4923,6 +4932,7 @@ fn live_sftp_configuration() -> (String, u16, String, PathBuf, PathBuf) {
 fn spawn_live_safe_file_client(
     journal_path: PathBuf,
     fault: Option<LiveRenameFault>,
+    counts: Option<Arc<LiveSafeFileRequestCounts>>,
 ) -> (
     Arc<remote_server::client::RemoteServerClient>,
     warpui::r#async::executor::Background,
@@ -4949,6 +4959,32 @@ fn spawn_live_safe_file_client(
             let Some(client_message::Message::SafeFile(request)) = message.message else {
                 panic!("live safe-file test received an unexpected request");
             };
+            if let Some(counts) = &counts {
+                if matches!(
+                    request.operation.as_ref(),
+                    Some(safe_file_request::Operation::ListIdentities(..))
+                ) {
+                    counts.identity_batches.fetch_add(1, Ordering::Relaxed);
+                }
+                if matches!(
+                    request.operation.as_ref(),
+                    Some(safe_file_request::Operation::OpenExisting(..))
+                ) {
+                    counts.open_existing.fetch_add(1, Ordering::Relaxed);
+                }
+                if matches!(
+                    request.operation.as_ref(),
+                    Some(safe_file_request::Operation::InspectHandle(..))
+                ) {
+                    counts.inspect_handle.fetch_add(1, Ordering::Relaxed);
+                }
+                if matches!(
+                    request.operation.as_ref(),
+                    Some(safe_file_request::Operation::CloseHandle(..))
+                ) {
+                    counts.close_handle.fetch_add(1, Ordering::Relaxed);
+                }
+            }
             let is_rename = matches!(
                 request.operation.as_ref(),
                 Some(safe_file_request::Operation::Rename(_))
@@ -4983,6 +5019,102 @@ fn spawn_live_safe_file_client(
 }
 
 #[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the isolated OpenSSH fixture from live-sftp-safety.yml"]
+async fn live_sftp_list_dir_batches_safe_identities() {
+    let (host, port, username, key_path, root) = live_sftp_configuration();
+    let case_root = root.join(format!("zaplex-live-sftp-list-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&case_root).unwrap();
+    for index in 0..100 {
+        fs::write(case_root.join(format!("entry-{index:03}.bin")), b"payload").unwrap();
+    }
+
+    let session = zap_sftp::SftpSession::connect(
+        &host,
+        port,
+        &username,
+        zap_sftp::AuthMethod::PublicKey {
+            key_path,
+            passphrase: None,
+        },
+        Some(std::time::Duration::from_secs(10)),
+    )
+    .expect("the CI OpenSSH fixture must accept the configured key");
+    let sftp = session.sftp().expect("the live SFTP subsystem must open");
+    let journal = tempdir().unwrap();
+    let counts = Arc::new(LiveSafeFileRequestCounts::default());
+    let slot = SafeFileClientSlot::default();
+    let (client, _executor, server) =
+        spawn_live_safe_file_client(journal.path().to_path_buf(), None, Some(counts.clone()));
+    slot.set_with_identity_batch(Some(client), true);
+    let backend = LiveSftpBackend::new_with_safe_file_slot(sftp, slot.clone());
+
+    let entries = backend.list_dir(&case_root).unwrap();
+    assert_eq!(entries.len(), 100);
+    assert!(entries
+        .iter()
+        .all(|entry| !entry.identity.object_id.is_empty()));
+    assert_eq!(counts.identity_batches.load(Ordering::Relaxed), 1);
+    assert_eq!(counts.open_existing.load(Ordering::Relaxed), 0);
+    assert_eq!(counts.inspect_handle.load(Ordering::Relaxed), 0);
+    assert_eq!(counts.close_handle.load(Ordering::Relaxed), 0);
+
+    slot.set(None);
+    server.abort();
+    let _ = server.await;
+    fs::remove_dir_all(case_root).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the isolated OpenSSH fixture from live-sftp-safety.yml"]
+async fn live_sftp_list_dir_keeps_unreadable_entries_visible() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (host, port, username, key_path, root) = live_sftp_configuration();
+    let case_root = root.join(format!("zaplex-live-sftp-mode-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&case_root).unwrap();
+    let unreadable = case_root.join("unreadable.bin");
+    fs::write(&unreadable, b"payload").unwrap();
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let session = zap_sftp::SftpSession::connect(
+        &host,
+        port,
+        &username,
+        zap_sftp::AuthMethod::PublicKey {
+            key_path,
+            passphrase: None,
+        },
+        Some(std::time::Duration::from_secs(10)),
+    )
+    .expect("the CI OpenSSH fixture must accept the configured key");
+    let sftp = session.sftp().expect("the live SFTP subsystem must open");
+    let journal = tempdir().unwrap();
+    let counts = Arc::new(LiveSafeFileRequestCounts::default());
+    let slot = SafeFileClientSlot::default();
+    let (client, _executor, server) =
+        spawn_live_safe_file_client(journal.path().to_path_buf(), None, Some(counts.clone()));
+    slot.set_with_identity_batch(Some(client), true);
+    let backend = LiveSftpBackend::new_with_safe_file_slot(sftp, slot.clone());
+
+    let entries = backend.list_dir(&case_root).unwrap();
+    let entry = entries
+        .iter()
+        .find(|entry| entry.name == "unreadable.bin")
+        .expect("an unreadable file must stay visible");
+    assert!(!entry.identity.object_id.is_empty());
+    assert_eq!(counts.identity_batches.load(Ordering::Relaxed), 1);
+    assert_eq!(counts.open_existing.load(Ordering::Relaxed), 0);
+
+    slot.set(None);
+    server.abort();
+    let _ = server.await;
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::remove_dir_all(case_root).unwrap();
+}
+
+#[cfg(unix)]
 async fn verify_live_sftp_rename_recovery(fault: LiveRenameFault) {
     let (host, port, username, key_path, root) = live_sftp_configuration();
     let case_root = root.join(format!("zaplex-live-sftp-{}", uuid::Uuid::new_v4()));
@@ -5008,7 +5140,7 @@ async fn verify_live_sftp_rename_recovery(fault: LiveRenameFault) {
     let journal = tempdir().unwrap();
     let slot = SafeFileClientSlot::default();
     let (first_client, _first_executor, first_server) =
-        spawn_live_safe_file_client(journal.path().to_path_buf(), Some(fault));
+        spawn_live_safe_file_client(journal.path().to_path_buf(), Some(fault), None);
     slot.set(Some(first_client));
     let backend = LiveSftpBackend::new_with_safe_file_slot(sftp, slot.clone());
 
@@ -5030,7 +5162,7 @@ async fn verify_live_sftp_rename_recovery(fault: LiveRenameFault) {
     first_server.await.unwrap();
 
     let (second_client, _second_executor, second_server) =
-        spawn_live_safe_file_client(journal.path().to_path_buf(), None);
+        spawn_live_safe_file_client(journal.path().to_path_buf(), None, None);
     slot.set(Some(second_client));
     assert_eq!(
         backend.retry_unresolved_recovery(&destination).unwrap(),
@@ -5106,7 +5238,7 @@ async fn live_sftp_copy_file_keeps_destination_after_handles_drop() {
     let journal = tempdir().unwrap();
     let slot = SafeFileClientSlot::default();
     let (client, _executor, server) =
-        spawn_live_safe_file_client(journal.path().to_path_buf(), None);
+        spawn_live_safe_file_client(journal.path().to_path_buf(), None, None);
     slot.set(Some(client));
     let backend = LiveSftpBackend::new_with_safe_file_slot(sftp, slot.clone());
 
@@ -5180,6 +5312,7 @@ async fn live_sftp_remote_safe_rename_does_not_claim_a_missing_user_source_was_r
     let (first_client, _first_executor, first_server) = spawn_live_safe_file_client(
         journal.path().to_path_buf(),
         Some(LiveRenameFault::BeforeMutation),
+        None,
     );
     slot.set(Some(first_client));
     let backend = LiveSftpBackend::new_with_safe_file_slot(sftp, slot.clone());
@@ -5196,7 +5329,7 @@ async fn live_sftp_remote_safe_rename_does_not_claim_a_missing_user_source_was_r
     fs::remove_file(&source).unwrap();
 
     let (second_client, _second_executor, second_server) =
-        spawn_live_safe_file_client(journal.path().to_path_buf(), None);
+        spawn_live_safe_file_client(journal.path().to_path_buf(), None, None);
     slot.set(Some(second_client));
     let error = backend
         .retry_unresolved_recovery(&destination)
