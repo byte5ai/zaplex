@@ -13,6 +13,7 @@
 //!
 //! See `docs/superpowers/specs/2026-06-30-cockpit-increment1-account-usage-design.md`.
 
+mod account_key;
 pub mod antigravity_sessions;
 pub mod claude;
 pub mod claude_registry_lifecycle;

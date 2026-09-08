@@ -33,6 +33,13 @@ fn account(key: &str) -> AccountUsage {
     }
 }
 
+fn account_at(key: &str, config_dir: &str) -> AccountUsage {
+    let mut account = account(key);
+    account.account.config_dir = config_dir.into();
+    account.account.is_default = false;
+    account
+}
+
 fn keys(v: &[AccountUsage]) -> Vec<String> {
     v.iter().map(|a| a.account.key.clone()).collect()
 }
@@ -84,6 +91,37 @@ fn color_lookup_by_key() {
     let ov = AccountOverrides::parse(r##"{"claude:a": {"color": "#22C55E"}}"##);
     assert_eq!(ov.color_for("claude:a"), Some("#22C55E"));
     assert_eq!(ov.color_for("claude:b"), None);
+}
+
+#[test]
+fn unique_legacy_override_migrates_to_root_bound_key() {
+    let new_key = "claude:work:0123456789ab";
+    let accounts = vec![account_at(new_key, "/srv/accounts/work")];
+    let mut overrides =
+        AccountOverrides::parse(r##"{"claude:work": {"label": "External", "color": "#22C55E"}}"##);
+
+    overrides.migrate_legacy_keys(&accounts);
+    let applied = overrides.apply(accounts);
+
+    assert_eq!(applied[0].account.label, "External");
+    assert_eq!(overrides.color_for(new_key), Some("#22C55E"));
+    assert_eq!(overrides.color_for("claude:work"), None);
+}
+
+#[test]
+fn ambiguous_legacy_override_is_not_copied_to_external_root() {
+    let external_key = "claude:work:0123456789ab";
+    let accounts = vec![
+        account_at("claude:work", "/home/user/.claude-work"),
+        account_at(external_key, "/srv/accounts/work"),
+    ];
+    let mut overrides = AccountOverrides::parse(r#"{"claude:work": {"label": "Legacy"}}"#);
+
+    overrides.migrate_legacy_keys(&accounts);
+    let applied = overrides.apply(accounts);
+
+    assert_eq!(applied[0].account.label, "Legacy");
+    assert_eq!(applied[1].account.label, external_key);
 }
 
 #[test]

@@ -344,22 +344,9 @@ fn store_exists(config_dir: &Path, name: &str) -> Result<bool, String> {
     }
 }
 
-/// Stable account key from the config dir, e.g. `claude:default`, `claude:work`.
-fn account_key(config_dir: &Path, is_default: bool) -> String {
-    if is_default {
-        return "claude:default".to_string();
-    }
-    let name = config_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("account");
-    // ".claude-work" → "work"; otherwise the raw dir name.
-    let suffix = name
-        .strip_prefix(".claude-")
-        .or_else(|| name.strip_prefix(".claude"))
-        .filter(|s| !s.is_empty())
-        .unwrap_or(name);
-    format!("claude:{suffix}")
+/// Stable account key from the canonical config root.
+fn account_key(config_dir: &Path, home: &Path, is_default: bool) -> String {
+    crate::account_key::stable_account_key(Provider::Claude, config_dir, home, is_default)
 }
 
 /// Derive a plan label from `organizationRateLimitTier` / `organizationType`.
@@ -425,11 +412,12 @@ fn account_from_dir(
         None => (None, None, None, None, None),
     };
 
+    let key = account_key(config_dir, home, is_default);
     let label = email
         .clone()
         .or_else(|| display.clone())
         .or_else(|| org.clone())
-        .unwrap_or_else(|| account_key(config_dir, is_default));
+        .unwrap_or_else(|| key.clone());
 
     let stable_identity = oauth.as_ref().and_then(|o| {
         s(o, "accountUuid")
@@ -451,7 +439,7 @@ fn account_from_dir(
     Ok(Some((
         Account {
             provider: Provider::Claude,
-            key: account_key(config_dir, is_default),
+            key,
             config_dir: config_dir.to_path_buf(),
             label,
             email,
@@ -532,6 +520,7 @@ fn discover_accounts_with_process_roots(
     let mut accounts = Vec::new();
     let mut seen_roots = HashSet::new();
     let mut seen_identities = HashSet::new();
+    let mut seen_keys = HashSet::new();
     for (dir, is_default, is_pinned) in candidates {
         let root = match fs::canonicalize(&dir) {
             Ok(root) => root,
@@ -557,6 +546,10 @@ fn discover_accounts_with_process_roots(
                     .as_ref()
                     .is_some_and(|identity| !seen_identities.insert(identity.clone()))
                 {
+                    continue;
+                }
+                if !seen_keys.insert(account.key.clone()) {
+                    push_unique_issue(&mut issues, "Claude account key collision");
                     continue;
                 }
                 accounts.push(account);
