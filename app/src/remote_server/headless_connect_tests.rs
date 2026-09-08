@@ -1,4 +1,8 @@
 use super::*;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
+#[cfg(unix)]
+use std::sync::Mutex;
 use warp_ssh_manager::{AuthType, SshServerInfo};
 
 fn server(auth: AuthType) -> SshServerInfo {
@@ -103,4 +107,72 @@ fn headless_control_master_uses_l2_host_key_and_argument_policy() {
     assert!(args[..destination_delimiter]
         .iter()
         .any(|arg| arg == "ControlMaster=auto"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn concurrent_ensure_control_master_spawns_once() {
+    struct RecordingCommandFactory {
+        script: PathBuf,
+        programs: Mutex<Vec<String>>,
+    }
+
+    impl WorkspaceCommandFactory for RecordingCommandFactory {
+        fn async_command(&self, program: &str) -> command::r#async::Command {
+            self.programs.lock().unwrap().push(program.to_string());
+            command::r#async::Command::new(&self.script)
+        }
+
+        fn blocking_command(&self, program: &str) -> command::blocking::Command {
+            panic!("unexpected blocking command: {program}")
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("fake-ssh");
+    let starts = directory.path().join("starts");
+    let release = directory.path().join("release");
+    let live = directory.path().join("live");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = '-O' ]; then\n  test -f '{}'\n  exit $?\nfi\nprintf 'start\\n' >> '{}'\nwhile [ ! -f '{}' ]; do sleep 0.01; done\ntouch '{}'\n",
+            live.display(),
+            starts.display(),
+            release.display(),
+            live.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    let factory = RecordingCommandFactory {
+        script,
+        programs: Mutex::new(Vec::new()),
+    };
+    let socket_path = directory.path().join("control.sock");
+    let test_server = server(AuthType::Key);
+
+    let first = ensure_control_master_with_factory(&test_server, &socket_path, &factory);
+    let second = ensure_control_master_with_factory(&test_server, &socket_path, &factory);
+    let release_first = async {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while !starts.exists() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(starts.exists(), "first ControlMaster setup did not start");
+        std::fs::write(&release, "release").unwrap();
+    };
+
+    let (first, second, ()) = tokio::join!(first, second, release_first);
+    first.unwrap();
+    second.unwrap();
+    assert_eq!(std::fs::read_to_string(starts).unwrap(), "start\n");
+    assert!(factory
+        .programs
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|program| program == "ssh"));
 }

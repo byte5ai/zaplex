@@ -22,8 +22,8 @@ fn re_add_refreshes_label_in_place_without_reordering() {
     favs.add(host("b"));
     // Re-add "a" with a new label: label updates, order stays [a, b].
     assert!(!favs.add(Favorite::new(FavoriteKind::Host, "a", "renamed")));
-    assert_eq!(favs.items[0].display_label(), "renamed");
-    assert_eq!(favs.items[1].target, "b");
+    assert_eq!(favs.items()[0].display_label(), "renamed");
+    assert_eq!(favs.items()[1].target, "b");
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn move_item_reorders_and_clamps() {
     favs.add(host("c"));
     favs.move_item(2, 0); // c to front
     assert_eq!(
-        favs.items
+        favs.items()
             .iter()
             .map(|f| f.target.clone())
             .collect::<Vec<_>>(),
@@ -66,7 +66,7 @@ fn move_item_reorders_and_clamps() {
     );
     favs.move_item(0, 99); // clamp to last
     assert_eq!(
-        favs.items
+        favs.items()
             .iter()
             .map(|f| f.target.clone())
             .collect::<Vec<_>>(),
@@ -94,8 +94,8 @@ fn json_round_trips() {
 fn missing_label_deserializes_to_empty() {
     let json = r#"{"items":[{"kind":"host","target":"n1"}]}"#;
     let favs: Favorites = serde_json::from_str(json).unwrap();
-    assert_eq!(favs.items[0].label, "");
-    assert_eq!(favs.items[0].display_label(), "n1");
+    assert_eq!(favs.items()[0].label, "");
+    assert_eq!(favs.items()[0].display_label(), "n1");
 }
 
 #[test]
@@ -122,15 +122,13 @@ fn favorite_menu_migration_preserves_non_host_favorite_data() {
 
 #[test]
 fn plus_menu_lists_only_favorite_hosts() {
-    let favorites = Favorites {
-        items: vec![
-            Favorite::new(FavoriteKind::Project, "project", "Project"),
-            Favorite::new(FavoriteKind::Host, "host-a", "A"),
-            Favorite::new(FavoriteKind::Session, "session", "Session"),
-            Favorite::new(FavoriteKind::Host, "host-b", "B"),
-            Favorite::new(FavoriteKind::Launch, "launch", "Launch"),
-        ],
-    };
+    let favorites = Favorites::from_items(vec![
+        Favorite::new(FavoriteKind::Project, "project", "Project"),
+        Favorite::new(FavoriteKind::Host, "host-a", "A"),
+        Favorite::new(FavoriteKind::Session, "session", "Session"),
+        Favorite::new(FavoriteKind::Host, "host-b", "B"),
+        Favorite::new(FavoriteKind::Launch, "launch", "Launch"),
+    ]);
 
     let host_targets: Vec<&str> = favorites
         .host_menu_items()
@@ -138,5 +136,38 @@ fn plus_menu_lists_only_favorite_hosts() {
         .collect();
 
     assert_eq!(host_targets, vec!["host-a", "host-b"]);
-    assert_eq!(favorites.items.len(), 5, "hidden records remain persisted");
+    assert_eq!(
+        favorites.items().len(),
+        5,
+        "hidden records remain persisted"
+    );
+}
+
+#[test]
+fn unknown_favorite_kind_is_opaque_and_survives_mutation() {
+    let unknown = serde_json::json!({
+        "kind": "workflow",
+        "target": "release",
+        "label": "Release",
+        "future": {"color": "violet"}
+    });
+    let mut favorites: Favorites = serde_json::from_value(serde_json::json!({
+        "items": [
+            {"kind": "host", "target": "node-dev", "label": "devhost"},
+            unknown.clone()
+        ]
+    }))
+    .unwrap();
+
+    assert_eq!(favorites.items().len(), 1);
+    favorites.add(host("node-prod"));
+
+    let raw = serde_json::to_value(&favorites).unwrap();
+    assert!(raw["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|record| record == &unknown));
+    let reloaded: Favorites = serde_json::from_value(raw).unwrap();
+    assert_eq!(reloaded.items().len(), 2);
 }

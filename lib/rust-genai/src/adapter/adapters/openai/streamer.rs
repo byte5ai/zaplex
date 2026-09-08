@@ -6,9 +6,12 @@ use crate::chat::{ChatOptionsSet, StopReason, ToolCall};
 use crate::webc::{Event, EventSourceStream};
 use crate::{Error, ModelIden, Result};
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use value_ext::JsonValueExt;
+
+const MAX_CAPTURED_TOOL_CALLS: usize = 256;
 
 fn take_stream_error(message_data: &mut Value, model_iden: &ModelIden) -> Option<Error> {
 	let error_body = message_data.x_take::<Value>("error").ok()?;
@@ -55,6 +58,8 @@ pub struct OpenAIStreamer {
 	/// Flag to prevent polling the EventSource after a MessageStop event
 	done: bool,
 	captured_data: StreamerCapturedData,
+	pending_events: VecDeque<InterStreamEvent>,
+	tool_call_slots: usize,
 }
 
 impl OpenAIStreamer {
@@ -64,21 +69,48 @@ impl OpenAIStreamer {
 			done: false,
 			options: StreamerOptions::new(model_iden, options_set),
 			captured_data: Default::default(),
+			pending_events: VecDeque::new(),
+			tool_call_slots: 0,
 		}
 	}
 
 	/// Captures a single tool call into `captured_data.tool_calls`, merging with existing if needed.
 	/// Returns the (possibly merged) tool call for use in events.
-	fn capture_tool_call(&mut self, index: usize, call_id: String, fn_name: String, arguments: String) -> ToolCall {
+	fn capture_tool_call(
+		&mut self,
+		index: usize,
+		call_id: String,
+		fn_name: String,
+		arguments: String,
+	) -> Result<ToolCall> {
+		if index >= MAX_CAPTURED_TOOL_CALLS {
+			return Err(self.stream_protocol_error(format!(
+				"tool call index {index} exceeds the maximum of {MAX_CAPTURED_TOOL_CALLS}"
+			)));
+		}
+		if index > self.tool_call_slots {
+			return Err(self.stream_protocol_error(format!(
+				"tool call index {index} skips the next sequential index {}",
+				self.tool_call_slots
+			)));
+		}
+
 		let tool_call = ToolCall {
-			call_id: call_id.clone(),
+			call_id: if call_id.is_empty() {
+				format!("call_{index}")
+			} else {
+				call_id.clone()
+			},
 			fn_name: fn_name.clone(),
 			fn_arguments: Value::String(arguments.clone()),
 			thought_signatures: None,
 		};
 
 		if !self.options.capture_tool_calls {
-			return tool_call;
+			if index == self.tool_call_slots {
+				self.tool_call_slots += 1;
+			}
+			return Ok(tool_call);
 		}
 
 		let calls = self.captured_data.tool_calls.get_or_insert_with(Vec::new);
@@ -90,16 +122,84 @@ impl OpenAIStreamer {
 				existing_call.fn_arguments = Value::String(accumulated);
 			}
 			// Update call_id and fn_name on first chunk that has them
-			if !fn_name.is_empty() {
+			if !call_id.is_empty() {
 				existing_call.call_id = call_id;
+			}
+			if !fn_name.is_empty() {
 				existing_call.fn_name = fn_name;
 			}
-			existing_call.clone()
+			Ok(existing_call.clone())
 		} else {
-			// New tool call - resize to handle potential gaps (though unlikely in streaming)
-			calls.resize(index + 1, tool_call.clone());
-			tool_call
+			calls.push(tool_call.clone());
+			self.tool_call_slots += 1;
+			Ok(tool_call)
 		}
+	}
+
+	fn queue_delta_tool_calls(&mut self, delta_tool_calls: Value) -> Result<()> {
+		let Some(delta_tool_calls) = delta_tool_calls.as_array() else {
+			return Err(self.stream_protocol_error("delta.tool_calls must be an array"));
+		};
+
+		for tool_call_value in delta_tool_calls {
+			let mut tool_call = tool_call_value.clone();
+			let index = tool_call
+				.x_take::<u32>("index")
+				.map_err(|error| self.stream_protocol_error(format!("invalid tool call index: {error}")))?;
+			let mut function = tool_call
+				.x_take::<Value>("function")
+				.map_err(|error| self.stream_protocol_error(format!("invalid tool call function: {error}")))?;
+			if !function.is_object() {
+				return Err(self.stream_protocol_error("tool call function must be an object"));
+			}
+			let call_id = tool_call.x_take::<String>("id").unwrap_or_default();
+			let fn_name = function.x_take::<String>("name").unwrap_or_default();
+			let arguments = function.x_take::<String>("arguments").unwrap_or_default();
+			if index as usize == self.tool_call_slots && call_id.is_empty() && fn_name.is_empty() {
+				return Err(self.stream_protocol_error("new tool call must include an id or function name"));
+			}
+
+			let tool_call = self.capture_tool_call(index as usize, call_id, fn_name, arguments)?;
+			self.pending_events.push_back(InterStreamEvent::ToolCallChunk(tool_call));
+		}
+
+		Ok(())
+	}
+
+	fn stream_protocol_error(&self, cause: impl Into<String>) -> Error {
+		Error::StreamProtocol {
+			model_iden: self.options.model_iden.clone(),
+			cause: cause.into(),
+		}
+	}
+
+	fn take_captured_tool_calls(&mut self) -> Option<Vec<ToolCall>> {
+		self.captured_data.tool_calls.take().map(|tool_calls| {
+			tool_calls
+				.into_iter()
+				.map(|tool_call| {
+					let ToolCall {
+						call_id,
+						fn_name,
+						fn_arguments,
+						..
+					} = tool_call;
+					let fn_arguments = match fn_arguments {
+						Value::String(arguments) => {
+							serde_json::from_str::<Value>(&arguments).unwrap_or(Value::String(arguments))
+						}
+						other => other,
+					};
+
+					ToolCall {
+						call_id,
+						fn_name,
+						fn_arguments,
+						thought_signatures: None,
+					}
+				})
+				.collect()
+		})
 	}
 }
 
@@ -107,6 +207,9 @@ impl futures::Stream for OpenAIStreamer {
 	type Item = Result<InterStreamEvent>;
 
 	fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+		if let Some(event) = self.pending_events.pop_front() {
+			return Poll::Ready(Some(Ok(event)));
+		}
 		if self.done {
 			// The last poll was definitely the end, so end the stream.
 			// This will prevent triggering a stream ended error
@@ -131,41 +234,7 @@ impl futures::Stream for OpenAIStreamer {
 
 						// -- Process the captured_tool_calls
 						// NOTE: here we attempt to parse the `fn_arguments` if it is string, because it means that it was accumulated
-						let captured_tool_calls = if let Some(tools_calls) = self.captured_data.tool_calls.take() {
-							let tools_calls: Vec<ToolCall> = tools_calls
-								.into_iter()
-								.map(|tool_call| {
-									// extrat
-									let ToolCall {
-										call_id,
-										fn_name,
-										fn_arguments,
-										..
-									} = tool_call;
-									// parse fn_arguments if needed
-									let fn_arguments = match fn_arguments {
-										Value::String(fn_arguments_string) => {
-											// NOTE: Here we are resilient for now, if we cannot parse, just return the original String
-											match serde_json::from_str::<Value>(&fn_arguments_string) {
-												Ok(fn_arguments) => fn_arguments,
-												Err(_) => Value::String(fn_arguments_string),
-											}
-										}
-										_ => fn_arguments,
-									};
-
-									ToolCall {
-										call_id,
-										fn_name,
-										fn_arguments,
-										thought_signatures: None,
-									}
-								})
-								.collect();
-							Some(tools_calls)
-						} else {
-							None
-						};
+						let captured_tool_calls = self.take_captured_tool_calls();
 
 						// Return the internal stream end
 						let inter_stream_end = InterStreamEnd {
@@ -209,30 +278,14 @@ impl futures::Stream for OpenAIStreamer {
 							// NOTE: Some providers (e.g., Ollama) send tool_calls AND finish_reason in the same message.
 							// We need to capture tool_calls here before continuing to the next message.
 							// Capture tool_calls that arrive in the same chunk as finish_reason.
-							// After capturing, emit the first ToolCallChunk so downstream
-							// consumers (e.g. agent loops) see the tool call event.
-							let mut first_tool_call_event: Option<ToolCall> = None;
+							// Every call is queued so downstream consumers see the complete batch.
 							if let Ok(delta_tool_calls) = first_choice.x_take::<Value>("/delta/tool_calls")
 								&& delta_tool_calls != Value::Null
-								&& let Some(delta_tool_calls) = delta_tool_calls.as_array()
 							{
-								for tool_call_obj_val in delta_tool_calls {
-									let mut tool_call_obj = tool_call_obj_val.clone();
-									if let (Ok(index), Ok(mut function)) = (
-										tool_call_obj.x_take::<u32>("index"),
-										tool_call_obj.x_take::<Value>("function"),
-									) {
-										let call_id = tool_call_obj
-											.x_take::<String>("id")
-											.unwrap_or_else(|_| format!("call_{index}"));
-										let fn_name = function.x_take::<String>("name").unwrap_or_default();
-										let arguments = function.x_take::<String>("arguments").unwrap_or_default();
-
-										let tc = self.capture_tool_call(index as usize, call_id, fn_name, arguments);
-										if first_tool_call_event.is_none() {
-											first_tool_call_event = Some(tc);
-										}
-									}
+								if let Err(error) = self.queue_delta_tool_calls(delta_tool_calls) {
+									self.done = true;
+									self.pending_events.clear();
+									return Poll::Ready(Some(Err(error)));
 								}
 							}
 
@@ -274,10 +327,10 @@ impl futures::Stream for OpenAIStreamer {
 								return Poll::Ready(Some(Ok(InterStreamEvent::ReasoningChunk(reasoning_content))));
 							}
 
-							// If we captured a tool call in the finish_reason chunk,
-							// emit it as a ToolCallChunk so the agent loop sees it.
-							if let Some(tc) = first_tool_call_event {
-								return Poll::Ready(Some(Ok(InterStreamEvent::ToolCallChunk(tc))));
+							// Emit the first queued call now; subsequent polls drain the rest
+							// before the underlying SSE stream is polled again.
+							if let Some(event) = self.pending_events.pop_front() {
+								return Poll::Ready(Some(Ok(event)));
 							}
 
 							continue;
@@ -286,29 +339,13 @@ impl futures::Stream for OpenAIStreamer {
 						else if let Ok(delta_tool_calls) = first_choice.x_take::<Value>("/delta/tool_calls")
 							&& delta_tool_calls != Value::Null
 						{
-							// Check if there's a tool call in the delta
-							if let Some(delta_tool_calls) = delta_tool_calls.as_array()
-								&& let Some(tool_call_obj_val) = delta_tool_calls.first()
-							{
-								// Extract the first tool call object as a mutable value
-								let mut tool_call_obj = tool_call_obj_val.clone();
-
-								// Extract tool call data
-								if let (Ok(index), Ok(mut function)) = (
-									tool_call_obj.x_take::<u32>("index"),
-									tool_call_obj.x_take::<Value>("function"),
-								) {
-									let call_id = tool_call_obj
-										.x_take::<String>("id")
-										.unwrap_or_else(|_| format!("call_{index}"));
-									let fn_name = function.x_take::<String>("name").unwrap_or_default();
-									let arguments = function.x_take::<String>("arguments").unwrap_or_default();
-
-									let tool_call = self.capture_tool_call(index as usize, call_id, fn_name, arguments);
-
-									// Return the ToolCallChunk event
-									return Poll::Ready(Some(Ok(InterStreamEvent::ToolCallChunk(tool_call))));
-								}
+							if let Err(error) = self.queue_delta_tool_calls(delta_tool_calls) {
+								self.done = true;
+								self.pending_events.clear();
+								return Poll::Ready(Some(Err(error)));
+							}
+							if let Some(event) = self.pending_events.pop_front() {
+								return Poll::Ready(Some(Ok(event)));
 							}
 							// No valid tool call found, continue to next message
 							continue;
@@ -389,6 +426,10 @@ impl futures::Stream for OpenAIStreamer {
 		Poll::Pending
 	}
 }
+
+#[cfg(test)]
+#[path = "streamer_tests.rs"]
+mod regression_tests;
 
 #[cfg(test)]
 mod tests {
