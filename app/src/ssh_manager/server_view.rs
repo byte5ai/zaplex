@@ -35,6 +35,8 @@ use warpui::{
     ViewHandle,
 };
 
+use std::sync::Arc;
+
 use warp_ssh_manager::{
     delete_onekey_credential_and_secrets, save_onekey_credential_with_secret,
     save_server_with_secrets, validate_ssh_endpoint, AuthType, ConnectionStatus, EndpointUse,
@@ -154,6 +156,67 @@ struct ServerFormSnapshot {
     onekey_credential_id: Option<String>,
 }
 
+struct ServerReloadSnapshot {
+    node: Option<SshNode>,
+    server: Option<SshServerInfo>,
+    folders: Vec<(String, String)>,
+    onekey_credentials: Vec<SshOneKeyCredential>,
+    password_saved: bool,
+    root_password_saved: bool,
+}
+
+fn load_server_reload_snapshot(
+    node_id: &str,
+    secret_store: &dyn SshSecretStore,
+) -> anyhow::Result<ServerReloadSnapshot> {
+    let (node, server, folders, onekey_credentials) = warp_ssh_manager::with_conn(|conn| {
+        let nodes = SshRepository::list_nodes(conn)?;
+        let node = nodes.iter().find(|node| node.id == node_id).cloned();
+        let server = match node.as_ref().map(|node| node.kind) {
+            Some(NodeKind::Server) => SshRepository::get_server(conn, node_id)?,
+            None | Some(NodeKind::Folder) => None,
+        };
+        let folders = nodes
+            .iter()
+            .filter(|node| matches!(node.kind, NodeKind::Folder))
+            .map(|node| (node.id.clone(), node.name.clone()))
+            .collect();
+        let onekey_credentials = SshRepository::list_onekey_credentials(conn)?;
+        Ok((node, server, folders, onekey_credentials))
+    })?;
+
+    let (password_saved, root_password_saved) =
+        load_server_secret_presence(server.as_ref(), secret_store)?;
+
+    Ok(ServerReloadSnapshot {
+        node,
+        server,
+        folders,
+        onekey_credentials,
+        password_saved,
+        root_password_saved,
+    })
+}
+
+fn load_server_secret_presence(
+    server: Option<&SshServerInfo>,
+    secret_store: &dyn SshSecretStore,
+) -> Result<(bool, bool), SshSecretStoreError> {
+    if let Some(server) = server {
+        let (password_lookup_id, password_kind) = password_lookup_for_server_form(server);
+        let password_saved = match password_lookup_id.as_deref() {
+            Some(id) => secret_store.get(id, password_kind)?.is_some(),
+            None => false,
+        };
+        let root_password_saved = secret_store
+            .get(&server.node_id, SecretKind::RootPassword)?
+            .is_some();
+        Ok((password_saved, root_password_saved))
+    } else {
+        Ok((false, false))
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 struct OneKeyFormSnapshot {
     credential_id: Option<String>,
@@ -196,6 +259,10 @@ fn onekey_selection_transition(
 
 pub struct SshServerView {
     node_id: String,
+    secret_store: Arc<dyn SshSecretStore>,
+    reload_generation: u64,
+    reload_in_flight: bool,
+    credential_operation_in_flight: bool,
     /// Node metadata (mainly uses name as header title).
     node: Option<SshNode>,
     /// Cached server from last DB read, used for placeholder text and initial values. None for folder nodes.
@@ -289,6 +356,14 @@ pub struct SshServerView {
 
 impl SshServerView {
     pub fn new(node_id: String, ctx: &mut ViewContext<Self>) -> Self {
+        Self::new_with_secret_store(node_id, Arc::new(KeychainSecretStore), ctx)
+    }
+
+    fn new_with_secret_store(
+        node_id: String,
+        secret_store: Arc<dyn SshSecretStore>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         let name_editor = make_editor(false, &crate::t!("common-name"), ctx);
         let host_editor = make_editor(false, "example.com", ctx);
         let port_editor = make_editor(false, "22", ctx);
@@ -337,6 +412,10 @@ impl SshServerView {
 
         let mut me = Self {
             node_id,
+            secret_store,
+            reload_generation: 0,
+            reload_in_flight: false,
+            credential_operation_in_flight: false,
             node: None,
             server: None,
             pane_configuration,
@@ -505,46 +584,82 @@ impl SshServerView {
         self.pane_configuration.clone()
     }
 
-    /// Read node + server from DB, write current buffer to each editor.
+    /// Load the server form without running SQLite or OS-keychain calls on the UI thread.
     fn reload(&mut self, ctx: &mut ViewContext<Self>) {
-        let id = self.node_id.clone();
-        let result = warp_ssh_manager::with_conn(|c| {
-            let nodes = SshRepository::list_nodes(c)?;
-            let node = nodes.iter().find(|n| n.id == id).cloned();
-            let server = match node.as_ref().map(|n| n.kind) {
-                Some(NodeKind::Server) => SshRepository::get_server(c, &id)?,
-                _ => None,
-            };
-            // Collect all folder nodes (id, name)
-            let folders: Vec<(String, String)> = nodes
-                .iter()
-                .filter(|n| matches!(n.kind, NodeKind::Folder))
-                .map(|n| (n.id.clone(), n.name.clone()))
-                .collect();
-            let onekey_credentials = SshRepository::list_onekey_credentials(c)?;
-            Ok((node, server, folders, onekey_credentials))
-        });
-        match result {
-            Ok((node, server, folders, onekey_credentials)) => {
-                self.original_parent_id = node.as_ref().and_then(|n| n.parent_id.clone());
-                self.current_group_id = self.original_parent_id.clone();
-                self.node = node;
-                self.server = server;
-                self.folders = folders;
-                self.onekey_credentials = onekey_credentials;
-            }
-            Err(e) => {
-                log::error!("ssh_server_view: reload failed: {e:?}");
-                self.node = None;
-                self.server = None;
-                self.folders = Vec::new();
-                self.onekey_credentials = Vec::new();
-                self.original_parent_id = None;
-                self.current_group_id = None;
-            }
-        }
+        self.reload_generation = self.reload_generation.wrapping_add(1);
+        let generation = self.reload_generation;
+        self.reload_in_flight = true;
+        self.baseline_snapshot = None;
+        let node_id = self.node_id.clone();
+        let secret_store = self.secret_store.clone();
+        ctx.notify();
 
-        // Write node name / server fields to editor buffer
+        ctx.spawn(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    load_server_reload_snapshot(&node_id, secret_store.as_ref())
+                })
+                .await
+            },
+            move |me, result, ctx| {
+                if me.reload_generation != generation {
+                    return;
+                }
+                me.reload_in_flight = false;
+                match result {
+                    Ok(Ok(snapshot)) => me.apply_reload_snapshot(snapshot, ctx),
+                    Ok(Err(error)) => {
+                        log::error!("ssh_server_view: reload failed: {error:?}");
+                        me.clear_reload_state();
+                        me.status = Some(StatusBanner::Error(
+                            error
+                                .downcast_ref::<SshSecretStoreError>()
+                                .map(|error| crate::t!("ssh-keychain-error", err = error.to_string()))
+                                .unwrap_or_else(|| crate::t!("common-error")),
+                        ));
+                        ctx.notify();
+                    }
+                    Err(error) => {
+                        log::error!("ssh_server_view: reload worker failed: {error}");
+                        me.clear_reload_state();
+                        me.status = Some(StatusBanner::Error(crate::t!("common-error")));
+                        ctx.notify();
+                    }
+                }
+            },
+        );
+    }
+
+    fn clear_reload_state(&mut self) {
+        self.node = None;
+        self.server = None;
+        self.folders.clear();
+        self.onekey_credentials.clear();
+        self.original_parent_id = None;
+        self.current_group_id = None;
+    }
+
+    fn apply_reload_snapshot(
+        &mut self,
+        snapshot: ServerReloadSnapshot,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let ServerReloadSnapshot {
+            node,
+            server,
+            folders,
+            onekey_credentials,
+            password_saved,
+            root_password_saved,
+        } = snapshot;
+        self.original_parent_id = node.as_ref().and_then(|node| node.parent_id.clone());
+        self.current_group_id = self.original_parent_id.clone();
+        self.node = node;
+        self.server = server;
+        self.folders = folders;
+        self.onekey_credentials = onekey_credentials;
+
+        // Write node name / server fields to editor buffer.
         let name = self
             .node
             .as_ref()
@@ -579,17 +694,9 @@ impl SshServerView {
             // Here we directly clear buffer, password stays in keychain; on Save only write if buffer is non-empty.
             // Placeholder mode mirrors root_password_editor (keychain exists → "●●●●●●●";
             // does not exist → back to "•••••••" from new()), giving user a visual hint "leaving empty also works for Test".
-            let (password_lookup_id, password_kind) = password_lookup_for_server_form(&srv);
-            let pw_saved = match password_lookup_id.as_deref() {
-                Some(id) => KeychainSecretStore
-                    .get(id, password_kind)
-                    .unwrap_or(None)
-                    .is_some(),
-                None => false,
-            };
             self.password_editor.update(ctx, |e, ctx| {
                 e.set_buffer_text("", ctx);
-                if pw_saved {
+                if password_saved {
                     e.set_placeholder_text("●●●●●●●", ctx);
                 } else {
                     e.set_placeholder_text("•••••••", ctx);
@@ -601,14 +708,9 @@ impl SshServerView {
             let notes = srv.notes.clone().unwrap_or_default();
             self.notes_editor
                 .update(ctx, |e, ctx| e.set_buffer_text(&notes, ctx));
-            // Root password: detect if keychain has saved, show placeholder hint if it does.
-            let root_pw_saved = KeychainSecretStore
-                .get(&srv.node_id, SecretKind::RootPassword)
-                .unwrap_or(None)
-                .is_some();
             self.root_password_editor.update(ctx, |e, ctx| {
                 e.set_buffer_text("", ctx);
-                if root_pw_saved {
+                if root_password_saved {
                     e.set_placeholder_text("●●●●●●●", ctx);
                 } else {
                     e.set_placeholder_text(
@@ -710,38 +812,6 @@ impl SshServerView {
             dd.set_items(items, ctx);
             dd.set_selected_by_index(selected_index, ctx);
         });
-    }
-
-    fn reload_onekey_credentials(&mut self, ctx: &mut ViewContext<Self>) {
-        match warp_ssh_manager::with_conn(|c| Ok(SshRepository::list_onekey_credentials(c)?)) {
-            Ok(credentials) => {
-                self.onekey_credentials = credentials;
-            }
-            Err(e) => {
-                log::error!("ssh_server_view: reload onekey credentials failed: {e:?}");
-                self.onekey_credentials = Vec::new();
-            }
-        }
-        if let Some(selected_id) = self.selected_onekey_credential_id.as_ref() {
-            if !self
-                .onekey_credentials
-                .iter()
-                .any(|credential| credential.id == *selected_id)
-            {
-                self.selected_onekey_credential_id = None;
-            }
-        }
-        if let Some(managed_id) = self.managed_onekey_credential_id.as_ref() {
-            if !self
-                .onekey_credentials
-                .iter()
-                .any(|credential| credential.id == *managed_id)
-            {
-                self.managed_onekey_credential_id = None;
-            }
-        }
-        self.rebuild_onekey_credential_dropdown(ctx);
-        self.sync_onekey_manager_row_states();
     }
 
     fn sync_managed_onekey_selection(&mut self, ctx: &mut ViewContext<Self>) {
@@ -921,6 +991,9 @@ impl SshServerView {
     }
 
     fn on_save(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.credential_operation_in_flight {
+            return;
+        }
         // 1. Collect fields
         let name = self.current_text(&self.name_editor.clone(), ctx);
         let host = self.current_text(&self.host_editor.clone(), ctx);
@@ -997,46 +1070,67 @@ impl SshServerView {
             ring_ceiling_mb: self.ring_ceiling_mb,
         };
 
-        // 2. Apply keychain and database changes with explicit compensation.
+        // 2. Apply keychain and database changes with explicit compensation off the UI thread.
         let group_changed = self.current_group_id != self.original_parent_id;
-        let result = warp_ssh_manager::with_conn(|c| {
-            Ok(save_server_with_secrets(
-                c,
-                &KeychainSecretStore,
-                SaveServerRequest {
-                    name: &name,
-                    server: &info,
-                    move_to_parent: group_changed,
-                    parent_id: self.current_group_id.as_deref(),
-                    password_or_passphrase: (self.auth_type != AuthType::OneKey)
-                        .then_some(password.as_str()),
-                    root_password: Some(root_password.as_str()),
-                },
-            )?)
-        });
-        if let Err(e) = result {
-            log::error!("ssh_server_view: save failed: {e:?}");
-            self.status = Some(StatusBanner::Error(credential_operation_message(&e)));
-            ctx.notify();
-            return;
-        }
-
-        if self.auth_type != AuthType::OneKey && !password.is_empty() {
-            self.password_editor
-                .update(ctx, |e, ctx| e.set_buffer_text("", ctx));
-        }
-        if !root_password.is_empty() {
-            self.root_password_editor
-                .update(ctx, |e, ctx| e.set_buffer_text("", ctx));
-        }
-
-        // 3. reload + status hint + notify all SshManagerPanel to refresh tree
-        self.reload(ctx);
-        self.status = Some(StatusBanner::Saved);
-        SshTreeChangedNotifier::handle(ctx).update(ctx, |_, ctx| {
-            ctx.emit(SshTreeChangedEvent::TreeChanged);
-        });
+        let parent_id = self.current_group_id.clone();
+        let save_secret = self.auth_type != AuthType::OneKey;
+        let password_was_entered = save_secret && !password.is_empty();
+        let root_password_was_entered = !root_password.is_empty();
+        let secret_store = self.secret_store.clone();
+        self.credential_operation_in_flight = true;
+        self.status = None;
         ctx.notify();
+
+        ctx.spawn(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    warp_ssh_manager::with_conn(|conn| {
+                        Ok(save_server_with_secrets(
+                            conn,
+                            secret_store.as_ref(),
+                            SaveServerRequest {
+                                name: &name,
+                                server: &info,
+                                move_to_parent: group_changed,
+                                parent_id: parent_id.as_deref(),
+                                password_or_passphrase: save_secret.then_some(password.as_str()),
+                                root_password: Some(root_password.as_str()),
+                            },
+                        )?)
+                    })
+                })
+                .await
+            },
+            move |me, result, ctx| {
+                me.credential_operation_in_flight = false;
+                match result {
+                    Ok(Ok(())) => {
+                        if password_was_entered {
+                            me.password_editor
+                                .update(ctx, |editor, ctx| editor.set_buffer_text("", ctx));
+                        }
+                        if root_password_was_entered {
+                            me.root_password_editor
+                                .update(ctx, |editor, ctx| editor.set_buffer_text("", ctx));
+                        }
+                        me.reload(ctx);
+                        me.status = Some(StatusBanner::Saved);
+                        SshTreeChangedNotifier::handle(ctx).update(ctx, |_, ctx| {
+                            ctx.emit(SshTreeChangedEvent::TreeChanged);
+                        });
+                    }
+                    Ok(Err(error)) => {
+                        log::error!("ssh_server_view: save failed: {error:?}");
+                        me.status = Some(StatusBanner::Error(credential_operation_message(&error)));
+                    }
+                    Err(error) => {
+                        log::error!("ssh_server_view: save worker failed: {error}");
+                        me.status = Some(StatusBanner::Error(crate::t!("common-error")));
+                    }
+                }
+                ctx.notify();
+            },
+        );
     }
 
     /// Trigger SSH connection — pass current node + server config to Workspace, which opens a new
@@ -1163,27 +1257,24 @@ impl SshServerView {
             ring_ceiling_mb: self.ring_ceiling_mb,
         };
 
-        let (server, password) = match resolve_test_server_and_password(
-            server,
-            &self.onekey_credentials,
-            &password,
-            &KeychainSecretStore,
-        ) {
-            Ok(resolved) => resolved,
-            Err(message) => {
-                self.status = Some(StatusBanner::Error(message));
-                ctx.notify();
-                return;
-            }
-        };
-
         self.is_testing = true;
         self.status = None;
         ctx.notify();
 
-        let node_id = self.node_id.clone();
+        let credentials = self.onekey_credentials.clone();
+        let secret_store = self.secret_store.clone();
         ctx.spawn(
             async move {
+                let (server, password) = tokio::task::spawn_blocking(move || {
+                    resolve_test_server_and_password(
+                        server,
+                        &credentials,
+                        &password,
+                        secret_store.as_ref(),
+                    )
+                })
+                .await
+                .map_err(|error| format!("SSH credential worker failed: {error}"))??;
                 let result = if let Some(expected_host_key) = expected_host_key {
                     warp_ssh_manager::ssh_command::test_connection_confirm_host_key(
                         &server,
@@ -1194,13 +1285,23 @@ impl SshServerView {
                 } else {
                     warp_ssh_manager::ssh_command::test_connection(&server, password).await
                 };
-                (node_id, result)
+                Ok::<_, String>(result)
             },
-            move |me, (_node_id, result), ctx| {
+            move |me, result, ctx| {
                 if !should_apply_connection_test_result(me.connection_test_generation, generation) {
                     return;
                 }
                 me.is_testing = false;
+                let result = match result {
+                    Ok(result) => result,
+                    Err(message) => {
+                        me.connection_status = ConnectionStatus::Unknown;
+                        me.latency_ms = None;
+                        me.status = Some(StatusBanner::Error(message));
+                        ctx.notify();
+                        return;
+                    }
+                };
                 if let Some(unknown_host_key) = result.unknown_host_key {
                     me.connection_status = ConnectionStatus::Unknown;
                     me.latency_ms = None;
@@ -1321,7 +1422,14 @@ impl SshServerView {
         }
     }
 
-    fn on_save_managed_onekey_credential(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+    fn on_save_managed_onekey_credential(
+        &mut self,
+        transition: Option<OneKeyTransition>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.credential_operation_in_flight {
+            return;
+        }
         let label = self.current_text(&self.onekey_label_editor.clone(), ctx);
         let username = self.current_text(&self.onekey_user_editor.clone(), ctx);
         let secret = self.current_text(&self.onekey_secret_editor.clone(), ctx);
@@ -1333,7 +1441,7 @@ impl SshServerView {
                 "workspace-left-panel-ssh-manager-onekey-label-required"
             )));
             ctx.notify();
-            return false;
+            return;
         }
 
         let key_path = key_path.trim().to_string();
@@ -1342,7 +1450,7 @@ impl SshServerView {
                 "workspace-left-panel-ssh-manager-onekey-key-path-required"
             )));
             ctx.notify();
-            return false;
+            return;
         }
 
         let key_path_for_db = match self.managed_onekey_kind {
@@ -1361,7 +1469,7 @@ impl SshServerView {
                     "workspace-left-panel-ssh-manager-onekey-select-required"
                 )));
                 ctx.notify();
-                return false;
+                return;
             };
             Some(existing)
         } else {
@@ -1383,45 +1491,66 @@ impl SshServerView {
                 .unwrap_or(now),
             updated_at: now,
         };
-        let credential_result = warp_ssh_manager::with_conn(|conn| {
-            Ok(save_onekey_credential_with_secret(
-                conn,
-                &KeychainSecretStore,
-                existing.as_ref(),
-                &draft,
-                Some(&secret),
-            )?)
-        });
-
-        let credential = match credential_result {
-            Ok(credential) => credential,
-            Err(e) => {
-                log::error!("ssh_server_view: save OneKey credential failed: {e:?}");
-                self.onekey_status = Some(StatusBanner::Error(credential_operation_message(&e)));
-                ctx.notify();
-                return false;
-            }
-        };
-
-        if !secret.is_empty() {
-            self.onekey_secret_editor
-                .update(ctx, |editor, ctx| editor.set_buffer_text("", ctx));
-        }
-
-        self.managed_onekey_credential_id = Some(credential.id.clone());
-        self.selected_onekey_credential_id = Some(credential.id);
-        self.reload_onekey_credentials(ctx);
-        if let Some(selected) = self.selected_onekey_credential_id.as_ref().and_then(|id| {
-            self.onekey_credentials
-                .iter()
-                .find(|credential| credential.id == *id)
-                .cloned()
-        }) {
-            self.set_managed_onekey_form_from_credential(&selected, ctx);
-        }
-        self.onekey_status = Some(StatusBanner::Saved);
+        let secret_was_entered = !secret.is_empty();
+        let secret_store = self.secret_store.clone();
+        self.credential_operation_in_flight = true;
+        self.onekey_status = None;
         ctx.notify();
-        true
+
+        ctx.spawn(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    warp_ssh_manager::with_conn(|conn| {
+                        let credential = save_onekey_credential_with_secret(
+                            conn,
+                            secret_store.as_ref(),
+                            existing.as_ref(),
+                            &draft,
+                            Some(&secret),
+                        )?;
+                        let credentials = SshRepository::list_onekey_credentials(conn)?;
+                        Ok((credential, credentials))
+                    })
+                })
+                .await
+            },
+            move |me, result, ctx| {
+                me.credential_operation_in_flight = false;
+                match result {
+                    Ok(Ok((credential, credentials))) => {
+                        if secret_was_entered {
+                            me.onekey_secret_editor
+                                .update(ctx, |editor, ctx| editor.set_buffer_text("", ctx));
+                        }
+                        me.managed_onekey_credential_id = Some(credential.id.clone());
+                        me.selected_onekey_credential_id = Some(credential.id.clone());
+                        me.onekey_credentials = credentials;
+                        me.rebuild_onekey_credential_dropdown(ctx);
+                        me.sync_onekey_manager_row_states();
+                        if let Some(transition) = transition {
+                            me.apply_onekey_transition(transition, ctx);
+                        } else {
+                            me.set_managed_onekey_form_from_credential(&credential, ctx);
+                            me.onekey_status = Some(StatusBanner::Saved);
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        log::error!(
+                            "ssh_server_view: save OneKey credential failed: {error:?}"
+                        );
+                        me.onekey_status =
+                            Some(StatusBanner::Error(credential_operation_message(&error)));
+                    }
+                    Err(error) => {
+                        log::error!(
+                            "ssh_server_view: save OneKey credential worker failed: {error}"
+                        );
+                        me.onekey_status = Some(StatusBanner::Error(crate::t!("common-error")));
+                    }
+                }
+                ctx.notify();
+            },
+        );
     }
 
     fn on_request_delete_managed_onekey_credential(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1436,29 +1565,57 @@ impl SshServerView {
     }
 
     fn on_confirm_delete_managed_onekey_credential(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.credential_operation_in_flight {
+            return;
+        }
         let Some(id) = self.pending_onekey_delete_id.take() else {
             return;
         };
-
-        if let Err(e) = warp_ssh_manager::with_conn(|conn| {
-            Ok(delete_onekey_credential_and_secrets(
-                conn,
-                &KeychainSecretStore,
-                &id,
-            )?)
-        }) {
-            log::error!("ssh_server_view: delete OneKey credential failed: {e:?}");
-            self.onekey_status = Some(StatusBanner::Error(credential_operation_message(&e)));
-            ctx.notify();
-            return;
-        }
-
-        if self.selected_onekey_credential_id.as_deref() == Some(id.as_str()) {
-            self.selected_onekey_credential_id = None;
-        }
-        self.clear_managed_onekey_form(ctx);
-        self.reload_onekey_credentials(ctx);
+        let secret_store = self.secret_store.clone();
+        self.credential_operation_in_flight = true;
+        self.onekey_status = None;
         ctx.notify();
+
+        ctx.spawn(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    warp_ssh_manager::with_conn(|conn| {
+                        delete_onekey_credential_and_secrets(conn, secret_store.as_ref(), &id)?;
+                        let credentials = SshRepository::list_onekey_credentials(conn)?;
+                        Ok((id, credentials))
+                    })
+                })
+                .await
+            },
+            |me, result, ctx| {
+                me.credential_operation_in_flight = false;
+                match result {
+                    Ok(Ok((id, credentials))) => {
+                        if me.selected_onekey_credential_id.as_deref() == Some(id.as_str()) {
+                            me.selected_onekey_credential_id = None;
+                        }
+                        me.onekey_credentials = credentials;
+                        me.clear_managed_onekey_form(ctx);
+                        me.rebuild_onekey_credential_dropdown(ctx);
+                        me.sync_onekey_manager_row_states();
+                    }
+                    Ok(Err(error)) => {
+                        log::error!(
+                            "ssh_server_view: delete OneKey credential failed: {error:?}"
+                        );
+                        me.onekey_status =
+                            Some(StatusBanner::Error(credential_operation_message(&error)));
+                    }
+                    Err(error) => {
+                        log::error!(
+                            "ssh_server_view: delete OneKey credential worker failed: {error}"
+                        );
+                        me.onekey_status = Some(StatusBanner::Error(crate::t!("common-error")));
+                    }
+                }
+                ctx.notify();
+            },
+        );
     }
 
     // ---------- Rendering helpers ---------- //
@@ -2657,15 +2814,11 @@ impl TypedActionView for SshServerView {
                 }
             }
             SshServerAction::SaveManagedOneKeyCredential => {
-                let _ = self.on_save_managed_onekey_credential(ctx);
+                self.on_save_managed_onekey_credential(None, ctx);
             }
             SshServerAction::SaveManagedOneKeyCredentialAndContinue => {
                 let transition = self.pending_onekey_transition.clone();
-                if self.on_save_managed_onekey_credential(ctx) {
-                    if let Some(transition) = transition {
-                        self.apply_onekey_transition(transition, ctx);
-                    }
-                }
+                self.on_save_managed_onekey_credential(transition, ctx);
             }
             SshServerAction::DiscardManagedOneKeyChanges => {
                 self.discard_onekey_changes(ctx);
@@ -2718,6 +2871,24 @@ impl View for SshServerView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+
+        if self.reload_in_flight {
+            let theme = appearance.theme();
+            let body = Text::new_inline(
+                crate::t!("common-loading"),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(theme.sub_text_color(theme.background()).into())
+            .finish();
+            return Align::new(
+                ConstrainedBox::new(Container::new(body).with_uniform_padding(24.0).finish())
+                    .with_max_width(560.0)
+                    .finish(),
+            )
+            .top_center()
+            .finish();
+        }
 
         // folder node / server not found → simple hint + hide form
         if !matches!(self.node.as_ref().map(|n| n.kind), Some(NodeKind::Server)) {
