@@ -33,9 +33,11 @@ pub(crate) use router::RoutePreferences;
 pub(crate) use router::{route_target, RouteResult};
 pub(crate) use runtime::{generate_subscription_output, subscription_dispatch_info};
 #[cfg(not(target_family = "wasm"))]
+pub(crate) use runtime::{preflight_subscription_target, subscription_preflight_info};
+#[cfg(not(target_family = "wasm"))]
 pub(crate) use session::SubscriptionSession;
 pub(crate) use types::{
     AccountIdentity, AgentCapability, AgentLifecycle, ApprovalDecision, HostIdentity,
     InstallationIdentity, ModelCapability, ModelEffort, SessionIdentity, SubscriptionAgent,
-    SubscriptionEvent, SubscriptionTarget, Usage,
+    SubscriptionAuthenticationError, SubscriptionEvent, SubscriptionTarget, Usage,
 };
