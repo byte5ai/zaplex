@@ -11,7 +11,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use zaplex_cockpit::{Provider, SessionSnapshot};
 
-use crate::cockpit::{agent_of, launch_registry::LaunchRecord};
+use crate::{
+    cockpit::{agent_of, launch_registry::LaunchRecord},
+    terminal::cli_agent::RoutedAgentLaunch,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum SessionHostRoute {
@@ -218,7 +221,7 @@ pub(crate) enum RestartTermination {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ResumeInvocation {
     LocalShell {
-        command: String,
+        launch: RoutedAgentLaunch,
     },
     RemoteDaemon {
         host_id: String,
@@ -354,8 +357,8 @@ pub(crate) fn plan_restart(
     let resume = match (&route.host, &route.account) {
         (SessionHostRoute::Local, SessionAccountRoute::Local { config_dir, .. }) => {
             ResumeInvocation::LocalShell {
-                command: agent
-                    .resume_command_routed_with(
+                launch: agent
+                    .resume_routed_with(
                         &route.session_id,
                         config_dir.as_deref(),
                         record.model.as_deref(),

@@ -48,16 +48,6 @@ fn linux_stat_parser_rejects_truncated_or_non_numeric_start_fields() {
 }
 
 #[test]
-fn linux_registry_binding_requires_the_same_ticks_and_current_boot() {
-    assert!(linux_registry_binding_matches("987654", 987654, 20_000, 10));
-    assert!(!linux_registry_binding_matches(
-        "987655", 987654, 20_000, 10
-    ));
-    assert!(!linux_registry_binding_matches("987654", 987654, 9_999, 10));
-    assert!(!linux_registry_binding_matches("", 987654, 20_000, 10));
-}
-
-#[test]
 fn process_signalling_support_requires_platform_and_runtime_probe() {
     assert_eq!(
         process_signalling_supported_with(|| true),
@@ -86,13 +76,75 @@ fn macos_processes_are_not_exposed_as_signalable_without_a_bound_handle() {
         chrono::Utc::now().timestamp_millis(),
     );
 
-    assert!(probe.alive);
+    assert_eq!(probe.presence, ProcessPresence::UnverifiedLive);
     assert_eq!(probe.fingerprint, None);
     assert_eq!(current_process_fingerprint(pid), None);
     assert_eq!(
         send_verified_process_signal(pid, "macos-v1:unusable", GuardrailSignal::Interrupt),
         Err(ProcessSignalError::UnsupportedPlatform)
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn previous_boot_registration_is_stale_even_when_pid_exists() {
+    let pid = std::process::id();
+    let proc_start = registry_start_for_process(pid).expect("current process is inspectable");
+    let boot_time = system_boot_time().expect("system boot time is available");
+    let previous_boot_millis =
+        i64::try_from(boot_time.saturating_sub(1).saturating_mul(1_000)).unwrap();
+
+    let probe = probe_registered_process(pid, Some(&proc_start), previous_boot_millis);
+
+    assert_eq!(probe.presence, ProcessPresence::StaleRegistration);
+    assert_eq!(probe.fingerprint, None);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn matching_current_boot_binding_is_verified_live() {
+    let pid = std::process::id();
+    let proc_start = registry_start_for_process(pid).expect("current process is inspectable");
+    let probe = probe_registered_process(
+        pid,
+        Some(&proc_start),
+        chrono::Utc::now().timestamp_millis(),
+    );
+
+    assert_eq!(probe.presence, ProcessPresence::VerifiedLive);
+    assert!(probe.fingerprint.is_some());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn missing_or_unparseable_binding_stays_visible_but_unsignalable() {
+    let pid = std::process::id();
+    let started_at = chrono::Utc::now().timestamp_millis();
+
+    for proc_start in [None, Some("not-a-number")] {
+        let probe = probe_registered_process(pid, proc_start, started_at);
+        assert_eq!(probe.presence, ProcessPresence::UnverifiedLive);
+        assert_eq!(probe.fingerprint, None);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn numeric_process_start_mismatch_is_stale_and_unsignalable() {
+    let pid = std::process::id();
+    let proc_start = registry_start_for_process(pid)
+        .and_then(|value| value.parse::<u64>().ok())
+        .expect("current process start ticks are inspectable");
+    let mismatching_start = proc_start.saturating_add(1).to_string();
+
+    let probe = probe_registered_process(
+        pid,
+        Some(&mismatching_start),
+        chrono::Utc::now().timestamp_millis(),
+    );
+
+    assert_eq!(probe.presence, ProcessPresence::StaleRegistration);
+    assert_eq!(probe.fingerprint, None);
 }
 
 #[cfg(target_os = "linux")]

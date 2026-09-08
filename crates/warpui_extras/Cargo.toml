@@ -21,6 +21,7 @@ async-channel.workspace = true
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 sha2.workspace = true
+tempfile.workspace = true
 toml_edit = { workspace = true, optional = true }
 thiserror.workspace = true
 warpui.workspace = true
@@ -28,7 +29,6 @@ warpui.workspace = true
 [dev-dependencies]
 # Enable the `test-util` feature for our own package when running tests.
 warpui_extras = { path = ".", features = ["test-util"] }
-tempfile.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = { workspace = true, optional = true }

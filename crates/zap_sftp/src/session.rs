@@ -182,7 +182,7 @@ impl SftpSession {
     /// Get SFTP channel
     pub fn sftp(&self) -> Result<Sftp, SftpError> {
         let sftp = self.session.sftp()?;
-        Ok(Sftp::new(sftp))
+        Ok(Sftp::new(sftp, self.session.clone()))
     }
 
     /// Disconnect

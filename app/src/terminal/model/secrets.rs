@@ -5,11 +5,14 @@ use crate::terminal::model::index::Point;
 use anyhow::anyhow;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 use rangemap::{RangeInclusiveMap, StepLite};
 use std::collections::HashMap;
 use std::ops::{Not, RangeInclusive};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use warpui::elements::SecretRange;
 use warpui::EntityId;
 
@@ -17,6 +20,16 @@ use super::grid::grid_handler::GridHandler;
 use super::grid::{Dimensions as _, RespectDisplayedOutput};
 use super::terminal_model::RangeInModel;
 use crate::terminal::model::find::RegexDFAs;
+
+/// One generation-consistent set of compiled secret detection rules.
+pub struct SecretsRegex {
+    /// Multi-pattern regex used for ordinary strings.
+    pub regex: regex_automata::meta::Regex,
+    /// Forward and reverse DFAs used for terminal grid searches.
+    pub dfas: RegexDFAs,
+    /// Pattern counts used to map matches back to their source level.
+    pub level_metadata: RegexLevelMetadata,
+}
 
 /// Tracks counts to infer which regex patterns correspond to which secret levels
 #[derive(Debug, Clone)]
@@ -28,25 +41,20 @@ pub struct RegexLevelMetadata {
 }
 
 lazy_static! {
-    /// Used for secret redaction in the Grid.
-    /// Initially empty - will be populated with user-defined regexes when safe mode is enabled.
-    pub(in crate::terminal::model) static ref SECRETS_DFA: RwLock<RegexDFAs> = RwLock::new(
-        RegexDFAs::new_many(&[], true, true)
-            .expect("should be able to construct empty regex DFA")
-    );
-    /// Used for secret redaction in simple text strings (e.g.: rich content blocks).
-    /// Initially empty - will be populated with user-defined regexes when safe mode is enabled.
-    pub static ref SECRETS_REGEX: RwLock<regex_automata::meta::Regex> = RwLock::new(
-        regex_automata::meta::Regex::new_many(&[] as &[&str])
-            .expect("should be able to construct empty regex")
-    );
-    /// Tracks counts to infer which regex patterns correspond to which secret levels
-    pub static ref REGEX_LEVEL_METADATA: RwLock<RegexLevelMetadata> = RwLock::new(
-        RegexLevelMetadata {
-            enterprise_count: 0,
-            user_count: 0,
+    /// The current immutable secret-detection snapshot. Readers only hold this mutex long enough
+    /// to clone the Arc, so compilation and scanning never happen inside the critical section.
+    pub static ref SECRETS_REGEX: Mutex<Arc<SecretsRegex>> = Mutex::new(Arc::new(
+        SecretsRegex {
+            regex: regex_automata::meta::Regex::new_many(&[] as &[&str])
+                .expect("should be able to construct empty regex"),
+            dfas: RegexDFAs::new_many(&[], true, true)
+                .expect("should be able to construct empty regex DFA"),
+            level_metadata: RegexLevelMetadata {
+                enterprise_count: 0,
+                user_count: 0,
+            },
         }
-    );
+    ));
 }
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd)]
@@ -326,16 +334,30 @@ impl SecretMap {
     }
 }
 
-/// Updates secret scanning to separate user-defined regexes from enterprise ones.
-/// Ensures enterprise secrets are handled differently, maintaining separation from user settings.
-/// If the internal [`RegexDFAs`] can't be constructed from the new regexes for any reason,
-/// the current DFA is kept unchanged.
+fn replace_secret_regex_snapshot(
+    patterns: &[&str],
+    level_metadata: RegexLevelMetadata,
+) -> anyhow::Result<()> {
+    let dfas = RegexDFAs::new_many(patterns, true, true)
+        .map_err(|err| anyhow!("failed to construct secret RegexDFAs: {err:?}"))?;
+    let regex = regex_automata::meta::Regex::new_many(patterns)
+        .map_err(|err| anyhow!("failed to construct secret Regex: {err:?}"))?;
+
+    let replacement = Arc::new(SecretsRegex {
+        regex,
+        dfas,
+        level_metadata,
+    });
+    *SECRETS_REGEX.lock() = replacement;
+    Ok(())
+}
+
+/// Updates secret scanning with one atomic set of user and enterprise regexes.
+/// If any compiled representation cannot be constructed, the current snapshot stays unchanged.
 pub fn set_user_and_enterprise_secret_regexes<'a>(
     user_secrets: impl IntoIterator<Item = &'a regex::Regex>,
     enterprise_secrets: impl IntoIterator<Item = &'a regex::Regex>,
 ) {
-    let mut secrets = SECRETS_DFA.write();
-
     // Collect enterprise and user secrets into vectors to count them
     let enterprise_secrets_vec: Vec<&'a regex::Regex> = enterprise_secrets.into_iter().collect();
     let user_secrets_vec: Vec<&'a regex::Regex> = user_secrets.into_iter().collect();
@@ -356,29 +378,13 @@ pub fn set_user_and_enterprise_secret_regexes<'a>(
         .chain(filtered_user_secrets_vec.iter().map(|regex| regex.as_str()))
         .collect_vec();
 
-    // Update the metadata counts first to ensure it's ready when the new regexes are set
-    let mut metadata = REGEX_LEVEL_METADATA.write();
-    metadata.enterprise_count = enterprise_secrets_vec.len();
-    metadata.user_count = filtered_user_secrets_vec.len();
-
-    let mut secrets_regex = SECRETS_REGEX.write();
-    match regex_automata::meta::Regex::new_many(&all_secrets) {
-        Ok(regex) => {
-            *secrets_regex = regex;
-        }
-        Err(err) => {
-            log::error!("Failed to construct new Regex with combined secrets: {err:?}");
-        }
-    }
-
-    match RegexDFAs::new_many(&all_secrets, true, true) {
-        Ok(dfa) => {
-            *secrets = dfa;
-        }
-        Err(err) => {
-            log::error!("Failed to construct new RegexDFA with combined secrets: {err:?}");
-        }
+    let level_metadata = RegexLevelMetadata {
+        enterprise_count: enterprise_secrets_vec.len(),
+        user_count: filtered_user_secrets_vec.len(),
     };
+    if let Err(err) = replace_secret_regex_snapshot(&all_secrets, level_metadata) {
+        log::error!("Failed to replace secret regex snapshot: {err:?}");
+    }
 }
 
 /// A wrapper around a [`Point`] that implements [`StepLite`], allowing us to store it in a

@@ -1,5 +1,9 @@
 use super::*;
-use warp_ssh_manager::{AuthType, SshServerInfo};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
+#[cfg(unix)]
+use std::sync::Mutex;
+use warp_ssh_manager::{AuthType, ResolvedSshConnection, SecretKind, SshServerInfo};
 
 fn server(auth: AuthType) -> SshServerInfo {
     let mut s = SshServerInfo::new_default("node-1".to_string());
@@ -17,6 +21,24 @@ fn headless_capable_only_for_key_auth() {
     // OneKey is resolved to Key/Password upstream (resolve_server_auth); the
     // bare OneKey marker is not headless-capable on its own.
     assert!(!is_headless_capable(&server(AuthType::OneKey)));
+}
+
+#[test]
+fn agent_route_preflight_resolves_onekey_key() {
+    let resolved = |auth_type, secret_kind| ResolvedSshConnection {
+        server: server(auth_type),
+        secret_lookup_id: "cred-1".to_string(),
+        secret_kind,
+    };
+
+    assert!(is_agent_route_headless_capable(&resolved(
+        AuthType::Key,
+        SecretKind::Passphrase,
+    )));
+    assert!(!is_agent_route_headless_capable(&resolved(
+        AuthType::Password,
+        SecretKind::OneKeyPassword,
+    )));
 }
 
 #[test]
@@ -72,7 +94,7 @@ fn headless_control_master_rejects_invalid_endpoints_before_spawn() {
         invalid.host = host.to_string();
         invalid.port = port;
         assert!(
-            control_master_args(&invalid, Path::new("/tmp/zaplex-test-control")).is_err(),
+            control_master_args(&invalid, Path::new("/tmp/zaplex-test-control"), None).is_err(),
             "headless ControlMaster must reject {host:?}:{port}"
         );
     }
@@ -83,6 +105,7 @@ fn headless_control_master_uses_l2_host_key_and_argument_policy() {
     let args = control_master_args(
         &server(AuthType::Key),
         Path::new("/tmp/zaplex-test-control"),
+        None,
     )
     .expect("valid endpoint should produce arguments");
     let destination_delimiter = args
@@ -103,4 +126,168 @@ fn headless_control_master_uses_l2_host_key_and_argument_policy() {
     assert!(args[..destination_delimiter]
         .iter()
         .any(|arg| arg == "ControlMaster=auto"));
+}
+
+#[cfg(unix)]
+struct HostKeyCommandFactory {
+    script: PathBuf,
+    log_path: PathBuf,
+}
+
+#[cfg(unix)]
+impl WorkspaceCommandFactory for HostKeyCommandFactory {
+    fn async_command(&self, program: &str) -> command::r#async::Command {
+        let mut command = command::r#async::Command::new(&self.script);
+        command
+            .arg(program)
+            .env("ZAPLEX_HOST_KEY_TEST_LOG", &self.log_path);
+        command
+    }
+
+    fn blocking_command(&self, program: &str) -> command::blocking::Command {
+        let mut command = command::blocking::Command::new(&self.script);
+        command
+            .arg(program)
+            .env("ZAPLEX_HOST_KEY_TEST_LOG", &self.log_path);
+        command
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unknown_host_key_requires_confirmation_before_control_master() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("fake-ssh-tools");
+    let log_path = directory.path().join("argv.log");
+    let mut file = std::fs::File::create(&script).unwrap();
+    file.write_all(
+        b"#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$ZAPLEX_HOST_KEY_TEST_LOG\"\ncase \"$1\" in\n  ssh-keygen)\n    printf '256 SHA256:confirmed host (ED25519)\\n' ;;\n  ssh)\n    shift\n    for arg in \"$@\"; do\n      case \"$arg\" in\n        UserKnownHostsFile=*) path=${arg#UserKnownHostsFile=} ;;\n        StrictHostKeyChecking=*) strict=${arg#StrictHostKeyChecking=} ;;\n        BatchMode=*) batch=${arg#BatchMode=} ;;\n        ControlPath=*) control=${arg#ControlPath=} ;;\n      esac\n    done\n    if [ \"$1\" = -O ]; then\n      test -f \"$control\"\n      exit $?\n    fi\n    if [ \"$strict\" = yes ]; then\n      if [ -n \"$path\" ] && grep -q 'ssh-ed25519 AAAA' \"$path\"; then\n        : > \"$control\"\n        exit 0\n      fi\n      printf 'Host key verification failed.\\nED25519 key fingerprint is SHA256:confirmed.\\n' >&2\n      exit 255\n    fi\n    if [ \"$strict\" = ask ] && [ \"$batch\" = no ]; then\n      printf 'example.com ssh-ed25519 AAAA\\n' > \"$path\"\n      exit 255\n    fi\n    exit 2 ;;\n  *) exit 2 ;;\nesac\n",
+    )
+    .unwrap();
+    let mut permissions = file.metadata().unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    drop(file);
+    let factory = HostKeyCommandFactory { script, log_path };
+    let managed_known_hosts = directory.path().join("known_hosts");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+
+    let outcome = runtime
+        .block_on(preflight_control_master_host_key_with_factory(
+            &server(AuthType::Key),
+            &managed_known_hosts,
+            &factory,
+        ))
+        .unwrap();
+    let HostKeyPreflight::ConfirmationRequired(host_key) = outcome else {
+        panic!("unknown host key must require confirmation");
+    };
+    let invocations = std::fs::read_to_string(&factory.log_path).unwrap();
+    assert!(
+        !invocations
+            .lines()
+            .any(|line| line.split_whitespace().any(|arg| arg == "-f")),
+        "ControlMaster started before confirmation: {invocations}"
+    );
+
+    confirm_host_key_at(&server(AuthType::Key), &host_key, &managed_known_hosts).unwrap();
+    assert_eq!(
+        std::fs::metadata(&managed_known_hosts)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    let args = control_master_args(
+        &server(AuthType::Key),
+        Path::new("/tmp/zaplex-test-control"),
+        Some(&managed_known_hosts),
+    )
+    .unwrap();
+    assert!(args.iter().any(|arg| arg == "StrictHostKeyChecking=yes"));
+    assert!(args
+        .iter()
+        .any(|arg| { arg == &format!("UserKnownHostsFile={}", managed_known_hosts.display()) }));
+    let control_socket = directory.path().join("control");
+    runtime
+        .block_on(ensure_control_master_with_factory(
+            &server(AuthType::Key),
+            &control_socket,
+            Some(&managed_known_hosts),
+            &factory,
+        ))
+        .unwrap();
+    assert!(control_socket.exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn concurrent_ensure_control_master_spawns_once() {
+    struct RecordingCommandFactory {
+        script: PathBuf,
+        programs: Mutex<Vec<String>>,
+    }
+
+    impl WorkspaceCommandFactory for RecordingCommandFactory {
+        fn async_command(&self, program: &str) -> command::r#async::Command {
+            self.programs.lock().unwrap().push(program.to_string());
+            command::r#async::Command::new(&self.script)
+        }
+
+        fn blocking_command(&self, program: &str) -> command::blocking::Command {
+            panic!("unexpected blocking command: {program}")
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("fake-ssh");
+    let starts = directory.path().join("starts");
+    let release = directory.path().join("release");
+    let live = directory.path().join("live");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = '-O' ]; then\n  test -f '{}'\n  exit $?\nfi\nprintf 'start\\n' >> '{}'\nwhile [ ! -f '{}' ]; do sleep 0.01; done\ntouch '{}'\n",
+            live.display(),
+            starts.display(),
+            release.display(),
+            live.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    let factory = RecordingCommandFactory {
+        script,
+        programs: Mutex::new(Vec::new()),
+    };
+    let socket_path = directory.path().join("control.sock");
+    let test_server = server(AuthType::Key);
+
+    let first = ensure_control_master_with_factory(&test_server, &socket_path, None, &factory);
+    let second = ensure_control_master_with_factory(&test_server, &socket_path, None, &factory);
+    let release_first = async {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while !starts.exists() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(starts.exists(), "first ControlMaster setup did not start");
+        std::fs::write(&release, "release").unwrap();
+    };
+
+    let (first, second, ()) = tokio::join!(first, second, release_first);
+    first.unwrap();
+    second.unwrap();
+    assert_eq!(std::fs::read_to_string(starts).unwrap(), "start\n");
+    assert!(factory
+        .programs
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|program| program == "ssh"));
 }
