@@ -5,6 +5,7 @@ mod codex;
 mod discovery;
 #[cfg(not(target_family = "wasm"))]
 mod process;
+mod presentation;
 mod registry;
 mod response_adapter;
 mod router;
@@ -25,6 +26,9 @@ pub(crate) use codex::CodexProtocol;
 pub(crate) use discovery::discover_capabilities;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use process::{query_cli_version, JsonLineProcess, ProcessLaunch, ProcessLocation};
+pub(crate) use presentation::{
+    conversation_identity_fields, ComposerPolicy, ConversationAction, ConversationPresentation,
+};
 pub(crate) use registry::SubscriptionSessionRegistry;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use response_adapter::ResponseEventAdapter;

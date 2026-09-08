@@ -29,7 +29,9 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentAttachment, AIAgentExchangeId, CancellationReason, ImageContext};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
-use crate::ai::blocklist::agent_view::{AgentViewEntryOrigin, EphemeralMessageModel};
+use crate::ai::blocklist::agent_view::{
+    AgentViewEntryOrigin, AgentViewState, EphemeralMessageModel,
+};
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBar;
 use crate::ai::blocklist::{ai_indicator_height, BlocklistAIActionModel, SlashCommandRequest};
@@ -41,6 +43,9 @@ use crate::ai::predict::prompt_suggestions::{
 };
 use crate::ai::skills::SkillManager;
 use crate::ai::skills::{SkillOpenOrigin, SkillTelemetryEvent};
+use crate::ai::subscription_agent::{
+    ComposerPolicy, ConversationPresentation, SubscriptionSessionRegistry,
+};
 use crate::context_chips::spacing;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
@@ -12309,12 +12314,38 @@ impl Input {
         true
     }
 
+    fn active_agent_view_conversation_id(&self, app: &AppContext) -> Option<String> {
+        match self.agent_view_controller.as_ref(app).agent_view_state() {
+            AgentViewState::Active {
+                conversation_id, ..
+            } => Some(conversation_id.to_string()),
+            AgentViewState::Inactive => None,
+        }
+    }
+
+    pub(super) fn subscription_prompt_block_reason(&self, app: &AppContext) -> Option<String> {
+        let conversation_id = self.active_agent_view_conversation_id(app)?;
+        let lifecycle = SubscriptionSessionRegistry::as_ref(app).lifecycle(&conversation_id)?;
+        match ConversationPresentation::for_lifecycle(&lifecycle).composer {
+            ComposerPolicy::Enabled => None,
+            ComposerPolicy::Disabled { reason } => Some(reason),
+        }
+    }
+
+    pub(super) fn is_subscription_agent_view_active(&self, app: &AppContext) -> bool {
+        self.active_agent_view_conversation_id(app).is_some()
+    }
+
     /// Submit the input buffer contents as an AI query.
     fn submit_ai_query(
         &mut self,
         zero_state_prompt_suggestion_type: Option<ZeroStatePromptSuggestionType>,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.subscription_prompt_block_reason(ctx).is_some() {
+            return;
+        }
+
         self.editor.update(ctx, |editor, ctx| {
             editor.abort_attached_images_future_handle(ctx);
         });
