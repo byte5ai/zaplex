@@ -13,6 +13,7 @@ use super::sftp_ops::SftpOpsError;
 use super::types::{FileEntryType, TransferPhase};
 
 pub const STREAM_CHUNK_SIZE: usize = 64 * 1024;
+const DEFAULT_TRANSFER_FILE_MODE: u32 = 0o600;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransferOperation {
@@ -386,6 +387,7 @@ struct EntrySnapshot {
     root: PathBuf,
     entries: BTreeMap<PathBuf, super::sftp_backend::StableEntryIdentity>,
     children: BTreeMap<PathBuf, Vec<String>>,
+    file_modes: BTreeMap<PathBuf, u32>,
 }
 
 struct BackupSnapshot {
@@ -483,6 +485,13 @@ impl EntrySnapshot {
             .expect("snapshot always contains its root")
     }
 
+    fn file_mode(&self, path: &Path) -> u32 {
+        self.file_modes
+            .get(path)
+            .copied()
+            .unwrap_or(DEFAULT_TRANSFER_FILE_MODE)
+    }
+
     fn relocated(&self, new_root: &Path) -> Self {
         let relocate = |path: &Path| {
             path.strip_prefix(&self.root)
@@ -500,6 +509,11 @@ impl EntrySnapshot {
                 .children
                 .iter()
                 .map(|(path, names)| (relocate(path), names.clone()))
+                .collect(),
+            file_modes: self
+                .file_modes
+                .iter()
+                .map(|(path, mode)| (relocate(path), *mode))
                 .collect(),
         }
     }
@@ -527,6 +541,12 @@ impl EntrySnapshot {
                 .iter()
                 .filter(|(path, _)| path.starts_with(root))
                 .map(|(path, names)| (path.clone(), names.clone()))
+                .collect(),
+            file_modes: self
+                .file_modes
+                .iter()
+                .filter(|(path, _)| path.starts_with(root))
+                .map(|(path, mode)| (path.clone(), *mode))
                 .collect(),
         })
     }
@@ -1068,6 +1088,7 @@ pub fn run_transfer(
         &*job.source_backend,
         &job.source_path,
         &source_identity,
+        source_snapshot.file_mode(&job.source_path),
         &*job.target_backend,
         &staged_path,
         control,
@@ -3247,6 +3268,7 @@ fn capture_publication_snapshot(
         root: root.to_path_buf(),
         entries: BTreeMap::new(),
         children: BTreeMap::new(),
+        file_modes: BTreeMap::new(),
     };
     capture_publication_entry(backend, root, &mut snapshot)?;
     Ok(snapshot)
@@ -3281,6 +3303,7 @@ fn capture_publication_snapshot_in_phase(
         root: root.to_path_buf(),
         entries: BTreeMap::new(),
         children: BTreeMap::new(),
+        file_modes: BTreeMap::new(),
     };
     let mut verified = 0_u64;
     let started = Instant::now();
@@ -3374,6 +3397,9 @@ fn capture_publication_entry_controlled(
     };
     match stable.file_type {
         FileEntryType::File => {
+            snapshot
+                .file_modes
+                .insert(path.to_path_buf(), transfer_file_mode_now(backend, path)?);
             snapshot.entries.insert(path.to_path_buf(), identity);
         }
         FileEntryType::Directory => {
@@ -3453,6 +3479,9 @@ fn capture_publication_entry(
     };
     match stable.file_type {
         FileEntryType::File => {
+            snapshot
+                .file_modes
+                .insert(path.to_path_buf(), transfer_file_mode_now(backend, path)?);
             snapshot.entries.insert(path.to_path_buf(), identity);
         }
         FileEntryType::Directory => {
@@ -3536,6 +3565,13 @@ fn stable_identity_now(
     Ok(second)
 }
 
+fn transfer_file_mode_now(backend: &dyn SftpBackend, path: &Path) -> Result<u32, SftpOpsError> {
+    Ok(backend
+        .regular_file_mode(path)?
+        .unwrap_or(DEFAULT_TRANSFER_FILE_MODE)
+        & 0o777)
+}
+
 fn optional_snapshot(
     backend: &dyn SftpBackend,
     path: &Path,
@@ -3612,6 +3648,7 @@ fn capture_snapshot(backend: &dyn SftpBackend, root: &Path) -> Result<EntrySnaps
         root: root.to_path_buf(),
         entries: BTreeMap::new(),
         children: BTreeMap::new(),
+        file_modes: BTreeMap::new(),
     };
     capture_snapshot_entry(backend, root, &mut snapshot)?;
     validate_snapshot(backend, &snapshot)?;
@@ -3631,6 +3668,7 @@ fn capture_snapshot_controlled(
         root: root.to_path_buf(),
         entries: BTreeMap::new(),
         children: BTreeMap::new(),
+        file_modes: BTreeMap::new(),
     };
     capture_snapshot_entry_controlled(backend, root, &mut snapshot, control)?;
     validate_snapshot_controlled(backend, &snapshot, control)?;
@@ -3647,6 +3685,9 @@ fn capture_snapshot_entry_controlled(
     let identity = stable_identity_now(backend, path)?;
     match identity.file_type {
         FileEntryType::File => {
+            snapshot
+                .file_modes
+                .insert(path.to_path_buf(), transfer_file_mode_now(backend, path)?);
             snapshot.entries.insert(path.to_path_buf(), identity);
         }
         FileEntryType::Directory => {
@@ -3687,6 +3728,9 @@ fn capture_snapshot_entry(
     let identity = stable_identity_now(backend, path)?;
     match identity.file_type {
         FileEntryType::File => {
+            snapshot
+                .file_modes
+                .insert(path.to_path_buf(), transfer_file_mode_now(backend, path)?);
             snapshot.entries.insert(path.to_path_buf(), identity);
         }
         FileEntryType::Directory => {
@@ -3747,6 +3791,14 @@ fn validate_snapshot(
                 path.display()
             )));
         }
+        if expected.file_type == FileEntryType::File
+            && snapshot.file_modes.get(path) != Some(&transfer_file_mode_now(backend, path)?)
+        {
+            return Err(SftpOpsError::Operation(format!(
+                "File mode changed at {}",
+                path.display()
+            )));
+        }
         if expected.file_type == FileEntryType::Directory {
             let mut entries = backend.list_dir(path)?;
             entries.sort_by(|left, right| left.name.cmp(&right.name));
@@ -3786,6 +3838,14 @@ fn validate_snapshot_controlled(
         if &actual != expected {
             return Err(SftpOpsError::Operation(format!(
                 "Entry identity changed at {}",
+                path.display()
+            )));
+        }
+        if expected.file_type == FileEntryType::File
+            && snapshot.file_modes.get(path) != Some(&transfer_file_mode_now(backend, path)?)
+        {
+            return Err(SftpOpsError::Operation(format!(
+                "File mode changed at {}",
                 path.display()
             )));
         }
@@ -3962,6 +4022,7 @@ fn merge_snapshot_into_existing_root(
             source_backend,
             source_path,
             identity,
+            source.file_mode(source_path),
             target_backend,
             &target_root.join(relative),
             control,
@@ -4241,6 +4302,7 @@ fn copy_snapshot_to_new_root(
             source_backend,
             &source.root,
             source.root_identity(),
+            source.file_mode(&source.root),
             target_backend,
             target_root,
             control,
@@ -4270,6 +4332,7 @@ fn copy_snapshot_to_new_root(
                             source_backend,
                             source_path,
                             identity,
+                            source.file_mode(source_path),
                             target_backend,
                             &target_path,
                             control,
@@ -4303,6 +4366,7 @@ fn copy_file_without_progress_owned(
     source_backend: &dyn SftpBackend,
     source_path: &Path,
     source_identity: &super::sftp_backend::StableEntryIdentity,
+    source_mode: u32,
     target_backend: &dyn SftpBackend,
     target_path: &Path,
     control: &TransferControl,
@@ -4336,6 +4400,7 @@ fn copy_file_without_progress_owned(
         source_backend,
         source_path,
         source_identity,
+        source_mode,
         &mut *reader,
         &mut *writer,
         target_backend,
@@ -4354,6 +4419,7 @@ fn copy_file_without_progress(
     source_backend: &dyn SftpBackend,
     source_path: &Path,
     source_identity: &super::sftp_backend::StableEntryIdentity,
+    source_mode: u32,
     target_backend: &dyn SftpBackend,
     target_path: &Path,
     control: &TransferControl,
@@ -4383,6 +4449,7 @@ fn copy_file_without_progress(
         source_backend,
         source_path,
         source_identity,
+        source_mode,
         &mut *reader,
         &mut *writer,
         target_backend,
@@ -4401,6 +4468,7 @@ fn copy_open_file_without_progress(
     source_backend: &dyn SftpBackend,
     source_path: &Path,
     source_identity: &super::sftp_backend::StableEntryIdentity,
+    source_mode: u32,
     reader: &mut dyn super::sftp_backend::BackendFileReader,
     writer: &mut dyn super::sftp_backend::BackendFileWriter,
     target_backend: &dyn SftpBackend,
@@ -4420,6 +4488,8 @@ fn copy_open_file_without_progress(
         refresh_owned_mutation(target_backend, target_path, ownership)?;
         written = written.saturating_add(read as u64);
     }
+    writer.set_mode(source_mode)?;
+    refresh_owned_mutation(target_backend, target_path, ownership)?;
     writer.flush()?;
     refresh_owned_mutation(target_backend, target_path, ownership)?;
     if written != source_identity.size
@@ -4450,6 +4520,7 @@ fn copy_snapshot_to_new_root_with_progress(
             source_backend,
             &source.root,
             source.root_identity(),
+            source.file_mode(&source.root),
             target_backend,
             target_root,
             control,
@@ -4501,6 +4572,7 @@ fn copy_snapshot_to_new_root_with_progress(
                     source_backend,
                     source_path,
                     identity,
+                    source.file_mode(source_path),
                     target_backend,
                     &target_root.join(relative),
                     control,
@@ -4530,6 +4602,7 @@ fn stream_file_to_new_path(
     source_backend: &dyn SftpBackend,
     source_path: &Path,
     source_identity: &super::sftp_backend::StableEntryIdentity,
+    source_mode: u32,
     target_backend: &dyn SftpBackend,
     target_path: &Path,
     control: &TransferControl,
@@ -4543,6 +4616,7 @@ fn stream_file_to_new_path(
         source_backend,
         source_path,
         source_identity,
+        source_mode,
         target_backend,
         target_path,
         control,
@@ -4559,6 +4633,7 @@ fn stream_file_to_new_path_owned(
     source_backend: &dyn SftpBackend,
     source_path: &Path,
     source_identity: &super::sftp_backend::StableEntryIdentity,
+    source_mode: u32,
     target_backend: &dyn SftpBackend,
     target_path: &Path,
     control: &TransferControl,
@@ -4571,6 +4646,7 @@ fn stream_file_to_new_path_owned(
         source_backend,
         source_path,
         source_identity,
+        source_mode,
         target_backend,
         target_path,
         control,
@@ -4587,6 +4663,7 @@ fn stream_file_to_new_path_tracked(
     source_backend: &dyn SftpBackend,
     source_path: &Path,
     source_identity: &super::sftp_backend::StableEntryIdentity,
+    source_mode: u32,
     target_backend: &dyn SftpBackend,
     target_path: &Path,
     control: &TransferControl,
@@ -4644,6 +4721,8 @@ fn stream_file_to_new_path_tracked(
                 callback(progress);
             }
         }
+        writer.set_mode(source_mode)?;
+        refresh_owned_mutation(target_backend, target_path, &mut ownership)?;
         writer.flush()?;
         refresh_owned_mutation(target_backend, target_path, &mut ownership)?;
         drop(writer);

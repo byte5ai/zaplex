@@ -667,6 +667,11 @@ message SafeFileFlushHandle {
   string handle_id = 1;
 }
 
+message SafeFileSetModeHandle {
+  string handle_id = 1;
+  uint32 mode = 2;
+}
+
 message SafeFileInspectHandle {
   string handle_id = 1;
   string path = 2;
@@ -719,6 +724,7 @@ message SafeFileRequest {
     SafeFileDelete delete = 10;
     SafeFileListRecoveries list_recoveries = 11;
     SafeFileRetryRecovery retry_recovery = 12;
+    SafeFileSetModeHandle set_mode_handle = 13;
   }
 }
 
