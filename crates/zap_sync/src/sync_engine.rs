@@ -17,6 +17,9 @@ pub trait SyncDataProvider: Send + Sync {
 
     /// Apply remote data to local
     fn apply_data(&self, token: &str, data: &serde_json::Value) -> Result<(), SyncEngineError>;
+
+    /// Return whether an equal-version remote section still needs a format migration upload.
+    fn requires_upload_migration(&self, data: &serde_json::Value) -> bool;
 }
 
 /// Sync engine, responsible for uploading/downloading sync data to Gist
@@ -87,7 +90,13 @@ impl<C: GistOps> SyncEngine<C> {
                     remote_version: remote_data.version,
                 });
             }
-            if remote_data.version == local_version {
+            let requires_migration = providers.iter().any(|provider| {
+                remote_data
+                    .sections
+                    .get(provider.section_key())
+                    .is_some_and(|section| provider.requires_upload_migration(section))
+            });
+            if remote_data.version == local_version && !requires_migration {
                 return Ok(SyncResult::AlreadyUpToDate {
                     version: local_version,
                 });
@@ -357,12 +366,42 @@ mod tests {
     struct MockProvider;
 
     impl SyncDataProvider for MockProvider {
-        fn section_key(&self) -> &str { "ssh" }
+        fn section_key(&self) -> &str {
+            "ssh"
+        }
         fn collect_data(&self, _token: &str) -> Result<serde_json::Value, SyncEngineError> {
             Ok(serde_json::json!({"nodes": []}))
         }
-        fn apply_data(&self, _token: &str, _data: &serde_json::Value) -> Result<(), SyncEngineError> {
+        fn apply_data(
+            &self,
+            _token: &str,
+            _data: &serde_json::Value,
+        ) -> Result<(), SyncEngineError> {
             Ok(())
+        }
+        fn requires_upload_migration(&self, _data: &serde_json::Value) -> bool {
+            false
+        }
+    }
+
+    struct MigrationProvider;
+
+    impl SyncDataProvider for MigrationProvider {
+        fn section_key(&self) -> &str {
+            "ssh"
+        }
+        fn collect_data(&self, _token: &str) -> Result<serde_json::Value, SyncEngineError> {
+            Ok(serde_json::json!({"nodes": [], "format": "current"}))
+        }
+        fn apply_data(
+            &self,
+            _token: &str,
+            _data: &serde_json::Value,
+        ) -> Result<(), SyncEngineError> {
+            Ok(())
+        }
+        fn requires_upload_migration(&self, _data: &serde_json::Value) -> bool {
+            true
         }
     }
 
@@ -506,11 +545,27 @@ mod tests {
         let engine = SyncEngine::with_client(mock);
         let provider = MockProvider;
         let store = MockVersionStore::new(3);
-        let result = engine.upload(SyncPlatform::GitHub, "token", &[&provider], &store).await.unwrap();
+        let result = engine
+            .upload(SyncPlatform::GitHub, "token", &[&provider], &store)
+            .await
+            .unwrap();
         assert!(matches!(result, SyncResult::AlreadyUpToDate { version: 3 }));
         // Remote version unchanged, should not trigger any writes
         assert!(!*engine.client.update_called.lock().unwrap());
         assert!(!*engine.client.create_called.lock().unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_upload_equal_version_rewrites_migrating_provider() {
+        let mock = MockGistOps::new(Some("gist123".to_string()), &make_sync_data_json(3));
+        let engine = SyncEngine::with_client(mock);
+        let provider = MigrationProvider;
+        let store = MockVersionStore::new(3);
+
+        let result = engine.upload(SyncPlatform::GitHub, "token", &[&provider], &store).await.unwrap();
+
+        assert!(matches!(result, SyncResult::Success { version: 3, .. }));
+        assert!(*engine.client.update_called.lock().unwrap());
     }
 
     #[tokio::test(flavor = "multi_thread")]

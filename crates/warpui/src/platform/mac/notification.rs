@@ -17,7 +17,7 @@ pub unsafe fn response_from_native(
     seconds_from_epoch: i32,
     data: id,
 ) -> Result<NotificationResponse> {
-    let data = nsstring_as_str(data)?;
+    let data = nsstring_as_str(data).ok_or_else(|| anyhow!("notification data is not UTF-8"))?;
 
     // Only set the data if it's not an empty string.
     let data = (!data.is_empty()).then_some(data);
@@ -39,7 +39,9 @@ pub unsafe fn send_error_from_native(
     error_type: NSUInteger,
     error_message: id,
 ) -> Result<NotificationSendError> {
-    let error_message = nsstring_as_str(error_message)?.to_owned();
+    let error_message = nsstring_as_str(error_message)
+        .ok_or_else(|| anyhow!("notification error message is not UTF-8"))?
+        .to_owned();
 
     Ok(match error_type {
         0 => NotificationSendError::PermissionsDenied,
@@ -57,7 +59,9 @@ pub unsafe fn request_permissions_outcome_from_native(
     outcome_type: NSUInteger,
     outcome_message: id,
 ) -> Result<RequestPermissionsOutcome> {
-    let outcome_message = nsstring_as_str(outcome_message)?.to_owned();
+    let outcome_message = nsstring_as_str(outcome_message)
+        .ok_or_else(|| anyhow!("notification outcome message is not UTF-8"))?
+        .to_owned();
 
     Ok(match outcome_type {
         0 => RequestPermissionsOutcome::Accepted,
