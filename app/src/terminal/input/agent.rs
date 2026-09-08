@@ -24,7 +24,8 @@ use crate::{
 use warp_core::settings::Setting;
 use warpui::{
     elements::{
-        Border, Container, DropTarget, Element, Flex, Hoverable, ParentElement, SavePosition, Stack,
+        Border, Container, DropTarget, Element, Flex, Hoverable, ParentElement, SavePosition,
+        Stack, Text,
     },
     presenter::ChildView,
     AppContext, SingletonEntity as _,
@@ -74,8 +75,12 @@ impl Input {
 
         let terminal_spacing = TerminalSettings::as_ref(app)
             .terminal_input_spacing(appearance.line_height_ratio(), app);
+        let composer = match self.subscription_prompt_block_reason(app) {
+            Some(reason) => subscription_composer_unavailable(reason, appearance),
+            None => self.render_input_box(/*show_vim_status=*/ false, appearance, app),
+        };
         column.add_child(
-            Container::new(self.render_input_box(/*show_vim_status=*/ false, appearance, app))
+            Container::new(composer)
                 .with_margin_top(
                     terminal_spacing.prompt_to_editor_padding
                         * spacing::UDI_PROMPT_BOTTOM_PADDING_FACTOR,
@@ -253,6 +258,26 @@ impl Input {
 
         SavePosition::new(outer_stack.finish(), &self.save_position_id()).finish()
     }
+}
+
+fn subscription_composer_unavailable(reason: String, appearance: &Appearance) -> Box<dyn Element> {
+    Container::new(
+        Text::new_inline(
+            reason,
+            appearance.ui_font_family(),
+            appearance.monospace_font_size(),
+        )
+        .with_color(
+            appearance
+                .theme()
+                .sub_text_color(appearance.theme().background())
+                .into_solid(),
+        )
+        .finish(),
+    )
+    .with_horizontal_padding(8.)
+    .with_vertical_padding(8.)
+    .finish()
 }
 
 pub mod styles {
