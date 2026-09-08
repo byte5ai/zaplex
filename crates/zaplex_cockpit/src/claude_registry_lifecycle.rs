@@ -206,7 +206,7 @@ pub fn claude_stale_registry_candidate(
     if !process.presence.allows_registry_cleanup() {
         return Ok(None);
     }
-    if crate::sessions::load_transcript_with_revision(config_dir, session_id)?.is_none() {
+    if !crate::sessions::transcript_is_independently_addressable(config_dir, session_id)? {
         return Err(ClaudeRegistryLifecycleError::MissingTranscript);
     }
     Ok(Some(ClaudeStaleRegistryCandidate {
@@ -239,9 +239,10 @@ pub fn cleanup_claude_stale_registry_entry(
     if !process.presence.allows_registry_cleanup() {
         return Err(ClaudeRegistryLifecycleError::ProcessIdentityUnverifiable);
     }
-    if crate::sessions::load_transcript_with_revision(&candidate.config_dir, &candidate.session_id)?
-        .is_none()
-    {
+    if !crate::sessions::transcript_is_independently_addressable(
+        &candidate.config_dir,
+        &candidate.session_id,
+    )? {
         return Err(ClaudeRegistryLifecycleError::MissingTranscript);
     }
     std::fs::remove_file(entry.path)?;

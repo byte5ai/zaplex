@@ -19,7 +19,7 @@ fn account_route_requires_the_negotiated_capability() {
     assert!(account_route_is_compatible(None, false));
 }
 
-/// A [`ChannelEventListener`] whose wakeup channel we keep. `process_pty_bytes`
+/// A [`ChannelEventListener`] whose wakeup channel we keep. Historical parsing
 /// fires a wakeup *after* feeding the bytes through the ANSI processor into the
 /// terminal model, so an observed wakeup proves the output reached the parser
 /// and model for our session (the shared parser's rendering itself is covered
@@ -222,10 +222,10 @@ fn adopt_output_waits_for_authoritative_attach_snapshot() {
             );
         });
 
-        event_loop.update(&mut app, |me, _ctx| {
+        event_loop.update(&mut app, |me, ctx| {
             me.apply_authoritative_agent_binding_state(None);
             me.awaiting_attach_snapshot = false;
-            me.drain_pending_output();
+            me.drain_pending_output(ctx);
         });
         event_loop.read(&app, |me, _| {
             assert_eq!(me.last_seq, b"before-attach".len() as u64);
@@ -374,6 +374,64 @@ fn session_output_routes_to_terminal_and_filters_by_pty() {
             (b"hello-daemon".len() + b"-more".len()) as u64,
             "last_seq tracks the latest seq + len"
         );
+    });
+}
+
+#[test]
+fn live_cursor_query_is_routed_back_as_session_input() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(31u64);
+        let (manager, event_loop, _model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
+        let query = b"\x1b[6n";
+
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: 0,
+                    replay: query.to_vec(),
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+            me.process_historical_pty_bytes(b"\x1b[H");
+        });
+        event_loop.read(&app, |me, _| {
+            assert!(
+                me.pending_input.is_empty(),
+                "a cursor query from attach replay must not be answered"
+            );
+        });
+
+        manager.update(&mut app, |_manager, ctx| {
+            ctx.emit(output_event(conn, OUR_PTY, query.len() as u64, query));
+        });
+        event_loop.read(&app, |me, _| {
+            assert_eq!(me.pending_input.len(), 1);
+            match &me.pending_input[0] {
+                EventLoopMessage::Input(bytes) => assert_eq!(&**bytes, b"\x1b[1;1R"),
+                EventLoopMessage::Resize(_)
+                | EventLoopMessage::Shutdown
+                | EventLoopMessage::ChildExited => {
+                    panic!("the terminal reply must be queued as session input")
+                }
+            }
+        });
+
+        manager.update(&mut app, |_manager, ctx| {
+            ctx.emit(output_event(conn, OUR_PTY, query.len() as u64, query));
+        });
+        event_loop.read(&app, |me, _| {
+            assert_eq!(
+                me.pending_input.len(),
+                1,
+                "a duplicate live output range must not emit a second terminal reply"
+            );
+        });
     });
 }
 
@@ -613,7 +671,7 @@ fn startup_command_does_not_run_on_session_opened_or_init_shell() {
         event_loop.prepare_startup_command_delivery().is_none(),
         "SessionOpened is only represented by the PTY id and is not readiness"
     );
-    event_loop.process_pty_bytes(&init_shell_dcs());
+    event_loop.process_historical_pty_bytes(&init_shell_dcs());
     assert!(
         event_loop.prepare_startup_command_delivery().is_none(),
         "InitShell must not release startup before the body reaches Bootstrapped"
@@ -635,7 +693,7 @@ fn startup_command_survives_replay_then_live_bootstrap() {
         event_loop.prepare_startup_command_delivery().is_none(),
         "an InitShell recovered from replay is still not readiness"
     );
-    event_loop.process_pty_bytes(&bootstrapped_dcs());
+    event_loop.process_historical_pty_bytes(&bootstrapped_dcs());
 
     let (pty_session_id, command_id, bytes, _attempt) = event_loop
         .prepare_startup_command_delivery()
@@ -823,7 +881,7 @@ fn second_bootstrap_after_reconnect_does_not_resend_startup_command() {
     );
 
     event_loop.begin_transport_reconnect();
-    event_loop.process_pty_bytes(&bootstrapped_dcs());
+    event_loop.process_historical_pty_bytes(&bootstrapped_dcs());
     event_loop.try_dispatch_startup_command_with(
         |_pty_session_id, _id, _bytes| -> Result<(), ()> {
             attempts += 1;
@@ -1601,6 +1659,67 @@ fn apply_attach_without_preamble_replays_plainly() {
     });
 }
 
+#[test]
+fn large_attach_replay_yields_with_model_unlocked_between_chunks() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(42u64);
+        let (manager, event_loop, model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
+        let replay = vec![b'x'; ATTACH_PARSE_CHUNK_BYTES * 3 + 17];
+        let replay_len = replay.len() as u64;
+        let live_output = b"live-after-snapshot";
+
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: 0,
+                    replay,
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+
+        event_loop.read(&app, |me, _| {
+            assert!(me.pending_attach_replay.is_some());
+            assert_eq!(me.last_seq, ATTACH_PARSE_CHUNK_BYTES as u64);
+            assert!(me.awaiting_attach_snapshot);
+        });
+        assert!(
+            model.try_lock().is_some(),
+            "the terminal model must be unlocked between replay chunks"
+        );
+        manager.update(&mut app, |_manager, ctx| {
+            ctx.emit(output_event(conn, OUR_PTY, replay_len, live_output));
+            ctx.emit(RemoteServerManagerEvent::SessionExited {
+                session_id: conn,
+                host_id: HostId::new(HOST.to_string()),
+                pty_session_id: OUR_PTY.to_string(),
+                exit_code: Some(0),
+            });
+        });
+        event_loop.read(&app, |me, _| {
+            assert_eq!(me.pending_output.len(), 1);
+            assert_eq!(me.pending_exit, Some(Some(0)));
+            assert!(!me.terminated, "exit stays ordered behind the replay");
+        });
+
+        for _ in 0..8 {
+            futures_lite::future::yield_now().await;
+        }
+        event_loop.read(&app, |me, _| {
+            assert!(me.pending_attach_replay.is_none());
+            assert_eq!(me.last_seq, replay_len + live_output.len() as u64);
+            assert!(!me.awaiting_attach_snapshot);
+            assert!(me.terminated, "the buffered exit applies after all output");
+        });
+    });
+}
+
 /// A reconnect (already-advanced cursor, no preamble, no gap) replays only
 /// what was missed and advances from its own cursor — the daemon never ships a
 /// preamble here, and `apply_attach` must not fabricate a gap.
@@ -1703,7 +1822,7 @@ fn suppression_latch_is_consumed_only_by_a_real_initshell() {
         // Plain output emits no InitShell, so the armed latch is left intact.
         event_loop.update(&mut app, |me, _| {
             me.terminal_model.lock().suppress_next_bootstrap_write();
-            me.process_pty_bytes(b"just some output\r\n");
+            me.process_historical_pty_bytes(b"just some output\r\n");
         });
         assert!(
             model.lock().take_suppress_next_bootstrap_write(),
@@ -1715,7 +1834,7 @@ fn suppression_latch_is_consumed_only_by_a_real_initshell() {
         let dcs = init_shell_dcs();
         event_loop.update(&mut app, |me, _| {
             me.terminal_model.lock().suppress_next_bootstrap_write();
-            me.process_pty_bytes(&dcs);
+            me.process_historical_pty_bytes(&dcs);
         });
         assert!(
             !model.lock().take_suppress_next_bootstrap_write(),
@@ -1794,7 +1913,7 @@ fn daemon_root_initshell_stamp(app: &mut App, conn: u64, shell: &str) -> Option<
     let mut dcs = vec![0x1b, 0x50, 0x24, 0x64]; // ESC P $ d
     dcs.extend_from_slice(hex::encode(json).as_bytes());
     dcs.push(0x9c); // ST
-    event_loop.update(app, |me, _| me.process_pty_bytes(&dcs));
+    event_loop.update(app, |me, _| me.process_historical_pty_bytes(&dcs));
 
     drained_initshell_stamp(&events_rx)
 }
@@ -1841,7 +1960,7 @@ fn live_initshell_of_a_daemon_session_is_stamped_suppressed() {
         // The live handshake: the InitShell DCS arrives in the normal output
         // stream of the daemon session — no adopt preamble, no armed latch.
         let dcs = init_shell_dcs();
-        event_loop.update(&mut app, |me, _| me.process_pty_bytes(&dcs));
+        event_loop.update(&mut app, |me, _| me.process_historical_pty_bytes(&dcs));
 
         assert_eq!(
             drained_initshell_stamp(&events_rx),
@@ -1892,7 +2011,7 @@ fn subshell_initshell_inside_a_daemon_tab_stays_unstamped() {
         let mut dcs = vec![0x1b, 0x50, 0x24, 0x64]; // ESC P $ d
         dcs.extend_from_slice(hex::encode(json).as_bytes());
         dcs.push(0x9c); // ST
-        event_loop.update(&mut app, |me, _| me.process_pty_bytes(&dcs));
+        event_loop.update(&mut app, |me, _| me.process_historical_pty_bytes(&dcs));
 
         assert_eq!(
             drained_initshell_stamp(&events_rx),

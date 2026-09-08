@@ -143,7 +143,7 @@ fn incomplete_download_preserves_existing_target_and_removes_its_sidecar() {
 }
 
 #[test]
-fn completed_download_atomically_replaces_existing_target() {
+fn commit_without_overwrite_consent_preserves_existing_target() {
     warpui::r#async::block_on(async {
         let directory = tempfile::tempdir().unwrap();
         let destination = directory.path().join("download.bin");
@@ -156,10 +156,57 @@ fn completed_download_atomically_replaces_existing_target() {
             .await
             .unwrap();
 
-        download.commit(&destination).await.unwrap();
+        assert!(download.commit(&destination).await.is_err());
+
+        assert_eq!(fs::read(destination).unwrap(), b"existing bytes");
+        assert!(!sidecar.exists());
+    });
+}
+
+#[test]
+fn explicit_overwrite_revalidates_and_replaces_existing_target() {
+    warpui::r#async::block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("download.bin");
+        fs::write(&destination, b"existing bytes").unwrap();
+        let identity = local_download_target_identity(&destination)
+            .unwrap()
+            .unwrap();
+        let mut download = AtomicDownloadFile::new(&destination).unwrap();
+        download
+            .output
+            .write_all(b"complete replacement")
+            .await
+            .unwrap();
+
+        download
+            .commit_overwriting(&destination, &identity)
+            .await
+            .unwrap();
 
         assert_eq!(fs::read(destination).unwrap(), b"complete replacement");
-        assert!(!sidecar.exists());
+    });
+}
+
+#[test]
+fn explicit_overwrite_rejects_a_changed_target() {
+    warpui::r#async::block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("download.bin");
+        fs::write(&destination, b"original").unwrap();
+        let identity = local_download_target_identity(&destination)
+            .unwrap()
+            .unwrap();
+        fs::remove_file(&destination).unwrap();
+        fs::write(&destination, b"replacement target").unwrap();
+        let mut download = AtomicDownloadFile::new(&destination).unwrap();
+        download.output.write_all(b"downloaded").await.unwrap();
+
+        assert!(download
+            .commit_overwriting(&destination, &identity)
+            .await
+            .is_err());
+        assert_eq!(fs::read(destination).unwrap(), b"replacement target");
     });
 }
 
@@ -174,6 +221,18 @@ fn completed_download_replaces_destination_symlink_without_touching_referent() {
         let destination = directory.path().join("download.bin");
         fs::write(&referent, b"outside bytes").unwrap();
         symlink(&referent, &destination).unwrap();
+        let conflicts = scan_local_download_conflicts(&[PendingDownloadFile {
+            remote_path: "/remote/download.bin".to_string(),
+            local_path: destination.clone(),
+            display_name: "download.bin".to_string(),
+            total_bytes: 16,
+        }])
+        .unwrap();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].identity.kind, LocalDownloadTargetKind::Symlink);
+        let identity = local_download_target_identity(&destination)
+            .unwrap()
+            .unwrap();
         let mut download = AtomicDownloadFile::new(&destination).unwrap();
         download
             .output
@@ -181,7 +240,10 @@ fn completed_download_replaces_destination_symlink_without_touching_referent() {
             .await
             .unwrap();
 
-        download.commit(&destination).await.unwrap();
+        download
+            .commit_overwriting(&destination, &identity)
+            .await
+            .unwrap();
 
         assert_eq!(fs::read(&referent).unwrap(), b"outside bytes");
         assert!(!fs::symlink_metadata(&destination)
