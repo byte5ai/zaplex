@@ -912,7 +912,9 @@ impl EventLoop {
         if pending.preamble_offset < pending.bootstrap_preamble.len() {
             let end = (pending.preamble_offset + ATTACH_PARSE_CHUNK_BYTES)
                 .min(pending.bootstrap_preamble.len());
-            self.process_pty_bytes(&pending.bootstrap_preamble[pending.preamble_offset..end]);
+            self.process_historical_pty_bytes(
+                &pending.bootstrap_preamble[pending.preamble_offset..end],
+            );
             pending.preamble_offset = end;
             self.last_seq = end as u64;
             self.pending_attach_replay = Some(pending);
@@ -930,7 +932,7 @@ impl EventLoop {
                 if pending.fed_preamble {
                     self.reset_parser();
                 }
-                self.process_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
+                self.process_historical_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
                 self.write_notice("scrollback truncated during a long disconnect");
             }
             pending.gap_applied = true;
@@ -939,7 +941,7 @@ impl EventLoop {
 
         if pending.replay_offset < pending.replay.len() {
             let end = (pending.replay_offset + ATTACH_PARSE_CHUNK_BYTES).min(pending.replay.len());
-            self.process_pty_bytes(&pending.replay[pending.replay_offset..end]);
+            self.process_historical_pty_bytes(&pending.replay[pending.replay_offset..end]);
             pending.replay_offset = end;
             self.last_seq = pending.base_seq + end as u64;
             self.pending_attach_replay = Some(pending);
