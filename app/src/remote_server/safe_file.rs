@@ -23,7 +23,7 @@ use super::proto::{
     SafeFileInspectHandle, SafeFileInspectResult, SafeFileMutationResult, SafeFileMutationState,
     SafeFileOpenExisting, SafeFileOpened, SafeFileReadHandle, SafeFileReadResult, SafeFileRecovery,
     SafeFileRecoveryList, SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileResponse,
-    SafeFileWriteHandle,
+    SafeFileSetModeHandle, SafeFileWriteHandle,
 };
 use super::server_model::ConnectionId;
 
@@ -426,6 +426,9 @@ impl SafeFileServer {
             Some(safe_file_request::Operation::FlushHandle(flush)) => self
                 .flush_handle(connection_id, flush)
                 .map(safe_file_response::Result::Mutation),
+            Some(safe_file_request::Operation::SetModeHandle(set_mode)) => self
+                .set_mode_handle(connection_id, set_mode)
+                .map(safe_file_response::Result::Mutation),
             Some(safe_file_request::Operation::InspectHandle(inspect)) => self
                 .inspect_handle(connection_id, inspect)
                 .map(safe_file_response::Result::Inspected),
@@ -680,6 +683,22 @@ impl SafeFileServer {
     ) -> Result<SafeFileMutationResult, String> {
         let handle = self.owned_handle_mut(owner, &request.handle_id)?;
         handle.file.sync_all().map_err(|error| error.to_string())?;
+        Ok(applied_mutation())
+    }
+
+    fn set_mode_handle(
+        &mut self,
+        owner: ConnectionId,
+        request: SafeFileSetModeHandle,
+    ) -> Result<SafeFileMutationResult, String> {
+        let handle = self.owned_handle_mut(owner, &request.handle_id)?;
+        if handle.kind != SafeFileEntryKind::Regular {
+            return Err("Cannot set a file mode on a directory handle".to_string());
+        }
+        handle
+            .file
+            .set_permissions(fs::Permissions::from_mode(request.mode & 0o777))
+            .map_err(|error| error.to_string())?;
         Ok(applied_mutation())
     }
 

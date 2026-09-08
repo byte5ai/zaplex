@@ -1283,25 +1283,29 @@ impl ServerFileBrowserView {
             ctx.notify();
             return;
         }
-        if new_name.contains('/') {
+        if validate_remote_entry_name(&new_name).is_err() {
             self.status = Some(crate::t!("server-file-browser-rename-invalid-name"));
             ctx.focus_self();
             ctx.notify();
             return;
         }
 
-        let session = self.session.clone();
-        let client = self.client(ctx);
-        let remote_session_id = self.remote_session_id(ctx);
-        let can_rename = session.is_some() || (client.is_some() && remote_session_id.is_some());
-        if !can_rename {
-            self.set_listing_error(
-                crate::t!("server-file-browser-rename-requires-session"),
-                ctx,
-            );
-            ctx.focus_self();
-            return;
-        }
+        let client = match self.transfer_client(ctx) {
+            Ok(client) => client,
+            Err(error) => {
+                self.apply_operation_error(error, ctx);
+                ctx.focus_self();
+                return;
+            }
+        };
+        let safe_kind = match safe_file_kind_for_entry(entry.kind, &entry.path) {
+            Ok(kind) => kind,
+            Err(error) => {
+                self.apply_operation_error(error, ctx);
+                ctx.focus_self();
+                return;
+            }
+        };
 
         let from_path = entry.path.clone();
         let is_directory = entry.kind == FileSystemEntryKind::Directory;
@@ -1312,12 +1316,11 @@ impl ServerFileBrowserView {
         ctx.notify();
         ctx.spawn(
             async move {
-                rename_remote_path(
-                    session,
+                rename_remote_path_with_safe_file(
                     client,
-                    remote_session_id,
                     from_path_for_rename,
                     new_name_for_rename,
+                    safe_kind,
                 )
                 .await
             },
@@ -1539,6 +1542,7 @@ impl ServerFileBrowserView {
             .iter()
             .filter(|task| matches!(task.status, UploadTaskStatus::Completed))
             .map(|task| task.final_remote_path.clone())
+            .chain(batch.directory_roots.iter().cloned())
             .collect();
         self.directories_to_refresh_for_paths(&final_paths)
     }
@@ -1851,7 +1855,7 @@ impl ServerFileBrowserView {
             conflict_policy,
             &conflict_paths,
         );
-        if pending_files.is_empty() {
+        if pending_files.is_empty() && directory_roots.is_empty() {
             self.status = Some(crate::t!("server-file-browser-upload-all-skipped"));
             self.release_upload_pipeline_and_continue(ctx);
             ctx.notify();
@@ -1919,10 +1923,6 @@ impl ServerFileBrowserView {
         tasks: Vec<ServerFileUploadTask>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if tasks.is_empty() {
-            self.release_upload_pipeline_and_continue(ctx);
-            return;
-        }
         if self.active_upload_batch_index.is_some() {
             log::warn!(
                 "server file browser: upload batch ready while another batch is still active; \
@@ -2058,10 +2058,13 @@ impl ServerFileBrowserView {
         client: Arc<RemoteServerClient>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some(batch_snapshot) = self
-            .active_upload_batch()
-            .map(|batch| (batch.conflict_policy, build_pending_promotions(batch)))
-        else {
+        let Some(batch_snapshot) = self.active_upload_batch().map(|batch| {
+            (
+                batch.conflict_policy,
+                batch.directory_roots.clone(),
+                build_pending_promotions(batch),
+            )
+        }) else {
             return;
         };
 
@@ -2070,18 +2073,14 @@ impl ServerFileBrowserView {
         }
         ctx.notify();
 
-        let (conflict_policy, promotions) = batch_snapshot;
+        let (conflict_policy, directories, promotions) = batch_snapshot;
         let client_for_promote = client.clone();
         let client_for_cleanup = client.clone();
 
         ctx.spawn(
             async move {
-                promote_staging_files(
-                    client_for_promote,
-                    conflict_policy,
-                    promotions,
-                )
-                .await
+                promote_staging_files(client_for_promote, conflict_policy, directories, promotions)
+                    .await
             },
             move |me, result, ctx| {
                 let cleanup_client = client_for_cleanup.clone();
@@ -2287,7 +2286,7 @@ impl ServerFileBrowserView {
         directory_roots: Vec<String>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if pending_files.is_empty() {
+        if pending_files.is_empty() && directory_roots.is_empty() {
             return;
         }
         if self.upload_pipeline_claimed {
@@ -2358,7 +2357,8 @@ impl ServerFileBrowserView {
         ctx: &mut ViewContext<Self>,
     ) {
         match result {
-            Ok((pending_files, _)) if pending_files.is_empty() => {}
+            Ok((pending_files, directory_roots))
+                if pending_files.is_empty() && directory_roots.is_empty() => {}
             Ok((pending_files, directory_roots)) => {
                 self.start_upload_after_conflict_scan(
                     client,
@@ -3924,6 +3924,8 @@ fn collect_upload_tasks(
                 }
                 let entry_type = entry.file_type();
                 if entry_type.is_dir() {
+                    let relative_str = relative.to_string_lossy().to_string();
+                    directory_roots.push(join_remote_path(&root_remote, &relative_str));
                     continue;
                 }
                 if entry_type.is_symlink() || !entry_type.is_file() {
@@ -3970,6 +3972,8 @@ fn collect_upload_tasks(
         }
     }
     dedupe_pending_upload_files(&mut files);
+    directory_roots.sort();
+    directory_roots.dedup();
     Ok((files, directory_roots))
 }
 
@@ -4375,49 +4379,17 @@ fn filter_upload_directory_roots_by_policy(
 }
 
 fn build_pending_promotions(batch: &ServerFileUploadBatch) -> Vec<PendingPromotion> {
-    let mut roots = batch.directory_roots.clone();
-    roots.sort_by_key(|root| root.len());
-    let mut outermost_roots: Vec<String> = Vec::new();
-    for root in roots {
-        if outermost_roots
-            .iter()
-            .any(|outer| path_is_under_conflict(&root, outer))
-        {
-            continue;
-        }
-        outermost_roots.push(root);
-    }
-
-    let mut promotions = outermost_roots
+    batch
+        .tasks
         .iter()
-        .map(|final_path| {
-            let relative = relative_remote_path_from_base(&batch.remote_directory, final_path);
-            PendingPromotion {
-                staging_path: join_remote_path(&batch.staging_root, &relative),
-                final_path: final_path.clone(),
-                kind: SafeFileEntryKind::Directory,
-                expected_size: None,
-            }
+        .filter(|task| matches!(task.status, UploadTaskStatus::Completed))
+        .map(|task| PendingPromotion {
+            staging_path: task.staging_remote_path.clone(),
+            final_path: task.final_remote_path.clone(),
+            kind: SafeFileEntryKind::Regular,
+            expected_size: Some(task.total_bytes),
         })
-        .collect::<Vec<_>>();
-    promotions.extend(
-        batch
-            .tasks
-            .iter()
-            .filter(|task| matches!(task.status, UploadTaskStatus::Completed))
-            .filter(|task| {
-                !outermost_roots
-                    .iter()
-                    .any(|root| path_is_under_conflict(&task.final_remote_path, root))
-            })
-            .map(|task| PendingPromotion {
-                staging_path: task.staging_remote_path.clone(),
-                final_path: task.final_remote_path.clone(),
-                kind: SafeFileEntryKind::Regular,
-                expected_size: Some(task.total_bytes),
-            }),
-    );
-    promotions
+        .collect()
 }
 
 fn format_upload_conflict_summary(conflicts: &[UploadConflict]) -> String {
@@ -4500,20 +4472,36 @@ async fn scan_upload_conflicts(
 ) -> Result<Vec<UploadConflict>, String> {
     let mut seen = HashSet::new();
     let mut conflicts = Vec::new();
-    let mut paths_to_check: Vec<String> = files
-        .iter()
-        .map(|file| file.final_remote_path.clone())
-        .collect();
-    paths_to_check.extend(directory_roots.iter().cloned());
-    for path in paths_to_check {
+    for path in directory_roots {
         if !seen.insert(path.clone()) {
             continue;
         }
         if let Some(conflict) = remote_path_conflict(client, &path).await? {
+            if conflict.kind != FileSystemEntryKind::Directory {
+                return Err(upload_type_conflict(path, "directory", conflict.kind));
+            }
+        }
+    }
+    for file in files {
+        let path = &file.final_remote_path;
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        if let Some(conflict) = remote_path_conflict(client, path).await? {
+            if conflict.kind != FileSystemEntryKind::File {
+                return Err(upload_type_conflict(path, "regular file", conflict.kind));
+            }
             conflicts.push(conflict);
         }
     }
     Ok(conflicts)
+}
+
+fn upload_type_conflict(path: &str, expected: &str, actual: FileSystemEntryKind) -> String {
+    crate::t!(
+        "server-file-browser-operation-failed",
+        error = format!("{path:?} must be a {expected}, but the remote entry is {actual:?}")
+    )
 }
 
 async fn remote_path_conflict(
@@ -4599,8 +4587,13 @@ fn append_staging_cleanup_script(script_lines: &mut Vec<String>, staging_root: &
 async fn promote_staging_files(
     client: Arc<RemoteServerClient>,
     conflict_policy: UploadConflictPolicy,
+    mut directories: Vec<String>,
     promotions: Vec<PendingPromotion>,
 ) -> Result<(), String> {
+    directories.sort_by_key(|path| path.len());
+    for directory in directories {
+        ensure_remote_upload_directory(client.clone(), directory).await?;
+    }
     for promotion in promotions {
         promote_staging_object(client.clone(), conflict_policy, promotion).await?;
     }
@@ -4649,12 +4642,20 @@ async fn promote_staging_object(
     };
 
     let target = match (conflict_policy, target_kind) {
-        (UploadConflictPolicy::OverwriteAll, Some(kind)) => {
-            let safe_kind = safe_file_kind_for_entry(kind, &promotion.final_path)?;
-            Some(
-                open_safe_remote_file(client.clone(), promotion.final_path.clone(), safe_kind)
-                    .await?,
+        (UploadConflictPolicy::OverwriteAll, Some(FileSystemEntryKind::File)) => Some(
+            open_safe_remote_file(
+                client.clone(),
+                promotion.final_path.clone(),
+                SafeFileEntryKind::Regular,
             )
+            .await?,
+        ),
+        (UploadConflictPolicy::OverwriteAll, Some(kind)) => {
+            return Err(upload_type_conflict(
+                &promotion.final_path,
+                "regular file",
+                kind,
+            ));
         }
         (UploadConflictPolicy::OverwriteAll, None)
         | (UploadConflictPolicy::Proceed | UploadConflictPolicy::SkipExisting, None) => None,
@@ -4742,6 +4743,34 @@ async fn promote_staging_object(
         }
     }
     Ok(())
+}
+
+async fn ensure_remote_upload_directory(
+    client: Arc<RemoteServerClient>,
+    path: String,
+) -> Result<(), String> {
+    create_remote_directory(client.clone(), path.clone()).await?;
+    let response = client
+        .resolve_path(path.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    match response.result {
+        Some(resolve_path_response::Result::Success(success)) => {
+            let kind = FileSystemEntryKind::try_from(success.kind)
+                .unwrap_or(FileSystemEntryKind::Unspecified);
+            if kind == FileSystemEntryKind::Directory {
+                Ok(())
+            } else {
+                Err(upload_type_conflict(&path, "directory", kind))
+            }
+        }
+        Some(resolve_path_response::Result::NotFound(_)) => Err(crate::t!(
+            "server-file-browser-operation-failed",
+            error = format!("created remote directory {path:?} is missing")
+        )),
+        Some(resolve_path_response::Result::Error(error)) => Err(error.message),
+        None => Err(crate::t!("server-file-browser-empty-response")),
+    }
 }
 
 fn safe_file_kind_for_entry(
@@ -5169,13 +5198,13 @@ async fn delete_remote_path(
     execute_remote_shell_script(session, client, remote_session_id, script).await
 }
 
-async fn rename_remote_path(
-    session: Option<Arc<Session>>,
-    client: Option<Arc<RemoteServerClient>>,
-    remote_session_id: Option<SessionId>,
+async fn rename_remote_path_with_safe_file(
+    client: Arc<RemoteServerClient>,
     from_path: String,
     new_name: String,
+    expected_kind: SafeFileEntryKind,
 ) -> Result<(), String> {
+    validate_remote_entry_name(&new_name)?;
     let parent = remote_parent(&from_path).ok_or_else(|| {
         crate::t!(
             "server-file-browser-operation-failed",
@@ -5183,10 +5212,56 @@ async fn rename_remote_path(
         )
     })?;
     let new_path = join_remote_path(&parent, &new_name);
-    let escaped_from = warp_util::path::ShellFamily::Posix.shell_escape(&from_path);
-    let escaped_to = warp_util::path::ShellFamily::Posix.shell_escape(&new_path);
-    let script = format!("mv -- {escaped_from} {escaped_to}");
-    execute_remote_shell_script(session, client, remote_session_id, script).await
+    let source = open_safe_remote_file(client, from_path.clone(), expected_kind).await?;
+    let operation_id = format!("server-file-browser-rename-{}", Uuid::new_v4());
+    let result = safe_file_operation(
+        &source.client,
+        operation_id.clone(),
+        safe_file_request::Operation::Rename(SafeFileRename {
+            handle_id: source.handle_id.clone(),
+            old_path: from_path,
+            new_path: new_path.clone(),
+            mode: SafeFileRenameMode::NoReplace as i32,
+            expected_target: None,
+        }),
+    )
+    .await?;
+    let safe_file_response::Result::Mutation(mutation) = result else {
+        return Err(crate::t!("server-file-browser-empty-response"));
+    };
+    match SafeFileMutationState::try_from(mutation.state) {
+        Ok(SafeFileMutationState::Applied | SafeFileMutationState::AlreadyApplied) => {}
+        Ok(SafeFileMutationState::Unspecified) | Err(_) => {
+            return Err(crate::t!("server-file-browser-empty-response"));
+        }
+    }
+
+    let inspection = inspect_safe_remote_file(&source, new_path.clone()).await?;
+    let identity = inspection
+        .identity
+        .ok_or_else(|| crate::t!("server-file-browser-empty-response"))?;
+    if !inspection.matches_path || !same_safe_file_identity(&source.identity, &identity) {
+        return Err(crate::t!(
+            "server-file-browser-operation-failed",
+            error = format!("renamed source does not match {new_path:?}")
+        ));
+    }
+
+    let acknowledgement = safe_file_operation(
+        &source.client,
+        operation_id,
+        safe_file_request::Operation::RetryRecovery(SafeFileRetryRecovery {}),
+    )
+    .await?;
+    let safe_file_response::Result::Mutation(acknowledgement) = acknowledgement else {
+        return Err(crate::t!("server-file-browser-empty-response"));
+    };
+    match SafeFileMutationState::try_from(acknowledgement.state) {
+        Ok(SafeFileMutationState::Applied | SafeFileMutationState::AlreadyApplied) => Ok(()),
+        Ok(SafeFileMutationState::Unspecified) | Err(_) => {
+            Err(crate::t!("server-file-browser-empty-response"))
+        }
+    }
 }
 
 async fn execute_remote_shell_script(

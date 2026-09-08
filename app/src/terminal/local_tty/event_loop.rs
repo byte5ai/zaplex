@@ -103,6 +103,13 @@ impl State {
     fn set_current(&mut self, new: Option<Writing>) {
         self.writing = new;
     }
+
+    #[inline]
+    fn queue_terminal_response_sequences(&mut self, response: Vec<u8>) {
+        if !response.is_empty() {
+            self.write_list.push_back(Cow::Owned(response));
+        }
+    }
 }
 
 impl Writing {
@@ -245,11 +252,13 @@ where
             };
 
             // Process the bytes read into the buffer.
+            let mut terminal_response_sequences = Vec::new();
             state.parser.parse_bytes(
                 terminal.deref_mut(),
                 &buf[..bytes_in_buffer],
-                &mut self.pty.writer(),
+                &mut terminal_response_sequences,
             );
+            state.queue_terminal_response_sequences(terminal_response_sequences);
 
             bytes_processed += bytes_in_buffer;
             bytes_in_buffer = 0;
@@ -274,43 +283,7 @@ where
 
     #[inline]
     fn pty_write(&mut self, state: &mut State, can_write: &mut bool) -> io::Result<()> {
-        state.ensure_next();
-
-        'write_many: while let Some(mut current) = state.take_current() {
-            'write_one: loop {
-                match self.pty.writer().write(current.remaining_bytes()) {
-                    Ok(0) => {
-                        state.set_current(Some(current));
-                        // We never attempt to write an empty buffer, so if we
-                        // get 0 here, it means the object is unable to receive
-                        // writes.
-                        *can_write = false;
-                        break 'write_many;
-                    }
-                    Ok(n) => {
-                        current.advance(n);
-                        if current.finished() {
-                            state.goto_next();
-                            break 'write_one;
-                        }
-                    }
-                    Err(err) => {
-                        state.set_current(Some(current));
-                        match err.kind() {
-                            ErrorKind::Interrupted | ErrorKind::WouldBlock => {
-                                if err.kind() == ErrorKind::WouldBlock {
-                                    *can_write = false;
-                                }
-                                break 'write_many;
-                            }
-                            _ => return Err(err),
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
+        write_queued(state, self.pty.writer(), can_write)
     }
 
     pub fn spawn(mut self) -> JoinHandle<()> {
@@ -369,10 +342,12 @@ where
 
                     // If there were no events but `poll` returned, that means we hit the timeout.
                     if events.is_empty() {
-                        state
-                            .parser
-                            .finish_sync_output(&mut *self.terminal.lock(), &mut self.pty.writer());
-                        continue;
+                        let mut terminal_response_sequences = Vec::new();
+                        state.parser.finish_sync_output(
+                            &mut *self.terminal.lock(),
+                            &mut terminal_response_sequences,
+                        );
+                        state.queue_terminal_response_sequences(terminal_response_sequences);
                     }
 
                     for event in events.iter() {
@@ -478,3 +453,51 @@ where
             .expect("thread spawn works")
     }
 }
+
+fn write_queued<W: Write>(
+    state: &mut State,
+    writer: &mut W,
+    can_write: &mut bool,
+) -> io::Result<()> {
+    state.ensure_next();
+
+    'write_many: while let Some(mut current) = state.take_current() {
+        'write_one: loop {
+            match writer.write(current.remaining_bytes()) {
+                Ok(0) => {
+                    state.set_current(Some(current));
+                    // We never attempt to write an empty buffer, so if we
+                    // get 0 here, it means the object is unable to receive
+                    // writes.
+                    *can_write = false;
+                    break 'write_many;
+                }
+                Ok(n) => {
+                    current.advance(n);
+                    if current.finished() {
+                        state.goto_next();
+                        break 'write_one;
+                    }
+                }
+                Err(err) => {
+                    state.set_current(Some(current));
+                    match err.kind() {
+                        ErrorKind::Interrupted | ErrorKind::WouldBlock => {
+                            if err.kind() == ErrorKind::WouldBlock {
+                                *can_write = false;
+                            }
+                            break 'write_many;
+                        }
+                        _ => return Err(err),
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "event_loop_tests.rs"]
+mod tests;

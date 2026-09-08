@@ -86,7 +86,7 @@ jobs:
   # daemon fully offline, version-matched to the client by construction (same
   # GIT_RELEASE_TAG). Mirrors build-remote-server.yml (static musl via zigbuild);
   # packed in the release-asset layout the install script expects (binary named
-  # `zaplex` inside `zap-linux-x86_64.tar.gz`, see setup.rs tarball_basename()).
+  # `zaplex` inside `zap-remote-server-linux-x86_64.tar.gz`, see setup.rs tarball_basename()).
   build_remote_server:
     name: Build bundled remote-server (Linux musl x86_64)
     # Fast large runner (16 vCPU / 64 GB) — this is a static **musl** build, so the
@@ -107,7 +107,7 @@ jobs:
         id: daemon_cache
         uses: actions/cache@v4
         with:
-          path: zap-linux-x86_64.tar.gz
+          path: zap-remote-server-linux-x86_64.tar.gz
           key: remote-server-musl-x86_64-${{ inputs.dmg_tag }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources') }}
 
       - name: Free up disk space
@@ -163,15 +163,20 @@ jobs:
           set -euo pipefail
           staging=$(mktemp -d)
           cp "${{ steps.bundle_cli.outputs.executable_path }}" "$staging/zaplex"
-          tar -czf zap-linux-x86_64.tar.gz -C "$staging" zaplex
-          ls -lh zap-linux-x86_64.tar.gz
+          tar -czf zap-remote-server-linux-x86_64.tar.gz -C "$staging" zaplex
+          ls -lh zap-remote-server-linux-x86_64.tar.gz
+
+      - name: Generate remote-server archive digest
         shell: bash
+        run: sha256sum zap-remote-server-linux-x86_64.tar.gz > zap-remote-server-linux-x86_64.tar.gz.sha256
 
       - name: Upload remote-server tarball
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: zap-remote-server-linux-x86_64
-          path: zap-linux-x86_64.tar.gz
+          path: |
+            zap-remote-server-linux-x86_64.tar.gz
+            zap-remote-server-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -192,6 +197,10 @@ jobs:
         with:
           name: zap-remote-server-linux-x86_64
           path: resources/bundled/remote-server/
+
+      - name: Assemble authenticated remote-server digest manifest
+        run: cp resources/bundled/remote-server/zap-remote-server-linux-x86_64.tar.gz.sha256 resources/bundled/remote-server/SHA256SUMS
+        shell: bash
 
       - uses: ./.github/actions/prepare_environment
         with:
