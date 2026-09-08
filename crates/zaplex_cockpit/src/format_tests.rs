@@ -72,6 +72,17 @@ fn token_humanization() {
 }
 
 #[test]
+fn token_humanization_promotes_rounded_unit_boundaries() {
+    assert_eq!(format_tokens(999_949), "999.9k");
+    assert_eq!(format_tokens(999_950), "1M");
+    assert_eq!(format_tokens(999_999), "1M");
+    assert_eq!(format_tokens(1_000_000), "1M");
+    assert_eq!(format_tokens(999_950_000), "1B");
+    assert_eq!(format_tokens(1_000_000_000), "1B");
+    assert_eq!(format_tokens(u64::MAX), "18446744073.7B");
+}
+
+#[test]
 fn reset_countdown() {
     let now = ts("2026-06-30T12:00:00Z");
     assert_eq!(format_reset(None, now), "");

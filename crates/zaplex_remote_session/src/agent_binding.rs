@@ -7,6 +7,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+/// Maximum number of closed, non-foreground binding records retained by the daemon.
+pub const MAX_HISTORICAL_BINDINGS: usize = 256;
+
 /// Stable identity of a CLI-agent conversation.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AgentIdentity {
@@ -67,7 +70,7 @@ impl AgentPtyBindings {
     /// Registers a newly opened PTY generation.
     ///
     /// Historical bindings for an older generation remain non-attachable and
-    /// generation-qualified when an id is reused.
+    /// generation-qualified when an id is reused, subject to the closed-history cap.
     pub fn register_pty(
         &mut self,
         pty_session_id: impl Into<String>,
@@ -90,6 +93,7 @@ impl AgentPtyBindings {
                 attached_connection,
             },
         );
+        self.prune_closed_history();
     }
 
     /// Transfers an existing PTY generation to a reconnected client.
@@ -110,7 +114,8 @@ impl AgentPtyBindings {
         Ok(())
     }
 
-    /// Closes a PTY generation while retaining its historical associations.
+    /// Closes a PTY generation and retains its newest historical associations up to
+    /// [`MAX_HISTORICAL_BINDINGS`]. Bindings for registered generations are never pruned.
     pub fn remove_pty(&mut self, pty_session_id: &str, generation: u64) {
         let should_remove = self
             .ptys
@@ -125,6 +130,7 @@ impl AgentPtyBindings {
                 binding.foreground = false;
             }
         }
+        self.prune_closed_history();
     }
 
     /// Makes an agent the only foreground agent for a validated PTY.
@@ -153,6 +159,7 @@ impl AgentPtyBindings {
         if let Some(foreground) = foreground {
             let foreground_agent = &self.bindings[foreground].agent;
             if foreground_agent == &request.agent {
+                self.prune_closed_history();
                 return Ok(());
             }
             match request.handoff_from.as_ref() {
@@ -190,13 +197,14 @@ impl AgentPtyBindings {
                 foreground: true,
             });
         }
+        self.prune_closed_history();
         Ok(())
     }
 
     /// Marks one identity historical after validating PTY ownership.
     ///
-    /// The association remains available to inventory, but it is no longer
-    /// attachable. Removing the PTY generation removes its history entirely.
+    /// The association remains available while its PTY generation is registered.
+    /// After that generation closes, it becomes subject to the bounded history policy.
     pub fn unbind(
         &mut self,
         connection: u128,
@@ -216,6 +224,7 @@ impl AgentPtyBindings {
             })
             .ok_or(BindingError::IdentityNotBound)?;
         binding.foreground = false;
+        self.prune_closed_history();
         Ok(())
     }
 
@@ -253,13 +262,14 @@ impl AgentPtyBindings {
     }
 
     /// Makes bindings whose agents disappeared from the current live inventory
-    /// historical. This is idempotent and never removes the association.
+    /// historical, then prunes the oldest closed-generation history above the cap.
     pub fn reconcile_live_agents(&mut self, live_agents: &HashSet<AgentIdentity>) {
         for binding in &mut self.bindings {
             if binding.foreground && !live_agents.contains(&binding.agent) {
                 binding.foreground = false;
             }
         }
+        self.prune_closed_history();
     }
 
     fn close_registered_generation(&mut self, pty_session_id: &str) {
@@ -272,6 +282,31 @@ impl AgentPtyBindings {
                 binding.foreground = false;
             }
         }
+    }
+
+    fn prune_closed_history(&mut self) {
+        let ptys = &self.ptys;
+        let is_closed_history = |binding: &AgentPtyBinding| {
+            !binding.foreground
+                && !ptys
+                    .get(&binding.pty_session_id)
+                    .is_some_and(|registration| registration.generation == binding.pty_generation)
+        };
+        let mut to_prune = self
+            .bindings
+            .iter()
+            .filter(|binding| is_closed_history(binding))
+            .count()
+            .saturating_sub(MAX_HISTORICAL_BINDINGS);
+
+        self.bindings.retain(|binding| {
+            if to_prune > 0 && is_closed_history(binding) {
+                to_prune -= 1;
+                false
+            } else {
+                true
+            }
+        });
     }
 
     fn validate_pty(
