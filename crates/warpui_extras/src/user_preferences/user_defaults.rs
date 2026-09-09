@@ -63,9 +63,10 @@ impl super::UserPreferences for UserDefaultsPreferencesStorage {
             let key = util::make_nsstring(key);
             let value: id = msg_send![*self.user_defaults, stringForKey: *key];
             if value != nil {
-                Ok(Some(
-                    warpui::platform::mac::utils::nsstring_as_str(value)?.to_owned(),
-                ))
+                let value = warpui::platform::mac::utils::nsstring_as_str(value)
+                    .ok_or_else(|| anyhow::anyhow!("user default value is not UTF-8"))?
+                    .to_owned();
+                Ok(Some(value))
             } else {
                 Ok(None)
             }
