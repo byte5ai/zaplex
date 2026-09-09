@@ -109,15 +109,13 @@ fn macos_requested_languages() -> Vec<LanguageIdentifier> {
         for index in 0..count {
             let language: *const Object = msg_send![preferred_languages, objectAtIndex: index];
             match nsstring_as_str(language) {
-                Ok(language) => {
+                Some(language) => {
                     if let Some(language) = parse_language_identifier(language) {
                         requested.push(language);
                     }
                 }
-                Err(err) => {
-                    log::warn!(
-                        "[i18n] failed to read macOS preferred language at index {index}: {err}"
-                    );
+                None => {
+                    log::warn!("[i18n] macOS preferred language at index {index} is not UTF-8");
                 }
             }
         }

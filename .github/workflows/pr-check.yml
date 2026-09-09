@@ -1,10 +1,10 @@
 # PR validation pipeline — cargo check + targeted keymap-validation unit tests.
 #
 # Division of labour with zap_release.yml:
-# - This workflow: runs a Linux cargo check on every PR (compile feedback), plus
-#   a targeted `cargo test` that parse-validates every registered keybinding on
-#   BOTH platform variants. `cargo check` compiles the code but never parses the
-#   binding strings, so it cannot catch a malformed keybinding like `cmd-shift-o`
+# - This workflow: runs Linux and macOS cargo checks on every build-relevant
+#   PR, plus a targeted `cargo test` that parse-validates every registered
+#   keybinding on BOTH platform variants. `cargo check` compiles the code but
+#   never parses the binding strings, so it cannot catch a malformed keybinding like `cmd-shift-o`
 #   (must be `cmd-shift-O`) that compiles yet panics during registration. The
 #   keymap-validation tests catch exactly that class. (A full window-open "does it
 #   even open" test needs the app's live singleton graph, which the unit-test
@@ -13,10 +13,9 @@
 # - zap_release.yml: runs the full three-platform packaging (~3h) only on
 #   tag push / manual dispatch.
 #
-# Only one platform (Linux): the Windows/macOS differences are mainly in the
-# bundle stage rather than the cargo compile, and a Linux check already catches
-# ~90% of compile errors; cross-platform issues are acceptable to surface at
-# release-tag time.
+# macOS is checked separately because `#[cfg(target_os = "macos")]` code is not
+# compiled by the Linux job. Without this check, API drift in macOS-only callers
+# surfaced only during the much more expensive signed-DMG build.
 #
 # (Restored after being removed in cff5085e: the "release tag will catch it"
 # rationale failed when an LLM-assisted change broke main between releases.)
@@ -123,6 +122,30 @@ jobs:
         # targets; check only the default oss bin + its dependency graph, matching
         # the release_linux compile target. Cargo.lock is committed, so run --locked
         # for a deterministic graph (immune to upstream version drift).
+        run: cargo check --locked --bin zaplex
+        shell: bash
+
+  cargo_check_macos:
+    name: cargo check (macOS Apple Silicon)
+    needs: changes
+    if: needs.changes.outputs.needs_build == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          cache_key: macos-aarch64-check
+          is_self_hosted: false
+          install_release_deps: false
+
+      - name: Ensure rust target is installed
+        run: rustup target add aarch64-apple-darwin
+        shell: bash
+
+      - name: cargo check (default = zaplex bin)
         run: cargo check --locked --bin zaplex
         shell: bash
 
