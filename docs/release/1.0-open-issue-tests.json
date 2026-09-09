@@ -199,7 +199,7 @@
         "move_with_untransferred_symlink_never_deletes_source_tree",
         "move_with_untransferred_special_entry_never_deletes_source_tree",
         "concurrent_copies_reserve_distinct_temporary_paths",
-        "cancelled_copy_preserves_previous_destination"
+        "cancelled_file_transfer_removes_owned_stage_and_returns_cancelled"
       ]
     },
     "127": {
@@ -254,7 +254,7 @@
         "unknown_host_key_requires_explicit_confirmation",
         "changed_host_key_is_a_hard_failure",
         "stale_test_completion_cannot_overwrite_current_endpoint_state",
-        "tailscale_lookup_uses_injected_workspace_command_factory"
+        "discover_tailscale_action_never_calls_blocking_factory"
       ]
     },
     "132": {

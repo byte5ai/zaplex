@@ -612,7 +612,8 @@ def live_sftp_commit_boundaries_have_a_real_protocol_gate(root: Path) -> None:
                 "pull_request:",
                 "openssh-server",
                 "Subsystem sftp internal-sftp",
-                "cargo test --locked -p warp --lib live_sftp_remote_safe_rename -- --ignored",
+                "cargo test --locked -p warp --lib live_sftp_ -- --ignored",
+                "cargo test --locked -p warp --lib openssh_v3 -- --ignored",
             ),
         ),
         "live SFTP fault cases": (
@@ -894,7 +895,7 @@ def run_self_test() -> None:
         live_sftp_workflow = fixture / ".github/workflows/live-sftp-safety.yml"
         live_sftp_workflow.write_text(
             read_text(live_sftp_workflow).replace(
-                "live_sftp_remote_safe_rename -- --ignored",
+                "live_sftp_ -- --ignored",
                 "mock_sftp_only",
                 1,
             ),
