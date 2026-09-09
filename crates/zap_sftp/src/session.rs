@@ -48,6 +48,7 @@ pub struct HostKeyConfirmation {
     host: String,
     port: u16,
     fingerprint_sha256: String,
+    replace_existing: bool,
 }
 
 impl HostKeyConfirmation {
@@ -56,6 +57,18 @@ impl HostKeyConfirmation {
             host,
             port,
             fingerprint_sha256,
+            replace_existing: false,
+        }
+    }
+
+    /// Approves replacing the stored key for one endpoint with the exact key
+    /// returned by the preceding handshake.
+    pub fn replacement(host: String, port: u16, fingerprint_sha256: String) -> Self {
+        Self {
+            host,
+            port,
+            fingerprint_sha256,
+            replace_existing: true,
         }
     }
 
@@ -66,6 +79,17 @@ impl HostKeyConfirmation {
     fn matches_endpoint(&self, host: &str, port: u16) -> bool {
         self.host == host && self.port == port
     }
+
+    fn permits_replacement(&self) -> bool {
+        self.replace_existing
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HostKeyPolicyAction {
+    Accept,
+    Persist,
+    Replace,
 }
 
 /// SFTP session, wraps ssh2 connection
@@ -270,24 +294,32 @@ fn verify_host_key(
         Err(error) => return Err(SftpError::Io(error)),
     }
 
-    enforce_host_key_policy(
+    match enforce_host_key_policy(
         known_hosts.check_port(host, port, host_key),
         host,
         port,
         fingerprint_sha256,
         key_type,
         confirmation,
-        || {
-            persist_host_key(
-                &mut known_hosts,
-                known_hosts_path,
-                host,
-                port,
-                host_key,
-                host_key_type,
-            )
-        },
-    )
+    )? {
+        HostKeyPolicyAction::Accept => Ok(()),
+        HostKeyPolicyAction::Persist => persist_host_key(
+            &mut known_hosts,
+            known_hosts_path,
+            host,
+            port,
+            host_key,
+            host_key_type,
+        ),
+        HostKeyPolicyAction::Replace => replace_host_key(
+            &mut known_hosts,
+            known_hosts_path,
+            host,
+            port,
+            host_key,
+            host_key_type,
+        ),
+    }
 }
 
 fn enforce_host_key_policy(
@@ -297,35 +329,82 @@ fn enforce_host_key_policy(
     fingerprint_sha256: String,
     key_type: String,
     confirmation: Option<&HostKeyConfirmation>,
-    persist: impl FnOnce() -> Result<(), SftpError>,
-) -> Result<(), SftpError> {
+) -> Result<HostKeyPolicyAction, SftpError> {
     match check_result {
-        CheckResult::Match => Ok(()),
-        CheckResult::Mismatch => Err(SftpError::HostKeyMismatch {
-            fingerprint_sha256,
-            key_type,
-        }),
-        CheckResult::NotFound => match confirmation {
-            Some(confirmation)
-                if confirmation.matches_endpoint(host, port)
-                    && confirmation.fingerprint_sha256() == fingerprint_sha256.as_str() =>
-            {
-                persist()?;
-                Ok(())
+        CheckResult::Match => Ok(HostKeyPolicyAction::Accept),
+        CheckResult::Mismatch => {
+            if confirmation.is_some_and(|confirmation| {
+                confirmation.matches_endpoint(host, port)
+                    && confirmation.fingerprint_sha256() == fingerprint_sha256.as_str()
+                    && confirmation.permits_replacement()
+            }) {
+                Ok(HostKeyPolicyAction::Replace)
+            } else {
+                Err(SftpError::HostKeyMismatch {
+                    fingerprint_sha256,
+                    key_type,
+                })
             }
-            Some(_) => Err(SftpError::HostKeyMismatch {
-                fingerprint_sha256,
-                key_type,
-            }),
-            None => Err(SftpError::UnknownHostKey {
-                fingerprint_sha256,
-                key_type,
-            }),
-        },
+        }
+        CheckResult::NotFound => {
+            if confirmation.is_some_and(|confirmation| {
+                confirmation.matches_endpoint(host, port)
+                    && confirmation.fingerprint_sha256() == fingerprint_sha256.as_str()
+            }) {
+                Ok(HostKeyPolicyAction::Persist)
+            } else if confirmation.is_some() {
+                Err(SftpError::HostKeyMismatch {
+                    fingerprint_sha256,
+                    key_type,
+                })
+            } else {
+                Err(SftpError::UnknownHostKey {
+                    fingerprint_sha256,
+                    key_type,
+                })
+            }
+        }
         CheckResult::Failure => Err(SftpError::ConnectionFailed(
             "Failed to verify the SSH host key against known_hosts".to_string(),
         )),
     }
+}
+
+fn replace_host_key(
+    known_hosts: &mut ssh2::KnownHosts,
+    known_hosts_path: &Path,
+    host: &str,
+    port: u16,
+    host_key: &[u8],
+    host_key_type: HostKeyType,
+) -> Result<(), SftpError> {
+    let mut removed_existing_key = false;
+    for known_host in known_hosts.hosts().map_err(SftpError::Ssh2)? {
+        let Ok(candidate_key) = base64::engine::general_purpose::STANDARD.decode(known_host.key())
+        else {
+            continue;
+        };
+        if matches!(
+            known_hosts.check_port(host, port, &candidate_key),
+            CheckResult::Match
+        ) {
+            known_hosts.remove(&known_host).map_err(SftpError::Ssh2)?;
+            removed_existing_key = true;
+        }
+    }
+    if !removed_existing_key {
+        return Err(SftpError::ConnectionFailed(
+            "The stored SSH host key could not be replaced safely".to_string(),
+        ));
+    }
+    persist_host_key(
+        known_hosts,
+        known_hosts_path,
+        host,
+        port,
+        host_key,
+        host_key_type,
+    )
 }
 
 fn authenticate_after_host_key_check<T>(

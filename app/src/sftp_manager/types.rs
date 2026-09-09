@@ -231,6 +231,14 @@ pub enum Dialog {
         fingerprint_sha256: String,
         key_type: String,
     },
+    /// A known SSH endpoint presented a different key. Replacing the stored
+    /// identity requires a separate, explicit warning dialog.
+    ConfirmChangedHostKey {
+        host: String,
+        port: u16,
+        fingerprint_sha256: String,
+        key_type: String,
+    },
     /// A copy/move batch hit an existing target: ask the user per item, with
     /// "…all" options that apply to the rest of the batch.
     CopyMoveConflict {

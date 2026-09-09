@@ -169,6 +169,7 @@ pub fn render_context_menu(
             | SftpBrowserAction::ConfirmNewFolder
             | SftpBrowserAction::ConfirmOverwrite
             | SftpBrowserAction::ConfirmUnknownHostKey
+            | SftpBrowserAction::ConfirmChangedHostKey
             | SftpBrowserAction::ContextMenu { .. }
             | SftpBrowserAction::CloseContextMenu
             | SftpBrowserAction::CloseDialog

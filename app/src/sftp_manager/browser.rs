@@ -299,6 +299,8 @@ pub enum SftpBrowserAction {
     ConfirmOverwrite,
     /// Confirm the exact host key shown by the preceding handshake.
     ConfirmUnknownHostKey,
+    /// Replace a changed host key after confirming the exact new fingerprint.
+    ConfirmChangedHostKey,
     /// Open the context menu
     ContextMenu {
         entry: EntryReference,
@@ -1396,6 +1398,24 @@ impl SftpBrowserView {
                                 me.connection =
                                     ConnectionState::Failed(crate::t!("fm-error-unknown-host-key"));
                                 me.dialog = Some(Dialog::ConfirmUnknownHostKey {
+                                    host,
+                                    port,
+                                    fingerprint_sha256,
+                                    key_type,
+                                });
+                            }
+                            Ok(Err(PrepareSftpConnectionError::Connect(
+                                sftp_ops::SftpOpsError::ChangedHostKey {
+                                    host,
+                                    port,
+                                    fingerprint_sha256,
+                                    key_type,
+                                },
+                            ))) => {
+                                me.connection = ConnectionState::Failed(crate::t!(
+                                    "fm-error-host-key-mismatch"
+                                ));
+                                me.dialog = Some(Dialog::ConfirmChangedHostKey {
                                     host,
                                     port,
                                     fingerprint_sha256,
@@ -3849,6 +3869,7 @@ impl SftpBrowserView {
             | Some(Dialog::Move { .. })
             | Some(Dialog::OverwriteConfirm { .. })
             | Some(Dialog::ConfirmUnknownHostKey { .. })
+            | Some(Dialog::ConfirmChangedHostKey { .. })
             | Some(Dialog::CopyMoveConflict { .. })
             | Some(Dialog::CopyMoveTargetPicker { .. })
             | Some(Dialog::CrossConnConflict { .. })
@@ -4220,6 +4241,36 @@ impl SftpBrowserView {
         };
 
         render_centered_status(icon, &msg, 12.0, appearance)
+    }
+
+    fn render_dialog_overlay(
+        &self,
+        main_content: Box<dyn Element>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let Some(dialog) = &self.dialog else {
+            return main_content;
+        };
+        let dialog_el = super::dialogs::render_dialog(
+            dialog,
+            &self.rename_editor,
+            &self.new_folder_editor,
+            appearance,
+            self.dialog_confirm_btn.clone(),
+            self.dialog_cancel_btn.clone(),
+            self.dialog_close_btn.clone(),
+            self.overwrite_all_btn.clone(),
+            self.skip_all_btn.clone(),
+            self.rename_conflict_btn.clone(),
+            self.newer_only_conflict_btn.clone(),
+            self.rename_all_btn.clone(),
+            self.newer_only_all_btn.clone(),
+            &self.target_pick_btn_states,
+        );
+        let mut stack = Stack::new();
+        stack.add_child(main_content);
+        stack.add_overlay_child(Align::new(dialog_el).finish());
+        stack.finish()
     }
 
     /// The pick-mode banner (#105): the current directory + a "Use this folder"
@@ -5435,6 +5486,7 @@ impl TypedActionView for SftpBrowserView {
                     | Some(Dialog::Move { .. })
                     | Some(Dialog::OverwriteConfirm { .. })
                     | Some(Dialog::ConfirmUnknownHostKey { .. })
+                    | Some(Dialog::ConfirmChangedHostKey { .. })
                     | Some(Dialog::CopyMoveConflict { .. })
                     | Some(Dialog::CopyMoveTargetPicker { .. })
                     | Some(Dialog::CrossConnConflict { .. })
@@ -5576,6 +5628,7 @@ impl TypedActionView for SftpBrowserView {
                     | Some(Dialog::CreateFolder { .. })
                     | Some(Dialog::Move { .. })
                     | Some(Dialog::ConfirmUnknownHostKey { .. })
+                    | Some(Dialog::ConfirmChangedHostKey { .. })
                     | Some(Dialog::CopyMoveConflict { .. })
                     | Some(Dialog::CopyMoveTargetPicker { .. })
                     | Some(Dialog::CrossConnConflict { .. })
@@ -5621,6 +5674,39 @@ impl TypedActionView for SftpBrowserView {
                     | Some(Dialog::CreateFolder { .. })
                     | Some(Dialog::Move { .. })
                     | Some(Dialog::OverwriteConfirm { .. })
+                    | Some(Dialog::ConfirmChangedHostKey { .. })
+                    | Some(Dialog::CopyMoveConflict { .. })
+                    | Some(Dialog::CopyMoveTargetPicker { .. })
+                    | Some(Dialog::CrossConnConflict { .. })
+                    | Some(Dialog::FileDetails { .. })
+                    | Some(Dialog::CloseTransferPanelConfirm)
+                    | None => None,
+                };
+                self.dialog = None;
+                if let Some(confirmation) = confirmation {
+                    self.connect_to_server_with_confirmation(Some(confirmation), ctx);
+                } else {
+                    ctx.notify();
+                }
+            }
+            SftpBrowserAction::ConfirmChangedHostKey => {
+                let confirmation = match &self.dialog {
+                    Some(Dialog::ConfirmChangedHostKey {
+                        host,
+                        port,
+                        fingerprint_sha256,
+                        ..
+                    }) => Some(zap_sftp::HostKeyConfirmation::replacement(
+                        host.clone(),
+                        *port,
+                        fingerprint_sha256.clone(),
+                    )),
+                    Some(Dialog::DeleteConfirm { .. })
+                    | Some(Dialog::Rename { .. })
+                    | Some(Dialog::CreateFolder { .. })
+                    | Some(Dialog::Move { .. })
+                    | Some(Dialog::OverwriteConfirm { .. })
+                    | Some(Dialog::ConfirmUnknownHostKey { .. })
                     | Some(Dialog::CopyMoveConflict { .. })
                     | Some(Dialog::CopyMoveTargetPicker { .. })
                     | Some(Dialog::CrossConnConflict { .. })
@@ -6086,7 +6172,7 @@ impl View for SftpBrowserView {
                     .with_border(Border::all(2.0).with_border_fill(theme.accent()))
                     .finish();
             }
-            return content;
+            return self.render_dialog_overlay(content, appearance);
         }
 
         let mut col = Flex::column()
@@ -6231,28 +6317,7 @@ impl View for SftpBrowserView {
         }
 
         // 9. Dialog (overlay layer)
-        if let Some(ref dialog) = self.dialog {
-            let dialog_el = super::dialogs::render_dialog(
-                dialog,
-                &self.rename_editor,
-                &self.new_folder_editor,
-                appearance,
-                self.dialog_confirm_btn.clone(),
-                self.dialog_cancel_btn.clone(),
-                self.dialog_close_btn.clone(),
-                self.overwrite_all_btn.clone(),
-                self.skip_all_btn.clone(),
-                self.rename_conflict_btn.clone(),
-                self.newer_only_conflict_btn.clone(),
-                self.rename_all_btn.clone(),
-                self.newer_only_all_btn.clone(),
-                &self.target_pick_btn_states,
-            );
-            let mut stack = Stack::new();
-            stack.add_child(main_content);
-            stack.add_overlay_child(Align::new(dialog_el).finish());
-            main_content = stack.finish();
-        }
+        main_content = self.render_dialog_overlay(main_content, appearance);
 
         // 10. Drag-and-drop visual feedback
         if self.is_drag_hovering {

@@ -51,6 +51,14 @@ pub enum SftpOpsError {
     },
     /// A known host presented a different key.
     HostKeyMismatch(String),
+    /// A known endpoint presented a different key that may be replaced only
+    /// after the user verifies and confirms the exact new fingerprint.
+    ChangedHostKey {
+        host: String,
+        port: u16,
+        fingerprint_sha256: String,
+        key_type: String,
+    },
     /// Authentication was attempted only after host-key verification and failed.
     Authentication(String),
     /// The SSH transport failed before authentication completed.
@@ -94,6 +102,15 @@ impl std::fmt::Display for SftpOpsError {
                 "Unknown {key_type} host key for {host}:{port} ({fingerprint_sha256})"
             ),
             SftpOpsError::HostKeyMismatch(msg) => write!(f, "Host key mismatch: {msg}"),
+            SftpOpsError::ChangedHostKey {
+                host,
+                port,
+                fingerprint_sha256,
+                key_type,
+            } => write!(
+                f,
+                "Changed {key_type} host key for {host}:{port} ({fingerprint_sha256})"
+            ),
             SftpOpsError::Authentication(msg) => write!(f, "Authentication failed: {msg}"),
             SftpOpsError::Transport(msg) => write!(f, "Transport error: {msg}"),
             SftpOpsError::Cancelled => write!(f, "Transfer cancelled"),
@@ -127,7 +144,9 @@ impl SftpOpsError {
             Self::LocalIo(_) => crate::t!("fm-error-local-io"),
             Self::NoCredentials(_) => crate::t!("fm-error-credentials"),
             Self::UnknownHostKey { .. } => crate::t!("fm-error-unknown-host-key"),
-            Self::HostKeyMismatch(_) => crate::t!("fm-error-host-key-mismatch"),
+            Self::HostKeyMismatch(_) | Self::ChangedHostKey { .. } => {
+                crate::t!("fm-error-host-key-mismatch")
+            }
             Self::Authentication(_) => crate::t!("fm-error-authentication"),
             Self::Transport(_) => crate::t!("fm-error-transport"),
             Self::Cancelled => crate::t!("fm-error-cancelled"),
@@ -147,6 +166,7 @@ impl SftpOpsError {
             | Self::NoCredentials(_)
             | Self::UnknownHostKey { .. }
             | Self::HostKeyMismatch(_)
+            | Self::ChangedHostKey { .. }
             | Self::Authentication(_)
             | Self::Transport(_)
             | Self::Cancelled
@@ -165,6 +185,7 @@ impl SftpOpsError {
             | Self::NoCredentials(_)
             | Self::UnknownHostKey { .. }
             | Self::HostKeyMismatch(_)
+            | Self::ChangedHostKey { .. }
             | Self::Authentication(_)
             | Self::Transport(_)
             | Self::Cancelled
@@ -333,6 +354,15 @@ fn connect_from_server_with_confirmation(
             fingerprint_sha256,
             key_type,
         } => SftpOpsError::UnknownHostKey {
+            host: server.host.clone(),
+            port: server.port,
+            fingerprint_sha256,
+            key_type,
+        },
+        zap_sftp::SftpError::HostKeyMismatch {
+            fingerprint_sha256,
+            key_type,
+        } => SftpOpsError::ChangedHostKey {
             host: server.host.clone(),
             port: server.port,
             fingerprint_sha256,
