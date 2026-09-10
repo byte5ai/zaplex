@@ -5,7 +5,7 @@ description = "The terminal cockpit for AI coding agents on remote machines"
 edition = "2021"
 autobins = false
 name = "warp"
-version = "1.0.16"
+version = "1.0.17"
 publish.workspace = true
 license.workspace = true
 
@@ -24,7 +24,7 @@ test = false
 [[bin]]
 name = "generate_settings_schema"
 path = "src/bin/generate_settings_schema.rs"
-test = false
+test = true
 
 [dependencies]
 addr = "0.15.6"
