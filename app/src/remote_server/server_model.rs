@@ -2,7 +2,7 @@ use crate::terminal::bootstrap::{daemon_bootstrap_delivery, DaemonBootstrapDeliv
 use crate::terminal::shell::ShellType;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
-#[cfg(unix)]
+#[cfg(any(unix, feature = "local_fs"))]
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -101,6 +101,12 @@ const HOST_RING_CAP_BYTES: usize = 256 * 1024 * 1024;
 #[cfg(unix)]
 const GC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 const MAX_CONCURRENT_AGENT_TRANSCRIPT_READS: usize = 2;
+#[cfg(feature = "local_fs")]
+const MAX_FILE_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+#[cfg(feature = "local_fs")]
+const MAX_CONCURRENT_FILE_CHUNK_IO: usize = 4;
+#[cfg(feature = "local_fs")]
+const MAX_PENDING_FILE_CHUNK_IO: usize = 16;
 #[cfg(unix)]
 const MAX_CONCURRENT_MANAGED_MEMORY_READS: usize = 1;
 #[cfg(unix)]
@@ -317,6 +323,259 @@ impl Drop for AgentTranscriptReadPermit {
     fn drop(&mut self) {
         let previous = self.in_flight.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(previous > 0);
+    }
+}
+
+#[cfg(feature = "local_fs")]
+trait FileChunkIoBackend: Send + Sync {
+    fn read(
+        &self,
+        path: &Path,
+        offset: u64,
+        max_bytes: usize,
+    ) -> std::io::Result<ReadFileChunkSuccess>;
+
+    fn write(
+        &self,
+        path: &Path,
+        offset: u64,
+        bytes: &[u8],
+        truncate: bool,
+        executable: Option<bool>,
+    ) -> std::io::Result<WriteFileChunkSuccess>;
+}
+
+#[cfg(feature = "local_fs")]
+struct StdFileChunkIoBackend;
+
+#[cfg(feature = "local_fs")]
+impl FileChunkIoBackend for StdFileChunkIoBackend {
+    fn read(
+        &self,
+        path: &Path,
+        offset: u64,
+        max_bytes: usize,
+    ) -> std::io::Result<ReadFileChunkSuccess> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let mut file = open_regular_file_nofollow(path)?;
+        let total_size = Some(file.metadata()?.len());
+        file.seek(SeekFrom::Start(offset))?;
+        let mut bytes = vec![0; max_bytes];
+        let read = file.read(&mut bytes)?;
+        bytes.truncate(read);
+        let next_offset = offset
+            .checked_add(read as u64)
+            .ok_or_else(|| std::io::Error::other("file offset overflow"))?;
+        let eof = total_size.is_some_and(|size| next_offset >= size) || read == 0;
+        Ok(ReadFileChunkSuccess {
+            bytes,
+            next_offset,
+            total_size,
+            eof,
+        })
+    }
+
+    fn write(
+        &self,
+        path: &Path,
+        offset: u64,
+        bytes: &[u8],
+        truncate: bool,
+        executable: Option<bool>,
+    ) -> std::io::Result<WriteFileChunkSuccess> {
+        use std::io::{Seek, SeekFrom, Write};
+
+        if bytes.len() > MAX_FILE_CHUNK_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "file chunk exceeds maximum size",
+            ));
+        }
+        let next_offset = offset
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| std::io::Error::other("file offset overflow"))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).write(true);
+        if truncate {
+            options.truncate(true);
+        }
+        let mut file = options.open(path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        file.write_all(bytes)?;
+        #[cfg(unix)]
+        if let Some(executable) = executable {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = if executable { 0o755 } else { 0o644 };
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+        }
+        #[cfg(not(unix))]
+        let _ = executable;
+
+        Ok(WriteFileChunkSuccess { next_offset })
+    }
+}
+
+#[cfg(feature = "local_fs")]
+enum FileChunkIoOperation {
+    Read {
+        requested_path: String,
+        path: PathBuf,
+        offset: u64,
+        max_bytes: usize,
+    },
+    Write {
+        requested_path: String,
+        path: PathBuf,
+        offset: u64,
+        bytes: Vec<u8>,
+        truncate: bool,
+        executable: Option<bool>,
+    },
+}
+
+#[cfg(feature = "local_fs")]
+impl FileChunkIoOperation {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Read { path, .. } | Self::Write { path, .. } => path,
+        }
+    }
+
+    fn error_response(&self, message: impl Into<String>) -> server_message::Message {
+        let error = FileOperationError {
+            message: message.into(),
+        };
+        match self {
+            Self::Read { .. } => {
+                server_message::Message::ReadFileChunkResponse(ReadFileChunkResponse {
+                    result: Some(read_file_chunk_response::Result::Error(error)),
+                })
+            }
+            Self::Write { .. } => {
+                server_message::Message::WriteFileChunkResponse(WriteFileChunkResponse {
+                    result: Some(write_file_chunk_response::Result::Error(error)),
+                })
+            }
+        }
+    }
+
+    fn execute(self, backend: &dyn FileChunkIoBackend) -> server_message::Message {
+        match self {
+            Self::Read {
+                requested_path,
+                path,
+                offset,
+                max_bytes,
+            } => {
+                let result = match backend.read(&path, offset, max_bytes) {
+                    Ok(success) => read_file_chunk_response::Result::Success(success),
+                    Err(err) => read_file_chunk_response::Result::Error(FileOperationError {
+                        message: format!("Failed to read file chunk {requested_path}: {err}"),
+                    }),
+                };
+                server_message::Message::ReadFileChunkResponse(ReadFileChunkResponse {
+                    result: Some(result),
+                })
+            }
+            Self::Write {
+                requested_path,
+                path,
+                offset,
+                bytes,
+                truncate,
+                executable,
+            } => {
+                let result = match backend.write(&path, offset, &bytes, truncate, executable) {
+                    Ok(success) => write_file_chunk_response::Result::Success(success),
+                    Err(err) => write_file_chunk_response::Result::Error(FileOperationError {
+                        message: format!("Failed to write file chunk {requested_path}: {err}"),
+                    }),
+                };
+                server_message::Message::WriteFileChunkResponse(WriteFileChunkResponse {
+                    result: Some(result),
+                })
+            }
+        }
+    }
+}
+
+#[cfg(feature = "local_fs")]
+struct PendingFileChunkIo {
+    request_id: RequestId,
+    path: PathBuf,
+    operation: FileChunkIoOperation,
+    result_sender: async_channel::Sender<server_message::Message>,
+}
+
+#[cfg(feature = "local_fs")]
+struct FileChunkIoState {
+    backend: Arc<dyn FileChunkIoBackend>,
+    active_requests: HashMap<RequestId, PathBuf>,
+    active_paths: HashSet<PathBuf>,
+    pending: VecDeque<PendingFileChunkIo>,
+}
+
+#[cfg(feature = "local_fs")]
+impl FileChunkIoState {
+    fn new(backend: Arc<dyn FileChunkIoBackend>) -> Self {
+        Self {
+            backend,
+            active_requests: HashMap::new(),
+            active_paths: HashSet::new(),
+            pending: VecDeque::new(),
+        }
+    }
+
+    fn has_pending_capacity(&self) -> bool {
+        self.pending.len() < MAX_PENDING_FILE_CHUNK_IO
+    }
+
+    fn enqueue(&mut self, job: PendingFileChunkIo) {
+        debug_assert!(self.has_pending_capacity());
+        self.pending.push_back(job);
+    }
+
+    fn next_runnable(&mut self) -> Option<PendingFileChunkIo> {
+        if self.active_requests.len() >= MAX_CONCURRENT_FILE_CHUNK_IO {
+            return None;
+        }
+        let position = self
+            .pending
+            .iter()
+            .position(|job| !self.active_paths.contains(&job.path))?;
+        let job = self
+            .pending
+            .remove(position)
+            .expect("pending file chunk position should remain valid");
+        self.active_paths.insert(job.path.clone());
+        self.active_requests
+            .insert(job.request_id.clone(), job.path.clone());
+        Some(job)
+    }
+
+    fn cancel_pending(&mut self, request_id: &RequestId) -> bool {
+        let Some(position) = self
+            .pending
+            .iter()
+            .position(|job| &job.request_id == request_id)
+        else {
+            return false;
+        };
+        self.pending.remove(position);
+        true
+    }
+
+    fn finish_active(&mut self, request_id: &RequestId) -> bool {
+        let Some(path) = self.active_requests.remove(request_id) else {
+            return false;
+        };
+        self.active_paths.remove(&path);
+        true
     }
 }
 
@@ -711,6 +970,10 @@ pub struct ServerModel {
     /// buffer requests (OpenBuffer, SaveBuffer, ResolveConflict).
     #[cfg(feature = "local_fs")]
     buffers: ServerBufferTracker,
+    /// Bounded scheduler for blocking file-chunk reads and writes. Operations
+    /// for one path stay ordered while independent paths may run in parallel.
+    #[cfg(feature = "local_fs")]
+    file_chunk_io: FileChunkIoState,
     /// Daemon-wide bearer credential for the identity-scoped daemon.
     ///
     /// The token is written by Initialize when the client supplies a
@@ -786,6 +1049,8 @@ impl ServerModel {
             pending_file_ops: PendingFileOps::new(),
             #[cfg(feature = "local_fs")]
             buffers: ServerBufferTracker::new(),
+            #[cfg(feature = "local_fs")]
+            file_chunk_io: FileChunkIoState::new(Arc::new(StdFileChunkIoBackend)),
             auth_token: None,
             #[cfg(unix)]
             sessions: HashMap::new(),
@@ -1272,9 +1537,13 @@ impl ServerModel {
                 self.handle_create_directory(msg)
             }
             #[cfg(feature = "local_fs")]
-            Some(client_message::Message::ReadFileChunk(msg)) => self.handle_read_file_chunk(msg),
+            Some(client_message::Message::ReadFileChunk(msg)) => {
+                self.handle_read_file_chunk(msg, &request_id, conn_id, ctx)
+            }
             #[cfg(feature = "local_fs")]
-            Some(client_message::Message::WriteFileChunk(msg)) => self.handle_write_file_chunk(msg),
+            Some(client_message::Message::WriteFileChunk(msg)) => {
+                self.handle_write_file_chunk(msg, &request_id, conn_id, ctx)
+            }
             // zaplex native session host (see remote_server.proto, "Native
             // Remote Session Layer"). Stage 1 implements the per-session PTY
             // host on unix; attach/detach/list land in Stages 3-4.
@@ -1580,6 +1849,29 @@ impl ServerModel {
         <S as Future>::Output: SpawnableOutput,
         F: 'static + FnOnce(&mut Self, <S as Future>::Output, &mut ModelContext<Self>),
     {
+        self.spawn_request_handler_with_abort(
+            request_id,
+            future,
+            on_resolve,
+            |_model, _ctx| {},
+            ctx,
+        )
+    }
+
+    fn spawn_request_handler_with_abort<S, F, A>(
+        &mut self,
+        request_id: RequestId,
+        future: S,
+        on_resolve: F,
+        on_abort: A,
+        ctx: &mut ModelContext<Self>,
+    ) -> SpawnedFutureHandle
+    where
+        S: Spawnable,
+        <S as Future>::Output: SpawnableOutput,
+        F: 'static + FnOnce(&mut Self, <S as Future>::Output, &mut ModelContext<Self>),
+        A: 'static + FnOnce(&mut Self, &mut ModelContext<Self>),
+    {
         let resolve_id = request_id.clone();
         let abort_id = request_id;
         ctx.spawn_abortable(
@@ -1588,9 +1880,10 @@ impl ServerModel {
                 me.in_progress.remove(&resolve_id);
                 on_resolve(me, output, ctx);
             },
-            move |me, _ctx| {
+            move |me, ctx| {
                 log::info!("Request cancelled (request_id={abort_id})");
                 me.in_progress.remove(&abort_id);
+                on_abort(me, ctx);
             },
         )
     }
@@ -2722,92 +3015,157 @@ impl ServerModel {
     }
 
     #[cfg(feature = "local_fs")]
-    fn handle_read_file_chunk(&self, msg: ReadFileChunk) -> HandlerOutcome {
-        use std::io::{Read, Seek, SeekFrom};
-
-        let path = expand_user_path(&msg.path);
-        let result = (|| -> std::io::Result<ReadFileChunkSuccess> {
-            if msg.max_bytes == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "file chunk size must be positive",
-                ));
-            }
-            let mut file = open_regular_file_nofollow(&path)?;
-            let total_size = Some(file.metadata()?.len());
-            file.seek(SeekFrom::Start(msg.offset))?;
-            let max_bytes = msg.max_bytes.min(8 * 1024 * 1024) as usize;
-            let mut bytes = vec![0; max_bytes];
-            let read = file.read(&mut bytes)?;
-            bytes.truncate(read);
-            let next_offset = msg
-                .offset
-                .checked_add(read as u64)
-                .ok_or_else(|| std::io::Error::other("file offset overflow"))?;
-            let eof = total_size.is_some_and(|size| next_offset >= size) || read == 0;
-            Ok(ReadFileChunkSuccess {
-                bytes,
-                next_offset,
-                total_size,
-                eof,
-            })
-        })();
-
-        let result = match result {
-            Ok(success) => read_file_chunk_response::Result::Success(success),
-            Err(err) => read_file_chunk_response::Result::Error(FileOperationError {
-                message: format!("Failed to read file chunk {}: {err}", msg.path),
-            }),
+    fn handle_read_file_chunk(
+        &mut self,
+        msg: ReadFileChunk,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let operation = FileChunkIoOperation::Read {
+            requested_path: msg.path.clone(),
+            path: expand_user_path(&msg.path),
+            offset: msg.offset,
+            max_bytes: msg.max_bytes.min(MAX_FILE_CHUNK_BYTES as u64) as usize,
         };
-
-        HandlerOutcome::Sync(server_message::Message::ReadFileChunkResponse(
-            ReadFileChunkResponse {
-                result: Some(result),
-            },
-        ))
+        if msg.max_bytes == 0 {
+            return HandlerOutcome::Sync(operation.error_response(format!(
+                "Failed to read file chunk {}: file chunk size must be positive",
+                msg.path
+            )));
+        }
+        self.handle_file_chunk_io(operation, request_id, conn_id, ctx)
     }
 
     #[cfg(feature = "local_fs")]
-    fn handle_write_file_chunk(&self, msg: WriteFileChunk) -> HandlerOutcome {
-        use std::io::{Seek, SeekFrom, Write};
-
-        let path = expand_user_path(&msg.path);
-        let result = (|| -> std::io::Result<WriteFileChunkSuccess> {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let mut options = std::fs::OpenOptions::new();
-            options.create(true).write(true);
-            if msg.truncate {
-                options.truncate(true);
-            }
-            let mut file = options.open(&path)?;
-            file.seek(SeekFrom::Start(msg.offset))?;
-            file.write_all(&msg.bytes)?;
-            #[cfg(unix)]
-            if let Some(executable) = msg.executable {
-                use std::os::unix::fs::PermissionsExt;
-
-                let mode = if executable { 0o755 } else { 0o644 };
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))?;
-            }
-            Ok(WriteFileChunkSuccess {
-                next_offset: msg.offset + msg.bytes.len() as u64,
-            })
-        })();
-
-        let result = match result {
-            Ok(success) => write_file_chunk_response::Result::Success(success),
-            Err(err) => write_file_chunk_response::Result::Error(FileOperationError {
-                message: format!("Failed to write file chunk {}: {err}", msg.path),
-            }),
+    fn handle_write_file_chunk(
+        &mut self,
+        msg: WriteFileChunk,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let operation = FileChunkIoOperation::Write {
+            requested_path: msg.path.clone(),
+            path: expand_user_path(&msg.path),
+            offset: msg.offset,
+            bytes: msg.bytes,
+            truncate: msg.truncate,
+            executable: msg.executable,
         };
+        let FileChunkIoOperation::Write { bytes, offset, .. } = &operation else {
+            unreachable!("write handler must construct a write operation");
+        };
+        if bytes.len() > MAX_FILE_CHUNK_BYTES {
+            return HandlerOutcome::Sync(operation.error_response(format!(
+                "Failed to write file chunk {}: file chunk exceeds maximum size",
+                msg.path
+            )));
+        }
+        if offset.checked_add(bytes.len() as u64).is_none() {
+            return HandlerOutcome::Sync(operation.error_response(format!(
+                "Failed to write file chunk {}: file offset overflow",
+                msg.path
+            )));
+        }
+        self.handle_file_chunk_io(operation, request_id, conn_id, ctx)
+    }
 
-        HandlerOutcome::Sync(server_message::Message::WriteFileChunkResponse(
-            WriteFileChunkResponse {
-                result: Some(result),
+    #[cfg(feature = "local_fs")]
+    fn handle_file_chunk_io(
+        &mut self,
+        operation: FileChunkIoOperation,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        if !self.file_chunk_io.has_pending_capacity() {
+            return HandlerOutcome::Sync(operation.error_response(
+                "File chunk I/O queue is full; retry after in-flight transfers complete",
+            ));
+        }
+
+        let path = operation.path().to_path_buf();
+        let request_id_for_response = request_id.clone();
+        let request_id_for_abort = request_id.clone();
+        let (result_sender, result_receiver) = async_channel::bounded(1);
+        let handle = self.spawn_request_handler_with_abort(
+            request_id.clone(),
+            result_receiver.recv(),
+            move |model, result, _ctx| {
+                let message = result.unwrap_or_else(|_| {
+                    server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::Internal.into(),
+                        message: "File chunk I/O result channel closed".to_string(),
+                    })
+                });
+                model.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
             },
-        ))
+            move |model, ctx| {
+                if model.file_chunk_io.cancel_pending(&request_id_for_abort) {
+                    model.schedule_file_chunk_io(ctx);
+                }
+            },
+            ctx,
+        );
+
+        self.file_chunk_io.enqueue(PendingFileChunkIo {
+            request_id: request_id.clone(),
+            path,
+            operation,
+            result_sender,
+        });
+        self.schedule_file_chunk_io(ctx);
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn schedule_file_chunk_io(&mut self, ctx: &mut ModelContext<Self>) {
+        while let Some(job) = self.file_chunk_io.next_runnable() {
+            let PendingFileChunkIo {
+                request_id,
+                operation,
+                result_sender,
+                ..
+            } = job;
+            let backend = self.file_chunk_io.backend.clone();
+            let spawner = ctx.spawner();
+            ctx.background_executor()
+                .spawn(async move {
+                    let result =
+                        tokio::task::spawn_blocking(move || operation.execute(backend.as_ref()))
+                            .await;
+                    let _ = spawner
+                        .spawn(move |model, ctx| {
+                            model.finish_file_chunk_io(request_id, result_sender, result, ctx);
+                        })
+                        .await;
+                })
+                .detach();
+        }
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn finish_file_chunk_io(
+        &mut self,
+        request_id: RequestId,
+        result_sender: async_channel::Sender<server_message::Message>,
+        result: Result<server_message::Message, tokio::task::JoinError>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let was_active = self.file_chunk_io.finish_active(&request_id);
+        debug_assert!(was_active, "completed file chunk request was not active");
+        let message = result.unwrap_or_else(|error| {
+            log::error!("File chunk blocking operation failed (request_id={request_id}): {error}");
+            server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::Internal.into(),
+                message: "Internal file chunk I/O operation failed".to_string(),
+            })
+        });
+        if result_sender.try_send(message).is_err() {
+            log::debug!("Discarding result for cancelled file chunk request {request_id}");
+        }
+        self.schedule_file_chunk_io(ctx);
     }
 
     /// Handles `CloseBuffer` notification (fire-and-forget).

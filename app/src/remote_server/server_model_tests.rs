@@ -1,14 +1,20 @@
 use std::collections::{HashMap, HashSet};
 
 use std::fs;
+#[cfg(feature = "local_fs")]
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    mpsc, Arc, Mutex,
+};
 
 use super::super::proto::{
     client_message, list_directory_response, read_file_chunk_response, resolve_path_response,
     server_message, write_file_chunk_response, Abort, AgentProcessSignal,
     AgentProcessSignalRequest, AgentProcessSignalStatus, AgentPtyBindingStatus,
     AgentSessionIdentity, AgentSessionInfo, Authenticate, BindAgentPty, ClientMessage,
-    CreateDirectory, ErrorCode, Initialize, ListDirectory, ReadFileChunk, ResolvePath,
-    ServerMessage, SessionBootstrapped, UnbindAgentPty, WriteFileChunk,
+    CreateDirectory, ErrorCode, Initialize, ListDirectory, ReadFileChunk, ReadFileChunkSuccess,
+    ResolvePath, ServerMessage, SessionBootstrapped, UnbindAgentPty, WriteFileChunk,
+    WriteFileChunkSuccess,
 };
 use super::super::protocol::RequestId;
 #[cfg(feature = "local_fs")]
@@ -24,6 +30,11 @@ use super::{
 use super::{
     push_recent_managed_exit, ManagedExitRecord, ManagedMemoryReadPermit,
     MAX_CONCURRENT_MANAGED_MEMORY_READS, MAX_RECENT_MANAGED_EXITS, RECENT_MANAGED_EXIT_TTL_MILLIS,
+};
+#[cfg(feature = "local_fs")]
+use super::{
+    FileChunkIoBackend, FileChunkIoState, StdFileChunkIoBackend, MAX_CONCURRENT_FILE_CHUNK_IO,
+    MAX_FILE_CHUNK_BYTES, MAX_PENDING_FILE_CHUNK_IO,
 };
 use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
 #[cfg(unix)]
@@ -47,6 +58,10 @@ fn test_model() -> ServerModel {
         pending_file_ops: PendingFileOps::new(),
         #[cfg(feature = "local_fs")]
         buffers: ServerBufferTracker::new(),
+        #[cfg(feature = "local_fs")]
+        file_chunk_io: super::FileChunkIoState::new(std::sync::Arc::new(
+            super::StdFileChunkIoBackend,
+        )),
         auth_token: None,
         #[cfg(unix)]
         sessions: HashMap::new(),
@@ -70,6 +85,167 @@ fn test_model() -> ServerModel {
         recent_managed_exits: std::collections::VecDeque::new(),
         #[cfg(unix)]
         managed_min_available_bytes: Ok(super::super::managed_fleet::DEFAULT_MIN_AVAILABLE_BYTES),
+    }
+}
+
+#[cfg(feature = "local_fs")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ObservedFileChunkIo {
+    Read {
+        path: std::path::PathBuf,
+        offset: u64,
+        max_bytes: usize,
+    },
+    Write {
+        path: std::path::PathBuf,
+        offset: u64,
+        bytes: Vec<u8>,
+        truncate: bool,
+        executable: Option<bool>,
+    },
+}
+
+#[cfg(feature = "local_fs")]
+struct BlockingFileChunkIoBackend {
+    started: async_channel::Sender<ObservedFileChunkIo>,
+    finished: async_channel::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+    active: AtomicUsize,
+    max_active: AtomicUsize,
+}
+
+#[cfg(feature = "local_fs")]
+impl BlockingFileChunkIoBackend {
+    fn wait_until_released(&self, operation: ObservedFileChunkIo) {
+        let active = self.active.fetch_add(1, Ordering::AcqRel) + 1;
+        self.max_active.fetch_max(active, Ordering::AcqRel);
+        self.started.try_send(operation).unwrap();
+        self.release.lock().unwrap().recv().unwrap();
+        self.active.fetch_sub(1, Ordering::AcqRel);
+        self.finished.try_send(()).unwrap();
+    }
+}
+
+#[cfg(feature = "local_fs")]
+impl FileChunkIoBackend for BlockingFileChunkIoBackend {
+    fn read(
+        &self,
+        path: &std::path::Path,
+        offset: u64,
+        max_bytes: usize,
+    ) -> std::io::Result<ReadFileChunkSuccess> {
+        self.wait_until_released(ObservedFileChunkIo::Read {
+            path: path.to_path_buf(),
+            offset,
+            max_bytes,
+        });
+        Ok(ReadFileChunkSuccess {
+            bytes: vec![0],
+            next_offset: offset.checked_add(1).expect("test read offset overflow"),
+            total_size: None,
+            eof: true,
+        })
+    }
+
+    fn write(
+        &self,
+        path: &std::path::Path,
+        offset: u64,
+        bytes: &[u8],
+        truncate: bool,
+        executable: Option<bool>,
+    ) -> std::io::Result<WriteFileChunkSuccess> {
+        self.wait_until_released(ObservedFileChunkIo::Write {
+            path: path.to_path_buf(),
+            offset,
+            bytes: bytes.to_vec(),
+            truncate,
+            executable,
+        });
+        Ok(WriteFileChunkSuccess {
+            next_offset: offset
+                .checked_add(bytes.len() as u64)
+                .expect("test write offset overflow"),
+        })
+    }
+}
+
+#[cfg(feature = "local_fs")]
+fn blocking_file_chunk_io_backend() -> (
+    Arc<BlockingFileChunkIoBackend>,
+    async_channel::Receiver<ObservedFileChunkIo>,
+    async_channel::Receiver<()>,
+    mpsc::Sender<()>,
+) {
+    let (started, started_rx) = async_channel::unbounded();
+    let (finished, finished_rx) = async_channel::unbounded();
+    let (release_tx, release) = mpsc::channel();
+    (
+        Arc::new(BlockingFileChunkIoBackend {
+            started,
+            finished,
+            release: Mutex::new(release),
+            active: AtomicUsize::new(0),
+            max_active: AtomicUsize::new(0),
+        }),
+        started_rx,
+        finished_rx,
+        release_tx,
+    )
+}
+
+#[cfg(feature = "local_fs")]
+fn test_model_with_file_chunk_backend(backend: Arc<dyn FileChunkIoBackend>) -> ServerModel {
+    let mut model = test_model();
+    model.file_chunk_io = FileChunkIoState::new(backend);
+    model
+}
+
+#[cfg(feature = "local_fs")]
+fn read_file_chunk_message(
+    request_id: impl Into<String>,
+    path: impl Into<String>,
+    offset: u64,
+    max_bytes: u64,
+) -> ClientMessage {
+    ClientMessage {
+        request_id: request_id.into(),
+        message: Some(client_message::Message::ReadFileChunk(ReadFileChunk {
+            path: path.into(),
+            offset,
+            max_bytes,
+        })),
+    }
+}
+
+#[cfg(feature = "local_fs")]
+fn write_file_chunk_message(
+    request_id: impl Into<String>,
+    path: impl Into<String>,
+    offset: u64,
+    bytes: Vec<u8>,
+    truncate: bool,
+) -> ClientMessage {
+    ClientMessage {
+        request_id: request_id.into(),
+        message: Some(client_message::Message::WriteFileChunk(WriteFileChunk {
+            path: path.into(),
+            offset,
+            bytes,
+            truncate,
+            executable: None,
+        })),
+    }
+}
+
+#[cfg(feature = "local_fs")]
+fn initialize_message(request_id: impl Into<String>) -> ClientMessage {
+    ClientMessage {
+        request_id: request_id.into(),
+        message: Some(client_message::Message::Initialize(Initialize {
+            auth_token: String::new(),
+            features: Vec::new(),
+        })),
     }
 }
 
@@ -1391,43 +1567,465 @@ fn list_directory_skips_entry_removed_after_readdir() {
 fn read_and_write_file_chunks_round_trip_binary_data() {
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("blob.bin");
-    let model = test_model();
+    let backend = StdFileChunkIoBackend;
 
-    let write_response = model.handle_write_file_chunk(WriteFileChunk {
-        path: file_path.to_string_lossy().to_string(),
-        offset: 0,
-        bytes: vec![0, 1, 2, 3],
-        truncate: true,
-        executable: None,
-    });
-    let server_message::Message::WriteFileChunkResponse(write_response) =
-        write_response.into_message()
-    else {
-        panic!("expected WriteFileChunkResponse");
-    };
-    let Some(write_file_chunk_response::Result::Success(write_success)) = write_response.result
-    else {
-        panic!("expected write chunk success");
-    };
+    let write_success = backend
+        .write(&file_path, 0, &[0, 1, 2, 3], true, None)
+        .expect("write chunk should succeed");
     assert_eq!(write_success.next_offset, 4);
 
-    let read_response = model.handle_read_file_chunk(ReadFileChunk {
-        path: file_path.to_string_lossy().to_string(),
-        offset: 1,
-        max_bytes: 2,
-    });
-    let server_message::Message::ReadFileChunkResponse(read_response) =
-        read_response.into_message()
-    else {
-        panic!("expected ReadFileChunkResponse");
-    };
-    let Some(read_file_chunk_response::Result::Success(read_success)) = read_response.result else {
-        panic!("expected read chunk success");
-    };
+    let read_success = backend
+        .read(&file_path, 1, 2)
+        .expect("read chunk should succeed");
     assert_eq!(read_success.bytes, vec![1, 2]);
     assert_eq!(read_success.next_offset, 3);
     assert_eq!(read_success.total_size, Some(4));
     assert!(!read_success.eof);
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn blocked_file_chunk_io_does_not_delay_independent_requests() {
+    use warpui::r#async::FutureExt as _;
+
+    warpui::App::test((), |mut app| async move {
+        let (backend, started, finished, release) = blocking_file_chunk_io_backend();
+        let model =
+            app.add_singleton_model(|_ctx| test_model_with_file_chunk_backend(backend.clone()));
+        let conn_id = uuid::Uuid::new_v4();
+        let (conn_tx, conn_rx) = async_channel::unbounded();
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(conn_id, conn_tx, ctx);
+            model.handle_message(
+                conn_id,
+                read_file_chunk_message("blocked-read", "/tmp/blocked-read", 7, u64::MAX),
+                ctx,
+            );
+        });
+
+        let read = started
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("blocked read did not start")
+            .expect("blocked read observation channel closed");
+        assert_eq!(
+            read,
+            ObservedFileChunkIo::Read {
+                path: std::path::PathBuf::from("/tmp/blocked-read"),
+                offset: 7,
+                max_bytes: MAX_FILE_CHUNK_BYTES,
+            }
+        );
+
+        model.update(&mut app, |model, ctx| {
+            model.handle_message(conn_id, initialize_message("during-read"), ctx);
+        });
+        let response = conn_rx
+            .recv()
+            .with_timeout(std::time::Duration::from_millis(250))
+            .await
+            .expect("independent request was delayed by blocked read")
+            .expect("connection closed during blocked read");
+        assert_eq!(response.request_id, "during-read");
+        assert!(matches!(
+            response.message,
+            Some(server_message::Message::InitializeResponse(_))
+        ));
+
+        release.send(()).unwrap();
+        finished
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("blocked read did not finish")
+            .expect("blocked read finish channel closed");
+        let response = conn_rx
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("read response timed out")
+            .expect("connection closed before read response");
+        assert_eq!(response.request_id, "blocked-read");
+
+        model.update(&mut app, |model, ctx| {
+            model.handle_message(
+                conn_id,
+                write_file_chunk_message(
+                    "blocked-write",
+                    "/tmp/blocked-write",
+                    11,
+                    vec![1, 2, 3],
+                    true,
+                ),
+                ctx,
+            );
+        });
+        let write = started
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("blocked write did not start")
+            .expect("blocked write observation channel closed");
+        assert_eq!(
+            write,
+            ObservedFileChunkIo::Write {
+                path: std::path::PathBuf::from("/tmp/blocked-write"),
+                offset: 11,
+                bytes: vec![1, 2, 3],
+                truncate: true,
+                executable: None,
+            }
+        );
+
+        model.update(&mut app, |model, ctx| {
+            model.handle_message(conn_id, initialize_message("during-write"), ctx);
+        });
+        let response = conn_rx
+            .recv()
+            .with_timeout(std::time::Duration::from_millis(250))
+            .await
+            .expect("independent request was delayed by blocked write")
+            .expect("connection closed during blocked write");
+        assert_eq!(response.request_id, "during-write");
+        assert!(matches!(
+            response.message,
+            Some(server_message::Message::InitializeResponse(_))
+        ));
+
+        release.send(()).unwrap();
+        finished
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("blocked write did not finish")
+            .expect("blocked write finish channel closed");
+        let response = conn_rx
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("write response timed out")
+            .expect("connection closed before write response");
+        assert_eq!(response.request_id, "blocked-write");
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn file_chunk_scheduler_bounds_work_and_cleans_up_aborts() {
+    use warpui::r#async::FutureExt as _;
+
+    warpui::App::test((), |mut app| async move {
+        let (backend, started, finished, release) = blocking_file_chunk_io_backend();
+        let model =
+            app.add_singleton_model(|_ctx| test_model_with_file_chunk_backend(backend.clone()));
+        let conn_id = uuid::Uuid::new_v4();
+        let (conn_tx, conn_rx) = async_channel::unbounded();
+        let accepted = MAX_CONCURRENT_FILE_CHUNK_IO + MAX_PENDING_FILE_CHUNK_IO;
+        let request_ids = (0..accepted)
+            .map(|index| format!("bounded-chunk-{index}"))
+            .collect::<Vec<_>>();
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(conn_id, conn_tx, ctx);
+            for (index, request_id) in request_ids.iter().enumerate() {
+                model.handle_message(
+                    conn_id,
+                    read_file_chunk_message(
+                        request_id,
+                        format!("/tmp/bounded-chunk-{index}"),
+                        0,
+                        1,
+                    ),
+                    ctx,
+                );
+            }
+            model.handle_message(
+                conn_id,
+                read_file_chunk_message("queue-full", "/tmp/queue-full", 0, 1),
+                ctx,
+            );
+        });
+
+        for _ in 0..MAX_CONCURRENT_FILE_CHUNK_IO {
+            started
+                .recv()
+                .with_timeout(std::time::Duration::from_secs(1))
+                .await
+                .expect("bounded chunk operation did not start")
+                .expect("bounded chunk observation channel closed");
+        }
+        assert_eq!(
+            backend.max_active.load(Ordering::Acquire),
+            MAX_CONCURRENT_FILE_CHUNK_IO
+        );
+        model.read(&app, |model, _ctx| {
+            assert_eq!(
+                model.file_chunk_io.active_requests.len(),
+                MAX_CONCURRENT_FILE_CHUNK_IO
+            );
+            assert_eq!(model.file_chunk_io.pending.len(), MAX_PENDING_FILE_CHUNK_IO);
+        });
+
+        let response = conn_rx
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("queue-full response timed out")
+            .expect("connection closed before queue-full response");
+        assert_eq!(response.request_id, "queue-full");
+        let Some(server_message::Message::ReadFileChunkResponse(response)) = response.message
+        else {
+            panic!("expected typed read chunk queue-full response");
+        };
+        let Some(read_file_chunk_response::Result::Error(error)) = response.result else {
+            panic!("expected read chunk queue-full error");
+        };
+        assert!(error.message.contains("queue is full"));
+
+        model.update(&mut app, |model, _ctx| {
+            for request_id in &request_ids {
+                model.handle_abort(
+                    Abort {
+                        request_id_to_abort: request_id.clone(),
+                    },
+                    &RequestId::from(format!("abort-{request_id}")),
+                );
+            }
+            assert!(model.in_progress.is_empty());
+        });
+
+        for _ in 0..100 {
+            if model.read(&app, |model, _ctx| model.file_chunk_io.pending.is_empty()) {
+                break;
+            }
+            async_io::Timer::after(std::time::Duration::from_millis(10)).await;
+        }
+        model.read(&app, |model, _ctx| {
+            assert!(model.file_chunk_io.pending.is_empty());
+            assert_eq!(
+                model.file_chunk_io.active_requests.len(),
+                MAX_CONCURRENT_FILE_CHUNK_IO
+            );
+        });
+
+        for _ in 0..MAX_CONCURRENT_FILE_CHUNK_IO {
+            release.send(()).unwrap();
+        }
+        for _ in 0..MAX_CONCURRENT_FILE_CHUNK_IO {
+            finished
+                .recv()
+                .with_timeout(std::time::Duration::from_secs(1))
+                .await
+                .expect("aborted chunk operation did not leave blocking backend")
+                .expect("aborted chunk finish channel closed");
+        }
+        for _ in 0..100 {
+            if model.read(&app, |model, _ctx| {
+                model.file_chunk_io.active_requests.is_empty()
+            }) {
+                break;
+            }
+            async_io::Timer::after(std::time::Duration::from_millis(10)).await;
+        }
+        model.read(&app, |model, _ctx| {
+            assert!(model.file_chunk_io.active_requests.is_empty());
+            assert!(model.file_chunk_io.active_paths.is_empty());
+            assert!(model.file_chunk_io.pending.is_empty());
+        });
+        assert_eq!(backend.active.load(Ordering::Acquire), 0);
+        assert_eq!(
+            backend.max_active.load(Ordering::Acquire),
+            MAX_CONCURRENT_FILE_CHUNK_IO
+        );
+        match conn_rx
+            .recv()
+            .with_timeout(std::time::Duration::from_millis(100))
+            .await
+        {
+            Ok(Ok(message)) => panic!("aborted request emitted stale response: {message:?}"),
+            Ok(Err(_)) | Err(_) => {}
+        }
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn file_chunk_scheduler_preserves_per_path_order_and_offsets() {
+    use warpui::r#async::FutureExt as _;
+
+    warpui::App::test((), |mut app| async move {
+        let (backend, started, finished, release) = blocking_file_chunk_io_backend();
+        let model =
+            app.add_singleton_model(|_ctx| test_model_with_file_chunk_backend(backend.clone()));
+        let conn_id = uuid::Uuid::new_v4();
+        let (conn_tx, conn_rx) = async_channel::unbounded();
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(conn_id, conn_tx, ctx);
+            model.handle_message(
+                conn_id,
+                write_file_chunk_message("write-first", "/tmp/ordered-file", 0, vec![1, 2], true),
+                ctx,
+            );
+            model.handle_message(
+                conn_id,
+                write_file_chunk_message("write-second", "/tmp/ordered-file", 2, vec![3], false),
+                ctx,
+            );
+        });
+
+        let first = started
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("first write did not start")
+            .expect("first write observation channel closed");
+        assert_eq!(
+            first,
+            ObservedFileChunkIo::Write {
+                path: std::path::PathBuf::from("/tmp/ordered-file"),
+                offset: 0,
+                bytes: vec![1, 2],
+                truncate: true,
+                executable: None,
+            }
+        );
+        assert!(
+            started
+                .recv()
+                .with_timeout(std::time::Duration::from_millis(100))
+                .await
+                .is_err(),
+            "second write started before the first write completed"
+        );
+
+        release.send(()).unwrap();
+        finished
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("first write did not finish")
+            .expect("first write finish channel closed");
+        let second = started
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("second write did not start after first completed")
+            .expect("second write observation channel closed");
+        assert_eq!(
+            second,
+            ObservedFileChunkIo::Write {
+                path: std::path::PathBuf::from("/tmp/ordered-file"),
+                offset: 2,
+                bytes: vec![3],
+                truncate: false,
+                executable: None,
+            }
+        );
+        assert_eq!(backend.max_active.load(Ordering::Acquire), 1);
+
+        release.send(()).unwrap();
+        finished
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("second write did not finish")
+            .expect("second write finish channel closed");
+
+        let mut next_offsets = HashMap::new();
+        for _ in 0..2 {
+            let response = conn_rx
+                .recv()
+                .with_timeout(std::time::Duration::from_secs(1))
+                .await
+                .expect("ordered write response timed out")
+                .expect("connection closed before ordered write response");
+            let Some(server_message::Message::WriteFileChunkResponse(response_message)) =
+                response.message
+            else {
+                panic!("expected write chunk response");
+            };
+            let Some(write_file_chunk_response::Result::Success(success)) = response_message.result
+            else {
+                panic!("expected write chunk success");
+            };
+            next_offsets.insert(response.request_id, success.next_offset);
+        }
+        assert_eq!(next_offsets.get("write-first"), Some(&2));
+        assert_eq!(next_offsets.get("write-second"), Some(&3));
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn invalid_write_chunks_are_rejected_before_blocking_io() {
+    use warpui::r#async::FutureExt as _;
+
+    warpui::App::test((), |mut app| async move {
+        let (backend, started, _finished, _release) = blocking_file_chunk_io_backend();
+        let model =
+            app.add_singleton_model(|_ctx| test_model_with_file_chunk_backend(backend.clone()));
+        let conn_id = uuid::Uuid::new_v4();
+        let (conn_tx, conn_rx) = async_channel::unbounded();
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(conn_id, conn_tx, ctx);
+            model.handle_message(
+                conn_id,
+                write_file_chunk_message(
+                    "oversized-write",
+                    "/tmp/oversized-write",
+                    0,
+                    vec![0; MAX_FILE_CHUNK_BYTES + 1],
+                    true,
+                ),
+                ctx,
+            );
+            model.handle_message(
+                conn_id,
+                write_file_chunk_message(
+                    "overflowing-write",
+                    "/tmp/overflowing-write",
+                    u64::MAX,
+                    vec![0],
+                    false,
+                ),
+                ctx,
+            );
+        });
+
+        let mut errors = HashMap::new();
+        for _ in 0..2 {
+            let response = conn_rx
+                .recv()
+                .with_timeout(std::time::Duration::from_secs(1))
+                .await
+                .expect("invalid write response timed out")
+                .expect("connection closed before invalid write response");
+            let Some(server_message::Message::WriteFileChunkResponse(response_message)) =
+                response.message
+            else {
+                panic!("expected write chunk response");
+            };
+            let Some(write_file_chunk_response::Result::Error(error)) = response_message.result
+            else {
+                panic!("expected invalid write error");
+            };
+            errors.insert(response.request_id, error.message);
+        }
+        assert!(errors["oversized-write"].contains("exceeds maximum size"));
+        assert!(errors["overflowing-write"].contains("offset overflow"));
+        assert!(
+            started
+                .recv()
+                .with_timeout(std::time::Duration::from_millis(100))
+                .await
+                .is_err(),
+            "invalid write reached blocking backend"
+        );
+        model.read(&app, |model, _ctx| {
+            assert!(model.file_chunk_io.active_requests.is_empty());
+            assert!(model.file_chunk_io.pending.is_empty());
+        });
+    });
 }
 
 #[cfg(all(feature = "local_fs", unix))]
@@ -1447,22 +2045,10 @@ fn read_file_chunk_rejects_symlinks_and_special_files() {
     symlink(directory.path(), &directory_link).unwrap();
     symlink(directory.path().join("missing"), &broken_link).unwrap();
     let _listener = UnixListener::bind(&socket).unwrap();
-    let model = test_model();
+    let backend = StdFileChunkIoBackend;
 
     for path in [file_link, directory_link, broken_link, socket] {
-        let response = model.handle_read_file_chunk(ReadFileChunk {
-            path: path.to_string_lossy().to_string(),
-            offset: 0,
-            max_bytes: 1024,
-        });
-        let server_message::Message::ReadFileChunkResponse(response) = response.into_message()
-        else {
-            panic!("expected ReadFileChunkResponse");
-        };
-        assert!(matches!(
-            response.result,
-            Some(read_file_chunk_response::Result::Error(_))
-        ));
+        assert!(backend.read(&path, 0, 1024).is_err());
     }
 }
 
