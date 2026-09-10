@@ -115,6 +115,13 @@ pub(crate) struct JsonlRead {
     pub mode: JsonlReadMode,
     pub records: Vec<u8>,
     pub cursor: JsonlCursor,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the byte counter is test-only I/O instrumentation"
+        )
+    )]
     pub bytes_read: u64,
 }
 
