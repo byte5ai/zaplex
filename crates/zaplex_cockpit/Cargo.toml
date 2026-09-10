@@ -5,7 +5,7 @@ edition = "2021"
 authors.workspace = true
 publish.workspace = true
 license.workspace = true
-description = "zaplex cockpit data spine: Claude/Codex account discovery + usage/cost/heat aggregation (read-only, never reads secrets)"
+description = "zaplex cockpit data spine: read-only usage aggregation; locally reads auth.json and decodes id_token without exposing raw token strings"
 
 [dependencies]
 serde.workspace = true

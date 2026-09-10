@@ -28,7 +28,8 @@ the proven increment style for this project.
 - Live **session/agent inventory** + "needs attention" state — Increment 3.
 - **Launch-on-freest** routing + credential-swap launching + subscription switching — Increment 4.
 - **Multi-host** usage aggregation (over the daemon) + **persisted history**/charts — Increment 5.
-- Reading or storing OAuth tokens/secrets (we read only token *counts* + account *metadata*).
+- Returning, persisting, logging, or transmitting OAuth token strings or secrets.
+  Codex account discovery reads auth metadata locally as described below.
 
 ## 2. Why this first / mission fit
 
@@ -68,10 +69,11 @@ native from day 0, no Bun/`claudeplex` subprocess.
 
 ### 3.2 Codex (net-new — no `claudeplex` prior art; verified on disk here)
 - **Account** = `~/.codex/auth.json`: `auth_mode`, `last_refresh`,
-  `tokens.{account_id,access_token,id_token,refresh_token}`. The email/plan are **not**
-  plaintext at top level — they are likely in the `id_token` JWT claims. We will
-  decode only the **unverified JWT payload** for `email`/plan-ish claims and **never
-  read or store** the token strings. (Open question §10: confirm claim names; possible
+  `tokens.{account_id,access_token,id_token,refresh_token}`. The complete JSON
+  document is read and parsed locally in memory. Account discovery inspects the
+  auth mode/account id and reads `id_token` to decode only its **unverified JWT
+  payload** for the `email` claim; raw token strings are never returned, persisted,
+  logged, or transmitted. (Open question §10: confirm further claim names; possible
   fallback to `~/.codex/*.sqlite`.)
 - **Usage** = `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. Line `type`s:
   `session_meta`, `turn_context`, `response_item`, `event_msg`. Token fields present:
@@ -200,11 +202,12 @@ launch-on-freest, per `claudeplex` `usage.ts:57-66`.
   with a **fixed `now`** (5h/today/week boundaries), cost against golden numbers, heat
   = work/budget. Pin one known model's cost so a pricing-table edit is a conscious
   test change.
-- **Secrets:** usage parsing reads only token counts + account metadata; the
-  later #114 task-progress extension additionally projects only titles/statuses
-  deliberately emitted through structured task tools. A test asserts no
-  token/secret field is ever surfaced. Never require a real
-  `~/.claude`/`~/.codex`.
+- **Secrets:** Codex account discovery parses local `auth.json` and decodes the
+  unverified `id_token` payload for email; usage parsing reads token counts. Raw
+  token strings are never returned, persisted, logged, or transmitted. The later
+  #114 task-progress extension additionally projects only titles/statuses
+  deliberately emitted through structured task tools. Tests assert no token/secret
+  field is surfaced. Never require a real `~/.claude`/`~/.codex`.
 - Runs locally (`cargo test -p zaplex_cockpit`); no GUI/network. **Run the full
   affected-crate suite, not just `-p warp`** (lesson from the remote-session work —
   a sibling crate's tests silently broke when only the app crate was run).
@@ -213,7 +216,8 @@ launch-on-freest, per `claudeplex` `usage.ts:57-66`.
 
 1. **Codex account/plan discovery (net-new).** Confirm where email/plan live —
    `id_token` JWT claims vs. a `~/.codex/*.sqlite` table. Decode only the unverified
-   JWT payload; never store tokens. Small spike at the start of Increment 1.
+   JWT payload; never return, persist, log, or transmit raw token strings. Small
+   spike at the start of Increment 1.
 2. **Codex usage semantics.** `total_token_usage` may be cumulative-per-session vs.
    `last_token_usage` per-turn — pick one consistently to avoid double-counting.
    Prefer summing per-turn deltas (parity with the Claude per-message approach).
@@ -223,11 +227,12 @@ launch-on-freest, per `claudeplex` `usage.ts:57-66`.
 4. **Pricing & budget are approximations** (both flagged). Keep the pricing table
    centralized + refresh on model launches; map tier→budget where possible, else the
    flat guess, both overridable.
-5. **Privacy.** Read only token counts + account metadata — **never
+5. **Privacy.** Codex discovery parses local `auth.json` and decodes the unverified
+   `id_token` payload for email; raw token strings are never returned, persisted,
+   logged, or transmitted. Usage scanning reads token counts — **never
    conversational transcript content**. The later #114 task-progress extension
-   permits only the titles/statuses deliberately emitted through structured
-   task tools; token strings and credentials remain excluded. Document this
-   prominently; it's a trust point for the product.
+   permits only the titles/statuses deliberately emitted through structured task
+   tools. Document this prominently; it's a trust point for the product.
 6. **Performance/footprint.** Many large transcripts → `(mtime,size)` cache + week
    cutoff; the watcher must debounce (transcripts are appended frequently during an
    active session).
@@ -248,8 +253,9 @@ launch-on-freest, per `claudeplex` `usage.ts:57-66`.
 `turn_context`, `response_item`, `event_msg`. Token fields seen: `input_tokens`,
 `output_tokens`, `cached_input_tokens`, `reasoning_output_tokens`, `total_tokens`,
 `last_token_usage`, `total_token_usage`. `~/.codex/auth.json` keys: `auth_mode`,
-`last_refresh`, `tokens.{access_token,account_id,id_token,refresh_token}` (values
-never read/stored).
+`last_refresh`, `tokens.{access_token,account_id,id_token,refresh_token}`. The file
+is parsed locally and `id_token` is decoded for email; raw token strings are never
+returned, persisted, logged, or transmitted.
 
 ## Appendix C — Code seams (verified, file:line)
 

@@ -4,9 +4,10 @@
 //! confirmed (design doc §10), so parsing is deliberately **defensive**: it searches
 //! each JSONL line for a token-usage object rather than assuming a fixed path.
 //!
-//! Privacy: reads `auth.json` only to classify the auth form and decodes the
-//! **unverified** `id_token` JWT payload for an `email` claim. API-key values
-//! and token strings are never stored.
+//! Privacy: reads local `auth.json` account metadata, including the auth form,
+//! and decodes the **unverified** `id_token` JWT payload for an `email` claim.
+//! Raw token and API-key strings are never returned, persisted, logged, or sent
+//! over the network.
 
 use std::collections::HashSet;
 use std::fs;

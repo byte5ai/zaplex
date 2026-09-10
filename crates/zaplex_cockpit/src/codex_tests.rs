@@ -37,6 +37,24 @@ fn discovers_account_and_reads_email_from_id_token_without_storing_tokens() {
 }
 
 #[test]
+fn public_privacy_docs_match_auth_discovery() {
+    let crate_docs = include_str!("lib.rs");
+    let manifest = include_str!("../Cargo.toml");
+    let codex_docs = include_str!("codex.rs");
+
+    assert!(!crate_docs.contains("It never reads token strings or credentials"));
+    assert!(!manifest.contains("never reads secrets"));
+    for docs in [crate_docs, manifest, codex_docs] {
+        assert!(docs.contains("auth.json"));
+        assert!(docs.contains("id_token"));
+    }
+    for docs in [crate_docs, codex_docs] {
+        assert!(docs.contains("never returned, persisted, logged, or sent over the network"));
+    }
+    assert!(manifest.contains("without exposing raw token strings"));
+}
+
+#[test]
 fn missing_auth_json_yields_no_accounts() {
     let tmp = tempfile::tempdir().unwrap();
     assert!(discover_accounts(tmp.path()).is_empty());
