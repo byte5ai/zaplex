@@ -2,12 +2,14 @@
 //!
 //! Restart, rename, and stale cleanup share one route type so none of them can
 //! silently fall back from a remote account id to a local config directory or
-//! from a stable host id to a display label. This module only decides whether
-//! an operation is safe and preserves its intent; the workspace and daemon own
-//! the actual terminal, process, and provider-registry mutations.
+//! from a stable host id to a display label. Restart additionally requires the
+//! exact recorded launch intent and verified process identity. Claude registry
+//! cleanup is revalidated by `cleanup_claude_stale_registry_entry`, including
+//! the registry revision, process identity, and independently addressable
+//! transcript; the workspace revalidates the route and account before calling
+//! it.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use zaplex_cockpit::{Provider, SessionSnapshot};
 
@@ -173,13 +175,10 @@ impl SessionRoute {
     }
 }
 
-/// Immediate evidence about the process or terminal that must be replaced.
+/// Immediate evidence about the process that must be replaced.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RestartPresence {
-    Dormant,
-    ExactTerminal { terminal_key: String },
     VerifiedProcess,
-    ProcessReused,
     Unverifiable,
 }
 
@@ -199,23 +198,13 @@ pub(crate) fn lifecycle_capabilities(
     let provider_resumes = agent_of(route.provider)
         .resume_command(&route.session_id)
         .is_some();
-    let exact_running_target = matches!(
-        presence,
-        RestartPresence::ExactTerminal { .. } | RestartPresence::VerifiedProcess
-    );
+    let exact_running_target = matches!(presence, RestartPresence::VerifiedProcess);
     SessionLifecycleCapabilities {
         can_restart: exact_launch_bound && provider_resumes && exact_running_target,
         can_rename: matches!(&route.host, SessionHostRoute::Local)
             && matches!(route.provider, Provider::Claude | Provider::Codex),
         can_cleanup_stale: route.provider == Provider::Claude && cleanup_candidate,
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum RestartTermination {
-    None,
-    ExactTerminal { terminal_key: String },
-    VerifiedProcess { pid: u32, fingerprint: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -238,84 +227,15 @@ pub(crate) enum ResumeInvocation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RestartPlan {
     pub(crate) route: SessionRoute,
-    pub(crate) termination: RestartTermination,
     pub(crate) resume: ResumeInvocation,
     pub(crate) model: Option<String>,
     pub(crate) effort: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct LifecycleOperationId(u64);
-
-impl LifecycleOperationId {
-    fn next() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum LifecycleOperationState {
-    Pending,
-    Applied,
-    Failed { retryable: bool, message: String },
-}
-
-/// One stable mutation identity. Retrying a partial failure retains the same
-/// id and target, while an applied operation can never return to Pending.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LifecycleOperation<T> {
-    pub(crate) id: LifecycleOperationId,
-    pub(crate) target: T,
-    pub(crate) state: LifecycleOperationState,
-}
-
-impl<T> LifecycleOperation<T> {
-    pub(crate) fn new(target: T) -> Self {
-        Self {
-            id: LifecycleOperationId::next(),
-            target,
-            state: LifecycleOperationState::Pending,
-        }
-    }
-
-    pub(crate) fn mark_applied(&mut self) {
-        if !matches!(self.state, LifecycleOperationState::Applied) {
-            self.state = LifecycleOperationState::Applied;
-        }
-    }
-
-    pub(crate) fn mark_failed(&mut self, retryable: bool, message: impl Into<String>) {
-        if !matches!(self.state, LifecycleOperationState::Applied) {
-            self.state = LifecycleOperationState::Failed {
-                retryable,
-                message: message.into(),
-            };
-        }
-    }
-
-    pub(crate) fn retry(&mut self) -> bool {
-        match self.state {
-            LifecycleOperationState::Failed {
-                retryable: true, ..
-            } => {
-                self.state = LifecycleOperationState::Pending;
-                true
-            }
-            LifecycleOperationState::Pending
-            | LifecycleOperationState::Applied
-            | LifecycleOperationState::Failed {
-                retryable: false, ..
-            } => false,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RestartPlanError {
     LaunchIntentUnbound,
     ProcessIdentityUnavailable,
-    ProcessIdentityChanged,
     ProviderCannotResume,
 }
 
@@ -324,34 +244,19 @@ pub(crate) enum RestartPlanError {
 /// operation before it can terminate or launch anything.
 pub(crate) fn plan_restart(
     route: SessionRoute,
-    presence: RestartPresence,
     record: &LaunchRecord,
 ) -> Result<RestartPlan, RestartPlanError> {
     if !route.launch_record_matches(record) {
         return Err(RestartPlanError::LaunchIntentUnbound);
     }
-    let termination = match presence {
-        RestartPresence::Dormant => RestartTermination::None,
-        RestartPresence::ExactTerminal { terminal_key } => {
-            RestartTermination::ExactTerminal { terminal_key }
-        }
-        RestartPresence::VerifiedProcess => {
-            let fingerprint = route
-                .process_fingerprint
-                .clone()
-                .filter(|value| !value.trim().is_empty())
-                .ok_or(RestartPlanError::ProcessIdentityUnavailable)?;
-            if route.pid == 0 {
-                return Err(RestartPlanError::ProcessIdentityUnavailable);
-            }
-            RestartTermination::VerifiedProcess {
-                pid: route.pid,
-                fingerprint,
-            }
-        }
-        RestartPresence::ProcessReused => return Err(RestartPlanError::ProcessIdentityChanged),
-        RestartPresence::Unverifiable => return Err(RestartPlanError::ProcessIdentityUnavailable),
-    };
+    if route.pid == 0
+        || route
+            .process_fingerprint
+            .as_deref()
+            .map_or(true, |fingerprint| fingerprint.trim().is_empty())
+    {
+        return Err(RestartPlanError::ProcessIdentityUnavailable);
+    }
 
     let agent = agent_of(route.provider);
     let resume = match (&route.host, &route.account) {
@@ -388,50 +293,10 @@ pub(crate) fn plan_restart(
 
     Ok(RestartPlan {
         route,
-        termination,
         resume,
         model: record.model.clone(),
         effort: record.effort.clone(),
     })
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum CleanupProcessEvidence {
-    Dead,
-    MatchingLive,
-    ProcessReused,
-    Unverifiable,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum CleanupRejection {
-    InventoryChanged,
-    SessionStillVisible,
-    ProcessStillLive,
-    ProcessIdentityChanged,
-    ProcessIdentityUnavailable,
-}
-
-/// Cleanup is allowed only against the same inventory revision after both the
-/// current inventory and an immediate process proof say the entry is gone.
-pub(crate) fn authorize_stale_cleanup(
-    candidate_revision: u64,
-    current_revision: u64,
-    still_visible: bool,
-    process: CleanupProcessEvidence,
-) -> Result<(), CleanupRejection> {
-    if candidate_revision != current_revision {
-        return Err(CleanupRejection::InventoryChanged);
-    }
-    if still_visible {
-        return Err(CleanupRejection::SessionStillVisible);
-    }
-    match process {
-        CleanupProcessEvidence::Dead => Ok(()),
-        CleanupProcessEvidence::MatchingLive => Err(CleanupRejection::ProcessStillLive),
-        CleanupProcessEvidence::ProcessReused => Err(CleanupRejection::ProcessIdentityChanged),
-        CleanupProcessEvidence::Unverifiable => Err(CleanupRejection::ProcessIdentityUnavailable),
-    }
 }
 
 pub(crate) const MAX_SESSION_NAME_BYTES: usize = 80;

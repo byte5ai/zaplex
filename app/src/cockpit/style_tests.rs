@@ -128,12 +128,8 @@ fn every_heat_band_clears_the_contrast_floor_on_both_themes() {
 }
 
 #[test]
-fn metric_column_width_does_not_change_with_label_length() {
-    assert_eq!(
-        session_metric_column_width("a"),
-        session_metric_column_width(
-            "a-very-long-worktree-label-that-must-shrink-before-the-metric-column"
-        )
-    );
-    assert_eq!(session_metric_column_width("a"), METRIC_COL_WIDTH);
+fn style_has_no_unused_session_metric_width_contract() {
+    let source = include_str!("style.rs");
+    assert!(!source.contains("session_metric_column_width"));
+    assert!(!source.contains("METRIC_COL_WIDTH"));
 }

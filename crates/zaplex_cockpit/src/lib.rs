@@ -5,9 +5,11 @@
 //! derives cost (per-model pricing) and heat (load vs. budget).
 //!
 //! This crate is a **pure, headless-testable data layer**: no GUI and no network.
-//! It never reads token strings or credentials. Structured task titles are the
-//! one deliberate transcript-content projection: providers emit them through
-//! task tools, and session snapshots carry them for the Conductor. The
+//! Codex discovery reads local `auth.json` account metadata and decodes the
+//! unverified `id_token` payload for an email claim. Raw token strings are never
+//! returned, persisted, logged, or sent over the network. Structured task titles
+//! are the one deliberate transcript-content projection: providers emit them
+//! through task tools, and session snapshots carry them for the Conductor. The
 //! `CockpitModel` / file-watch wiring that surfaces this into the app lives in
 //! `app/src/cockpit/`.
 //!
@@ -43,12 +45,12 @@ pub use claude_registry_lifecycle::{
     ClaudeRegistryCleanupOutcome, ClaudeRegistryLifecycleError, ClaudeStaleRegistryCandidate,
 };
 pub use conductor::{
-    fleet_conductor_session_count, fleet_is_large, fleet_session_count, group_project_sessions,
-    host_auto_collapsed, host_conductor_session_count, host_ident, host_key, host_key_is_local,
-    host_session_count, host_summary, model_effort_label, next_waiting, session_attr_line,
-    session_attrs, session_glyph, session_identity_key, session_identity_key_with_account_id,
-    session_key, split_host_key, state_word, waiting_sessions, ConductorSession, SessionAttrs,
-    WaitingTarget, GLYPH_IDLE, GLYPH_WAITING, GLYPH_WORKING,
+    fleet_conductor_session_count, fleet_session_count, group_project_sessions,
+    host_conductor_session_count, host_ident, host_key, host_key_is_local, host_session_count,
+    model_effort_label, next_waiting, session_attr_line, session_attrs, session_glyph,
+    session_identity_key, session_identity_key_with_account_id, session_key, split_host_key,
+    state_word, waiting_sessions, ConductorSession, SessionAttrs, WaitingTarget, GLYPH_IDLE,
+    GLYPH_WAITING, GLYPH_WORKING,
 };
 pub use favorites::{Favorite, FavoriteKind, Favorites};
 pub use fleet::{
@@ -305,92 +307,8 @@ pub fn live_codex_sessions_with_cache(
 }
 
 #[cfg(test)]
-mod build_snapshot_health_tests {
-    use super::*;
-    use chrono::Utc;
-    use std::fs;
-
-    /// A present-but-unreadable `auth.json` makes codex discovery return no account —
-    /// identical in shape to "Codex was never set up". The snapshot must report this
-    /// as *degraded* so the UI can say "couldn't read your account" (and offer a
-    /// retry) instead of the misleading "no accounts".
-    #[test]
-    fn a_malformed_codex_auth_json_degrades_the_snapshot() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let codex_home = tmp.path().join("codex");
-        fs::create_dir_all(&home).unwrap();
-        fs::create_dir_all(&codex_home).unwrap();
-        fs::write(codex_home.join("auth.json"), "{ this is not valid json").unwrap();
-
-        let snap = build_snapshot(
-            &home,
-            &codex_home,
-            None,
-            Utc::now(),
-            0,
-            0,
-            &PricingTable::default(),
-        );
-        assert!(
-            matches!(snap.health, ScanHealth::Degraded(_)),
-            "a present-but-unreadable codex auth.json must degrade, not read as empty: {:?}",
-            snap.health,
-        );
-    }
-
-    #[test]
-    fn a_malformed_claude_identity_degrades_the_snapshot() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let codex_home = home.join(".codex");
-        fs::create_dir_all(home.join(".claude")).unwrap();
-        fs::write(home.join(".claude/.claude.json"), "{not valid json").unwrap();
-
-        let snap = build_snapshot(
-            &home,
-            &codex_home,
-            None,
-            Utc::now(),
-            0,
-            0,
-            &PricingTable::default(),
-        );
-        assert!(
-            matches!(snap.health, ScanHealth::Degraded(_)),
-            "a malformed Claude identity must degrade, not invent an account: {:?}",
-            snap.health,
-        );
-        assert!(snap.accounts.is_empty());
-    }
-
-    /// A clean setup with genuinely no accounts is authoritative — an empty list that
-    /// the UI may present as a real "no accounts" (with a sign-in prompt), not a
-    /// failure.
-    #[test]
-    fn a_clean_empty_setup_is_loaded_not_degraded() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let codex_home = tmp.path().join("codex");
-        fs::create_dir_all(&home).unwrap();
-        fs::create_dir_all(&codex_home).unwrap();
-
-        let snap = build_snapshot(
-            &home,
-            &codex_home,
-            None,
-            Utc::now(),
-            0,
-            0,
-            &PricingTable::default(),
-        );
-        assert_eq!(
-            snap.health,
-            ScanHealth::Loaded,
-            "a clean, genuinely-empty setup is authoritative-empty",
-        );
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "snapshot_platform_tests.rs"]
