@@ -231,12 +231,14 @@ fn nested_cwd_stops_at_innermost_git_root() {
 fn real_repo_with_worktrees(tmp: &Path, names: &[&str]) -> Option<PathBuf> {
     let main = tmp.join("zaplex");
     std::fs::create_dir_all(&main).ok()?;
+    let global_git_config = tmp.join("empty-gitconfig");
+    std::fs::write(&global_git_config, "").ok()?;
     let git = |args: &[&str], cwd: &Path| -> Option<()> {
-        let ok = std::process::Command::new("git")
+        let ok = command::blocking::Command::new("git")
             .args(args)
             .current_dir(cwd)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_CONFIG_GLOBAL", &global_git_config)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
             .output()
             .ok()?
             .status
