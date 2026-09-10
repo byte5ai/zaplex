@@ -14,9 +14,10 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::lock::Mutex;
+use instant::Instant;
 use zaplex_cockpit::{OauthUsage, UtilizationScale};
 
 const ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";

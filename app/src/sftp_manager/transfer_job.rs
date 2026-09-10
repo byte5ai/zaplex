@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use instant::Instant;
 use sha2::{Digest, Sha256};
 
 use super::sftp_backend::{BackendOwnershipAnchor, SftpBackend};

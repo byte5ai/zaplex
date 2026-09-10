@@ -18,6 +18,7 @@ use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
+use instant::Instant;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
@@ -865,7 +866,7 @@ pub struct SftpBrowserView {
     /// row navigates on double click (no tail click exists), and breadcrumb /
     /// toolbar targets are not over the rows. 250 ms is far below any
     /// deliberate see-then-click reaction on a fresh listing.
-    suppress_row_clicks_until: Option<std::time::Instant>,
+    suppress_row_clicks_until: Option<Instant>,
     // ---- Scrolling ----
     /// Scroll state handle
     scroll_state: ClippedScrollStateHandle,
@@ -1939,7 +1940,7 @@ impl SftpBrowserView {
     /// moves need not.
     fn row_clicks_suppressed(&self) -> bool {
         self.suppress_row_clicks_until
-            .is_some_and(|until| std::time::Instant::now() < until)
+            .is_some_and(|until| Instant::now() < until)
     }
 
     /// Test-only fast-forward past the stray-click window — tests dispatch
@@ -5792,7 +5793,7 @@ impl TypedActionView for SftpBrowserView {
                 // second click is still in flight when the rows swap (see
                 // `suppress_row_clicks_until`).
                 self.suppress_row_clicks_until =
-                    Some(std::time::Instant::now() + std::time::Duration::from_millis(250));
+                    Some(Instant::now() + std::time::Duration::from_millis(250));
                 self.go_up(ctx);
             }
             SftpBrowserAction::DeleteSelected => {
