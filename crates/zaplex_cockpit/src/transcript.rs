@@ -17,15 +17,24 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
+use std::fs::{File, Metadata};
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
+use sha2::{Digest as _, Sha256};
 
 use crate::types::{Provider, TaskItem, TaskState, TaskStatus};
 
 const TASK_STATE_CACHE_LIMIT: usize = 512;
+const JSONL_ANCHOR_BYTES: usize = 256;
+const JSONL_ANCHOR_SEGMENT_BYTES: usize = JSONL_ANCHOR_BYTES / 2;
+const JSONL_SUFFIX_MAX_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FileFingerprint {
@@ -41,24 +50,375 @@ pub(crate) fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> 
     })
 }
 
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(not(unix))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileIdentity {
+    created: Option<SystemTime>,
+}
+
+impl FileIdentity {
+    #[cfg(unix)]
+    fn from_metadata(metadata: &Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn from_metadata(metadata: &Metadata) -> Self {
+        Self {
+            created: metadata.created().ok(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct JsonlCursor {
+    fingerprint: FileFingerprint,
+    identity: FileIdentity,
+    committed_offset: u64,
+    read_offset: u64,
+    suffix: Vec<u8>,
+    discarding_oversized_line: bool,
+    anchor: JsonlAnchor,
+}
+
+#[derive(Clone, Debug, Default)]
+struct JsonlAnchor {
+    prefix_len: usize,
+    prefix_checksum: [u8; 32],
+    tail_len: usize,
+    tail_checksum: [u8; 32],
+}
+
+struct JsonlAnchorBytes {
+    prefix: Vec<u8>,
+    tail: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JsonlReadMode {
+    Unchanged,
+    Append,
+    Full,
+}
+
+pub(crate) struct JsonlRead {
+    pub mode: JsonlReadMode,
+    pub records: Vec<u8>,
+    pub cursor: JsonlCursor,
+    pub bytes_read: u64,
+}
+
+impl JsonlCursor {
+    pub(crate) fn fingerprint(&self) -> FileFingerprint {
+        self.fingerprint
+    }
+
+    fn apply_bytes(&mut self, bytes: Vec<u8>) -> Vec<u8> {
+        let initial_read_offset = self.read_offset;
+        let incoming_len = bytes.len();
+        let mut remaining_start = 0usize;
+
+        if self.discarding_oversized_line {
+            let Some(newline) = bytes.iter().position(|byte| *byte == b'\n') else {
+                self.read_offset = initial_read_offset.saturating_add(incoming_len as u64);
+                return Vec::new();
+            };
+            self.committed_offset = initial_read_offset
+                .saturating_add(newline as u64)
+                .saturating_add(1);
+            self.discarding_oversized_line = false;
+            remaining_start = newline + 1;
+        }
+
+        let mut pending = std::mem::take(&mut self.suffix);
+        if pending.is_empty() && remaining_start == 0 {
+            pending = bytes;
+        } else {
+            pending.extend_from_slice(&bytes[remaining_start..]);
+        }
+        let mut line_start = 0usize;
+        for (index, byte) in pending.iter().enumerate() {
+            if *byte == b'\n' {
+                line_start = index + 1;
+            }
+        }
+
+        self.committed_offset = self.committed_offset.saturating_add(line_start as u64);
+        let suffix = pending.split_off(line_start);
+        if suffix.len() <= JSONL_SUFFIX_MAX_BYTES {
+            self.suffix = suffix;
+        } else {
+            self.discarding_oversized_line = true;
+        }
+        self.read_offset = initial_read_offset.saturating_add(incoming_len as u64);
+        pending
+    }
+}
+
+pub(crate) fn for_each_jsonl_object(records: &[u8], mut apply: impl FnMut(&Value)) -> u64 {
+    let mut parsed = 0u64;
+    for line in records.split(|byte| *byte == b'\n') {
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(object) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        apply(&object);
+        parsed = parsed.saturating_add(1);
+    }
+    parsed
+}
+
+impl JsonlAnchor {
+    fn checksum(bytes: &[u8]) -> [u8; 32] {
+        let digest = Sha256::digest(bytes);
+        let mut checksum = [0; 32];
+        checksum.copy_from_slice(&digest);
+        checksum
+    }
+
+    fn from_full(bytes: &[u8]) -> Self {
+        let prefix_len = bytes.len().min(JSONL_ANCHOR_SEGMENT_BYTES);
+        let tail_len = bytes
+            .len()
+            .saturating_sub(prefix_len)
+            .min(JSONL_ANCHOR_SEGMENT_BYTES);
+        Self {
+            prefix_len,
+            prefix_checksum: Self::checksum(&bytes[..prefix_len]),
+            tail_len,
+            tail_checksum: Self::checksum(&bytes[bytes.len().saturating_sub(tail_len)..]),
+        }
+    }
+
+    fn after_append(
+        &self,
+        previous_len: u64,
+        previous: &JsonlAnchorBytes,
+        appended: &[u8],
+    ) -> Self {
+        let mut prior_tail = if previous_len <= JSONL_ANCHOR_SEGMENT_BYTES as u64 {
+            previous.prefix.clone()
+        } else {
+            previous.tail.clone()
+        };
+        prior_tail.extend_from_slice(appended);
+        let tail_len = previous_len
+            .saturating_add(appended.len() as u64)
+            .saturating_sub(JSONL_ANCHOR_SEGMENT_BYTES as u64)
+            .min(JSONL_ANCHOR_SEGMENT_BYTES as u64) as usize;
+        let tail = &prior_tail[prior_tail.len().saturating_sub(tail_len)..];
+
+        if previous_len < JSONL_ANCHOR_SEGMENT_BYTES as u64 {
+            let mut prefix = previous.prefix.clone();
+            prefix.extend_from_slice(appended);
+            return Self::from_full(&prefix);
+        }
+
+        Self {
+            prefix_len: self.prefix_len,
+            prefix_checksum: self.prefix_checksum,
+            tail_len,
+            tail_checksum: Self::checksum(tail),
+        }
+    }
+}
+
+fn metadata_snapshot(file: &File) -> std::io::Result<(FileFingerprint, FileIdentity)> {
+    let metadata = file.metadata()?;
+    Ok((
+        FileFingerprint {
+            len: metadata.len(),
+            modified: metadata.modified()?,
+        },
+        FileIdentity::from_metadata(&metadata),
+    ))
+}
+
+fn read_exact_anchor(
+    file: &mut File,
+    cursor: &JsonlCursor,
+) -> std::io::Result<(bool, u64, JsonlAnchorBytes)> {
+    if cursor.anchor.prefix_len == 0 {
+        return Ok((
+            true,
+            0,
+            JsonlAnchorBytes {
+                prefix: Vec::new(),
+                tail: Vec::new(),
+            },
+        ));
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let mut prefix = vec![0; cursor.anchor.prefix_len];
+    file.read_exact(&mut prefix)?;
+    let mut bytes_read = prefix.len() as u64;
+    if cursor.anchor.tail_len == 0 {
+        let matches = JsonlAnchor::checksum(&prefix) == cursor.anchor.prefix_checksum;
+        return Ok((
+            matches,
+            bytes_read,
+            JsonlAnchorBytes {
+                prefix,
+                tail: Vec::new(),
+            },
+        ));
+    }
+    let start = cursor
+        .read_offset
+        .saturating_sub(cursor.anchor.tail_len as u64);
+    file.seek(SeekFrom::Start(start))?;
+    let mut tail = vec![0; cursor.anchor.tail_len];
+    file.read_exact(&mut tail)?;
+    bytes_read = bytes_read.saturating_add(tail.len() as u64);
+    Ok((
+        JsonlAnchor::checksum(&prefix) == cursor.anchor.prefix_checksum
+            && JsonlAnchor::checksum(&tail) == cursor.anchor.tail_checksum,
+        bytes_read,
+        JsonlAnchorBytes { prefix, tail },
+    ))
+}
+
+fn read_full_jsonl(
+    file: &mut File,
+    fingerprint: FileFingerprint,
+    identity: FileIdentity,
+    bytes_read_before_fallback: u64,
+) -> std::io::Result<JsonlRead> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut bytes = Vec::with_capacity(fingerprint.len as usize);
+    (&mut *file).take(fingerprint.len).read_to_end(&mut bytes)?;
+    let (after_fingerprint, after_identity) = metadata_snapshot(file)?;
+    if after_fingerprint != fingerprint
+        || after_identity != identity
+        || bytes.len() as u64 != fingerprint.len
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "JSONL file changed during full replay",
+        ));
+    }
+    let mut cursor = JsonlCursor {
+        fingerprint,
+        identity,
+        committed_offset: 0,
+        read_offset: 0,
+        suffix: Vec::new(),
+        discarding_oversized_line: false,
+        anchor: JsonlAnchor::default(),
+    };
+    let content_len = bytes.len() as u64;
+    cursor.anchor = JsonlAnchor::from_full(&bytes);
+    let records = cursor.apply_bytes(bytes);
+    Ok(JsonlRead {
+        mode: JsonlReadMode::Full,
+        records,
+        cursor,
+        bytes_read: bytes_read_before_fallback.saturating_add(content_len),
+    })
+}
+
+/// Read a JSONL source through a verified append cursor.
+///
+/// An unchanged fingerprint performs no content read. A same-file growth reads
+/// only a short prefix/tail anchor and the newly appended bytes; every other
+/// change replays the complete file. Incomplete final records stay in a bounded
+/// suffix and are emitted only after their terminating newline arrives.
+pub(crate) fn read_jsonl_objects(
+    path: &Path,
+    cached: Option<&JsonlCursor>,
+) -> std::io::Result<JsonlRead> {
+    let mut file = File::open(path)?;
+    let (fingerprint, identity) = metadata_snapshot(&file)?;
+    if let Some(cached) = cached {
+        if cached.fingerprint == fingerprint && cached.identity == identity {
+            return Ok(JsonlRead {
+                mode: JsonlReadMode::Unchanged,
+                records: Vec::new(),
+                cursor: cached.clone(),
+                bytes_read: 0,
+            });
+        }
+        if identity == cached.identity
+            && fingerprint.len > cached.fingerprint.len
+            && cached.read_offset == cached.fingerprint.len
+        {
+            let (anchor_matches, anchor_bytes, previous_anchor) =
+                read_exact_anchor(&mut file, cached)?;
+            if anchor_matches {
+                file.seek(SeekFrom::Start(cached.read_offset))?;
+                let delta_len = fingerprint.len - cached.read_offset;
+                let mut delta = Vec::with_capacity(delta_len as usize);
+                (&mut file).take(delta_len).read_to_end(&mut delta)?;
+                let (after_fingerprint, after_identity) = metadata_snapshot(&file)?;
+                if after_fingerprint != fingerprint
+                    || after_identity != identity
+                    || delta.len() as u64 != delta_len
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "JSONL file changed during append read",
+                    ));
+                }
+                let mut cursor = cached.clone();
+                cursor.anchor =
+                    cached
+                        .anchor
+                        .after_append(cached.read_offset, &previous_anchor, &delta);
+                let records = cursor.apply_bytes(delta);
+                cursor.fingerprint = fingerprint;
+                cursor.identity = identity;
+                return Ok(JsonlRead {
+                    mode: JsonlReadMode::Append,
+                    records,
+                    cursor,
+                    bytes_read: anchor_bytes.saturating_add(delta_len),
+                });
+            }
+            return read_full_jsonl(&mut file, fingerprint, identity, anchor_bytes);
+        }
+    }
+    read_full_jsonl(&mut file, fingerprint, identity, 0)
+}
+
 #[derive(Clone, Debug)]
 struct CachedTaskState {
     provider: Provider,
     fingerprint: FileFingerprint,
     state: Option<TaskState>,
+    cursor: Option<JsonlCursor>,
+    claude_accumulator: Option<ClaudeTaskAccumulator>,
     last_used: u64,
 }
 
 /// Bounded cache for the full-transcript replay needed by structured task state.
 ///
-/// Every lookup still stats the file, but an unchanged `(mtime, size)` pair
-/// avoids reopening and reparsing the transcript. The cache is process-local,
-/// contains only the same task titles already exposed on `SessionSnapshot`,
-/// and evicts the least recently used entry once the fixed bound is exceeded.
+/// Every lookup still checks file metadata and Claude sources are reopened to
+/// verify their file identity, but unchanged content is neither read nor
+/// reparsed. The cache is process-local, contains only the same task titles
+/// already exposed on `SessionSnapshot`, and evicts the least recently used
+/// entry once the fixed bound is exceeded.
 #[derive(Clone, Debug, Default)]
 pub struct TaskStateCache {
     entries: HashMap<PathBuf, CachedTaskState>,
     clock: u64,
+    #[cfg(test)]
+    bytes_read: u64,
 }
 
 impl TaskStateCache {
@@ -71,26 +431,70 @@ impl TaskStateCache {
             }
         };
         self.clock = self.clock.wrapping_add(1);
-        if let Some(cached) = self.entries.get_mut(path) {
-            if cached.provider == provider && cached.fingerprint == fingerprint {
-                cached.last_used = self.clock;
-                return cached.state.clone();
+        if provider != Provider::Claude {
+            if let Some(cached) = self.entries.get_mut(path) {
+                if cached.provider == provider && cached.fingerprint == fingerprint {
+                    cached.last_used = self.clock;
+                    return cached.state.clone();
+                }
             }
         }
 
-        let state = match std::fs::read_to_string(path) {
-            Ok(jsonl) => parse_task_state(provider, &jsonl),
-            Err(_) => {
-                self.entries.remove(path);
-                return None;
+        let cached = self.entries.get(path).cloned();
+        let (state, cursor, claude_accumulator) = match provider {
+            Provider::Claude => {
+                let read = match read_jsonl_objects(
+                    path,
+                    cached.as_ref().and_then(|entry| entry.cursor.as_ref()),
+                ) {
+                    Ok(read) => read,
+                    Err(_) => {
+                        self.entries.remove(path);
+                        return None;
+                    }
+                };
+                #[cfg(test)]
+                {
+                    self.bytes_read = self.bytes_read.saturating_add(read.bytes_read);
+                }
+                let mut accumulator = if read.mode != JsonlReadMode::Full {
+                    cached
+                        .and_then(|entry| entry.claude_accumulator)
+                        .unwrap_or_default()
+                } else {
+                    ClaudeTaskAccumulator::default()
+                };
+                for_each_jsonl_object(&read.records, |object| accumulator.apply(object));
+                (accumulator.state(), Some(read.cursor), Some(accumulator))
             }
+            Provider::Codex => {
+                let jsonl = match std::fs::read_to_string(path) {
+                    Ok(jsonl) => jsonl,
+                    Err(_) => {
+                        self.entries.remove(path);
+                        return None;
+                    }
+                };
+                #[cfg(test)]
+                {
+                    self.bytes_read = self.bytes_read.saturating_add(jsonl.len() as u64);
+                }
+                (parse_codex_task_state(&jsonl), None, None)
+            }
+            Provider::Antigravity => (None, None, None),
         };
+        let fingerprint = cursor
+            .as_ref()
+            .map(JsonlCursor::fingerprint)
+            .unwrap_or(fingerprint);
         self.entries.insert(
             path.to_path_buf(),
             CachedTaskState {
                 provider,
                 fingerprint,
                 state: state.clone(),
+                cursor,
+                claude_accumulator,
                 last_used: self.clock,
             },
         );
@@ -181,15 +585,15 @@ struct PendingClaudeTask {
     metadata: Map<String, Value>,
 }
 
-#[derive(Debug, Default)]
-struct ClaudeTaskAccumulator {
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ClaudeTaskAccumulator {
     tasks: BTreeMap<String, ClaudeTask>,
     pending_creates: HashMap<String, PendingClaudeTask>,
     displayed: Option<Vec<TaskItem>>,
 }
 
 impl ClaudeTaskAccumulator {
-    fn apply(&mut self, object: &Value) {
+    pub(crate) fn apply(&mut self, object: &Value) {
         match object.get("type").and_then(Value::as_str) {
             Some("assistant") => self.apply_assistant(object),
             Some("user") => self.apply_user(object),
@@ -378,8 +782,10 @@ impl ClaudeTaskAccumulator {
         self.displayed = Some(self.task_items());
     }
 
-    fn finish(self) -> Option<TaskState> {
-        self.displayed.map(|tasks| TaskState { tasks })
+    pub(crate) fn state(&self) -> Option<TaskState> {
+        self.displayed.as_ref().map(|tasks| TaskState {
+            tasks: tasks.clone(),
+        })
     }
 }
 
@@ -424,41 +830,42 @@ fn parse_claude_task_state(jsonl: &str) -> Option<TaskState> {
         };
         accumulator.apply(&object);
     }
-    accumulator.finish()
+    accumulator.state()
 }
 
-fn parse_codex_task_state(jsonl: &str) -> Option<TaskState> {
-    let mut latest = None;
-    for line in jsonl.lines().filter(|line| !line.trim().is_empty()) {
-        let Ok(object) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CodexTaskAccumulator {
+    latest: Option<TaskState>,
+}
+
+impl CodexTaskAccumulator {
+    pub(crate) fn apply(&mut self, object: &Value) {
         if object.get("type").and_then(Value::as_str) != Some("response_item") {
-            continue;
+            return;
         }
         let Some(payload) = object.get("payload") else {
-            continue;
+            return;
         };
         if payload.get("type").and_then(Value::as_str) != Some("function_call")
             || payload.get("name").and_then(Value::as_str) != Some("update_plan")
         {
-            continue;
+            return;
         }
         let Some(arguments) = payload.get("arguments") else {
-            continue;
+            return;
         };
         let parsed_arguments = if let Some(arguments) = arguments.as_str() {
             let Ok(parsed) = serde_json::from_str::<Value>(arguments) else {
-                continue;
+                return;
             };
             parsed
         } else if arguments.is_object() {
             arguments.clone()
         } else {
-            continue;
+            return;
         };
         let Some(plan) = parsed_arguments.get("plan").and_then(Value::as_array) else {
-            continue;
+            return;
         };
         let tasks: Vec<TaskItem> = plan
             .iter()
@@ -475,10 +882,24 @@ fn parse_codex_task_state(jsonl: &str) -> Option<TaskState> {
         // A valid empty plan explicitly clears the state. A non-empty plan made
         // solely of malformed rows cannot be trusted to erase the last good one.
         if plan.is_empty() || !tasks.is_empty() {
-            latest = Some(TaskState { tasks });
+            self.latest = Some(TaskState { tasks });
         }
     }
-    latest
+
+    pub(crate) fn state(&self) -> Option<TaskState> {
+        self.latest.clone()
+    }
+}
+
+fn parse_codex_task_state(jsonl: &str) -> Option<TaskState> {
+    let mut accumulator = CodexTaskAccumulator::default();
+    for line in jsonl.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(object) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        accumulator.apply(&object);
+    }
+    accumulator.state()
 }
 
 /// Reconstruct the latest structured task state from one provider transcript.

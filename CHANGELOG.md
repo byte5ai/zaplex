@@ -2,6 +2,17 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.13] — 2026-09-10
+
+- **Effizientere Cockpit-Aktualisierung:** Wachsende Codex- und
+  Claude-Transkripte werden für Sitzungs- und Aufgabenstatus nur noch ab dem
+  geprüften Append-Offset verarbeitet; Truncate, Ersetzung und geänderte
+  Prüfsummen lösen sicher einen vollständigen Neuaufbau aus.
+- **Zwischengespeicherte Claude-Nutzung:** Unveränderte Transkripte werden für
+  die Nutzungsanzeige nicht erneut eingelesen; ein begrenzter LRU-Cache hält
+  ausschließlich destillierte Nutzungsdaten und wendet Zeitfenster bei jedem
+  Refresh neu an.
+
 ## [1.0.12] — 2026-09-10
 
 - **Reaktionsfähige Remote-Dateitransfers:** Datei-Chunks laufen außerhalb des

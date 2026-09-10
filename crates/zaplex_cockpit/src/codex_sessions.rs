@@ -47,7 +47,10 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use walkdir::WalkDir;
 
-use crate::transcript::{LoadedTranscript, ToolCall, TranscriptTurn, TurnRole};
+use crate::transcript::{
+    for_each_jsonl_object, CodexTaskAccumulator, JsonlCursor, JsonlReadMode, LoadedTranscript,
+    ToolCall, TranscriptTurn, TurnRole,
+};
 use crate::types::{Provider, SessionSnapshot, SessionState, TaskState};
 
 /// A rollout whose last activity is older than this is not treated as live
@@ -184,21 +187,26 @@ struct RolloutInfo {
 
 #[derive(Clone, Debug)]
 struct CachedRollout {
-    fingerprint: crate::transcript::FileFingerprint,
-    info: RolloutInfo,
+    cursor: JsonlCursor,
+    accumulator: RolloutAccumulator,
     last_used: u64,
 }
 
-/// Bounded cache for complete Codex rollout parsing.
+/// Bounded cache for incremental Codex rollout parsing.
 ///
 /// Codex stores all session signals and structured task state in the same
-/// append-only rollout. An unchanged `(mtime, size)` pair can therefore reuse
-/// the complete distilled result instead of reopening the transcript on every
-/// reconcile tick.
+/// append-only rollout. The cache verifies the file identity and a short
+/// prefix/tail anchor, then applies only complete newly appended JSONL records
+/// to the saved parser state. Truncation, replacement, or an anchor mismatch
+/// safely resets the accumulator through a full replay.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RolloutCache {
     entries: HashMap<PathBuf, CachedRollout>,
     clock: u64,
+    #[cfg(test)]
+    bytes_read: u64,
+    #[cfg(test)]
+    parsed_objects: u64,
     #[cfg(test)]
     fail_next_parse: bool,
 }
@@ -210,33 +218,43 @@ impl RolloutCache {
             self.entries.remove(path);
             return Err(());
         }
-        let fingerprint = match crate::transcript::file_fingerprint(path) {
-            Ok(fingerprint) => fingerprint,
-            Err(_) => {
-                self.entries.remove(path);
-                return Err(());
-            }
-        };
         self.clock = self.clock.wrapping_add(1);
-        if let Some(cached) = self.entries.get_mut(path) {
-            if cached.fingerprint == fingerprint {
-                cached.last_used = self.clock;
-                return Ok(cached.info.clone());
-            }
-        }
-
-        let info = match std::fs::read_to_string(path) {
-            Ok(content) => parse_rollout_content(path, &content),
+        let cached = self.entries.get(path).cloned();
+        let read = match crate::transcript::read_jsonl_objects(
+            path,
+            cached.as_ref().map(|entry| &entry.cursor),
+        ) {
+            Ok(read) => read,
             Err(_) => {
                 self.entries.remove(path);
                 return Err(());
             }
         };
+        #[cfg(test)]
+        {
+            self.bytes_read = self.bytes_read.saturating_add(read.bytes_read);
+        }
+        let mut accumulator = if read.mode != JsonlReadMode::Full {
+            cached
+                .map(|entry| entry.accumulator)
+                .unwrap_or_else(|| RolloutAccumulator::new(path))
+        } else {
+            RolloutAccumulator::new(path)
+        };
+        #[cfg(test)]
+        {
+            let parsed_objects =
+                for_each_jsonl_object(&read.records, |object| accumulator.apply(object));
+            self.parsed_objects = self.parsed_objects.saturating_add(parsed_objects);
+        }
+        #[cfg(not(test))]
+        for_each_jsonl_object(&read.records, |object| accumulator.apply(object));
+        let info = accumulator.snapshot();
         self.entries.insert(
             path.to_path_buf(),
             CachedRollout {
-                fingerprint,
-                info: info.clone(),
+                cursor: read.cursor,
+                accumulator,
                 last_used: self.clock,
             },
         );
@@ -872,16 +890,27 @@ fn hex_revision(content: &str) -> String {
 /// Distil one rollout transcript's live-session signals. Best-effort and
 /// defensive: each line is an independent JSON object, malformed lines are
 /// skipped, and both the wrapped (`{type,payload}`) and flat shapes are handled.
-fn parse_rollout_content(path: &Path, content: &str) -> RolloutInfo {
-    let mut info = RolloutInfo::default();
-    info.session_id = session_id_from_path(path);
-    info.task_state = crate::transcript::parse_task_state(Provider::Codex, content);
-    let mut active_turn_id: Option<String> = None;
+#[derive(Clone, Debug)]
+struct RolloutAccumulator {
+    info: RolloutInfo,
+    active_turn_id: Option<String>,
+    tasks: CodexTaskAccumulator,
+}
 
-    for line in content.lines().filter(|l| !l.trim().is_empty()) {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
+impl RolloutAccumulator {
+    fn new(path: &Path) -> Self {
+        Self {
+            info: RolloutInfo {
+                session_id: session_id_from_path(path),
+                ..RolloutInfo::default()
+            },
+            active_turn_id: None,
+            tasks: CodexTaskAccumulator::default(),
+        }
+    }
+
+    fn apply(&mut self, v: &Value) {
+        self.tasks.apply(v);
         let typ = v.get("type").and_then(Value::as_str).unwrap_or("");
         // Top-level timestamp advances last-activity on every line.
         if let Some(ts) = v
@@ -889,30 +918,30 @@ fn parse_rollout_content(path: &Path, content: &str) -> RolloutInfo {
             .and_then(Value::as_str)
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         {
-            info.last_ts = Some(ts.with_timezone(&Utc));
+            self.info.last_ts = Some(ts.with_timezone(&Utc));
         }
         match typ {
             "session_meta" => {
                 if let Some(id) = find(&v, "id").and_then(Value::as_str) {
-                    info.session_id = id.to_string();
+                    self.info.session_id = id.to_string();
                 }
                 if let Some(cwd) = find(&v, "cwd").and_then(Value::as_str) {
-                    info.cwd = cwd.to_string();
+                    self.info.cwd = cwd.to_string();
                 }
             }
             "turn_context" => {
                 // Model / cwd / effort of the most recent turn win.
                 if let Some(m) = find(&v, "model").and_then(Value::as_str) {
-                    info.model = m.to_string();
+                    self.info.model = m.to_string();
                 }
                 if let Some(cwd) = find(&v, "cwd").and_then(Value::as_str) {
-                    info.cwd = cwd.to_string();
+                    self.info.cwd = cwd.to_string();
                 }
-                info.effort = find(&v, "effort")
+                self.info.effort = find(&v, "effort")
                     .and_then(Value::as_str)
                     .filter(|s| !s.trim().is_empty())
                     .map(str::to_string)
-                    .or_else(|| info.effort.clone());
+                    .or_else(|| self.info.effort.clone());
             }
             "event_msg" => {
                 match find(&v, "type")
@@ -926,9 +955,9 @@ fn parse_rollout_content(path: &Path, content: &str) -> RolloutInfo {
                             .and_then(Value::as_str)
                     }) {
                     Some("task_started") => {
-                        info.ended = false;
-                        info.has_turn = true;
-                        active_turn_id = v
+                        self.info.ended = false;
+                        self.info.has_turn = true;
+                        self.active_turn_id = v
                             .get("payload")
                             .and_then(|payload| payload.get("turn_id"))
                             .and_then(Value::as_str)
@@ -936,19 +965,21 @@ fn parse_rollout_content(path: &Path, content: &str) -> RolloutInfo {
                             .map(str::to_string);
                     }
                     Some("task_complete" | "turn_aborted") => {
-                        info.ended = true;
-                        info.has_turn = true;
-                        active_turn_id = None;
+                        self.info.ended = true;
+                        self.info.has_turn = true;
+                        self.active_turn_id = None;
                     }
                     Some("error") => {
                         let error_turn_id = v
                             .get("payload")
                             .and_then(|payload| payload.get("turn_id"))
                             .and_then(Value::as_str);
-                        if active_turn_id.as_deref() == error_turn_id && active_turn_id.is_some() {
-                            info.ended = true;
-                            info.has_turn = true;
-                            active_turn_id = None;
+                        if self.active_turn_id.as_deref() == error_turn_id
+                            && self.active_turn_id.is_some()
+                        {
+                            self.info.ended = true;
+                            self.info.has_turn = true;
+                            self.active_turn_id = None;
                         }
                     }
                     Some(_) | None => {}
@@ -956,15 +987,20 @@ fn parse_rollout_content(path: &Path, content: &str) -> RolloutInfo {
                 // Current context size: the latest per-turn prompt tokens.
                 if let Some(last) = find(&v, "last_token_usage") {
                     if let Some(input) = last.get("input_tokens").and_then(Value::as_u64) {
-                        info.ctx_tokens = input;
-                        info.has_turn = true;
+                        self.info.ctx_tokens = input;
+                        self.info.has_turn = true;
                     }
                 }
             }
             _ => {}
         }
     }
-    info
+
+    fn snapshot(&self) -> RolloutInfo {
+        let mut info = self.info.clone();
+        info.task_state = self.tasks.state();
+        info
+    }
 }
 
 /// State from the distilled signals, mirroring Claude's ended→Waiting /

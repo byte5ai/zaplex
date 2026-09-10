@@ -338,6 +338,164 @@ fn task_state_cache_reuses_unchanged_files_and_invalidates_on_append_or_removal(
 }
 
 #[test]
+fn claude_task_cache_reads_only_appended_bytes_after_growth() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("claude-tasks.jsonl");
+    let mut initial = concat!(
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TaskUpdate","input":{"task_id":"7","subject":"Initial","status":"pending"}}]}}"#,
+        "\n"
+    )
+    .to_string();
+    initial.push_str(&"{\"type\":\"unknown\"}\n".repeat(32));
+    std::fs::write(&path, initial).unwrap();
+    let mut cache = TaskStateCache::default();
+    let first = cache.parse_file(Provider::Claude, &path).unwrap();
+    assert_eq!(first.tasks[0].title, "Initial");
+    assert!(std::fs::metadata(&path).unwrap().len() > 256);
+
+    let appended = concat!(
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TaskUpdate","input":{"task_id":"7","status":"completed"}}]}}"#,
+        "\n"
+    );
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(appended.as_bytes())
+        .unwrap();
+    cache.bytes_read = 0;
+
+    let refreshed = cache.parse_file(Provider::Claude, &path).unwrap();
+    assert_eq!(refreshed.tasks[0].status, TaskStatus::Completed);
+    assert_eq!(cache.bytes_read, 256 + appended.len() as u64);
+}
+
+#[test]
+fn claude_task_cache_preserves_accumulator_across_linear_appends() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("claude-linear.jsonl");
+    let mut initial = concat!(
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"create-7","name":"TaskCreate","input":{"subject":"Created"}}]}}"#,
+        "\n"
+    )
+    .to_string();
+    initial.push_str(&"{\"type\":\"unknown\"}\n".repeat(32));
+    std::fs::write(&path, initial).unwrap();
+    let mut cache = TaskStateCache::default();
+    assert_eq!(cache.parse_file(Provider::Claude, &path), None);
+    assert!(std::fs::metadata(&path).unwrap().len() > 256);
+    cache.bytes_read = 0;
+
+    let created = concat!(
+        r#"{"type":"user","toolUseResult":{"task":{"id":"7","subject":"Created"}},"message":{"content":[{"type":"tool_result","tool_use_id":"create-7"}]}}"#,
+        "\n"
+    );
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(created.as_bytes())
+        .unwrap();
+    let state = cache.parse_file(Provider::Claude, &path).unwrap();
+    assert_eq!(state.tasks[0].title, "Created");
+    assert_eq!(state.tasks[0].status, TaskStatus::Pending);
+    assert_eq!(cache.bytes_read, 256 + created.len() as u64);
+
+    let completed = concat!(
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TaskUpdate","input":{"task_id":"7","subject":"Renamed","status":"completed"}}]}}"#,
+        "\n"
+    );
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(completed.as_bytes())
+        .unwrap();
+    let state = cache.parse_file(Provider::Claude, &path).unwrap();
+    assert_eq!(state.tasks[0].title, "Renamed");
+    assert_eq!(state.tasks[0].status, TaskStatus::Completed);
+    assert_eq!(
+        cache.bytes_read,
+        512 + created.len() as u64 + completed.len() as u64
+    );
+}
+
+#[test]
+fn claude_task_cache_waits_for_a_split_jsonl_line() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("claude-split.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TaskUpdate","input":{"task_id":"7","subject":"Initial","status":"pending"}}]}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    let mut cache = TaskStateCache::default();
+    cache.parse_file(Provider::Claude, &path).unwrap();
+    let update = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TaskUpdate","input":{"task_id":"7","subject":"Split","status":"completed"}}]}}"#;
+    let split = update.len() / 2;
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    file.write_all(&update.as_bytes()[..split]).unwrap();
+    drop(file);
+    let state = cache.parse_file(Provider::Claude, &path).unwrap();
+    assert_eq!(state.tasks[0].title, "Initial");
+    assert_eq!(state.tasks[0].status, TaskStatus::Pending);
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    file.write_all(&update.as_bytes()[split..]).unwrap();
+    file.write_all(b"\n").unwrap();
+    drop(file);
+    let state = cache.parse_file(Provider::Claude, &path).unwrap();
+    assert_eq!(state.tasks[0].title, "Split");
+    assert_eq!(state.tasks[0].status, TaskStatus::Completed);
+}
+
+#[test]
+fn claude_task_cache_full_replays_after_truncate_or_replace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("claude-replaced.jsonl");
+    let task = |title: &str| {
+        serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use",
+                "name": "TaskUpdate",
+                "input": {"task_id": "7", "subject": title, "status": "pending"}
+            }]}
+        })
+        .to_string()
+            + "\n"
+    };
+    std::fs::write(
+        &path,
+        task("Original") + &"{\"type\":\"unknown\"}\n".repeat(32),
+    )
+    .unwrap();
+    let mut cache = TaskStateCache::default();
+    cache.parse_file(Provider::Claude, &path).unwrap();
+
+    std::fs::write(&path, task("Truncated")).unwrap();
+    let state = cache.parse_file(Provider::Claude, &path).unwrap();
+    assert_eq!(state.tasks[0].title, "Truncated");
+
+    let replacement = path.with_extension("replacement");
+    std::fs::write(&replacement, task("Replacement")).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::rename(replacement, &path).unwrap();
+    let state = cache.parse_file(Provider::Claude, &path).unwrap();
+    assert_eq!(state.tasks[0].title, "Replacement");
+}
+
+#[test]
 fn malformed_unknown_and_incomplete_records_never_clear_last_valid_state() {
     let jsonl = r#"
 {"type":"response_item","payload":{"type":"function_call","name":"update_plan","arguments":"{\"plan\":[{\"step\":\"Keep me\",\"status\":\"in_progress\"}]}"}}
