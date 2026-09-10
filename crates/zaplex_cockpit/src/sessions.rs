@@ -19,6 +19,7 @@
 //! after Claude has removed the registry row. A registry-backed session is
 //! probed once, so the live and idle sets can never overlap.
 
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{File, Metadata, OpenOptions};
@@ -864,7 +865,7 @@ pub(crate) fn scan_sessions_with_cache(
                 (modified >= cutoff).then(|| (modified, session_id.clone(), path.clone()))
             })
             .collect();
-        transcript_only.sort_by(|a, b| b.0.cmp(&a.0));
+        transcript_only.sort_by_key(|entry| Reverse(entry.0));
         transcript_only.truncate(limit.saturating_mul(4));
 
         for (modified, session_id, path) in transcript_only {
@@ -913,13 +914,13 @@ pub(crate) fn scan_sessions_with_cache(
             .then(b.last_activity.cmp(&a.last_activity))
     });
 
-    idle_candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    idle_candidates.sort_by_key(|entry| Reverse(entry.0));
     idle_candidates.truncate(limit);
     let mut idle: Vec<SessionSnapshot> = idle_candidates
         .into_iter()
         .map(|(_, r, path)| snapshot_of(r, &path, now, Some(SessionState::Idle), None, task_cache))
         .collect();
-    idle.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    idle.sort_by_key(|session| Reverse(session.last_activity));
 
     SessionScan { live, idle }
 }

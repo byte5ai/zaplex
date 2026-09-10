@@ -1,4 +1,4 @@
-use super::{Client, headers};
+use super::{headers, Client};
 use std::sync::Once;
 use warp_core::channel::ChannelState;
 
@@ -47,13 +47,11 @@ fn external_provider_origin_receives_no_zaplex_headers() {
 
 #[test]
 fn configured_backend_origin_is_trusted_but_other_ports_are_not() {
-    let trusted_url = ChannelState::server_root_url();
-    assert_eq!(
-        Client::include_warp_http_headers(trusted_url.as_ref()),
-        true
-    );
+    let trusted_url_string = ChannelState::server_root_url();
+    let trusted_url: &str = trusted_url_string.as_ref();
+    assert!(Client::include_warp_http_headers(trusted_url));
 
-    let mut other_origin = reqwest::Url::parse(trusted_url.as_ref()).expect("valid backend URL");
+    let mut other_origin = reqwest::Url::parse(trusted_url).expect("valid backend URL");
     let other_port = other_origin.port_or_known_default().unwrap_or(80) + 1;
     other_origin
         .set_port(Some(other_port))

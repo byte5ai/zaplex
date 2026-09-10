@@ -33,6 +33,7 @@
 //! deliberately emitted by `update_plan` remain the sole background
 //! task-progress projection.
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, Metadata, OpenOptions};
@@ -922,29 +923,29 @@ impl RolloutAccumulator {
         }
         match typ {
             "session_meta" => {
-                if let Some(id) = find(&v, "id").and_then(Value::as_str) {
+                if let Some(id) = find(v, "id").and_then(Value::as_str) {
                     self.info.session_id = id.to_string();
                 }
-                if let Some(cwd) = find(&v, "cwd").and_then(Value::as_str) {
+                if let Some(cwd) = find(v, "cwd").and_then(Value::as_str) {
                     self.info.cwd = cwd.to_string();
                 }
             }
             "turn_context" => {
                 // Model / cwd / effort of the most recent turn win.
-                if let Some(m) = find(&v, "model").and_then(Value::as_str) {
+                if let Some(m) = find(v, "model").and_then(Value::as_str) {
                     self.info.model = m.to_string();
                 }
-                if let Some(cwd) = find(&v, "cwd").and_then(Value::as_str) {
+                if let Some(cwd) = find(v, "cwd").and_then(Value::as_str) {
                     self.info.cwd = cwd.to_string();
                 }
-                self.info.effort = find(&v, "effort")
+                self.info.effort = find(v, "effort")
                     .and_then(Value::as_str)
                     .filter(|s| !s.trim().is_empty())
                     .map(str::to_string)
                     .or_else(|| self.info.effort.clone());
             }
             "event_msg" => {
-                match find(&v, "type")
+                match find(v, "type")
                     .and_then(Value::as_str)
                     // `find` returns the outer "event_msg" first; re-read the
                     // inner payload type explicitly.
@@ -985,7 +986,7 @@ impl RolloutAccumulator {
                     Some(_) | None => {}
                 }
                 // Current context size: the latest per-turn prompt tokens.
-                if let Some(last) = find(&v, "last_token_usage") {
+                if let Some(last) = find(v, "last_token_usage") {
                     if let Some(input) = last.get("input_tokens").and_then(Value::as_u64) {
                         self.info.ctx_tokens = input;
                         self.info.has_turn = true;
@@ -1182,7 +1183,7 @@ pub(crate) fn scan_sessions_with_cache(
             dormant.push((path, mtime));
         }
     }
-    dormant.sort_by(|a, b| b.1.cmp(&a.1));
+    dormant.sort_by_key(|entry| Reverse(entry.1));
     dormant.truncate(limit);
 
     let mut live: Vec<SessionSnapshot> = Vec::new();
@@ -1222,7 +1223,7 @@ pub(crate) fn scan_sessions_with_cache(
             .cmp(&rank(b))
             .then(b.last_activity.cmp(&a.last_activity))
     });
-    idle.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    idle.sort_by_key(|session| Reverse(session.last_activity));
     // The mtime cap bounded the dormant tail; re-apply it now that the
     // touched-but-stale ones have joined.
     idle.truncate(limit);
