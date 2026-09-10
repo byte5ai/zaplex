@@ -31,6 +31,32 @@ use warpui::{
     AppContext, SingletonEntity as _,
 };
 
+#[cfg(test)]
+thread_local! {
+    static AGENT_INPUT_COMPOSITION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(super) fn set_agent_input_composition_hook(hook: impl FnOnce() + 'static) {
+    AGENT_INPUT_COMPOSITION_HOOK.with(|current| {
+        let previous = current.borrow_mut().replace(Box::new(hook));
+        assert!(
+            previous.is_none(),
+            "agent input composition hook already set"
+        );
+    });
+}
+
+#[cfg(test)]
+fn run_agent_input_composition_hook() {
+    AGENT_INPUT_COMPOSITION_HOOK.with(|current| {
+        if let Some(hook) = current.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
 impl Input {
     /// Renders the input when there is an active `AgentView`.
     ///
@@ -38,8 +64,6 @@ impl Input {
     pub(super) fn render_agent_input(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let menu_positioning = self.menu_positioning(app);
-
-        let _model = self.model.lock();
 
         // We should likely rework this stack to not need to use `with_constrain_absolute_children`,
         // by reworking the positioning of the children to not depend on this.
@@ -87,6 +111,8 @@ impl Input {
                 )
                 .finish(),
         );
+        #[cfg(test)]
+        run_agent_input_composition_hook();
         column.add_child(
             SavePosition::new(
                 ChildView::new(&self.agent_input_footer).finish(),

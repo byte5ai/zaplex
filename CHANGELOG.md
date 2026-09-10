@@ -2,6 +2,12 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.8] — 2026-09-10
+
+- **Flüssigeres Rendering:** Der Agent-Input hält bei der UI-Komposition keinen
+  ungenutzten Terminal-Lock mehr; intrinsische SVGs werden nur einmal pro Größe
+  gerastert und anschließend pointer-stabil wiederverwendet.
+
 ## [1.0.7] — 2026-09-10
 
 - **Filemanager nach Serverwechsel:** Zeigt bei geänderter SSH-Serveridentität
@@ -229,7 +235,8 @@ First preview release of the Zap community fork.
 - **AI**: CJK input classification, reasoning split out, BYOP `tool_call` diagnostics, LRC tag-in synthesizes a virtual subagent + floating spawn flow
 - **CI**: Release workflow explicitly declares `contents: write` permission, fixing a 403
 
-[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.7...HEAD
+[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.8...HEAD
+[1.0.8]: https://github.com/byte5ai/zaplex/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/byte5ai/zaplex/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/byte5ai/zaplex/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/byte5ai/zaplex/compare/v1.0.4...v1.0.5
