@@ -98,19 +98,6 @@ pub fn hover_row(
     c.finish()
 }
 
-/// Fixed width of a session row's right-hand **metric column** (provider icon +
-/// ctx%), so the metrics align into a clean column across rows and never shift
-/// as the branch label grows or shrinks (spec §2.3). Narrow because it no longer
-/// carries the model — that overflowed and broke the alignment.
-pub const METRIC_COL_WIDTH: f32 = 58.0;
-
-/// Session labels are flexible content; the trailing metric column is not.
-/// Keeping this policy explicit prevents a later label-length-based layout
-/// calculation from reintroducing the horizontal jump rejected in the spine.
-pub fn session_metric_column_width(_session_label: &str) -> f32 {
-    METRIC_COL_WIDTH
-}
-
 /// A flat sidebar **zone-card**: `surface_1`, a hairline border, radius 12 and
 /// **no** shadow (spec §2.1). Emphasis comes from content + spacing, never from
 /// heavy container chrome. Returns the still-open [`Container`] so the caller

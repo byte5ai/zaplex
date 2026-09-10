@@ -29,10 +29,10 @@ use warpui::{
     ViewHandle,
 };
 use zaplex_cockpit::{
-    fleet_is_large, format_cost, format_relative, format_reset, format_tokens, heat_fill,
-    heat_pct_label_with_provenance, host_auto_collapsed, host_ident, host_key, session_glyph,
-    session_key, AccountStatus, AccountUsage, FleetTree, HeatLevel, HostNode, PricingSource,
-    Provider, SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
+    format_cost, format_relative, format_reset, format_tokens, heat_fill,
+    heat_pct_label_with_provenance, host_ident, host_key, session_glyph, session_key,
+    AccountStatus, AccountUsage, FleetTree, HeatLevel, PricingSource, Provider, SessionSnapshot,
+    SessionState, UsageProvenance, WindowTotals,
 };
 
 use crate::cockpit::account_identity;
@@ -567,26 +567,12 @@ pub struct CockpitPaneView {
     /// Delayed hover state for the read-only session peek. Separate from the
     /// click state so dismissing the overlay cannot disturb row activation.
     conductor_peek_states: HashMap<String, MouseStateHandle>,
-    /// Hover state of each Conductor host collapse toggle (key = stable host
-    /// identity `host_ident`, not the display label).
-    conductor_host_toggle_states: HashMap<String, MouseStateHandle>,
-    /// Hover state of each Conductor project collapse toggle (key =
-    /// `host_ident\0root`).
-    conductor_project_toggle_states: HashMap<String, MouseStateHandle>,
     /// Hover state of the contextual "+" (open the Spawn-Karte pre-scoped to
     /// this host/project) on each Conductor host/project header. Keyed with a
     /// `host:`/`proj:` prefix over the stable host identity (`host:<host_ident>`,
     /// `proj:<host_ident>\0root`) so host and project pluses never collide and a
     /// shared display label never crosses two hosts.
     conductor_plus_states: HashMap<String, MouseStateHandle>,
-    /// Explicit user collapse override per host (key = stable host identity
-    /// `host_ident`, not the display label). Absent = use the inverse-complexity
-    /// auto decision ([`host_auto_collapsed`]); present = the user has toggled it
-    /// and their choice wins until the fleet changes.
-    collapsed_hosts: HashMap<String, bool>,
-    /// Explicit user collapse override per project (key = `host_ident\0root`).
-    /// Absent = expanded (projects default open; collapse is opt-in per project).
-    collapsed_projects: HashMap<String, bool>,
     /// Hover state of each Conductor session row's review-loop verbs (step 6),
     /// keyed `"{verb}\0{session_key}"` (verb ∈
     /// review/mark/redirect/commit/pr). One combined map (rather than five)
@@ -643,9 +629,9 @@ fn review_redirect_prompt(project_name: &str) -> String {
     format!("I reviewed the working changes in {target}. Please adjust the approach: ")
 }
 
-/// Actions the Conductor rows dispatch back into this pane view (collapse
-/// toggles). Attach/jump go to the workspace via [`WorkspaceAction`] instead —
-/// they open panes, which is the workspace's job.
+/// Actions the Conductor rows dispatch back into this pane view. Attach/jump go
+/// to the workspace via [`WorkspaceAction`] instead — they open panes, which is
+/// the workspace's job.
 #[derive(Clone, Debug)]
 pub enum CockpitPaneAction {
     /// Fold/unfold a project group in the session table, keyed by **repo root**
@@ -680,11 +666,6 @@ pub enum CockpitPaneAction {
     },
     ConfirmClaudeCleanup,
     CancelSessionLifecycleDialog,
-    /// Fold/unfold a host node (key = stable host identity `host_ident`, not the
-    /// display label — two remote daemons can share a label).
-    ToggleHost(String),
-    /// Fold/unfold a project node (key = `host_ident\0root`).
-    ToggleProject(String),
     /// Toggle the user's "I have read this" mark for a session, keyed by the
     /// session's own id (never the row's `host_key` — a daemon's host_id is
     /// regenerated on every start). Persisted by `ReviewedStore`; it tells the
@@ -832,11 +813,7 @@ impl CockpitPaneView {
             session_in_repo: HashMap::new(),
             conductor_row_states: HashMap::new(),
             conductor_peek_states: HashMap::new(),
-            conductor_host_toggle_states: HashMap::new(),
-            conductor_project_toggle_states: HashMap::new(),
             conductor_plus_states: HashMap::new(),
-            collapsed_hosts: HashMap::new(),
-            collapsed_projects: HashMap::new(),
             conductor_review_states: HashMap::new(),
             conductor_guardrail_states: HashMap::new(),
             conductor_lever_states: HashMap::new(),
@@ -848,25 +825,6 @@ impl CockpitPaneView {
         // render as text, and the pane would look inert until the next update.
         me.sync_table_states(ctx);
         me
-    }
-
-    /// Effective collapse state of a host: the user's explicit toggle if set,
-    /// otherwise the inverse-complexity auto decision (calm hosts fold when the
-    /// fleet is large; a host that needs you never auto-folds).
-    fn host_collapsed(&self, host: &HostNode, fleet_large: bool) -> bool {
-        self.collapsed_hosts
-            .get(&host_ident(host.is_local, host.host_id.as_deref()))
-            .copied()
-            .unwrap_or_else(|| host_auto_collapsed(host, fleet_large))
-    }
-
-    /// Effective collapse state of a project: expanded unless the user folded it.
-    /// Keyed by the project's stable host identity, not the display label.
-    fn project_collapsed(&self, is_local: bool, host_id: Option<&str>, root: &str) -> bool {
-        self.collapsed_projects
-            .get(&host_key(is_local, host_id, root))
-            .copied()
-            .unwrap_or(false)
     }
 
     /// Keep one stable `MouseStateHandle` per live session for each row action
@@ -1003,8 +961,8 @@ impl CockpitPaneView {
         // includes remote sessions the local `accounts` list never sees), by the
         // complete `session_key` for rows, `host_key` for projects, and bare
         // stable `host_ident` for hosts — never the display label or raw session
-        // id. Retain live keys, drop the rest, and prune stale collapse overrides
-        // so a disconnected host/account doesn't leak UI state.
+        // id. Retain live keys and drop the rest so a disconnected host/account
+        // doesn't leak UI state.
         let inv = CockpitModel::as_ref(ctx).inventory();
         let managed_keys: std::collections::HashSet<String> = CockpitModel::as_ref(ctx)
             .managed_fleet()
@@ -1073,32 +1031,19 @@ impl CockpitPaneView {
                 .map(|(_, rest)| live_rows.contains(rest))
                 .unwrap_or(false)
         });
-        self.conductor_host_toggle_states
-            .retain(|k, _| live_hosts.contains(k));
-        self.conductor_project_toggle_states
-            .retain(|k, _| live_projects.contains(k));
         self.conductor_plus_states.retain(|k, _| {
             k.strip_prefix("host:")
                 .map(|h| live_hosts.contains(h))
                 .or_else(|| k.strip_prefix("proj:").map(|p| live_projects.contains(p)))
                 .unwrap_or(false)
         });
-        self.collapsed_hosts.retain(|k, _| live_hosts.contains(k));
-        self.collapsed_projects
-            .retain(|k, _| live_projects.contains(k));
         for host in &inv.hosts {
             let hident = host_ident(host.is_local, host.host_id.as_deref());
-            self.conductor_host_toggle_states
-                .entry(hident.clone())
-                .or_default();
             self.conductor_plus_states
                 .entry(format!("host:{hident}"))
                 .or_default();
             for project in &host.projects {
                 let pkey = host_key(host.is_local, host.host_id.as_deref(), &project.root);
-                self.conductor_project_toggle_states
-                    .entry(pkey.clone())
-                    .or_default();
                 self.conductor_plus_states
                     .entry(format!("proj:{pkey}"))
                     .or_default();
@@ -4089,29 +4034,6 @@ impl TypedActionView for CockpitPaneView {
                         ascending: column.default_ascending(),
                     }
                 };
-                ctx.notify();
-            }
-            CockpitPaneAction::ToggleHost(host_ident_key) => {
-                // Flip relative to the *effective* state (which may be the
-                // inverse-complexity auto decision), so one click always does the
-                // visible thing regardless of whether an override exists yet.
-                // `host_ident_key` is the stable host identity (`host_ident`),
-                // not the display label, so we resolve the node by identity.
-                let model = CockpitModel::as_ref(ctx);
-                let fleet_large = fleet_is_large(model.inventory());
-                let eff = model
-                    .inventory()
-                    .hosts
-                    .iter()
-                    .find(|h| &host_ident(h.is_local, h.host_id.as_deref()) == host_ident_key)
-                    .map(|h| self.host_collapsed(h, fleet_large))
-                    .unwrap_or(false);
-                self.collapsed_hosts.insert(host_ident_key.clone(), !eff);
-                ctx.notify();
-            }
-            CockpitPaneAction::ToggleProject(key) => {
-                let eff = self.collapsed_projects.get(key).copied().unwrap_or(false);
-                self.collapsed_projects.insert(key.clone(), !eff);
                 ctx.notify();
             }
             CockpitPaneAction::MarkReviewed(session_id) => {

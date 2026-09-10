@@ -81,20 +81,11 @@ fn record(route: &SessionRoute) -> LaunchRecord {
 #[test]
 fn local_restart_preserves_conversation_account_and_intent() {
     let route = SessionRoute::from_snapshot(&snapshot(Provider::Claude), true, None, None).unwrap();
-    let plan = plan_restart(
-        route.clone(),
-        RestartPresence::VerifiedProcess,
-        &record(&route),
-    )
-    .expect("an exact process-bound route is restartable");
+    let plan = plan_restart(route.clone(), &record(&route))
+        .expect("an exact process-bound route is restartable");
 
-    assert_eq!(
-        plan.termination,
-        RestartTermination::VerifiedProcess {
-            pid: 42,
-            fingerprint: "process-1".to_string(),
-        }
-    );
+    assert_eq!(plan.route.pid, 42);
+    assert_eq!(plan.route.process_fingerprint.as_deref(), Some("process-1"));
     let ResumeInvocation::LocalShell { launch } = plan.resume else {
         panic!("local restart must stay local");
     };
@@ -113,7 +104,7 @@ fn remote_restart_uses_only_stable_host_and_opaque_account_ids() {
     let route =
         SessionRoute::from_snapshot(&session, false, Some("daemon-host-7"), Some("fleet-node-7"))
             .unwrap();
-    let plan = plan_restart(route.clone(), RestartPresence::Dormant, &record(&route)).unwrap();
+    let plan = plan_restart(route.clone(), &record(&route)).unwrap();
     assert_eq!(
         plan.resume,
         ResumeInvocation::RemoteDaemon {
@@ -130,21 +121,23 @@ fn remote_restart_uses_only_stable_host_and_opaque_account_ids() {
 }
 
 #[test]
-fn restart_rejects_account_drift_and_pid_reuse() {
+fn restart_rejects_account_drift_and_missing_process_identity() {
     let route = SessionRoute::from_snapshot(&snapshot(Provider::Claude), true, None, None).unwrap();
     let mut wrong_account = record(&route);
     wrong_account.account_email = Some("other@example.com".to_string());
     assert_eq!(
-        plan_restart(route.clone(), RestartPresence::Dormant, &wrong_account),
+        plan_restart(route.clone(), &wrong_account),
         Err(RestartPlanError::LaunchIntentUnbound)
     );
+
+    let mut route_without_fingerprint = route;
+    route_without_fingerprint.process_fingerprint = None;
     assert_eq!(
         plan_restart(
-            route.clone(),
-            RestartPresence::ProcessReused,
-            &record(&route),
+            route_without_fingerprint.clone(),
+            &record(&route_without_fingerprint),
         ),
-        Err(RestartPlanError::ProcessIdentityChanged)
+        Err(RestartPlanError::ProcessIdentityUnavailable)
     );
 }
 
@@ -161,30 +154,6 @@ fn remote_route_fails_closed_without_exact_account_or_with_local_path() {
     assert_eq!(
         SessionRoute::from_snapshot(&session, false, Some("host"), Some("node")),
         Err(SessionRouteError::LeakedRemoteConfigDirectory)
-    );
-}
-
-#[test]
-fn stale_cleanup_rechecks_revision_visibility_and_process_identity() {
-    assert_eq!(
-        authorize_stale_cleanup(7, 7, false, CleanupProcessEvidence::Dead),
-        Ok(())
-    );
-    assert_eq!(
-        authorize_stale_cleanup(7, 8, false, CleanupProcessEvidence::Dead),
-        Err(CleanupRejection::InventoryChanged)
-    );
-    assert_eq!(
-        authorize_stale_cleanup(7, 7, true, CleanupProcessEvidence::Dead),
-        Err(CleanupRejection::SessionStillVisible)
-    );
-    assert_eq!(
-        authorize_stale_cleanup(7, 7, false, CleanupProcessEvidence::ProcessReused),
-        Err(CleanupRejection::ProcessIdentityChanged)
-    );
-    assert_eq!(
-        authorize_stale_cleanup(7, 7, false, CleanupProcessEvidence::Unverifiable),
-        Err(CleanupRejection::ProcessIdentityUnavailable)
     );
 }
 
@@ -207,21 +176,6 @@ fn rename_conflicts_are_scoped_to_exact_provider_host_and_account() {
 }
 
 #[test]
-fn retry_keeps_operation_identity_and_applied_state_is_idempotent() {
-    let mut operation = LifecycleOperation::new("session-1".to_string());
-    let id = operation.id;
-    operation.mark_failed(true, "daemon disconnected");
-    assert!(operation.retry());
-    assert_eq!(operation.id, id);
-    assert_eq!(operation.state, LifecycleOperationState::Pending);
-
-    operation.mark_applied();
-    operation.mark_failed(true, "late duplicate failure");
-    assert_eq!(operation.state, LifecycleOperationState::Applied);
-    assert!(!operation.retry());
-}
-
-#[test]
 fn lifecycle_capabilities_require_exact_executable_routes() {
     let route = SessionRoute::from_snapshot(&snapshot(Provider::Claude), true, None, None).unwrap();
     assert_eq!(
@@ -238,4 +192,24 @@ fn lifecycle_capabilities_require_exact_executable_routes() {
     assert!(
         !lifecycle_capabilities(&route, &RestartPresence::VerifiedProcess, false, true).can_restart
     );
+}
+
+#[test]
+fn no_test_only_lifecycle_contracts() {
+    let source = include_str!("session_lifecycle.rs");
+    for dormant_contract in [
+        "pub(crate) struct LifecycleOperation",
+        "pub(crate) enum CleanupProcessEvidence",
+        "pub(crate) enum CleanupRejection",
+        "pub(crate) fn authorize_stale_cleanup",
+        "RestartPresence::Dormant",
+        "RestartPresence::ExactTerminal",
+        "RestartPresence::ProcessReused",
+        "pub(crate) enum RestartTermination",
+    ] {
+        assert!(
+            !source.contains(dormant_contract),
+            "dormant lifecycle contract remains: {dormant_contract}"
+        );
+    }
 }

@@ -5644,9 +5644,7 @@ impl Workspace {
         route: crate::cockpit::session_lifecycle::SessionRoute,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::cockpit::session_lifecycle::{
-            RestartPresence, SessionAccountRoute, SessionHostRoute,
-        };
+        use crate::cockpit::session_lifecycle::{SessionAccountRoute, SessionHostRoute};
 
         let Some((_, route)) = Self::fresh_session_route(&route, &*ctx) else {
             self.session_not_found_toast("", ctx);
@@ -5710,11 +5708,8 @@ impl Workspace {
                 return;
             }
         };
-        let Ok(plan) = crate::cockpit::session_lifecycle::plan_restart(
-            route.clone(),
-            RestartPresence::VerifiedProcess,
-            &record,
-        ) else {
+        let Ok(plan) = crate::cockpit::session_lifecycle::plan_restart(route.clone(), &record)
+        else {
             self.show_agent_launch_error(
                 "The selected process identity could not be verified for restart.".to_string(),
                 ctx,

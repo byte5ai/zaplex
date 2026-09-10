@@ -7,10 +7,6 @@
 //! meant to match (one consistent glyph language and one waiting-cycle order):
 //!
 //! - [`session_glyph`] — the single glyph vocabulary every surface renders.
-//! - [`fleet_is_large`] / [`host_auto_collapsed`] — the roomy pane's
-//!   *inverse-complexity* law: above a threshold, hosts with nothing waiting
-//!   fold to a one-line [`host_summary`]; explicit sidebar expansion is kept
-//!   separate.
 //! - [`next_waiting`] — the `w`-jump order: cycle to the next Waiting agent
 //!   across the whole fleet, in the tree's already-sorted (waiting-first) order.
 //!
@@ -202,47 +198,8 @@ pub fn host_conductor_session_count(host: &HostNode) -> usize {
         .sum()
 }
 
-/// Above this many total agents (or more than this many hosts) the fleet counts
-/// as "large" and the inverse-complexity collapsing kicks in. Tuned so a normal
-/// single-host day (a handful of agents) never auto-collapses, but a busy
-/// multi-host fleet does.
-pub const LARGE_FLEET_AGENTS: usize = 8;
-/// Hosts above this count also trip the "large" rule, independent of the agent
-/// total — many machines is itself a reason to summarize.
-pub const LARGE_FLEET_HOSTS: usize = 2;
-
-/// Is the fleet large enough that we default to quiet (auto-collapsed) hosts?
-pub fn fleet_is_large(tree: &FleetTree) -> bool {
-    fleet_session_count(tree) > LARGE_FLEET_AGENTS || tree.hosts.len() > LARGE_FLEET_HOSTS
-}
-
-/// The inverse-complexity law, per host: when the fleet is large, a host with
-/// **nothing waiting** folds to a one-line summary (calm by default); a host
-/// that needs you stays expanded so the attention state is never hidden. Small
-/// fleets never auto-collapse (there's room to show everything).
-pub fn host_auto_collapsed(host: &HostNode, fleet_is_large: bool) -> bool {
-    fleet_is_large && host.needs_me == 0
-}
-
-/// One-line summary for a collapsed host, e.g. `"devhost · 5 agents · 1
-/// waiting"`. The waiting clause is omitted when zero — the summary of a calm
-/// host stays calm.
-pub fn host_summary(host: &HostNode) -> String {
-    let agents = host_session_count(host);
-    let mut s = format!(
-        "{} · {} agent{}",
-        host.host,
-        agents,
-        if agents == 1 { "" } else { "s" }
-    );
-    if host.needs_me > 0 {
-        s.push_str(&format!(" · {} waiting", host.needs_me));
-    }
-    s
-}
-
-/// Stable host-identity string for keying per-host UI state (collapse, hover,
-/// the pre-scoped "+"). `local` for this machine, `daemon:<host_id>` for a
+/// Stable host-identity string for keying per-host UI state (hover and the
+/// pre-scoped "+"). `local` for this machine, `daemon:<host_id>` for a
 /// remote daemon — **never** the display label. Two remote daemons can advertise
 /// the same label (SSH alias / matching `gethostname()`), and a label key would
 /// then alias their UI state into one; `(is_local, host_id)` keeps them
