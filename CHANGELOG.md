@@ -2,6 +2,12 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.10] — 2026-09-10
+
+- **Speicherschonende Uploads:** Der Server-Dateibrowser streamt lokale Dateien
+  unter Transport-Backpressure in begrenzten Chunks und erkennt Änderungen an
+  der geöffneten Upload-Quelle vor dem Remote-Commit.
+
 ## [1.0.9] — 2026-09-10
 
 - **Zuverlässigerer Start:** Das vorgewärmte SQLite-Ergebnis wird direkt über

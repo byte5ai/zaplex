@@ -2047,7 +2047,7 @@ impl ServerFileBrowserView {
             batch.next_task_index += 1;
         }
 
-        let (local_path, staging_remote_path, staging_handle, uploaded_bytes) = {
+        let (local_path, staging_remote_path, staging_handle, total_bytes, uploaded_bytes) = {
             let batch = self
                 .upload_batches
                 .get(batch_index)
@@ -2061,6 +2061,7 @@ impl ServerFileBrowserView {
                 task.local_path.clone(),
                 task.staging_remote_path.clone(),
                 staging_handle,
+                task.total_bytes,
                 task.uploaded_bytes.clone(),
             )
         };
@@ -2072,7 +2073,8 @@ impl ServerFileBrowserView {
                 let staging_handle = staging_handle.ok_or_else(|| {
                     format!("Missing safe upload handle for {staging_remote_path}")
                 })?;
-                upload_file_with_progress(staging_handle, local_path, uploaded_bytes).await
+                upload_file_with_progress(staging_handle, local_path, total_bytes, uploaded_bytes)
+                    .await
             },
             move |me, result, ctx| {
                 if let Some(batch) = me.upload_batches.get_mut(batch_index) {
@@ -4252,39 +4254,57 @@ async fn create_remote_directory(
 async fn upload_file_with_progress(
     remote_file: Arc<SafeRemoteFileHandle>,
     local_path: PathBuf,
+    expected_bytes: u64,
     uploaded_bytes: Arc<AtomicU64>,
 ) -> Result<(), String> {
-    use tokio::io::AsyncReadExt as _;
-
     let file = open_local_regular_file(&local_path).map_err(|error| {
         crate::t!(
             "server-file-browser-operation-failed",
             error = format!("{}: {error}", local_path.display())
         )
     })?;
-    let mut file = tokio::fs::File::from_std(file);
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .await
-        .map_err(|error| error.to_string())?;
-    let mut offset = 0_u64;
-    for chunk in bytes.chunks(TRANSFER_CHUNK_BYTES as usize) {
-        expect_safe_file_mutation(
-            safe_file_operation(
-                &remote_file.client,
-                String::new(),
-                safe_file_request::Operation::WriteHandle(SafeFileWriteHandle {
-                    handle_id: remote_file.handle_id.clone(),
-                    bytes: chunk.to_vec(),
-                }),
-            )
-            .await?,
-        )?;
-        offset = offset
-            .checked_add(chunk.len() as u64)
-            .ok_or_else(|| "Upload byte count overflow".to_string())?;
-        uploaded_bytes.store(offset, Ordering::Relaxed);
+    let initial_snapshot = LocalUploadSourceSnapshot::from_metadata(
+        &file.metadata().map_err(|error| error.to_string())?,
+    );
+    if initial_snapshot.length != expected_bytes {
+        return Err(upload_source_changed_error(&local_path));
     }
+    let mut file = tokio::fs::File::from_std(file);
+    let client = remote_file.client.clone();
+    let handle_id = remote_file.handle_id.clone();
+    let streamed_bytes = stream_upload_reader(
+        &mut file,
+        TRANSFER_CHUNK_BYTES as usize,
+        &uploaded_bytes,
+        move |bytes| {
+            let client = client.clone();
+            let handle_id = handle_id.clone();
+            async move {
+                expect_safe_file_mutation(
+                    safe_file_operation(
+                        &client,
+                        String::new(),
+                        safe_file_request::Operation::WriteHandle(SafeFileWriteHandle {
+                            handle_id,
+                            bytes,
+                        }),
+                    )
+                    .await?,
+                )
+            }
+        },
+    )
+    .await?;
+    let final_snapshot = LocalUploadSourceSnapshot::from_metadata(
+        &file.metadata().await.map_err(|error| error.to_string())?,
+    );
+    validate_upload_source_snapshot(
+        &local_path,
+        expected_bytes,
+        streamed_bytes,
+        &initial_snapshot,
+        &final_snapshot,
+    )?;
     expect_safe_file_mutation(
         safe_file_operation(
             &remote_file.client,
@@ -4296,6 +4316,78 @@ async fn upload_file_with_progress(
         .await?,
     )?;
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocalUploadSourceSnapshot {
+    // The opened file handle anchors path replacements to the selected object;
+    // length or modification changes on that object are rejected before flush.
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+impl LocalUploadSourceSnapshot {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            length: metadata.len(),
+            modified: metadata.modified().ok(),
+        }
+    }
+}
+
+fn validate_upload_source_snapshot(
+    path: &Path,
+    expected_bytes: u64,
+    streamed_bytes: u64,
+    initial: &LocalUploadSourceSnapshot,
+    current: &LocalUploadSourceSnapshot,
+) -> Result<(), String> {
+    if initial.length != expected_bytes || streamed_bytes != expected_bytes || initial != current {
+        return Err(upload_source_changed_error(path));
+    }
+    Ok(())
+}
+
+fn upload_source_changed_error(path: &Path) -> String {
+    crate::t!(
+        "server-file-browser-operation-failed",
+        error = format!("upload source changed during transfer: {}", path.display())
+    )
+}
+
+async fn stream_upload_reader<R, W, F>(
+    reader: &mut R,
+    chunk_bytes: usize,
+    uploaded_bytes: &AtomicU64,
+    mut write_chunk: W,
+) -> Result<u64, String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: FnMut(Vec<u8>) -> F,
+    F: std::future::Future<Output = Result<(), String>>,
+{
+    use tokio::io::AsyncReadExt as _;
+
+    if chunk_bytes == 0 {
+        return Err("Upload chunk size must be positive".to_string());
+    }
+    let mut offset = 0_u64;
+    loop {
+        let mut chunk = vec![0; chunk_bytes];
+        let read = reader
+            .read(&mut chunk)
+            .await
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            return Ok(offset);
+        }
+        chunk.truncate(read);
+        write_chunk(chunk).await?;
+        offset = offset
+            .checked_add(read as u64)
+            .ok_or_else(|| "Upload byte count overflow".to_string())?;
+        uploaded_bytes.store(offset, Ordering::Relaxed);
+    }
 }
 
 fn open_local_regular_file(path: &Path) -> std::io::Result<std::fs::File> {

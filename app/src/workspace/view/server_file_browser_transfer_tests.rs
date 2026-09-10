@@ -1,4 +1,7 @@
 use std::fs;
+use std::pin::Pin;
+use std::sync::atomic::AtomicUsize;
+use std::task::{Context, Poll};
 
 #[cfg(unix)]
 use remote_server::proto::{client_message, server_message, ServerMessage};
@@ -6,10 +9,214 @@ use remote_server::proto::{
     resolve_path_response, FileOperationError, ResolvePathNotFound, ResolvePathResponse,
 };
 use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncRead, ReadBuf};
 #[cfg(unix)]
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 
 use super::*;
+
+struct SyntheticLargeReader {
+    remaining: u64,
+    read_calls: Arc<AtomicUsize>,
+    peak_bytes_held: Arc<AtomicUsize>,
+}
+
+impl SyntheticLargeReader {
+    fn new(
+        total_bytes: u64,
+        read_calls: Arc<AtomicUsize>,
+        peak_bytes_held: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            remaining: total_bytes,
+            read_calls,
+            peak_bytes_held,
+        }
+    }
+}
+
+impl AsyncRead for SyntheticLargeReader {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _ctx: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.read_calls.fetch_add(1, Ordering::Relaxed);
+        let read = usize::try_from(self.remaining.min(buffer.remaining() as u64)).unwrap();
+        self.peak_bytes_held.fetch_max(read, Ordering::Relaxed);
+        buffer.initialize_unfilled_to(read).fill(0);
+        buffer.advance(read);
+        self.remaining -= read as u64;
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn streamed_upload_peak_memory_is_bounded_by_chunk_size() {
+    let synthetic_bytes = TRANSFER_CHUNK_BYTES * 64 + 17;
+    let read_calls = Arc::new(AtomicUsize::new(0));
+    let peak_reader_bytes = Arc::new(AtomicUsize::new(0));
+    let mut reader = SyntheticLargeReader::new(
+        synthetic_bytes,
+        read_calls.clone(),
+        peak_reader_bytes.clone(),
+    );
+    let uploaded_bytes = AtomicU64::new(0);
+    let mut peak_transport_bytes = 0;
+    let mut progress_before_writes = Vec::new();
+
+    let streamed = stream_upload_reader(
+        &mut reader,
+        TRANSFER_CHUNK_BYTES as usize,
+        &uploaded_bytes,
+        |chunk| {
+            progress_before_writes.push(uploaded_bytes.load(Ordering::Relaxed));
+            peak_transport_bytes = peak_transport_bytes.max(chunk.len());
+            std::future::ready(Ok(()))
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(streamed, synthetic_bytes);
+    assert_eq!(uploaded_bytes.load(Ordering::Relaxed), streamed);
+    assert_eq!(
+        peak_reader_bytes.load(Ordering::Relaxed) as u64,
+        TRANSFER_CHUNK_BYTES
+    );
+    assert_eq!(peak_transport_bytes as u64, TRANSFER_CHUNK_BYTES);
+    assert_eq!(read_calls.load(Ordering::Relaxed), 66);
+    assert_eq!(progress_before_writes.len(), 65);
+    assert_eq!(progress_before_writes.first(), Some(&0));
+    assert_eq!(
+        progress_before_writes.last(),
+        Some(&(TRANSFER_CHUNK_BYTES * 64))
+    );
+}
+
+#[tokio::test]
+async fn streamed_upload_waits_for_transport_before_reading_ahead() {
+    let read_calls = Arc::new(AtomicUsize::new(0));
+    let reader_peak = Arc::new(AtomicUsize::new(0));
+    let first_chunk_started = Arc::new(tokio::sync::Notify::new());
+    let release_first_chunk = Arc::new(tokio::sync::Notify::new());
+    let block_first_chunk = Arc::new(AtomicBool::new(true));
+    let read_calls_for_task = read_calls.clone();
+    let first_chunk_started_for_task = first_chunk_started.clone();
+    let release_first_chunk_for_task = release_first_chunk.clone();
+    let block_first_chunk_for_task = block_first_chunk.clone();
+
+    let upload = tokio::spawn(async move {
+        let mut reader =
+            SyntheticLargeReader::new(TRANSFER_CHUNK_BYTES * 3, read_calls_for_task, reader_peak);
+        let uploaded_bytes = AtomicU64::new(0);
+        stream_upload_reader(
+            &mut reader,
+            TRANSFER_CHUNK_BYTES as usize,
+            &uploaded_bytes,
+            move |chunk| {
+                let first_chunk_started = first_chunk_started_for_task.clone();
+                let release_first_chunk = release_first_chunk_for_task.clone();
+                let block_first_chunk = block_first_chunk_for_task.clone();
+                async move {
+                    if block_first_chunk.swap(false, Ordering::Relaxed) {
+                        first_chunk_started.notify_one();
+                        release_first_chunk.notified().await;
+                    }
+                    assert!(!chunk.is_empty());
+                    Ok(())
+                }
+            },
+        )
+        .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), first_chunk_started.notified())
+        .await
+        .expect("the first transport write should start");
+    tokio::task::yield_now().await;
+    assert_eq!(read_calls.load(Ordering::Relaxed), 1);
+
+    release_first_chunk.notify_one();
+    let streamed = tokio::time::timeout(Duration::from_secs(5), upload)
+        .await
+        .expect("the upload should resume")
+        .expect("the upload task should not panic")
+        .unwrap();
+    assert_eq!(streamed, TRANSFER_CHUNK_BYTES * 3);
+}
+
+#[tokio::test]
+async fn streamed_upload_preserves_empty_file_and_transport_error_semantics() {
+    let read_calls = Arc::new(AtomicUsize::new(0));
+    let reader_peak = Arc::new(AtomicUsize::new(0));
+    let mut empty_reader = SyntheticLargeReader::new(0, read_calls.clone(), reader_peak.clone());
+    let uploaded_bytes = AtomicU64::new(0);
+    let mut write_calls = 0;
+
+    let streamed = stream_upload_reader(
+        &mut empty_reader,
+        TRANSFER_CHUNK_BYTES as usize,
+        &uploaded_bytes,
+        |_chunk| {
+            write_calls += 1;
+            std::future::ready(Ok(()))
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(streamed, 0);
+    assert_eq!(write_calls, 0);
+
+    let mut reader =
+        SyntheticLargeReader::new(TRANSFER_CHUNK_BYTES * 2, read_calls.clone(), reader_peak);
+    let result = stream_upload_reader(
+        &mut reader,
+        TRANSFER_CHUNK_BYTES as usize,
+        &uploaded_bytes,
+        |_chunk| std::future::ready(Err("retryable transport failure".to_string())),
+    )
+    .await;
+    assert_eq!(result.unwrap_err(), "retryable transport failure");
+    assert_eq!(uploaded_bytes.load(Ordering::Relaxed), 0);
+    assert_eq!(read_calls.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn changed_upload_source_is_rejected_before_flush() {
+    let initial = LocalUploadSourceSnapshot {
+        length: 4,
+        modified: Some(std::time::SystemTime::UNIX_EPOCH),
+    };
+    let changed = LocalUploadSourceSnapshot {
+        length: 4,
+        modified: Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
+    };
+
+    assert!(
+        validate_upload_source_snapshot(Path::new("source.bin"), 4, 4, &initial, &changed).is_err()
+    );
+    assert!(
+        validate_upload_source_snapshot(Path::new("source.bin"), 5, 4, &initial, &initial).is_err()
+    );
+    assert!(
+        validate_upload_source_snapshot(Path::new("source.bin"), 4, 3, &initial, &initial).is_err()
+    );
+    assert!(validate_upload_source_snapshot(
+        Path::new("empty.bin"),
+        0,
+        0,
+        &LocalUploadSourceSnapshot {
+            length: 0,
+            modified: None,
+        },
+        &LocalUploadSourceSnapshot {
+            length: 0,
+            modified: None,
+        },
+    )
+    .is_ok());
+}
 
 #[cfg(unix)]
 fn spawn_safe_file_test_client(
