@@ -83,13 +83,23 @@ fn fake_account_at(
 /// `u32` to a signed `pid_t`, so anything above `i32::MAX` wraps negative, and
 /// pid -1 addresses *every* process.
 fn dead_pid() -> u32 {
-    let mut child = std::process::Command::new("/bin/sh")
-        .args(["-c", "exit 0"])
+    let test_executable = std::env::current_exe().expect("resolve the current test executable");
+    let mut child = command::blocking::Command::new(test_executable)
+        .args(["--exact", "__zaplex_cockpit_dead_pid_child_never_matches__"])
         .spawn()
         .expect("spawn a throwaway child");
     let pid = child.id();
-    child.wait().expect("reap it");
+    let status = child.wait().expect("reap the throwaway child");
+    assert!(
+        status.success(),
+        "throwaway test process should exit cleanly"
+    );
     pid
+}
+
+#[test]
+fn dead_pid_returns_a_reaped_portable_child() {
+    assert_ne!(dead_pid(), 0);
 }
 
 #[cfg(unix)]
