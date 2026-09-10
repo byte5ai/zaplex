@@ -71,11 +71,9 @@ runs:
         # Make sure x86_64-unknown-linux-gnu and wasm32-unknown-unknown builds
         # don't share a cache, despite running on the same _host_ architecture.
         key: ${{ inputs.cache_key != '' && inputs.cache_key || inputs.target_os }}
-        # Save the cache on master AND on `feat/*` dev branches (each branch's
-        # cache is reusable by that branch's later runs), so iterative dev DMG /
-        # daemon builds are warm/incremental instead of cold. PR runs (refs/pull/*)
-        # still don't save, to avoid thrashing the shared cache.
-        save-if: ${{ github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/heads/feat/') }}
+        # Save on every branch, including main and fix/codex branches, so later
+        # runs can reuse dependencies. PR merge refs and release tags only restore.
+        save-if: ${{ startsWith(github.ref, 'refs/heads/') }}
 
     - name: Set up Namespace cache
       if: ${{ startsWith(runner.name, 'nsc-runner') }}

@@ -73,6 +73,10 @@ jobs:
         run: script/classify-release-tag-tests
         shell: bash
 
+      - name: Verify macOS packaging split
+        run: python3 script/test-macos-bundle
+        shell: bash
+
       - name: Detect build-relevant changes
         id: detect
         env:

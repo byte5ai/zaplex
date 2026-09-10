@@ -530,13 +530,12 @@ def macos_distribution_uses_developer_id_and_api_key_notarization(root: Path) ->
         "MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}",
         "MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}",
         "MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}",
-        "Build, sign and notarize",
     )
-    for workflow_name, workflow in (
-        ("zap_release.yml", release_workflow),
-        ("test-dmg.yml", test_workflow),
+    for workflow_name, workflow, signing_step in (
+        ("zap_release.yml", release_workflow, "Build, sign and notarize"),
+        ("test-dmg.yml", test_workflow, "Sign and notarize prepared aarch64 bundle"),
     ):
-        for marker in workflow_markers:
+        for marker in (*workflow_markers, signing_step):
             if marker not in workflow:
                 raise ReadinessError(f"{workflow_name} lacks signing contract {marker!r}")
 

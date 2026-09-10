@@ -61,17 +61,6 @@ INTEL_ARCH="x86_64"
 INTEL_TARGET="$INTEL_ARCH-apple-darwin"
 ARM_ARCH="aarch64"
 ARM_TARGET="$ARM_ARCH-apple-darwin"
-DEFAULT_ARCH="$(rustc --print cfg | grep target_arch)"
-
-# The Rust target triple corresponding to the build host. Used below to
-# decide whether to forward --target to `cargo run` for the settings schema
-# generator: that step needs to execute its compiled binary, so we can only
-# pass a target that's runnable on the host.
-if [[ "$DEFAULT_ARCH" == *"$INTEL_ARCH"* ]]; then
-    HOST_TARGET="$INTEL_TARGET"
-elif [[ "$DEFAULT_ARCH" == *"$ARM_ARCH"* ]]; then
-    HOST_TARGET="$ARM_TARGET"
-fi
 
 # Function to clean up temporary DMG files
 cleanup_dmg_files() {
@@ -237,6 +226,8 @@ SELFSIGN=false
 OPEN_AFTER_BUNDLE=false
 READ_PASSWORDS_FROM_ENV=false
 CHECK_SIGNING_ONLY=false
+PREPARE_ONLY=false
+PACKAGE_ONLY=false
 
 PARAMS=""
 while (( "$#" )); do
@@ -257,6 +248,16 @@ while (( "$#" )); do
     --skip-build)
       echo "Skipping binary build step."
       BUILD_BINARY=false
+      shift
+      ;;
+    # Prepare an unsigned app for a later packaging job, including its resources.
+    --prepare-only)
+      PREPARE_ONLY=true
+      shift
+      ;;
+    # Sign and package an already prepared app without invoking Cargo or generators.
+    --package-only)
+      PACKAGE_ONLY=true
       shift
       ;;
     # Skip code signing process
@@ -378,6 +379,17 @@ done
 # set positional arguments in their proper place
 eval set -- "$PARAMS"
 
+if [[ $PREPARE_ONLY = true && $PACKAGE_ONLY = true ]]; then
+  echo "--prepare-only and --package-only are mutually exclusive." >&2
+  exit 1
+fi
+if [[ $PREPARE_ONLY = true || $PACKAGE_ONLY = true ]]; then
+  if [[ "$ARTIFACT" != app || -z "$TARGET_ARCH" || $CHECK_ONLY = true || $CHECK_SIGNING_ONLY = true ]]; then
+    echo "Split packaging requires --artifact app and an explicit --arch, without check-only flags." >&2
+    exit 1
+  fi
+fi
+
 if [[ $CODESIGN = true && $READ_PASSWORDS_FROM_ENV = true ]]; then
   prepare_distribution_signing_inputs
 fi
@@ -394,6 +406,17 @@ if [[ $CHECK_SIGNING_ONLY = true ]]; then
     --issuer "$MACOS_NOTARY_ISSUER_ID" >/dev/null
   echo "Developer ID identity and App Store Connect notarization credentials are valid."
   exit 0
+fi
+
+# Packaging a prepared app needs no Rust toolchain. Resolve the host only when
+# compiling, including the schema generator that must run on this host.
+if [[ $PACKAGE_ONLY != true ]]; then
+  DEFAULT_ARCH="$(rustc --print cfg | grep target_arch)"
+  if [[ "$DEFAULT_ARCH" == *"$INTEL_ARCH"* ]]; then
+    HOST_TARGET="$INTEL_TARGET"
+  elif [[ "$DEFAULT_ARCH" == *"$ARM_ARCH"* ]]; then
+    HOST_TARGET="$ARM_TARGET"
+  fi
 fi
 
 # Infer a cargo profile from the bundle configuration.
@@ -535,7 +558,16 @@ rm -R "$OUT_DIR/$FINAL_DMG_NAME" || echo "No old dmg to remove"
 ## Step 1: Build the app ##
 ###########################
 
-if [[ "$ARTIFACT" == "app" ]]; then
+if [[ $PACKAGE_ONLY = true ]]; then
+  BINARY_PATH="$BUNDLE_DIR/$ZAPLEX_APP_NAME.app/Contents/MacOS/$ZAPLEX_BIN"
+  BUNDLED_RESOURCES_DIR="$BUNDLE_DIR/$ZAPLEX_APP_NAME.app/Contents/Resources"
+  DMG_PATH="$OUT_DIR/$FINAL_DMG_NAME"
+  if [[ ! -x "$BINARY_PATH" || ! -f "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app/Contents/Info.plist" || ! -f "$BUNDLED_RESOURCES_DIR/settings_schema.json" ]]; then
+    echo "Prepared app is missing or incomplete at $BUNDLE_DIR/$ZAPLEX_APP_NAME.app." >&2
+    exit 1
+  fi
+  echo "Using prepared app at $BUNDLE_DIR/$ZAPLEX_APP_NAME.app"
+elif [[ "$ARTIFACT" == "app" ]]; then
   if [[ $BUILD_BINARY != true ]]; then
     echo "Skipping binary build due to --skip-build flag"
     export CARGO_BUNDLE_SKIP_BUILD=1
@@ -761,6 +793,14 @@ elif [[ "$ARTIFACT" == "cli" ]]; then
 else
   echo "Unsupported artifact: $ARTIFACT" >&2
   exit 1
+fi
+
+if [[ $PREPARE_ONLY = true ]]; then
+  echo "Prepared unsigned app at $BUNDLE_DIR/$ZAPLEX_APP_NAME.app"
+  if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+    echo "prepared_app_path=$BUNDLE_DIR/$ZAPLEX_APP_NAME.app" >> "$GITHUB_OUTPUT"
+  fi
+  exit 0
 fi
 
 ##########################################
