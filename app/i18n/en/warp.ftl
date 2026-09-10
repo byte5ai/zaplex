@@ -510,6 +510,7 @@ terminal-message-to-select = {" "}to select
 terminal-message-select-save-profile = {" "}select and save to profile
 terminal-message-open-plan = {" "}open plan
 terminal-starting-shell = Starting shell...
+terminal-classic-ssh = Classic SSH
 terminal-input-no-skills-found = No skills found
 terminal-model-specs-title = Model Specs
 terminal-model-specs-description = Zaplex's benchmarks for how well a model performs in our harness, the rate at which it consumes credits, and task speed.
