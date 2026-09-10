@@ -22,32 +22,6 @@ fn agent_run_accepts_model() {
 }
 
 #[test]
-fn agent_run_accepts_hidden_bedrock_inference_role_flag() {
-    let args = Args::try_parse_from([
-        "warp",
-        "agent",
-        "run",
-        "--prompt",
-        "hello",
-        "--bedrock-inference-role",
-        "arn:aws:iam::123456789012:role/test",
-    ])
-    .unwrap();
-
-    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
-        panic!("Expected `warp agent run` command");
-    };
-    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
-        panic!("Expected `warp agent run` command");
-    };
-
-    assert_eq!(
-        run_args.bedrock_inference_role.as_deref(),
-        Some("arn:aws:iam::123456789012:role/test")
-    );
-}
-
-#[test]
 fn model_list_parses() {
     let args = Args::try_parse_from(["warp", "model", "list"]).unwrap();
 

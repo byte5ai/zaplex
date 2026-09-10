@@ -1,6 +1,7 @@
 # Explicit Repair Records Gate BYOP Placeholder Tool Results
 
-Status: accepted
+Status: retired by #152; retained only as historical design context. The Custom-Provider HTTP
+transport and its repair path are no longer part of the Zaplex product.
 
 Normal BYOP request flow must not fabricate placeholder tool results when a model tool call is missing its recorded result. Zap will block normal-flow serialization until the tool call has a real terminal result, while placeholder tool results remain available only for explicit history repair backed by per-tool-call Repair Records.
 

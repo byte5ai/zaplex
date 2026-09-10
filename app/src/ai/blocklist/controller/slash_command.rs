@@ -21,6 +21,16 @@ use super::{
     BlocklistAIControllerEvent, RequestInput,
 };
 
+const INIT_PROJECT_PROMPT: &str = include_str!("init_project_prompt.md");
+
+fn render_init_project_command(arguments: Option<&str>) -> String {
+    let arguments = arguments
+        .map(str::trim)
+        .filter(|arguments| !arguments.is_empty())
+        .unwrap_or("(none)");
+    INIT_PROJECT_PROMPT.replace("{{ arguments }}", arguments)
+}
+
 pub enum SlashCommandRequest {
     CreateNewProject {
         query: String,
@@ -33,11 +43,6 @@ pub enum SlashCommandRequest {
     },
     Summarize {
         prompt: Option<String>,
-        /// Zaplex BYOP local conversation compaction: whether this summary was triggered automatically by token overflow.
-        /// The chat_stream::SummarizeConversation branch uses this to decide the follow-up wording
-        /// (the overflow path appends a "previous request exceeded ..." explanation).
-        /// false for manual /compact and /compact-and triggers; true for the auto-trigger path.
-        overflow: bool,
     },
     FetchReviewComments {
         repo_path: String,
@@ -69,7 +74,6 @@ impl SlashCommandRequest {
         if let Some(prompt) = query.strip_prefix(commands::COMPACT.name) {
             return Some(Self::Summarize {
                 prompt: prompt.strip_prefix(' ').map(String::from),
-                overflow: false, // The text-input path is only used for manual /compact, never for automatic overflow
             });
         }
 
@@ -212,9 +216,7 @@ impl SlashCommandRequest {
                 }]
             }
             SlashCommandRequest::InitProjectRules { arguments } => vec![AIAgentInput::UserQuery {
-                query: crate::ai::agent_providers::prompt_renderer::render_init_project_command(
-                    arguments.as_deref(),
-                ),
+                query: render_init_project_command(arguments.as_deref()),
                 context,
                 static_query_type: None,
                 referenced_attachments: HashMap::<String, AIAgentAttachment>::new(),
@@ -222,8 +224,8 @@ impl SlashCommandRequest {
                 running_command: None,
                 intended_agent: None,
             }],
-            SlashCommandRequest::Summarize { prompt, overflow } => {
-                vec![AIAgentInput::SummarizeConversation { prompt, overflow }]
+            SlashCommandRequest::Summarize { prompt } => {
+                vec![AIAgentInput::SummarizeConversation { prompt }]
             }
             SlashCommandRequest::FetchReviewComments { repo_path } => {
                 vec![AIAgentInput::FetchReviewComments { repo_path, context }]
@@ -262,5 +264,19 @@ impl SlashCommandRequest {
             | SlashCommandRequest::FetchReviewComments { .. }
             | SlashCommandRequest::InvokeSkill { .. } => EntrypointType::UserInitiated,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_init_project_command;
+
+    #[test]
+    fn init_project_prompt_includes_trimmed_user_focus() {
+        let prompt = render_init_project_command(Some("  focus on test commands  "));
+
+        assert!(prompt.contains("Create or update `AGENTS.md`"));
+        assert!(prompt.contains("focus on test commands"));
+        assert!(!prompt.contains("{{ arguments }}"));
     }
 }

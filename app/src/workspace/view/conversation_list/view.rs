@@ -339,7 +339,7 @@ impl ConversationListView {
         // Focus the search bar when the panel is opened.
         ctx.focus(&self.query_editor);
 
-        // No focused conversation tracking after BYOP cloud removal.
+        // No focused conversation tracking after removing the legacy cloud-agent path.
         self.selected_index = None;
 
         if let Some(index) = self.selected_index {

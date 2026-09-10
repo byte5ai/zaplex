@@ -540,14 +540,9 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
         params: ConversionParams,
     ) -> Result<MaybeAIAgentAction, ToolToAIAgentActionError> {
         let Some(tool) = self.tool else {
-            // Zaplex BYOP: `make_tool_call_carrier_message` intentionally emits `tool: None` ToolCall
-            // when from_args parsing fails, serving as a carrier for the next build_chat_request round to restore
-            // the original fn_name + args_str to the upstream model (server_message_data carries the original content);
-            // the synthetic error ToolCallResult immediately following is the content to display to the user.
-            // Returning MissingTool would cause the entire conversation update to be rejected (`UpdateTask(ConversionError)`),
-            // and the following ToolCallResult would not apply → exchange stuck in "Warping..." forever.
-            // Here we change to NoClientRepresentation: UI doesn't render this empty ToolCall,
-            // task.messages still persists (server_message_data intact), next round's upstream re-send path is complete.
+            // A transport may retain an unparseable tool call as server-only message data and
+            // follow it with a synthetic error result for the user. Rejecting that placeholder
+            // would discard the entire update, so keep it out of the client representation.
             return Ok(MaybeAIAgentAction::NoClientRepresentation);
         };
 

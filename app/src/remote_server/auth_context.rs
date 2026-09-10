@@ -7,9 +7,7 @@ use crate::auth::AuthState;
 
 /// Construct auth context for use by remote-server module.
 ///
-/// Zaplex Wave 3-1: `AuthClient` trait already physically deleted. Bearer token source changed to directly read
-/// `AuthState::get_access_token_ignoring_validity()`(on Zaplex path only returns `Some` when user has BYOP API key mounted,
-/// otherwise always `None`).
+/// Builds remote-server bearer authentication from the current local auth state.
 pub fn server_api_auth_context(auth_state: Arc<AuthState>) -> RemoteServerAuthContext {
     let token_auth_state = auth_state.clone();
     let identity_auth_state = auth_state;

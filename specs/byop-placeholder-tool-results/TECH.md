@@ -2,7 +2,8 @@
 
 ## Status
 
-Drafted from the accepted decisions in `PRODUCT.md`, `CONTEXT.md`, and `ADR.md`.
+Retired by #152. The Custom-Provider HTTP transport and these implementation steps are no longer
+active; this plan is retained only as historical context.
 
 During the grilling phase, implementation decisions may remain duplicated between `PRODUCT.md` and this file to avoid losing accepted context. After decisions stabilize, do a cleanup pass that keeps `PRODUCT.md` focused on behavior and moves implementation matrices into this technical plan.
 

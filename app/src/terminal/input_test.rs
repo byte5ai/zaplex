@@ -106,7 +106,6 @@ use workflows::{
 use crate::context_chips::prompt::Prompt;
 use crate::terminal::general_settings::UserDefaultShellUnsupportedBannerState;
 use crate::terminal::resizable_data::ResizableData;
-use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
@@ -145,7 +144,6 @@ pub fn initialize_app(app: &mut App) {
     app.add_singleton_model(BlocklistAIPermissions::new);
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AuthManager::new_for_test);
-    app.add_singleton_model(crate::ai::agent_providers::AgentProviderSecrets::new);
     app.add_singleton_model(LLMPreferences::new);
     app.add_singleton_model(DirectoryWatcher::new);
     app.add_singleton_model(|_| DetectedRepositories::default());
@@ -193,7 +191,6 @@ pub fn initialize_app(app: &mut App) {
     app.add_singleton_model(OneTimeModalModel::new);
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(|_| ToastStack);
-    app.add_singleton_model(ByoLlmAuthBannerSessionState::new);
     app.add_singleton_model(|_| {
         crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier::new()
     });

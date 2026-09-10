@@ -1,5 +1,8 @@
 # Cockpit — Native Integration Design (claudeplex, adapted the zaplex way)
 
+> **Historical amendment (2026-09-10):** references to a local BYOP conversation path below were
+> superseded by #152. Current in-app conversations use the Claude Code/Codex subscription routes.
+
 > **Goal.** A claudeplex user must find **everything** they had — at least parity,
 > ideally more — but it must feel like claudeplex was built into zaplex *from day one*,
 > not bolted on. We adapt, we don't blind-port. Precedent: the file-manager

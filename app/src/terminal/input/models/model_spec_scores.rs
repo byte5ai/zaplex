@@ -1,8 +1,8 @@
 use pathfinder_color::ColorU;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Border, ConstrainedBox, Container, CornerRadius, Expanded, Flex, MainAxisAlignment,
-    MainAxisSize, ParentElement as _, Percentage, Radius, Rect, Stack, Text,
+    Border, ConstrainedBox, Container, CornerRadius, Expanded, Flex, MainAxisSize,
+    ParentElement as _, Percentage, Radius, Rect, Stack, Text,
 };
 use warpui::prelude::{Align, CrossAxisAlignment};
 use warpui::text_layout::ClipConfig;
@@ -17,81 +17,10 @@ const ROW_SPACING: f32 = 12.0;
 
 pub enum CostRow {
     Bar { value: Option<f32> },
-    BilledToApi { manage_button: Box<dyn Element> },
 }
 
 pub struct ModelSpecScoresLayout {
     pub bg_bar_color: ColorU,
-}
-
-/// Spec panel rendered for BYOP (bring-your-own-provider) models.
-///
-/// Visually identical to [`render_model_spec_scores`] (same `render_score_row` private helper),
-/// but with different row semantics:
-/// - Context — context window, bar uses log2 normalization to map to 4K..2M
-/// - Output  — max tokens per output, bar uses log2 normalization to map to 1K..128K
-/// - Cost    — forces `BilledToApi` branch (BYOP users use their own key, not Zaplex billing)
-///
-/// When `context_window` / `max_output_tokens` is 0 (unfilled), pass None, displaying
-/// a default "?" placeholder, consistent with Zaplex's default panel when data is missing.
-pub fn render_byop_spec_scores(
-    context_window: Option<u32>,
-    max_output_tokens: Option<u32>,
-    manage_button: Box<dyn Element>,
-    layout: ModelSpecScoresLayout,
-    app: &AppContext,
-) -> Box<dyn Element> {
-    let rows = vec![
-        render_score_row(
-            "Context",
-            ScoreRowKind::Bar {
-                value: context_window.map(normalize_context_window),
-            },
-            layout.bg_bar_color,
-            app,
-        ),
-        render_score_row(
-            "Output",
-            ScoreRowKind::Bar {
-                value: max_output_tokens.map(normalize_max_output),
-            },
-            layout.bg_bar_color,
-            app,
-        ),
-        render_score_row(
-            "Cost",
-            ScoreRowKind::BilledToApi { manage_button },
-            layout.bg_bar_color,
-            app,
-        ),
-    ];
-
-    Flex::column()
-        .with_spacing(ROW_SPACING)
-        .with_children(rows)
-        .finish()
-}
-
-/// log2 normalization: 4K..2M tokens → 0..1. Out-of-range / 0 controlled by caller via `Option<u32>`.
-fn normalize_context_window(ctx: u32) -> f32 {
-    if ctx == 0 {
-        return 0.0;
-    }
-    let l = (ctx as f32).log2();
-    let lo = 12.0; // log2(4096) = 4K
-    let hi = 21.0; // log2(2 097 152) ≈ 2M
-    ((l - lo) / (hi - lo)).clamp(0.0, 1.0)
-}
-
-/// log2 normalization: 1K..128K tokens → 0..1.
-fn normalize_max_output(out: u32) -> f32 {
-    if out == 0 {
-        return 0.0;
-    }
-    let l = (out as f32).log2();
-    let lo = 10.0; // log2(1024) = 1K
-    let hi = 17.0; // log2(131 072) = 128K
-    ((l - lo) / (hi - lo)).clamp(0.0, 1.0)
 }
 
 pub fn render_model_spec_scores(
@@ -118,24 +47,13 @@ pub fn render_model_spec_scores(
         app,
     ));
 
-    match cost_row {
-        CostRow::Bar { value } => {
-            rows.push(render_score_row(
-                "Cost",
-                ScoreRowKind::Bar { value },
-                layout.bg_bar_color,
-                app,
-            ));
-        }
-        CostRow::BilledToApi { manage_button } => {
-            rows.push(render_score_row(
-                "Cost",
-                ScoreRowKind::BilledToApi { manage_button },
-                layout.bg_bar_color,
-                app,
-            ));
-        }
-    }
+    let CostRow::Bar { value } = cost_row;
+    rows.push(render_score_row(
+        "Cost",
+        ScoreRowKind::Bar { value },
+        layout.bg_bar_color,
+        app,
+    ));
 
     Flex::column()
         .with_spacing(ROW_SPACING)
@@ -145,7 +63,6 @@ pub fn render_model_spec_scores(
 
 enum ScoreRowKind {
     Bar { value: Option<f32> },
-    BilledToApi { manage_button: Box<dyn Element> },
 }
 
 fn render_score_row(
@@ -248,28 +165,6 @@ fn render_score_row(
             )
             .finish()
         }
-        ScoreRowKind::BilledToApi { manage_button } => Expanded::new(
-            1.,
-            Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(
-                    Container::new(
-                        Text::new(
-                            "Billed to API".to_string(),
-                            appearance.ui_font_family(),
-                            14.,
-                        )
-                        .with_color(theme.disabled_ui_text_color().into())
-                        .finish(),
-                    )
-                    .finish(),
-                )
-                .with_child(manage_button)
-                .finish(),
-        )
-        .finish(),
     };
 
     Flex::row()

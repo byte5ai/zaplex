@@ -28,9 +28,6 @@ use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::agent::CancellationReason;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
-use crate::ai::byop_readiness::{
-    RepairRecord, RepairSource, RepairState, RepairStateStatus, ToolCallKey,
-};
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::input_suggestions::HistoryOrder;
 use crate::persistence::model::AgentConversationData;
@@ -545,22 +542,6 @@ impl BlocklistAIHistoryModel {
         Ok(())
     }
 
-    pub fn append_byop_preflight_messages_to_task(
-        &mut self,
-        conversation_id: AIConversationId,
-        task_id: TaskId,
-        messages: Vec<warp_multi_agent_api::Message>,
-        ctx: &mut ModelContext<Self>,
-    ) -> Result<usize, UpdateHistoryError> {
-        let conversation = self
-            .conversations_by_id
-            .get_mut(&conversation_id)
-            .ok_or(UpdateHistoryError::ConversationNotFound(conversation_id))?;
-        conversation
-            .append_byop_preflight_messages_to_task(task_id, messages, ctx)
-            .map_err(UpdateHistoryError::from)
-    }
-
     pub fn restore_conversations(
         &mut self,
         terminal_view_id: EntityId,
@@ -757,7 +738,7 @@ impl BlocklistAIHistoryModel {
         Ok(conversation.create_optimistic_cli_subagent_task(&block_id, terminal_view_id, ctx))
     }
 
-    /// Zaplex BYOP-specific: see `Conversation::create_optimistic_cli_subagent_task_silent` docs.
+    /// See `Conversation::create_optimistic_cli_subagent_task_silent` docs.
     /// Creates real subagent task but doesn't emit `CreatedSubtask`, avoiding triggering `CLISubagentView`
     /// panic when task has no exchange.
     pub fn create_silent_cli_subagent_task_for_conversation(
@@ -1008,13 +989,7 @@ impl BlocklistAIHistoryModel {
             .filter_map(|t| t.source().cloned())
             .collect();
 
-        let updated_tasks_with_new_ids = update_forked_task_properties(tasks.clone(), prefix);
-        let byop_repair_state_json = byop_fork_repair_state_json(
-            &tasks,
-            &updated_tasks_with_new_ids,
-            &source_conversation.byop_repair_state,
-            None,
-        );
+        let updated_tasks_with_new_ids = update_forked_task_properties(tasks, prefix);
         let Some(sqlite_sender) = GlobalResourceHandlesProvider::as_ref(app)
             .get()
             .model_event_sender
@@ -1069,7 +1044,7 @@ impl BlocklistAIHistoryModel {
             // forked conversation will establish its own cursor.
             last_event_sequence: None,
             compaction_state_json: None,
-            byop_repair_state_json,
+            byop_repair_state_json: None,
         };
         let forked_conversation_id = AIConversationId::new();
         if let Err(e) = sqlite_sender.send(ModelEvent::UpdateMultiAgentConversation {
@@ -1175,12 +1150,6 @@ impl BlocklistAIHistoryModel {
         }
 
         let updated_tasks_with_new_ids = update_forked_task_properties(truncated_tasks, prefix);
-        let byop_repair_state_json = byop_fork_repair_state_json(
-            &source_tasks,
-            &updated_tasks_with_new_ids,
-            &conversation.byop_repair_state,
-            Some(from_exchange_id.to_string()),
-        );
 
         let Some(sqlite_sender) = GlobalResourceHandlesProvider::as_ref(app)
             .get()
@@ -1238,7 +1207,7 @@ impl BlocklistAIHistoryModel {
             // forked conversation will establish its own cursor.
             last_event_sequence: None,
             compaction_state_json: None,
-            byop_repair_state_json,
+            byop_repair_state_json: None,
         };
 
         let forked_conversation_id = AIConversationId::new();
@@ -2331,253 +2300,6 @@ fn update_forked_task_properties(
             t
         })
         .collect()
-}
-
-fn byop_fork_repair_state_json(
-    source_tasks: &[warp_multi_agent_api::Task],
-    forked_tasks: &[warp_multi_agent_api::Task],
-    source_repair_state: &RepairStateStatus,
-    exchange_id: Option<String>,
-) -> Option<String> {
-    let records = collect_byop_fork_repair_records(
-        source_tasks,
-        forked_tasks,
-        source_repair_state,
-        exchange_id,
-    );
-    RepairStateStatus::Valid(RepairState::new(records)).to_sidecar_json()
-}
-
-fn collect_byop_fork_repair_records(
-    source_tasks: &[warp_multi_agent_api::Task],
-    forked_tasks: &[warp_multi_agent_api::Task],
-    source_repair_state: &RepairStateStatus,
-    exchange_id: Option<String>,
-) -> Vec<RepairRecord> {
-    let source_tool_call_keys = byop_tool_call_keys_by_message_id(source_tasks);
-    let forked_tool_call_keys = byop_tool_call_keys_by_message_id(forked_tasks);
-    let source_result_message_ids = byop_result_message_ids_by_tool_call_key(source_tasks);
-    let retained_message_ids = byop_message_ids(forked_tasks);
-
-    let mut source_to_fork_key = HashMap::new();
-    for (message_id, fork_key) in &forked_tool_call_keys {
-        let Some(source_key) = source_tool_call_keys.get(message_id) else {
-            continue;
-        };
-        source_to_fork_key.insert(source_key.clone(), fork_key.clone());
-    }
-
-    let mut records = Vec::new();
-    let mut seen_keys = HashSet::new();
-    for (source_key, fork_key) in &source_to_fork_key {
-        let result_ids = source_result_message_ids
-            .get(source_key)
-            .cloned()
-            .unwrap_or_default();
-        if result_ids.is_empty()
-            || result_ids
-                .iter()
-                .any(|id| retained_message_ids.contains(id))
-        {
-            continue;
-        }
-
-        let mut record = RepairRecord::new(RepairSource::ForkedHistory, fork_key.clone());
-        record.exchange_id = exchange_id.clone();
-        push_unique_repair_record(&mut records, &mut seen_keys, record);
-    }
-
-    for record in source_repair_state.repair_records() {
-        let Some(fork_key) = source_to_fork_key.get(&record.key) else {
-            continue;
-        };
-        if source_result_message_ids
-            .get(&record.key)
-            .is_some_and(|ids| ids.iter().any(|id| retained_message_ids.contains(id)))
-        {
-            continue;
-        }
-
-        let mut translated = RepairRecord::new(record.source, fork_key.clone());
-        translated.fork_point_message_id = record.fork_point_message_id.clone();
-        translated.exchange_id = record.exchange_id.clone().or_else(|| exchange_id.clone());
-        push_unique_repair_record(&mut records, &mut seen_keys, translated);
-    }
-
-    records
-}
-
-fn push_unique_repair_record(
-    records: &mut Vec<RepairRecord>,
-    seen_keys: &mut HashSet<ToolCallKey>,
-    record: RepairRecord,
-) {
-    if seen_keys.insert(record.key.clone()) {
-        records.push(record);
-    }
-}
-
-fn byop_message_ids(tasks: &[warp_multi_agent_api::Task]) -> HashSet<String> {
-    tasks
-        .iter()
-        .flat_map(|task| task.messages.iter().map(|message| message.id.clone()))
-        .collect()
-}
-
-fn byop_result_message_ids_by_tool_call_key(
-    tasks: &[warp_multi_agent_api::Task],
-) -> HashMap<ToolCallKey, HashSet<String>> {
-    let mut result_ids = HashMap::new();
-    for task in tasks {
-        let mut active_task_id: Option<String> = None;
-        let mut active_assistant_message_id: Option<String> = None;
-        let mut active_tool_call_ids: Vec<String> = Vec::new();
-        let mut active_saw_tool_result = false;
-        for message in &task.messages {
-            match message.message.as_ref() {
-                Some(warp_multi_agent_api::message::Message::ToolCall(tool_call)) => {
-                    if tool_call.subagent().is_some() {
-                        continue;
-                    }
-
-                    if active_task_id
-                        .as_deref()
-                        .is_some_and(|task_id| task_id != message.task_id)
-                    {
-                        active_assistant_message_id = None;
-                        active_tool_call_ids.clear();
-                        active_saw_tool_result = false;
-                    }
-
-                    if active_saw_tool_result {
-                        active_task_id = None;
-                        active_assistant_message_id = None;
-                        active_tool_call_ids.clear();
-                        active_saw_tool_result = false;
-                    }
-
-                    if active_tool_call_ids.is_empty() {
-                        active_task_id = Some(message.task_id.clone());
-                        active_assistant_message_id = Some(message.id.clone());
-                    }
-                    active_tool_call_ids.push(tool_call.tool_call_id.clone());
-                }
-                Some(warp_multi_agent_api::message::Message::ToolCallResult(result)) => {
-                    let Some(assistant_message_id) = active_assistant_message_id.as_ref() else {
-                        continue;
-                    };
-                    if active_task_id.as_deref() != Some(message.task_id.as_str()) {
-                        continue;
-                    }
-                    let matching_count = active_tool_call_ids
-                        .iter()
-                        .filter(|tool_call_id| *tool_call_id == &result.tool_call_id)
-                        .count();
-                    if matching_count != 1 {
-                        continue;
-                    }
-
-                    result_ids
-                        .entry(ToolCallKey::new(
-                            message.task_id.clone(),
-                            assistant_message_id.clone(),
-                            result.tool_call_id.clone(),
-                        ))
-                        .or_insert_with(HashSet::new)
-                        .insert(message.id.clone());
-                    active_saw_tool_result = true;
-                }
-                Some(warp_multi_agent_api::message::Message::UserQuery(_))
-                | Some(warp_multi_agent_api::message::Message::AgentOutput(_)) => {
-                    active_task_id = None;
-                    active_assistant_message_id = None;
-                    active_tool_call_ids.clear();
-                    active_saw_tool_result = false;
-                }
-                Some(warp_multi_agent_api::message::Message::AgentReasoning(_))
-                | Some(warp_multi_agent_api::message::Message::ServerEvent(_))
-                | Some(warp_multi_agent_api::message::Message::SystemQuery(_))
-                | Some(warp_multi_agent_api::message::Message::UpdateTodos(_))
-                | Some(warp_multi_agent_api::message::Message::Summarization(_))
-                | Some(warp_multi_agent_api::message::Message::CodeReview(_))
-                | Some(warp_multi_agent_api::message::Message::UpdateReviewComments(_))
-                | Some(warp_multi_agent_api::message::Message::WebSearch(_))
-                | Some(warp_multi_agent_api::message::Message::WebFetch(_))
-                | Some(warp_multi_agent_api::message::Message::DebugOutput(_))
-                | Some(warp_multi_agent_api::message::Message::ArtifactEvent(_))
-                | Some(warp_multi_agent_api::message::Message::InvokeSkill(_))
-                | Some(warp_multi_agent_api::message::Message::MessagesReceivedFromAgents(_))
-                | Some(warp_multi_agent_api::message::Message::ModelUsed(_))
-                | Some(warp_multi_agent_api::message::Message::EventsFromAgents(_))
-                | Some(warp_multi_agent_api::message::Message::PassiveSuggestionResult(_))
-                | None => {}
-            }
-        }
-    }
-    result_ids
-}
-
-fn byop_tool_call_keys_by_message_id(
-    tasks: &[warp_multi_agent_api::Task],
-) -> HashMap<String, ToolCallKey> {
-    let mut keys = HashMap::new();
-    for task in tasks {
-        let mut pending_task_id: Option<String> = None;
-        let mut pending_assistant_message_id: Option<String> = None;
-        for message in &task.messages {
-            match message.message.as_ref() {
-                Some(warp_multi_agent_api::message::Message::ToolCall(tool_call)) => {
-                    if tool_call.subagent().is_some() {
-                        continue;
-                    }
-
-                    if pending_task_id
-                        .as_deref()
-                        .is_some_and(|task_id| task_id != message.task_id)
-                    {
-                        pending_assistant_message_id = None;
-                    }
-
-                    let assistant_message_id = pending_assistant_message_id
-                        .get_or_insert_with(|| message.id.clone())
-                        .clone();
-                    pending_task_id = Some(message.task_id.clone());
-                    keys.insert(
-                        message.id.clone(),
-                        ToolCallKey::new(
-                            message.task_id.clone(),
-                            assistant_message_id,
-                            tool_call.tool_call_id.clone(),
-                        ),
-                    );
-                }
-                Some(warp_multi_agent_api::message::Message::UserQuery(_))
-                | Some(warp_multi_agent_api::message::Message::AgentOutput(_))
-                | Some(warp_multi_agent_api::message::Message::ToolCallResult(_)) => {
-                    pending_task_id = None;
-                    pending_assistant_message_id = None;
-                }
-                Some(warp_multi_agent_api::message::Message::AgentReasoning(_))
-                | Some(warp_multi_agent_api::message::Message::ServerEvent(_))
-                | Some(warp_multi_agent_api::message::Message::SystemQuery(_))
-                | Some(warp_multi_agent_api::message::Message::UpdateTodos(_))
-                | Some(warp_multi_agent_api::message::Message::Summarization(_))
-                | Some(warp_multi_agent_api::message::Message::CodeReview(_))
-                | Some(warp_multi_agent_api::message::Message::UpdateReviewComments(_))
-                | Some(warp_multi_agent_api::message::Message::WebSearch(_))
-                | Some(warp_multi_agent_api::message::Message::WebFetch(_))
-                | Some(warp_multi_agent_api::message::Message::DebugOutput(_))
-                | Some(warp_multi_agent_api::message::Message::ArtifactEvent(_))
-                | Some(warp_multi_agent_api::message::Message::InvokeSkill(_))
-                | Some(warp_multi_agent_api::message::Message::MessagesReceivedFromAgents(_))
-                | Some(warp_multi_agent_api::message::Message::ModelUsed(_))
-                | Some(warp_multi_agent_api::message::Message::EventsFromAgents(_))
-                | Some(warp_multi_agent_api::message::Message::PassiveSuggestionResult(_))
-                | None => {}
-            }
-        }
-    }
-    keys
 }
 
 /// The default prefix used when forking a conversation.

@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
-use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner};
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -47,7 +46,6 @@ impl ThirdPartyHarness for GeminiHarness {
         &self,
         working_dir: &Path,
         system_prompt: Option<&str>,
-        _secrets: &HashMap<String, ManagedSecretValue>,
     ) -> Result<(), AgentDriverError> {
         prepare_gemini_environment_config(working_dir, system_prompt).map_err(|error| {
             AgentDriverError::HarnessConfigSetupFailed {
@@ -220,13 +218,6 @@ fn prepare_gemini_environment_config(
 
 fn prepare_gemini_settings(settings_path: &Path, has_system_prompt: bool) -> Result<()> {
     let mut settings: GeminiSettings = read_json_file_or_default(settings_path)?;
-    settings
-        .security
-        .get_or_insert_with(GeminiSecurity::default)
-        .auth
-        .get_or_insert_with(GeminiAuth::default)
-        .selected_type = Some(GEMINI_API_KEY_AUTH_TYPE.to_owned());
-
     if has_system_prompt {
         let context = settings.context.get_or_insert_with(GeminiContext::default);
         let file_name = GEMINI_SYSTEM_PROMPT_FILE_NAME.to_owned();
@@ -259,9 +250,6 @@ const GEMINI_CONFIG_DIR: &str = ".gemini";
 const GEMINI_SETTINGS_FILE_NAME: &str = "settings.json";
 const GEMINI_TRUSTED_FOLDERS_FILE_NAME: &str = "trustedFolders.json";
 const GEMINI_SYSTEM_PROMPT_FILE_NAME: &str = "OZ_SYSTEM_PROMPT.md";
-/// Auth-type discriminant for API-key auth — matches `AuthType.USE_GEMINI` in
-/// Gemini's `packages/core/src/core/contentGenerator.ts`.
-const GEMINI_API_KEY_AUTH_TYPE: &str = "gemini-api-key";
 /// Trust level discriminant that grants full trust to a single folder — matches
 /// Gemini's `TrustLevel.TRUST_FOLDER` in `packages/cli/src/config/trustedFolders.ts`.
 const GEMINI_TRUST_LEVEL_FOLDER: &str = "TRUST_FOLDER";

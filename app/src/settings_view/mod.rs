@@ -64,7 +64,6 @@ use warpui::{
 use zaplexify_page::{ZaplexifyPageAction, ZaplexifyPageView};
 
 mod about_page;
-mod agent_providers_widget;
 mod ai_page;
 mod appearance_page;
 mod cloud_sync_page;
@@ -292,7 +291,6 @@ impl FromStr for SettingsSection {
             "Oz" | "Zaplex Agent" => Ok(Self::WarpAgent),
             "Profiles" | "AgentProfiles" => Ok(Self::AgentProfiles),
             "MCP servers" | "AgentMCPServers" => Ok(Self::AgentMCPServers),
-            "Providers" | "AgentProviders" => Ok(Self::WarpAgent),
             "Knowledge" => Ok(Self::Knowledge),
             "Third party CLI agents" | "ThirdPartyCLIAgents" => Ok(Self::ThirdPartyCLIAgents),
             "Editor and Code Review" | "EditorAndCodeReview" => Ok(Self::EditorAndCodeReview),

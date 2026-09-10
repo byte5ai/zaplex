@@ -1294,13 +1294,9 @@ fn forget_daemon_node_session(
 }
 
 #[cfg(unix)]
-fn resolved_daemon_connection(
-    node_id: &str,
-) -> Option<warp_ssh_manager::ResolvedSshConnection> {
+fn resolved_daemon_connection(node_id: &str) -> Option<warp_ssh_manager::ResolvedSshConnection> {
     warp_ssh_manager::with_conn(|database| {
-        Ok(warp_ssh_manager::SshRepository::get_server_with_resolved_auth(
-            database, node_id,
-        )?)
+        Ok(warp_ssh_manager::SshRepository::get_server_with_resolved_auth(database, node_id)?)
     })
     .ok()
     .flatten()
@@ -11216,12 +11212,7 @@ impl Workspace {
             "connect-fallback-handshake-failed",
             host = connection.server.host.clone()
         );
-        self.fall_back_to_classic_ssh(
-            connection.server.node_id.clone(),
-            connection,
-            warning,
-            ctx,
-        );
+        self.fall_back_to_classic_ssh(connection.server.node_id.clone(), connection, warning, ctx);
         self.finish_daemon_ssh_connect(session_id, ctx);
     }
 
@@ -13763,7 +13754,7 @@ impl Workspace {
         self.vertical_tabs_panel.show_settings_popup = false;
     }
 
-    /// Stub: agent management view removed (BYOP).
+    /// Stub: the legacy agent-management view has been removed.
     fn set_is_agent_management_view_open(&mut self, _is_open: bool, _ctx: &mut ViewContext<Self>) {}
 
     fn toggle_left_panel(&mut self, ctx: &mut ViewContext<Self>) {
@@ -15203,25 +15194,12 @@ impl Workspace {
                 self.current_workspace_state.is_workflow_modal_open = false;
                 ctx.notify();
             }
-            WorkflowModalEvent::AiAssistError(message) => {
-                self.toast_stack.update(ctx, |view, ctx| {
-                    let new_toast = DismissibleToast::error(message.clone());
-                    view.add_ephemeral_toast(new_toast, ctx);
-                });
-            }
             WorkflowModalEvent::UpdatedWorkflow(workflow_id) => {
                 // If saved workflow id matches the one that is currently displayed, then refresh workflow info box + input
                 self.maybe_refresh_workflow_info_box_and_input(workflow_id, ctx);
             }
             WorkflowModalEvent::ViewInWarpDrive(id) => {
                 self.view_in_and_focus_warp_drive(*id, ctx);
-            }
-            WorkflowModalEvent::AiAssistUpgradeError(_, _) => {
-                self.toast_stack.update(ctx, |view, ctx| {
-                    let new_toast =
-                        DismissibleToast::error(crate::t!("workspace-toast-out-of-ai-credits"));
-                    view.add_ephemeral_toast(new_toast, ctx);
-                });
             }
         }
     }
@@ -22204,13 +22182,13 @@ impl Workspace {
                 };
                 let location = match node_id.as_deref() {
                     Some(node_id) => warp_ssh_manager::with_conn(|database| {
-                        let connection = warp_ssh_manager::SshRepository::get_server_with_resolved_auth(
-                            database,
-                            node_id,
-                        )?
-                        .ok_or_else(|| {
-                            warp_ssh_manager::SshRepositoryError::NotFound(node_id.to_string())
-                        })?;
+                        let connection =
+                            warp_ssh_manager::SshRepository::get_server_with_resolved_auth(
+                                database, node_id,
+                            )?
+                            .ok_or_else(|| {
+                                warp_ssh_manager::SshRepositoryError::NotFound(node_id.to_string())
+                            })?;
                         Ok(crate::ai::subscription_agent::ProcessLocation::Remote {
                             ssh_argv: warp_ssh_manager::ssh_command::build_ssh_args(
                                 &connection.server,
@@ -26018,7 +25996,7 @@ impl Workspace {
             });
         }
 
-        // Agent conversation history (local, BYOP).
+        // Local agent conversation history.
         if FeatureFlag::AgentViewConversationListView.is_enabled()
             && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
             && *AISettings::as_ref(ctx).show_conversation_history
@@ -27926,21 +27904,6 @@ impl TypedActionView for Workspace {
             #[cfg(feature = "local_fs")]
             FileDeleted { path } => {
                 self.close_tabs_with_file_path(path, ctx);
-            }
-            #[cfg(debug_assertions)]
-            DebugResetAwsBedrockLoginBannerDismissed => {
-                // Reset the AWS Bedrock login banner dismissed state for debugging
-                AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
-                    if let Err(e) = ai_settings
-                        .aws_bedrock_login_banner_dismissed
-                        .set_value(false, ctx)
-                    {
-                        log::warn!(
-                            "Failed to reset AWS Bedrock login banner dismissed setting: {e}"
-                        );
-                    }
-                });
-                log::info!("AWS Bedrock login banner dismissed state has been reset");
             }
             #[cfg(debug_assertions)]
             OpenZapLaunchModal => {

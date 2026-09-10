@@ -15,7 +15,6 @@ use crate::ai::blocklist::block::view_impl::common::{
     MaybeShimmeringText, BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB,
     BLOCKED_ACTION_MESSAGE_FOR_READING_FILES,
 };
-use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
 use crate::ai::blocklist::inline_action::create_or_edit_document::CreateOrEditDocumentAction;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::view_util::format_credits;
@@ -100,7 +99,6 @@ use crate::{
     terminal::ShellLaunchData,
     ui_components::{blended_colors, buttons::icon_button, icons::Icon},
     view_components::action_button::ActionButton,
-    workspaces::user_workspaces::UserWorkspaces,
     FeatureFlag,
 };
 use itertools::Itertools;
@@ -175,8 +173,6 @@ pub(crate) struct Props<'a> {
     pub(super) shared_session_status: &'a SharedSessionStatus,
     pub(super) terminal_view_id: EntityId,
     pub(super) is_conversation_transcript_viewer: bool,
-    pub(super) aws_bedrock_credentials_error_view:
-        Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub(super) imported_comments: &'a HashMap<AIAgentActionId, ImportedCommentGroup>,
     #[cfg(feature = "local_fs")]
     pub(crate) resolved_code_block_paths:
@@ -1048,11 +1044,6 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                     FailedOutputProps {
                         error,
                         is_ai_input_enabled: props.is_ai_input_enabled,
-                        invalid_api_key_button_handle: &props
-                            .state_handles
-                            .invalid_api_key_button_handle,
-                        aws_bedrock_credentials_error_view: props
-                            .aws_bedrock_credentials_error_view,
                         icon_right_margin: 16.,
                     },
                     app,
@@ -2597,10 +2588,6 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
 
 /// Renders the usage button that, on click, will expand & collapse the usage summary footer.
 fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
-    if UserWorkspaces::as_ref(app).is_byo_api_key_enabled() {
-        return Empty::new().finish();
-    }
-
     let Some(conversation) = props.model.conversation(app) else {
         return Empty::new().finish();
     };

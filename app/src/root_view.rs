@@ -1728,8 +1728,7 @@ impl RootView {
                 }
 
                 LLMPreferencesEvent::UpdatedActiveAgentModeLLM
-                | LLMPreferencesEvent::UpdatedActiveCodingLLM
-                | LLMPreferencesEvent::UpdatedReasoningEffort => {}
+                | LLMPreferencesEvent::UpdatedActiveCodingLLM => {}
             },
         );
 

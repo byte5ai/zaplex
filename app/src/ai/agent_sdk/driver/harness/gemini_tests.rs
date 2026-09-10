@@ -6,17 +6,14 @@ use tempfile::TempDir;
 use super::*;
 
 #[test]
-fn prepare_gemini_settings_creates_file_with_api_key_auth() {
+fn prepare_gemini_settings_does_not_select_an_auth_type() {
     let tmp = TempDir::new().unwrap();
     let settings_path = tmp.path().join("settings.json");
 
     prepare_gemini_settings(&settings_path, false).unwrap();
 
     let settings: Value = serde_json::from_slice(&fs::read(settings_path).unwrap()).unwrap();
-    assert_eq!(
-        settings["security"]["auth"]["selectedType"],
-        Value::String("gemini-api-key".to_owned()),
-    );
+    assert_eq!(settings.get("security"), None);
 }
 
 #[test]
@@ -40,12 +37,9 @@ fn prepare_gemini_settings_preserves_unrelated_keys() {
     let settings: Value = serde_json::from_slice(&fs::read(settings_path).unwrap()).unwrap();
     assert_eq!(settings["ui"]["theme"], "dark");
     assert_eq!(settings["security"]["folderTrust"]["enabled"], true);
-    // Sibling auth fields survive, and selectedType is set alongside them.
+    // Existing authentication settings survive without selecting an API-key mode.
     assert_eq!(settings["security"]["auth"]["enforcedType"], "vertex-ai");
-    assert_eq!(
-        settings["security"]["auth"]["selectedType"],
-        "gemini-api-key",
-    );
+    assert_eq!(settings["security"]["auth"].get("selectedType"), None);
 }
 
 #[test]

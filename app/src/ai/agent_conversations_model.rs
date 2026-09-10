@@ -702,7 +702,7 @@ impl AgentConversationsModel {
         // for remote ambient agent tasks and conversation metadata. In the localized scenario:
         //   - No polling subsystem (physically removed in Wave 6-6)
         //   - has_finished_initial_load is directly set to true, so UI queries return empty sets
-        // Local BYOP agent execution does not depend on this model.
+        // Local subscription-agent execution does not depend on this model.
         //
         // Issue #93 fix: must subscribe to BlocklistAIHistoryModel events; otherwise when users delete
         // conversations from the history list, this model's cached conversations won't refresh, and the UI

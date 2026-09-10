@@ -799,15 +799,10 @@ impl Input {
                 self.open_repos_menu(ctx);
             }
             compact if command.name == commands::COMPACT.name => {
-                // Zaplex: `/compact` and `/compact-and` share the local session compression path --
-                // dispatch `WorkspaceAction::SummarizeAIConversation`, initial_prompt: None
-                // means "compress but don't send follow-up prompt", only summarize silently into conversation.
-                // Custom instructions (`/compact <instruction>`) go into the prompt field; in BYOP build_chat_request
-                // path they get concatenated after SUMMARY_TEMPLATE as plugin_context.
-                //
-                // In non-BYOP paths, `SummarizeConversation { prompt }` still goes through server protobuf
-                // (`api::request::input::SummarizeConversation`), server-side summarization --
-                // the previously prefix-injected semantics are completely replaced by SummarizeConversation.
+                // `/compact` and `/compact-and` dispatch
+                // `WorkspaceAction::SummarizeAIConversation`. An absent initial prompt means
+                // "summarize without sending a follow-up prompt"; custom instructions are carried
+                // by `SummarizeConversation { prompt }` to the active agent transport.
                 if self
                     .ai_context_model
                     .as_ref(ctx)

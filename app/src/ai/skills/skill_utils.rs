@@ -97,10 +97,8 @@ fn skill_reference_key(reference: &ai::skills::SkillReference) -> String {
 /// **Design note**: the legacy `list_skills_if_changed` in the cloud protocol sent only differences
 /// (compared to `conversation.latest_skills()` from the previous turn, returning `None` if unchanged)
 /// to save upstream tokens — warp backend maintained session state, so it kept the state after receiving
-/// it the first turn. After the project went on-premises, BYOP uses stateless `/chat/completions`
-/// from OpenAI/Anthropic, so the system prompt must be fully re-rendered on the client each turn
-/// and data must be sent every turn, otherwise the skills section in the system prompt disappears
-/// from the second turn onward. Therefore simplified to full return every turn.
+/// it the first turn. Local subscription transports rebuild request context each turn, so skill
+/// data must be returned every time rather than only as a delta.
 pub fn list_skills(working_directory: Option<&Path>, app: &AppContext) -> Vec<SkillDescriptor> {
     SkillManager::as_ref(app).get_skills_for_working_directory(working_directory, app)
 }

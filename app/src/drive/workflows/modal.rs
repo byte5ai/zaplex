@@ -21,14 +21,13 @@ use warpui::{
     platform::Cursor,
     presenter::ChildView,
     ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
+        button::ButtonVariant,
         components::{Coords, UiComponent, UiComponentStyles},
     },
     AppContext, Element, Entity, SingletonEntity, TypedActionView, UpdateView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::auth::UserUid;
 use crate::{
     appearance::Appearance,
     cloud_object::{
@@ -48,7 +47,7 @@ use crate::{
     },
     menu::{Event, Menu, MenuItem, MenuItemFields},
     network::NetworkStatus,
-    server::ids::{ClientId, ServerId, SyncId},
+    server::ids::{ClientId, SyncId},
     themes::theme::AnsiColorIdentifier,
     ui_components::{
         blended_colors,
@@ -93,7 +92,6 @@ const BUTTON_FONT_SIZE: f32 = 14.;
 const BUTTON_BORDER_RADIUS: f32 = 4.;
 const BORDER_WIDTH: f32 = 1.;
 const DIALOG_WIDTH: f32 = 460.;
-const AI_ASSIST_BUTTON_SIZE: f32 = 96.;
 const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 
 const COMMAND_EDITOR_PLACEHOLDER_TEXT: &str =
@@ -107,15 +105,7 @@ struct MouseStateHandles {
     save_workflow_state: MouseStateHandle,
     keep_editing_state: MouseStateHandle,
     discard_changes_state: MouseStateHandle,
-    ai_assist_state: MouseStateHandle,
-    ai_assist_tool_tip: MouseStateHandle,
     menu_state: MouseStateHandle,
-}
-
-pub(super) enum AiAssistState {
-    PreRequest,
-    RequestInFlight,
-    Generated,
 }
 
 /// Represents a particular row for editing a single argument.
@@ -149,7 +139,6 @@ pub struct WorkflowModal {
     pub(super) arguments_rows: Vec<ArgumentEditorRow>,
     show_unsaved_changes_dialog: bool,
     revision_ts: Option<Revision>,
-    pub(super) ai_metadata_assist_state: AiAssistState,
     breadcrumbs: Option<Vec<BreadcrumbState<ContainingObject>>>,
     /// ID of the breadcrumb space/folder a user clicked on before the unsaved dialog popped up
     clicked_breadcrumb: Option<WarpDriveItemId>,
@@ -169,7 +158,6 @@ pub enum WorkflowModalAction {
     Save,
     CloseUnsavedChangesDialog,
     ForceClose,
-    AiAssist,
     ViewInWarpDrive(WarpDriveItemId),
     OpenOverflowMenu,
     CopyObjectToClipboard,
@@ -179,8 +167,6 @@ pub enum WorkflowModalAction {
 pub enum WorkflowModalEvent {
     Close,
     UpdatedWorkflow(SyncId),
-    AiAssistError(String),
-    AiAssistUpgradeError(Option<ServerId>, UserUid),
     ViewInWarpDrive(WarpDriveItemId),
 }
 
@@ -288,7 +274,6 @@ impl WorkflowModal {
             arguments_rows: Vec::new(),
             show_unsaved_changes_dialog: false,
             revision_ts: None,
-            ai_metadata_assist_state: AiAssistState::PreRequest,
             breadcrumbs: Default::default(),
             clicked_breadcrumb: None,
             menu,
@@ -511,8 +496,6 @@ impl WorkflowModal {
         }
 
         self.hide_unsaved_changes_dialog(ctx);
-        self.ai_metadata_assist_state = AiAssistState::PreRequest;
-
         self.is_open = false;
         self.owner = None;
         self.initial_folder_id = None;
@@ -1321,30 +1304,12 @@ impl WorkflowModal {
 
     fn is_new_argument_button_disabled(&self) -> bool {
         self.show_unsaved_changes_dialog
-            || matches!(
-                self.ai_metadata_assist_state,
-                AiAssistState::RequestInFlight
-            )
     }
 
     fn is_save_workflow_button_disabled(&self) -> bool {
         self.show_unsaved_changes_dialog
             || self.errors.has_any_error()
-            || matches!(
-                self.ai_metadata_assist_state,
-                AiAssistState::RequestInFlight
-            )
             || self.show_enum_creation_dialog
-    }
-
-    fn is_ai_assist_button_disabled(&self, app: &AppContext) -> bool {
-        // Autofill button should be disabled when there is no content.
-        self.content_editor.as_ref(app).is_empty(app)
-            || self.show_unsaved_changes_dialog
-            || matches!(
-                self.ai_metadata_assist_state,
-                AiAssistState::RequestInFlight
-            )
     }
 
     fn is_online(&self, app: &AppContext) -> bool {
@@ -1683,71 +1648,7 @@ impl WorkflowModal {
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween);
 
-        let label_and_icon = match self.ai_metadata_assist_state {
-            AiAssistState::PreRequest => {
-                Some((crate::t!("workflow-ai-assist-autofill"), Icon::AiAssistant))
-            }
-            AiAssistState::RequestInFlight => {
-                Some((crate::t!("workflow-ai-assist-loading"), Icon::Refresh))
-            }
-            AiAssistState::Generated => None,
-        };
-
-        if let Some((label, icon)) = label_and_icon {
-            let text_and_icon = TextAndIcon::new(
-                TextAndIconAlignment::TextFirst,
-                label,
-                icon.to_warpui_icon(appearance.theme().active_ui_text_color()),
-                MainAxisSize::Min,
-                MainAxisAlignment::Center,
-                vec2f(16., 16.),
-            )
-            .with_inner_padding(4.);
-
-            let mut button = appearance
-                .ui_builder()
-                .button_with_custom_styles(
-                    ButtonVariant::Basic,
-                    self.button_mouse_states.ai_assist_state.clone(),
-                    default_button_styles.set_width(AI_ASSIST_BUTTON_SIZE),
-                    Some(hovered_and_clicked_styles.set_width(AI_ASSIST_BUTTON_SIZE)),
-                    Some(hovered_and_clicked_styles.set_width(AI_ASSIST_BUTTON_SIZE)),
-                    Some(primary_disabled_styles.set_width(AI_ASSIST_BUTTON_SIZE)),
-                )
-                .with_text_and_icon_label(text_and_icon);
-
-            if self.is_ai_assist_button_disabled(app) {
-                button = button.disabled();
-            }
-
-            let rendered_button = button
-                .build()
-                .with_cursor(Cursor::PointingHand)
-                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(WorkflowModalAction::AiAssist))
-                .finish();
-
-            let button_with_tool_tip = appearance.ui_builder().tool_tip_on_element(
-                crate::t!("workflow-ai-assist-tooltip"),
-                self.button_mouse_states.ai_assist_tool_tip.clone(),
-                rendered_button,
-                ParentAnchor::BottomMiddle,
-                ChildAnchor::TopMiddle,
-                vec2f(0., 5.),
-            );
-
-            button_row.add_child(
-                Flex::row()
-                    .with_child(
-                        Container::new(button_with_tool_tip)
-                            .with_margin_right(8.)
-                            .finish(),
-                    )
-                    .with_child(render_save_button)
-                    .finish(),
-            )
-        } else {
-            button_row.add_child(render_save_button);
-        }
+        button_row.add_child(render_save_button);
 
         Container::new(button_row.finish())
             .with_padding_left(MODAL_HORIZONTAL_PADDING)
@@ -1917,7 +1818,6 @@ impl TypedActionView for WorkflowModal {
                     self.view_in_warp_drive(id, ctx);
                 }
             }
-            WorkflowModalAction::AiAssist => self.issue_request(ctx),
             WorkflowModalAction::ViewInWarpDrive(id) => {
                 if self.should_show_unsaved_changes_dialog(ctx) {
                     self.clicked_breadcrumb = Some(*id);

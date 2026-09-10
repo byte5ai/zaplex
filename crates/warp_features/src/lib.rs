@@ -392,9 +392,6 @@ pub enum FeatureFlag {
     /// Enables API key authentication for Agent SDK
     APIKeyAuthentication,
 
-    /// Enables API key management UI in settings
-    APIKeyManagement,
-
     /// Enables OAuth support for MCP.
     McpOauth,
 
@@ -643,9 +640,6 @@ pub enum FeatureFlag {
 
     /// Enables the ask_user_question tool allowing the agent to ask clarifying questions.
     AskUserQuestion,
-
-    /// When enabled, solo users (not on a team) can use BYO API keys.
-    SoloUserByok,
 
     /// Replaces the in-block zaplexification banner with a zaplexify footer.
     ZaplexifyFooter,

@@ -133,8 +133,6 @@ pub mod settings_view;
 pub mod tab_configs;
 pub mod terminal;
 pub mod themes;
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::aws_credentials::AwsCredentialRefresher as _;
 use crate::ai::mcp::FileBasedMCPManager;
 use crate::ai::mcp::FileMCPWatcher;
 use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
@@ -227,7 +225,6 @@ use crate::system::SystemStats;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::resizable_data::ResizableData;
-use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::{AudibleBell, History};
 use crate::undo_close::UndoCloseStack;
 use crate::user_config::WarpConfig;
@@ -1203,17 +1200,8 @@ fn initialize_app(
 
     ctx.add_singleton_model(|_| UserWorkspaces::new(cached_workspaces, current_workspace_uid));
 
-    // Initialize ApiKeyManager after UserWorkspaces so it can subscribe to workspace/settings changes
-    ctx.add_singleton_model(|ctx| {
-        #[cfg_attr(target_family = "wasm", allow(unused_mut))]
-        let mut manager = ::ai::api_keys::ApiKeyManager::new(ctx);
-        #[cfg(not(target_family = "wasm"))]
-        manager.subscribe_to_settings_changes(ctx);
-        manager
-    });
-
-    // Delete any API keys left by the retired custom-provider feature.
-    ctx.add_singleton_model(crate::ai::agent_providers::AgentProviderSecrets::new);
+    // Delete secrets left by retired custom-provider and BYO-key features.
+    crate::ai::legacy_secret_cleanup::remove_retired_provider_secrets(ctx);
 
     // Issue #72: global HTTP proxy Basic Auth password goes through OS keychain.
     // Immediately reapply after registration so the global slot that was placeholder-empty during settings::init gets the real password.
@@ -1392,8 +1380,8 @@ fn initialize_app(
         // If the app was opened while logged out, record an event for measuring new users.
         // This is sent immediately in case they quit the app on the signup screen.
         send_telemetry_sync_from_app_ctx!(TelemetryEvent::LoggedOutStartup, ctx);
-        // Unauthenticated users also need to see startup sequence (BYOP scenarios are majority), after first frame
-        // dump ZAPLEX_STARTUP_TRACE table once. No telemetry, does not affect logic.
+        // Unauthenticated users also need startup timing visibility. After the first frame,
+        // print the ZAPLEX_STARTUP_TRACE table once when tracing is enabled.
         ctx.on_first_frame_drawn(move |ctx| {
             IntervalTimer::handle(ctx).update(ctx, |timer, _| {
                 timer.mark_interval_end("FIRST_FRAME_DRAWN");
@@ -1709,9 +1697,6 @@ fn initialize_app(
 
     // AgentConversationsModel subscribes to UpdateManager events that still flow through the local updater.
     ctx.add_singleton_model(AgentConversationsModel::new);
-
-    // ByoLlmAuthBannerSessionState tracks dismissal of the BYO LLM auth banner (e.g., AWS Bedrock login).
-    ctx.add_singleton_model(ByoLlmAuthBannerSessionState::new);
 
     ctx.add_singleton_model(ExportManager::new);
     ctx.add_singleton_model(|ctx| NotebookManager::new(notebooks, ctx));
@@ -2576,14 +2561,11 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ServerFileBrowser,
         #[cfg(feature = "allow_ignoring_input_suggestions")]
         FeatureFlag::AllowIgnoringInputSuggestions,
-        // Zaplex (localization): cloud entry point for ambient agent / agent management view has been physically shut down.
-        // BYOP agent local execution does not depend on these entry points.
+        // Zaplex (localization): the cloud entry point for ambient-agent management is disabled.
         #[cfg(feature = "code_launch_modal")]
         FeatureFlag::CodeLaunchModal,
         #[cfg(feature = "api_key_authentication")]
         FeatureFlag::APIKeyAuthentication,
-        #[cfg(feature = "api_key_management")]
-        FeatureFlag::APIKeyManagement,
         #[cfg(feature = "mcp_oauth")]
         FeatureFlag::McpOauth,
         #[cfg(feature = "file_based_mcp")]
@@ -2712,8 +2694,6 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::TransferControlTool,
         #[cfg(feature = "zaplexify_footer")]
         FeatureFlag::ZaplexifyFooter,
-        #[cfg(feature = "solo_user_byok")]
-        FeatureFlag::SoloUserByok,
         #[cfg(feature = "hoa_onboarding_flow")]
         FeatureFlag::HOAOnboardingFlow,
         #[cfg(feature = "git_operations_in_code_review")]

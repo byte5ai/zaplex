@@ -587,8 +587,7 @@ impl CommandSearchView {
     ) -> Box<dyn Element> {
         if is_ratelimit_error {
             self.render_error_header_text(
-                "Request limit reached. Please configure a BYOP provider or try again later."
-                    .to_string(),
+                "Request limit reached. Please try again later.".to_string(),
                 appearance,
             )
         } else {

@@ -198,14 +198,6 @@ pub struct AIExecutionProfile {
     pub coding_model: Option<LLMId>,
     pub cli_agent_model: Option<LLMId>,
     pub computer_use_model: Option<LLMId>,
-    /// Model used to generate conversation titles. Falls back to `base_model` when `None`.
-    pub title_model: Option<LLMId>,
-    /// Model used by proactive AI (prompt suggestions / NLD / relevant files).
-    /// Falls back to `base_model` when `None`. Recommended to select a small/fast/cheap BYOP model.
-    pub active_ai_model: Option<LLMId>,
-    /// Model used by Next Command (gray completion / zero-state suggestions).
-    /// Falls back to `base_model` when `None`. Latency-sensitive; recommended to select the cheapest/fastest BYOP model.
-    pub next_command_model: Option<LLMId>,
 
     pub context_window_limit: Option<u32>,
 
@@ -237,9 +229,6 @@ impl Default for AIExecutionProfile {
             coding_model: None,
             cli_agent_model: None,
             computer_use_model: None,
-            title_model: None,
-            active_ai_model: None,
-            next_command_model: None,
             context_window_limit: None,
             autosync_plans_to_warp_drive: false,
             web_search_enabled: true,
@@ -292,9 +281,6 @@ impl AIExecutionProfile {
             coding_model: None,
             cli_agent_model: None,
             computer_use_model: None,
-            title_model: None,
-            active_ai_model: None,
-            next_command_model: None,
             context_window_limit: None,
             autosync_plans_to_warp_drive: false,
             web_search_enabled: true,
@@ -350,9 +336,6 @@ impl AIExecutionProfile {
             coding_model: None,
             cli_agent_model: None,
             computer_use_model: None,
-            title_model: None,
-            active_ai_model: None,
-            next_command_model: None,
             context_window_limit: None,
             autosync_plans_to_warp_drive: FeatureFlag::SyncAmbientPlans.is_enabled(),
             web_search_enabled: true,

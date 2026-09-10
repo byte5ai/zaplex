@@ -23,7 +23,7 @@ use crate::terminal::CLIAgent;
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::json_utils::{read_json_file_or_default, write_json_file};
-use super::{write_temp_file, HarnessRunner, ManagedSecretValue, SavePoint, ThirdPartyHarness};
+use super::{write_temp_file, HarnessRunner, SavePoint, ThirdPartyHarness};
 mod parent_bridge;
 
 #[cfg(test)]
@@ -60,9 +60,8 @@ impl ThirdPartyHarness for ClaudeHarness {
         &self,
         working_dir: &Path,
         _system_prompt: Option<&str>,
-        secrets: &HashMap<String, ManagedSecretValue>,
     ) -> Result<(), AgentDriverError> {
-        prepare_claude_environment_config(working_dir, secrets).map_err(|error| {
+        prepare_claude_environment_config(working_dir).map_err(|error| {
             AgentDriverError::HarnessConfigSetupFailed {
                 harness: self.cli_agent().command_prefix().to_owned(),
                 error,
@@ -362,16 +361,12 @@ impl HarnessRunner for ClaudeHarnessRunner {
     }
 }
 
-fn prepare_claude_environment_config(
-    working_dir: &Path,
-    secrets: &HashMap<String, ManagedSecretValue>,
-) -> Result<()> {
+fn prepare_claude_environment_config(working_dir: &Path) -> Result<()> {
     let home_dir =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
     let claude_json_path = home_dir.join(CLAUDE_JSON_FILE_NAME);
     let claude_settings_path = claude_config_dir()?.join(CLAUDE_SETTINGS_FILE_NAME);
-    let api_key_suffix = resolve_anthropic_api_key_suffix(secrets);
-    prepare_claude_config(&claude_json_path, working_dir, api_key_suffix.as_deref())?;
+    prepare_claude_config(&claude_json_path, working_dir, None)?;
     prepare_claude_settings(&claude_settings_path)?;
     Ok(())
 }
@@ -425,10 +420,8 @@ fn prepare_claude_settings(claude_settings_path: &Path) -> Result<()> {
     Ok(())
 }
 
-const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const CLAUDE_JSON_FILE_NAME: &str = ".claude.json";
 const CLAUDE_SETTINGS_FILE_NAME: &str = "settings.json";
-const ANTHROPIC_API_KEY_SUFFIX_LEN: usize = 20;
 
 #[derive(Default, Deserialize, Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -470,37 +463,6 @@ struct ClaudeSettings {
     skip_dangerous_mode_permission_prompt: bool,
     #[serde(flatten)]
     extra: Map<String, Value>,
-}
-
-/// Try to get the last 20 chars of the ANTHROPIC_API_KEY from the secrets map,
-/// where 20 chars is the suffix length that Claude Code truncates keys to.
-/// Falls back to the environment variable.
-fn resolve_anthropic_api_key_suffix(
-    secrets: &HashMap<String, ManagedSecretValue>,
-) -> Option<String> {
-    // First, check for an AnthropicApiKey variant anywhere in the secrets map,
-    // since the secret name doesn't necessarily match the env var.
-    for secret in secrets.values() {
-        if let ManagedSecretValue::AnthropicApiKey { api_key } = secret {
-            return suffix_of(api_key).map(str::to_owned);
-        }
-    }
-    // Then check for a RawValue stored under the env var name.
-    if let Some(ManagedSecretValue::RawValue { value }) = secrets.get(ANTHROPIC_API_KEY_ENV) {
-        return suffix_of(value).map(str::to_owned);
-    }
-    // Fall back to the environment variable, which a user may have set separately in the env.
-    std::env::var(ANTHROPIC_API_KEY_ENV)
-        .ok()
-        .and_then(|k| suffix_of(&k).map(str::to_owned))
-}
-
-fn suffix_of(key: &str) -> Option<&str> {
-    if key.len() >= ANTHROPIC_API_KEY_SUFFIX_LEN {
-        key.get(key.len() - ANTHROPIC_API_KEY_SUFFIX_LEN..)
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

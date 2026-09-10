@@ -1,15 +1,14 @@
-use crate::ai::llms::{is_using_api_key_for_provider, DisableReason, LLMId, LLMInfo};
+use crate::ai::llms::{DisableReason, LLMId, LLMInfo};
 use crate::menu::{MenuItem, MenuItemFields, MenuTooltipPosition};
 use itertools::Itertools;
 use std::sync::Arc;
 use warp_core::ui::Icon;
 use warpui::{
     elements::{
-        ConstrainedBox, Container, CrossAxisAlignment, Empty, Flex, ParentElement, SavePosition,
-        Shrinkable, Text,
+        CrossAxisAlignment, Flex, ParentElement, SavePosition, Shrinkable, Text,
     },
     fonts::{Properties, Style},
-    Action, AppContext, Element,
+    Action, Element,
 };
 
 pub fn is_auto(llm: &LLMInfo) -> bool {
@@ -70,7 +69,6 @@ fn make_item_fields<A: Action + Clone>(
     model_id_to_add_profile_default_label_to: Option<&LLMId>,
     collapse_auto: bool,
     collapse_reasoning_variants: bool,
-    app: &AppContext,
 ) -> MenuItem<A> {
     let label = if collapse_auto && is_auto(llm) {
         "auto".to_string()
@@ -79,30 +77,12 @@ fn make_item_fields<A: Action + Clone>(
     } else {
         llm.menu_display_name()
     };
-    let is_using_api_key = is_using_api_key_for_provider(&llm.provider, app);
-
     let mut item = if let Some(position_id_fn) = position_id_fn {
         let position_id = position_id_fn(&llm.id);
         MenuItemFields::new_with_custom_label(
             Arc::new(move |_, _, appearance, _| {
                 let mut item_row =
                     Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-
-                let icon_container = Container::new(
-                    ConstrainedBox::new(if is_using_api_key {
-                        Icon::Key
-                            .to_warpui_icon(appearance.theme().foreground())
-                            .finish()
-                    } else {
-                        Empty::new().finish()
-                    })
-                    .with_height(appearance.ui_font_size())
-                    .with_width(appearance.ui_font_size())
-                    .finish(),
-                )
-                .with_margin_right(appearance.ui_font_size() / 2.)
-                .finish();
-                item_row.add_child(icon_container);
 
                 let text = Text::new(
                     label.clone(),
@@ -151,7 +131,6 @@ pub fn available_model_menu_items<A: Action + Clone>(
     position_id_fn: Option<&dyn Fn(&LLMId) -> String>,
     collapse_auto: bool,
     collapse_reasoning_variants: bool,
-    app: &AppContext,
 ) -> Vec<MenuItem<A>> {
     choices
         .into_iter()
@@ -163,7 +142,6 @@ pub fn available_model_menu_items<A: Action + Clone>(
                 model_id_to_add_profile_default_label_to,
                 collapse_auto,
                 collapse_reasoning_variants,
-                app,
             )
         })
         .collect_vec()

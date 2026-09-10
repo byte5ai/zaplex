@@ -15,9 +15,7 @@ use crate::{
     settings_view::SettingsSection,
     ui_components::icons::Icon,
     workspace::WorkspaceAction,
-    workspaces::user_workspaces::UserWorkspaces,
 };
-use ai::api_keys::ApiKeyManager;
 
 const ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PERCENTAGE: f32 = 0.5;
 
@@ -26,7 +24,7 @@ const ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PRIMARY_TEXT: &str = "";
 const ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_PRIMARY_TEXT: &str = "At Limit -";
 const OUT_OF_REQUESTS_PRIMARY_TEXT: &str = "Out of credits";
 
-const ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT: &str = "Configure local AI provider";
+const ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT: &str = "Open Agent settings";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptAlertAction {}
@@ -55,26 +53,14 @@ pub struct PromptAlertView {
 impl PromptAlertView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let request_usage_model = AIRequestUsageModel::handle(ctx);
-        let user_workspaces = UserWorkspaces::handle(ctx);
         let network_status = NetworkStatus::handle(ctx);
-        let api_key_manager = ApiKeyManager::handle(ctx);
 
         ctx.subscribe_to_model(&request_usage_model, |me, _, _, ctx| {
             me.state = Self::determine_state(ctx);
             ctx.notify();
         });
 
-        ctx.subscribe_to_model(&user_workspaces, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
-            ctx.notify();
-        });
-
         ctx.subscribe_to_model(&network_status, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
-            ctx.notify();
-        });
-
-        ctx.subscribe_to_model(&api_key_manager, |me, _, _, ctx| {
             me.state = Self::determine_state(ctx);
             ctx.notify();
         });
@@ -86,12 +72,8 @@ impl PromptAlertView {
     }
 
     pub fn determine_state(app: &AppContext) -> PromptAlertState {
-        if UserWorkspaces::as_ref(app).is_byo_api_key_enabled() {
-            return PromptAlertState::NoAlert;
-        }
-
-        // Zaplex: BYOP / local providers handle connection state themselves, including localhost
-        // providers like Ollama. The global offline state only blocks built-in cloud usage.
+        // Subscription agents handle their own process and host connectivity. The global offline
+        // state only blocks built-in cloud usage.
         if !NetworkStatus::as_ref(app).is_online() {
             return PromptAlertState::NoConnection;
         }
@@ -173,7 +155,6 @@ impl PromptAlertView {
         &self,
         state: &PromptAlertState,
         text_fragments: &mut Vec<FormattedTextFragment>,
-        app: &AppContext,
     ) {
         match state {
             PromptAlertState::NoConnection => {}
@@ -183,23 +164,12 @@ impl PromptAlertView {
                 text_fragments.push(FormattedTextFragment::hyperlink_action(
                     ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT,
                     WorkspaceAction::ShowSettingsPageWithSearch {
-                        search_query: "api".to_string(),
+                        search_query: "agent".to_string(),
                         section: Some(SettingsSection::WarpAgent),
                     },
                 ));
             }
-            PromptAlertState::RequestLimitReached => {
-                text_fragments.push(FormattedTextFragment::plain_text("  "));
-                if UserWorkspaces::as_ref(app).is_byo_api_key_enabled() {
-                    text_fragments.push(FormattedTextFragment::hyperlink_action(
-                        "use your own API keys",
-                        WorkspaceAction::ShowSettingsPageWithSearch {
-                            search_query: "api".to_string(),
-                            section: Some(SettingsSection::WarpAgent),
-                        },
-                    ));
-                }
-            }
+            PromptAlertState::RequestLimitReached => {}
             PromptAlertState::NoAlert => {}
         }
     }
@@ -230,7 +200,7 @@ impl View for PromptAlertView {
 
         self.primary_text(&state, &mut text_fragments);
 
-        self.action_hyperlink(&state, &mut text_fragments, app);
+        self.action_hyperlink(&state, &mut text_fragments);
 
         let formatted_text_element = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(text_fragments)]),

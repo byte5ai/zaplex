@@ -32,8 +32,6 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
 use crate::view_components::alert::{Alert, AlertConfig};
 use crate::workspace::WorkspaceAction;
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
-
 struct ManageDefaultsTheme;
 
 impl ActionButtonTheme for ManageDefaultsTheme {
@@ -302,23 +300,6 @@ impl InlineModelSelectorView {
                 _ => (),
             },
         );
-        ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), |me, _, event, ctx| {
-            if !matches!(event, ApiKeyManagerEvent::KeysUpdated) {
-                return;
-            }
-            if me
-                .suggestions_mode_model
-                .as_ref(ctx)
-                .is_inline_model_selector()
-            {
-                me.mixer.update(ctx, |mixer, ctx| {
-                    if let Some(query) = mixer.current_query().cloned() {
-                        mixer.run_query(query, ctx);
-                    }
-                });
-            }
-        });
-
         ctx.subscribe_to_model(&cli_subagent_controller, |me, _, event, ctx| match event {
             CLISubagentEvent::SpawnedSubagent { .. }
             | CLISubagentEvent::FinishedSubagent { .. }

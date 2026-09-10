@@ -1004,12 +1004,11 @@ pub struct AgentConversationData {
     /// delivery without re-delivering already-processed events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_event_sequence: Option<i64>,
-    /// Serialized `CompactionState` JSON for BYOP local compaction (head trimming).
-    /// `None` means no compaction has occurred.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Retired local compaction sidecar retained only to consume legacy rows.
+    #[serde(default, skip_serializing)]
     pub compaction_state_json: Option<String>,
-    /// Opaque serialized BYOP repair sidecar. The app layer owns validation semantics.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Retired request-repair sidecar retained only to consume legacy rows.
+    #[serde(default, skip_serializing)]
     pub byop_repair_state_json: Option<String>,
 }
 
@@ -1360,30 +1359,19 @@ mod tests {
     }
 
     #[test]
-    fn agent_conversation_data_roundtrips_byop_repair_sidecar() {
-        let data = AgentConversationData {
-            server_conversation_token: None,
-            conversation_usage_metadata: None,
-            reverted_action_ids: None,
-            forked_from_server_conversation_token: None,
-            artifacts_json: None,
-            parent_agent_id: None,
-            agent_name: None,
-            parent_conversation_id: None,
-            run_id: None,
-            autoexecute_override: None,
-            last_event_sequence: None,
-            compaction_state_json: None,
-            byop_repair_state_json: Some(r#"{"version":1,"records":[]}"#.to_string()),
-        };
-
+    fn agent_conversation_data_does_not_reserialize_retired_sidecars() {
+        let data: AgentConversationData = serde_json::from_str(
+            r#"{
+                "server_conversation_token": null,
+                "compaction_state_json": "{\"version\":1}",
+                "byop_repair_state_json": "{\"version\":1,\"records\":[]}"
+            }"#,
+        )
+        .expect("legacy sidecars must deserialize");
         let json = serde_json::to_string(&data).expect("serialize");
-        let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
 
-        assert_eq!(
-            roundtripped.byop_repair_state_json.as_deref(),
-            Some(r#"{"version":1,"records":[]}"#)
-        );
+        assert!(!json.contains("compaction_state_json"));
+        assert!(!json.contains("byop_repair_state_json"));
     }
 }
 

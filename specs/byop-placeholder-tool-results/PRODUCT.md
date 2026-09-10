@@ -1,5 +1,8 @@
 # Prevent BYOP Placeholder Tool Results From Reaching Normal Agent Requests
 
+> **Retired specification:** #152 removed the Custom-Provider HTTP transport described below.
+> This document remains only as historical context and does not describe active product behavior.
+
 Technical implementation details are tracked in `TECH.md`. The core repair-boundary decision is recorded in `ADR.md`.
 
 ## Problem Statement

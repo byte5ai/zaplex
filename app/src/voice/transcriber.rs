@@ -17,7 +17,7 @@ pub enum TranscribeError {
     #[error("Failed to deserialize JSON.")]
     Deserialization,
 
-    /// Zaplex has disabled voice transcription (the BYOP genai protocol cannot carry audio).
+    /// Zaplex has disabled voice transcription because the subscription-agent transport cannot carry audio.
     #[error("Voice transcription is unavailable in Zaplex.")]
     Disabled,
 

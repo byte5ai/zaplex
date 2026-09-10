@@ -753,45 +753,83 @@ fn test_mark_quota_banner_as_dismissed() {
 }
 
 #[test]
-fn extra_headers_backward_compat() {
-    let toml_str = r#"
-        id = "test-id"
-        name = "Test Provider"
-        base_url = "https://api.example.com/v1"
-    "#;
-    let provider: AgentProvider = toml::from_str(toml_str).expect("should deserialize");
-    assert!(
-        provider.extra_headers.is_empty(),
-        "extra_headers should default to empty vec"
-    );
-}
+fn retired_byop_settings_are_tolerated_without_writeback() {
+    let directory = tempfile::tempdir().expect("temporary settings directory");
+    let settings_path = directory.path().join("settings.toml");
+    let legacy_settings = r#"
+[agents.warp_agent]
+providers = [{ id = "legacy-provider", name = "Legacy", base_url = "https://example.invalid/v1", models = ["legacy-model"] }]
 
-#[test]
-fn extra_headers_skip_when_empty() {
-    let provider = AgentProvider {
-        id: "test-id".to_string(),
-        name: "Test".to_string(),
-        kind: AgentProviderKind::default(),
-        api_type: AgentProviderApiType::default(),
-        base_url: "https://api.example.com/v1".to_string(),
-        models: Vec::new(),
-        extra_headers: Vec::new(),
-    };
-    let serialized = toml::to_string(&provider).expect("should serialize");
-    assert!(
-        !serialized.contains("extra_headers"),
-        "empty extra_headers should not appear in TOML"
-    );
-}
+[agents.byop_compaction]
+auto = true
+prune = true
+tail_turns = 2
+preserve_recent_tokens = 2000
+reserved = 1000
 
-#[test]
-fn extra_headers_round_trip() {
-    let mut provider = AgentProvider::new_empty();
-    provider.extra_headers = vec![
-        ("x-portkey-provider".to_string(), "openai".to_string()),
-        ("x-custom".to_string(), "value".to_string()),
-    ];
-    let serialized = toml::to_string(&provider).expect("should serialize");
-    let deserialized: AgentProvider = toml::from_str(&serialized).expect("should deserialize");
-    assert_eq!(provider.extra_headers, deserialized.extra_headers);
+[agents.byop_compaction.model]
+provider_id = "legacy-provider"
+model_id = "legacy-model"
+
+[agents.byop]
+last_used_model_id = "legacy-model"
+last_used_reasoning = { "OpenAi:legacy-model" = "high" }
+"#;
+    std::fs::write(&settings_path, legacy_settings).expect("write legacy settings");
+
+    App::test((), move |mut app| async move {
+        use settings::manager::SettingsManager;
+        use warpui_extras::user_preferences::{
+            in_memory::InMemoryPreferences, toml_backed::TomlBackedUserPreferences,
+        };
+
+        let (preferences, parse_error) = TomlBackedUserPreferences::new(settings_path.clone());
+        assert!(
+            parse_error.is_none(),
+            "legacy BYOP settings must still parse"
+        );
+        app.add_singleton_model(move |_| {
+            crate::settings::PublicPreferences::new(Box::new(preferences))
+        });
+        app.add_singleton_model(|_| {
+            crate::settings::PrivatePreferences::new(Box::<InMemoryPreferences>::default())
+        });
+        app.add_singleton_model(|_| SettingsManager::default());
+
+        AISettings::register(&mut app);
+
+        assert_eq!(
+            std::fs::read_to_string(&settings_path).expect("read settings after registration"),
+            legacy_settings,
+            "loading legacy BYOP settings must not write them back or rewrite the file"
+        );
+        app.read(|ctx| {
+            let retired_paths = [
+                "agents.warp_agent.providers",
+                "agents.byop_compaction.auto",
+                "agents.byop_compaction.prune",
+                "agents.byop_compaction.tail_turns",
+                "agents.byop_compaction.preserve_recent_tokens",
+                "agents.byop_compaction.reserved",
+                "agents.byop_compaction.model.provider_id",
+                "agents.byop_compaction.model.model_id",
+                "agents.byop.last_used_model_id",
+                "agents.byop.last_used_reasoning",
+            ];
+            let registered_paths: Vec<String> = SettingsManager::as_ref(ctx)
+                .default_values_for_settings_file()
+                .map(|(key, _, hierarchy, _)| match hierarchy {
+                    Some(hierarchy) => format!("{hierarchy}.{key}"),
+                    None => key.to_owned(),
+                })
+                .collect();
+
+            for retired_path in retired_paths {
+                assert!(
+                    !registered_paths.iter().any(|path| path == retired_path),
+                    "retired setting {retired_path} must not be registered for serialization"
+                );
+            }
+        });
+    });
 }

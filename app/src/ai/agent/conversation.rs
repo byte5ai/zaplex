@@ -3,7 +3,6 @@ use crate::ai::agent::linearization::compute_task_depths;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::{RequestInput, ResponseStreamId, SerializedBlockListItem};
-use crate::ai::byop_readiness::RepairStateStatus;
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
 use crate::persistence::model::{ConversationUsageMetadata, ModelTokenUsage, ToolUsageMetadata};
@@ -218,15 +217,6 @@ pub struct AIConversation {
 
     /// Legacy cloud event cursor retained only for deserializing older conversations.
     last_event_sequence: Option<i64>,
-
-    /// Zaplex BYOP local session compaction sidecar — decoupled from warp protobuf message,
-    /// indexed by message_id to attach metadata like "is_summary / tool_output_compacted_at / synthetic_continue".
-    /// Empty by default = uncompacted state, fully non-invasive.
-    /// See [`crate::ai::byop_compaction`] for details.
-    pub(crate) compaction_state: crate::ai::byop_compaction::state::CompactionState,
-    /// Zaplex BYOP repair sidecar. Invalid sidecars must be preserved as-is to avoid silently
-    /// authorizing repair or erasing corrupted metadata during save.
-    pub(crate) byop_repair_state: RepairStateStatus,
 }
 
 pub(crate) fn artifact_from_fork_proto(
@@ -276,8 +266,6 @@ impl AIConversation {
             parent_conversation_id: None,
             is_remote_child: false,
             last_event_sequence: None,
-            compaction_state: Default::default(),
-            byop_repair_state: RepairStateStatus::default(),
         }
     }
 
@@ -358,8 +346,6 @@ impl AIConversation {
             run_id,
             autoexecute_override,
             last_event_sequence,
-            compaction_state,
-            byop_repair_state,
         ) = if let Some(data) = conversation_data {
             let server_conversation_token = data
                 .server_conversation_token
@@ -391,21 +377,6 @@ impl AIConversation {
                 AIConversationAutoexecuteMode::default()
             };
             let last_event_sequence = data.last_event_sequence;
-            let compaction_state = data
-                .compaction_state_json
-                .and_then(|json| {
-                    serde_json::from_str(&json)
-                        .map_err(|e| log::warn!("[byop-compaction] failed to deserialize compaction_state, resetting: {e}"))
-                        .ok()
-                })
-                .unwrap_or_default();
-            let byop_repair_state =
-                RepairStateStatus::from_sidecar_json(data.byop_repair_state_json);
-            if let Some(error_category) = byop_repair_state.error_category() {
-                log::error!(
-                    "[byop-repair] failed to load repair sidecar category={error_category:?}"
-                );
-            }
 
             (
                 server_conversation_token,
@@ -419,8 +390,6 @@ impl AIConversation {
                 run_id,
                 autoexecute_override,
                 last_event_sequence,
-                compaction_state,
-                byop_repair_state,
             )
         } else {
             (
@@ -435,8 +404,6 @@ impl AIConversation {
                 None,
                 AIConversationAutoexecuteMode::default(),
                 None,
-                crate::ai::byop_compaction::state::CompactionState::default(),
-                RepairStateStatus::default(),
             )
         };
 
@@ -479,8 +446,6 @@ impl AIConversation {
             parent_conversation_id,
             is_remote_child: false,
             last_event_sequence,
-            compaction_state,
-            byop_repair_state,
         })
     }
 
@@ -1360,45 +1325,6 @@ impl AIConversation {
         // Persist on turn startup: write once when user query is submitted, so even if stream aborts mid-way, question history is preserved.
         self.write_updated_conversation_state(ctx);
         Ok(())
-    }
-
-    pub fn append_byop_preflight_messages_to_task(
-        &mut self,
-        task_id: TaskId,
-        messages: Vec<api::Message>,
-        ctx: &mut ModelContext<BlocklistAIHistoryModel>,
-    ) -> Result<usize, UpdateConversationError> {
-        let message_count = messages.len();
-        if message_count == 0 {
-            return Ok(0);
-        }
-        self.ensure_can_persist_byop_preflight_state(ctx)?;
-
-        let message_ids = messages
-            .iter()
-            .map(|message| message.id.clone())
-            .collect::<HashSet<_>>();
-        self.task_store
-            .modify_task(&task_id, |task| task.append_source_messages(messages))
-            .ok_or(UpdateConversationError::TaskNotFound)??;
-        if let Err(e) = self.send_updated_conversation_state_for_byop_preflight(ctx) {
-            if let Some(rollback_result) = self.task_store.modify_task(&task_id, |task| {
-                task.remove_source_messages_by_ids(&message_ids)
-            }) {
-                if let Err(rollback_error) = rollback_result {
-                    log::error!(
-                        "[byop-readiness] failed to roll back preflight messages after \
-                         persistence error: {rollback_error:?}"
-                    );
-                }
-            } else {
-                log::error!(
-                    "[byop-readiness] failed to find task while rolling back preflight messages"
-                );
-            }
-            return Err(e);
-        }
-        Ok(message_count)
     }
 
     pub fn append_reassigned_exchange(
@@ -2693,7 +2619,7 @@ impl AIConversation {
         new_task_id
     }
 
-    /// Zaplex BYOP-specific: When agent self-initiates LRC and receives snapshot,
+    /// When a local agent self-initiates LRC and receives a snapshot,
     /// directly land a Server-backed cli subagent task in conversation.
     ///
     /// Does not use `create_optimistic_cli_subagent_task` (which produces `TaskImpl::Optimistic` and
@@ -2707,7 +2633,7 @@ impl AIConversation {
     ///    panics. `block/cli.rs:438` added root_task fallback safety net, but here cli_controller
     ///    still controls emit timing.
     ///
-    /// Implementation: `Task::new_byop_silent_cli_subtask` locally synthesizes `api::Task` + synthesizes
+    /// Implementation: `Task::new_silent_cli_subtask` locally synthesizes `api::Task` + synthesizes
     /// `SubagentParams { command_id }`. Task is Server-backed from the start. Dependencies point to
     /// root task to keep conversation tree complete. **Does not emit CreatedSubtask**; caller
     /// (cli_controller) manually emits `SpawnedSubagent` after block upgrade to create floating panel.
@@ -2719,7 +2645,7 @@ impl AIConversation {
         }
 
         let parent_task_id = String::from(self.task_store.root_task_id().clone());
-        let new_task = Task::new_byop_silent_cli_subtask(block_id.clone(), parent_task_id);
+        let new_task = Task::new_silent_cli_subtask(block_id.clone(), parent_task_id);
         let new_task_id = new_task.id().clone();
         // Still record to optimistic_cli_subagent_subtask_id to keep the LRC subtask detection path in
         // `has_active_subagent` and `controller.rs:1107-1130` consistent with upstream. Field name only means
@@ -2886,82 +2812,10 @@ impl AIConversation {
                 run_id: self.task_id.map(|id| id.to_string()),
                 autoexecute_override: Some(self.autoexecute_override.into()),
                 last_event_sequence: self.last_event_sequence,
-                compaction_state_json: if self.compaction_state.completed().is_empty() {
-                    None
-                } else {
-                    match serde_json::to_string(&self.compaction_state) {
-                        Ok(json) => Some(json),
-                        Err(e) => {
-                            log::error!(
-                                "[byop-compaction] failed to serialize compaction_state: {e}"
-                            );
-                            None
-                        }
-                    }
-                },
-                byop_repair_state_json: self.byop_repair_state.to_sidecar_json(),
+                compaction_state_json: None,
+                byop_repair_state_json: None,
             },
         }
-    }
-
-    fn ensure_can_persist_byop_preflight_state(
-        &self,
-        ctx: &mut ModelContext<BlocklistAIHistoryModel>,
-    ) -> Result<(), UpdateConversationError> {
-        if self.is_viewing_shared_session {
-            return Err(
-                UpdateConversationError::ByopPreflightPersistenceUnavailable(
-                    "shared session conversations are not persisted".to_owned(),
-                ),
-            );
-        }
-        if !*GeneralSettings::as_ref(ctx).persist_conversations {
-            return Err(
-                UpdateConversationError::ByopPreflightPersistenceUnavailable(
-                    "conversation persistence is disabled".to_owned(),
-                ),
-            );
-        }
-        if !AppExecutionMode::as_ref(ctx).can_save_session() {
-            return Err(
-                UpdateConversationError::ByopPreflightPersistenceUnavailable(
-                    "current execution mode cannot save sessions".to_owned(),
-                ),
-            );
-        }
-        if GlobalResourceHandlesProvider::as_ref(ctx)
-            .get()
-            .model_event_sender
-            .is_none()
-        {
-            return Err(
-                UpdateConversationError::ByopPreflightPersistenceUnavailable(
-                    "sqlite sender is unavailable".to_owned(),
-                ),
-            );
-        }
-        Ok(())
-    }
-
-    fn send_updated_conversation_state_for_byop_preflight(
-        &self,
-        ctx: &mut ModelContext<BlocklistAIHistoryModel>,
-    ) -> Result<(), UpdateConversationError> {
-        // Caller (`append_byop_preflight_messages_to_task`) already called
-        // `ensure_can_persist_byop_preflight_state` before writing, so no need to re-check sender existence here.
-        // Only care about try_send's own Full/Closed errors, continuing to use existing ByopPreflightPersistenceSend.
-        let sqlite_sender = GlobalResourceHandlesProvider::as_ref(ctx)
-            .get()
-            .model_event_sender
-            .clone()
-            .ok_or_else(|| {
-                UpdateConversationError::ByopPreflightPersistenceUnavailable(
-                    "sqlite sender is unavailable".to_owned(),
-                )
-            })?;
-        sqlite_sender
-            .try_send(self.updated_conversation_state_event())
-            .map_err(|e| UpdateConversationError::ByopPreflightPersistenceSend(format!("{e:?}")))
     }
 
     pub(crate) fn write_updated_conversation_state(
@@ -3481,8 +3335,8 @@ impl AIConversation {
 
 /// Zaplex optimization 1: Detect if AppendToMessageContent mask is purely text/reasoning append.
 /// These two mask paths:
-/// - `agent_output.text` — BYOP / cloud path text chunk
-/// - `agent_reasoning.reasoning` — BYOP / cloud path reasoning chunk
+/// - `agent_output.text` — local / cloud path text chunk
+/// - `agent_reasoning.reasoning` — local / cloud path reasoning chunk
 ///
 /// When hit, conversation layer skips todo_list / code_review clone (saves entire vec clone + Arc bump
 /// in high-frequency chunks), and `to_client_output_message`'s AgentOutput / AgentReasoning branches
@@ -3651,10 +3505,6 @@ pub enum UpdateConversationError {
     NoActiveTask,
     #[error("No pending request.")]
     NoPendingRequest,
-    #[error("BYOP preflight conversation persistence is unavailable: {0}")]
-    ByopPreflightPersistenceUnavailable(String),
-    #[error("Failed to persist BYOP preflight conversation state: {0}")]
-    ByopPreflightPersistenceSend(String),
 }
 
 /// A globally unique ID for a conversation with an AI agent.

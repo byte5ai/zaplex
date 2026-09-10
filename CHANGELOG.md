@@ -2,6 +2,16 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.17] — 2026-09-11
+
+- **Ausschließlich Subscription-Agenten:** Der interne BYOP-/Custom-Provider-
+  Stack einschließlich API-Key- und AWS-Bedrock-Credential-Pfaden ist entfernt;
+  „Frag Zaplex“ nutzt nur noch erkannte Claude-Code- und Codex-Abonnements.
+- **Sicherer Übergang:** Veraltete Provider-Secrets werden beim Start
+  idempotent gelöscht, bekannte API-Key-Umgebungsvariablen für CLI-Agenten
+  weiterhin entfernt und alte Settings-/Persistenzdaten nur noch kompatibel
+  gelesen, aber nicht mehr produktiv ausgewertet.
+
 ## [1.0.10] — 2026-09-10
 
 - **Speicherschonende Uploads:** Der Server-Dateibrowser streamt lokale Dateien

@@ -10,7 +10,6 @@ use crate::ui_components::blended_colors;
 use crate::util::time_format::human_readable_precise_duration;
 use crate::view_components::action_button::{ActionButton, PrimaryTheme};
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::UserWorkspaces;
 use std::path::Path;
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
@@ -351,7 +350,7 @@ impl ConversationEndedTombstoneView {
         .finish()
     }
 
-    fn render_metadata_row(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    fn render_metadata_row(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let mut parts: Vec<String> = Vec::new();
 
@@ -372,10 +371,8 @@ impl ConversationEndedTombstoneView {
             parts.push(format!("Run time: {run_time}"));
         }
 
-        if !UserWorkspaces::as_ref(app).is_byo_api_key_enabled() {
-            if let Some(credits) = &self.display_data.credits {
-                parts.push(format!("Credits used: {credits}"));
-            }
+        if let Some(credits) = &self.display_data.credits {
+            parts.push(format!("Credits used: {credits}"));
         }
 
         if parts.is_empty() {
@@ -492,7 +489,7 @@ impl View for ConversationEndedTombstoneView {
 
         let metadata_margin_top = if is_transcript { 12. } else { 4. };
         left_column.add_child(
-            Container::new(self.render_metadata_row(appearance, app))
+            Container::new(self.render_metadata_row(appearance))
                 .with_margin_top(metadata_margin_top)
                 .finish(),
         );

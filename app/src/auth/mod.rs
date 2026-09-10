@@ -42,10 +42,8 @@ pub enum OwnerType {
 
 /// Zaplex local API key prefix.
 ///
-/// Historically used to identify "a string starting with wk- is a managed API key". On the BYOP
-/// path there is no longer any managed-account API key concept. The constant is still consumed
-/// internally by `AuthState::initialize` plus a few legacy call sites that match the prefix, so it
-/// is retained.
+/// Historically used to identify "a string starting with wk- is a managed API key". The constant
+/// remains for compatibility with legacy startup credentials and callers that match the prefix.
 pub const API_KEY_PREFIX: &str = "wk-";
 
 // ---------- Credentials / AuthToken / LoginToken ----------
@@ -58,13 +56,12 @@ pub const API_KEY_PREFIX: &str = "wk-";
 /// Represents how the user authenticates with Zaplex.
 ///
 /// Zaplex localization branches:
-/// - `ApiKey`: on the BYOP path, the user's own LLM provider API key, actually managed by
-///   settings/keychain respectively; here we only keep the enum facade for reader methods like
+/// - `ApiKey`: legacy platform credential retained for compatible reader methods such as
 ///   `AuthState::credentials()`.
 /// - `Test`: used in test / `skip_login` builds.
 #[derive(Clone, Debug)]
 pub enum Credentials {
-    /// BYOP / Zaplex Inc API key; owner_type is kept for legacy code to read (always `None`).
+    /// Legacy platform API key; `owner_type` is kept for compatible readers (always `None`).
     ApiKey {
         key: String,
         owner_type: Option<OwnerType>,
@@ -105,7 +102,7 @@ impl Credentials {
 /// Short-lived token used in HTTP request headers.
 #[derive(Debug, Clone)]
 pub enum AuthToken {
-    /// BYOP / platform-layer API key.
+    /// Legacy platform-layer API key.
     ApiKey(String),
     /// No token at all (session cookie / test / Zaplex local mode).
     NoAuth,
@@ -263,8 +260,8 @@ impl AuthState {
         Self::new()
     }
 
-    /// Initializes the AuthState. The `api_key` argument is faithfully preserved (the BYOP entry
-    /// point may still pass it in), but all other external-account check paths are no-ops.
+    /// Initializes the AuthState. The `api_key` argument is preserved for legacy startup callers,
+    /// while other external-account check paths remain no-ops.
     #[cfg_attr(target_family = "wasm", allow(unused_variables))]
     pub fn initialize(_ctx: &AppContext, api_key: Option<String>) -> Self {
         let state = Self::new();

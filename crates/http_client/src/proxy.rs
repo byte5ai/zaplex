@@ -1,7 +1,7 @@
 //! Global HTTP proxy configuration.
 //!
 //! See Issue #72: Zaplex needs a globally-configurable proxy setting that uniformly covers
-//! all outbound HTTP requests (BYOP model list fetching, autoupdate, conversation loading, etc.).
+//! all outbound HTTP requests (autoupdate, conversation loading, and similar traffic).
 //!
 //! Design points:
 //! - Three modes in [`ProxyMode`]: `System` / `Custom` / `Off`.
@@ -58,7 +58,7 @@ impl ProxyMode {
 /// Parsed global proxy configuration.
 ///
 /// `username` is stored plaintext in settings.toml; `password` is stored separately
-/// via `managed_secrets` (same pattern as BYOP API key) and injected into [`Self::password`] by callers before assembling this struct.
+/// via `managed_secrets` and injected into [`Self::password`] by callers before assembling this struct.
 #[derive(Clone, Debug, Default)]
 pub struct ProxyConfig {
     pub mode: ProxyMode,

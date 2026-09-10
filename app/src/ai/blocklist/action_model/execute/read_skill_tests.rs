@@ -256,13 +256,12 @@ fn test_read_skill_executor_fallback_returns_error_when_file_missing() {
     });
 }
 
-/// When BYOP `read_skill` tool calls with name:
-/// `from_args` wraps name into `SkillReference::SkillPath(name)`,
-/// executor reverse-looks up by name after cache miss and returns Sync Success.
+/// A structured `read_skill` call may provide the skill name in the path slot. The executor
+/// reverse-looks it up by name after a cache miss and returns Sync Success.
 #[test]
 fn test_read_skill_executor_resolves_by_name() {
     let temp_dir = TempDir::new().unwrap();
-    let skill_path = create_test_skill_file(&temp_dir, "byop-named-skill", "Lookup by name");
+    let skill_path = create_test_skill_file(&temp_dir, "named-skill", "Lookup by name");
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -274,11 +273,11 @@ fn test_read_skill_executor_resolves_by_name() {
 
         let executor_handle = app.add_model(|_| ReadSkillExecutor::new());
 
-        // Simulate BYOP from_args: pass name as path.
+        // Simulate a structured transport passing the name as a path.
         let action = AIAgentAction {
             id: AIAgentActionId::from("name-lookup-action".to_string()),
             action: AIAgentActionType::ReadSkill(ReadSkillRequest {
-                skill: SkillReference::Path(std::path::PathBuf::from("byop-named-skill")),
+                skill: SkillReference::Path(std::path::PathBuf::from("named-skill")),
             }),
             task_id: TaskId::new("name-lookup-task".to_string()),
             requires_result: false,

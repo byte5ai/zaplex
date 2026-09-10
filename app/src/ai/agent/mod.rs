@@ -642,10 +642,6 @@ impl RenderableAIError {
         matches!(self, Self::InvalidApiKey { .. })
     }
 
-    pub fn is_aws_bedrock_credentials_error(&self) -> bool {
-        matches!(self, Self::AwsBedrockCredentialsExpiredOrInvalid { .. })
-    }
-
     /// Returns true if an automatic resume will be attempted for this error.
     pub fn will_attempt_resume(&self) -> bool {
         matches!(
@@ -688,14 +684,8 @@ impl Display for RenderableAIError {
             Self::ContextWindowExceeded(message) => {
                 write!(f, "Context window exceeded: {message}")
             }
-            Self::InvalidApiKey { provider, .. } => {
-                write!(f, "Invalid API key for {provider}")
-            }
-            Self::AwsBedrockCredentialsExpiredOrInvalid { model_name } => {
-                write!(
-                    f,
-                    "AWS Bedrock credentials expired or invalid for {model_name}"
-                )
+            Self::InvalidApiKey { .. } | Self::AwsBedrockCredentialsExpiredOrInvalid { .. } => {
+                write!(f, "The selected model could not be authenticated.")
             }
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
         }
@@ -2390,11 +2380,6 @@ pub enum AIAgentInput {
 
     SummarizeConversation {
         prompt: Option<String>,
-        /// Zaplex BYOP: this field marks whether this summarization was triggered automatically by token overflow.
-        /// The `chat_stream::SummarizeConversation` branch uses it to decide the follow-up wording
-        /// (the overflow path appends a "previous request exceeded ..." explanation).
-        /// The local agent conversation path does not read this field. All existing call sites keep `overflow: false`.
-        overflow: bool,
     },
 
     /// Invoke a skill. The skill content is passed as instructions to the agent.

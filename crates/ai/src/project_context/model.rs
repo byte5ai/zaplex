@@ -253,7 +253,7 @@ impl ProjectContextModel {
                 // Zaplex: Originally, this would call `try_initialize_and_register_watcher` for each persisted root,
                 // which internally invokes `DetectedRepositories::detect_possible_git_repo(ProjectRulesIndexing)`
                 // to trigger events, having RepoMetadataModel perform full indexing of 6 persisted repos
-                // (biggest cold-startup background CPU cost for Zaplex BYOP).
+                // (the largest cold-startup background CPU cost for Zaplex).
                 //
                 // Now only populates in-memory path_to_rules cache, no proactive detect events.
                 // When user later cd into a repo via terminal, RepoDetectionSource::TerminalNavigation

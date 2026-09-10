@@ -93,14 +93,6 @@ impl Workspace {
                 .first()
                 .is_some_and(|m| m.email == current_user_email)
     }
-
-    pub fn is_custom_llm_enabled(&self) -> bool {
-        self.settings.llm_settings.enabled
-    }
-
-    pub fn is_byo_api_key_enabled(&self) -> bool {
-        self.billing_metadata.is_byo_api_key_enabled()
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -339,7 +331,7 @@ pub struct Tier {
     pub ambient_agents_policy: Option<AmbientAgentsPolicy>,
 }
 
-/// Local representation of persisted billing/entitlement metadata used by BYOP and local workspace policy checks.
+/// Local representation of persisted billing and entitlement metadata.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BillingMetadata {
@@ -535,12 +527,6 @@ impl BillingMetadata {
         } else {
             false
         }
-    }
-
-    pub fn is_byo_api_key_enabled(&self) -> bool {
-        self.tier
-            .byo_api_key_policy
-            .is_some_and(|policy| policy.enabled)
     }
 
     pub fn has_overages_used(&self) -> bool {

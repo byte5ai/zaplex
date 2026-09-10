@@ -33,7 +33,6 @@ use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{TelemetryEvent, WarpAIActionType};
 use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_ZAPLEX_AI_WIDTH};
 use crate::ui_components::blended_colors;
-use crate::workspaces::user_workspaces::UserWorkspaces;
 
 use crate::ui_components::buttons::icon_button;
 use crate::workspace::{ActiveSession, TAB_BAR_HEIGHT};
@@ -981,21 +980,15 @@ impl AIAssistantPanelView {
             .finish(),
         );
 
-        let is_custom_llm_enabled: bool = UserWorkspaces::as_ref(app)
-            .current_team()
-            .is_some_and(|team| team.is_custom_llm_enabled());
-
-        if !is_custom_llm_enabled {
-            column.add_child(
-                Container::new(render_request_limit_info(
-                    &self.requests_model,
-                    app,
-                    appearance,
-                ))
-                .with_margin_top(18.)
-                .finish(),
-            );
-        }
+        column.add_child(
+            Container::new(render_request_limit_info(
+                &self.requests_model,
+                app,
+                appearance,
+            ))
+            .with_margin_top(18.)
+            .finish(),
+        );
 
         Container::new(column.finish())
             .with_margin_left(12.)

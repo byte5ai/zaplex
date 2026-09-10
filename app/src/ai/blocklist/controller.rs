@@ -32,11 +32,6 @@ use crate::ai::agent::{
 use crate::ai::agent::{DocumentContentAttachmentSource, FileContext};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::api_error::AIApiError;
-use crate::ai::byop_readiness::{
-    BlockedByopReadinessError, PendingByopToolResultsError, ReadinessCategory,
-    ReadinessDiagnosticCoalescer, ReadinessDiagnosticContext, ReadinessDiagnosticLevel,
-    ReadinessTriggerLayer, BLOCKED_BYOP_REQUEST_MESSAGE,
-};
 use crate::ai::document::ai_document_model::{
     AIDocumentId, AIDocumentModel, AIDocumentUserEditStatus,
 };
@@ -45,8 +40,8 @@ use crate::ai::{
     agent::{
         conversation::AIConversationId, AIAgentActionResultType, AIAgentAttachment, AIAgentContext,
         AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers, EntrypointType,
-        FinishedAIAgentOutput, MessageId, RenderableAIError, RequestCost, RequestMetadata,
-        StaticQueryType, UserQueryMode,
+        FinishedAIAgentOutput, RenderableAIError, RequestCost, RequestMetadata, StaticQueryType,
+        UserQueryMode,
     },
     llms::LLMPreferences,
 };
@@ -219,12 +214,6 @@ struct RequestConversationSnapshot {
     agent_name: Option<String>,
 }
 
-/// Per iteration, preflight only repairs "one type" of issue (persisted-result reclamation / current input
-/// results / finished results / cancellation result). A normal request involves at most 2~3 types, but under
-/// extreme concurrency, or when results from many tasks accumulate at once, more iterations are needed to converge.
-/// We keep a small upper bound here so that a genuine infinite loop returns blocked early rather than spinning silently.
-const BYOP_PREFLIGHT_MAX_ITERATIONS: usize = 6;
-
 impl RequestInput {
     fn for_task(
         inputs: Vec<AIAgentInput>,
@@ -281,21 +270,6 @@ impl RequestInput {
     pub fn with_supported_tools(mut self, tools: Vec<ToolType>) -> Self {
         self.supported_tools_override = Some(tools);
         self
-    }
-
-    fn remove_action_results_by_tool_call_id(&mut self, keys: &HashSet<(String, String)>) -> usize {
-        let mut removed = 0;
-        for inputs in self.input_messages.values_mut() {
-            let before = inputs.len();
-            inputs.retain(|input| {
-                let AIAgentInput::ActionResult { result, .. } = input else {
-                    return true;
-                };
-                !keys.contains(&(result.task_id.to_string(), result.id.to_string()))
-            });
-            removed += before - inputs.len();
-        }
-        removed
     }
 
     fn new_with_common_fields(
@@ -1913,866 +1887,17 @@ impl BlocklistAIController {
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
 
-        self.populate_lrc_request_params(&mut request_params, request_input.conversation_id);
+        self.populate_lrc_request_params(&mut request_params);
         request_params
     }
 
-    fn populate_lrc_request_params(
-        &self,
-        request_params: &mut api::RequestParams,
-        conversation_id: AIConversationId,
-    ) {
-        let terminal_model = self.terminal_model.lock();
-        let active_block = terminal_model.block_list().active_block();
-        let is_lrc_tagged_in = active_block.is_agent_tagged_in();
-        let is_matching_lrc_agent = active_block.is_agent_in_control()
-            && active_block
-                .agent_interaction_metadata()
-                .is_some_and(|metadata| metadata.conversation_id() == &conversation_id);
-        if !is_lrc_tagged_in && !is_matching_lrc_agent {
-            return;
-        }
-
-        request_params.lrc_command_id = Some(active_block.id().to_string());
-        request_params.lrc_should_spawn_subagent = is_lrc_tagged_in;
-
-        if let Some(running_command) = byop_get_running_command_for_lrc(&terminal_model) {
-            request_params.lrc_running_command = Some(running_command.clone());
-            let total_inputs = request_params.input.len();
-            let mut filled_count = 0usize;
-            for input in request_params.input.iter_mut() {
-                if let crate::ai::agent::AIAgentInput::UserQuery {
-                    running_command: rc_slot @ None,
-                    ..
-                } = input
-                {
-                    *rc_slot = Some(running_command.clone());
-                    filled_count += 1;
-                }
-            }
-            log::info!(
-                "[byop-diag] LRC running_command filled: {filled_count}/{total_inputs} \
-                 UserQuery slot(s); should_spawn={} grid_contents_len={} command={:?} is_alt_screen={}",
-                request_params.lrc_should_spawn_subagent,
-                running_command.grid_contents.len(),
-                running_command.command,
-                running_command.is_alt_screen_active
-            );
-        } else {
-            log::warn!(
-                "[byop-diag] LRC detected but byop_get_running_command_for_lrc \
-                 returned None (active_block state mismatch)"
-            );
-        }
-    }
-
-    fn run_byop_request_preflight(
-        &mut self,
-        request_input: &mut RequestInput,
-        conversation_data: &mut api::ConversationData,
-        request_params: &mut api::RequestParams,
-        query_metadata: Option<RequestMetadata>,
-        ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<()> {
-        if crate::ai::agent_providers::lookup_byop(ctx, &request_params.model).is_none() {
-            return Ok(());
-        }
-
-        let readiness_attempt_id = request_params
-            .byop_readiness_attempt_id
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        request_params.byop_readiness_attempt_id = Some(readiness_attempt_id.clone());
-        let conversation_id_for_log = conversation_data.id.to_string();
-        let mut diagnostics = ReadinessDiagnosticCoalescer::default();
-
-        for iteration in 0..BYOP_PREFLIGHT_MAX_ITERATIONS {
-            let removed_persisted = self.remove_persisted_byop_action_results_from_input(
-                conversation_data.id,
-                request_input,
-                ctx,
-            );
-            if removed_persisted > 0 {
-                log::debug!(
-                    "[byop-readiness] controller preflight removed {removed_persisted} \
-                     already-persisted action result(s) from current input \
-                     iteration={iteration}"
-                );
-                self.rebuild_request_after_byop_preflight(
-                    request_input,
-                    conversation_data,
-                    request_params,
-                    query_metadata.clone(),
-                    ctx,
-                )?;
-                request_params.byop_readiness_attempt_id = Some(readiness_attempt_id.clone());
-                continue;
-            }
-
-            let committed_current_results = self.commit_byop_current_action_results(
-                conversation_data.id,
-                request_input,
-                request_params,
-                ctx,
-            )?;
-            if committed_current_results > 0 {
-                log::debug!(
-                    "[byop-readiness] controller persisted current action result(s) \
-                     progress={committed_current_results} iteration={iteration}"
-                );
-                self.rebuild_request_after_byop_preflight(
-                    request_input,
-                    conversation_data,
-                    request_params,
-                    query_metadata.clone(),
-                    ctx,
-                )?;
-                request_params.byop_readiness_attempt_id = Some(readiness_attempt_id.clone());
-                continue;
-            }
-
-            let committed_finished_results = self.commit_byop_finished_action_results(
-                conversation_data.id,
-                request_params,
-                ctx,
-            )?;
-            if committed_finished_results > 0 {
-                log::debug!(
-                    "[byop-readiness] controller drained finished action result(s) \
-                     progress={committed_finished_results} iteration={iteration}"
-                );
-                self.rebuild_request_after_byop_preflight(
-                    request_input,
-                    conversation_data,
-                    request_params,
-                    query_metadata.clone(),
-                    ctx,
-                )?;
-                request_params.byop_readiness_attempt_id = Some(readiness_attempt_id.clone());
-                continue;
-            }
-
-            let live_tool_calls =
-                self.byop_unfinished_live_tool_calls(conversation_data.id, request_params, ctx);
-            let report =
-                crate::ai::agent_providers::chat_stream::classify_byop_controller_readiness_with_live_tool_calls(
-                    request_params,
-                    live_tool_calls,
-                );
-            match report.state {
-                crate::ai::byop_readiness::ReadinessState::Ready
-                | crate::ai::byop_readiness::ReadinessState::AcceptedHistoryRepair { .. } => {
-                    return Ok(());
-                }
-                crate::ai::byop_readiness::ReadinessState::NeedsCancellationCommit {
-                    tool_calls,
-                } => {
-                    let diagnostic_context = ReadinessDiagnosticContext::new(
-                        &conversation_id_for_log,
-                        &readiness_attempt_id,
-                        ReadinessTriggerLayer::ControllerPreflight,
-                    )
-                    .with_iteration(iteration);
-                    diagnostics.log_state(
-                        &crate::ai::byop_readiness::ReadinessState::NeedsCancellationCommit {
-                            tool_calls: tool_calls.clone(),
-                        },
-                        &diagnostic_context,
-                        ReadinessDiagnosticLevel::Debug,
-                    );
-                    let progress = self.commit_byop_cancellation_results(
-                        conversation_data.id,
-                        request_input,
-                        &tool_calls,
-                        ctx,
-                    )?;
-                    if progress == 0 {
-                        log::error!(
-                            "[byop-readiness] controller preflight made no cancellation progress \
-                             iteration={iteration} tool_calls={}",
-                            tool_calls.len()
-                        );
-                        diagnostics.finish(&diagnostic_context, ReadinessDiagnosticLevel::Error);
-                        return Err(BlockedByopReadinessError::new(
-                            ReadinessCategory::NeedsCancellationCommit,
-                        )
-                        .into());
-                    }
-                    log::debug!(
-                        "[byop-readiness] controller committed cancellation result(s) \
-                         progress={progress} iteration={iteration}"
-                    );
-                    self.rebuild_request_after_byop_preflight(
-                        request_input,
-                        conversation_data,
-                        request_params,
-                        query_metadata.clone(),
-                        ctx,
-                    )?;
-                    request_params.byop_readiness_attempt_id = Some(readiness_attempt_id.clone());
-                }
-                crate::ai::byop_readiness::ReadinessState::PendingToolResults { tool_calls } => {
-                    let diagnostic_context = ReadinessDiagnosticContext::new(
-                        &conversation_id_for_log,
-                        &readiness_attempt_id,
-                        ReadinessTriggerLayer::ControllerPreflight,
-                    )
-                    .with_iteration(iteration);
-                    diagnostics.log_state(
-                        &crate::ai::byop_readiness::ReadinessState::PendingToolResults {
-                            tool_calls: tool_calls.clone(),
-                        },
-                        &diagnostic_context,
-                        ReadinessDiagnosticLevel::Debug,
-                    );
-                    diagnostics.finish(&diagnostic_context, ReadinessDiagnosticLevel::Debug);
-                    return Err(PendingByopToolResultsError::new(tool_calls.len()).into());
-                }
-                crate::ai::byop_readiness::ReadinessState::MissingResultWithoutRepairSource {
-                    tool_calls,
-                    reason: crate::ai::byop_readiness::MissingResultReason::NoResult,
-                } => {
-                    // When the user interrupts AI during tool execution (submits a new conversation),
-                    // the interrupted tool call may never produce a cancelled result due to race conditions
-                    // in cancel / long-running command futures being dropped (see
-                    // action_model/execute/shell_command.rs cancel_execution), leaving behind an orphaned
-                    // gap of "tool_call present but tool_result missing".
-                    // Previously, the code would block here, causing the conversation to deadlock (issues #147 / #222).
-                    // The only safe semantic for a missing result is "this call has been cancelled", so we
-                    // synthesize a cancellation placeholder result for confirmed result-less tool calls,
-                    // allowing the conversation to self-heal.
-                    let diagnostic_context = ReadinessDiagnosticContext::new(
-                        &conversation_id_for_log,
-                        &readiness_attempt_id,
-                        ReadinessTriggerLayer::ControllerPreflight,
-                    )
-                    .with_iteration(iteration);
-                    diagnostics.log_state(
-                        &crate::ai::byop_readiness::ReadinessState::MissingResultWithoutRepairSource {
-                            tool_calls: tool_calls.clone(),
-                            reason: crate::ai::byop_readiness::MissingResultReason::NoResult,
-                        },
-                        &diagnostic_context,
-                        ReadinessDiagnosticLevel::Debug,
-                    );
-                    let progress = self.synthesize_byop_missing_cancellation_results(
-                        conversation_data.id,
-                        &tool_calls,
-                        ctx,
-                    )?;
-                    if progress == 0 {
-                        diagnostics.finish(&diagnostic_context, ReadinessDiagnosticLevel::Error);
-                        log::error!(
-                            "[byop-readiness] controller preflight could not synthesize \
-                             cancellation result for missing tool call(s) \
-                             iteration={iteration} tool_calls={} conversation_id={} \
-                             request_attempt_id={}",
-                            tool_calls.len(),
-                            conversation_id_for_log,
-                            readiness_attempt_id
-                        );
-                        return Err(BlockedByopReadinessError::new(
-                            ReadinessCategory::MissingResultWithoutRepairSource,
-                        )
-                        .into());
-                    }
-                    log::info!(
-                        "[byop-readiness] controller synthesized cancellation result(s) for \
-                         interrupted tool call(s) progress={progress} iteration={iteration} \
-                         conversation_id={conversation_id_for_log}"
-                    );
-                    self.rebuild_request_after_byop_preflight(
-                        request_input,
-                        conversation_data,
-                        request_params,
-                        query_metadata.clone(),
-                        ctx,
-                    )?;
-                    request_params.byop_readiness_attempt_id = Some(readiness_attempt_id.clone());
-                }
-                state @ (crate::ai::byop_readiness::ReadinessState::DuplicateToolResults {
-                    ..
-                }
-                | crate::ai::byop_readiness::ReadinessState::OrphanToolResult { .. }
-                | crate::ai::byop_readiness::ReadinessState::OutOfOrderToolResult { .. }
-                | crate::ai::byop_readiness::ReadinessState::MissingResultWithoutRepairSource {
-                    ..
-                }) => {
-                    let category = state.category();
-                    let diagnostic_context = ReadinessDiagnosticContext::new(
-                        &conversation_id_for_log,
-                        &readiness_attempt_id,
-                        ReadinessTriggerLayer::ControllerPreflight,
-                    )
-                    .with_iteration(iteration);
-                    diagnostics.log_state(
-                        &state,
-                        &diagnostic_context,
-                        ReadinessDiagnosticLevel::Error,
-                    );
-                    diagnostics.finish(&diagnostic_context, ReadinessDiagnosticLevel::Error);
-                    log::error!(
-                        "[byop-readiness] controller blocked request category={category:?} \
-                         conversation_id={} trigger_layer=controller_preflight \
-                         request_attempt_id={} iteration={iteration}",
-                        conversation_id_for_log,
-                        readiness_attempt_id
-                    );
-                    return Err(BlockedByopReadinessError::new(category).into());
-                }
-            }
-        }
-
-        let diagnostic_context = ReadinessDiagnosticContext::new(
-            &conversation_id_for_log,
-            &readiness_attempt_id,
-            ReadinessTriggerLayer::ControllerPreflight,
-        );
-        diagnostics.log_category(
-            ReadinessCategory::ReadinessLoopDidNotConverge,
-            &diagnostic_context,
-            ReadinessDiagnosticLevel::Error,
-        );
-        diagnostics.finish(&diagnostic_context, ReadinessDiagnosticLevel::Error);
-        log::error!(
-            "[byop-readiness] controller preflight did not converge iterations={} \
-             conversation_id={} request_attempt_id={}",
-            BYOP_PREFLIGHT_MAX_ITERATIONS,
-            conversation_id_for_log,
-            readiness_attempt_id
-        );
-        Err(BlockedByopReadinessError::new(ReadinessCategory::ReadinessLoopDidNotConverge).into())
-    }
-
-    fn rebuild_request_after_byop_preflight(
-        &self,
-        request_input: &RequestInput,
-        conversation_data: &mut api::ConversationData,
-        request_params: &mut api::RequestParams,
-        query_metadata: Option<RequestMetadata>,
-        ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<()> {
-        let snapshot = self.conversation_snapshot_for_request(request_input, ctx)?;
-        *conversation_data = snapshot.conversation_data.clone();
-        *request_params = self.build_request_params_for_input(
-            request_input,
-            snapshot.conversation_data,
-            query_metadata,
-            snapshot.parent_agent_id,
-            snapshot.agent_name,
-            ctx,
-        );
-        Ok(())
-    }
-
-    fn remove_persisted_byop_action_results_from_input(
-        &self,
-        conversation_id: AIConversationId,
-        request_input: &mut RequestInput,
-        ctx: &mut ModelContext<Self>,
-    ) -> usize {
-        let keys = request_input
-            .all_inputs()
-            .filter_map(|input| {
-                let AIAgentInput::ActionResult { result, .. } = input else {
-                    return None;
-                };
-                let task_id = result.task_id.to_string();
-                let tool_call_id = result.id.to_string();
-                self.has_persisted_tool_result(conversation_id, &task_id, &tool_call_id, ctx)
-                    .then_some((task_id, tool_call_id))
-            })
-            .collect::<HashSet<_>>();
-        request_input.remove_action_results_by_tool_call_id(&keys)
-    }
-
-    fn commit_byop_current_action_results(
-        &self,
-        conversation_id: AIConversationId,
-        request_input: &mut RequestInput,
-        request_params: &api::RequestParams,
-        ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<usize> {
-        let visible_tool_calls = Self::visible_byop_tool_result_keys(request_params);
-        let results = request_input
-            .all_inputs()
-            .filter_map(|input| {
-                let AIAgentInput::ActionResult { result, .. } = input else {
-                    return None;
-                };
-                if result.result.is_cancelled() {
-                    return None;
-                }
-                visible_tool_calls
-                    .contains(&(result.task_id.to_string(), result.id.to_string()))
-                    .then(|| result.clone())
-            })
-            .collect_vec();
-        let keys_to_remove = Self::action_result_keys(&results);
-        let appended = self.append_byop_action_result_messages(conversation_id, &results, ctx)?;
-        let removed = request_input.remove_action_results_by_tool_call_id(&keys_to_remove);
-        Ok(appended + removed)
-    }
-
-    fn commit_byop_finished_action_results(
-        &self,
-        conversation_id: AIConversationId,
-        request_params: &api::RequestParams,
-        ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<usize> {
-        let visible_tool_calls = Self::visible_byop_tool_result_keys(request_params);
-        let results = self
-            .action_model
-            .as_ref(ctx)
-            .finished_action_results_matching(conversation_id, &visible_tool_calls);
-        let keys_to_remove = Self::action_result_keys(&results);
-        let appended = self.append_byop_action_result_messages(conversation_id, &results, ctx)?;
-        let removed = self.action_model.update(ctx, |action_model, _| {
-            action_model.remove_finished_action_results_matching(conversation_id, &keys_to_remove)
-        });
-        Ok(appended + removed)
-    }
-
-    fn append_byop_action_result_messages(
-        &self,
-        conversation_id: AIConversationId,
-        results: &[AIAgentActionResult],
-        ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<usize> {
-        let request_id = format!("byop-preflight:{}", uuid::Uuid::new_v4());
-        let mut grouped_messages: HashMap<TaskId, Vec<warp_multi_agent_api::Message>> =
-            HashMap::new();
-        for result in results {
-            let task_id = result.task_id.to_string();
-            let tool_call_id = result.id.to_string();
-            if self.has_persisted_tool_result(conversation_id, &task_id, &tool_call_id, ctx) {
-                continue;
-            }
-            grouped_messages
-                .entry(result.task_id.clone())
-                .or_default()
-                .push(Self::byop_action_result_message(&request_id, result));
-        }
-
-        let mut appended = 0;
-        for (task_id, messages) in grouped_messages {
-            appended +=
-                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                    history_model.append_byop_preflight_messages_to_task(
-                        conversation_id,
-                        task_id,
-                        messages,
-                        ctx,
-                    )
-                })?;
-        }
-        Ok(appended)
-    }
-
-    fn byop_unfinished_live_tool_calls(
-        &self,
-        conversation_id: AIConversationId,
-        request_params: &api::RequestParams,
-        ctx: &mut ModelContext<Self>,
-    ) -> Vec<crate::ai::byop_readiness::LiveToolCall> {
-        use crate::ai::agent::task::helper::{ToolCallExt, ToolExt};
-
-        request_params
-            .tasks
-            .iter()
-            .flat_map(|task| task.messages.iter())
-            .filter_map(|msg| {
-                let message::Message::ToolCall(tool_call) = msg.message.as_ref()? else {
-                    return None;
-                };
-                if tool_call.subagent().is_some()
-                    || !self
-                        .action_model
-                        .as_ref(ctx)
-                        .has_unfinished_action_for_tool_call(
-                            conversation_id,
-                            &msg.task_id,
-                            &tool_call.tool_call_id,
-                            ctx,
-                        )
-                {
-                    return None;
-                }
-                Some(crate::ai::byop_readiness::LiveToolCall::new(
-                    crate::ai::byop_readiness::ToolCallRef::new(
-                        crate::ai::byop_readiness::ToolCallKey::new(
-                            &msg.task_id,
-                            &msg.id,
-                            &tool_call.tool_call_id,
-                        ),
-                        crate::ai::byop_readiness::RedactedToolKind::new(
-                            tool_call
-                                .tool
-                                .as_ref()
-                                .map(|tool| tool.name())
-                                .unwrap_or("unknown"),
-                        ),
-                    ),
-                    crate::ai::byop_readiness::LiveToolCallState::Running,
-                ))
-            })
-            .collect()
-    }
-
-    fn visible_byop_tool_result_keys(
-        request_params: &api::RequestParams,
-    ) -> HashSet<(String, String)> {
-        use crate::ai::agent::task::helper::ToolCallExt;
-
-        request_params
-            .tasks
-            .iter()
-            .flat_map(|task| task.messages.iter())
-            .filter_map(|msg| {
-                let message::Message::ToolCall(tool_call) = msg.message.as_ref()? else {
-                    return None;
-                };
-                if tool_call.subagent().is_some() {
-                    return None;
-                }
-                Some((msg.task_id.clone(), tool_call.tool_call_id.clone()))
-            })
-            .collect()
-    }
-
-    fn action_result_keys(results: &[AIAgentActionResult]) -> HashSet<(String, String)> {
-        results
-            .iter()
-            .map(|result| (result.task_id.to_string(), result.id.to_string()))
-            .collect()
-    }
-
-    fn commit_byop_cancellation_results(
-        &self,
-        conversation_id: AIConversationId,
-        request_input: &mut RequestInput,
-        tool_calls: &[crate::ai::byop_readiness::ToolCallRef],
-        ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<usize> {
-        // `ToolCallKey` is a triple (task_id + assistant_tool_call_message_id + tool_call_id),
-        // but the BYOP `AIAgentActionResult` and persisted `ToolCallResult` protocol layers only carry
-        // (task_id, tool_call_id) without an explicit assistant_tool_call_message_id back-reference.
-        // To align with the readiness module's ToolCallKey semantics, we use (task_id, tool_call_id) as
-        // the outer matching key, while recording the set of assistant_tool_call_message_ids expected by
-        // readiness. If the protocol assumption (unique tool_call_id within a conversation) is violated,
-        // we only log a warning rather than blocking, to avoid deadlocking user flows on edge cases.
-        let mut wanted: HashMap<(String, String), HashSet<String>> = HashMap::new();
-        for tool_call in tool_calls {
-            wanted
-                .entry((
-                    tool_call.key.task_id.clone(),
-                    tool_call.key.tool_call_id.clone(),
-                ))
-                .or_default()
-                .insert(tool_call.key.assistant_tool_call_message_id.clone());
-        }
-        for ((task_id, tool_call_id), assistant_message_ids) in &wanted {
-            if assistant_message_ids.len() > 1 {
-                log::warn!(
-                    "[byop-readiness] commit_byop_cancellation_results saw duplicate tool_call_id \
-                     across multiple assistant messages task_id={task_id} \
-                     tool_call_id={tool_call_id} assistant_message_id_count={}",
-                    assistant_message_ids.len()
-                );
-            }
-        }
-        let request_id = format!("byop-preflight:{}", uuid::Uuid::new_v4());
-        let mut grouped_messages: HashMap<TaskId, Vec<warp_multi_agent_api::Message>> =
-            HashMap::new();
-        let mut keys_to_remove = HashSet::new();
-        // Already-persisted cancellation results also count as "progress", otherwise when readiness
-        // still reports NeedsCancellationCommit but request_input has no matching entry, it would be
-        // incorrectly flagged as zero progress and blocked; in reality, the next readiness iteration
-        // will converge naturally.
-        let mut already_persisted = 0usize;
-
-        for input in request_input.all_inputs() {
-            let AIAgentInput::ActionResult { result, .. } = input else {
-                continue;
-            };
-            if !result.result.is_cancelled() {
-                continue;
-            }
-
-            let task_id = result.task_id.to_string();
-            let tool_call_id = result.id.to_string();
-            let key = (task_id.clone(), tool_call_id.clone());
-            if !wanted.contains_key(&key) {
-                continue;
-            }
-
-            keys_to_remove.insert(key.clone());
-            if self.has_persisted_tool_result(conversation_id, &task_id, &tool_call_id, ctx) {
-                already_persisted += 1;
-                continue;
-            }
-
-            grouped_messages
-                .entry(result.task_id.clone())
-                .or_default()
-                .push(Self::byop_action_result_message(&request_id, result));
-        }
-
-        let mut appended = 0;
-        for (task_id, messages) in grouped_messages {
-            appended +=
-                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                    history_model.append_byop_preflight_messages_to_task(
-                        conversation_id,
-                        task_id,
-                        messages,
-                        ctx,
-                    )
-                })?;
-        }
-
-        let removed = request_input.remove_action_results_by_tool_call_id(&keys_to_remove);
-        Ok(appended + removed + already_persisted)
-    }
-
-    /// Synthesizes a cancellation placeholder `ToolCallResult` into history for tool calls
-    /// that were interrupted by the user and confirmed to have no results (neither running action
-    /// nor finished/persisted result).
-    ///
-    /// Called only when readiness determines `MissingResultWithoutRepairSource { NoResult }`:
-    /// at this point, history contains an orphaned tool_call but will never produce a real result
-    /// (future already dropped / cancel race lost), nor is there a RepairRecord to authorize a fix.
-    /// Adding a "cancelled" result is the only safe and semantically correct repair, allowing the
-    /// BYOP request to continue sending rather than permanently blocking the entire conversation.
-    fn synthesize_byop_missing_cancellation_results(
-        &self,
-        conversation_id: AIConversationId,
-        tool_calls: &[crate::ai::byop_readiness::ToolCallRef],
-        ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<usize> {
-        let request_id = format!("byop-preflight:{}", uuid::Uuid::new_v4());
-        let mut grouped_messages: HashMap<TaskId, Vec<warp_multi_agent_api::Message>> =
-            HashMap::new();
-        for tool_call in tool_calls {
-            let task_id = &tool_call.key.task_id;
-            let tool_call_id = &tool_call.key.tool_call_id;
-            // Defensive: if this (task_id, tool_call_id) already has a persisted result, skip to avoid synthesizing a duplicate.
-            if self.has_persisted_tool_result(conversation_id, task_id, tool_call_id, ctx) {
-                continue;
-            }
-            grouped_messages
-                .entry(TaskId::new(task_id.clone()))
-                .or_default()
-                .push(Self::byop_synthetic_cancellation_message(
-                    &request_id,
-                    task_id,
-                    tool_call_id,
-                ));
-        }
-
-        let mut appended = 0;
-        for (task_id, messages) in grouped_messages {
-            appended +=
-                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                    history_model.append_byop_preflight_messages_to_task(
-                        conversation_id,
-                        task_id,
-                        messages,
-                        ctx,
-                    )
-                })?;
-        }
-        Ok(appended)
-    }
-
-    /// Constructs a cancellation `ToolCallResult` message that does not depend on `AIAgentActionResult`.
-    /// The interrupted tool call has no corresponding action, so it cannot use `byop_action_result_message`;
-    /// instead, `server_message_data` directly carries the cancellation status (consistent with unstructured result format).
-    fn byop_synthetic_cancellation_message(
-        request_id: &str,
-        task_id: &str,
-        tool_call_id: &str,
-    ) -> warp_multi_agent_api::Message {
-        let server_message_data = serde_json::json!({
-            "status": "cancelled",
-            "reason": "interrupted_by_user",
-        })
-        .to_string();
-        warp_multi_agent_api::Message {
-            id: uuid::Uuid::new_v4().to_string(),
-            task_id: task_id.to_owned(),
-            server_message_data,
-            citations: vec![],
-            message: Some(message::Message::ToolCallResult(message::ToolCallResult {
-                tool_call_id: tool_call_id.to_owned(),
-                context: None,
-                result: None,
-            })),
-            request_id: request_id.to_owned(),
-            timestamp: None,
-        }
-    }
-
-    fn has_persisted_tool_result(
-        &self,
-        conversation_id: AIConversationId,
-        task_id: &str,
-        tool_call_id: &str,
-        ctx: &mut ModelContext<Self>,
-    ) -> bool {
-        // The persisted protobuf `ToolCallResult` protocol only carries `tool_call_id` without an
-        // `assistant_message_id` back-reference, so the strictest matching possible is the (task_id, tool_call_id)
-        // pair. The outer `get_task(&task_id)` already isolates the search to the target task;
-        // here we additionally validate `msg.task_id` to guard against future callers with non-isolated views.
-        let task_id_owned = TaskId::new(task_id.to_owned());
-        BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&conversation_id)
-            .and_then(|conversation| conversation.get_task(&task_id_owned))
-            .is_some_and(|task| {
-                task.messages().any(|msg| {
-                    msg.task_id == task_id
-                        && matches!(
-                            msg.message.as_ref(),
-                            Some(message::Message::ToolCallResult(result))
-                                if result.tool_call_id == tool_call_id
-                        )
-                })
-            })
-    }
-
-    fn byop_action_result_message(
-        request_id: &str,
-        result: &AIAgentActionResult,
-    ) -> warp_multi_agent_api::Message {
-        let structured_result =
-            crate::ai::agent_providers::tools::action_result_to_msg_result(result);
-        let server_message_data = if structured_result.is_none() {
-            let status = if result.result.is_cancelled() {
-                "cancelled"
-            } else {
-                "completed"
-            };
-            crate::ai::agent_providers::tools::serialize_action_result(result).unwrap_or_else(
-                || {
-                    serde_json::json!({
-                        "status": status,
-                        "result": result.result.to_string(),
-                    })
-                    .to_string()
-                },
-            )
-        } else {
-            String::new()
-        };
-
-        warp_multi_agent_api::Message {
-            id: uuid::Uuid::new_v4().to_string(),
-            task_id: result.task_id.to_string(),
-            server_message_data,
-            citations: vec![],
-            message: Some(message::Message::ToolCallResult(message::ToolCallResult {
-                tool_call_id: result.id.to_string(),
-                context: None,
-                result: structured_result,
-            })),
-            request_id: request_id.to_owned(),
-            timestamp: None,
-        }
-    }
-
-    fn complete_byop_blocked_request(
-        &mut self,
-        request_input: RequestInput,
-        conversation_id: AIConversationId,
-        model_id: LLMId,
-        is_queued_prompt: bool,
-        error_message: String,
-        ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
-        let response_stream_id = ResponseStreamId::new_local();
-        let input_contains_user_query = request_input
-            .all_inputs()
-            .any(|input| input.is_user_query());
-        let is_passive_request = request_input
-            .all_inputs()
-            .any(|input| input.is_passive_request());
-
-        for input in request_input.all_inputs() {
-            if let AIAgentInput::UserQuery {
-                referenced_attachments,
-                ..
-            } = input
-            {
-                self.maybe_populate_plans_for_ai_document_model(
-                    referenced_attachments,
-                    conversation_id,
-                    ctx,
-                );
-            }
-        }
-
-        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-            history_model.update_conversation_for_new_request_input(
-                request_input,
-                response_stream_id.clone(),
-                self.terminal_view_id,
-                ctx,
-            )?;
-            history_model.update_conversation_status(
-                self.terminal_view_id,
-                conversation_id,
-                ConversationStatus::InProgress,
-                ctx,
-            );
-            Ok::<(), anyhow::Error>(())
-        })?;
-
-        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-            history_model.mark_response_stream_completed_with_error(
-                RenderableAIError::Other {
-                    error_message,
-                    will_attempt_resume: false,
-                    waiting_for_network: false,
-                },
-                &response_stream_id,
-                conversation_id,
-                self.terminal_view_id,
-                ctx,
-            );
-        });
-
-        if input_contains_user_query {
-            let pending_document_id = self.context_model.as_ref(ctx).pending_document_id();
-            self.context_model.update(ctx, |context_model, ctx| {
-                context_model.reset_context_to_default(ctx);
-            });
-            if let Some(doc_id) = pending_document_id {
-                AIDocumentModel::handle(ctx).update(ctx, |model, mctx| {
-                    model.set_user_edit_status(&doc_id, AIDocumentUserEditStatus::UpToDate, mctx);
-                });
-            }
-        }
-
-        ctx.emit(BlocklistAIControllerEvent::SentRequest {
-            contains_user_query: input_contains_user_query,
-            is_queued_prompt,
-            model_id,
-            stream_id: response_stream_id.clone(),
-        });
-        if !is_passive_request {
-            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                history_model.mark_active_conversation_id(
-                    conversation_id,
-                    self.terminal_view_id,
-                    ctx,
-                )
-            });
-        }
-        if input_contains_user_query {
-            ctx.dispatch_global_action("workspace:save_app", ());
-        }
-
-        Ok((conversation_id, response_stream_id))
+    fn populate_lrc_request_params(&self, request_params: &mut api::RequestParams) {
+        request_params.lrc_should_spawn_subagent = self
+            .terminal_model
+            .lock()
+            .block_list()
+            .active_block()
+            .is_agent_tagged_in();
     }
 
     /// Attempts to send a request to the AI model API. Adds context to the input if it
@@ -3151,7 +2276,7 @@ impl BlocklistAIController {
                         if matches!(e.as_ref(), AIApiError::QuotaLimit) {
                             // Zaplex(Phase 3c A1): remove
                             // `AIRequestUsageModel::enable_buy_credits_banner` call.
-                            // After localization, BYOP scenarios do not have "buy additional credits" business logic.
+                            // Local subscription transports have no "buy additional credits" business logic.
                         }
 
                         let mut renderable_error: RenderableAIError = e.as_ref().into();
@@ -3210,13 +2335,6 @@ impl BlocklistAIController {
                 let mut was_passive_request = false;
                 let mut is_any_exchange_unfinished = false;
                 let mut actions_to_queue = vec![];
-                // Zaplex BYOP: collect newly-added message ids this round, used later to detect
-                // synthetic invalid_arguments error markers in the EMPTY branch. **Only look at
-                // newly added** to avoid repeatedly hitting markers in history and causing auto-resume
-                // loops (markers persist once persisted).
-                let mut newly_added_message_ids: std::collections::HashSet<MessageId> =
-                    std::collections::HashSet::new();
-
                 for new_exchange_id in new_exchange_ids {
                     let Some(exchange) = conversation.exchange_with_id(new_exchange_id) else {
                         log::warn!("Exchange not found.");
@@ -3224,8 +2342,6 @@ impl BlocklistAIController {
                     };
                     was_passive_request |= exchange.has_passive_request();
                     is_any_exchange_unfinished |= !exchange.output_status.is_finished();
-                    newly_added_message_ids.extend(exchange.added_message_ids.iter().cloned());
-
                     if let AIAgentOutputStatus::Finished {
                         finished_output: FinishedAIAgentOutput::Success { output },
                         ..
@@ -3268,7 +2384,7 @@ impl BlocklistAIController {
                     });
                 } else if !actions_to_queue.is_empty() {
                     log::info!(
-                        "[byop-diag] queue_actions: count={} ids=[{}] conversation_id={:?}",
+                        "[agent-diag] queue_actions: count={} ids=[{}] conversation_id={:?}",
                         actions_to_queue.len(),
                         actions_to_queue
                             .iter()
@@ -3287,7 +2403,7 @@ impl BlocklistAIController {
                         response_stream.as_ref(ctx).is_lrc_tag_in_request();
                     if auto_accept_for_lrc_tag_in {
                         log::info!(
-                            "[byop] LRC tag-in: queue with auto-accept ({} action(s))",
+                            "[agent] LRC tag-in: queue with auto-accept ({} action(s))",
                             actions_to_queue.len()
                         );
                     }
@@ -3299,66 +2415,6 @@ impl BlocklistAIController {
                             ctx,
                         );
                     });
-                } else {
-                    // Zaplex BYOP: when from_args parsing fails, chat_stream falls back to emitting
-                    // a carrier ToolCall(tool=None) + synthetic error ToolCallResult(result=None,
-                    // server_message_data is invalid_arguments JSON). Both walk NoClientRepresentation,
-                    // not entering actions_to_queue, exchange ends silently → the model never receives
-                    // error feedback, user must manually send another message to trigger a retry.
-                    //
-                    // Detect if recent ~16 messages contain BYOP synthetic error markers; if so,
-                    // reuse the auto-resume path at line 2695+ to trigger a resend, letting the model
-                    // immediately correct and retry parameters based on the error tool_result.
-                    // `can_attempt_resume_on_error=false` prevents the LLM from continuously outputting
-                    // bad args, which would cause a deadloop.
-                    // Only search newly-added messages for synthetic error markers to avoid repeating
-                    // hits on historically-persisted markers, which would cause deadloops.
-                    // Zaplex BYOP: synthetic ToolCallResults that don't enter the AIAgentAction queue
-                    // need auto-resume, otherwise the exchange ends silently and the model gets stuck waiting.
-                    // 1. invalid_arguments — fallback for from_args parsing failure (original).
-                    // 2. _byop_intercepted — results from locally-intercepted tools like todowrite / webfetch / websearch.
-                    //    These tools don't use the protobuf executor, synthesize results directly,
-                    //    and don't enter the AIAgentAction queue.
-                    let needs_byop_local_resume = conversation.all_tasks().any(|task| {
-                        task.messages().any(|msg| {
-                            newly_added_message_ids.contains(&MessageId::new(msg.id.clone()))
-                                && matches!(
-                                    msg.message,
-                                    Some(message::Message::ToolCallResult(
-                                        message::ToolCallResult { result: None, .. },
-                                    )),
-                                )
-                                && (msg
-                                    .server_message_data
-                                    .contains(r#""error":"invalid_arguments""#)
-                                    || msg
-                                        .server_message_data
-                                        .contains(r#""_byop_intercepted":true"#))
-                        })
-                    });
-                    if needs_byop_local_resume {
-                        log::info!(
-                            "[byop] detected synthetic local tool_result (invalid_arguments \
-                             or _byop_intercepted) without queued action → schedule auto-resume. \
-                             conversation_id={conversation_id:?}"
-                        );
-                        let network_status = NetworkStatus::handle(ctx);
-                        let wait_for_online = network_status.as_ref(ctx).wait_until_online();
-                        let handle = ctx.spawn(wait_for_online, move |me, _, ctx| {
-                            me.pending_auto_resume_handles.remove(&conversation_id);
-                            me.resume_conversation(
-                                conversation_id,
-                                /*can_attempt_resume_on_error*/
-                                false,
-                                /*is_auto_resume_after_error*/
-                                true,
-                                vec![],
-                                ctx,
-                            );
-                        });
-                        self.pending_auto_resume_handles
-                            .insert(conversation_id, handle);
-                    }
                 }
 
                 // Cancelled streams will handle pending_response_stream updates synchronously.
@@ -3438,7 +2494,7 @@ impl BlocklistAIController {
 
     // Zaplex(Phase 3c A1): remove `maybe_refresh_ai_overages` function.
     // The original implementation was an optimization path for “fetch the latest overage status
-    // from the server when local limit is exhausted”. After BYOP localization, there is neither a
+    // from the server when local limit is exhausted”. Local subscription transports have neither a
     // limit nor overage; both the function body and its only call site must be removed together.
 
     pub(super) fn handle_response_stream_finished(
@@ -3532,36 +2588,15 @@ impl BlocklistAIController {
                     );
                 });
             }
-            Some(warp_multi_agent_api::response_event::stream_finished::Reason::InvalidApiKey(details)) => {
-                use warp_multi_agent_api::LlmProvider;
-                let is_aws_bedrock = details
-                    .provider
-                    .try_into()
-                    .ok()
-                    .is_some_and(|p: LlmProvider| p == LlmProvider::AwsBedrock);
-
-                let error = if is_aws_bedrock {
-                    RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid {
-                        model_name: details.model_name,
-                    }
-                } else {
-                    let provider = details.provider.try_into().ok().and_then(|p| match p {
-                        LlmProvider::Google => Some("Google"),
-                        LlmProvider::Anthropic => Some("Anthropic"),
-                        LlmProvider::Openai => Some("OpenAI"),
-                        LlmProvider::Xai => Some("xAI"),
-                        LlmProvider::Openrouter => Some("OpenRouter"),
-                        LlmProvider::AwsBedrock | LlmProvider::Unknown => None,
-                    });
-                    RenderableAIError::InvalidApiKey {
-                        provider: provider.unwrap_or("Unknown").to_string(),
-                        model_name: details.model_name,
-                    }
-                };
-
+            Some(warp_multi_agent_api::response_event::stream_finished::Reason::InvalidApiKey(_)) => {
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        error,
+                        RenderableAIError::Other {
+                            error_message: "The selected model could not be authenticated."
+                                .to_owned(),
+                            will_attempt_resume: false,
+                            waiting_for_network: false,
+                        },
                         stream_id,
                         conversation_id,
                         self.terminal_view_id,
@@ -3724,53 +2759,6 @@ fn get_running_command(terminal_model: &TerminalModel) -> Option<RunningCommand>
             formatted_terminal_contents_for_input(
                 active_block.output_grid().grid_handler(),
                 // TODO(vorporeal): This is probably too large.
-                Some(1000),
-                CURSOR_MARKER,
-            )
-        },
-        cursor: CURSOR_MARKER.to_owned(),
-        requested_command_id: active_block.requested_command_action_id().cloned(),
-        is_alt_screen_active,
-    })
-}
-
-/// Zaplex BYOP specific: extract RunningCommand in LRC tag-in / agent-monitored scenarios.
-///
-/// Upstream `get_running_command` returns None when `is_agent_monitoring()` because in Zaplex's own
-/// LRC path, after spawning cli subagent, the server persists this state, so subsequent client
-/// rounds don't need to resend running_command. However, BYOP directly connects to the model with
-/// no server-side persistence, so **every round must re-provide the current PTY grid contents**
-/// (otherwise the model only sees a blind spot after the first round's grid_contents).
-///
-/// Condition is relaxed to `is_agent_in_control_or_tagged_in()` — covering:
-///   - tag-in: `InteractionMode::User { did_user_tag_in_agent: true }` (before spawn)
-///   - monitored: `InteractionMode::Agent { ... }` (after spawn)
-///
-/// Extraction logic strictly aligns with upstream: on alt-screen, use `terminal_model.alt_screen().grid_handler()`
-/// instead of `active_block.output_grid()` (the latter is empty during alt-screen; don't use
-/// `output_to_string_force_full_grid_contents()`, as that path returns an empty string under
-/// TUI like nvim, causing the `<attached_running_command>` block to be empty and the model to complain about "can't see command_id").
-fn byop_get_running_command_for_lrc(terminal_model: &TerminalModel) -> Option<RunningCommand> {
-    let active_block = terminal_model.block_list().active_block();
-    if !active_block.is_active_and_long_running() {
-        return None;
-    }
-    if !active_block.is_agent_in_control_or_tagged_in() {
-        return None;
-    }
-    let is_alt_screen_active = terminal_model.is_alt_screen_active();
-    Some(RunningCommand {
-        block_id: active_block.id().clone(),
-        command: active_block.command_to_string(),
-        grid_contents: if is_alt_screen_active {
-            formatted_terminal_contents_for_input(
-                terminal_model.alt_screen().grid_handler(),
-                None,
-                CURSOR_MARKER,
-            )
-        } else {
-            formatted_terminal_contents_for_input(
-                active_block.output_grid().grid_handler(),
                 Some(1000),
                 CURSOR_MARKER,
             )

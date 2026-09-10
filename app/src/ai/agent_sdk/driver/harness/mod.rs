@@ -9,7 +9,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
-use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
 use crate::ai::agent_events::AgentEventStreamClient;
@@ -63,7 +62,6 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         &self,
         _working_dir: &Path,
         _system_prompt: Option<&str>,
-        _secrets: &HashMap<String, ManagedSecretValue>,
     ) -> Result<(), AgentDriverError> {
         Ok(())
     }

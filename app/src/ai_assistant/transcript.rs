@@ -23,7 +23,6 @@ use warpui::{
 };
 use warpui::{BlurContext, FocusContext};
 
-use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
     appearance::Appearance,
     send_telemetry_from_ctx,
@@ -898,21 +897,15 @@ impl View for Transcript {
                 );
             }
 
-            let is_custom_llm_enabled: bool = UserWorkspaces::as_ref(app)
-                .current_team()
-                .is_some_and(|team| team.is_custom_llm_enabled());
-
-            if !is_custom_llm_enabled {
-                blocks.add_child(
-                    Container::new(render_request_limit_info(
-                        &self.requests_model,
-                        app,
-                        appearance,
-                    ))
-                    .with_margin_top(15.)
-                    .finish(),
-                );
-            }
+            blocks.add_child(
+                Container::new(render_request_limit_info(
+                    &self.requests_model,
+                    app,
+                    appearance,
+                ))
+                .with_margin_top(15.)
+                .finish(),
+            );
 
             let current_transcript_summarized = self
                 .requests_model

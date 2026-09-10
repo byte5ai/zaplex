@@ -1,5 +1,8 @@
 # BYOP Placeholder Tool Results Local Issues
 
+> **Historical only:** #152 retired the Custom-Provider HTTP transport and all implementation
+> tracked here. These completed task notes are preserved as project history, not active backlog.
+
 本文件记录 `$to-issues` 已确认的本地 implementation issues。它们不发布到 GitHub。
 
 Source artifacts:
