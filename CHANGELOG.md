@@ -2,6 +2,13 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.12] — 2026-09-10
+
+- **Reaktionsfähige Remote-Dateitransfers:** Datei-Chunks laufen außerhalb des
+  Model-Threads mit begrenzter Parallelität und Warteschlange; Abbrüche räumen
+  wartende Arbeit auf, während Schreibreihenfolge und Offsets pro Datei stabil
+  bleiben.
+
 ## [1.0.11] — 2026-09-10
 
 - **Verständlicher SSH-Fallback:** ControlMaster-Fehler erscheinen ohne
@@ -254,7 +261,10 @@ First preview release of the Zap community fork.
 - **AI**: CJK input classification, reasoning split out, BYOP `tool_call` diagnostics, LRC tag-in synthesizes a virtual subagent + floating spawn flow
 - **CI**: Release workflow explicitly declares `contents: write` permission, fixing a 403
 
-[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.9...HEAD
+[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.12...HEAD
+[1.0.12]: https://github.com/byte5ai/zaplex/compare/v1.0.11...v1.0.12
+[1.0.11]: https://github.com/byte5ai/zaplex/compare/v1.0.10...v1.0.11
+[1.0.10]: https://github.com/byte5ai/zaplex/compare/v1.0.9...v1.0.10
 [1.0.9]: https://github.com/byte5ai/zaplex/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/byte5ai/zaplex/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/byte5ai/zaplex/compare/v1.0.6...v1.0.7

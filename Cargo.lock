@@ -14695,7 +14695,7 @@ dependencies = [
 
 [[package]]
 name = "warp"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "addr",
  "aho-corasick",
