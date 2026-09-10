@@ -3,7 +3,7 @@
 //! exceptions without uploading them to a remote crash service.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io,
     path::{Path, PathBuf},
@@ -26,7 +26,36 @@ use uuid::Uuid;
 use super::ToCrashReportTags;
 
 lazy_static! {
-    static ref GUARD: Mutex<Option<MinidumpGuard>> = Mutex::new(None);
+    static ref GUARD: Mutex<GuardSlot<MinidumpGuard>> = Mutex::new(GuardSlot::default());
+}
+
+struct GuardSlot<G> {
+    guard: Option<G>,
+}
+
+impl<G> Default for GuardSlot<G> {
+    fn default() -> Self {
+        Self { guard: None }
+    }
+}
+
+impl<G> GuardSlot<G> {
+    fn initialize<E>(&mut self, start: impl FnOnce() -> Result<G, E>) -> Result<bool, E> {
+        if self.guard.is_some() {
+            return Ok(false);
+        }
+
+        self.guard = Some(start()?);
+        Ok(true)
+    }
+
+    fn as_ref(&self) -> Option<&G> {
+        self.guard.as_ref()
+    }
+
+    fn take(&mut self) -> Option<G> {
+        self.guard.take()
+    }
 }
 
 /// The minidump child process will exit if it doesn't receive a message after some time. This
@@ -39,10 +68,11 @@ const PING_INTERVAL: Duration = Duration::from_secs(5);
 pub fn init() {
     let mut global_guard = GUARD.lock();
 
-    match MinidumpGuard::start() {
-        Ok(guard) => {
-            *global_guard = Some(guard);
+    match global_guard.initialize(MinidumpGuard::start) {
+        Ok(true) => {
+            log::info!("Initialized local minidump reporter");
         }
+        Ok(false) => log::debug!("Local minidump reporter is already initialized"),
         Err(err) => {
             log::error!("Unable to initialize local minidump reporter: {err:#}");
         }
@@ -86,6 +116,60 @@ pub fn crash() {
     }
 }
 
+/// Exercise the native client/server path and require a newly written local dump.
+pub fn run_smoke_test(dump_dir: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dump_dir).context("Unable to create minidump smoke-test directory")?;
+    let existing_dumps = dump_paths(dump_dir)?;
+    let guard = MinidumpGuard::start_with_dump_dir(Some(dump_dir))?;
+
+    guard.crash();
+
+    let deadline = instant::Instant::now() + Duration::from_secs(5);
+    loop {
+        let new_dump = dump_paths(dump_dir)?
+            .into_iter()
+            .find(|path| !existing_dumps.contains(path));
+        if let Some(path) = new_dump {
+            let dump_size = path
+                .metadata()
+                .with_context(|| format!("Unable to inspect {}", path.display()))?
+                .len();
+            if dump_size > 0 {
+                std::mem::drop(guard);
+                return Ok(());
+            }
+        }
+
+        if instant::Instant::now() >= deadline {
+            std::mem::drop(guard);
+            anyhow::bail!(
+                "Native minidump smoke test did not create a non-empty dump in {}",
+                dump_dir.display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn dump_paths(dump_dir: &Path) -> anyhow::Result<HashSet<PathBuf>> {
+    dump_dir
+        .read_dir()
+        .with_context(|| format!("Unable to read {}", dump_dir.display()))?
+        .filter_map(|entry| match entry {
+            Ok(entry)
+                if entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "dmp") =>
+            {
+                Some(Ok(entry.path()))
+            }
+            Ok(_) => None,
+            Err(err) => Some(Err(err.into())),
+        })
+        .collect()
+}
+
 /// Handle for minidump state that must be kept in scope while crash reporting is enabled.
 pub struct MinidumpGuard {
     child: process::Child,
@@ -94,7 +178,7 @@ pub struct MinidumpGuard {
 }
 
 /// Run the minidump server process.
-pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
+pub fn run_server(socket_path: &Path, dump_dir: Option<&Path>) -> anyhow::Result<()> {
     // For troubleshooting, attempt to log from the minidump server. There's not much we can really
     // do if crash reporting fails, so creating the log file itself is best-effort.
     let log_dir = warp_core::paths::state_dir().join(warp_core::paths::ZAPLEX_LOGS_DIR);
@@ -109,6 +193,7 @@ pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
         .init();
 
     struct Handler {
+        dump_dir: PathBuf,
         shutdown: Arc<AtomicBool>,
         pending_crash_details: Mutex<Option<String>>,
         pending_dump_path: Mutex<Option<PathBuf>>,
@@ -117,12 +202,11 @@ pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
 
     impl minidumper::ServerHandler for Handler {
         fn create_minidump_file(&self) -> Result<(File, PathBuf), io::Error> {
-            let dump_dir = warp_core::paths::state_dir()
-                .join(warp_core::paths::ZAPLEX_LOGS_DIR)
-                .join("crash-dumps");
-            std::fs::create_dir_all(&dump_dir)?;
+            std::fs::create_dir_all(&self.dump_dir)?;
 
-            let dump_path = dump_dir.join(format!("zap-minidump-{}.dmp", Uuid::new_v4().simple()));
+            let dump_path = self
+                .dump_dir
+                .join(format!("zap-minidump-{}.dmp", Uuid::new_v4().simple()));
             let file = File::create(&dump_path)?;
             *self.pending_dump_path.lock() = Some(dump_path.clone());
             Ok((file, dump_path))
@@ -163,7 +247,13 @@ pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
     }
 
     let shutdown = Arc::new(AtomicBool::new(false));
+    let dump_dir = dump_dir.map(Path::to_path_buf).unwrap_or_else(|| {
+        warp_core::paths::state_dir()
+            .join(warp_core::paths::ZAPLEX_LOGS_DIR)
+            .join("crash-dumps")
+    });
     let handler = Box::new(Handler {
+        dump_dir,
         shutdown: shutdown.clone(),
         pending_crash_details: Default::default(),
         pending_dump_path: Default::default(),
@@ -207,6 +297,10 @@ impl MinidumpGuard {
     /// Set up minidump-backed crash reporting. This spawns a child process that writes local
     /// minidumps, and a crash handler which sends crashes to that child process.
     pub fn start() -> anyhow::Result<Self> {
+        Self::start_with_dump_dir(None)
+    }
+
+    fn start_with_dump_dir(dump_dir: Option<&Path>) -> anyhow::Result<Self> {
         let socket_name = format!("wcr-{}.sock", Uuid::new_v4().simple());
         let socket_path = if cfg!(target_os = "macos") {
             // On macOS, the maximum length of a socket path is fairly short, so use the temp directory.
@@ -215,16 +309,23 @@ impl MinidumpGuard {
             warp_core::paths::state_dir().join(socket_name)
         };
 
-        let child =
-            Command::new(std::env::current_exe().context("Unable to get current executable path")?)
-                .arg("minidump-server")
-                .arg(&socket_path)
-                .spawn()
-                .context("Unable to spawn minidump server process")?;
+        let mut command =
+            Command::new(std::env::current_exe().context("Unable to get current executable path")?);
+        command.arg("minidump-server").arg(&socket_path);
+        if let Some(dump_dir) = dump_dir {
+            command.arg("--dump-dir").arg(dump_dir);
+        }
+        let mut child = command
+            .spawn()
+            .context("Unable to spawn minidump server process")?;
 
-        let client = Arc::new(
-            wait_for_server(socket_path.as_path()).context("Unable to create minidump client")?,
-        );
+        let client = match wait_for_server(socket_path.as_path()) {
+            Ok(client) => Arc::new(client),
+            Err(err) => {
+                terminate_and_reap(&mut child);
+                return Err(err).context("Unable to create minidump client");
+            }
+        };
         spawn_keepalive_thread(client.clone());
 
         let client2 = client.clone();
@@ -245,8 +346,14 @@ impl MinidumpGuard {
                 let dump_result = client.request_dump(crash_context);
                 crash_handler::CrashEventResult::Handled(dump_result.is_ok())
             })
-        })
-        .context("Failed to attach crash signal handler")?;
+        });
+        let crash_handler = match crash_handler {
+            Ok(crash_handler) => crash_handler,
+            Err(err) => {
+                terminate_and_reap(&mut child);
+                return Err(err).context("Failed to attach crash signal handler");
+            }
+        };
 
         // Ensure that the crash server process can ptrace Zaplex.
         #[cfg(target_os = "linux")]
@@ -288,9 +395,22 @@ impl Drop for MinidumpGuard {
             log::warn!("Unable to send shutdown command to minidump child process: {err:#}");
         }
 
-        if let Err(err) = self.child.kill() {
-            log::warn!("Unable to kill minidump child process: {err:#}");
-        }
+        terminate_and_reap(&mut self.child);
+    }
+}
+
+fn terminate_and_reap(child: &mut process::Child) {
+    match child.try_wait() {
+        Ok(Some(_)) => return,
+        Ok(None) => {}
+        Err(err) => log::warn!("Unable to query minidump child process: {err:#}"),
+    }
+
+    if let Err(err) = child.kill() {
+        log::warn!("Unable to kill minidump child process: {err:#}");
+    }
+    if let Err(err) = child.wait() {
+        log::warn!("Unable to reap minidump child process: {err:#}");
     }
 }
 
@@ -364,3 +484,7 @@ fn format_crash_details(crash_context: &CrashContext) -> Option<String> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "local_minidump_tests.rs"]
+mod tests;

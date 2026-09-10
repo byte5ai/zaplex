@@ -24,6 +24,8 @@ use warpui::windowing::{self, StateEvent, WindowManager};
 
 #[cfg(linux_or_windows)]
 pub use local_minidump::run_server as run_minidump_server;
+#[cfg(linux_or_windows)]
+pub use local_minidump::run_smoke_test as run_minidump_smoke_test;
 
 lazy_static! {
     /// A map from sensitive error messages to "scrubbed" error messages.
@@ -268,6 +270,9 @@ fn init_local_crash_reporting(
 ) {
     log::info!("openWarp: crash reporting uses local panic logs, no remote submission");
 
+    #[cfg(linux_or_windows)]
+    local_minidump::init();
+
     use std::sync::Once;
     static PANIC_HOOK_INSTALLED: Once = Once::new();
     PANIC_HOOK_INSTALLED.call_once(|| {
@@ -318,6 +323,9 @@ pub fn resume_crash_reporting_after_child_spawn() {
 }
 
 pub fn crash() {
+    #[cfg(linux_or_windows)]
+    local_minidump::crash();
+    #[cfg(not(linux_or_windows))]
     panic!("openWarp: crash() invoked for local panic-hook smoke test");
 }
 

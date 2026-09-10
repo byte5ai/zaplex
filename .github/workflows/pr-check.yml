@@ -246,6 +246,20 @@ jobs:
           channel_option_requires_a_value
         shell: bash
 
+      - name: cargo test (native minidump lifecycle)
+        run: >
+          cargo test --locked -p warp --lib --features crash_reporting --
+          minidump_backend_
+        shell: bash
+
+      - name: Native minidump smoke test
+        run: |
+          dump_dir="$(mktemp -d)"
+          cargo run --locked -p warp --bin zaplex --features crash_reporting -- \
+            minidump-smoke "$dump_dir"
+          test "$(find "$dump_dir" -type f -name 'zap-minidump-*.dmp' -size +0c | wc -l)" -eq 1
+        shell: bash
+
       # Focused app-crate unit tests: the FM-toggle + spawn-card launch payload,
       # catalog copy guard, plus the real boot/open smoke gate. Targeted by name so only these run —
       # the app crate's full test suite has known harness/env-dependent failures

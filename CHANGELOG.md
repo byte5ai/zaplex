@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.18] — 2026-09-11
+
+- Lokale native Absturzdiagnose startet bei Opt-in idempotent, beendet und reapet den Minidump-Dienst bei Opt-out und wird durch einen echten Linux-Smoke-Test abgesichert.
+
 ## [1.0.17] — 2026-09-11
 
 - OSS-Einstellungsschema verwendet den expliziten OSS-Kanal und die tatsächlich kompilierten Laufzeit-Features; ungültige Kanäle brechen ab.
