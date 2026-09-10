@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""Exercise macOS build/package separation without compiling or signing code."""
+
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+BUNDLE_SCRIPT = Path(
+    os.environ.get(
+        "ZAPLEX_BUNDLE_SCRIPT", Path(__file__).resolve().parent / "macos" / "bundle"
+    )
+).resolve()
+
+MOCK_COMMAND = r'''
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+name = Path(sys.argv[0]).name
+args = sys.argv[1:]
+root = Path(os.environ["MOCK_ROOT"])
+with open(os.environ["MOCK_COMMAND_LOG"], "a") as log:
+    log.write(json.dumps([name, *args]) + "\n")
+
+if os.environ.get("MOCK_FORBID_PREPARATION") == "1" and name in {
+    "cargo", "rustc", "rustup", "install_name_tool", "prepare_bundled_resources",
+    "update_plist", "compile_icon", "prepare_bundled_pprof",
+}:
+    sys.exit("Packaging unexpectedly invoked " + name)
+
+if name == "rustc":
+    print('target_arch="aarch64"')
+elif name == "cargo":
+    if not args or args[0] != "bundle":
+        sys.exit("Unexpected cargo invocation")
+    profile = args[args.index("--profile") + 1]
+    profile_dir = "debug" if profile == "dev" else profile
+    target = args[args.index("--target") + 1]
+    app = root / "target" / target / profile_dir / "bundle/osx/Zaplex.app"
+    executable = app / "Contents/MacOS/zaplex"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("mock application\n")
+    executable.chmod(0o755)
+    (app / "Contents/Info.plist").write_text("mock plist\n")
+    plugin = root / "target" / profile_dir / "ZapDockTilePlugin.docktileplugin/Contents"
+    plugin.mkdir(parents=True)
+    (plugin / "Info.plist").write_text("mock plugin plist\n")
+elif name == "prepare_bundled_resources":
+    resources = Path(args[0])
+    resources.mkdir(parents=True, exist_ok=True)
+    (resources / "settings_schema.json").write_text('{"type":"object"}\n')
+    (resources / "THIRD_PARTY_LICENSES.txt").write_text("mock attribution\n")
+elif name == "security":
+    if args[:1] == ["find-identity"]:
+        print('  1) ABC123 "Apple Development: Test (TESTTEAM01)"')
+elif name == "create-dmg":
+    Path(args[-2]).write_bytes(b"mock disk image")
+elif name == "sed":
+    # The bundle script uses BSD sed's in-place argument form on macOS.
+    if sys.platform != "darwin" and args[:2] == ["-i", ""]:
+        sys.exit(subprocess.run(["/usr/bin/sed", "-i", *args[2:]]).returncode)
+    sys.exit(subprocess.run(["/usr/bin/sed", *args]).returncode)
+'''
+
+
+class MacOSBundleModesTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="zaplex-bundle-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / "script/macos").mkdir(parents=True)
+        (self.root / "app").mkdir()
+        self.script = self.root / "script/macos/bundle"
+        shutil.copyfile(BUNDLE_SCRIPT, self.script)
+        self.commands = self.root / "commands"
+        self.commands.mkdir()
+        self.log = self.root / "commands.jsonl"
+        self.outputs = self.root / "outputs"
+        self.outputs.touch()
+        for name in (
+            "rustc", "rustup", "cargo", "install_name_tool", "plutil",
+            "security", "codesign", "hdiutil", "create-dmg", "xcrun", "sed",
+        ):
+            self.write_mock(self.commands / name)
+        for name in (
+            "update_plist", "prepare_bundled_resources", "compile_icon",
+            "prepare_bundled_pprof",
+        ):
+            self.write_mock(self.root / "script" / name)
+        self.env = os.environ.copy()
+        # Keep the fixture independent of any developer or CI signing settings.
+        for name in tuple(self.env):
+            if name.startswith("MACOS_") or name in (
+                "CARGO_BUNDLE_SKIP_BUILD", "SKIP_SETTINGS_SCHEMA", "GIT_RELEASE_TAG",
+                "RUNNER_NAME", "FINAL_DMG_NAME", "ZAPLEX_APPLE_TEAM_ID",
+            ):
+                self.env.pop(name)
+        self.env.update(
+            PATH=f"{self.commands}{os.pathsep}{self.env['PATH']}",
+            MOCK_ROOT=str(self.root),
+            MOCK_COMMAND_LOG=str(self.log),
+            GITHUB_ACTIONS="true",
+            GITHUB_OUTPUT=str(self.outputs),
+        )
+
+    def write_mock(self, path):
+        path.write_text(f"#!{sys.executable}\n" + MOCK_COMMAND)
+        path.chmod(0o755)
+
+    def run_bundle(self, *args, success=True):
+        result = subprocess.run(
+            ["bash", str(self.script), *args], cwd=self.root, env=self.env,
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=20, check=False,
+        )
+        if success:
+            self.assertEqual(result.returncode, 0, result.stdout)
+        else:
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+        return result
+
+    def command_names(self):
+        if not self.log.exists():
+            return []
+        return [json.loads(line)[0] for line in self.log.read_text().splitlines()]
+
+    def make_prepared_app(self, profile_dir="release-lto"):
+        app = self.root / "target/aarch64-apple-darwin" / profile_dir / "bundle/osx/Zaplex.app"
+        files = {
+            "Contents/MacOS/zaplex": b"compiled application\n",
+            "Contents/Info.plist": b"prepared plist\n",
+            "Contents/Resources/settings_schema.json": b'{"type":"object"}\n',
+            "Contents/Resources/THIRD_PARTY_LICENSES.txt": b"attribution\n",
+            "Contents/Resources/bundled/remote-server/zap-remote-server-linux-x86_64.tar.gz": b"daemon archive\n",
+            "Contents/Resources/bundled/remote-server/SHA256SUMS": b"authenticated digest\n",
+            "Contents/PlugIns/ZapDockTilePlugin.docktileplugin/Contents/Info.plist": b"plugin\n",
+            "Contents/Frameworks/Example.framework/Versions/A/Example": b"framework\n",
+        }
+        for relative, contents in files.items():
+            path = app / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(contents)
+        (app / "Contents/MacOS/zaplex").chmod(0o755)
+        framework = app / "Contents/Frameworks/Example.framework"
+        (framework / "Versions/Current").symlink_to("A")
+        (framework / "Example").symlink_to("Versions/Current/Example")
+        return app, files
+
+    def test_prepare_stops_before_signing_and_disk_image_creation(self):
+        for profile_dir, profile_args in (("release-lto", ()), ("debug", ("--debug",))):
+            with self.subTest(profile=profile_dir):
+                self.run_bundle(
+                    "--channel", "oss", "--arch", "aarch64", "--prepare-only", *profile_args
+                )
+                outputs = dict(
+                    line.split("=", 1) for line in self.outputs.read_text().splitlines()
+                    if "=" in line
+                )
+                prepared_app = self.root / outputs["prepared_app_path"]
+                self.assertEqual(
+                    prepared_app,
+                    self.root / "target/aarch64-apple-darwin" / profile_dir / "bundle/osx/Zaplex.app",
+                )
+                self.assertTrue((prepared_app / "Contents/MacOS/zaplex").is_file())
+                self.assertTrue((prepared_app / "Contents/Resources/settings_schema.json").is_file())
+        commands = self.command_names()
+        self.assertIn("cargo", commands)
+        self.assertIn("prepare_bundled_resources", commands)
+        self.assertNotIn("codesign", commands)
+        self.assertNotIn("create-dmg", commands)
+
+    def test_package_uses_complete_app_without_any_preparation(self):
+        self.env["MOCK_FORBID_PREPARATION"] = "1"
+        for profile_dir, profile_args in (("release-lto", ()), ("debug", ("--debug",))):
+            with self.subTest(profile=profile_dir):
+                app, expected_files = self.make_prepared_app(profile_dir)
+                self.run_bundle(
+                    "--channel", "oss", "--arch", "aarch64", "--package-only",
+                    "--selfsign", *profile_args,
+                )
+                packaged = self.root / "target" / profile_dir / "bundle/osx/Zaplex.app"
+                for relative, expected in expected_files.items():
+                    self.assertEqual((packaged / relative).read_bytes(), expected, relative)
+                    self.assertEqual((app / relative).read_bytes(), expected, relative)
+                self.assertTrue(os.access(packaged / "Contents/MacOS/zaplex", os.X_OK))
+                framework = packaged / "Contents/Frameworks/Example.framework"
+                self.assertEqual(os.readlink(framework / "Versions/Current"), "A")
+                self.assertEqual(os.readlink(framework / "Example"), "Versions/Current/Example")
+        commands = self.command_names()
+        self.assertIn("codesign", commands)
+        self.assertIn("create-dmg", commands)
+        self.assertNotIn("cargo", commands)
+        self.assertNotIn("prepare_bundled_resources", commands)
+
+    def test_invalid_mode_combinations_fail_before_preparation(self):
+        cases = (
+            ("--arch", "aarch64", "--prepare-only", "--package-only"),
+            ("--arch", "aarch64", "--artifact", "cli", "--prepare-only"),
+            ("--arch", "aarch64", "--artifact", "cli", "--package-only"),
+            ("--prepare-only",),
+            ("--package-only",),
+        ) + tuple(
+            ("--arch", "aarch64", mode, check)
+            for mode in ("--prepare-only", "--package-only")
+            for check in ("--check-only", "--check-signing-only")
+        )
+        for args in cases:
+            with self.subTest(args=args):
+                self.run_bundle("--channel", "oss", *args, success=False)
+        commands = self.command_names()
+        self.assertNotIn("cargo", commands)
+        self.assertNotIn("codesign", commands)
+        self.assertNotIn("create-dmg", commands)
+
+    def test_package_rejects_missing_or_incomplete_app(self):
+        args = ("--channel", "oss", "--arch", "aarch64", "--package-only")
+        self.run_bundle(*args, success=False)
+        app, _ = self.make_prepared_app()
+        (app / "Contents/Resources/settings_schema.json").unlink()
+        self.run_bundle(*args, success=False)
+        commands = self.command_names()
+        self.assertNotIn("cargo", commands)
+        self.assertNotIn("codesign", commands)
+        self.assertNotIn("create-dmg", commands)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -31,7 +31,7 @@ on:
         type: string
         default: v1.0.6
       fast:
-        description: "Nur für schnelle Entwicklerprüfung: Debug-Profil statt release-lto. Für ein Abnahme-DMG ausgeschaltet lassen."
+        description: "Debug-Profil für Mac-App und Linux-Daemon. Nur für schnelle Entwicklerprüfung; für Abnahme-DMGs ausgeschaltet lassen."
         type: boolean
         default: false
 
@@ -49,6 +49,10 @@ jobs:
         with:
           # Phase A verifies ancestry from the recorded V1 base commit.
           fetch-depth: 0
+
+      - name: Verify macOS packaging split
+        run: python3 script/test-macos-bundle
+        shell: bash
 
       - name: Verify release version and Phase A readiness
         run: |
@@ -108,7 +112,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: zap-remote-server-linux-x86_64.tar.gz
-          key: remote-server-musl-x86_64-${{ inputs.dmg_tag }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources') }}
+          key: remote-server-musl-x86_64-${{ inputs.fast && 'debug' || 'release-cli' }}-${{ inputs.dmg_tag }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources') }}
 
       - name: Free up disk space
         if: steps.daemon_cache.outputs.cache-hit != 'true'
@@ -122,6 +126,7 @@ jobs:
         if: steps.daemon_cache.outputs.cache-hit != 'true'
         with:
           target_os: linux
+          cache_key: linux-musl-x86_64-${{ inputs.fast && 'debug' || 'release-cli' }}
           is_self_hosted: false
           install_release_deps: true
 
@@ -146,7 +151,8 @@ jobs:
         id: bundle_cli
         run: |
           script/bundle --channel "$CHANNEL" --arch x86_64 --artifact cli --packages none \
-            --target x86_64-unknown-linux-musl
+            --target x86_64-unknown-linux-musl \
+            ${{ inputs.fast && '--debug' || '' }}
         shell: bash
         env:
           GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}
@@ -180,32 +186,19 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  build_dmg:
-    name: Build Test DMG (macOS Apple Silicon)
+  build_app:
+    name: Prepare Test app (macOS Apple Silicon)
     # GitHub's pinned macOS 26 image provisions Xcode's optional Metal toolchain.
     runs-on: macos-26
     timeout-minutes: 360
-    needs: build_remote_server
+    needs: signing_preflight
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      # Stage the Linux remote-server tarball where prepare_bundled_resources
-      # picks it up (resources/bundled/ → Zaplex.app/Contents/Resources/bundled/),
-      # matching the runtime resolver app/src/remote_server/embedded.rs.
-      - name: Fetch bundled remote-server tarball
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: zap-remote-server-linux-x86_64
-          path: resources/bundled/remote-server/
-
-      - name: Assemble authenticated remote-server digest manifest
-        run: cp resources/bundled/remote-server/zap-remote-server-linux-x86_64.tar.gz.sha256 resources/bundled/remote-server/SHA256SUMS
-        shell: bash
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
-          cache_key: macos-aarch64
+          cache_key: macos-aarch64-${{ inputs.fast && 'debug' || 'release-lto' }}
           is_self_hosted: false
           install_release_deps: true
 
@@ -221,14 +214,88 @@ jobs:
       - name: Install cargo-bundle
         run: script/install_cargo_bundle
 
-      - name: Install create-dmg
-        run: brew install create-dmg
-
-      - name: Build, sign and notarize aarch64 bundle
+      # Derive the Apple team ID from the certificate before compiling: Rust
+      # embeds it for Keychain access. Signing itself happens in build_dmg.
+      - name: Build and prepare unsigned aarch64 app
         id: bundle_app
         run: |
           script/bundle --channel "$CHANNEL" --arch aarch64 \
-            --dmg-name-suffix arm64 \
+            --prepare-only \
+            --read-passwords-from-env \
+            ${{ inputs.fast && '--debug' || '' }}
+        shell: bash
+        env:
+          GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
+
+      # tar preserves executable modes and framework symlinks across runners.
+      # Transfer the complete app so packaging never needs Cargo or generators.
+      - name: Archive prepared app
+        run: tar -cf prepared-app.tar "$PREPARED_APP_PATH"
+        shell: bash
+        env:
+          PREPARED_APP_PATH: ${{ steps.bundle_app.outputs.prepared_app_path }}
+
+      - name: Upload prepared app
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zap-test-app-aarch64
+          path: prepared-app.tar
+          compression-level: 1
+          if-no-files-found: error
+          retention-days: 1
+
+  build_dmg:
+    name: Sign and package Test DMG (macOS Apple Silicon)
+    runs-on: macos-26
+    timeout-minutes: 60
+    needs: [build_app, build_remote_server]
+    env:
+      APP_PATH: target/aarch64-apple-darwin/${{ inputs.fast && 'debug' || 'release-lto' }}/bundle/osx/Zaplex.app
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Fetch prepared app
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: zap-test-app-aarch64
+
+      - name: Extract prepared app
+        run: tar -xf prepared-app.tar
+        shell: bash
+
+      - name: Fetch bundled remote-server tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: zap-remote-server-linux-x86_64
+          path: resources/bundled/remote-server/
+
+      # The runtime reads these files from the signed app resources. Insert
+      # both the archive and its digest before sealing the app's signature.
+      - name: Bundle remote-server with authenticated digest manifest
+        run: |
+          cp resources/bundled/remote-server/zap-remote-server-linux-x86_64.tar.gz.sha256 resources/bundled/remote-server/SHA256SUMS
+          (cd resources/bundled/remote-server && shasum -a 256 -c SHA256SUMS)
+          mkdir -p "$APP_PATH/Contents/Resources/bundled/remote-server"
+          cp resources/bundled/remote-server/* "$APP_PATH/Contents/Resources/bundled/remote-server/"
+        shell: bash
+
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: '26'
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Sign and notarize prepared aarch64 bundle
+        id: bundle_app
+        run: |
+          script/bundle --channel "$CHANNEL" --arch aarch64 \
+            --package-only --dmg-name-suffix arm64 \
             --read-passwords-from-env \
             ${{ inputs.fast && '--debug' || '' }}
         shell: bash
