@@ -148,22 +148,20 @@ type DeleteCloudObjectFn =
 /// Reads from the sqlite database to get the app state for session restoration.
 /// Starts a writer thread that listens for ModelEvents and processes them.
 /// SQLite connection prewarmed in the background. After `prewarm_db_in_background` is started,
-/// the background thread stores the result of `init_db()` here; `initialize` retrieves it from here.
+/// `initialize` joins the worker and takes the `init_db()` result directly from its handle.
 ///
 /// Type explanation:
 /// - Outer `OnceLock` indicates “whether prewarming has been started”.
-/// - Inner `Mutex<PrewarmState>` is used for the main thread to retrieve results and the background thread to store results.
-static PREWARMED_DB: OnceLock<Mutex<PrewarmState>> = OnceLock::new();
+/// - Inner `Mutex<PrewarmState>` lets the main thread take the worker handle exactly once.
+static PREWARMED_DB: OnceLock<Mutex<PrewarmState<SqliteConnection>>> = OnceLock::new();
 
-/// Prewarming state machine. `Pending` -> (`Done` | `Joining`). `Joining` means the main thread
-/// took the handle but the background thread hasn't yet written Done—the background thread should still be able to write.
-/// `Taken` means the main thread has already taken the result.
-enum PrewarmState {
-    Pending(std::thread::JoinHandle<()>),
-    /// Main thread took the handle to join, but the background thread hasn't yet written the result.
-    /// The background thread will transition this state to Done.
-    Joining,
-    Done(Result<SqliteConnection>),
+/// Prewarming state machine. The worker owns its result until the main thread
+/// joins it, so completion cannot race publication of the outer `OnceLock`.
+enum PrewarmState<T> {
+    Pending(std::thread::JoinHandle<Result<T>>),
+    /// Worker creation failed; initialization must use the synchronous path.
+    Unavailable,
+    /// The main thread has already taken the worker handle or fallback marker.
     Taken,
 }
 
@@ -175,7 +173,7 @@ enum PrewarmState {
 /// Multiple calls are idempotent—OnceLock ensures the background thread is started only once.
 pub fn prewarm_db_in_background() {
     // OnceLock::get_or_init runs the closure only once across multiple callers—the background thread
-    // is created only once. If spawn fails, it stores a Failed state (unlikely).
+    // is created only once. Its JoinHandle transports the result without consulting PREWARMED_DB.
     PREWARMED_DB.get_or_init(|| {
         let handle_result = std::thread::Builder::new()
             .name("warp-sqlite-prewarm".into())
@@ -190,30 +188,48 @@ pub fn prewarm_db_in_background() {
                     "SQLite prewarm completed in {elapsed_ms} ms (success={})",
                     result.is_ok()
                 );
-                if let Some(cell) = PREWARMED_DB.get() {
-                    if let Ok(mut guard) = cell.lock() {
-                        // Transition to Done. Both Pending and Joining states need the result written.
-                        // If main thread already Taken (shouldn't happen), discard the connection.
-                        match *guard {
-                            PrewarmState::Pending(_) | PrewarmState::Joining => {
-                                *guard = PrewarmState::Done(result);
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+                result
             });
 
         match handle_result {
             Ok(handle) => Mutex::new(PrewarmState::Pending(handle)),
             Err(err) => {
                 log::warn!("Failed to spawn SQLite prewarm thread: {err:#}");
-                Mutex::new(PrewarmState::Done(Err(anyhow!(
-                    "failed to spawn prewarm thread: {err}"
-                ))))
+                Mutex::new(PrewarmState::Unavailable)
             }
         }
     });
+}
+
+fn take_prewarmed_result<T>(cell: &Mutex<PrewarmState<T>>) -> Option<Result<T>> {
+    let state = {
+        let mut guard = match cell.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                log::warn!("SQLite prewarm: mutex poisoned, falling back to sync");
+                return None;
+            }
+        };
+        std::mem::replace(&mut *guard, PrewarmState::Taken)
+    };
+
+    match state {
+        PrewarmState::Pending(handle) => match handle.join() {
+            Ok(result) => Some(result),
+            Err(_panic) => {
+                log::warn!("SQLite prewarm thread panicked; falling back to sync init");
+                None
+            }
+        },
+        PrewarmState::Unavailable => {
+            log::warn!("SQLite prewarm unavailable; falling back to sync init");
+            None
+        }
+        PrewarmState::Taken => {
+            log::warn!("SQLite prewarm result already taken; falling back to sync init");
+            None
+        }
+    }
 }
 
 /// If background prewarming has been started, take the result (may need to wait for the background thread to join).
@@ -221,65 +237,14 @@ pub fn prewarm_db_in_background() {
 fn take_prewarmed_db() -> Option<Result<SqliteConnection>> {
     let cell = PREWARMED_DB.get()?;
     let take_start = Instant::now();
-
-    // First get the join handle (if still Pending), transition to Joining, then get the result after join.
-    // This two-phase design avoids the main thread holding the lock, while ensuring the background thread can write the result.
-    let handle = {
-        let mut guard = match cell.lock() {
-            Ok(g) => g,
-            // Poisoned lock = previous panic; fall back to synchronous path.
-            Err(_) => {
-                log::warn!("SQLite prewarm: mutex poisoned, falling back to sync");
-                return None;
-            }
-        };
-        // Check state first: if Done, get result directly; if Pending, get handle then join.
-        match std::mem::replace(&mut *guard, PrewarmState::Taken) {
-            PrewarmState::Pending(h) => {
-                // Transition to Joining state (background thread will still write Done).
-                *guard = PrewarmState::Joining;
-                Some(h)
-            }
-            PrewarmState::Done(result) => {
-                log::info!(
-                    "SQLite prewarm hit (already done): take took {} µs",
-                    take_start.elapsed().as_micros()
-                );
-                return Some(result);
-            }
-            PrewarmState::Joining | PrewarmState::Taken => {
-                // Shouldn't happen—take is only called once. Return None and fall back to synchronous path.
-                log::warn!("SQLite prewarm: unexpected Joining/Taken state, sync fallback");
-                return None;
-            }
-        }
-    };
-
-    // Join the background thread. If background panics, join returns Err—this is key to avoid deadlock.
-    if let Some(handle) = handle {
-        match handle.join() {
-            Ok(()) => {
-                let join_us = take_start.elapsed().as_micros();
-                log::info!("SQLite prewarm: main thread waited {join_us} µs for background");
-                // After background thread finishes, result should be in Mutex.
-                let mut guard = match cell.lock() {
-                    Ok(g) => g,
-                    Err(_) => return None,
-                };
-                match std::mem::replace(&mut *guard, PrewarmState::Taken) {
-                    PrewarmState::Done(result) => Some(result),
-                    // Background thread join succeeded but Done not written—impossible, defensive handling.
-                    _ => None,
-                }
-            }
-            Err(_panic) => {
-                log::warn!("SQLite prewarm thread panicked; falling back to sync init");
-                None
-            }
-        }
-    } else {
-        None
+    let result = take_prewarmed_result(cell);
+    if result.is_some() {
+        log::info!(
+            "SQLite prewarm: main thread waited {} µs for background",
+            take_start.elapsed().as_micros()
+        );
     }
+    result
 }
 
 pub fn initialize(ctx: &mut AppContext) -> (Option<PersistedData>, Option<WriterHandles>) {

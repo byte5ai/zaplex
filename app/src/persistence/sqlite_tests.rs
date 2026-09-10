@@ -1,6 +1,13 @@
 #[cfg(target_os = "macos")]
 use std::fs;
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Barrier, Mutex,
+    },
+    thread,
+};
 
 use warp_core::features::FeatureFlag;
 
@@ -23,7 +30,48 @@ use crate::{
 
 use super::{
     decode_path, deduplicate_events, encode_path, read_sqlite_data, save_app_state, setup_database,
+    take_prewarmed_result, PrewarmState,
 };
+
+#[test]
+fn prewarm_result_survives_worker_finishing_before_state_publication() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let worker_ready = Arc::new(Barrier::new(2));
+    let worker_calls = Arc::clone(&calls);
+    let worker_barrier = Arc::clone(&worker_ready);
+    let handle = thread::spawn(move || {
+        worker_calls.fetch_add(1, Ordering::SeqCst);
+        worker_barrier.wait();
+        Ok::<_, anyhow::Error>(42)
+    });
+
+    worker_ready.wait();
+    while !handle.is_finished() {
+        thread::yield_now();
+    }
+
+    let state = Mutex::new(PrewarmState::Pending(handle));
+    let value = take_prewarmed_result(&state)
+        .expect("finished prewarm result should be available")
+        .expect("test prewarm should succeed");
+
+    assert_eq!(value, 42);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(take_prewarmed_result(&state).is_none());
+}
+
+#[test]
+fn unavailable_or_panicked_prewarm_uses_sync_fallback() {
+    let unavailable = Mutex::new(PrewarmState::<usize>::Unavailable);
+    assert!(take_prewarmed_result(&unavailable).is_none());
+
+    let panicked = Mutex::new(PrewarmState::Pending(thread::spawn(
+        || -> anyhow::Result<usize> {
+            panic!("simulated prewarm panic");
+        },
+    )));
+    assert!(take_prewarmed_result(&panicked).is_none());
+}
 
 #[test]
 fn test_deduplicate_snapshots() {
