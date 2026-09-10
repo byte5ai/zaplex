@@ -3091,7 +3091,7 @@ impl ServerModel {
         let (result_sender, result_receiver) = async_channel::bounded(1);
         let handle = self.spawn_request_handler_with_abort(
             request_id.clone(),
-            result_receiver.recv(),
+            async move { result_receiver.recv().await },
             move |model, result, _ctx| {
                 let message = result.unwrap_or_else(|_| {
                     server_message::Message::Error(ErrorResponse {
