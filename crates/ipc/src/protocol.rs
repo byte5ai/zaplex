@@ -29,7 +29,7 @@ impl ConnectionAddress {
         {
             let directory =
                 std::env::temp_dir().join(format!("warp-ipc-{:016x}", rand::random::<u64>()));
-            return Self(directory.join("server.sock").to_string_lossy().into_owned());
+            Self(directory.join("server.sock").to_string_lossy().into_owned())
         }
         #[cfg(not(unix))]
         Self(format!("/tmp/warp-ipc-{}.sock", rand::random::<i64>()))
