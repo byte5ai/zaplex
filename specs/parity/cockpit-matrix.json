@@ -693,9 +693,9 @@
     },
     {
       "id": "lifecycle-cleanup-recheck",
-      "suite": "cockpit-app",
-      "source": "app/src/cockpit/session_lifecycle_tests.rs",
-      "name": "stale_cleanup_rechecks_revision_visibility_and_process_identity"
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/claude_registry_lifecycle_tests.rs",
+      "name": "changed_registry_revision_fails_closed"
     },
     {
       "id": "lifecycle-rename-persisted",
