@@ -1274,6 +1274,7 @@ terminal-message-to-select = {" "}zum Auswählen
 terminal-message-select-save-profile = {" "}auswählen und im Profil speichern
 terminal-message-open-plan = {" "}Plan öffnen
 terminal-starting-shell = Shell wird gestartet…
+terminal-classic-ssh = Standard-SSH
 terminal-model-specs-title = Modellspezifikationen
 terminal-model-specs-description = Zaplex-Benchmarks zur Leistung eines Modells in unserer Umgebung, seinem Credit-Verbrauch und seiner Aufgabengeschwindigkeit.
 terminal-model-specs-reasoning-level-title = Denktiefe

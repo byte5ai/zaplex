@@ -128,6 +128,20 @@ fn headless_control_master_uses_l2_host_key_and_argument_policy() {
         .any(|arg| arg == "ControlMaster=auto"));
 }
 
+#[test]
+fn control_master_failure_message_has_one_context_prefix() {
+    let error = anyhow!("ControlMaster setup failed: Connection closed by remote port 22");
+
+    assert_eq!(
+        format_control_master_setup_error(error),
+        "ControlMaster setup failed: Connection closed by remote port 22"
+    );
+    assert_eq!(
+        format_control_master_setup_error(anyhow!(HOST_KEY_CHANGED)),
+        HOST_KEY_CHANGED
+    );
+}
+
 #[cfg(unix)]
 struct HostKeyCommandFactory {
     script: PathBuf,
