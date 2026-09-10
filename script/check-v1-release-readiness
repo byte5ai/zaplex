@@ -72,6 +72,8 @@ PLANNED_TEST_ALIASES = {
     "clone_compensates_secret_failure":
         "clone_host_rolls_back_when_secret_copy_fails",
     "codex_effort_reaches_cli_args": "selected_codex_effort_reaches_cli_arguments",
+    "cockpit_persistence_failure_preserves_last_good_state":
+        "failed_settings_write_preserves_last_good_file",
     "columns_do_not_move_with_filename":
         "column_positions_do_not_move_with_filename_length",
     "corrupt_store_is_never_overwritten":
