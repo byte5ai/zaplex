@@ -355,8 +355,3 @@ fn assert_failed_write_preserves_last_good_file() {
 fn failed_settings_write_preserves_last_good_file() {
     assert_failed_write_preserves_last_good_file();
 }
-
-#[test]
-fn cockpit_persistence_failure_preserves_last_good_state() {
-    assert_failed_write_preserves_last_good_file();
-}
