@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""Update every Zaplex release-version source as one validated operation."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import re
+import tempfile
+
+
+SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+
+
+class VersionUpdateError(RuntimeError):
+    pass
+
+
+def replace_exact(text: str, old: str, new: str, path: Path, count: int) -> str:
+    actual = text.count(old)
+    if actual != count:
+        raise VersionUpdateError(
+            f"{path}: expected {count} occurrence(s) of {old!r}, found {actual}"
+        )
+    return text.replace(old, new)
+
+
+def replace_pattern(
+    text: str, pattern: str, replacement: str, path: Path, count: int
+) -> str:
+    updated, actual = re.subn(pattern, replacement, text, flags=re.MULTILINE)
+    if actual != count:
+        raise VersionUpdateError(
+            f"{path}: expected {count} match(es) for {pattern!r}, found {actual}"
+        )
+    return updated
+
+
+def prepare_updates(
+    root: Path, old_version: str, new_version: str, date: str, changelog_entry: str
+) -> dict[Path, str]:
+    updates: dict[Path, str] = {}
+
+    version_path = root / "VERSION"
+    updates[version_path] = f"{new_version}\n"
+
+    manifest_path = root / "app/Cargo.toml"
+    manifest = manifest_path.read_text(encoding="utf-8")
+    updates[manifest_path] = replace_pattern(
+        manifest,
+        rf'(?m)^(version = "){re.escape(old_version)}("\s*)$',
+        rf"\g<1>{new_version}\g<2>",
+        manifest_path,
+        1,
+    )
+
+    lock_path = root / "Cargo.lock"
+    lock = lock_path.read_text(encoding="utf-8")
+    updates[lock_path] = replace_pattern(
+        lock,
+        rf'(\[\[package\]\]\nname = "warp"\nversion = "){re.escape(old_version)}("\n)',
+        rf"\g<1>{new_version}\g<2>",
+        lock_path,
+        1,
+    )
+
+    for relative_path in (
+        "app/assets/resources/mac/CLI-Info.plist",
+        "app/DockTilePlugin/Info.plist",
+        "app/src/bin/zaplex.rs",
+    ):
+        path = root / relative_path
+        text = path.read_text(encoding="utf-8")
+        updates[path] = replace_exact(
+            text,
+            f"<string>{old_version}</string>",
+            f"<string>{new_version}</string>",
+            path,
+            2,
+        )
+
+    installer_path = root / "script/windows/windows-installer.iss"
+    installer = installer_path.read_text(encoding="utf-8")
+    updates[installer_path] = replace_exact(
+        installer,
+        f'#define MyAppVersion "{old_version}"',
+        f'#define MyAppVersion "{new_version}"',
+        installer_path,
+        1,
+    )
+
+    release_config_path = root / ".github/workflows/release_configurations.json"
+    release_config = release_config_path.read_text(encoding="utf-8")
+    updates[release_config_path] = replace_exact(
+        release_config,
+        f"Zaplex {old_version} — signed and notarized macOS distribution",
+        f"Zaplex {new_version} — signed and notarized macOS distribution",
+        release_config_path,
+        1,
+    )
+
+    workflow_versions = {
+        ".github/workflows/test-dmg.yml": 2,
+        ".github/workflows/zap_release.yml": 1,
+    }
+    for relative_path, count in workflow_versions.items():
+        path = root / relative_path
+        text = path.read_text(encoding="utf-8")
+        updates[path] = replace_exact(
+            text,
+            f"v{old_version}",
+            f"v{new_version}",
+            path,
+            count,
+        )
+
+    readme_path = root / "README.md"
+    readme = readme_path.read_text(encoding="utf-8")
+    updates[readme_path] = replace_exact(
+        readme,
+        f"Zaplex {old_version}",
+        f"Zaplex {new_version}",
+        readme_path,
+        2,
+    )
+
+    guide_path = root / "docs/release/1.0-user-guide.md"
+    guide = guide_path.read_text(encoding="utf-8")
+    guide = replace_exact(
+        guide,
+        f"Zaplex {old_version}",
+        f"Zaplex {new_version}",
+        guide_path,
+        1,
+    )
+    updates[guide_path] = replace_exact(
+        guide,
+        f"v{old_version}",
+        f"v{new_version}",
+        guide_path,
+        1,
+    )
+
+    changelog_path = root / "CHANGELOG.md"
+    changelog = changelog_path.read_text(encoding="utf-8")
+    if f"## [{new_version}]" in changelog:
+        raise VersionUpdateError(f"{changelog_path}: {new_version} already has an entry")
+    first_release = re.search(r"(?m)^## \[[0-9]+\.[0-9]+\.[0-9]+\]", changelog)
+    if first_release is None:
+        raise VersionUpdateError(f"{changelog_path}: cannot find the first release entry")
+    new_entry = f"## [{new_version}] — {date}\n\n- {changelog_entry.strip()}\n\n"
+    updates[changelog_path] = (
+        changelog[: first_release.start()] + new_entry + changelog[first_release.start() :]
+    )
+
+    return updates
+
+
+def write_atomically(updates: dict[Path, str]) -> None:
+    staged: dict[Path, Path] = {}
+    originals = {path: path.read_bytes() for path in updates}
+    try:
+        for path, text in updates.items():
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                delete=False,
+            ) as temporary:
+                temporary.write(text)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+                staged[path] = Path(temporary.name)
+            staged[path].chmod(path.stat().st_mode)
+        for path, temporary in staged.items():
+            os.replace(temporary, path)
+    except Exception:
+        for path, content in originals.items():
+            if path.read_bytes() != content:
+                with tempfile.NamedTemporaryFile(
+                    dir=path.parent, prefix=f".{path.name}.rollback-", delete=False
+                ) as rollback:
+                    rollback.write(content)
+                    rollback.flush()
+                    os.fsync(rollback.fileno())
+                    rollback_path = Path(rollback.name)
+                rollback_path.chmod(path.stat().st_mode)
+                os.replace(rollback_path, path)
+        raise
+    finally:
+        for temporary in staged.values():
+            temporary.unlink(missing_ok=True)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("version", help="new stable semantic version (for example 1.0.16)")
+    parser.add_argument("--date", required=True, help="changelog date in YYYY-MM-DD form")
+    parser.add_argument(
+        "--changelog-entry",
+        required=True,
+        help="complete changelog bullet text without the leading dash",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    if SEMVER.fullmatch(args.version) is None:
+        raise VersionUpdateError(f"not a stable semantic version: {args.version!r}")
+    if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", args.date) is None:
+        raise VersionUpdateError(f"not an ISO date: {args.date!r}")
+    if not args.changelog_entry.strip():
+        raise VersionUpdateError("the changelog entry must not be empty")
+
+    root = Path(__file__).resolve().parent.parent
+    old_version = (root / "VERSION").read_text(encoding="utf-8").strip()
+    if SEMVER.fullmatch(old_version) is None:
+        raise VersionUpdateError(f"VERSION is invalid: {old_version!r}")
+    if args.version == old_version:
+        raise VersionUpdateError(f"VERSION is already {old_version}")
+
+    updates = prepare_updates(
+        root, old_version, args.version, args.date, args.changelog_entry
+    )
+    write_atomically(updates)
+    print(f"Updated {old_version} -> {args.version} in {len(updates)} files")
+    print("Run: script/check-v1-release-readiness --phase-a")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

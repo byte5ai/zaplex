@@ -81,6 +81,18 @@ jobs:
         run: script/classify-release-tag-tests
         shell: bash
 
+      - name: Verify atomic release version updater
+        run: script/set-version-tests
+        shell: bash
+
+      - name: Verify release-readiness fixtures
+        run: script/check-v1-release-readiness --self-test
+        shell: bash
+
+      - name: Verify release metadata consistency
+        run: script/check-v1-release-readiness --phase-a
+        shell: bash
+
       - name: Verify macOS packaging split
         run: python3 script/test-macos-bundle
         shell: bash
