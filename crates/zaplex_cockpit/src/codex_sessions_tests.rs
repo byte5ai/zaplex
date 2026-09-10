@@ -381,6 +381,190 @@ fn rollout_cache_invalidates_when_the_append_only_transcript_grows() {
 }
 
 #[test]
+fn rollout_cache_reads_only_delta_bytes_after_small_append() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-delta.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-delta"),
+            turn_context("gpt-5.5", "/tmp/proj", Some("medium")),
+            token_count(1000),
+            event("task_started"),
+            update_plan(&[("First", "pending")]),
+        ],
+    );
+    let mut cache = RolloutCache::default();
+    cache.parse_file(&path).unwrap();
+    assert!(fs::metadata(&path).unwrap().len() > 256);
+
+    let appended =
+        serde_json::to_string(&update_plan(&[("Second", "in_progress")])).unwrap() + "\n";
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(appended.as_bytes())
+        .unwrap();
+    cache.bytes_read = 0;
+
+    let refreshed = cache.parse_file(&path).unwrap();
+    assert_eq!(refreshed.task_state.unwrap().tasks[0].title, "Second");
+    assert_eq!(cache.bytes_read, 256 + appended.len() as u64);
+}
+
+#[test]
+fn rollout_cache_reads_linearly_across_successive_appends() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-linear.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-linear"),
+            turn_context("gpt-5.5", "/tmp/proj", Some("medium")),
+            token_count(1000),
+            event("task_started"),
+        ],
+    );
+    let mut cache = RolloutCache::default();
+    cache.parse_file(&path).unwrap();
+    assert!(fs::metadata(&path).unwrap().len() > 256);
+    cache.bytes_read = 0;
+    let mut expected_bytes = 0u64;
+
+    for index in 0..8 {
+        let appended =
+            serde_json::to_string(&update_plan(&[(&format!("Step {index}"), "in_progress")]))
+                .unwrap()
+                + "\n";
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(appended.as_bytes())
+            .unwrap();
+        expected_bytes = expected_bytes.saturating_add(256 + appended.len() as u64);
+        let info = cache.parse_file(&path).unwrap();
+        assert_eq!(
+            info.task_state.unwrap().tasks[0].title,
+            format!("Step {index}")
+        );
+    }
+
+    assert_eq!(cache.bytes_read, expected_bytes);
+}
+
+#[test]
+fn rollout_cache_applies_a_split_jsonl_line_exactly_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-split.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-split"),
+            turn_context("gpt-5.5", "/tmp/proj", Some("medium")),
+            token_count(1000),
+            update_plan(&[("First", "pending")]),
+        ],
+    );
+    let mut cache = RolloutCache::default();
+    cache.parse_file(&path).unwrap();
+    cache.parsed_objects = 0;
+    let appended = serde_json::to_string(&update_plan(&[("Split", "completed")])).unwrap();
+    let split = appended.len() / 2;
+
+    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    file.write_all(&appended.as_bytes()[..split]).unwrap();
+    drop(file);
+    let incomplete = cache.parse_file(&path).unwrap();
+    assert_eq!(incomplete.task_state.unwrap().tasks[0].title, "First");
+    assert_eq!(cache.parsed_objects, 0);
+
+    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    file.write_all(&appended.as_bytes()[split..]).unwrap();
+    file.write_all(b"\n").unwrap();
+    drop(file);
+    let completed = cache.parse_file(&path).unwrap();
+    assert_eq!(completed.task_state.unwrap().tasks[0].title, "Split");
+    assert_eq!(cache.parsed_objects, 1);
+}
+
+#[test]
+fn rollout_cache_full_replays_after_truncate_or_replace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-replaced.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-original"),
+            turn_context("gpt-5.5", "/tmp/proj", Some("medium")),
+            token_count(1000),
+            update_plan(&[("Original", "pending")]),
+        ],
+    );
+    let mut cache = RolloutCache::default();
+    cache.parse_file(&path).unwrap();
+
+    let truncated: String = [
+        session_meta("/tmp/short", "sess-truncated"),
+        event("task_complete"),
+        update_plan(&[("Truncated", "completed")]),
+    ]
+    .into_iter()
+    .map(|line| serde_json::to_string(&line).unwrap() + "\n")
+    .collect();
+    fs::write(&path, truncated).unwrap();
+    let replayed = cache.parse_file(&path).unwrap();
+    assert_eq!(replayed.session_id, "sess-truncated");
+    assert_eq!(replayed.task_state.unwrap().tasks[0].title, "Truncated");
+
+    let replacement = path.with_extension("replacement");
+    let replacement_content: String = [
+        session_meta("/tmp/new", "sess-replacement"),
+        event("task_started"),
+        update_plan(&[("Replacement", "in_progress")]),
+    ]
+    .into_iter()
+    .map(|line| serde_json::to_string(&line).unwrap() + "\n")
+    .collect();
+    fs::write(&replacement, replacement_content).unwrap();
+    fs::remove_file(&path).unwrap();
+    fs::rename(replacement, &path).unwrap();
+    let replayed = cache.parse_file(&path).unwrap();
+    assert_eq!(replayed.session_id, "sess-replacement");
+    assert_eq!(replayed.task_state.unwrap().tasks[0].title, "Replacement");
+}
+
+#[test]
+fn rollout_cache_anchor_mismatch_forces_full_replay() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-anchor.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-anchor-a"),
+            turn_context("gpt-5.5", "/tmp/proj", Some("medium")),
+            token_count(1000),
+            update_plan(&[("Original", "pending")]),
+        ],
+    );
+    let mut cache = RolloutCache::default();
+    cache.parse_file(&path).unwrap();
+
+    let original = fs::read_to_string(&path).unwrap();
+    let rewritten = original.replace("sess-anchor-a", "sess-anchor-b")
+        + &serde_json::to_string(&update_plan(&[("Appended", "completed")])).unwrap()
+        + "\n";
+    fs::write(&path, &rewritten).unwrap();
+    cache.bytes_read = 0;
+
+    let replayed = cache.parse_file(&path).unwrap();
+    assert_eq!(replayed.session_id, "sess-anchor-b");
+    assert_eq!(replayed.task_state.unwrap().tasks[0].title, "Appended");
+    assert!(cache.bytes_read > rewritten.len() as u64);
+}
+
+#[test]
 fn started_but_not_complete_turn_is_monitor() {
     let tmp = tempfile::tempdir().unwrap();
     write_rollout(

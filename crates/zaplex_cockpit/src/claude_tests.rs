@@ -684,6 +684,210 @@ fn usage_for_account_respects_the_since_cutoff() {
     assert_eq!(entries[0].input, 2);
 }
 
+#[test]
+fn unchanged_claude_usage_transcript_is_parsed_once_across_cached_scans() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    write(
+        &home.join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"me@example.com"}}"#,
+    );
+    write(
+        &home.join(".claude/projects/p/s.jsonl"),
+        concat!(
+            r#"{"type":"assistant","timestamp":"2026-09-09T10:00:00Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":2}}}"#,
+            "\n"
+        ),
+    );
+    let account = accounts_without_process(home, None)
+        .into_iter()
+        .find(|account| account.is_default)
+        .unwrap();
+    let since = DateTime::parse_from_rfc3339("2026-09-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mut cache = ClaudeUsageCache::default();
+
+    let first = usage_for_account_with_cache(&account, since, &mut cache);
+    let second = usage_for_account_with_cache(&account, since, &mut cache);
+
+    assert_eq!(first, second);
+    assert_eq!(first.0.len(), 1);
+    assert_eq!(cache.parse_count, 1);
+}
+
+#[test]
+fn claude_usage_cache_reapplies_the_current_cutoff_without_reparsing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    write(
+        &home.join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"me@example.com"}}"#,
+    );
+    write(
+        &home.join(".claude/projects/p/s.jsonl"),
+        concat!(
+            r#"{"type":"assistant","timestamp":"2026-09-02T10:00:00Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":1}}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-09-09T10:00:00Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":2}}}"#,
+            "\n"
+        ),
+    );
+    let account = accounts_without_process(home, None)
+        .into_iter()
+        .find(|account| account.is_default)
+        .unwrap();
+    let mut cache = ClaudeUsageCache::default();
+    let early = DateTime::parse_from_rfc3339("2026-09-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let late = DateTime::parse_from_rfc3339("2026-09-08T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+
+    let (all, _) = usage_for_account_with_cache(&account, early, &mut cache);
+    let (recent, _) = usage_for_account_with_cache(&account, late, &mut cache);
+
+    assert_eq!(all.len(), 2);
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].input, 2);
+    assert_eq!(cache.parse_count, 1);
+}
+
+#[test]
+fn claude_usage_cache_invalidates_changed_and_deleted_transcripts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    write(
+        &home.join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"me@example.com"}}"#,
+    );
+    let path = home.join(".claude/projects/p/s.jsonl");
+    write(
+        &path,
+        concat!(
+            r#"{"type":"assistant","timestamp":"2026-09-09T10:00:00Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":1}}}"#,
+            "\n"
+        ),
+    );
+    let account = accounts_without_process(home, None)
+        .into_iter()
+        .find(|account| account.is_default)
+        .unwrap();
+    let since = DateTime::parse_from_rfc3339("2026-09-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mut cache = ClaudeUsageCache::default();
+    usage_for_account_with_cache(&account, since, &mut cache);
+
+    write(
+        &path,
+        concat!(
+            r#"{"type":"assistant","timestamp":"2026-09-09T10:00:00Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":200}}}"#,
+            "\n"
+        ),
+    );
+    let (changed, _) = usage_for_account_with_cache(&account, since, &mut cache);
+    assert_eq!(changed[0].input, 200);
+    assert_eq!(cache.parse_count, 2);
+
+    std::fs::remove_file(path).unwrap();
+    let (deleted, io_error) = usage_for_account_with_cache(&account, since, &mut cache);
+    assert!(!io_error);
+    assert!(deleted.is_empty());
+    assert!(cache.entries.is_empty());
+}
+
+#[test]
+fn claude_usage_cache_evicts_transcripts_older_than_the_scan_cutoff() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    write(
+        &home.join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"me@example.com"}}"#,
+    );
+    let path = home.join(".claude/projects/p/s.jsonl");
+    write(
+        &path,
+        concat!(
+            r#"{"type":"assistant","timestamp":"2026-09-09T10:00:00Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":1}}}"#,
+            "\n"
+        ),
+    );
+    let account = accounts_without_process(home, None)
+        .into_iter()
+        .find(|account| account.is_default)
+        .unwrap();
+    let since = DateTime::parse_from_rfc3339("2026-09-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mut cache = ClaudeUsageCache::default();
+    usage_for_account_with_cache(&account, since, &mut cache);
+    assert_eq!(cache.entries.len(), 1);
+
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap();
+    let (stale, io_error) = usage_for_account_with_cache(&account, since, &mut cache);
+
+    assert!(!io_error);
+    assert!(stale.is_empty());
+    assert!(cache.entries.is_empty());
+}
+
+#[test]
+fn claude_usage_cache_evicts_the_least_recently_used_transcript() {
+    let tmp = tempfile::tempdir().unwrap();
+    let account_root = std::fs::canonicalize(tmp.path()).unwrap();
+    let mut cache = ClaudeUsageCache::default();
+    let mut keys = Vec::new();
+
+    for index in 0..USAGE_CACHE_LIMIT {
+        let path = tmp.path().join(format!("session-{index}.jsonl"));
+        let content = serde_json::json!({
+            "type": "assistant",
+            "timestamp": "2026-09-09T10:00:00Z",
+            "message": {
+                "model": "claude-opus-4-8",
+                "usage": { "input_tokens": index },
+            },
+        })
+        .to_string()
+            + "\n";
+        write(&path, &content);
+        let key = ClaudeUsageCacheKey {
+            account_root: account_root.clone(),
+            transcript: std::fs::canonicalize(&path).unwrap(),
+        };
+        cache.parse_file(key.clone(), &path);
+        keys.push((key, path));
+    }
+    cache.parse_file(keys[0].0.clone(), &keys[0].1);
+
+    let overflow = tmp.path().join("overflow.jsonl");
+    write(
+        &overflow,
+        concat!(
+            r#"{"type":"assistant","timestamp":"2026-09-09T10:00:00Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":999}}}"#,
+            "\n"
+        ),
+    );
+    cache.parse_file(
+        ClaudeUsageCacheKey {
+            account_root,
+            transcript: std::fs::canonicalize(&overflow).unwrap(),
+        },
+        &overflow,
+    );
+
+    assert_eq!(cache.entries.len(), USAGE_CACHE_LIMIT);
+    assert!(cache.entries.contains_key(&keys[0].0));
+    assert!(!cache.entries.contains_key(&keys[1].0));
+}
+
 /// The join that makes per-session spend usable: the id `parse_transcript`
 /// stamps must be the very id discovery gives the session, or the table's "today
 /// $" column looks up a key no row has.

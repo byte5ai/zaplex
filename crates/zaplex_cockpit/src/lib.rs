@@ -100,12 +100,13 @@ use std::path::Path;
 use chrono::{DateTime, Duration, Utc};
 
 /// Process-local, bounded transcript parse caches shared across reconcile
-/// cycles. It stores only the same structured task titles already projected on
-/// session snapshots, never credentials or conversational message text.
+/// cycles. It stores only distilled task and usage data already projected on
+/// snapshots, never credentials or conversational message text.
 #[derive(Clone, Debug, Default)]
 pub struct TranscriptScanCache {
     task_states: transcript::TaskStateCache,
     codex_rollouts: codex_sessions::RolloutCache,
+    claude_usage: claude::ClaudeUsageCache,
 }
 
 /// How far back dormant-session discovery looks.
@@ -178,7 +179,11 @@ pub fn build_snapshot_with_cache(
         // The walk reports its own I/O errors now (permission on any subdir, not just
         // the projects/ root) — a silently-truncated scan reads as "never used" and
         // would win freest-account routing.
-        let (entries, io_error) = claude::usage_for_account(&account, since);
+        let (entries, io_error) = claude::usage_for_account_with_cache(
+            &account,
+            since,
+            &mut transcript_cache.claude_usage,
+        );
         if io_error {
             degraded.push(format!("{}: usage history unreadable", account.label));
         }
