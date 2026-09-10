@@ -53,13 +53,12 @@ pub fn build_ssh_args(server: &SshServerInfo) -> Vec<String> {
         args.push("-p".into());
         args.push(server.port.to_string());
     }
-    if matches!(server.auth_type, AuthType::Key | AuthType::OneKey) {
-        if let Some(path) = server.key_path.as_deref() {
-            if !path.is_empty() {
-                args.push("-i".into());
-                args.push(path.to_string());
-            }
-        }
+    if matches!(server.auth_type, AuthType::Key | AuthType::OneKey)
+        && let Some(path) = server.key_path.as_deref()
+        && !path.is_empty()
+    {
+        args.push("-i".into());
+        args.push(path.to_string());
     }
     let target = if server.username.is_empty() {
         server.host.clone()
@@ -658,13 +657,12 @@ fn apply_host_key_file(
     pinned_host_key: &KnownHostsSession,
     require_exact_match: bool,
 ) {
-    if require_exact_match {
-        if let Some(setting) = args
+    if require_exact_match
+        && let Some(setting) = args
             .iter_mut()
             .find(|arg| arg.starts_with("StrictHostKeyChecking="))
-        {
-            *setting = "StrictHostKeyChecking=yes".to_string();
-        }
+    {
+        *setting = "StrictHostKeyChecking=yes".to_string();
     }
     let delimiter_index = args
         .iter()
