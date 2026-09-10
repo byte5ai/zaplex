@@ -9,10 +9,10 @@ use zaplex_cockpit::{
 use crate::control::ControlAuth;
 
 use super::{
-    CockpitSnapshotDocument, CockpitSnapshotRequest, RemoteAccountInventorySnapshot,
-    RemoteAccountInventoryStatus, RemoteAccountSnapshot, SnapshotStatus, SourceStatus,
-    COCKPIT_SNAPSHOT_PROTOCOL_VERSION, COCKPIT_SNAPSHOT_SCHEMA_VERSION, EXIT_HARD_ERROR,
-    EXIT_PARTIAL, EXIT_SUCCESS,
+    COCKPIT_SNAPSHOT_PROTOCOL_VERSION, COCKPIT_SNAPSHOT_SCHEMA_VERSION, CockpitSnapshotDocument,
+    CockpitSnapshotRequest, EXIT_HARD_ERROR, EXIT_PARTIAL, EXIT_SUCCESS,
+    RemoteAccountInventorySnapshot, RemoteAccountInventoryStatus, RemoteAccountSnapshot,
+    SnapshotStatus, SourceStatus,
 };
 
 fn generated_at() -> chrono::DateTime<Utc> {
@@ -496,10 +496,12 @@ fn incomplete_connected_host_keeps_its_root_and_degrades_exit() {
     assert_eq!(document.status, SnapshotStatus::Degraded);
     assert_eq!(document.sources.remote_hosts.status, SourceStatus::Degraded);
     assert_eq!(document.exit_code(), EXIT_PARTIAL);
-    assert!(document
-        .hosts
-        .iter()
-        .any(|host| host.label == "old-daemon" && host.state == "unsupported"));
+    assert!(
+        document
+            .hosts
+            .iter()
+            .any(|host| host.label == "old-daemon" && host.state == "unsupported")
+    );
 }
 
 #[test]
