@@ -69,6 +69,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify license policy configuration
+        run: script/check_license_config_sync
+        shell: bash
+
+      - name: Verify dependency security baseline
+        run: script/dependency-security-baseline-tests
+        shell: bash
+
       - name: Validate release tag classification
         run: script/classify-release-tag-tests
         shell: bash
@@ -114,6 +122,11 @@ jobs:
       - name: Verify required Clippy gate
         run: script/pr-check-clippy-gate-tests
         shell: bash
+
+      - name: cargo deny check advisories
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -206,6 +219,13 @@ jobs:
           ssh_workspace_has_no_direct_std_process_command
         shell: bash
 
+      - name: cargo test (HTTP client construction smoke)
+        run: >
+          cargo test --locked -p http_client --lib --
+          apply_off_disables_proxy_without_error
+          apply_custom_with_valid_url_succeeds
+        shell: bash
+
       # Focused app-crate unit tests: the FM-toggle + spawn-card launch payload,
       # catalog copy guard, plus the real boot/open smoke gate. Targeted by name so only these run —
       # the app crate's full test suite has known harness/env-dependent failures
@@ -216,9 +236,12 @@ jobs:
       # graph, so it constructs a workspace window headless and runs the binding
       # registration path — catching both the keymap-crash class and "does the UI
       # wiring survive construction", the thing `cargo check` cannot.
-      - name: cargo test (FM toggle + spawn-card + catalog + boot/open smoke gate)
+      - name: cargo test (app dependency + UI smoke gates)
         run: >
           cargo test --locked -p warp --lib --
+          maps_credentials_not_loaded_to_user_message
+          newer_profile_refresh_rejects_late_success_or_error_from_older_refresh
+          test_import_from_file
           file_manager_start_path_uses_session_cwd
           file_manager_start_path_falls_back_when_no_cwd
           confirm_payload_carries_local_selection

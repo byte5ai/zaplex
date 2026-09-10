@@ -2,6 +2,15 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.15] — 2026-09-10
+
+- **Geschlossene Dependency-Lücken:** Betroffene HTTP/2-, TLS-, XML-, Git-
+  und Nebenabhängigkeiten sind auf korrigierte Stände aktualisiert; der alte
+  Hyper-/Rustls-Pfad des AWS-Clients wurde entfernt.
+- **Dauerhafte Sicherheitsprüfung:** Pull Requests und ein wöchentlicher Lauf
+  prüfen RustSec-Advisories; die immer laufende Vorprüfung erzwingt synchronen
+  Lizenzumfang, exakte Git-Quellen und die bereinigte Dependency-Baseline.
+
 ## [1.0.14] — 2026-09-10
 
 - **Verbindliche Clippy-Policy:** Build-relevante Pull Requests verweigern nun
