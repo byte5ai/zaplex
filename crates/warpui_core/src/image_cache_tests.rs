@@ -17,6 +17,12 @@ pub struct Assets;
 impl AssetProvider for Assets {
     fn get(&self, path: &str) -> Result<Cow<'_, [u8]>> {
         match path {
+            "intrinsic.svg" => Ok(Cow::Borrowed(
+                br##"<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+  <rect width="16" height="16" fill="#ff00ff"/>
+</svg>
+"##,
+            )),
             "animated.webp" => Ok(Cow::Borrowed(include_bytes!("../test_data/animated.webp"))),
             "numbers-1000ms.gif" => Ok(Cow::Borrowed(include_bytes!(
                 "../../warpui/examples/assets/numbers-1000ms.gif"
@@ -135,6 +141,186 @@ fn test_passes_through_asset_cache_original_when_target_size_matches_source_size
     // in the asset cache point to the same underlying data (i.e.: there were
     // no copies made).
     assert!(image_asset_weak.ptr_eq(&Arc::downgrade(image)));
+}
+
+#[test]
+fn test_caches_intrinsic_svg_bysize_with_stable_pointer_identity() {
+    let asset_cache = new_asset_cache();
+    let image_cache = ImageCache::new();
+    let source = AssetSource::Bundled {
+        path: "intrinsic.svg",
+    };
+    let bounds = Vector2I::new(16, 16);
+
+    let first = image_cache.image(
+        source.clone(),
+        bounds,
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+        CacheOption::BySize,
+        None,
+        &asset_cache,
+    );
+    let second = image_cache.image(
+        source,
+        bounds,
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+        CacheOption::BySize,
+        None,
+        &asset_cache,
+    );
+    let (AssetState::Loaded { data: first }, AssetState::Loaded { data: second }) = (first, second)
+    else {
+        panic!("Bundled SVG should be available immediately!");
+    };
+    let (Image::Static(first_static), Image::Static(second_static)) =
+        (first.as_ref(), second.as_ref())
+    else {
+        panic!("Expected static SVG rasters!");
+    };
+
+    assert!(Rc::ptr_eq(&first, &second));
+    assert!(Arc::ptr_eq(first_static, second_static));
+}
+
+#[test]
+fn test_caches_intrinsic_svg_original_with_stable_pointer_identity() {
+    let asset_cache = new_asset_cache();
+    let image_cache = ImageCache::new();
+    let source = AssetSource::Bundled {
+        path: "intrinsic.svg",
+    };
+
+    let first = image_cache.image(
+        source.clone(),
+        Vector2I::new(1, 1),
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+        CacheOption::Original,
+        None,
+        &asset_cache,
+    );
+    let second = image_cache.image(
+        source,
+        Vector2I::new(100, 100),
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+        CacheOption::Original,
+        None,
+        &asset_cache,
+    );
+    let (AssetState::Loaded { data: first }, AssetState::Loaded { data: second }) = (first, second)
+    else {
+        panic!("Bundled SVG should be available immediately!");
+    };
+    let (Image::Static(first_static), Image::Static(second_static)) =
+        (first.as_ref(), second.as_ref())
+    else {
+        panic!("Expected static SVG rasters!");
+    };
+
+    assert!(Rc::ptr_eq(&first, &second));
+    assert!(Arc::ptr_eq(first_static, second_static));
+}
+
+#[test]
+fn test_intrinsic_svg_cache_keeps_different_bounds_separate() {
+    let asset_cache = new_asset_cache();
+    let image_cache = ImageCache::new();
+    let source = AssetSource::Bundled {
+        path: "intrinsic.svg",
+    };
+
+    let small = image_cache.image(
+        source.clone(),
+        Vector2I::new(16, 16),
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+        CacheOption::BySize,
+        None,
+        &asset_cache,
+    );
+    let large = image_cache.image(
+        source.clone(),
+        Vector2I::new(32, 32),
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+        CacheOption::BySize,
+        None,
+        &asset_cache,
+    );
+    let small_again = image_cache.image(
+        source.clone(),
+        Vector2I::new(16, 16),
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+        CacheOption::BySize,
+        None,
+        &asset_cache,
+    );
+    let large_again = image_cache.image(
+        source,
+        Vector2I::new(32, 32),
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+        CacheOption::BySize,
+        None,
+        &asset_cache,
+    );
+    let (AssetState::Loaded { data: small }, AssetState::Loaded { data: large }) = (small, large)
+    else {
+        panic!("Bundled SVG should be available immediately!");
+    };
+    let (AssetState::Loaded { data: small_again }, AssetState::Loaded { data: large_again }) =
+        (small_again, large_again)
+    else {
+        panic!("Bundled SVG should be available immediately!");
+    };
+    let (Image::Static(small_static), Image::Static(large_static)) =
+        (small.as_ref(), large.as_ref())
+    else {
+        panic!("Expected static SVG rasters!");
+    };
+
+    assert!(Rc::ptr_eq(&small, &small_again));
+    assert!(Rc::ptr_eq(&large, &large_again));
+    assert!(!Rc::ptr_eq(&small, &large));
+    assert!(!Arc::ptr_eq(small_static, large_static));
+    assert_eq!(small_static.img.dimensions(), (16, 16));
+    assert_eq!(large_static.img.dimensions(), (32, 32));
+}
+
+#[test]
+fn test_evict_image_drops_intrinsic_svg_raster() {
+    let asset_cache = new_asset_cache();
+    let image_cache = ImageCache::new();
+    let source = AssetSource::Bundled {
+        path: "intrinsic.svg",
+    };
+
+    let weak = {
+        let image = image_cache.image(
+            source.clone(),
+            Vector2I::new(16, 16),
+            FitType::Contain,
+            AnimatedImageBehavior::FullAnimation,
+            CacheOption::BySize,
+            None,
+            &asset_cache,
+        );
+        let AssetState::Loaded { data: image } = image else {
+            panic!("Bundled SVG should be available immediately!");
+        };
+        let Image::Static(image) = image.as_ref() else {
+            panic!("Expected static SVG raster!");
+        };
+        Arc::downgrade(image)
+    };
+
+    assert_eq!(weak.strong_count(), 1);
+    image_cache.evict_image(&source);
+    assert_eq!(weak.strong_count(), 0);
 }
 
 #[test]

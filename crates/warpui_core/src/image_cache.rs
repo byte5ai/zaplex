@@ -915,6 +915,9 @@ impl ImageCache {
                     }
                 }
 
+                let should_cache_rendered =
+                    needs_resize || matches!(data.as_ref(), ImageType::Svg { .. });
+
                 let rendered_image_cache_key = RenderedImageCacheKey {
                     bounds,
                     animated_image_behavior,
@@ -938,7 +941,7 @@ impl ImageCache {
                         Ok(image) => Rc::new(image),
                         Err(err) => return AssetState::FailedToLoad(Rc::new(err)),
                     };
-                if needs_resize {
+                if should_cache_rendered {
                     let mut images_cache = RwLockUpgradableReadGuard::upgrade(cache);
                     images_cache
                         .entry(cache_key)

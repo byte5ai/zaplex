@@ -1,4 +1,10 @@
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use super::*;
 use crate::ai::agent::DriveObjectPayload;
@@ -112,9 +118,7 @@ pub fn initialize_app(app: &mut App) {
     app.update(init);
 
     // Initialize any global models required by the Input view.
-    app.add_singleton_model(|_| {
-        ChangelogModel::new(std::sync::Arc::new(http_client::Client::new()))
-    });
+    app.add_singleton_model(|_| ChangelogModel::new(Arc::new(http_client::Client::new())));
     app.add_singleton_model(|_| NetworkStatus::new());
     app.add_singleton_model(|_| SystemStats::new());
     app.add_singleton_model(|_| Prompt::mock());
@@ -520,6 +524,34 @@ fn set_alias_expansion_setting(new_value: bool, app: &mut App) {
         if let Err(e) = settings.alias_expansion_enabled.set_value(new_value, ctx) {
             panic!("Unable to set alias expansion setting in test, {e:?}");
         }
+    });
+}
+
+#[test]
+fn test_agent_input_render_keeps_terminal_model_unlocked_during_composition() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let model = input.read(&app, |input, _| input.model.clone());
+        let hook_ran = Arc::new(AtomicBool::new(false));
+        let hook_ran_during_composition = hook_ran.clone();
+
+        super::agent::set_agent_input_composition_hook(move || {
+            let lock_is_available = std::thread::spawn(move || model.try_lock().is_some())
+                .join()
+                .expect("lock probe task should complete");
+            assert!(
+                lock_is_available,
+                "TerminalModel must remain unlocked while child elements are composed"
+            );
+            hook_ran_during_composition.store(true, Ordering::Release);
+        });
+
+        input.read(&app, |input, ctx| {
+            drop(input.render_agent_input(ctx));
+        });
+        assert!(hook_ran.load(Ordering::Acquire));
     });
 }
 
