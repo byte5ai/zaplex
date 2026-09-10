@@ -5,7 +5,6 @@
 from pathlib import Path
 import re
 import sys
-import tomllib
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -17,9 +16,51 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-def load_toml(path: Path) -> dict:
-    with path.open("rb") as file:
-        return tomllib.load(file)
+def section(text: str, name: str) -> str:
+    match = re.search(
+        rf"(?ms)^\[{re.escape(name)}\]\s*$.*?(?=^\[[^[][^]]*\]\s*$|\Z)",
+        text,
+    )
+    if match is None:
+        fail(f"missing [{name}] section")
+    return match.group(0)
+
+
+def require_line(text: str, pattern: str, message: str) -> re.Match[str]:
+    match = re.search(pattern, text, re.MULTILINE)
+    if match is None:
+        fail(message)
+    return match
+
+
+def string_array(text: str, key: str) -> set[str]:
+    match = re.search(
+        rf"(?ms)^\s*{re.escape(key)}\s*=\s*\[(.*?)^\s*\]",
+        text,
+    )
+    if match is None:
+        fail(f"missing {key} array")
+    return set(re.findall(r'"([^"]+)"', match.group(1)))
+
+
+def lock_packages(lock: str) -> list[dict[str, object]]:
+    packages = []
+    for block in re.split(r"(?m)^\[\[package\]\]\s*$", lock)[1:]:
+        name = require_line(block, r'^name\s*=\s*"([^"]+)"', "lock package without name")
+        version = require_line(
+            block,
+            r'^version\s*=\s*"([^"]+)"',
+            f"lock package {name.group(1)} without version",
+        )
+        dependencies = re.search(r"(?ms)^dependencies\s*=\s*\[(.*?)^\]", block)
+        packages.append(
+            {
+                "name": name.group(1),
+                "version": version.group(1),
+                "dependencies": dependencies.group(1) if dependencies is not None else "",
+            }
+        )
+    return packages
 
 
 def job_block(workflow: str, job_id: str) -> str:
@@ -37,28 +78,37 @@ def version_tuple(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in numeric.split("."))
 
 
-zap_sftp = load_toml(REPO_ROOT / "crates" / "zap_sftp" / "Cargo.toml")
-zap_sync = load_toml(REPO_ROOT / "crates" / "zap_sync" / "Cargo.toml")
+zap_sftp = (REPO_ROOT / "crates" / "zap_sftp" / "Cargo.toml").read_text()
+zap_sync = (REPO_ROOT / "crates" / "zap_sync" / "Cargo.toml").read_text()
 for crate_name, manifest in (("zap_sftp", zap_sftp), ("zap_sync", zap_sync)):
-    package = manifest["package"]
-    if package.get("license") != {"workspace": True}:
+    package = section(manifest, "package")
+    if re.search(r"(?m)^license\.workspace\s*=\s*true\s*$", package) is None:
         fail(f"{crate_name} must inherit workspace.package.license")
-    if package.get("publish") != {"workspace": True}:
+    if re.search(r"(?m)^publish\.workspace\s*=\s*true\s*$", package) is None:
         fail(f"{crate_name} must inherit workspace.package.publish")
 
-openssl_version = zap_sftp["dependencies"]["openssl-sys"]["version"]
+openssl_version = require_line(
+    section(zap_sftp, "dependencies"),
+    r'^openssl-sys\s*=\s*\{[^\n}]*version\s*=\s*"([^"]+)"',
+    "zap_sftp must declare openssl-sys with an explicit version",
+).group(1)
 if openssl_version == "*":
     fail("zap_sftp must not use a wildcard openssl-sys version")
 
-deny = load_toml(REPO_ROOT / "deny.toml")
-ignored = {entry["id"]: entry["reason"] for entry in deny["advisories"]["ignore"]}
+deny = (REPO_ROOT / "deny.toml").read_text()
+ignored = dict(
+    re.findall(
+        r'\{\s*id\s*=\s*"([^"]+)",\s*reason\s*=\s*"([^"]+)"\s*\}',
+        section(deny, "advisories"),
+    )
+)
 if "RUSTSEC-2023-0081" in ignored:
     fail("stale safemem advisory ignore must stay removed")
 for advisory in ("RUSTSEC-2026-0192", "RUSTSEC-2026-0206"):
     if advisory not in ignored or "#243" not in ignored[advisory]:
         fail(f"temporary {advisory} ignore must carry its tracking reference")
 
-allowed_git = set(deny["sources"]["allow-git"])
+allowed_git = string_array(section(deny, "sources"), "allow-git")
 for repository in (
     "https://github.com/chenx-dust/winit.git",
     "https://github.com/zerx-lab/warp-proto-apis.git",
@@ -66,11 +116,10 @@ for repository in (
     if repository not in allowed_git:
         fail(f"missing exact source allowance for {repository}")
 
-lock = load_toml(REPO_ROOT / "Cargo.lock")
-packages = lock["package"]
+packages = lock_packages((REPO_ROOT / "Cargo.lock").read_text())
 versions: dict[str, list[str]] = {}
 for package in packages:
-    versions.setdefault(package["name"], []).append(package["version"])
+    versions.setdefault(str(package["name"]), []).append(str(package["version"]))
 
 for name, minimum in {
     "anyhow": "1.0.103",
@@ -93,9 +142,9 @@ if "number_prefix" in versions:
     fail("unmaintained dependency number_prefix returned to Cargo.lock")
 
 i18n_embed_fl = next(package for package in packages if package["name"] == "i18n-embed-fl")
-if version_tuple(i18n_embed_fl["version"]) < version_tuple("0.10.1"):
+if version_tuple(str(i18n_embed_fl["version"])) < version_tuple("0.10.1"):
     fail("i18n-embed-fl must use the proc-macro-error3 migration")
-if any(dependency.startswith("proc-macro-error2") for dependency in i18n_embed_fl["dependencies"]):
+if '"proc-macro-error2' in str(i18n_embed_fl["dependencies"]):
     fail("i18n-embed-fl returned to unmaintained proc-macro-error2")
 
 legacy_versions = {

@@ -7,13 +7,40 @@ set -e
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-python3 -c "
-import tomllib, sys
+python3 - "$REPO_ROOT" <<'PY'
+from pathlib import Path
+import re
+import sys
 
-with open('$REPO_ROOT/deny.toml', 'rb') as f:
-    deny = set(tomllib.load(f)['licenses']['allow'])
-with open('$REPO_ROOT/about.toml', 'rb') as f:
-    about = set(tomllib.load(f)['accepted'])
+
+def string_array(path: Path, key: str, section: str | None = None) -> set[str]:
+    current_section = None
+    collecting = False
+    values = []
+
+    for line in path.read_text().splitlines():
+        stripped = line.split("#", 1)[0].strip()
+        section_match = re.fullmatch(r"\[([^]]+)\]", stripped)
+        if section_match is not None:
+            current_section = section_match.group(1)
+            collecting = False
+            continue
+
+        in_section = current_section == section if section is not None else current_section is None
+        if in_section and re.match(rf"{re.escape(key)}\s*=\s*\[", stripped):
+            collecting = True
+
+        if collecting:
+            values.extend(re.findall(r'"([^"]+)"', stripped))
+            if "]" in stripped:
+                return set(values)
+
+    raise SystemExit(f"Could not find {key} array in {path}")
+
+
+repo_root = Path(sys.argv[1])
+deny = string_array(repo_root / "deny.toml", "allow", "licenses")
+about = string_array(repo_root / "about.toml", "accepted")
 
 if deny != about:
     only_deny = deny - about
@@ -25,4 +52,4 @@ if deny != about:
     sys.exit(1)
 
 print('License config in sync.')
-"
+PY
