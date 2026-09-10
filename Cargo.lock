@@ -14695,7 +14695,7 @@ dependencies = [
 
 [[package]]
 name = "warp"
-version = "1.0.6"
+version = "1.0.7"
 dependencies = [
  "addr",
  "aho-corasick",
@@ -17046,8 +17046,8 @@ dependencies = [
  "base64 0.22.1",
  "dirs 6.0.0",
  "openssl-sys",
- "shell-escape",
  "sha2 0.10.9",
+ "shell-escape",
  "smol",
  "ssh2",
  "tempfile",
