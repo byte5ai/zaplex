@@ -1061,6 +1061,37 @@ fn test_render_failed_state() {
     });
 }
 
+#[test]
+fn test_host_key_dialogs_render_while_connection_failed() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view) = create_view(&mut app);
+
+        for dialog in [
+            Dialog::ConfirmUnknownHostKey {
+                host: "sftp.example".to_string(),
+                port: 22,
+                fingerprint_sha256: "SHA256:unknown".to_string(),
+                key_type: "ED25519".to_string(),
+            },
+            Dialog::ConfirmChangedHostKey {
+                host: "sftp.example".to_string(),
+                port: 22,
+                fingerprint_sha256: "SHA256:changed".to_string(),
+                key_type: "ED25519".to_string(),
+            },
+        ] {
+            view.update(&mut app, |view, ctx| {
+                view.connection = ConnectionState::Failed("host key blocked".to_string());
+                view.dialog = Some(dialog);
+                ctx.notify();
+            });
+            let (presenter, invalidation) = presenter_for_window(&app, window_id);
+            let _ = render_position(&mut app, presenter, invalidation, "sftp_btn:dialog_confirm");
+        }
+    });
+}
+
 // ============================================================
 // B. File browsing and navigation tests (10)
 // ============================================================
