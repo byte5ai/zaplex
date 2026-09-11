@@ -1,0 +1,1372 @@
+#!/usr/bin/env python3
+
+"""Generate immutable assignments for the thirteen codebase-audit crosscuts.
+
+Each crosscut is one model work item.  Its single invocation must apply all three
+review lenses declared below; retrying that invocation is capped at three
+attempts.  The three output buckets are scheduling partitions, not additional
+model calls.  This preserves the finder contract from issue #245 while making
+the invocation budget mechanically auditable.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import fnmatch
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import sys
+import tempfile
+from typing import Any
+
+
+SCHEMA_VERSION = 1
+GENERATOR_VERSION = 1
+BUCKET_COUNT = 3
+INVOCATIONS_PER_CROSSCUT = 1
+MAX_ATTEMPTS_PER_INVOCATION = 3
+LENSES = (
+    "correctness-security",
+    "failure-path-lifecycle",
+    "regression-upstream",
+)
+EXPECTED_CROSSCUT_IDS = (
+    "unsafe-app-and-zaplex",
+    "unsafe-framework",
+    "process-spawning",
+    "terminal-model-lock",
+    "async-blocking",
+    "secrets-and-logging",
+    "path-and-transfer-safety",
+    "ssh-bootstrap-injection",
+    "persistence-and-migrations",
+    "ci-release-security",
+    "upstream-drift",
+    "error-swallowing-and-cancellation",
+    "feature-flags-i18n-dead-code",
+)
+OBJECT_FORMAT_LENGTHS = {"sha1": 40, "sha256": 64}
+SOURCE_TYPES = {"target-tree", "upstream-commit-series"}
+OWNERSHIPS = {
+    "fork-owned",
+    "upstream-modified-by-fork",
+    "upstream-unmodified",
+}
+MATCHER_FLAG_VALUES = {
+    "dotall": re.DOTALL,
+    "ignore-case": re.IGNORECASE,
+    "multiline": re.MULTILINE,
+}
+MATCHER_FLAGS = set(MATCHER_FLAG_VALUES)
+EVIDENCE_MANIFEST_KEYS = {
+    "artifacts",
+    "coverage",
+    "definitions_sha256",
+    "evidence_sha256",
+    "generator_version",
+    "inventory_manifest_sha256",
+    "inventory_sha256",
+    "merge_base_sha",
+    "object_format",
+    "schema_version",
+    "scope_sha256",
+    "target_sha",
+    "upstream_commit_series_sha256",
+    "upstream_sha",
+}
+EVIDENCE_ROOT_KEYS = {
+    "coverage",
+    "crosscut_coverage",
+    "definitions_sha256",
+    "evidence",
+    "inventory_manifest_sha256",
+    "inventory_sha256",
+    "mandatory_path_coverage",
+    "merge_base_sha",
+    "object_format",
+    "schema_version",
+    "scope_sha256",
+    "sources",
+    "target_blobs",
+    "target_sha",
+    "upstream_commit_series",
+    "upstream_commit_series_sha256",
+    "upstream_sha",
+}
+DEFINITION_ROOT_KEYS = {"definitions", "description", "schema_version"}
+DEFINITION_KEYS = {
+    "context",
+    "description",
+    "id",
+    "mandatory_paths",
+    "matchers",
+    "path_rules",
+    "source_type",
+}
+COVERAGE_KEYS = {
+    "complete",
+    "crosscuts",
+    "definition_evaluations",
+    "evidence_entries",
+    "included_blobs",
+    "mandatory_paths",
+    "mandatory_ranges",
+    "mandatory_selectors",
+    "source_records",
+    "target_blobs_scanned",
+    "target_match_occurrences",
+    "upstream_commits",
+}
+CROSSCUT_COVERAGE_KEYS = {
+    "applicable_paths",
+    "complete",
+    "id",
+    "mandatory_paths",
+    "mandatory_ranges",
+    "match_occurrences",
+    "source_type",
+    "upstream_commits",
+}
+TARGET_BLOB_KEYS = {
+    "applicable_crosscuts",
+    "blob_oid",
+    "blob_sha256",
+    "definitions_sha256",
+    "line_count",
+    "mode",
+    "object_id",
+    "ownership",
+    "path",
+    "type",
+}
+TARGET_EVIDENCE_KEYS = {
+    "blob_oid",
+    "crosscut_id",
+    "evidence_id",
+    "kind",
+    "mandatory_patterns",
+    "match_range",
+    "match_span",
+    "matcher_id",
+    "mode",
+    "object_id",
+    "ownership",
+    "path",
+    "range",
+    "source_sha256",
+    "type",
+}
+UPSTREAM_EVIDENCE_KEYS = {
+    "commit_index",
+    "commit_oid",
+    "crosscut_id",
+    "evidence_id",
+    "kind",
+    "matcher_id",
+    "parent_oids",
+    "patch_base_oid",
+    "patch_sha256",
+    "source_sha256",
+    "subject",
+    "tree_oid",
+}
+UPSTREAM_COMMIT_KEYS = {
+    "commit_oid",
+    "index",
+    "parent_oids",
+    "patch_base_oid",
+    "patch_sha256",
+    "subject",
+    "tree_oid",
+}
+MANDATORY_COVERAGE_KEYS = {
+    "crosscut_id",
+    "matched_paths",
+    "minimum_matches",
+    "pattern",
+}
+SOURCE_KEYS = {"sha256", "text"}
+ASSIGNMENT_ENTRY_KEYS = {
+    "assignment_id",
+    "crosscut_id",
+    "definition_sha256",
+    "definitions_sha256",
+    "estimated_input_bytes",
+    "evidence_ids",
+    "evidence_sha256",
+    "lens_count",
+    "lenses",
+    "mandatory_selector_sha256s",
+    "max_attempts",
+    "model_invocations",
+    "source_sha",
+    "source_sha256s",
+    "target_blobs",
+    "upstream_commit_oids",
+}
+ASSIGNMENT_TARGET_BLOB_KEYS = {"blob_oid", "blob_sha256", "path"}
+ASSIGNMENT_BUCKET_KEYS = {
+    "assignment_sha256",
+    "crosscut_count",
+    "entries",
+    "estimated_input_bytes",
+    "id",
+}
+ASSIGNMENT_ROOT_KEYS = {
+    "assignment_sha256",
+    "buckets",
+    "bucket_count",
+    "coverage",
+    "execution_contract",
+    "generator_version",
+    "schema_version",
+    "source_contract",
+}
+SOURCE_CONTRACT_KEYS = {
+    "definitions_sha256",
+    "evidence_manifest_sha256",
+    "evidence_sha256",
+    "inventory_manifest_sha256",
+    "inventory_sha256",
+    "merge_base_sha",
+    "object_format",
+    "scope_sha256",
+    "target_sha",
+    "upstream_commit_series_sha256",
+    "upstream_sha",
+}
+EXECUTION_CONTRACT_KEYS = {
+    "assignment_unit",
+    "invocations_per_crosscut",
+    "lens_count",
+    "lenses",
+    "max_attempts_per_invocation",
+}
+ASSIGNMENT_COVERAGE_KEYS = {
+    "assigned_crosscuts",
+    "bucket_count",
+    "complete",
+    "crosscuts",
+    "evidence_entries",
+    "model_invocations",
+    "source_records",
+}
+
+
+class CrosscutAssignmentError(RuntimeError):
+    """Raised when evidence or assignment contracts are invalid."""
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def reject_nonfinite_number(value: str) -> None:
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
+def canonical_json(value: Any) -> bytes:
+    return (
+        json.dumps(
+            value,
+            allow_nan=False,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def read_bytes(path: Path, label: str) -> bytes:
+    try:
+        return path.read_bytes()
+    except OSError as error:
+        raise CrosscutAssignmentError(f"cannot read {label} {path}: {error}") from error
+
+
+def load_canonical_json(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
+    raw = read_bytes(path, label)
+    try:
+        value = json.loads(
+            raw,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_number,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise CrosscutAssignmentError(f"invalid {label} JSON in {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise CrosscutAssignmentError(f"{label} must be a JSON object")
+    if canonical_json(value) != raw:
+        raise CrosscutAssignmentError(f"{label} is not canonical JSON")
+    return value, raw
+
+
+def parse_hash_file(raw: bytes, filename: str, label: str) -> str:
+    match = re.fullmatch(
+        rb"([0-9a-f]{64})  " + re.escape(filename.encode("ascii")) + rb"\n", raw
+    )
+    if match is None:
+        raise CrosscutAssignmentError(
+            f"{label} must contain a canonical SHA-256 for {filename}"
+        )
+    return match.group(1).decode("ascii")
+
+
+def require_hash(value: Any, label: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise CrosscutAssignmentError(f"{label} must be a canonical SHA-256")
+    return value
+
+
+def require_plain_int(
+    value: Any,
+    label: str,
+    *,
+    expected: int | None = None,
+    minimum: int | None = None,
+) -> int:
+    if type(value) is not int:
+        raise CrosscutAssignmentError(f"{label} must be a plain integer")
+    if expected is not None and value != expected:
+        raise CrosscutAssignmentError(f"{label} must be {expected}")
+    if minimum is not None and value < minimum:
+        raise CrosscutAssignmentError(f"{label} must be at least {minimum}")
+    return value
+
+
+def require_object_id(value: Any, label: str, length: int) -> str:
+    if not isinstance(value, str) or re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is None:
+        raise CrosscutAssignmentError(
+            f"{label} must be a canonical {length}-character object ID"
+        )
+    return value
+
+
+def require_nonempty_text(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value or "\0" in value:
+        raise CrosscutAssignmentError(f"{label} must be a non-empty string")
+    return value
+
+
+def require_path(value: Any, label: str) -> str:
+    path_value = require_nonempty_text(value, label)
+    path = PurePosixPath(path_value)
+    if (
+        path.is_absolute()
+        or str(path) != path_value
+        or any(part in ("", ".", "..") for part in path.parts)
+    ):
+        raise CrosscutAssignmentError(
+            f"{label} must be a normalized repository-relative path"
+        )
+    return path_value
+
+
+def require_exact_keys(value: Any, keys: set[str], label: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise CrosscutAssignmentError(f"{label} shape is invalid")
+    return value
+
+
+def require_string_list(
+    value: Any, label: str, *, unique: bool = True, sorted_values: bool = False
+) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise CrosscutAssignmentError(f"{label} must be an array of strings")
+    if unique and len(value) != len(set(value)):
+        raise CrosscutAssignmentError(f"{label} must not contain duplicates")
+    if sorted_values and value != sorted(value):
+        raise CrosscutAssignmentError(f"{label} must be in stable order")
+    return value
+
+
+def require_range(value: Any, label: str) -> tuple[int, int]:
+    value = require_exact_keys(value, {"end", "start"}, label)
+    start = require_plain_int(value["start"], f"{label}.start", minimum=1)
+    end = require_plain_int(value["end"], f"{label}.end", minimum=1)
+    if end < start:
+        raise CrosscutAssignmentError(f"{label}.end must not precede start")
+    return start, end
+
+
+def require_span(value: Any, label: str) -> tuple[int, int]:
+    value = require_exact_keys(value, {"end", "start"}, label)
+    start = require_plain_int(value["start"], f"{label}.start", minimum=0)
+    end = require_plain_int(value["end"], f"{label}.end", minimum=1)
+    if end <= start:
+        raise CrosscutAssignmentError(f"{label}.end must follow start")
+    return start, end
+
+
+def validate_definition(definition: Any, expected_id: str) -> None:
+    definition = require_exact_keys(definition, DEFINITION_KEYS, f"definition {expected_id}")
+    if definition["id"] != expected_id:
+        raise CrosscutAssignmentError("definitions are not in canonical crosscut order")
+    require_nonempty_text(definition["description"], f"definition {expected_id}.description")
+    source_type = definition["source_type"]
+    if source_type not in SOURCE_TYPES:
+        raise CrosscutAssignmentError(f"definition {expected_id}.source_type is invalid")
+    if (expected_id == "upstream-drift") != (source_type == "upstream-commit-series"):
+        raise CrosscutAssignmentError("only upstream-drift may use upstream-commit-series")
+    context = require_exact_keys(
+        definition["context"], {"after", "before"}, f"definition {expected_id}.context"
+    )
+    for key in ("after", "before"):
+        value = require_plain_int(context[key], f"definition {expected_id}.context.{key}")
+        if value > 200:
+            raise CrosscutAssignmentError(
+                f"definition {expected_id}.context.{key} must be at most 200"
+            )
+    path_rules = definition["path_rules"]
+    if not isinstance(path_rules, list) or not path_rules:
+        raise CrosscutAssignmentError(f"definition {expected_id}.path_rules is invalid")
+    for index, rule in enumerate(path_rules):
+        rule = require_exact_keys(
+            rule, {"action", "patterns"}, f"definition {expected_id}.path_rules[{index}]"
+        )
+        if rule["action"] not in ("include", "exclude"):
+            raise CrosscutAssignmentError(f"definition {expected_id} path action is invalid")
+        patterns = require_string_list(
+            rule["patterns"], f"definition {expected_id} path patterns"
+        )
+        if not patterns or any(not pattern or "\0" in pattern for pattern in patterns):
+            raise CrosscutAssignmentError(f"definition {expected_id} path patterns are invalid")
+    if path_rules[-1]["patterns"] != ["**"]:
+        raise CrosscutAssignmentError(f"definition {expected_id} must classify ** last")
+    mandatory_paths = definition["mandatory_paths"]
+    if not isinstance(mandatory_paths, list):
+        raise CrosscutAssignmentError(f"definition {expected_id}.mandatory_paths is invalid")
+    mandatory_patterns = []
+    for index, selector in enumerate(mandatory_paths):
+        selector = require_exact_keys(
+            selector,
+            {"minimum_matches", "pattern"},
+            f"definition {expected_id}.mandatory_paths[{index}]",
+        )
+        require_plain_int(
+            selector["minimum_matches"],
+            f"definition {expected_id}.minimum_matches",
+            minimum=1,
+        )
+        mandatory_patterns.append(
+            require_nonempty_text(selector["pattern"], f"definition {expected_id}.pattern")
+        )
+    if len(mandatory_patterns) != len(set(mandatory_patterns)):
+        raise CrosscutAssignmentError(f"definition {expected_id} has duplicate selectors")
+    matchers = definition["matchers"]
+    if not isinstance(matchers, list) or not matchers:
+        raise CrosscutAssignmentError(f"definition {expected_id}.matchers is invalid")
+    matcher_ids = []
+    for index, matcher in enumerate(matchers):
+        matcher = require_exact_keys(
+            matcher,
+            {"flags", "id", "pattern"},
+            f"definition {expected_id}.matchers[{index}]",
+        )
+        matcher_ids.append(
+            require_nonempty_text(matcher["id"], f"definition {expected_id} matcher id")
+        )
+        require_nonempty_text(matcher["pattern"], f"definition {expected_id} matcher pattern")
+        require_string_list(
+            matcher["flags"],
+            f"definition {expected_id} matcher flags",
+            sorted_values=True,
+        )
+        if not set(matcher["flags"]).issubset(MATCHER_FLAGS):
+            raise CrosscutAssignmentError(f"definition {expected_id} matcher flags are invalid")
+    if len(matcher_ids) != len(set(matcher_ids)):
+        raise CrosscutAssignmentError(f"definition {expected_id} has duplicate matcher IDs")
+
+
+def validate_definitions(document: dict[str, Any]) -> list[dict[str, Any]]:
+    require_exact_keys(document, DEFINITION_ROOT_KEYS, "crosscut definitions")
+    require_plain_int(document["schema_version"], "definitions.schema_version", expected=1)
+    require_nonempty_text(document["description"], "definitions.description")
+    definitions = document["definitions"]
+    if not isinstance(definitions, list) or len(definitions) != len(EXPECTED_CROSSCUT_IDS):
+        raise CrosscutAssignmentError("definitions must contain exactly 13 crosscuts")
+    for definition, expected_id in zip(definitions, EXPECTED_CROSSCUT_IDS):
+        validate_definition(definition, expected_id)
+    return definitions
+
+
+def validate_target_blob(
+    record: Any, oid_length: int, definitions_sha256: str
+) -> dict[str, Any]:
+    record = require_exact_keys(record, TARGET_BLOB_KEYS, "target blob")
+    require_path(record["path"], "target blob path")
+    require_object_id(record["blob_oid"], "target blob OID", oid_length)
+    require_object_id(record["object_id"], "target object ID", oid_length)
+    if record["blob_oid"] != record["object_id"] or record["type"] != "blob":
+        raise CrosscutAssignmentError("target blob object metadata is invalid")
+    require_hash(record["blob_sha256"], "target blob SHA-256")
+    require_plain_int(record["line_count"], "target blob line_count")
+    if record["definitions_sha256"] != definitions_sha256:
+        raise CrosscutAssignmentError("target blob definitions SHA-256 mismatch")
+    applicable = require_string_list(record["applicable_crosscuts"], "applicable crosscuts")
+    indexes = [EXPECTED_CROSSCUT_IDS.index(crosscut_id) for crosscut_id in applicable if crosscut_id in EXPECTED_CROSSCUT_IDS]
+    if len(indexes) != len(applicable) or indexes != sorted(indexes):
+        raise CrosscutAssignmentError("target blob applicable crosscuts are invalid")
+    for key in ("mode", "ownership", "type"):
+        require_nonempty_text(record[key], f"target blob {key}")
+    if record["ownership"] not in OWNERSHIPS:
+        raise CrosscutAssignmentError("target blob ownership is invalid")
+    return record
+
+
+def definition_includes_path(definition: dict[str, Any], path: str) -> bool:
+    for rule in definition["path_rules"]:
+        if any(fnmatch.fnmatchcase(path, pattern) for pattern in rule["patterns"]):
+            return rule["action"] == "include"
+    raise CrosscutAssignmentError(f"definition {definition['id']} does not classify {path}")
+
+
+def validate_evidence_entry(
+    entry: Any,
+    oid_length: int,
+    source_text_by_hash: dict[str, str],
+    compiled_matchers: dict[str, dict[str, re.Pattern[str]]],
+) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise CrosscutAssignmentError("evidence entry must be an object")
+    kind = entry.get("kind")
+    expected_keys = (
+        UPSTREAM_EVIDENCE_KEYS if kind == "upstream-commit" else TARGET_EVIDENCE_KEYS
+    )
+    require_exact_keys(entry, expected_keys, "evidence entry")
+    evidence_id = require_hash(entry["evidence_id"], "evidence ID")
+    payload = dict(entry)
+    payload.pop("evidence_id")
+    if sha256_bytes(canonical_json(payload)) != evidence_id:
+        raise CrosscutAssignmentError(f"evidence ID mismatch: {evidence_id}")
+    crosscut_id = entry["crosscut_id"]
+    if crosscut_id not in EXPECTED_CROSSCUT_IDS:
+        raise CrosscutAssignmentError(f"unknown evidence crosscut: {crosscut_id}")
+    source_sha256 = require_hash(entry["source_sha256"], "evidence source SHA-256")
+    if source_sha256 not in source_text_by_hash:
+        raise CrosscutAssignmentError(f"evidence references missing source: {evidence_id}")
+    if kind == "upstream-commit":
+        if crosscut_id != "upstream-drift":
+            raise CrosscutAssignmentError("upstream commit evidence has wrong crosscut")
+        require_plain_int(entry["commit_index"], "upstream commit index")
+        require_object_id(entry["commit_oid"], "upstream commit OID", oid_length)
+        require_object_id(entry["tree_oid"], "upstream tree OID", oid_length)
+        parents = require_string_list(entry["parent_oids"], "upstream parent OIDs")
+        for parent in parents:
+            require_object_id(parent, "upstream parent OID", oid_length)
+        if entry["patch_base_oid"] is not None:
+            require_object_id(entry["patch_base_oid"], "upstream patch base OID", oid_length)
+        patch_sha256 = require_hash(entry["patch_sha256"], "upstream patch SHA-256")
+        if patch_sha256 != source_sha256:
+            raise CrosscutAssignmentError("upstream patch/source SHA-256 mismatch")
+        require_nonempty_text(entry["matcher_id"], "upstream matcher ID")
+        if not isinstance(entry["subject"], str) or "\0" in entry["subject"]:
+            raise CrosscutAssignmentError("upstream subject is invalid")
+        return entry
+    if kind not in ("matcher", "mandatory-range"):
+        raise CrosscutAssignmentError(f"invalid evidence kind: {kind}")
+    require_path(entry["path"], "evidence path")
+    require_object_id(entry["blob_oid"], "evidence blob OID", oid_length)
+    require_object_id(entry["object_id"], "evidence object ID", oid_length)
+    require_range(entry["range"], "evidence range")
+    require_string_list(
+        entry["mandatory_patterns"], "evidence mandatory patterns", sorted_values=True
+    )
+    for key in ("mode", "ownership", "type"):
+        require_nonempty_text(entry[key], f"evidence {key}")
+    if kind == "matcher":
+        require_nonempty_text(entry["matcher_id"], "evidence matcher ID")
+        match_start_line, match_end_line = require_range(
+            entry["match_range"], "evidence match range"
+        )
+        match_start, match_end = require_span(
+            entry["match_span"], "evidence match span"
+        )
+        source_text = source_text_by_hash[source_sha256]
+        if match_end > len(source_text):
+            raise CrosscutAssignmentError("evidence match span exceeds its source")
+        matcher = compiled_matchers.get(crosscut_id, {}).get(entry["matcher_id"])
+        if matcher is None:
+            raise CrosscutAssignmentError("evidence references unknown matcher")
+        if not any(
+            match.start() == match_start and match.end() == match_end
+            for match in matcher.finditer(source_text)
+        ):
+            raise CrosscutAssignmentError(
+                "evidence match span does not match its declared matcher"
+            )
+        range_start, _ = require_range(entry["range"], "evidence range")
+        if (
+            match_start_line != range_start + source_text.count("\n", 0, match_start)
+            or match_end_line
+            != range_start + source_text.count("\n", 0, match_end - 1)
+        ):
+            raise CrosscutAssignmentError("evidence match range does not match its span")
+        if entry["mandatory_patterns"]:
+            raise CrosscutAssignmentError("matcher evidence must not carry mandatory patterns")
+    else:
+        if (
+            entry["matcher_id"] is not None
+            or entry["match_range"] is not None
+            or entry["match_span"] is not None
+        ):
+            raise CrosscutAssignmentError("mandatory evidence must not carry matcher metadata")
+        if not entry["mandatory_patterns"]:
+            raise CrosscutAssignmentError("mandatory evidence must identify a selector")
+    return entry
+
+
+def validate_upstream_commit(
+    record: Any, expected_index: int, oid_length: int, source_hashes: set[str]
+) -> dict[str, Any]:
+    record = require_exact_keys(record, UPSTREAM_COMMIT_KEYS, "upstream commit")
+    require_plain_int(record["index"], "upstream commit index", expected=expected_index)
+    require_object_id(record["commit_oid"], "upstream commit OID", oid_length)
+    require_object_id(record["tree_oid"], "upstream tree OID", oid_length)
+    parents = require_string_list(record["parent_oids"], "upstream parent OIDs")
+    for parent in parents:
+        require_object_id(parent, "upstream parent OID", oid_length)
+    if record["patch_base_oid"] is not None:
+        require_object_id(record["patch_base_oid"], "upstream patch base OID", oid_length)
+    patch_sha256 = require_hash(record["patch_sha256"], "upstream patch SHA-256")
+    if patch_sha256 not in source_hashes:
+        raise CrosscutAssignmentError("upstream commit references missing patch source")
+    if not isinstance(record["subject"], str) or "\0" in record["subject"]:
+        raise CrosscutAssignmentError("upstream commit subject is invalid")
+    return record
+
+
+def validate_evidence_document(
+    document: dict[str, Any], definitions: list[dict[str, Any]], manifest: dict[str, Any]
+) -> None:
+    require_exact_keys(document, EVIDENCE_ROOT_KEYS, "crosscut evidence")
+    object_format = manifest["object_format"]
+    oid_length = OBJECT_FORMAT_LENGTHS[object_format]
+    provenance_keys = (
+        "definitions_sha256",
+        "inventory_manifest_sha256",
+        "inventory_sha256",
+        "merge_base_sha",
+        "object_format",
+        "scope_sha256",
+        "target_sha",
+        "upstream_commit_series_sha256",
+        "upstream_sha",
+    )
+    for key in provenance_keys:
+        if document.get(key) != manifest.get(key):
+            raise CrosscutAssignmentError(f"evidence/manifest {key} mismatch")
+    require_plain_int(document["schema_version"], "evidence.schema_version", expected=1)
+
+    sources = document["sources"]
+    if not isinstance(sources, list):
+        raise CrosscutAssignmentError("evidence sources must be an array")
+    source_hashes = []
+    source_text_by_hash = {}
+    for source in sources:
+        source = require_exact_keys(source, SOURCE_KEYS, "evidence source")
+        source_sha256 = require_hash(source["sha256"], "source SHA-256")
+        if not isinstance(source["text"], str):
+            raise CrosscutAssignmentError("source text must be a string")
+        if sha256_bytes(source["text"].encode("utf-8")) != source_sha256:
+            raise CrosscutAssignmentError("source SHA-256 mismatch")
+        source_hashes.append(source_sha256)
+        source_text_by_hash[source_sha256] = source["text"]
+    if source_hashes != sorted(set(source_hashes)):
+        raise CrosscutAssignmentError("sources are duplicate or not in stable order")
+    source_hash_set = set(source_hashes)
+
+    target_blobs = document["target_blobs"]
+    if not isinstance(target_blobs, list):
+        raise CrosscutAssignmentError("target_blobs must be an array")
+    validated_blobs = [
+        validate_target_blob(record, oid_length, manifest["definitions_sha256"])
+        for record in target_blobs
+    ]
+    target_paths = [record["path"] for record in validated_blobs]
+    if target_paths != sorted(set(target_paths)):
+        raise CrosscutAssignmentError("target blobs are duplicate or not in stable order")
+    definition_by_id = {definition["id"]: definition for definition in definitions}
+    compiled_matchers = {}
+    for definition in definitions:
+        compiled_matchers[definition["id"]] = {}
+        for matcher in definition["matchers"]:
+            flags = 0
+            for flag in matcher["flags"]:
+                flags |= MATCHER_FLAG_VALUES[flag]
+            try:
+                compiled = re.compile(matcher["pattern"], flags)
+            except re.error as error:
+                raise CrosscutAssignmentError(
+                    f"definition {definition['id']} matcher regex is invalid"
+                ) from error
+            if compiled.search("") is not None:
+                raise CrosscutAssignmentError(
+                    f"definition {definition['id']} matcher must not match empty text"
+                )
+            compiled_matchers[definition["id"]][matcher["id"]] = compiled
+    blob_by_path = {record["path"]: record for record in validated_blobs}
+    for blob in validated_blobs:
+        expected_applicable = [
+            definition["id"]
+            for definition in definitions
+            if definition_includes_path(definition, blob["path"])
+        ]
+        if blob["applicable_crosscuts"] != expected_applicable:
+            raise CrosscutAssignmentError(
+                f"target blob applicable crosscuts mismatch: {blob['path']}"
+            )
+
+    evidence = document["evidence"]
+    if not isinstance(evidence, list):
+        raise CrosscutAssignmentError("evidence must be an array")
+    validated_evidence = [
+        validate_evidence_entry(
+            entry, oid_length, source_text_by_hash, compiled_matchers
+        )
+        for entry in evidence
+    ]
+    evidence_ids = [entry["evidence_id"] for entry in validated_evidence]
+    if len(evidence_ids) != len(set(evidence_ids)):
+        raise CrosscutAssignmentError("evidence IDs are duplicated")
+    for entry in validated_evidence:
+        definition = definition_by_id[entry["crosscut_id"]]
+        matcher_ids = {matcher["id"] for matcher in definition["matchers"]}
+        if entry["matcher_id"] not in matcher_ids and entry["matcher_id"] is not None:
+            raise CrosscutAssignmentError("evidence references unknown matcher")
+        if entry["kind"] == "upstream-commit":
+            continue
+        path = entry["path"]
+        if path not in blob_by_path:
+            raise CrosscutAssignmentError(f"target evidence references unknown path: {path}")
+        blob = blob_by_path[path]
+        if entry["crosscut_id"] not in blob["applicable_crosscuts"]:
+            raise CrosscutAssignmentError("target evidence references an inapplicable crosscut")
+        for key in ("blob_oid", "mode", "object_id", "ownership", "type"):
+            if entry[key] != blob[key]:
+                raise CrosscutAssignmentError(f"target evidence {key} mismatch: {path}")
+        start, end = require_range(entry["range"], "target evidence range")
+        if end > blob["line_count"]:
+            raise CrosscutAssignmentError(f"target evidence range exceeds blob: {path}")
+        if entry["kind"] == "matcher":
+            match_start, match_end = require_range(
+                entry["match_range"], "target evidence match range"
+            )
+            if match_start < start or match_end > end:
+                raise CrosscutAssignmentError("matcher range is outside evidence context")
+        else:
+            defined_patterns = {
+                selector["pattern"] for selector in definition["mandatory_paths"]
+            }
+            if not set(entry["mandatory_patterns"]).issubset(defined_patterns):
+                raise CrosscutAssignmentError("mandatory evidence references unknown selector")
+
+    mandatory = document["mandatory_path_coverage"]
+    if not isinstance(mandatory, list):
+        raise CrosscutAssignmentError("mandatory_path_coverage must be an array")
+    mandatory_pairs = []
+    for record in mandatory:
+        record = require_exact_keys(record, MANDATORY_COVERAGE_KEYS, "mandatory coverage")
+        crosscut_id = record["crosscut_id"]
+        if crosscut_id not in EXPECTED_CROSSCUT_IDS:
+            raise CrosscutAssignmentError("mandatory coverage has unknown crosscut")
+        require_nonempty_text(record["pattern"], "mandatory coverage pattern")
+        require_plain_int(record["minimum_matches"], "mandatory minimum_matches", minimum=1)
+        paths = require_string_list(
+            record["matched_paths"], "mandatory matched paths", sorted_values=True
+        )
+        for path in paths:
+            require_path(path, "mandatory matched path")
+        if len(paths) < record["minimum_matches"]:
+            raise CrosscutAssignmentError("mandatory coverage is below its minimum")
+        mandatory_pairs.append((crosscut_id, record["pattern"]))
+    if len(mandatory_pairs) != len(set(mandatory_pairs)):
+        raise CrosscutAssignmentError("mandatory coverage selectors are duplicated")
+    expected_mandatory_pairs = [
+        (definition["id"], selector["pattern"])
+        for definition in definitions
+        for selector in definition["mandatory_paths"]
+    ]
+    if mandatory_pairs != expected_mandatory_pairs:
+        raise CrosscutAssignmentError("mandatory coverage does not match definitions")
+    for record in mandatory:
+        definition = definition_by_id[record["crosscut_id"]]
+        selector = next(
+            item
+            for item in definition["mandatory_paths"]
+            if item["pattern"] == record["pattern"]
+        )
+        expected_paths = sorted(
+            blob["path"]
+            for blob in validated_blobs
+            if fnmatch.fnmatchcase(blob["path"], selector["pattern"])
+        )
+        if record["minimum_matches"] != selector["minimum_matches"]:
+            raise CrosscutAssignmentError("mandatory coverage minimum does not match definition")
+        if record["matched_paths"] != expected_paths:
+            raise CrosscutAssignmentError("mandatory matched paths are incomplete")
+        if any(not definition_includes_path(definition, path) for path in expected_paths):
+            raise CrosscutAssignmentError("mandatory path is excluded by its definition")
+
+    series = document["upstream_commit_series"]
+    if not isinstance(series, list):
+        raise CrosscutAssignmentError("upstream_commit_series must be an array")
+    validated_series = [
+        validate_upstream_commit(record, index, oid_length, source_hash_set)
+        for index, record in enumerate(series)
+    ]
+    if sha256_bytes(canonical_json(series)) != document["upstream_commit_series_sha256"]:
+        raise CrosscutAssignmentError("upstream commit series SHA-256 mismatch")
+    commit_oids = [record["commit_oid"] for record in validated_series]
+    if len(commit_oids) != len(set(commit_oids)):
+        raise CrosscutAssignmentError("upstream commit OIDs are duplicated")
+    upstream_evidence = [
+        entry for entry in validated_evidence if entry["kind"] == "upstream-commit"
+    ]
+    if [entry["commit_index"] for entry in upstream_evidence] != list(range(len(series))):
+        raise CrosscutAssignmentError("upstream evidence order or coverage is invalid")
+    if [entry["commit_oid"] for entry in upstream_evidence] != commit_oids:
+        raise CrosscutAssignmentError("upstream evidence commits do not match series")
+    upstream_matcher_ids = {
+        matcher["id"] for matcher in definition_by_id["upstream-drift"]["matchers"]
+    }
+    for record, entry in zip(validated_series, upstream_evidence):
+        expected_base = record["parent_oids"][0] if record["parent_oids"] else None
+        if record["patch_base_oid"] != expected_base:
+            raise CrosscutAssignmentError("upstream patch base does not match first parent")
+        if entry["matcher_id"] not in upstream_matcher_ids:
+            raise CrosscutAssignmentError("upstream evidence references unknown matcher")
+        expected_entry = {
+            "commit_index": record["index"],
+            "commit_oid": record["commit_oid"],
+            "crosscut_id": "upstream-drift",
+            "kind": "upstream-commit",
+            "matcher_id": entry["matcher_id"],
+            "parent_oids": record["parent_oids"],
+            "patch_base_oid": record["patch_base_oid"],
+            "patch_sha256": record["patch_sha256"],
+            "source_sha256": record["patch_sha256"],
+            "subject": record["subject"],
+            "tree_oid": record["tree_oid"],
+        }
+        expected_id = sha256_bytes(canonical_json(expected_entry))
+        expected_entry["evidence_id"] = expected_id
+        if entry != expected_entry:
+            raise CrosscutAssignmentError("upstream evidence metadata does not match series")
+
+    crosscut_coverage = document["crosscut_coverage"]
+    if not isinstance(crosscut_coverage, list) or len(crosscut_coverage) != 13:
+        raise CrosscutAssignmentError("crosscut coverage must contain exactly 13 records")
+    for expected_id, definition, record in zip(
+        EXPECTED_CROSSCUT_IDS, definitions, crosscut_coverage
+    ):
+        record = require_exact_keys(record, CROSSCUT_COVERAGE_KEYS, "crosscut coverage")
+        if record["id"] != expected_id or record["source_type"] != definition["source_type"]:
+            raise CrosscutAssignmentError("crosscut coverage order or source type is invalid")
+        if record["complete"] is not True:
+            raise CrosscutAssignmentError(f"crosscut coverage is incomplete: {expected_id}")
+        for key in (
+            "applicable_paths",
+            "mandatory_paths",
+            "mandatory_ranges",
+            "match_occurrences",
+            "upstream_commits",
+        ):
+            require_plain_int(record[key], f"crosscut coverage {expected_id}.{key}")
+        expected_applicable = sum(
+            expected_id in blob["applicable_crosscuts"] for blob in validated_blobs
+        )
+        expected_mandatory_paths = len(
+            {
+                path
+                for item in mandatory
+                if item["crosscut_id"] == expected_id
+                for path in item["matched_paths"]
+            }
+        )
+        expected_mandatory_ranges = sum(
+            entry["kind"] == "mandatory-range" and entry["crosscut_id"] == expected_id
+            for entry in validated_evidence
+        )
+        expected_matches = sum(
+            entry["kind"] == "matcher" and entry["crosscut_id"] == expected_id
+            for entry in validated_evidence
+        )
+        expected_commits = len(series) if expected_id == "upstream-drift" else 0
+        expected = {
+            "applicable_paths": expected_applicable,
+            "complete": True,
+            "id": expected_id,
+            "mandatory_paths": expected_mandatory_paths,
+            "mandatory_ranges": expected_mandatory_ranges,
+            "match_occurrences": expected_matches,
+            "source_type": definition["source_type"],
+            "upstream_commits": expected_commits,
+        }
+        if record != expected:
+            raise CrosscutAssignmentError(f"crosscut coverage counters mismatch: {expected_id}")
+
+    coverage = require_exact_keys(document["coverage"], COVERAGE_KEYS, "evidence coverage")
+    if coverage["complete"] is not True:
+        raise CrosscutAssignmentError("evidence coverage is incomplete")
+    for key in COVERAGE_KEYS - {"complete"}:
+        require_plain_int(coverage[key], f"evidence coverage.{key}")
+    expected_coverage = {
+        "complete": True,
+        "crosscuts": 13,
+        "definition_evaluations": len(validated_blobs) * 13,
+        "evidence_entries": len(validated_evidence),
+        "included_blobs": len(validated_blobs),
+        "mandatory_paths": sum(len(record["matched_paths"]) for record in mandatory),
+        "mandatory_ranges": sum(
+            entry["kind"] == "mandatory-range" for entry in validated_evidence
+        ),
+        "mandatory_selectors": len(mandatory),
+        "source_records": len(sources),
+        "target_blobs_scanned": len(validated_blobs),
+        "target_match_occurrences": sum(
+            entry["kind"] == "matcher" for entry in validated_evidence
+        ),
+        "upstream_commits": len(series),
+    }
+    if coverage != expected_coverage:
+        raise CrosscutAssignmentError("evidence coverage counters mismatch")
+    if manifest["coverage"] != coverage:
+        raise CrosscutAssignmentError("manifest/evidence coverage mismatch")
+
+
+def load_contract(
+    directory: Path,
+    expected_target_sha: str,
+    expected_definitions_sha256: str,
+    expected_evidence_sha256: str,
+) -> dict[str, Any]:
+    directory = directory.resolve()
+    expected_definitions_sha256 = require_hash(
+        expected_definitions_sha256, "expected-definitions-sha256"
+    )
+    expected_evidence_sha256 = require_hash(
+        expected_evidence_sha256, "expected-evidence-sha256"
+    )
+    manifest_hash_file = read_bytes(directory / "manifest.sha256", "manifest hash")
+    if read_bytes(directory / "COMPLETE", "completion marker") != manifest_hash_file:
+        raise CrosscutAssignmentError("COMPLETE must exactly equal manifest.sha256")
+    manifest_sha256 = parse_hash_file(
+        manifest_hash_file, "manifest.json", "manifest.sha256"
+    )
+    manifest, manifest_bytes = load_canonical_json(directory / "manifest.json", "manifest")
+    if sha256_bytes(manifest_bytes) != manifest_sha256:
+        raise CrosscutAssignmentError("manifest.json SHA-256 mismatch")
+    require_exact_keys(manifest, EVIDENCE_MANIFEST_KEYS, "evidence manifest")
+    require_plain_int(manifest["schema_version"], "manifest.schema_version", expected=1)
+    require_plain_int(manifest["generator_version"], "manifest.generator_version", expected=1)
+    if manifest["artifacts"] != {
+        "completion": "COMPLETE",
+        "definitions": "crosscuts.resolved.json",
+        "evidence": "crosscut-evidence.json",
+    }:
+        raise CrosscutAssignmentError("manifest artifact contract mismatch")
+    object_format = manifest["object_format"]
+    if object_format not in OBJECT_FORMAT_LENGTHS:
+        raise CrosscutAssignmentError(f"unsupported object format: {object_format}")
+    oid_length = OBJECT_FORMAT_LENGTHS[object_format]
+    target_sha = require_object_id(manifest["target_sha"], "target SHA", oid_length)
+    require_object_id(expected_target_sha, "expected-target-sha", oid_length)
+    if target_sha != expected_target_sha:
+        raise CrosscutAssignmentError("target SHA does not match the expected source pin")
+    require_object_id(manifest["upstream_sha"], "upstream SHA", oid_length)
+    require_object_id(manifest["merge_base_sha"], "merge-base SHA", oid_length)
+    for key in (
+        "definitions_sha256",
+        "evidence_sha256",
+        "inventory_manifest_sha256",
+        "inventory_sha256",
+        "scope_sha256",
+        "upstream_commit_series_sha256",
+    ):
+        require_hash(manifest[key], f"manifest.{key}")
+    if manifest["definitions_sha256"] != expected_definitions_sha256:
+        raise CrosscutAssignmentError("definitions SHA-256 does not match the expected pin")
+    if manifest["evidence_sha256"] != expected_evidence_sha256:
+        raise CrosscutAssignmentError("evidence SHA-256 does not match the expected pin")
+
+    definitions_hash_file = read_bytes(directory / "crosscuts.sha256", "definitions hash")
+    definitions_hash = parse_hash_file(
+        definitions_hash_file, "crosscuts.resolved.json", "crosscuts.sha256"
+    )
+    definitions, definitions_bytes = load_canonical_json(
+        directory / "crosscuts.resolved.json", "resolved definitions"
+    )
+    if definitions_hash != expected_definitions_sha256 or sha256_bytes(definitions_bytes) != definitions_hash:
+        raise CrosscutAssignmentError("resolved definitions SHA-256 mismatch")
+    definition_entries = validate_definitions(definitions)
+
+    evidence_hash_file = read_bytes(directory / "crosscut-evidence.sha256", "evidence hash")
+    evidence_hash = parse_hash_file(
+        evidence_hash_file, "crosscut-evidence.json", "crosscut-evidence.sha256"
+    )
+    evidence, evidence_bytes = load_canonical_json(
+        directory / "crosscut-evidence.json", "crosscut evidence"
+    )
+    if evidence_hash != expected_evidence_sha256 or sha256_bytes(evidence_bytes) != evidence_hash:
+        raise CrosscutAssignmentError("crosscut evidence SHA-256 mismatch")
+    validate_evidence_document(evidence, definition_entries, manifest)
+    return {
+        "definitions": definition_entries,
+        "definitions_sha256": definitions_hash,
+        "evidence": evidence,
+        "evidence_sha256": evidence_hash,
+        "manifest": manifest,
+        "manifest_sha256": manifest_sha256,
+    }
+
+
+def assignment_entry_hash(entry: dict[str, Any]) -> str:
+    payload = copy.deepcopy(entry)
+    payload.pop("assignment_id", None)
+    return sha256_bytes(canonical_json(payload))
+
+
+def bucket_assignment_hash(bucket: dict[str, Any], source_contract: dict[str, Any]) -> str:
+    payload = {
+        "entries": bucket.get("entries"),
+        "id": bucket.get("id"),
+        "source_contract": source_contract,
+    }
+    return sha256_bytes(canonical_json(payload))
+
+
+def assignment_document_hash(assignments: dict[str, Any]) -> str:
+    payload = copy.deepcopy(assignments)
+    payload.pop("assignment_sha256", None)
+    return sha256_bytes(canonical_json(payload))
+
+
+def expected_entries(contract: dict[str, Any]) -> list[dict[str, Any]]:
+    evidence = contract["evidence"]
+    definitions = contract["definitions"]
+    sources = {source["sha256"]: source for source in evidence["sources"]}
+    entries = []
+    for crosscut_id, definition in zip(EXPECTED_CROSSCUT_IDS, definitions):
+        relevant_evidence = [
+            item for item in evidence["evidence"] if item["crosscut_id"] == crosscut_id
+        ]
+        evidence_ids = [item["evidence_id"] for item in relevant_evidence]
+        source_sha256s = sorted({item["source_sha256"] for item in relevant_evidence})
+        target_blobs = [
+            {
+                "blob_oid": blob["blob_oid"],
+                "blob_sha256": blob["blob_sha256"],
+                "path": blob["path"],
+            }
+            for blob in evidence["target_blobs"]
+            if crosscut_id in blob["applicable_crosscuts"]
+        ]
+        mandatory_records = [
+            item
+            for item in evidence["mandatory_path_coverage"]
+            if item["crosscut_id"] == crosscut_id
+        ]
+        mandatory_selector_sha256s = [
+            sha256_bytes(canonical_json(item)) for item in mandatory_records
+        ]
+        upstream_commit_oids = (
+            [item["commit_oid"] for item in evidence["upstream_commit_series"]]
+            if crosscut_id == "upstream-drift"
+            else []
+        )
+        estimated_input_bytes = (
+            len(canonical_json(definition))
+            + len(canonical_json(relevant_evidence))
+            + len(canonical_json(target_blobs))
+            + len(canonical_json(mandatory_records))
+            + sum(len(sources[source_hash]["text"].encode("utf-8")) for source_hash in source_sha256s)
+        )
+        entry = {
+            "crosscut_id": crosscut_id,
+            "definition_sha256": sha256_bytes(canonical_json(definition)),
+            "definitions_sha256": contract["definitions_sha256"],
+            "estimated_input_bytes": estimated_input_bytes,
+            "evidence_ids": evidence_ids,
+            "evidence_sha256": contract["evidence_sha256"],
+            "lens_count": len(LENSES),
+            "lenses": list(LENSES),
+            "mandatory_selector_sha256s": mandatory_selector_sha256s,
+            "max_attempts": MAX_ATTEMPTS_PER_INVOCATION,
+            "model_invocations": INVOCATIONS_PER_CROSSCUT,
+            "source_sha": evidence["target_sha"],
+            "source_sha256s": source_sha256s,
+            "target_blobs": target_blobs,
+            "upstream_commit_oids": upstream_commit_oids,
+        }
+        entry["assignment_id"] = assignment_entry_hash(entry)
+        entries.append(entry)
+    return entries
+
+
+def distribute_entries(entries: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    buckets = [[] for _ in range(BUCKET_COUNT)]
+    weights = [0] * BUCKET_COUNT
+    for entry in entries:
+        index = min(range(BUCKET_COUNT), key=lambda candidate: (weights[candidate], candidate))
+        buckets[index].append(entry)
+        weights[index] += entry["estimated_input_bytes"]
+    return buckets
+
+
+def source_contract(contract: dict[str, Any]) -> dict[str, Any]:
+    manifest = contract["manifest"]
+    return {
+        "definitions_sha256": contract["definitions_sha256"],
+        "evidence_manifest_sha256": contract["manifest_sha256"],
+        "evidence_sha256": contract["evidence_sha256"],
+        "inventory_manifest_sha256": manifest["inventory_manifest_sha256"],
+        "inventory_sha256": manifest["inventory_sha256"],
+        "merge_base_sha": manifest["merge_base_sha"],
+        "object_format": manifest["object_format"],
+        "scope_sha256": manifest["scope_sha256"],
+        "target_sha": manifest["target_sha"],
+        "upstream_commit_series_sha256": manifest["upstream_commit_series_sha256"],
+        "upstream_sha": manifest["upstream_sha"],
+    }
+
+
+def build_assignments(contract: dict[str, Any]) -> dict[str, Any]:
+    entries = expected_entries(contract)
+    provenance = source_contract(contract)
+    buckets = []
+    for index, assigned in enumerate(distribute_entries(entries)):
+        bucket = {
+            "crosscut_count": len(assigned),
+            "entries": assigned,
+            "estimated_input_bytes": sum(entry["estimated_input_bytes"] for entry in assigned),
+            "id": f"bucket-{index + 1}",
+        }
+        bucket["assignment_sha256"] = bucket_assignment_hash(bucket, provenance)
+        buckets.append(bucket)
+    assignments = {
+        "buckets": buckets,
+        "bucket_count": BUCKET_COUNT,
+        "coverage": {
+            "assigned_crosscuts": len(entries),
+            "bucket_count": BUCKET_COUNT,
+            "complete": True,
+            "crosscuts": len(EXPECTED_CROSSCUT_IDS),
+            "evidence_entries": len(contract["evidence"]["evidence"]),
+            "model_invocations": sum(entry["model_invocations"] for entry in entries),
+            "source_records": len(contract["evidence"]["sources"]),
+        },
+        "execution_contract": {
+            "assignment_unit": "crosscut",
+            "invocations_per_crosscut": INVOCATIONS_PER_CROSSCUT,
+            "lens_count": len(LENSES),
+            "lenses": list(LENSES),
+            "max_attempts_per_invocation": MAX_ATTEMPTS_PER_INVOCATION,
+        },
+        "generator_version": GENERATOR_VERSION,
+        "schema_version": SCHEMA_VERSION,
+        "source_contract": provenance,
+    }
+    assignments["assignment_sha256"] = assignment_document_hash(assignments)
+    validate_assignments(assignments, contract)
+    return assignments
+
+
+def validate_assignment_entry(entry: Any, expected: dict[str, Any]) -> None:
+    entry = require_exact_keys(entry, ASSIGNMENT_ENTRY_KEYS, "assignment entry")
+    for key in (
+        "estimated_input_bytes",
+        "lens_count",
+        "max_attempts",
+        "model_invocations",
+    ):
+        require_plain_int(
+            entry[key], f"assignment entry {expected['crosscut_id']}.{key}", expected=expected[key]
+        )
+    if entry != expected:
+        raise CrosscutAssignmentError(f"assignment metadata mismatch: {expected['crosscut_id']}")
+    if entry["assignment_id"] != assignment_entry_hash(entry):
+        raise CrosscutAssignmentError("assignment entry SHA-256 mismatch")
+    if entry["model_invocations"] != 1 or entry["max_attempts"] != 3:
+        raise CrosscutAssignmentError("assignment invocation budget is invalid")
+    if entry["lens_count"] != 3 or tuple(entry["lenses"]) != LENSES:
+        raise CrosscutAssignmentError("assignment review lenses are invalid")
+    for blob in entry["target_blobs"]:
+        blob = require_exact_keys(blob, ASSIGNMENT_TARGET_BLOB_KEYS, "assignment target blob")
+        require_path(blob["path"], "assignment target blob path")
+        require_hash(blob["blob_sha256"], "assignment target blob SHA-256")
+
+
+def validate_assignments(assignments: dict[str, Any], contract: dict[str, Any]) -> None:
+    require_exact_keys(assignments, ASSIGNMENT_ROOT_KEYS, "assignment document")
+    require_plain_int(assignments["schema_version"], "assignment.schema_version", expected=1)
+    require_plain_int(assignments["generator_version"], "assignment.generator_version", expected=1)
+    expected_source = source_contract(contract)
+    require_exact_keys(assignments["source_contract"], SOURCE_CONTRACT_KEYS, "source contract")
+    if assignments["source_contract"] != expected_source:
+        raise CrosscutAssignmentError("assignment source contract mismatch")
+    execution = require_exact_keys(
+        assignments["execution_contract"], EXECUTION_CONTRACT_KEYS, "execution contract"
+    )
+    expected_execution = {
+        "assignment_unit": "crosscut",
+        "invocations_per_crosscut": 1,
+        "lens_count": 3,
+        "lenses": list(LENSES),
+        "max_attempts_per_invocation": 3,
+    }
+    for key in (
+        "invocations_per_crosscut",
+        "lens_count",
+        "max_attempts_per_invocation",
+    ):
+        require_plain_int(
+            execution[key], f"execution contract.{key}", expected=expected_execution[key]
+        )
+    if execution != expected_execution:
+        raise CrosscutAssignmentError("execution contract mismatch")
+    require_plain_int(assignments["bucket_count"], "assignment.bucket_count", expected=3)
+    buckets = assignments["buckets"]
+    if not isinstance(buckets, list) or len(buckets) != BUCKET_COUNT:
+        raise CrosscutAssignmentError("assignments must contain exactly three buckets")
+    expected = expected_entries(contract)
+    expected_by_id = {entry["crosscut_id"]: entry for entry in expected}
+    actual_entries = []
+    for index, bucket in enumerate(buckets):
+        bucket = require_exact_keys(bucket, ASSIGNMENT_BUCKET_KEYS, "assignment bucket")
+        if bucket["id"] != f"bucket-{index + 1}":
+            raise CrosscutAssignmentError("assignment bucket IDs are invalid")
+        entries = bucket["entries"]
+        if not isinstance(entries, list):
+            raise CrosscutAssignmentError("assignment bucket entries must be an array")
+        require_plain_int(
+            bucket["crosscut_count"],
+            f"assignment bucket {bucket['id']}.crosscut_count",
+            expected=len(entries),
+        )
+        if bucket["crosscut_count"] != len(entries):
+            raise CrosscutAssignmentError("assignment bucket crosscut_count mismatch")
+        expected_input_bytes = sum(
+            entry.get("estimated_input_bytes", -1) for entry in entries if isinstance(entry, dict)
+        )
+        require_plain_int(
+            bucket["estimated_input_bytes"],
+            f"assignment bucket {bucket['id']}.estimated_input_bytes",
+            expected=expected_input_bytes,
+        )
+        if bucket["estimated_input_bytes"] != expected_input_bytes:
+            raise CrosscutAssignmentError("assignment bucket input byte count mismatch")
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("crosscut_id") not in expected_by_id:
+                raise CrosscutAssignmentError("assignment references unknown crosscut")
+            validate_assignment_entry(entry, expected_by_id[entry["crosscut_id"]])
+            actual_entries.append(entry)
+        if bucket["assignment_sha256"] != bucket_assignment_hash(bucket, expected_source):
+            raise CrosscutAssignmentError("assignment bucket SHA-256 mismatch")
+    actual_ids = [entry["crosscut_id"] for entry in actual_entries]
+    if len(actual_ids) != 13 or set(actual_ids) != set(EXPECTED_CROSSCUT_IDS):
+        raise CrosscutAssignmentError("crosscuts must be assigned exactly once")
+    expected_buckets = distribute_entries(expected)
+    if [bucket["entries"] for bucket in buckets] != expected_buckets:
+        raise CrosscutAssignmentError("assignment buckets do not match deterministic distribution")
+    coverage = require_exact_keys(
+        assignments["coverage"], ASSIGNMENT_COVERAGE_KEYS, "assignment coverage"
+    )
+    expected_coverage = {
+        "assigned_crosscuts": 13,
+        "bucket_count": 3,
+        "complete": True,
+        "crosscuts": 13,
+        "evidence_entries": len(contract["evidence"]["evidence"]),
+        "model_invocations": 13,
+        "source_records": len(contract["evidence"]["sources"]),
+    }
+    for key in (
+        "assigned_crosscuts",
+        "bucket_count",
+        "crosscuts",
+        "evidence_entries",
+        "model_invocations",
+        "source_records",
+    ):
+        require_plain_int(
+            coverage[key], f"assignment coverage.{key}", expected=expected_coverage[key]
+        )
+    if coverage["complete"] is not True:
+        raise CrosscutAssignmentError("assignment coverage.complete must be true boolean")
+    if coverage != expected_coverage:
+        raise CrosscutAssignmentError("assignment coverage mismatch")
+    if assignments["assignment_sha256"] != assignment_document_hash(assignments):
+        raise CrosscutAssignmentError("assignment document SHA-256 mismatch")
+
+
+def write_output(output: Path, assignments: dict[str, Any]) -> None:
+    output = output.parent.resolve() / output.name
+    output.parent.mkdir(parents=True, exist_ok=True)
+    contents = canonical_json(assignments)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as temporary_file:
+            temporary_file.write(contents)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        try:
+            os.link(temporary, output)
+        except FileExistsError as error:
+            raise CrosscutAssignmentError(f"output path already exists: {output}") from error
+        except OSError as error:
+            raise CrosscutAssignmentError(f"cannot publish output {output}: {error}") from error
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--evidence-dir", type=Path, required=True)
+    parser.add_argument("--expected-target-sha", required=True)
+    parser.add_argument("--expected-definitions-sha256", required=True)
+    parser.add_argument("--expected-evidence-sha256", required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        contract = load_contract(
+            args.evidence_dir,
+            args.expected_target_sha,
+            args.expected_definitions_sha256,
+            args.expected_evidence_sha256,
+        )
+        assignments = build_assignments(contract)
+        write_output(args.output, assignments)
+    except CrosscutAssignmentError as error:
+        print(f"codebase audit crosscut assignments: {error}", file=sys.stderr)
+        return 1
+    print(f"codebase audit crosscut assignments: wrote {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

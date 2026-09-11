@@ -1,0 +1,635 @@
+#!/usr/bin/env python3
+
+"""Focused tests for immutable codebase-audit crosscut assignments."""
+
+from __future__ import annotations
+
+import concurrent.futures
+import copy
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+SCRIPT = Path(__file__).resolve().parent / "generate-codebase-audit-crosscut-assignments"
+LOADER = importlib.machinery.SourceFileLoader("codebase_audit_crosscut_assignments", str(SCRIPT))
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
+assert SPEC is not None
+ASSIGNMENTS = importlib.util.module_from_spec(SPEC)
+LOADER.exec_module(ASSIGNMENTS)
+
+
+class CodebaseAuditCrosscutAssignmentsTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="zaplex-crosscut-assignments-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.contract_dir = self.root / "evidence"
+        self.target_sha = "1" * 40
+        self.upstream_sha = "2" * 40
+        self.merge_base_sha = "3" * 40
+        self.definitions = self.make_definitions()
+        self.evidence = self.make_evidence(self.definitions)
+        self.write_contract(self.definitions, self.evidence)
+
+    def oid(self, value):
+        return hashlib.sha1(value.encode("utf-8")).hexdigest()
+
+    def source(self, text):
+        return {"sha256": ASSIGNMENTS.sha256_bytes(text.encode("utf-8")), "text": text}
+
+    def evidence_entry(self, payload):
+        value = dict(payload)
+        value["evidence_id"] = ASSIGNMENTS.sha256_bytes(ASSIGNMENTS.canonical_json(payload))
+        return value
+
+    def make_definitions(self):
+        definitions = []
+        for crosscut_id in ASSIGNMENTS.EXPECTED_CROSSCUT_IDS:
+            upstream = crosscut_id == "upstream-drift"
+            definitions.append(
+                {
+                    "context": {"after": 1, "before": 1},
+                    "description": f"Review {crosscut_id}",
+                    "id": crosscut_id,
+                    "mandatory_paths": (
+                        [{"minimum_matches": 1, "pattern": "src/a.rs"}]
+                        if crosscut_id == ASSIGNMENTS.EXPECTED_CROSSCUT_IDS[0]
+                        else []
+                    ),
+                    "matchers": [
+                        {
+                            "flags": [],
+                            "id": "patch" if upstream else "site",
+                            "pattern": ".+" if upstream else "unsafe",
+                        }
+                    ],
+                    "path_rules": [
+                        {
+                            "action": "exclude" if upstream else "include",
+                            "patterns": ["**"],
+                        }
+                    ],
+                    "source_type": "upstream-commit-series" if upstream else "target-tree",
+                }
+            )
+        return {
+            "definitions": definitions,
+            "description": "Test definitions for exactly thirteen crosscuts",
+            "schema_version": 1,
+        }
+
+    def make_evidence(self, definitions):
+        definitions_sha256 = ASSIGNMENTS.sha256_bytes(ASSIGNMENTS.canonical_json(definitions))
+        target_ids = list(ASSIGNMENTS.EXPECTED_CROSSCUT_IDS[:-3]) + list(
+            ASSIGNMENTS.EXPECTED_CROSSCUT_IDS[-2:]
+        )
+        self.assertEqual(len(target_ids), 12)
+        target_blobs = []
+        for path in ("src/a.rs", "src/b.rs"):
+            oid = self.oid(path)
+            target_blobs.append(
+                {
+                    "applicable_crosscuts": target_ids,
+                    "blob_oid": oid,
+                    "blob_sha256": hashlib.sha256(path.encode("utf-8")).hexdigest(),
+                    "definitions_sha256": definitions_sha256,
+                    "line_count": 2,
+                    "mode": "100644",
+                    "object_id": oid,
+                    "ownership": "fork-owned",
+                    "path": path,
+                    "type": "blob",
+                }
+            )
+
+        source_by_hash = {}
+        evidence = []
+        for index, crosscut_id in enumerate(target_ids):
+            source = self.source(f"{crosscut_id}: unsafe site {'x' * index}\n")
+            source_by_hash[source["sha256"]] = source
+            payload = {
+                "blob_oid": target_blobs[index % 2]["blob_oid"],
+                "crosscut_id": crosscut_id,
+                "kind": "matcher",
+                "mandatory_patterns": [],
+                "match_range": {"end": 1, "start": 1},
+                "match_span": {
+                    "end": source["text"].index("unsafe") + len("unsafe"),
+                    "start": source["text"].index("unsafe"),
+                },
+                "matcher_id": "site",
+                "mode": "100644",
+                "object_id": target_blobs[index % 2]["object_id"],
+                "ownership": "fork-owned",
+                "path": target_blobs[index % 2]["path"],
+                "range": {"end": 2, "start": 1},
+                "source_sha256": source["sha256"],
+                "type": "blob",
+            }
+            evidence.append(self.evidence_entry(payload))
+
+        mandatory_source = self.source("mandatory complete range\n")
+        source_by_hash[mandatory_source["sha256"]] = mandatory_source
+        mandatory_payload = {
+            "blob_oid": target_blobs[0]["blob_oid"],
+            "crosscut_id": ASSIGNMENTS.EXPECTED_CROSSCUT_IDS[0],
+            "kind": "mandatory-range",
+            "mandatory_patterns": ["src/a.rs"],
+            "match_range": None,
+            "match_span": None,
+            "matcher_id": None,
+            "mode": "100644",
+            "object_id": target_blobs[0]["object_id"],
+            "ownership": "fork-owned",
+            "path": "src/a.rs",
+            "range": {"end": 2, "start": 1},
+            "source_sha256": mandatory_source["sha256"],
+            "type": "blob",
+        }
+        evidence.append(self.evidence_entry(mandatory_payload))
+
+        series = []
+        for index in range(2):
+            patch_source = self.source(f"diff --git a/{index} b/{index}\n+line {index}\n")
+            source_by_hash[patch_source["sha256"]] = patch_source
+            commit_oid = self.oid(f"upstream-{index}")
+            parents = [self.merge_base_sha if index == 0 else series[index - 1]["commit_oid"]]
+            record = {
+                "commit_oid": commit_oid,
+                "index": index,
+                "parent_oids": parents,
+                "patch_base_oid": parents[0],
+                "patch_sha256": patch_source["sha256"],
+                "subject": f"Upstream {index}",
+                "tree_oid": self.oid(f"tree-{index}"),
+            }
+            series.append(record)
+            evidence.append(
+                self.evidence_entry(
+                    {
+                        "commit_index": index,
+                        "commit_oid": commit_oid,
+                        "crosscut_id": "upstream-drift",
+                        "kind": "upstream-commit",
+                        "matcher_id": "patch",
+                        "parent_oids": parents,
+                        "patch_base_oid": parents[0],
+                        "patch_sha256": patch_source["sha256"],
+                        "source_sha256": patch_source["sha256"],
+                        "subject": f"Upstream {index}",
+                        "tree_oid": record["tree_oid"],
+                    }
+                )
+            )
+
+        mandatory_coverage = [
+            {
+                "crosscut_id": ASSIGNMENTS.EXPECTED_CROSSCUT_IDS[0],
+                "matched_paths": ["src/a.rs"],
+                "minimum_matches": 1,
+                "pattern": "src/a.rs",
+            }
+        ]
+        crosscut_coverage = []
+        for definition in definitions["definitions"]:
+            crosscut_id = definition["id"]
+            crosscut_coverage.append(
+                {
+                    "applicable_paths": 0 if crosscut_id == "upstream-drift" else 2,
+                    "complete": True,
+                    "id": crosscut_id,
+                    "mandatory_paths": (
+                        1 if crosscut_id == ASSIGNMENTS.EXPECTED_CROSSCUT_IDS[0] else 0
+                    ),
+                    "mandatory_ranges": (
+                        1 if crosscut_id == ASSIGNMENTS.EXPECTED_CROSSCUT_IDS[0] else 0
+                    ),
+                    "match_occurrences": 0 if crosscut_id == "upstream-drift" else 1,
+                    "source_type": definition["source_type"],
+                    "upstream_commits": 2 if crosscut_id == "upstream-drift" else 0,
+                }
+            )
+        coverage = {
+            "complete": True,
+            "crosscuts": 13,
+            "definition_evaluations": 26,
+            "evidence_entries": len(evidence),
+            "included_blobs": 2,
+            "mandatory_paths": 1,
+            "mandatory_ranges": 1,
+            "mandatory_selectors": 1,
+            "source_records": len(source_by_hash),
+            "target_blobs_scanned": 2,
+            "target_match_occurrences": 12,
+            "upstream_commits": 2,
+        }
+        return {
+            "coverage": coverage,
+            "crosscut_coverage": crosscut_coverage,
+            "definitions_sha256": definitions_sha256,
+            "evidence": evidence,
+            "inventory_manifest_sha256": "4" * 64,
+            "inventory_sha256": "5" * 64,
+            "mandatory_path_coverage": mandatory_coverage,
+            "merge_base_sha": self.merge_base_sha,
+            "object_format": "sha1",
+            "schema_version": 1,
+            "scope_sha256": "6" * 64,
+            "sources": [source_by_hash[key] for key in sorted(source_by_hash)],
+            "target_blobs": target_blobs,
+            "target_sha": self.target_sha,
+            "upstream_commit_series": series,
+            "upstream_commit_series_sha256": ASSIGNMENTS.sha256_bytes(
+                ASSIGNMENTS.canonical_json(series)
+            ),
+            "upstream_sha": self.upstream_sha,
+        }
+
+    def write_contract(self, definitions, evidence, directory=None):
+        directory = self.contract_dir if directory is None else directory
+        directory.mkdir(parents=True, exist_ok=True)
+        definitions_bytes = ASSIGNMENTS.canonical_json(definitions)
+        definitions_sha256 = ASSIGNMENTS.sha256_bytes(definitions_bytes)
+        evidence["definitions_sha256"] = definitions_sha256
+        for blob in evidence["target_blobs"]:
+            blob["definitions_sha256"] = definitions_sha256
+        evidence_bytes = ASSIGNMENTS.canonical_json(evidence)
+        evidence_sha256 = ASSIGNMENTS.sha256_bytes(evidence_bytes)
+        manifest = {
+            "artifacts": {
+                "completion": "COMPLETE",
+                "definitions": "crosscuts.resolved.json",
+                "evidence": "crosscut-evidence.json",
+            },
+            "coverage": evidence["coverage"],
+            "definitions_sha256": definitions_sha256,
+            "evidence_sha256": evidence_sha256,
+            "generator_version": 1,
+            "inventory_manifest_sha256": evidence["inventory_manifest_sha256"],
+            "inventory_sha256": evidence["inventory_sha256"],
+            "merge_base_sha": evidence["merge_base_sha"],
+            "object_format": evidence["object_format"],
+            "schema_version": 1,
+            "scope_sha256": evidence["scope_sha256"],
+            "target_sha": evidence["target_sha"],
+            "upstream_commit_series_sha256": evidence["upstream_commit_series_sha256"],
+            "upstream_sha": evidence["upstream_sha"],
+        }
+        manifest_bytes = ASSIGNMENTS.canonical_json(manifest)
+        manifest_sha256 = ASSIGNMENTS.sha256_bytes(manifest_bytes)
+        (directory / "crosscuts.resolved.json").write_bytes(definitions_bytes)
+        (directory / "crosscuts.sha256").write_text(
+            f"{definitions_sha256}  crosscuts.resolved.json\n", encoding="ascii"
+        )
+        (directory / "crosscut-evidence.json").write_bytes(evidence_bytes)
+        (directory / "crosscut-evidence.sha256").write_text(
+            f"{evidence_sha256}  crosscut-evidence.json\n", encoding="ascii"
+        )
+        (directory / "manifest.json").write_bytes(manifest_bytes)
+        manifest_hash = f"{manifest_sha256}  manifest.json\n"
+        (directory / "manifest.sha256").write_text(manifest_hash, encoding="ascii")
+        (directory / "COMPLETE").write_text(manifest_hash, encoding="ascii")
+        self.definitions_sha256 = definitions_sha256
+        self.evidence_sha256 = evidence_sha256
+        self.manifest_sha256 = manifest_sha256
+        return directory
+
+    def run_generator(
+        self,
+        output,
+        *,
+        directory=None,
+        target_sha=None,
+        definitions_sha256=None,
+        evidence_sha256=None,
+    ):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--evidence-dir",
+                str(self.contract_dir if directory is None else directory),
+                "--expected-target-sha",
+                self.target_sha if target_sha is None else target_sha,
+                "--expected-definitions-sha256",
+                self.definitions_sha256
+                if definitions_sha256 is None
+                else definitions_sha256,
+                "--expected-evidence-sha256",
+                self.evidence_sha256 if evidence_sha256 is None else evidence_sha256,
+                "--output",
+                str(output),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def load_contract(self, directory=None):
+        return ASSIGNMENTS.load_contract(
+            self.contract_dir if directory is None else directory,
+            self.target_sha,
+            self.definitions_sha256,
+            self.evidence_sha256,
+        )
+
+    def test_deterministic_exact_coverage_and_single_invocation_contract(self):
+        first = self.root / "assignments-first.json"
+        second = self.root / "assignments-second.json"
+        for output in (first, second):
+            result = self.run_generator(output)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(first.read_bytes(), second.read_bytes())
+
+        document = json.loads(first.read_text(encoding="utf-8"))
+        ASSIGNMENTS.validate_assignments(document, self.load_contract())
+        entries = [entry for bucket in document["buckets"] for entry in bucket["entries"]]
+        self.assertEqual([entry["crosscut_id"] for entry in sorted(entries, key=lambda item: ASSIGNMENTS.EXPECTED_CROSSCUT_IDS.index(item["crosscut_id"]))], list(ASSIGNMENTS.EXPECTED_CROSSCUT_IDS))
+        self.assertEqual(document["coverage"]["assigned_crosscuts"], 13)
+        self.assertEqual(document["coverage"]["model_invocations"], 13)
+        self.assertEqual(document["bucket_count"], 3)
+        self.assertEqual(document["execution_contract"]["lenses"], list(ASSIGNMENTS.LENSES))
+        for entry in entries:
+            self.assertEqual(entry["model_invocations"], 1)
+            self.assertEqual(entry["max_attempts"], 3)
+            self.assertEqual(entry["lens_count"], 3)
+            self.assertEqual(entry["source_sha"], self.target_sha)
+            self.assertEqual(entry["definitions_sha256"], self.definitions_sha256)
+            self.assertEqual(entry["evidence_sha256"], self.evidence_sha256)
+
+    def test_assignment_references_cover_every_evidence_entry_once(self):
+        contract = self.load_contract()
+        document = ASSIGNMENTS.build_assignments(contract)
+        entries = [entry for bucket in document["buckets"] for entry in bucket["entries"]]
+        assigned_ids = [evidence_id for entry in entries for evidence_id in entry["evidence_ids"]]
+        expected_ids = [entry["evidence_id"] for entry in self.evidence["evidence"]]
+        self.assertCountEqual(assigned_ids, expected_ids)
+        self.assertEqual(len(assigned_ids), len(set(assigned_ids)))
+        upstream = next(entry for entry in entries if entry["crosscut_id"] == "upstream-drift")
+        self.assertEqual(len(upstream["upstream_commit_oids"]), 2)
+        self.assertEqual(upstream["target_blobs"], [])
+
+    def test_concurrent_outputs_are_byte_stable(self):
+        outputs = [self.root / f"concurrent-{index}.json" for index in range(8)]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(self.run_generator, outputs))
+        for result in results:
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len({output.read_bytes() for output in outputs}), 1)
+
+    def test_same_output_race_publishes_one_complete_document(self):
+        output = self.root / "shared-output.json"
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(lambda _: self.run_generator(output), range(8)))
+        self.assertEqual(sum(result.returncode == 0 for result in results), 1)
+        for result in results:
+            if result.returncode != 0:
+                self.assertIn("already exists", result.stderr)
+        ASSIGNMENTS.validate_assignments(
+            json.loads(output.read_text(encoding="utf-8")), self.load_contract()
+        )
+
+    def test_refuses_existing_output_without_overwrite(self):
+        output = self.root / "assignments.json"
+        output.write_text("sentinel\n", encoding="utf-8")
+        result = self.run_generator(output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already exists", result.stderr)
+        self.assertEqual(output.read_text(encoding="utf-8"), "sentinel\n")
+
+    def test_requires_external_source_and_content_hash_pins(self):
+        cases = (
+            {"target_sha": "a" * 40, "message": "source pin"},
+            {"definitions_sha256": "b" * 64, "message": "definitions SHA-256"},
+            {"evidence_sha256": "c" * 64, "message": "evidence SHA-256"},
+        )
+        for index, case in enumerate(cases):
+            message = case.pop("message")
+            with self.subTest(case=message):
+                result = self.run_generator(self.root / f"bad-pin-{index}.json", **case)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_completion_and_hash_files_are_fail_closed(self):
+        incomplete = self.root / "incomplete"
+        self.write_contract(copy.deepcopy(self.definitions), copy.deepcopy(self.evidence), incomplete)
+        (incomplete / "COMPLETE").write_text("not complete\n", encoding="utf-8")
+        result = self.run_generator(self.root / "incomplete.json", directory=incomplete)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("COMPLETE", result.stderr)
+
+        malformed = self.root / "malformed-hash"
+        self.write_contract(copy.deepcopy(self.definitions), copy.deepcopy(self.evidence), malformed)
+        (malformed / "crosscut-evidence.sha256").write_text(
+            f"{self.evidence_sha256} crosscut-evidence.json\n", encoding="ascii"
+        )
+        result = self.run_generator(self.root / "malformed.json", directory=malformed)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("canonical SHA-256", result.stderr)
+
+    def test_rejects_noncanonical_duplicate_and_nonfinite_json(self):
+        noncanonical = self.root / "noncanonical"
+        self.write_contract(copy.deepcopy(self.definitions), copy.deepcopy(self.evidence), noncanonical)
+        raw = json.dumps(self.definitions).encode("utf-8")
+        definitions_hash = ASSIGNMENTS.sha256_bytes(raw)
+        (noncanonical / "crosscuts.resolved.json").write_bytes(raw)
+        (noncanonical / "crosscuts.sha256").write_text(
+            f"{definitions_hash}  crosscuts.resolved.json\n", encoding="ascii"
+        )
+        manifest = json.loads((noncanonical / "manifest.json").read_text())
+        manifest["definitions_sha256"] = definitions_hash
+        manifest_bytes = ASSIGNMENTS.canonical_json(manifest)
+        manifest_hash = ASSIGNMENTS.sha256_bytes(manifest_bytes)
+        (noncanonical / "manifest.json").write_bytes(manifest_bytes)
+        marker = f"{manifest_hash}  manifest.json\n"
+        (noncanonical / "manifest.sha256").write_text(marker, encoding="ascii")
+        (noncanonical / "COMPLETE").write_text(marker, encoding="ascii")
+        result = self.run_generator(
+            self.root / "noncanonical.json",
+            directory=noncanonical,
+            definitions_sha256=definitions_hash,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not canonical JSON", result.stderr)
+
+        duplicate = self.root / "duplicate"
+        self.write_contract(copy.deepcopy(self.definitions), copy.deepcopy(self.evidence), duplicate)
+        duplicate_raw = b'{"definitions":[],"description":"x","schema_version":1,"schema_version":1}\n'
+        duplicate_hash = ASSIGNMENTS.sha256_bytes(duplicate_raw)
+        (duplicate / "crosscuts.resolved.json").write_bytes(duplicate_raw)
+        (duplicate / "crosscuts.sha256").write_text(
+            f"{duplicate_hash}  crosscuts.resolved.json\n", encoding="ascii"
+        )
+        manifest = json.loads((duplicate / "manifest.json").read_text())
+        manifest["definitions_sha256"] = duplicate_hash
+        manifest_bytes = ASSIGNMENTS.canonical_json(manifest)
+        manifest_hash = ASSIGNMENTS.sha256_bytes(manifest_bytes)
+        (duplicate / "manifest.json").write_bytes(manifest_bytes)
+        marker = f"{manifest_hash}  manifest.json\n"
+        (duplicate / "manifest.sha256").write_text(marker, encoding="ascii")
+        (duplicate / "COMPLETE").write_text(marker, encoding="ascii")
+        result = self.run_generator(
+            self.root / "duplicate.json",
+            directory=duplicate,
+            definitions_sha256=duplicate_hash,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("duplicate JSON key", result.stderr)
+
+        with self.assertRaises(ValueError):
+            ASSIGNMENTS.canonical_json({"value": float("nan")})
+
+    def test_rejects_schema_drift_even_when_hashes_are_recomputed(self):
+        cases = []
+        definitions = copy.deepcopy(self.definitions)
+        definitions["unexpected"] = True
+        cases.append((definitions, copy.deepcopy(self.evidence), "definitions"))
+        evidence = copy.deepcopy(self.evidence)
+        evidence["unexpected"] = True
+        cases.append((copy.deepcopy(self.definitions), evidence, "evidence"))
+        evidence = copy.deepcopy(self.evidence)
+        evidence["crosscut_coverage"][0]["unexpected"] = True
+        cases.append((copy.deepcopy(self.definitions), evidence, "crosscut coverage"))
+        for index, (definitions, evidence, message) in enumerate(cases):
+            with self.subTest(message=message):
+                directory = self.root / f"schema-{index}"
+                self.write_contract(definitions, evidence, directory)
+                result = self.run_generator(self.root / f"schema-{index}.json", directory=directory)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_rejects_incomplete_crosscut_coverage_and_boolean_counters(self):
+        incomplete = copy.deepcopy(self.evidence)
+        incomplete["crosscut_coverage"][0]["complete"] = False
+        directory = self.root / "incomplete-crosscut"
+        self.write_contract(copy.deepcopy(self.definitions), incomplete, directory)
+        result = self.run_generator(self.root / "incomplete-crosscut.json", directory=directory)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("incomplete", result.stderr)
+
+        boolean = copy.deepcopy(self.evidence)
+        boolean["coverage"]["crosscuts"] = True
+        directory = self.root / "boolean-counter"
+        self.write_contract(copy.deepcopy(self.definitions), boolean, directory)
+        result = self.run_generator(self.root / "boolean-counter.json", directory=directory)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("plain integer", result.stderr)
+
+    def test_rejects_source_and_evidence_reference_tampering(self):
+        source_tamper = copy.deepcopy(self.evidence)
+        source_tamper["sources"][0]["text"] += "tampered"
+        directory = self.root / "source-tamper"
+        self.write_contract(copy.deepcopy(self.definitions), source_tamper, directory)
+        result = self.run_generator(self.root / "source-tamper.json", directory=directory)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("source SHA-256 mismatch", result.stderr)
+
+        missing_source = copy.deepcopy(self.evidence)
+        missing_source["evidence"][0]["source_sha256"] = "f" * 64
+        payload = dict(missing_source["evidence"][0])
+        payload.pop("evidence_id")
+        missing_source["evidence"][0]["evidence_id"] = ASSIGNMENTS.sha256_bytes(
+            ASSIGNMENTS.canonical_json(payload)
+        )
+        directory = self.root / "missing-source"
+        self.write_contract(copy.deepcopy(self.definitions), missing_source, directory)
+        result = self.run_generator(self.root / "missing-source.json", directory=directory)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing source", result.stderr)
+
+        span_tamper = copy.deepcopy(self.evidence)
+        matcher = next(
+            entry for entry in span_tamper["evidence"] if entry["kind"] == "matcher"
+        )
+        source_text = next(
+            source["text"]
+            for source in span_tamper["sources"]
+            if source["sha256"] == matcher["source_sha256"]
+        )
+        matcher["match_span"]["end"] = len(source_text) + 1
+        payload = dict(matcher)
+        payload.pop("evidence_id")
+        matcher["evidence_id"] = ASSIGNMENTS.sha256_bytes(
+            ASSIGNMENTS.canonical_json(payload)
+        )
+        directory = self.root / "span-tamper"
+        self.write_contract(copy.deepcopy(self.definitions), span_tamper, directory)
+        result = self.run_generator(
+            self.root / "span-tamper.json", directory=directory
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("match span exceeds", result.stderr)
+
+        matcher_tamper = copy.deepcopy(self.evidence)
+        matcher = next(
+            entry for entry in matcher_tamper["evidence"] if entry["kind"] == "matcher"
+        )
+        matcher["match_span"]["start"] += 1
+        payload = dict(matcher)
+        payload.pop("evidence_id")
+        matcher["evidence_id"] = ASSIGNMENTS.sha256_bytes(
+            ASSIGNMENTS.canonical_json(payload)
+        )
+        directory = self.root / "matcher-tamper"
+        self.write_contract(copy.deepcopy(self.definitions), matcher_tamper, directory)
+        result = self.run_generator(
+            self.root / "matcher-tamper.json", directory=directory
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("declared matcher", result.stderr)
+
+    def test_rejects_assignment_tampering_and_duplicate_crosscuts(self):
+        contract = self.load_contract()
+        document = ASSIGNMENTS.build_assignments(contract)
+        tampered = copy.deepcopy(document)
+        tampered["buckets"][0]["entries"][0]["model_invocations"] = 2
+        with self.assertRaisesRegex(
+            ASSIGNMENTS.CrosscutAssignmentError, "model_invocations must be 1"
+        ):
+            ASSIGNMENTS.validate_assignments(tampered, contract)
+
+        duplicate = copy.deepcopy(document)
+        duplicate["buckets"][0]["entries"][0] = copy.deepcopy(
+            duplicate["buckets"][0]["entries"][1]
+        )
+        duplicate["buckets"][0]["estimated_input_bytes"] = sum(
+            entry["estimated_input_bytes"] for entry in duplicate["buckets"][0]["entries"]
+        )
+        duplicate["buckets"][0]["assignment_sha256"] = ASSIGNMENTS.bucket_assignment_hash(
+            duplicate["buckets"][0], duplicate["source_contract"]
+        )
+        duplicate["assignment_sha256"] = ASSIGNMENTS.assignment_document_hash(duplicate)
+        with self.assertRaisesRegex(
+            ASSIGNMENTS.CrosscutAssignmentError,
+            "exactly once",
+        ):
+            ASSIGNMENTS.validate_assignments(duplicate, contract)
+
+    def test_rejects_boolean_assignment_counters_even_when_equal_to_one(self):
+        contract = self.load_contract()
+        document = ASSIGNMENTS.build_assignments(contract)
+
+        cases = (
+            ("execution", lambda value: value["execution_contract"].__setitem__("invocations_per_crosscut", True)),
+            ("entry", lambda value: value["buckets"][0]["entries"][0].__setitem__("model_invocations", True)),
+            ("bucket", lambda value: value["buckets"][0].__setitem__("estimated_input_bytes", True)),
+            ("coverage", lambda value: value["coverage"].__setitem__("complete", 1)),
+        )
+        for label, mutate in cases:
+            with self.subTest(label=label):
+                tampered = copy.deepcopy(document)
+                mutate(tampered)
+                with self.assertRaises(ASSIGNMENTS.CrosscutAssignmentError):
+                    ASSIGNMENTS.validate_assignments(tampered, contract)
+
+
+if __name__ == "__main__":
+    unittest.main()
