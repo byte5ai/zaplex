@@ -698,10 +698,149 @@ fn test_find_url_with_delimiter() {
 #[test]
 fn test_find_url_line_breaks() {
     let blockgrid = mock_blockgrid("abc https://goog\r\nle.com");
+    let expected_link = Link {
+        range: Point { row: 0, col: 4 }..=Point { row: 1, col: 5 },
+        is_empty: false,
+    };
     assert_eq!(
         blockgrid
             .grid_handler
             .url_at_point(Point { row: 1, col: 0 }),
+        Some(expected_link.clone())
+    );
+    assert_eq!(
+        blockgrid
+            .grid_handler
+            .url_at_point(Point { row: 0, col: 10 }),
+        Some(expected_link.clone())
+    );
+    let raw_url = blockgrid.grid_handler.bounds_to_string(
+        *expected_link.range.start(),
+        *expected_link.range.end(),
+        false,
+        RespectObfuscatedSecrets::Yes,
+        false,
+        RespectDisplayedOutput::No,
+    );
+    assert_eq!(raw_url, "https://goog\nle.com");
+    assert_eq!(
+        normalize_hard_wrapped_http_url(&raw_url),
+        Some("https://google.com".to_owned())
+    );
+    assert_eq!(
+        normalize_hard_wrapped_http_url("HTTPS://goog\nle.com"),
+        Some("HTTPS://google.com".to_owned())
+    );
+    assert_eq!(
+        normalize_hard_wrapped_http_url(
+            "https://x.test/?redirect_uri=http%3A%2F%2Flocalhost%2Fcal\nlback&scope=openid&originator=\ncodex-tui"
+        ),
+        Some(
+            "https://x.test/?redirect_uri=http%3A%2F%2Flocalhost%2Fcallback&scope=openid&originator=codex-tui"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn test_find_hard_wrapped_url_only_when_filtered_rows_are_contiguous() {
+    let mut blockgrid = mock_blockgrid("abc https://goog\r\nle.com");
+    blockgrid
+        .grid_handler_mut()
+        .set_displayed_output(DisplayedOutput::new_for_test(vec![0..=1]));
+    assert_eq!(
+        blockgrid
+            .grid_handler
+            .url_at_point(Point { row: 1, col: 0 }),
+        Some(Link {
+            range: Point { row: 0, col: 4 }..=Point { row: 1, col: 5 },
+            is_empty: false,
+        })
+    );
+
+    blockgrid
+        .grid_handler_mut()
+        .set_displayed_output(DisplayedOutput::new_for_test(vec![1..=1]));
+    assert_eq!(
+        blockgrid
+            .grid_handler
+            .url_at_point(Point { row: 0, col: 0 }),
+        None
+    );
+}
+
+#[test]
+fn test_does_not_join_normal_text_across_hard_line_breaks() {
+    let blockgrid = mock_blockgrid("https://example.com\r\nordinary multiline text");
+    assert_eq!(
+        blockgrid
+            .grid_handler
+            .url_at_point(Point { row: 1, col: 0 }),
+        None
+    );
+    assert_eq!(
+        blockgrid.grid_handler.bounds_to_string(
+            Point { row: 0, col: 0 },
+            Point { row: 1, col: 22 },
+            false,
+            RespectObfuscatedSecrets::Yes,
+            false,
+            RespectDisplayedOutput::No,
+        ),
+        "https://example.com\nordinary multiline text"
+    );
+    assert_eq!(
+        normalize_hard_wrapped_http_url("https://example.com\nordinarytext"),
+        None
+    );
+    assert_eq!(
+        normalize_hard_wrapped_http_url("https://example.com?q=x\nordinarytext"),
+        None
+    );
+    assert_eq!(
+        normalize_hard_wrapped_http_url("https://example.com/path/\nordinarytext"),
+        None
+    );
+}
+
+#[test]
+fn test_does_not_join_multiple_urls_across_hard_line_breaks() {
+    let blockgrid = mock_blockgrid("https://one.example\r\nhttps://two.example");
+    assert_eq!(
+        blockgrid
+            .grid_handler
+            .url_at_point(Point { row: 0, col: 8 }),
+        Some(Link {
+            range: Point { row: 0, col: 0 }..=Point { row: 0, col: 18 },
+            is_empty: false,
+        })
+    );
+    assert_eq!(
+        blockgrid
+            .grid_handler
+            .url_at_point(Point { row: 1, col: 8 }),
+        Some(Link {
+            range: Point { row: 1, col: 0 }..=Point { row: 1, col: 18 },
+            is_empty: false,
+        })
+    );
+    assert_eq!(
+        blockgrid.grid_handler.bounds_to_string(
+            Point { row: 0, col: 0 },
+            Point { row: 1, col: 18 },
+            false,
+            RespectObfuscatedSecrets::Yes,
+            false,
+            RespectDisplayedOutput::No,
+        ),
+        "https://one.example\nhttps://two.example"
+    );
+    assert_eq!(
+        normalize_hard_wrapped_http_url("https://one.example\nhttps://two.example"),
+        None
+    );
+    assert_eq!(
+        normalize_hard_wrapped_http_url("https://one.example/?next=\nHTTPS://two.example"),
         None
     );
 }
