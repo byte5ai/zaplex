@@ -17759,7 +17759,6 @@ impl Workspace {
                         controller.send_slash_command_request(
                             SlashCommandRequest::Summarize {
                                 prompt: summarization_prompt,
-                                overflow: false, // ForkAndCompact is user-initiated, not an automatic overflow
                             },
                             ctx,
                         );
@@ -17858,13 +17857,8 @@ impl Workspace {
 
         terminal_view.update(ctx, |terminal, ctx| {
             terminal.ai_controller().update(ctx, |controller, ctx| {
-                controller.send_slash_command_request(
-                    SlashCommandRequest::Summarize {
-                        prompt,
-                        overflow: false,
-                    },
-                    ctx,
-                );
+                controller
+                    .send_slash_command_request(SlashCommandRequest::Summarize { prompt }, ctx);
             });
 
             if let Some(prompt) = initial_prompt {

@@ -3,7 +3,6 @@ use std::{collections::HashMap, ffi::OsString, path::PathBuf};
 use shell_words::quote as shell_quote;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
-use warp_managed_secrets::ManagedSecretValue;
 
 use crate::ai::{
     agent_sdk::{
@@ -95,13 +94,8 @@ pub(super) async fn prepare_local_harness_child_launch(
             claude_harness
                 .validate()
                 .map_err(|error: AgentDriverError| error.to_string())?;
-            // Local child harness panes inherit the user's existing local Claude
-            // auth/session state. We still prepare Claude's config files here,
-            // but there are no Zap-managed secrets to materialize into the
-            // hidden child pane.
-            let managed_secrets: HashMap<String, ManagedSecretValue> = HashMap::new();
             claude_harness
-                .prepare_environment_config(&working_dir, None, &managed_secrets)
+                .prepare_environment_config(&working_dir, None)
                 .map_err(|error: AgentDriverError| error.to_string())?;
             if let Some(manager) = plugin_manager_for(claude_harness.cli_agent()) {
                 if let Err(error) = manager.install().await {
