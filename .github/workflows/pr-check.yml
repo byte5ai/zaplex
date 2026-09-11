@@ -302,6 +302,12 @@ jobs:
           absolute_root_breadcrumb_click_lists_root
           direct_skill_paths_reject_forbidden_components_for_qualified_and_unqualified_specs
           direct_skill_path_rejects_symlink_outside_root_before_parsing
+          remote_su_echo_and_password_prompt_do_not_authorize_confirmation
+          local_root_su_authorizes_exactly_one_confirmation
+          non_root_remote_and_non_user_commands_do_not_arm_attempt
+          timeout_later_command_and_session_change_clear_attempt
+          earlier_timeout_does_not_clear_newer_attempt
+          abort_or_shell_return_clear_attempt
           ui_copy_has_no_space_before_ellipsis
           spaced_ellipsis_detection_covers_catalog_whitespace_and_punctuation
           spaced_ellipsis_detection_ignores_comments_and_leading_ellipses
