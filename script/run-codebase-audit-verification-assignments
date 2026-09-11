@@ -21,11 +21,12 @@ from typing import Any
 
 
 SCHEMA_VERSION = 1
-RUNNER_VERSION = 1
+RUNNER_VERSION = 2
 BUCKET_COUNT = 3
 MAX_PARALLEL = 3
 LENSES = ("disprove", "impact", "reproduction-fix")
-REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
+VERIFICATION_MODEL = "gpt-5.6-sol"
+VERIFICATION_REASONING_EFFORT = "xhigh"
 SEVERITIES = ("P0", "P1", "P2", "P3")
 ASSIGNMENT_ROOT_KEYS = {
     "schema_version",
@@ -762,7 +763,7 @@ def communicate_with_timeout(
 
 def execute_tuple(
     codex_cli: str,
-    model: str | None,
+    model: str,
     reasoning_effort: str,
     snapshot: Path,
     schema_path: Path,
@@ -799,8 +800,7 @@ def execute_tuple(
         "--output-last-message",
         str(final_message_path),
     ]
-    if model is not None:
-        command.extend(("--model", model))
+    command.extend(("--model", model))
     command.append("-")
     stdout = b""
     stderr = b""
@@ -917,6 +917,7 @@ def build_run_summary(
     generator_evidence: GeneratorEvidence,
     results: list[TupleResult],
     result_buckets: list[dict[str, Any]],
+    model: str,
     reasoning_effort: str,
 ) -> dict[str, Any]:
     ordered_results = sorted(results, key=lambda item: (item.bucket_id, item.position))
@@ -936,6 +937,7 @@ def build_run_summary(
         "provenance": copy.deepcopy(assignments["provenance"]),
         "generator_stdout_sha256": sha256_bytes(generator_evidence.stdout),
         "generator_stderr_sha256": sha256_bytes(generator_evidence.stderr),
+        "model": model,
         "reasoning_effort": reasoning_effort,
         "bucket_count": BUCKET_COUNT,
         "expected_tuples": expected_count,
@@ -979,9 +981,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--expected-issue-snapshot-sha256", required=True)
     parser.add_argument("--github-repository", required=True)
     parser.add_argument("--codex-cli", default="codex")
-    parser.add_argument("--model")
     parser.add_argument(
-        "--reasoning-effort", choices=REASONING_EFFORTS, default="high"
+        "--model", choices=(VERIFICATION_MODEL,), default=VERIFICATION_MODEL
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=(VERIFICATION_REASONING_EFFORT,),
+        default=VERIFICATION_REASONING_EFFORT,
     )
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     return parser.parse_args(argv)
@@ -1095,6 +1101,7 @@ def main(argv: list[str] | None = None) -> int:
             generator_evidence,
             results,
             result_buckets,
+            args.model,
             args.reasoning_effort,
         )
         for result_bucket in result_buckets:
