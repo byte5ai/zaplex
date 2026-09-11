@@ -2220,12 +2220,12 @@ impl SpawnCard {
         if context_window >= 1_000_000 {
             crate::t!(
                 "cockpit-spawn-card-sum-context-million",
-                count = context_window / 1_000_000
+                count = context_window / 1_000_000_u64
             )
         } else {
             crate::t!(
                 "cockpit-spawn-card-sum-context-thousand",
-                count = context_window / 1_000
+                count = context_window / 1_000_u64
             )
         }
     }
