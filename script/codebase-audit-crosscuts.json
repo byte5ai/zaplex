@@ -1,0 +1,771 @@
+{
+  "definitions": [
+    {
+      "context": {
+        "after": 24,
+        "before": 24
+      },
+      "description": "Review every unsafe Rust site in product and Zaplex-owned code for concrete aliasing, lifetime, FFI, ownership, and thread-safety violations.",
+      "id": "unsafe-app-and-zaplex",
+      "mandatory_paths": [
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/command/src/*.rs"
+        }
+      ],
+      "matchers": [
+        {
+          "flags": [],
+          "id": "unsafe-keyword",
+          "pattern": "\\bunsafe\\b"
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "include",
+          "patterns": [
+            "app/src/**",
+            "crates/zaplex_*/**",
+            "crates/zap_*/**",
+            "crates/warp_ssh_manager/**",
+            "crates/remote_server/**",
+            "crates/command/**",
+            "crates/managed_secrets*/**",
+            "crates/prevent_sleep/**",
+            "crates/node_runtime/**",
+            "crates/computer_use/**",
+            "crates/warp_terminal/**",
+            "crates/warp_core/**",
+            "crates/warp_util/**",
+            "crates/ipc/**",
+            "crates/http_client/**",
+            "crates/websocket/**",
+            "crates/warp_cli/**"
+          ]
+        },
+        {
+          "action": "exclude",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "target-tree"
+    },
+    {
+      "context": {
+        "after": 24,
+        "before": 24
+      },
+      "description": "Review unsafe Rust sites in framework and vendored crates, with emphasis on platform FFI, raw pointers, object lifetimes, and manual Send or Sync implementations.",
+      "id": "unsafe-framework",
+      "mandatory_paths": [
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/warpui_core/src/lib.rs"
+        }
+      ],
+      "matchers": [
+        {
+          "flags": [],
+          "id": "unsafe-keyword",
+          "pattern": "\\bunsafe\\b"
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "exclude",
+          "patterns": [
+            "crates/zaplex_*/**",
+            "crates/zap_*/**",
+            "crates/warp_ssh_manager/**",
+            "crates/remote_server/**",
+            "crates/command/**",
+            "crates/managed_secrets*/**",
+            "crates/prevent_sleep/**",
+            "crates/node_runtime/**",
+            "crates/computer_use/**",
+            "crates/warp_terminal/**",
+            "crates/warp_core/**",
+            "crates/warp_util/**",
+            "crates/ipc/**",
+            "crates/http_client/**",
+            "crates/websocket/**",
+            "crates/warp_cli/**"
+          ]
+        },
+        {
+          "action": "include",
+          "patterns": [
+            "crates/**"
+          ]
+        },
+        {
+          "action": "exclude",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "target-tree"
+    },
+    {
+      "context": {
+        "after": 32,
+        "before": 32
+      },
+      "description": "Review process creation for command-wrapper bypasses, shell injection, pipe deadlocks, missing waits, cancellation gaps, timeouts, and inherited secrets.",
+      "id": "process-spawning",
+      "mandatory_paths": [
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/command/src/*.rs"
+        }
+      ],
+      "matchers": [
+        {
+          "flags": [],
+          "id": "command-construction",
+          "pattern": "(?:std|tokio)::process::Command|Command::new\\s*\\("
+        },
+        {
+          "flags": [],
+          "id": "process-execution",
+          "pattern": "\\.(?:spawn|output|status|wait)\\s*\\("
+        },
+        {
+          "flags": [
+            "ignore-case"
+          ],
+          "id": "shell-evaluation",
+          "pattern": "(?:sh|bash|zsh)\\s+-[lc]|cmd(?:\\.exe)?\\s+/c|powershell(?:\\.exe)?.*-command|osascript|tmux\\s+send-keys"
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "include",
+          "patterns": [
+            "app/**",
+            "crates/**",
+            "lib/**"
+          ]
+        },
+        {
+          "action": "exclude",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "target-tree"
+    },
+    {
+      "context": {
+        "after": 40,
+        "before": 40
+      },
+      "description": "Review TerminalModel and related shared-lock call chains for re-entrancy, lock-order inversion, callbacks or awaits under locks, and silently dropped try_lock work.",
+      "id": "terminal-model-lock",
+      "mandatory_paths": [
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/terminal/model/mod.rs"
+        }
+      ],
+      "matchers": [
+        {
+          "flags": [],
+          "id": "lock-acquisition",
+          "pattern": "(?:model\\s*\\.\\s*)?(?:try_)?lock\\s*\\(|\\.(?:read|write)\\s*\\("
+        },
+        {
+          "flags": [],
+          "id": "callbacks-and-await",
+          "pattern": "\\.await\\b|ctx\\.(?:emit|notify|dispatch)\\s*\\(|callback\\s*\\("
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "include",
+          "patterns": [
+            "app/src/terminal/**",
+            "app/src/ai/**",
+            "app/src/cockpit/**",
+            "app/src/workspace/**",
+            "app/src/pane_group/**",
+            "app/src/remote_server/**",
+            "app/src/sftp_manager/**"
+          ]
+        },
+        {
+          "action": "exclude",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "target-tree"
+    },
+    {
+      "context": {
+        "after": 32,
+        "before": 32
+      },
+      "description": "Review synchronous filesystem, process, network, locking, waiting, and large parsing operations that can block async executors or UI-model threads.",
+      "id": "async-blocking",
+      "mandatory_paths": [
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/lib.rs"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/warpui_core/src/lib.rs"
+        }
+      ],
+      "matchers": [
+        {
+          "flags": [],
+          "id": "blocking-api",
+          "pattern": "std::fs::|std::thread::sleep|std::sync::(?:Mutex|RwLock)|block_on\\s*\\(|reqwest::blocking|\\.(?:wait|join|recv)\\s*\\("
+        },
+        {
+          "flags": [],
+          "id": "async-context",
+          "pattern": "\\basync\\s+(?:fn|move)|\\.await\\b"
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "include",
+          "patterns": [
+            "app/src/**",
+            "crates/zaplex_*/**",
+            "crates/zap_*/**",
+            "crates/warp_ssh_manager/**",
+            "crates/remote_server/**",
+            "crates/http_client/**",
+            "crates/warpui_core/**"
+          ]
+        },
+        {
+          "action": "exclude",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "target-tree"
+    },
+    {
+      "context": {
+        "after": 36,
+        "before": 36
+      },
+      "description": "Trace credentials and tokens through storage, logs, telemetry, crash reports, child environments, command lines, error surfaces, and exports.",
+      "id": "secrets-and-logging",
+      "mandatory_paths": [
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/local_managed_secrets.rs"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/managed_secrets/src/*.rs"
+        }
+      ],
+      "matchers": [
+        {
+          "flags": [
+            "ignore-case"
+          ],
+          "id": "credential-material",
+          "pattern": "password|passphrase|private[_-]?key|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|auth\\.json|CODEX_HOME|CLAUDE_CONFIG_DIR"
+        },
+        {
+          "flags": [],
+          "id": "logging-and-debug",
+          "pattern": "(?:log|tracing)::(?:trace|debug|info|warn|error)!|#\\[derive\\([^]]*Debug|debug_dump|telemetry|crash_report"
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "include",
+          "patterns": [
+            "app/src/**",
+            "crates/warp_ssh_manager/**",
+            "crates/zaplex_cockpit/**",
+            "crates/zaplex_remote_session/**",
+            "crates/remote_server/**",
+            "crates/managed_secrets*/**",
+            "crates/zap_sftp/**"
+          ]
+        },
+        {
+          "action": "exclude",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "target-tree"
+    },
+    {
+      "context": {
+        "after": 36,
+        "before": 36
+      },
+      "description": "Review local and remote file operations for traversal, symlink and TOCTOU flaws, non-atomic promotion, cleanup, conflict races, permission loss, and offset arithmetic.",
+      "id": "path-and-transfer-safety",
+      "mandatory_paths": [
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/zap_sftp/src/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/workspace/view/server_file_browser.rs"
+        }
+      ],
+      "matchers": [
+        {
+          "flags": [
+            "ignore-case"
+          ],
+          "id": "path-operation",
+          "pattern": "canonicalize|symlink|read_link|rename|remove_(?:file|dir)|copy|temp(?:file|dir)?|PathBuf|\\.join\\s*\\("
+        },
+        {
+          "flags": [
+            "ignore-case"
+          ],
+          "id": "transfer-operation",
+          "pattern": "upload|download|transfer|overwrite|offset|resume|progress|cancel"
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "include",
+          "patterns": [
+            "crates/zap_sftp/**",
+            "crates/remote_server/**",
+            "app/src/sftp_manager/**",
+            "app/src/workspace/view/server_file_browser.rs",
+            "app/src/remote_server/**",
+            "app/src/drive/**",
+            "app/src/autoupdate/**"
+          ]
+        },
+        {
+          "action": "exclude",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "target-tree"
+    },
+    {
+      "context": {
+        "after": 40,
+        "before": 40
+      },
+      "description": "Trace SSH and bootstrap inputs into argv, remote shell strings, heredocs, tmux commands, host-key policy, and downloaded executable verification.",
+      "id": "ssh-bootstrap-injection",
+      "mandatory_paths": [
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/warp_ssh_manager/src/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/remote_server/ssh_transport.rs"
+        }
+      ],
+      "matchers": [
+        {
+          "flags": [
+            "ignore-case"
+          ],
+          "id": "ssh-command",
+          "pattern": "ssh|scp|sftp|ProxyCommand|LocalCommand|StrictHostKeyChecking|known_hosts|identity[_ -]?file|jump[_ -]?host"
+        },
+        {
+          "flags": [
+            "ignore-case"
+          ],
+          "id": "remote-shell",
+          "pattern": "heredoc|<<-?['\"]?[A-Za-z_]+|base64|printf|eval|tmux|curl[^\\n]*\\|[^\\n]*(?:sh|bash)|wget"
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "include",
+          "patterns": [
+            "crates/warp_ssh_manager/**",
+            "crates/remote_server/**",
+            "crates/zaplex_remote_session/**",
+            "crates/zaplex_cockpit/**",
+            "app/src/terminal/ssh/**",
+            "app/src/terminal/zaplexify/**",
+            "app/assets/bundled/ssh/**",
+            "app/assets/bundled/bootstrap/**",
+            "app/src/remote_server/**",
+            "app/src/cockpit/**"
+          ]
+        },
+        {
+          "action": "exclude",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "target-tree"
+    },
+    {
+      "context": {
+        "after": 48,
+        "before": 48
+      },
+      "description": "Review the complete migration chain and persistence implementation for schema drift, invalid reversals, missing transactions, swallowed errors, concurrency configuration, and lossy data migrations.",
+      "id": "persistence-and-migrations",
+      "mandatory_paths": [
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/persistence/migrations/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/persistence/src/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/persistence/**"
+        }
+      ],
+      "matchers": [
+        {
+          "flags": [
+            "ignore-case"
+          ],
+          "id": "schema-and-migration",
+          "pattern": "create\\s+table|alter\\s+table|drop\\s+(?:table|column)|pragma\\s+foreign_keys|schema!|embed_migrations"
+        },
+        {
+          "flags": [],
+          "id": "database-operation",
+          "pattern": "diesel::|rusqlite|\\.(?:execute|load|get_result)\\s*\\(|insert_into|sql_query|busy_timeout|journal_mode"
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "include",
+          "patterns": [
+            "crates/persistence/**",
+            "app/src/persistence/**",
+            "app/src/**",
+            "crates/zaplex_cockpit/**"
+          ]
+        },
+        {
+          "action": "exclude",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "target-tree"
+    },
+    {
+      "context": {
+        "after": 48,
+        "before": 48
+      },
+      "description": "Adversarially review workflows, actions, hooks, and release scripts for untrusted interpolation, permissions, action pinning, secret exposure, signing bypass, tag errors, cache poisoning, and release races.",
+      "id": "ci-release-security",
+      "mandatory_paths": [
+        {
+          "minimum_matches": 1,
+          "pattern": ".github/workflows/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": ".github/actions/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": ".hooks/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "script/create_release_tag_and_branch"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "script/classify-release-tag*"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "script/needs-build-check"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "script/check-v1-release-readiness"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "script/macos/bundle"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "script/linux/bundle"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "script/windows/*.ps1"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "script/deploy_remote_server"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "script/upload-cockpit-runtime-evidence"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "script/cockpit-parity-audit"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "script/generate_changelog"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "cliff.toml"
+        }
+      ],
+      "matchers": [
+        {
+          "flags": [
+            "ignore-case"
+          ],
+          "id": "workflow-trust-boundary",
+          "pattern": "pull_request_target|workflow_run|github\\.event|head_ref|permissions:|secrets\\.|persist-credentials|cache|concurrency:"
+        },
+        {
+          "flags": [
+            "multiline"
+          ],
+          "id": "action-or-download",
+          "pattern": "uses:\\s+[^\\s]+@[^\\s]+|curl[^\\n]*\\|[^\\n]*(?:sh|bash)|wget|notarytool|codesign|create_release|release-tag"
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "include",
+          "patterns": [
+            ".github/**",
+            ".hooks/**",
+            "script/**",
+            "cliff.toml",
+            "SECURITY.md",
+            "CONTRIBUTING.md"
+          ]
+        },
+        {
+          "action": "exclude",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "target-tree"
+    },
+    {
+      "context": {
+        "after": 0,
+        "before": 0
+      },
+      "description": "Classify every immutable upstream commit after the pinned merge base and verify each bug or security patch against the pinned target tree.",
+      "id": "upstream-drift",
+      "mandatory_paths": [],
+      "matchers": [
+        {
+          "flags": [
+            "dotall"
+          ],
+          "id": "commit-patch",
+          "pattern": ".+"
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "include",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "upstream-commit-series"
+    },
+    {
+      "context": {
+        "after": 36,
+        "before": 36
+      },
+      "description": "Review error-discarding constructs and task, watcher, child, PTY, retry, timeout, and drop lifecycles for false success, ghost work, leaks, and lost failures.",
+      "id": "error-swallowing-and-cancellation",
+      "mandatory_paths": [
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/zaplex_cockpit/src/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/ai/subscription_agent/**"
+        }
+      ],
+      "matchers": [
+        {
+          "flags": [],
+          "id": "discarded-error",
+          "pattern": "let\\s+_\\s*=|\\.ok\\s*\\(|if\\s+let\\s+Ok|unwrap_or_default\\s*\\(|map_err\\s*\\(\\s*\\|_\\|"
+        },
+        {
+          "flags": [
+            "ignore-case"
+          ],
+          "id": "lifecycle-operation",
+          "pattern": "spawn|JoinHandle|abort|cancel|timeout|interval|watcher|subscription|retry|backoff|kill_on_drop|drop\\s*\\("
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "include",
+          "patterns": [
+            "crates/zaplex_cockpit/**",
+            "crates/zaplex_remote_session/**",
+            "crates/zap_sftp/**",
+            "crates/zap_sync/**",
+            "crates/warp_ssh_manager/**",
+            "crates/remote_server/**",
+            "app/src/cockpit/**",
+            "app/src/ssh_manager/**",
+            "app/src/sftp_manager/**",
+            "app/src/remote_server/**",
+            "app/src/ai/subscription_agent/**",
+            "app/src/ai/agent_sdk/**",
+            "app/src/ai/mcp/**",
+            "app/src/autoupdate/**",
+            "app/src/control_surface.rs",
+            "app/src/notifications/**",
+            "app/src/terminal/cli_agent_sessions/**",
+            "app/src/terminal/daemon_tty/**"
+          ]
+        },
+        {
+          "action": "exclude",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "target-tree"
+    },
+    {
+      "context": {
+        "after": 40,
+        "before": 40
+      },
+      "description": "Review feature-flag wiring, channel and Cargo configuration, Zaplex-owned dead code, and user-facing strings or catalog lookups that bypass or drift from Fluent resources.",
+      "id": "feature-flags-i18n-dead-code",
+      "mandatory_paths": [
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/warp_core/src/features.rs"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/features.rs"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/i18n.rs"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/channels/**/*.desktop"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/channels/**/*.json"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "Cargo.toml"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "**/Cargo.toml"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/i18n/**/*.ftl"
+        }
+      ],
+      "matchers": [
+        {
+          "flags": [
+            "multiline"
+          ],
+          "id": "feature-flag",
+          "pattern": "FeatureFlag::[A-Za-z0-9_]+|\\.is_enabled\\s*\\(|(?:RELEASE|PREVIEW|DOGFOOD)_FLAGS|cfg\\s*\\(\\s*feature|^\\[features\\]"
+        },
+        {
+          "flags": [
+            "ignore-case"
+          ],
+          "id": "stub-or-dead-code",
+          "pattern": "unimplemented!|todo!|not supported|coming soon|allow\\(dead_code\\)"
+        },
+        {
+          "flags": [
+            "ignore-case"
+          ],
+          "id": "i18n-surface",
+          "pattern": "fluent|i18n|localiz|translate|tr!\\s*\\(|shared_string\\s*\\("
+        }
+      ],
+      "path_rules": [
+        {
+          "action": "include",
+          "patterns": [
+            "Cargo.toml",
+            "crates/warp_core/src/features.rs",
+            "app/src/features.rs",
+            "app/src/i18n.rs",
+            "app/src/**/*.rs",
+            "crates/**/*.rs",
+            "app/channels/**",
+            "app/i18n.toml",
+            "app/i18n/**",
+            "**/Cargo.toml",
+            "resources/**",
+            "scripts/check-i18n-*"
+          ]
+        },
+        {
+          "action": "exclude",
+          "patterns": [
+            "**"
+          ]
+        }
+      ],
+      "source_type": "target-tree"
+    }
+  ],
+  "description": "Immutable definitions for the thirteen codebase-audit crosscut reviews. Path rules use first-match semantics against included inventory paths.",
+  "schema_version": 1
+}

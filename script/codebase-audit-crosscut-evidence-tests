@@ -1,0 +1,733 @@
+#!/usr/bin/env python3
+
+"""Focused tests for immutable codebase-audit crosscut evidence generation."""
+
+from __future__ import annotations
+
+import concurrent.futures
+import copy
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest import mock
+
+
+SCRIPT = Path(__file__).resolve().parent / "generate-codebase-audit-crosscut-evidence"
+INVENTORY_GENERATOR = Path(__file__).resolve().parent / "generate-codebase-audit-inventory"
+PRODUCTION_DEFINITIONS = Path(__file__).resolve().parent / "codebase-audit-crosscuts.json"
+LOADER = importlib.machinery.SourceFileLoader("codebase_audit_crosscut_evidence", str(SCRIPT))
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
+assert SPEC is not None
+EVIDENCE = importlib.util.module_from_spec(SPEC)
+LOADER.exec_module(EVIDENCE)
+
+
+class CodebaseAuditCrosscutEvidenceTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="zaplex-audit-crosscut-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q")
+        self.git("config", "user.name", "Crosscut Test")
+        self.git("config", "user.email", "crosscut@example.invalid")
+
+        self.write("src/shared.rs", b"fn base() {}\n")
+        self.write(".gitattributes", b"*.rs diff=hostile\n")
+        self.write("mandatory/a.txt", b"one\ntwo\nthree\n")
+        self.write("docs/stable.txt", b"stable\n")
+        self.write("assets/image.png", b"\x89PNG\x00binary")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "base")
+        self.merge_base_sha = self.rev_parse("HEAD")
+
+        self.git("checkout", "-q", "-b", "upstream")
+        self.write("src/shared.rs", b"unsafe fn upstream_one() {}\n")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "fix shared")
+        self.first_upstream_sha = self.rev_parse("HEAD")
+        self.write("src/upstream.rs", b"unsafe fn upstream_two() {}\n")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "add upstream")
+        self.upstream_sha = self.rev_parse("HEAD")
+
+        self.git("checkout", "-q", "-b", "target", self.merge_base_sha)
+        self.write(
+            "src/shared.rs",
+            b"unsafe fn target() {}\nCommand::new(\"tool\");\nlet _ = result;\n",
+        )
+        self.write("src/target.rs", b"unsafe fn target_only() {}\n")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "target")
+        self.target_sha = self.rev_parse("HEAD")
+
+        self.scope = self.root / "scope.json"
+        self.scope.write_bytes(
+            EVIDENCE.canonical_json(
+                {
+                    "description": "Test scope",
+                    "rules": [
+                        {
+                            "action": "exclude",
+                            "entry_types": ["blob"],
+                            "id": "binary",
+                            "patterns": ["*.png"],
+                            "reason": "test binary",
+                        },
+                        {
+                            "action": "include",
+                            "entry_types": ["blob"],
+                            "id": "text",
+                            "patterns": ["**"],
+                        },
+                    ],
+                    "schema_version": 1,
+                }
+            )
+        )
+        self.inventory_dir = self.root / "inventory"
+        inventory_result = subprocess.run(
+            [
+                sys.executable,
+                str(INVENTORY_GENERATOR),
+                "--repo",
+                str(self.repo),
+                "--target-sha",
+                self.target_sha,
+                "--upstream-sha",
+                self.upstream_sha,
+                "--merge-base-sha",
+                self.merge_base_sha,
+                "--scope",
+                str(self.scope),
+                "--output",
+                str(self.inventory_dir),
+                "--max-range-lines",
+                "2",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(inventory_result.returncode, 0, inventory_result.stderr)
+        self.manifest_sha256 = self.read_hash(
+            self.inventory_dir / "manifest.sha256", "manifest.json"
+        )
+        self.definitions = self.root / "crosscuts.json"
+        self.write_definitions(self.make_definitions())
+
+    def git(self, *args):
+        result = subprocess.run(
+            ["git", "-C", str(self.repo), *args],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def rev_parse(self, revision):
+        return self.git("rev-parse", revision)
+
+    def write(self, relative, contents):
+        path = self.repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+
+    def read_hash(self, path, filename):
+        return EVIDENCE.parse_hash_file(path.read_bytes(), filename, path.name)
+
+    def make_definitions(self):
+        definitions = []
+        for crosscut_id in EVIDENCE.EXPECTED_CROSSCUT_IDS:
+            source_type = (
+                "upstream-commit-series"
+                if crosscut_id == "upstream-drift"
+                else "target-tree"
+            )
+            definition = {
+                "context": {"after": 0, "before": 0},
+                "description": f"Test definition for {crosscut_id}",
+                "id": crosscut_id,
+                "mandatory_paths": [],
+                "matchers": [
+                    {
+                        "flags": ["dotall"] if source_type == "upstream-commit-series" else [],
+                        "id": "commit-patch" if source_type == "upstream-commit-series" else "unsafe",
+                        "pattern": ".+" if source_type == "upstream-commit-series" else "unsafe",
+                    }
+                ],
+                "path_rules": [{"action": "include", "patterns": ["**"]}],
+                "source_type": source_type,
+            }
+            definitions.append(definition)
+        definitions[0]["mandatory_paths"] = [
+            {"minimum_matches": 1, "pattern": "mandatory/**"}
+        ]
+        return {
+            "definitions": definitions,
+            "description": "Test all thirteen crosscuts",
+            "schema_version": 1,
+        }
+
+    def write_definitions(self, definitions, path=None):
+        path = self.definitions if path is None else path
+        path.write_bytes(EVIDENCE.canonical_json(definitions))
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def definitions_sha256(self, path=None):
+        path = self.definitions if path is None else path
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def run_generator(
+        self,
+        output,
+        inventory_dir=None,
+        definitions=None,
+        manifest_sha256=None,
+        definitions_sha256=None,
+        extra=(),
+        environment=None,
+    ):
+        definitions = self.definitions if definitions is None else definitions
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--repo",
+                str(self.repo),
+                "--inventory-dir",
+                str(self.inventory_dir if inventory_dir is None else inventory_dir),
+                "--expected-manifest-sha256",
+                self.manifest_sha256 if manifest_sha256 is None else manifest_sha256,
+                "--definitions",
+                str(definitions),
+                "--expected-definitions-sha256",
+                self.definitions_sha256(definitions)
+                if definitions_sha256 is None
+                else definitions_sha256,
+                "--output",
+                str(output),
+                *extra,
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            check=False,
+        )
+
+    def load_inputs(self):
+        contract = EVIDENCE.load_inventory_contract(
+            self.inventory_dir, self.manifest_sha256
+        )
+        definitions = EVIDENCE.load_definitions(
+            self.definitions, self.definitions_sha256()
+        )
+        object_format, oid_length = EVIDENCE.repository_object_format(self.repo)
+        self.assertEqual(object_format, "sha1")
+        EVIDENCE.validate_inventory_against_repo(contract, self.repo, oid_length)
+        return contract, definitions, oid_length
+
+    def rewrite_inventory_hash_chain(self, directory):
+        inventory_bytes = (directory / "inventory.json").read_bytes()
+        inventory_sha256 = hashlib.sha256(inventory_bytes).hexdigest()
+        (directory / "inventory.sha256").write_text(
+            f"{inventory_sha256}  inventory.json\n", encoding="ascii"
+        )
+        manifest = json.loads((directory / "manifest.json").read_text())
+        manifest["inventory_sha256"] = inventory_sha256
+        manifest_bytes = EVIDENCE.canonical_json(manifest)
+        (directory / "manifest.json").write_bytes(manifest_bytes)
+        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        hash_file = f"{manifest_sha256}  manifest.json\n"
+        (directory / "manifest.sha256").write_text(hash_file, encoding="ascii")
+        (directory / "COMPLETE").write_text(hash_file, encoding="ascii")
+        return manifest_sha256
+
+    def test_production_contract_has_exact_thirteen_canonical_definitions(self):
+        raw = PRODUCTION_DEFINITIONS.read_bytes()
+        contract = EVIDENCE.load_definitions(
+            PRODUCTION_DEFINITIONS, hashlib.sha256(raw).hexdigest()
+        )
+        self.assertEqual(
+            [definition["id"] for definition in contract["definitions"]],
+            list(EVIDENCE.EXPECTED_CROSSCUT_IDS),
+        )
+        self.assertEqual(EVIDENCE.canonical_json(json.loads(raw)), raw)
+
+        repository = SCRIPT.parent.parent
+        object_format, oid_length = EVIDENCE.repository_object_format(repository)
+        head = EVIDENCE.run_git(repository, "rev-parse", "HEAD").decode("ascii").strip()
+        EVIDENCE.require_object_id(head, "test HEAD", oid_length)
+        tree = EVIDENCE.load_tree(repository, head, oid_length)
+        scope, _ = EVIDENCE.load_canonical_json(
+            SCRIPT.parent / "codebase-audit-scope.json", "production scope"
+        )
+        EVIDENCE.validate_scope(scope)
+        included_paths = {
+            entry["path"]
+            for entry in tree
+            if EVIDENCE.classify_scope(entry, scope["rules"])["action"] == "include"
+        }
+        excluded_paths = {entry["path"] for entry in tree} - included_paths
+        for definition in contract["definitions"]:
+            for selector in definition["mandatory_paths"]:
+                matches = {
+                    path
+                    for path in included_paths
+                    if EVIDENCE.fnmatch.fnmatchcase(path, selector["pattern"])
+                }
+                excluded_matches = {
+                    path
+                    for path in excluded_paths
+                    if EVIDENCE.fnmatch.fnmatchcase(path, selector["pattern"])
+                }
+                self.assertGreaterEqual(
+                    len(matches),
+                    selector["minimum_matches"],
+                    f"{definition['id']}/{selector['pattern']}",
+                )
+                self.assertFalse(
+                    excluded_matches, f"{definition['id']}/{selector['pattern']}"
+                )
+                self.assertTrue(
+                    all(
+                        EVIDENCE.classify_definition_path(definition, path) == "include"
+                        for path in matches
+                    )
+                )
+
+    def test_output_is_deterministic_immutable_complete_and_source_deduplicated(self):
+        self.write("src/shared.rs", b"dirty worktree data must never be read\n")
+        first = self.root / "evidence-first"
+        second = self.root / "evidence-second"
+        for output in (first, second):
+            result = self.run_generator(output)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        for name in (
+            "COMPLETE",
+            "crosscut-evidence.json",
+            "crosscut-evidence.sha256",
+            "crosscuts.resolved.json",
+            "crosscuts.sha256",
+            "manifest.json",
+            "manifest.sha256",
+        ):
+            self.assertEqual((first / name).read_bytes(), (second / name).read_bytes(), name)
+
+        document = json.loads((first / "crosscut-evidence.json").read_text())
+        contract, definitions, _ = self.load_inputs()
+        EVIDENCE.validate_evidence(document, contract, definitions)
+        included_count = len(contract["included"])
+        self.assertEqual(document["coverage"]["crosscuts"], 13)
+        self.assertEqual(document["coverage"]["target_blobs_scanned"], included_count)
+        self.assertEqual(document["coverage"]["definition_evaluations"], included_count * 13)
+        self.assertEqual(
+            [record["path"] for record in document["target_blobs"]],
+            sorted(entry["path"] for entry in contract["included"]),
+        )
+        source_text = "".join(source["text"] for source in document["sources"])
+        self.assertIn("unsafe fn target()", source_text)
+        self.assertNotIn("dirty worktree", source_text)
+
+        matcher_evidence = [
+            entry
+            for entry in document["evidence"]
+            if entry["kind"] == "matcher" and entry["path"] == "src/target.rs"
+        ]
+        self.assertEqual(len(matcher_evidence), 12)
+        self.assertEqual(len({entry["source_sha256"] for entry in matcher_evidence}), 1)
+        self.assertLess(document["coverage"]["source_records"], len(document["evidence"]))
+
+        mandatory = [
+            entry for entry in document["evidence"] if entry["kind"] == "mandatory-range"
+        ]
+        self.assertEqual(
+            [(entry["range"]["start"], entry["range"]["end"]) for entry in mandatory],
+            [(1, 2), (3, 3)],
+        )
+        self.assertEqual(
+            [record["commit_oid"] for record in document["upstream_commit_series"]],
+            [self.first_upstream_sha, self.upstream_sha],
+        )
+        self.assertEqual(
+            [record["index"] for record in document["upstream_commit_series"]], [0, 1]
+        )
+        for record in document["upstream_commit_series"]:
+            self.assertEqual(len(record["tree_oid"]), 40)
+            self.assertEqual(record["patch_base_oid"], record["parent_oids"][0])
+            self.assertEqual(record["patch_sha256"], record["patch_sha256"].lower())
+            self.assertEqual(len(record["patch_sha256"]), 64)
+        self.assertEqual(document["coverage"]["upstream_commits"], 2)
+        self.assertEqual(
+            document["upstream_commit_series_sha256"],
+            hashlib.sha256(
+                EVIDENCE.canonical_json(document["upstream_commit_series"])
+            ).hexdigest(),
+        )
+        self.assertEqual(
+            (first / "COMPLETE").read_bytes(), (first / "manifest.sha256").read_bytes()
+        )
+        manifest = json.loads((first / "manifest.json").read_text())
+        self.assertEqual(manifest["inventory_manifest_sha256"], self.manifest_sha256)
+        self.assertEqual(manifest["definitions_sha256"], self.definitions_sha256())
+
+        repeated = self.run_generator(first)
+        self.assertNotEqual(repeated.returncode, 0)
+        self.assertIn("output path already exists", repeated.stderr)
+
+    def test_each_included_blob_is_loaded_exactly_once(self):
+        contract, definitions, oid_length = self.load_inputs()
+        calls = []
+        original_run_git = EVIDENCE.run_git
+
+        def counted_run_git(repo, *args, **kwargs):
+            if len(args) >= 3 and args[0:2] == ("cat-file", "blob"):
+                calls.append(args[2])
+            return original_run_git(repo, *args, **kwargs)
+
+        with mock.patch.object(EVIDENCE, "run_git", counted_run_git):
+            document = EVIDENCE.build_evidence(
+                self.repo, contract, definitions, oid_length
+            )
+        expected = sorted(entry["blob_oid"] for entry in contract["included"])
+        self.assertEqual(sorted(calls), expected)
+        self.assertEqual(len(calls), len(set(entry["path"] for entry in contract["included"])))
+        self.assertEqual(document["coverage"]["target_blobs_scanned"], len(expected))
+
+    def test_upstream_patch_bytes_ignore_host_and_repository_diff_configuration(self):
+        baseline = self.root / "canonical-patch-baseline"
+        baseline_result = self.run_generator(baseline)
+        self.assertEqual(baseline_result.returncode, 0, baseline_result.stderr)
+
+        order_file = self.root / "host-order"
+        order_file.write_text("src/upstream.rs\nsrc/shared.rs\n", encoding="utf-8")
+        attributes_file = self.root / "host-attributes"
+        attributes_file.write_text("*.rs -diff\n", encoding="utf-8")
+        (self.repo / ".gitattributes").write_text("*.rs -diff\n", encoding="utf-8")
+        for key, value in (
+            ("core.attributesFile", str(attributes_file)),
+            ("core.quotePath", "false"),
+            ("diff.algorithm", "histogram"),
+            ("diff.context", "10"),
+            ("diff.indentHeuristic", "true"),
+            ("diff.interHunkContext", "10"),
+            ("diff.mnemonicPrefix", "true"),
+            ("diff.noprefix", "true"),
+            ("diff.orderFile", str(order_file)),
+        ):
+            self.git("config", key, value)
+
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "diff.hostile.binary",
+                "GIT_CONFIG_VALUE_0": "true",
+                "GIT_CONFIG_PARAMETERS": "'diff.hostile.binary=true'",
+            }
+        )
+        configured = self.root / "canonical-patch-configured"
+        configured_result = self.run_generator(configured, environment=environment)
+        self.assertEqual(configured_result.returncode, 0, configured_result.stderr)
+        self.assertEqual(
+            (baseline / "crosscut-evidence.json").read_bytes(),
+            (configured / "crosscut-evidence.json").read_bytes(),
+        )
+        self.assertEqual(
+            (baseline / "manifest.json").read_bytes(),
+            (configured / "manifest.json").read_bytes(),
+        )
+
+    def test_required_pins_and_all_hash_layers_fail_closed(self):
+        missing_pin = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--repo",
+                str(self.repo),
+                "--inventory-dir",
+                str(self.inventory_dir),
+                "--definitions",
+                str(self.definitions),
+                "--output",
+                str(self.root / "missing-pin"),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertNotEqual(missing_pin.returncode, 0)
+        self.assertIn("--expected-manifest-sha256", missing_pin.stderr)
+        self.assertIn("--expected-definitions-sha256", missing_pin.stderr)
+
+        wrong_manifest = self.run_generator(
+            self.root / "wrong-manifest", manifest_sha256="0" * 64
+        )
+        self.assertNotEqual(wrong_manifest.returncode, 0)
+        self.assertIn("expected pin", wrong_manifest.stderr)
+
+        wrong_definitions = self.run_generator(
+            self.root / "wrong-definitions", definitions_sha256="0" * 64
+        )
+        self.assertNotEqual(wrong_definitions.returncode, 0)
+        self.assertIn("definitions SHA-256", wrong_definitions.stderr)
+
+        complete = self.inventory_dir / "COMPLETE"
+        original = complete.read_bytes()
+        complete.write_bytes(b"0" * 64 + b"  manifest.json\n")
+        try:
+            mismatch = self.run_generator(self.root / "complete-mismatch")
+            self.assertNotEqual(mismatch.returncode, 0)
+            self.assertIn("COMPLETE must exactly equal", mismatch.stderr)
+        finally:
+            complete.write_bytes(original)
+
+        definitions_bytes = self.definitions.read_bytes()
+        self.definitions.write_bytes(definitions_bytes + b" ")
+        try:
+            noncanonical = self.run_generator(
+                self.root / "noncanonical-definitions",
+                definitions_sha256=hashlib.sha256(self.definitions.read_bytes()).hexdigest(),
+            )
+            self.assertNotEqual(noncanonical.returncode, 0)
+            self.assertIn("not canonical JSON", noncanonical.stderr)
+        finally:
+            self.definitions.write_bytes(definitions_bytes)
+
+        inventory_tamper = self.root / "inventory-hash-tamper"
+        shutil.copytree(self.inventory_dir, inventory_tamper)
+        with (inventory_tamper / "inventory.json").open("ab") as artifact:
+            artifact.write(b" ")
+        inventory_result = self.run_generator(
+            self.root / "inventory-hash-output", inventory_dir=inventory_tamper
+        )
+        self.assertNotEqual(inventory_result.returncode, 0)
+        self.assertIn("not canonical JSON", inventory_result.stderr)
+
+        scope_tamper = self.root / "scope-hash-tamper"
+        shutil.copytree(self.inventory_dir, scope_tamper)
+        scope = json.loads((scope_tamper / "scope.resolved.json").read_text())
+        scope["description"] = "tampered"
+        (scope_tamper / "scope.resolved.json").write_bytes(EVIDENCE.canonical_json(scope))
+        scope_result = self.run_generator(
+            self.root / "scope-hash-output", inventory_dir=scope_tamper
+        )
+        self.assertNotEqual(scope_result.returncode, 0)
+        self.assertIn("scope.resolved.json SHA-256 mismatch", scope_result.stderr)
+
+        manifest_tamper = self.root / "manifest-hash-tamper"
+        shutil.copytree(self.inventory_dir, manifest_tamper)
+        manifest = json.loads((manifest_tamper / "manifest.json").read_text())
+        manifest["coverage"]["complete"] = False
+        (manifest_tamper / "manifest.json").write_bytes(EVIDENCE.canonical_json(manifest))
+        manifest_result = self.run_generator(
+            self.root / "manifest-hash-output", inventory_dir=manifest_tamper
+        )
+        self.assertNotEqual(manifest_result.returncode, 0)
+        self.assertIn("manifest.json SHA-256 mismatch", manifest_result.stderr)
+
+    def test_json_rejects_duplicate_keys_nonfinite_numbers_and_boolean_integers(self):
+        duplicate = self.root / "duplicate.json"
+        duplicate.write_text(
+            '{\n  "definitions": [],\n  "definitions": [],\n  "description": "x",\n  "schema_version": 1\n}\n',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(EVIDENCE.EvidenceError, "duplicate JSON key"):
+            EVIDENCE.load_canonical_json(duplicate, "duplicate")
+
+        for token in ("NaN", "Infinity", "-Infinity"):
+            nonfinite = self.root / f"nonfinite-{token.replace('-', 'minus')}.json"
+            nonfinite.write_text(f'{{\n  "value": {token}\n}}\n', encoding="utf-8")
+            with self.subTest(token=token):
+                with self.assertRaisesRegex(EVIDENCE.EvidenceError, "non-finite"):
+                    EVIDENCE.load_canonical_json(nonfinite, "non-finite")
+
+        boolean_version = self.make_definitions()
+        boolean_version["schema_version"] = True
+        boolean_version_path = self.root / "boolean-version.json"
+        boolean_hash = self.write_definitions(boolean_version, boolean_version_path)
+        with self.assertRaisesRegex(EVIDENCE.EvidenceError, "plain integer"):
+            EVIDENCE.load_definitions(boolean_version_path, boolean_hash)
+
+    def test_rehashed_inventory_metadata_is_checked_against_git_objects(self):
+        tampered = self.root / "tampered-inventory"
+        tampered.mkdir()
+        for child in self.inventory_dir.iterdir():
+            (tampered / child.name).write_bytes(child.read_bytes())
+        inventory = json.loads((tampered / "inventory.json").read_text())
+        target = next(entry for entry in inventory["included"] if entry["path"] == "src/shared.rs")
+        target["object_id"] = self.rev_parse(f"{self.first_upstream_sha}:src/shared.rs")
+        target["blob_oid"] = target["object_id"]
+        (tampered / "inventory.json").write_bytes(EVIDENCE.canonical_json(inventory))
+        manifest_sha256 = self.rewrite_inventory_hash_chain(tampered)
+        result = self.run_generator(
+            self.root / "tampered-result",
+            inventory_dir=tampered,
+            manifest_sha256=manifest_sha256,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("inventory object_id mismatch", result.stderr)
+
+    def test_definition_and_mandatory_path_coverage_fail_closed(self):
+        missing_id = self.make_definitions()
+        missing_id["definitions"].pop()
+        missing_id_path = self.root / "missing-id.json"
+        self.write_definitions(missing_id, missing_id_path)
+        invalid = self.run_generator(
+            self.root / "missing-id-output", definitions=missing_id_path
+        )
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn("exact 13 crosscut IDs", invalid.stderr)
+
+        missing_path = self.make_definitions()
+        missing_path["definitions"][0]["mandatory_paths"] = [
+            {"minimum_matches": 1, "pattern": "does-not-exist/**"}
+        ]
+        missing_path_file = self.root / "missing-path.json"
+        self.write_definitions(missing_path, missing_path_file)
+        missing = self.run_generator(
+            self.root / "missing-path-output", definitions=missing_path_file
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("matched 0, expected at least 1", missing.stderr)
+
+        excluded_path = self.make_definitions()
+        excluded_path["definitions"][0]["mandatory_paths"] = [
+            {"minimum_matches": 1, "pattern": "*.png"}
+        ]
+        excluded_path_file = self.root / "excluded-path.json"
+        self.write_definitions(excluded_path, excluded_path_file)
+        excluded = self.run_generator(
+            self.root / "excluded-path-output", definitions=excluded_path_file
+        )
+        self.assertNotEqual(excluded.returncode, 0)
+        self.assertIn("matches excluded paths", excluded.stderr)
+
+    def test_evidence_validator_rejects_missing_duplicate_and_drifted_records(self):
+        contract, definitions, oid_length = self.load_inputs()
+        document = EVIDENCE.build_evidence(self.repo, contract, definitions, oid_length)
+
+        missing_blob = copy.deepcopy(document)
+        missing_blob["target_blobs"].pop()
+        with self.assertRaisesRegex(EVIDENCE.EvidenceError, "scan coverage"):
+            EVIDENCE.validate_evidence(missing_blob, contract, definitions)
+
+        duplicate = copy.deepcopy(document)
+        duplicate["evidence"].append(copy.deepcopy(duplicate["evidence"][0]))
+        duplicate["coverage"]["evidence_entries"] += 1
+        with self.assertRaisesRegex(EVIDENCE.EvidenceError, "duplicate evidence ID"):
+            EVIDENCE.validate_evidence(duplicate, contract, definitions)
+
+        missing_mandatory = copy.deepcopy(document)
+        index = next(
+            index
+            for index, entry in enumerate(missing_mandatory["evidence"])
+            if entry["kind"] == "mandatory-range"
+        )
+        missing_mandatory["evidence"].pop(index)
+        missing_mandatory["coverage"]["evidence_entries"] -= 1
+        missing_mandatory["coverage"]["mandatory_ranges"] -= 1
+        with self.assertRaisesRegex(EVIDENCE.EvidenceError, "mandatory range coverage"):
+            EVIDENCE.validate_evidence(missing_mandatory, contract, definitions)
+
+        source_drift = copy.deepcopy(document)
+        source_drift["sources"][0]["text"] += "tampered"
+        with self.assertRaisesRegex(EVIDENCE.EvidenceError, "source SHA-256 mismatch"):
+            EVIDENCE.validate_evidence(source_drift, contract, definitions)
+
+        series_drift = copy.deepcopy(document)
+        series_drift["upstream_commit_series"].pop()
+        with self.assertRaisesRegex(EVIDENCE.EvidenceError, "series SHA-256 mismatch"):
+            EVIDENCE.validate_evidence(series_drift, contract, definitions)
+
+        selector_drift = copy.deepcopy(document)
+        selector_drift["mandatory_path_coverage"][0]["matched_paths"] = []
+        selector_drift["coverage"]["mandatory_paths"] -= 1
+        with self.assertRaisesRegex(EVIDENCE.EvidenceError, "selector coverage"):
+            EVIDENCE.validate_evidence(selector_drift, contract, definitions)
+
+        crosscut_drift = copy.deepcopy(document)
+        crosscut_drift["crosscut_coverage"][0]["match_occurrences"] += 1
+        with self.assertRaisesRegex(EVIDENCE.EvidenceError, "crosscut coverage"):
+            EVIDENCE.validate_evidence(crosscut_drift, contract, definitions)
+
+    def test_replace_refs_are_rejected(self):
+        self.git("replace", self.target_sha, self.upstream_sha)
+        result = self.run_generator(self.root / "replace-output")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Git replace refs are not allowed", result.stderr)
+
+    def test_mutable_git_attributes_and_diff_driver_config_fail_closed(self):
+        attributes = self.repo / ".git" / "info" / "attributes"
+        attributes.write_text("*.rs -diff\n", encoding="utf-8")
+        mutable_attributes = self.run_generator(self.root / "mutable-attributes")
+        self.assertNotEqual(mutable_attributes.returncode, 0)
+        self.assertIn("mutable Git info attributes are not allowed", mutable_attributes.stderr)
+        attributes.unlink()
+
+        self.git("config", "diff.hostile.binary", "true")
+        mutable_driver = self.run_generator(self.root / "mutable-driver")
+        self.assertNotEqual(mutable_driver.returncode, 0)
+        self.assertIn("mutable Git diff-driver", mutable_driver.stderr)
+
+        self.git("config", "--unset", "diff.hostile.binary")
+        self.git("config", "extensions.worktreeConfig", "true")
+        worktree_config = self.repo / ".git" / "config.worktree"
+        worktree_config.write_text(
+            '[diff "hostile"]\n\tbinary = true\n', encoding="utf-8"
+        )
+        mutable_worktree_driver = self.run_generator(
+            self.root / "mutable-worktree-driver"
+        )
+        self.assertNotEqual(mutable_worktree_driver.returncode, 0)
+        self.assertIn("worktree config is not allowed", mutable_worktree_driver.stderr)
+
+    def test_output_reservation_is_atomic_under_a_reproducible_race(self):
+        contract, definitions, oid_length = self.load_inputs()
+        document = EVIDENCE.build_evidence(self.repo, contract, definitions, oid_length)
+        output = self.root / "race-output"
+        barrier = threading.Barrier(2)
+        original_reserve = EVIDENCE.reserve_output
+
+        def synchronized_reserve(path):
+            barrier.wait(timeout=5)
+            original_reserve(path)
+
+        def writer():
+            try:
+                EVIDENCE.write_output(output, document, definitions)
+                return "written"
+            except EVIDENCE.EvidenceError as error:
+                return str(error)
+
+        with mock.patch.object(EVIDENCE, "reserve_output", synchronized_reserve):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(lambda _: writer(), range(2)))
+        self.assertEqual(results.count("written"), 1, results)
+        self.assertEqual(
+            sum("output path already exists" in result for result in results), 1, results
+        )
+        self.assertTrue((output / "COMPLETE").is_file())
+        self.assertFalse((output / ".COMPLETE.tmp").exists())
+        self.assertEqual(
+            (output / "COMPLETE").read_bytes(), (output / "manifest.sha256").read_bytes()
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

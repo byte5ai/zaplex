@@ -1,0 +1,1666 @@
+#!/usr/bin/env python3
+
+"""Generate immutable, hash-bound evidence for all codebase-audit crosscuts."""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import subprocess
+import sys
+from typing import Any
+
+
+SCHEMA_VERSION = 1
+GENERATOR_VERSION = 1
+OBJECT_FORMAT_LENGTHS = {"sha1": 40, "sha256": 64}
+OWNERSHIPS = {
+    "fork-owned",
+    "upstream-modified-by-fork",
+    "upstream-unmodified",
+}
+EXPECTED_CROSSCUT_IDS = (
+    "unsafe-app-and-zaplex",
+    "unsafe-framework",
+    "process-spawning",
+    "terminal-model-lock",
+    "async-blocking",
+    "secrets-and-logging",
+    "path-and-transfer-safety",
+    "ssh-bootstrap-injection",
+    "persistence-and-migrations",
+    "ci-release-security",
+    "upstream-drift",
+    "error-swallowing-and-cancellation",
+    "feature-flags-i18n-dead-code",
+)
+DEFINITION_ROOT_KEYS = {"definitions", "description", "schema_version"}
+DEFINITION_KEYS = {
+    "context",
+    "description",
+    "id",
+    "mandatory_paths",
+    "matchers",
+    "path_rules",
+    "source_type",
+}
+MANIFEST_KEYS = {
+    "artifacts",
+    "coverage",
+    "generator_version",
+    "inventory_sha256",
+    "merge_base_sha",
+    "object_format",
+    "schema_version",
+    "scope_sha256",
+    "target_sha",
+    "upstream_sha",
+}
+INVENTORY_KEYS = {
+    "excluded",
+    "generator_version",
+    "included",
+    "max_range_lines",
+    "merge_base_sha",
+    "object_format",
+    "schema_version",
+    "scope_sha256",
+    "target_sha",
+    "upstream_sha",
+}
+INCLUDED_KEYS = {
+    "blob_oid",
+    "line_count",
+    "merge_base_blob_oid",
+    "merge_base_entry",
+    "mode",
+    "object_id",
+    "ownership",
+    "path",
+    "ranges",
+    "scope_rule",
+    "type",
+    "upstream_blob_oid",
+    "upstream_entry",
+}
+EXCLUDED_KEYS = {"mode", "object_id", "path", "reason", "scope_rule", "type"}
+SOURCE_TYPES = {"target-tree", "upstream-commit-series"}
+MATCHER_FLAGS = {
+    "dotall": re.DOTALL,
+    "ignore-case": re.IGNORECASE,
+    "multiline": re.MULTILINE,
+}
+
+
+class EvidenceError(RuntimeError):
+    """Raised when an immutable input or evidence invariant is invalid."""
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def reject_nonfinite_number(value: str) -> None:
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
+def canonical_json(value: Any) -> bytes:
+    return (
+        json.dumps(
+            value,
+            allow_nan=False,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def read_bytes(path: Path, label: str) -> bytes:
+    try:
+        return path.read_bytes()
+    except OSError as error:
+        raise EvidenceError(f"cannot read {label} {path}: {error}") from error
+
+
+def load_canonical_json(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
+    raw = read_bytes(path, label)
+    try:
+        value = json.loads(
+            raw,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_number,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise EvidenceError(f"invalid {label} JSON in {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise EvidenceError(f"{label} must be a JSON object")
+    if canonical_json(value) != raw:
+        raise EvidenceError(f"{label} is not canonical JSON")
+    return value, raw
+
+
+def parse_hash_file(raw: bytes, filename: str, label: str) -> str:
+    match = re.fullmatch(
+        rb"([0-9a-f]{64})  " + re.escape(filename.encode("ascii")) + rb"\n", raw
+    )
+    if match is None:
+        raise EvidenceError(f"{label} must contain a canonical SHA-256 for {filename}")
+    return match.group(1).decode("ascii")
+
+
+def require_hash(value: Any, label: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise EvidenceError(f"{label} must be a canonical SHA-256")
+    return value
+
+
+def require_plain_int(
+    value: Any,
+    label: str,
+    *,
+    expected: int | None = None,
+    minimum: int | None = None,
+) -> int:
+    if type(value) is not int:
+        raise EvidenceError(f"{label} must be a plain integer")
+    if expected is not None and value != expected:
+        raise EvidenceError(f"{label} must be {expected}")
+    if minimum is not None and value < minimum:
+        raise EvidenceError(f"{label} must be at least {minimum}")
+    return value
+
+
+def require_object_id(value: Any, label: str, length: int) -> str:
+    if not isinstance(value, str) or re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is None:
+        raise EvidenceError(
+            f"{label} must be the full canonical {length}-character lowercase object ID"
+        )
+    return value
+
+
+def require_path(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value or "\0" in value:
+        raise EvidenceError(f"{label} must be a non-empty repository-relative path")
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or str(path) != value
+        or any(part in ("", ".", "..") for part in path.parts)
+    ):
+        raise EvidenceError(f"{label} must be a normalized repository-relative path")
+    return value
+
+
+def run_git(
+    repo: Path, *args: str, attribute_source: str | None = None
+) -> bytes:
+    environment = os.environ.copy()
+    for name in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_ATTR_SOURCE",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_DIFF_OPTS",
+        "GIT_DIR",
+        "GIT_EXTERNAL_DIFF",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    ):
+        environment.pop(name, None)
+    for name in tuple(environment):
+        if re.fullmatch(r"GIT_CONFIG_(?:KEY|VALUE)_\d+", name):
+            environment.pop(name)
+    environment["GIT_GRAFT_FILE"] = os.devnull
+    environment["GIT_ATTR_NOSYSTEM"] = "1"
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_CONFIG_SYSTEM"] = os.devnull
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+    environment["GIT_PAGER"] = "cat"
+    if attribute_source is not None:
+        environment["GIT_ATTR_SOURCE"] = attribute_source
+    environment["LANG"] = "C"
+    environment["LC_ALL"] = "C"
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise EvidenceError(f"git {' '.join(args)} failed: {detail}")
+    return result.stdout
+
+
+def repository_object_format(repo: Path) -> tuple[str, int]:
+    value = run_git(repo, "rev-parse", "--show-object-format=storage").decode("ascii").strip()
+    if value not in OBJECT_FORMAT_LENGTHS:
+        raise EvidenceError(f"unsupported Git object format: {value or 'empty'}")
+    return value, OBJECT_FORMAT_LENGTHS[value]
+
+
+def git_common_directory(repo: Path) -> Path:
+    raw = run_git(repo, "rev-parse", "--git-common-dir").decode("utf-8").strip()
+    path = Path(raw)
+    return path.resolve() if path.is_absolute() else (repo / path).resolve()
+
+
+def git_directory(repo: Path) -> Path:
+    raw = run_git(repo, "rev-parse", "--git-dir").decode("utf-8").strip()
+    path = Path(raw)
+    return path.resolve() if path.is_absolute() else (repo / path).resolve()
+
+
+def reject_unsafe_config_names(names: list[str], label: str) -> None:
+    unsafe_config = sorted(
+        name
+        for name in names
+        if name
+        and (
+            re.fullmatch(
+                r"diff\..+\.(?:binary|command|textconv|wordregex|xfuncname)",
+                name,
+                re.IGNORECASE,
+            )
+            or name.lower().startswith(("include.", "includeif."))
+        )
+    )
+    if unsafe_config:
+        raise EvidenceError(
+            f"mutable Git diff-driver/include {label} is not allowed: "
+            + ", ".join(unsafe_config)
+        )
+
+
+def reject_history_overrides(repo: Path) -> None:
+    replace_refs = (
+        run_git(repo, "for-each-ref", "--format=%(refname)", "refs/replace/")
+        .decode("utf-8")
+        .splitlines()
+    )
+    if replace_refs:
+        raise EvidenceError(
+            f"Git replace refs are not allowed: {', '.join(sorted(replace_refs))}"
+        )
+    grafts = git_common_directory(repo) / "info" / "grafts"
+    if grafts.exists():
+        raise EvidenceError(f"Git grafts are not allowed: {grafts}")
+    attributes = git_common_directory(repo) / "info" / "attributes"
+    if attributes.exists():
+        raise EvidenceError(f"mutable Git info attributes are not allowed: {attributes}")
+    config_names = (
+        run_git(repo, "config", "--local", "--null", "--name-only", "--list")
+        .decode("utf-8")
+        .split("\0")
+    )
+    reject_unsafe_config_names(config_names, "repository config")
+    worktree_config = git_directory(repo) / "config.worktree"
+    if worktree_config.exists():
+        worktree_names = (
+            run_git(
+                repo,
+                "config",
+                "--file",
+                str(worktree_config),
+                "--null",
+                "--name-only",
+                "--list",
+            )
+            .decode("utf-8")
+            .split("\0")
+        )
+        reject_unsafe_config_names(worktree_names, "worktree config")
+
+
+def require_commit(repo: Path, value: Any, label: str, oid_length: int) -> str:
+    object_id = require_object_id(value, label, oid_length)
+    canonical = (
+        run_git(repo, "rev-parse", "--verify", f"{object_id}^{{commit}}")
+        .decode("ascii")
+        .strip()
+    )
+    if canonical != object_id:
+        raise EvidenceError(f"{label} is not the exact canonical commit object ID")
+    if run_git(repo, "cat-file", "-t", object_id).decode("ascii").strip() != "commit":
+        raise EvidenceError(f"{label} is not a commit")
+    return object_id
+
+
+def verify_merge_base(
+    repo: Path, target: str, upstream: str, expected: str, oid_length: int
+) -> None:
+    merge_bases = sorted(
+        require_object_id(line, "computed merge-base", oid_length)
+        for line in run_git(repo, "merge-base", "--all", target, upstream)
+        .decode("ascii")
+        .splitlines()
+        if line
+    )
+    if merge_bases != [expected]:
+        actual = ", ".join(merge_bases) if merge_bases else "none"
+        raise EvidenceError(
+            f"merge-base mismatch: expected exactly {expected}, Git reports {actual}"
+        )
+
+
+def load_tree(repo: Path, commit: str, oid_length: int) -> list[dict[str, str]]:
+    raw = run_git(repo, "ls-tree", "-r", "-z", "--full-tree", commit)
+    entries = []
+    seen = set()
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, raw_path = record.split(b"\t", 1)
+            mode, entry_type, object_id = metadata.decode("ascii").split(" ", 2)
+            path = raw_path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise EvidenceError(f"cannot decode ls-tree record: {record!r}") from error
+        if path in seen:
+            raise EvidenceError(f"duplicate path in Git tree: {path}")
+        require_path(path, "Git tree path")
+        require_object_id(object_id, f"object ID for {path}", oid_length)
+        seen.add(path)
+        entries.append(
+            {"path": path, "mode": mode, "type": entry_type, "object_id": object_id}
+        )
+    return sorted(entries, key=lambda entry: entry["path"])
+
+
+def validate_scope(scope: dict[str, Any]) -> None:
+    require_plain_int(
+        scope.get("schema_version"),
+        "scope.schema_version",
+        expected=SCHEMA_VERSION,
+    )
+    rules = scope.get("rules")
+    if not isinstance(rules, list) or not rules:
+        raise EvidenceError("scope.rules must be a non-empty array")
+    seen = set()
+    for index, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            raise EvidenceError(f"scope rule {index} must be an object")
+        rule_id = rule.get("id")
+        if not isinstance(rule_id, str) or not rule_id or rule_id in seen:
+            raise EvidenceError(f"scope rule {index} has an invalid or duplicate id")
+        seen.add(rule_id)
+        if rule.get("action") not in ("include", "exclude"):
+            raise EvidenceError(f"scope rule {rule_id} has an invalid action")
+        entry_types = rule.get("entry_types")
+        patterns = rule.get("patterns")
+        if not isinstance(entry_types, list) or not entry_types or not all(
+            value in ("blob", "commit") for value in entry_types
+        ):
+            raise EvidenceError(f"scope rule {rule_id} has invalid entry_types")
+        if not isinstance(patterns, list) or not patterns or not all(
+            isinstance(pattern, str) and pattern for pattern in patterns
+        ):
+            raise EvidenceError(f"scope rule {rule_id} has invalid patterns")
+        if rule["action"] == "exclude" and not isinstance(rule.get("reason"), str):
+            raise EvidenceError(f"excluded scope rule {rule_id} needs a reason")
+
+
+def classify_scope(entry: dict[str, Any], rules: list[dict[str, Any]]) -> dict[str, Any]:
+    for rule in rules:
+        if entry["type"] not in rule["entry_types"]:
+            continue
+        if any(fnmatch.fnmatchcase(entry["path"], pattern) for pattern in rule["patterns"]):
+            return rule
+    raise EvidenceError(f"tracked entry is not classified by scope rules: {entry['path']}")
+
+
+def validate_ranges(path: str, line_count: Any, ranges: Any) -> None:
+    if not isinstance(line_count, int) or isinstance(line_count, bool) or line_count < 0:
+        raise EvidenceError(f"invalid line_count for {path}")
+    if not isinstance(ranges, list):
+        raise EvidenceError(f"ranges for {path} must be an array")
+    expected_start = 1
+    for line_range in ranges:
+        if not isinstance(line_range, dict) or set(line_range) != {"start", "end"}:
+            raise EvidenceError(f"invalid range for {path}: {line_range}")
+        start = line_range["start"]
+        end = line_range["end"]
+        if (
+            not isinstance(start, int)
+            or isinstance(start, bool)
+            or not isinstance(end, int)
+            or isinstance(end, bool)
+            or start != expected_start
+            or end < start
+        ):
+            raise EvidenceError(
+                f"inventory range gap or overlap for {path}: expected {expected_start}, got {line_range}"
+            )
+        expected_start = end + 1
+    if expected_start != line_count + 1:
+        raise EvidenceError(
+            f"inventory range coverage for {path} ends at {expected_start - 1}, expected {line_count}"
+        )
+
+
+def entry_metadata(entry: dict[str, Any] | None) -> dict[str, str] | None:
+    if entry is None:
+        return None
+    return {key: entry[key] for key in ("mode", "type", "object_id")}
+
+
+def expected_ownership(
+    target: dict[str, Any], upstream: dict[str, Any] | None, merge_base: dict[str, Any] | None
+) -> str:
+    identity = lambda entry: (entry["type"], entry["mode"], entry["object_id"])
+    if merge_base is not None:
+        return (
+            "upstream-unmodified"
+            if identity(target) == identity(merge_base)
+            else "upstream-modified-by-fork"
+        )
+    if upstream is not None and identity(target) == identity(upstream):
+        return "upstream-unmodified"
+    return "fork-owned"
+
+
+def validate_inventory_against_repo(
+    contract: dict[str, Any], repo: Path, oid_length: int
+) -> None:
+    inventory = contract["inventory"]
+    scope = contract["scope"]
+    target_tree = load_tree(repo, inventory["target_sha"], oid_length)
+    upstream_tree = {
+        entry["path"]: entry for entry in load_tree(repo, inventory["upstream_sha"], oid_length)
+    }
+    base_tree = {
+        entry["path"]: entry
+        for entry in load_tree(repo, inventory["merge_base_sha"], oid_length)
+    }
+    expected = {entry["path"]: entry for entry in target_tree}
+    decisions = inventory["included"] + inventory["excluded"]
+    actual_paths = [entry["path"] for entry in decisions]
+    if len(actual_paths) != len(set(actual_paths)):
+        raise EvidenceError("inventory assigns at least one tracked path more than once")
+    if set(actual_paths) != set(expected):
+        raise EvidenceError("inventory path coverage does not match the immutable target tree")
+
+    for decision in decisions:
+        path = decision["path"]
+        target = expected[path]
+        for key in ("mode", "type", "object_id"):
+            if decision.get(key) != target[key]:
+                raise EvidenceError(f"inventory {key} mismatch for {path}")
+        rule = classify_scope(target, scope["rules"])
+        if decision.get("scope_rule") != rule["id"]:
+            raise EvidenceError(f"inventory scope rule mismatch for {path}")
+        collection = "included" if decision in inventory["included"] else "excluded"
+        if rule["action"] != ("include" if collection == "included" else "exclude"):
+            raise EvidenceError(f"inventory scope action mismatch for {path}")
+        if collection == "excluded" and decision.get("reason") != rule["reason"]:
+            raise EvidenceError(f"inventory exclusion reason mismatch for {path}")
+
+    for entry in inventory["included"]:
+        path = entry["path"]
+        target = expected[path]
+        upstream = upstream_tree.get(path)
+        base = base_tree.get(path)
+        if entry["type"] != "blob" or entry["blob_oid"] != entry["object_id"]:
+            raise EvidenceError(f"included inventory entry is not a canonical blob: {path}")
+        if entry["merge_base_entry"] != entry_metadata(base):
+            raise EvidenceError(f"merge-base metadata mismatch for {path}")
+        if entry["upstream_entry"] != entry_metadata(upstream):
+            raise EvidenceError(f"upstream metadata mismatch for {path}")
+        expected_base_blob = base["object_id"] if base and base["type"] == "blob" else None
+        expected_upstream_blob = (
+            upstream["object_id"] if upstream and upstream["type"] == "blob" else None
+        )
+        if entry["merge_base_blob_oid"] != expected_base_blob:
+            raise EvidenceError(f"merge-base blob OID mismatch for {path}")
+        if entry["upstream_blob_oid"] != expected_upstream_blob:
+            raise EvidenceError(f"upstream blob OID mismatch for {path}")
+        if entry["ownership"] != expected_ownership(target, upstream, base):
+            raise EvidenceError(f"ownership mismatch for {path}")
+
+
+def load_inventory_contract(directory: Path, expected_manifest_sha256: str) -> dict[str, Any]:
+    directory = directory.resolve()
+    expected_manifest_sha256 = require_hash(
+        expected_manifest_sha256, "expected-manifest-sha256"
+    )
+    complete = read_bytes(directory / "COMPLETE", "completion marker")
+    manifest_hash_file = read_bytes(directory / "manifest.sha256", "manifest hash")
+    if complete != manifest_hash_file:
+        raise EvidenceError("COMPLETE must exactly equal manifest.sha256")
+    manifest_sha256 = parse_hash_file(
+        manifest_hash_file, "manifest.json", "manifest.sha256"
+    )
+    if manifest_sha256 != expected_manifest_sha256:
+        raise EvidenceError("inventory manifest SHA-256 does not match the expected pin")
+    manifest, manifest_bytes = load_canonical_json(directory / "manifest.json", "manifest")
+    if sha256_bytes(manifest_bytes) != manifest_sha256:
+        raise EvidenceError("manifest.json SHA-256 mismatch")
+    if set(manifest) != MANIFEST_KEYS:
+        raise EvidenceError("manifest shape is invalid")
+    require_plain_int(
+        manifest["schema_version"],
+        "manifest.schema_version",
+        expected=SCHEMA_VERSION,
+    )
+    require_plain_int(
+        manifest["generator_version"],
+        "manifest.generator_version",
+        expected=1,
+    )
+    if manifest["artifacts"] != {
+        "completion": "COMPLETE",
+        "inventory": "inventory.json",
+        "scope": "scope.resolved.json",
+    }:
+        raise EvidenceError("manifest artifact contract mismatch")
+    object_format = manifest["object_format"]
+    if object_format not in OBJECT_FORMAT_LENGTHS:
+        raise EvidenceError(f"unsupported object format: {object_format}")
+    oid_length = OBJECT_FORMAT_LENGTHS[object_format]
+    for key in ("target_sha", "upstream_sha", "merge_base_sha"):
+        require_object_id(manifest[key], f"manifest.{key}", oid_length)
+
+    inventory_hash_file = read_bytes(directory / "inventory.sha256", "inventory hash")
+    inventory_hash = parse_hash_file(
+        inventory_hash_file, "inventory.json", "inventory.sha256"
+    )
+    inventory_sha256 = require_hash(
+        manifest["inventory_sha256"], "manifest.inventory_sha256"
+    )
+    if inventory_hash != inventory_sha256:
+        raise EvidenceError("manifest/inventory.sha256 mismatch")
+    inventory, inventory_bytes = load_canonical_json(
+        directory / "inventory.json", "inventory"
+    )
+    if sha256_bytes(inventory_bytes) != inventory_sha256:
+        raise EvidenceError("inventory.json SHA-256 mismatch")
+    if set(inventory) != INVENTORY_KEYS:
+        raise EvidenceError("inventory shape is invalid")
+    require_plain_int(
+        inventory["schema_version"],
+        "inventory.schema_version",
+        expected=SCHEMA_VERSION,
+    )
+    require_plain_int(
+        inventory["generator_version"],
+        "inventory.generator_version",
+        expected=1,
+    )
+    for key in ("schema_version", "generator_version", "object_format", "target_sha", "upstream_sha", "merge_base_sha"):
+        if inventory.get(key) != manifest.get(key):
+            raise EvidenceError(f"manifest/inventory {key} mismatch")
+    maximum_range_lines = require_plain_int(
+        inventory.get("max_range_lines"), "inventory.max_range_lines", minimum=1
+    )
+
+    scope, scope_bytes = load_canonical_json(directory / "scope.resolved.json", "scope")
+    validate_scope(scope)
+    scope_sha256 = require_hash(manifest["scope_sha256"], "manifest.scope_sha256")
+    if sha256_bytes(scope_bytes) != scope_sha256:
+        raise EvidenceError("scope.resolved.json SHA-256 mismatch")
+    if inventory.get("scope_sha256") != scope_sha256:
+        raise EvidenceError("manifest/inventory scope SHA-256 mismatch")
+
+    included = inventory.get("included")
+    excluded = inventory.get("excluded")
+    if not isinstance(included, list) or not isinstance(excluded, list):
+        raise EvidenceError("inventory included/excluded fields must be arrays")
+    seen_paths = set()
+    for collection, entries, expected_keys in (
+        ("included", included, INCLUDED_KEYS),
+        ("excluded", excluded, EXCLUDED_KEYS),
+    ):
+        for entry in entries:
+            if not isinstance(entry, dict) or set(entry) != expected_keys:
+                raise EvidenceError(f"inventory {collection} entry shape is invalid")
+            path = require_path(entry.get("path"), f"{collection} path")
+            if path in seen_paths:
+                raise EvidenceError(f"inventory path appears more than once: {path}")
+            seen_paths.add(path)
+            if not isinstance(entry["mode"], str) or not entry["mode"]:
+                raise EvidenceError(f"invalid mode for {path}")
+            if entry["type"] not in ("blob", "commit"):
+                raise EvidenceError(f"invalid inventory entry type for {path}")
+            require_object_id(entry["object_id"], f"object_id for {path}", oid_length)
+            if collection == "included":
+                require_object_id(entry["blob_oid"], f"blob_oid for {path}", oid_length)
+                if entry["ownership"] not in OWNERSHIPS:
+                    raise EvidenceError(f"invalid ownership for {path}")
+                validate_ranges(path, entry["line_count"], entry["ranges"])
+                if any(
+                    line_range["end"] - line_range["start"] + 1
+                    > maximum_range_lines
+                    for line_range in entry["ranges"]
+                ):
+                    raise EvidenceError(f"inventory range exceeds max_range_lines for {path}")
+
+    coverage = manifest.get("coverage")
+    if not isinstance(coverage, dict):
+        raise EvidenceError("manifest.coverage must be an object")
+    for key in (
+        "tracked_entries",
+        "included_paths",
+        "excluded_paths",
+        "included_lines",
+        "ranges",
+    ):
+        require_plain_int(coverage.get(key), f"manifest.coverage.{key}", minimum=0)
+    if coverage.get("complete") is not True:
+        raise EvidenceError("manifest.coverage.complete must be true")
+    expected_coverage = {
+        "tracked_entries": len(included) + len(excluded),
+        "included_paths": len(included),
+        "excluded_paths": len(excluded),
+        "included_lines": sum(entry["line_count"] for entry in included),
+        "ranges": sum(len(entry["ranges"]) for entry in included),
+        "complete": True,
+    }
+    if coverage != expected_coverage:
+        raise EvidenceError("inventory manifest coverage counters do not match inventory")
+    return {
+        "directory": directory,
+        "excluded": excluded,
+        "included": included,
+        "inventory": inventory,
+        "inventory_sha256": inventory_sha256,
+        "manifest": manifest,
+        "manifest_sha256": manifest_sha256,
+        "scope": scope,
+        "scope_sha256": scope_sha256,
+    }
+
+
+def compile_matcher(matcher: dict[str, Any], crosscut_id: str) -> re.Pattern[str]:
+    if set(matcher) != {"flags", "id", "pattern"}:
+        raise EvidenceError(f"matcher shape is invalid in {crosscut_id}")
+    matcher_id = matcher["id"]
+    pattern = matcher["pattern"]
+    flags = matcher["flags"]
+    if not isinstance(matcher_id, str) or not matcher_id:
+        raise EvidenceError(f"matcher id is invalid in {crosscut_id}")
+    if not isinstance(pattern, str) or not pattern:
+        raise EvidenceError(f"matcher pattern is invalid in {crosscut_id}/{matcher_id}")
+    if (
+        not isinstance(flags, list)
+        or len(flags) != len(set(flags))
+        or flags != sorted(flags)
+        or not all(flag in MATCHER_FLAGS for flag in flags)
+    ):
+        raise EvidenceError(f"matcher flags are invalid in {crosscut_id}/{matcher_id}")
+    compiled_flags = 0
+    for flag in flags:
+        compiled_flags |= MATCHER_FLAGS[flag]
+    try:
+        compiled = re.compile(pattern, compiled_flags)
+    except re.error as error:
+        raise EvidenceError(
+            f"matcher regex is invalid in {crosscut_id}/{matcher_id}: {error}"
+        ) from error
+    if compiled.search("") is not None:
+        raise EvidenceError(f"matcher may match empty text in {crosscut_id}/{matcher_id}")
+    return compiled
+
+
+def load_definitions(path: Path, expected_sha256: str) -> dict[str, Any]:
+    expected_sha256 = require_hash(expected_sha256, "expected-definitions-sha256")
+    document, raw = load_canonical_json(path, "crosscut definitions")
+    actual_sha256 = sha256_bytes(raw)
+    if actual_sha256 != expected_sha256:
+        raise EvidenceError("crosscut definitions SHA-256 does not match the expected pin")
+    if set(document) != DEFINITION_ROOT_KEYS:
+        raise EvidenceError("crosscut definitions root shape is invalid")
+    require_plain_int(
+        document["schema_version"],
+        "definitions.schema_version",
+        expected=SCHEMA_VERSION,
+    )
+    if not isinstance(document["description"], str) or not document["description"]:
+        raise EvidenceError("definitions.description must be non-empty")
+    definitions = document["definitions"]
+    if not isinstance(definitions, list):
+        raise EvidenceError("definitions must be an array")
+    ids = [definition.get("id") for definition in definitions if isinstance(definition, dict)]
+    if tuple(ids) != EXPECTED_CROSSCUT_IDS:
+        raise EvidenceError("definitions must contain the exact 13 crosscut IDs in canonical order")
+
+    compiled = {}
+    for definition in definitions:
+        crosscut_id = definition["id"]
+        if set(definition) != DEFINITION_KEYS:
+            raise EvidenceError(f"definition shape is invalid for {crosscut_id}")
+        if not isinstance(definition["description"], str) or not definition["description"]:
+            raise EvidenceError(f"description is invalid for {crosscut_id}")
+        source_type = definition["source_type"]
+        if source_type not in SOURCE_TYPES:
+            raise EvidenceError(f"source_type is invalid for {crosscut_id}")
+        if (crosscut_id == "upstream-drift") != (
+            source_type == "upstream-commit-series"
+        ):
+            raise EvidenceError("only upstream-drift may use upstream-commit-series")
+        context = definition["context"]
+        if not isinstance(context, dict) or set(context) != {"after", "before"}:
+            raise EvidenceError(f"context shape is invalid for {crosscut_id}")
+        if not all(
+            isinstance(context[key], int)
+            and not isinstance(context[key], bool)
+            and 0 <= context[key] <= 200
+            for key in ("after", "before")
+        ):
+            raise EvidenceError(f"context values are invalid for {crosscut_id}")
+
+        path_rules = definition["path_rules"]
+        if not isinstance(path_rules, list) or not path_rules:
+            raise EvidenceError(f"path_rules are invalid for {crosscut_id}")
+        for rule in path_rules:
+            if not isinstance(rule, dict) or set(rule) != {"action", "patterns"}:
+                raise EvidenceError(f"path rule shape is invalid for {crosscut_id}")
+            if rule["action"] not in ("include", "exclude"):
+                raise EvidenceError(f"path rule action is invalid for {crosscut_id}")
+            if not isinstance(rule["patterns"], list) or not rule["patterns"] or not all(
+                isinstance(pattern, str) and pattern and "\0" not in pattern
+                for pattern in rule["patterns"]
+            ):
+                raise EvidenceError(f"path rule patterns are invalid for {crosscut_id}")
+        if path_rules[-1]["patterns"] != ["**"]:
+            raise EvidenceError(f"last path rule must classify ** for {crosscut_id}")
+
+        mandatory_paths = definition["mandatory_paths"]
+        if not isinstance(mandatory_paths, list):
+            raise EvidenceError(f"mandatory_paths must be an array for {crosscut_id}")
+        mandatory_patterns = []
+        for selector in mandatory_paths:
+            if not isinstance(selector, dict) or set(selector) != {
+                "minimum_matches",
+                "pattern",
+            }:
+                raise EvidenceError(f"mandatory path shape is invalid for {crosscut_id}")
+            minimum = selector["minimum_matches"]
+            pattern = selector["pattern"]
+            if (
+                type(minimum) is not int
+                or minimum < 1
+                or not isinstance(pattern, str)
+                or not pattern
+                or "\0" in pattern
+            ):
+                raise EvidenceError(f"mandatory path is invalid for {crosscut_id}")
+            mandatory_patterns.append(pattern)
+        if len(mandatory_patterns) != len(set(mandatory_patterns)):
+            raise EvidenceError(f"duplicate mandatory path pattern for {crosscut_id}")
+
+        matchers = definition["matchers"]
+        if not isinstance(matchers, list) or not matchers:
+            raise EvidenceError(f"matchers must be a non-empty array for {crosscut_id}")
+        matcher_ids = [matcher.get("id") for matcher in matchers if isinstance(matcher, dict)]
+        if len(matcher_ids) != len(matchers) or len(matcher_ids) != len(set(matcher_ids)):
+            raise EvidenceError(f"matcher IDs are invalid or duplicate for {crosscut_id}")
+        compiled[crosscut_id] = {
+            matcher["id"]: compile_matcher(matcher, crosscut_id) for matcher in matchers
+        }
+    return {
+        "compiled": compiled,
+        "definitions": definitions,
+        "document": document,
+        "raw": raw,
+        "sha256": actual_sha256,
+    }
+
+
+def classify_definition_path(definition: dict[str, Any], path: str) -> str:
+    for rule in definition["path_rules"]:
+        if any(fnmatch.fnmatchcase(path, pattern) for pattern in rule["patterns"]):
+            return rule["action"]
+    raise EvidenceError(f"definition {definition['id']} does not classify path {path}")
+
+
+def split_text_lines(data: bytes, path: str) -> tuple[str, list[str]]:
+    if b"\0" in data:
+        raise EvidenceError(f"immutable included blob contains NUL bytes: {path}")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise EvidenceError(f"immutable included blob is not UTF-8: {path}") from error
+    lines = []
+    start = 0
+    while start < len(text):
+        newline = text.find("\n", start)
+        if newline < 0:
+            lines.append(text[start:])
+            break
+        lines.append(text[start : newline + 1])
+        start = newline + 1
+    return text, lines
+
+
+def add_source(sources: dict[str, dict[str, str]], text: str) -> str:
+    source_sha256 = sha256_bytes(text.encode("utf-8"))
+    source = {"sha256": source_sha256, "text": text}
+    if source_sha256 in sources and sources[source_sha256] != source:
+        raise EvidenceError(f"SHA-256 collision for source {source_sha256}")
+    sources[source_sha256] = source
+    return source_sha256
+
+
+def add_evidence(entries: list[dict[str, Any]], payload: dict[str, Any]) -> None:
+    entry = dict(payload)
+    entry["evidence_id"] = sha256_bytes(canonical_json(payload))
+    entries.append(entry)
+
+
+def extract_range(lines: list[str], start: int, end: int) -> str:
+    if start < 1 or end < start or end > len(lines):
+        raise EvidenceError(f"source range {start}-{end} is outside immutable blob bounds")
+    return "".join(lines[start - 1 : end])
+
+
+def parse_commit_object(
+    repo: Path, commit_oid: str, oid_length: int
+) -> tuple[str, list[str], str]:
+    raw = run_git(repo, "cat-file", "commit", commit_oid)
+    try:
+        headers, message = raw.split(b"\n\n", 1)
+        decoded_headers = headers.decode("ascii").splitlines()
+        decoded_message = message.decode("utf-8")
+    except (ValueError, UnicodeDecodeError) as error:
+        raise EvidenceError(f"cannot decode commit object {commit_oid}") from error
+    tree_lines = [line[5:] for line in decoded_headers if line.startswith("tree ")]
+    parent_lines = [line[7:] for line in decoded_headers if line.startswith("parent ")]
+    if len(tree_lines) != 1:
+        raise EvidenceError(f"commit {commit_oid} does not have exactly one tree header")
+    tree_oid = require_object_id(tree_lines[0], f"tree for {commit_oid}", oid_length)
+    parents = [
+        require_object_id(parent, f"parent for {commit_oid}", oid_length)
+        for parent in parent_lines
+    ]
+    subject = decoded_message.splitlines()[0] if decoded_message.splitlines() else ""
+    return tree_oid, parents, subject
+
+
+def commit_patch(repo: Path, commit_oid: str, parents: list[str]) -> bytes:
+    options = (
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--binary",
+        "--full-index",
+        "--no-renames",
+        "--diff-algorithm=myers",
+        "--no-indent-heuristic",
+        "--unified=3",
+        "--inter-hunk-context=0",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "--line-prefix=",
+        "--output-indicator-context= ",
+        "--output-indicator-new=+",
+        "--output-indicator-old=-",
+        "--submodule=short",
+        "--ignore-submodules=none",
+        "-O",
+        os.devnull,
+    )
+    config = (
+        "-c",
+        "color.ui=false",
+        "-c",
+        f"core.attributesFile={os.devnull}",
+        "-c",
+        "core.bigFileThreshold=512m",
+        "-c",
+        "core.quotePath=true",
+        "-c",
+        "diff.context=3",
+        "-c",
+        "diff.interHunkContext=0",
+        "-c",
+        "diff.mnemonicPrefix=false",
+        "-c",
+        "diff.noprefix=false",
+        "-c",
+        "diff.suppressBlankEmpty=false",
+    )
+    if parents:
+        return run_git(
+            repo,
+            *config,
+            "diff",
+            *options,
+            parents[0],
+            commit_oid,
+            "--",
+            attribute_source=commit_oid,
+        )
+    return run_git(
+        repo,
+        *config,
+        "diff-tree",
+        "--root",
+        *options,
+        "--no-commit-id",
+        "-p",
+        commit_oid,
+        "--",
+        attribute_source=commit_oid,
+    )
+
+
+def build_upstream_series(
+    repo: Path,
+    definition: dict[str, Any],
+    merge_base_sha: str,
+    upstream_sha: str,
+    oid_length: int,
+    sources: dict[str, dict[str, str]],
+    evidence: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str]:
+    raw_commits = run_git(
+        repo,
+        "rev-list",
+        "--reverse",
+        "--topo-order",
+        f"{merge_base_sha}..{upstream_sha}",
+    )
+    commit_oids = [line for line in raw_commits.decode("ascii").splitlines() if line]
+    if len(commit_oids) != len(set(commit_oids)):
+        raise EvidenceError("upstream commit series contains duplicate object IDs")
+    matcher_id = definition["matchers"][0]["id"]
+    series = []
+    for index, commit_oid in enumerate(commit_oids):
+        require_commit(repo, commit_oid, "upstream commit", oid_length)
+        tree_oid, parent_oids, subject = parse_commit_object(repo, commit_oid, oid_length)
+        patch = commit_patch(repo, commit_oid, parent_oids)
+        try:
+            patch_text = patch.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise EvidenceError(f"upstream patch is not UTF-8: {commit_oid}") from error
+        patch_sha256 = add_source(sources, patch_text)
+        record = {
+            "commit_oid": commit_oid,
+            "index": index,
+            "parent_oids": parent_oids,
+            "patch_base_oid": parent_oids[0] if parent_oids else None,
+            "patch_sha256": patch_sha256,
+            "subject": subject,
+            "tree_oid": tree_oid,
+        }
+        series.append(record)
+        add_evidence(
+            evidence,
+            {
+                "commit_index": index,
+                "commit_oid": commit_oid,
+                "crosscut_id": definition["id"],
+                "kind": "upstream-commit",
+                "matcher_id": matcher_id,
+                "parent_oids": parent_oids,
+                "patch_base_oid": record["patch_base_oid"],
+                "patch_sha256": patch_sha256,
+                "source_sha256": patch_sha256,
+                "subject": subject,
+                "tree_oid": tree_oid,
+            },
+        )
+    return series, sha256_bytes(canonical_json(series))
+
+
+def build_evidence(
+    repo: Path,
+    contract: dict[str, Any],
+    definitions_contract: dict[str, Any],
+    oid_length: int,
+) -> dict[str, Any]:
+    definitions = definitions_contract["definitions"]
+    compiled = definitions_contract["compiled"]
+    definitions_sha256 = definitions_contract["sha256"]
+    sources: dict[str, dict[str, str]] = {}
+    evidence: list[dict[str, Any]] = []
+    scanned_blobs = []
+    mandatory_coverage = []
+    stats = {
+        definition["id"]: {
+            "applicable_paths": 0,
+            "mandatory_paths": set(),
+            "mandatory_ranges": 0,
+            "match_occurrences": 0,
+            "upstream_commits": 0,
+        }
+        for definition in definitions
+    }
+    excluded_paths = {entry["path"] for entry in contract["excluded"]}
+
+    for entry in sorted(contract["included"], key=lambda item: item["path"]):
+        path = entry["path"]
+        data = run_git(repo, "cat-file", "blob", entry["blob_oid"])
+        text, lines = split_text_lines(data, path)
+        if len(lines) != entry["line_count"]:
+            raise EvidenceError(f"immutable blob line count mismatch for {path}")
+        applicable = []
+        for definition in definitions:
+            crosscut_id = definition["id"]
+            if classify_definition_path(definition, path) != "include":
+                continue
+            applicable.append(crosscut_id)
+            stats[crosscut_id]["applicable_paths"] += 1
+            if definition["source_type"] != "target-tree":
+                continue
+            context = definition["context"]
+            for matcher in definition["matchers"]:
+                matcher_id = matcher["id"]
+                for match in compiled[crosscut_id][matcher_id].finditer(text):
+                    match_start = text.count("\n", 0, match.start()) + 1
+                    match_end = text.count("\n", 0, match.end() - 1) + 1
+                    source_start = max(1, match_start - context["before"])
+                    source_end = min(len(lines), match_end + context["after"])
+                    source_text = extract_range(lines, source_start, source_end)
+                    source_sha256 = add_source(sources, source_text)
+                    add_evidence(
+                        evidence,
+                        {
+                            "blob_oid": entry["blob_oid"],
+                            "crosscut_id": crosscut_id,
+                            "kind": "matcher",
+                            "mandatory_patterns": [],
+                            "match_range": {"end": match_end, "start": match_start},
+                            "matcher_id": matcher_id,
+                            "mode": entry["mode"],
+                            "object_id": entry["object_id"],
+                            "ownership": entry["ownership"],
+                            "path": path,
+                            "range": {"end": source_end, "start": source_start},
+                            "source_sha256": source_sha256,
+                            "type": entry["type"],
+                        },
+                    )
+                    stats[crosscut_id]["match_occurrences"] += 1
+
+            matched_patterns = sorted(
+                selector["pattern"]
+                for selector in definition["mandatory_paths"]
+                if fnmatch.fnmatchcase(path, selector["pattern"])
+            )
+            if matched_patterns:
+                stats[crosscut_id]["mandatory_paths"].add(path)
+                for line_range in entry["ranges"]:
+                    source_text = extract_range(
+                        lines, line_range["start"], line_range["end"]
+                    )
+                    source_sha256 = add_source(sources, source_text)
+                    add_evidence(
+                        evidence,
+                        {
+                            "blob_oid": entry["blob_oid"],
+                            "crosscut_id": crosscut_id,
+                            "kind": "mandatory-range",
+                            "mandatory_patterns": matched_patterns,
+                            "match_range": None,
+                            "matcher_id": None,
+                            "mode": entry["mode"],
+                            "object_id": entry["object_id"],
+                            "ownership": entry["ownership"],
+                            "path": path,
+                            "range": {
+                                "end": line_range["end"],
+                                "start": line_range["start"],
+                            },
+                            "source_sha256": source_sha256,
+                            "type": entry["type"],
+                        },
+                    )
+                    stats[crosscut_id]["mandatory_ranges"] += 1
+        scanned_blobs.append(
+            {
+                "applicable_crosscuts": applicable,
+                "blob_oid": entry["blob_oid"],
+                "blob_sha256": sha256_bytes(data),
+                "definitions_sha256": definitions_sha256,
+                "line_count": entry["line_count"],
+                "mode": entry["mode"],
+                "object_id": entry["object_id"],
+                "ownership": entry["ownership"],
+                "path": path,
+                "type": entry["type"],
+            }
+        )
+
+    included_paths = {entry["path"] for entry in contract["included"]}
+    for definition in definitions:
+        crosscut_id = definition["id"]
+        for selector in definition["mandatory_paths"]:
+            pattern = selector["pattern"]
+            matched_included = sorted(
+                path for path in included_paths if fnmatch.fnmatchcase(path, pattern)
+            )
+            matched_excluded = sorted(
+                path for path in excluded_paths if fnmatch.fnmatchcase(path, pattern)
+            )
+            if matched_excluded:
+                raise EvidenceError(
+                    f"mandatory path selector {crosscut_id}/{pattern} matches excluded paths: {matched_excluded}"
+                )
+            if len(matched_included) < selector["minimum_matches"]:
+                raise EvidenceError(
+                    f"mandatory path selector {crosscut_id}/{pattern} matched {len(matched_included)}, expected at least {selector['minimum_matches']}"
+                )
+            if any(
+                classify_definition_path(definition, path) != "include"
+                for path in matched_included
+            ):
+                raise EvidenceError(
+                    f"mandatory path selector {crosscut_id}/{pattern} is excluded by its definition"
+                )
+            mandatory_coverage.append(
+                {
+                    "crosscut_id": crosscut_id,
+                    "matched_paths": matched_included,
+                    "minimum_matches": selector["minimum_matches"],
+                    "pattern": pattern,
+                }
+            )
+
+    upstream_definition = next(
+        definition for definition in definitions if definition["id"] == "upstream-drift"
+    )
+    upstream_series, upstream_series_sha256 = build_upstream_series(
+        repo,
+        upstream_definition,
+        contract["manifest"]["merge_base_sha"],
+        contract["manifest"]["upstream_sha"],
+        oid_length,
+        sources,
+        evidence,
+    )
+    stats["upstream-drift"]["upstream_commits"] = len(upstream_series)
+
+    evidence.sort(
+        key=lambda entry: (
+            entry["crosscut_id"],
+            entry["kind"],
+            entry.get("path", ""),
+            (entry.get("range") or {}).get("start", 0),
+            (entry.get("range") or {}).get("end", 0),
+            entry.get("matcher_id") or "",
+            (entry.get("match_range") or {}).get("start", 0),
+            entry.get("commit_index", -1),
+        )
+    )
+    evidence_ids = [entry["evidence_id"] for entry in evidence]
+    if len(evidence_ids) != len(set(evidence_ids)):
+        raise EvidenceError("evidence IDs are not unique")
+
+    crosscut_coverage = []
+    for definition in definitions:
+        values = stats[definition["id"]]
+        crosscut_coverage.append(
+            {
+                "applicable_paths": values["applicable_paths"],
+                "complete": True,
+                "id": definition["id"],
+                "mandatory_paths": len(values["mandatory_paths"]),
+                "mandatory_ranges": values["mandatory_ranges"],
+                "match_occurrences": values["match_occurrences"],
+                "source_type": definition["source_type"],
+                "upstream_commits": values["upstream_commits"],
+            }
+        )
+
+    target_match_count = sum(
+        1 for entry in evidence if entry["kind"] == "matcher"
+    )
+    mandatory_range_count = sum(
+        1 for entry in evidence if entry["kind"] == "mandatory-range"
+    )
+    manifest = contract["manifest"]
+    document = {
+        "coverage": {
+            "complete": True,
+            "crosscuts": len(definitions),
+            "definition_evaluations": len(scanned_blobs) * len(definitions),
+            "evidence_entries": len(evidence),
+            "included_blobs": len(contract["included"]),
+            "mandatory_paths": sum(
+                len(record["matched_paths"]) for record in mandatory_coverage
+            ),
+            "mandatory_ranges": mandatory_range_count,
+            "mandatory_selectors": len(mandatory_coverage),
+            "source_records": len(sources),
+            "target_blobs_scanned": len(scanned_blobs),
+            "target_match_occurrences": target_match_count,
+            "upstream_commits": len(upstream_series),
+        },
+        "crosscut_coverage": crosscut_coverage,
+        "definitions_sha256": definitions_sha256,
+        "evidence": evidence,
+        "inventory_manifest_sha256": contract["manifest_sha256"],
+        "inventory_sha256": contract["inventory_sha256"],
+        "mandatory_path_coverage": mandatory_coverage,
+        "merge_base_sha": manifest["merge_base_sha"],
+        "object_format": manifest["object_format"],
+        "schema_version": SCHEMA_VERSION,
+        "scope_sha256": contract["scope_sha256"],
+        "sources": [sources[key] for key in sorted(sources)],
+        "target_blobs": scanned_blobs,
+        "target_sha": manifest["target_sha"],
+        "upstream_commit_series": upstream_series,
+        "upstream_commit_series_sha256": upstream_series_sha256,
+        "upstream_sha": manifest["upstream_sha"],
+    }
+    validate_evidence(document, contract, definitions_contract)
+    return document
+
+
+def validate_evidence(
+    document: dict[str, Any],
+    contract: dict[str, Any],
+    definitions_contract: dict[str, Any],
+) -> None:
+    definitions = definitions_contract["definitions"]
+    expected_root_keys = {
+        "coverage",
+        "crosscut_coverage",
+        "definitions_sha256",
+        "evidence",
+        "inventory_manifest_sha256",
+        "inventory_sha256",
+        "mandatory_path_coverage",
+        "merge_base_sha",
+        "object_format",
+        "schema_version",
+        "scope_sha256",
+        "sources",
+        "target_blobs",
+        "target_sha",
+        "upstream_commit_series",
+        "upstream_commit_series_sha256",
+        "upstream_sha",
+    }
+    if set(document) != expected_root_keys:
+        raise EvidenceError("evidence document shape is invalid")
+    expected_provenance = {
+        "definitions_sha256": definitions_contract["sha256"],
+        "inventory_manifest_sha256": contract["manifest_sha256"],
+        "inventory_sha256": contract["inventory_sha256"],
+        "merge_base_sha": contract["manifest"]["merge_base_sha"],
+        "object_format": contract["manifest"]["object_format"],
+        "schema_version": SCHEMA_VERSION,
+        "scope_sha256": contract["scope_sha256"],
+        "target_sha": contract["manifest"]["target_sha"],
+        "upstream_sha": contract["manifest"]["upstream_sha"],
+    }
+    for key, value in expected_provenance.items():
+        if document.get(key) != value:
+            raise EvidenceError(f"evidence {key} does not match immutable provenance")
+    require_plain_int(
+        document.get("schema_version"),
+        "evidence.schema_version",
+        expected=SCHEMA_VERSION,
+    )
+
+    sources = document["sources"]
+    if not isinstance(sources, list):
+        raise EvidenceError("evidence sources must be an array")
+    if sources != sorted(sources, key=lambda source: source.get("sha256", "")):
+        raise EvidenceError("evidence sources are not in stable order")
+    source_by_hash = {}
+    for source in sources:
+        if not isinstance(source, dict) or set(source) != {"sha256", "text"}:
+            raise EvidenceError("source shape is invalid")
+        source_sha256 = require_hash(source["sha256"], "source.sha256")
+        if not isinstance(source["text"], str):
+            raise EvidenceError("source.text must be a string")
+        if sha256_bytes(source["text"].encode("utf-8")) != source_sha256:
+            raise EvidenceError("source SHA-256 mismatch")
+        if source_sha256 in source_by_hash:
+            raise EvidenceError("duplicate source SHA-256")
+        source_by_hash[source_sha256] = source
+
+    included_by_path = {entry["path"]: entry for entry in contract["included"]}
+    scanned = document["target_blobs"]
+    if not isinstance(scanned, list):
+        raise EvidenceError("target_blobs must be an array")
+    scanned_paths = [entry.get("path") for entry in scanned if isinstance(entry, dict)]
+    if scanned_paths != sorted(included_by_path):
+        raise EvidenceError("target blob scan coverage is incomplete or out of order")
+    for record in scanned:
+        path = record["path"]
+        inventory_entry = included_by_path[path]
+        expected_record = {
+            "applicable_crosscuts": [
+                definition["id"]
+                for definition in definitions
+                if classify_definition_path(definition, path) == "include"
+            ],
+            "blob_oid": inventory_entry["blob_oid"],
+            "blob_sha256": record.get("blob_sha256"),
+            "definitions_sha256": definitions_contract["sha256"],
+            "line_count": inventory_entry["line_count"],
+            "mode": inventory_entry["mode"],
+            "object_id": inventory_entry["object_id"],
+            "ownership": inventory_entry["ownership"],
+            "path": path,
+            "type": inventory_entry["type"],
+        }
+        require_hash(record.get("blob_sha256"), f"blob SHA-256 for {path}")
+        if record != expected_record:
+            raise EvidenceError(f"target blob scan metadata mismatch for {path}")
+
+    entries = document["evidence"]
+    if not isinstance(entries, list):
+        raise EvidenceError("evidence must be an array")
+    evidence_ids = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise EvidenceError("evidence entry must be an object")
+        evidence_id = require_hash(entry.get("evidence_id"), "evidence_id")
+        payload = dict(entry)
+        payload.pop("evidence_id")
+        if sha256_bytes(canonical_json(payload)) != evidence_id:
+            raise EvidenceError(f"evidence ID mismatch: {evidence_id}")
+        if evidence_id in evidence_ids:
+            raise EvidenceError(f"duplicate evidence ID: {evidence_id}")
+        evidence_ids.add(evidence_id)
+        if entry.get("source_sha256") not in source_by_hash:
+            raise EvidenceError(f"evidence references missing source: {evidence_id}")
+        if entry.get("crosscut_id") not in EXPECTED_CROSSCUT_IDS:
+            raise EvidenceError(f"evidence references unknown crosscut: {evidence_id}")
+        if entry["kind"] in ("matcher", "mandatory-range"):
+            path = entry.get("path")
+            if path not in included_by_path:
+                raise EvidenceError(f"target evidence path is not included: {path}")
+            inventory_entry = included_by_path[path]
+            for key in ("blob_oid", "mode", "object_id", "ownership", "type"):
+                if entry.get(key) != inventory_entry[key]:
+                    raise EvidenceError(f"target evidence {key} mismatch for {path}")
+            line_range = entry.get("range")
+            if (
+                not isinstance(line_range, dict)
+                or set(line_range) != {"end", "start"}
+                or not isinstance(line_range["start"], int)
+                or not isinstance(line_range["end"], int)
+                or line_range["start"] < 1
+                or line_range["end"] < line_range["start"]
+                or line_range["end"] > inventory_entry["line_count"]
+            ):
+                raise EvidenceError(f"target evidence range is invalid for {path}")
+        elif entry["kind"] != "upstream-commit":
+            raise EvidenceError(f"invalid evidence kind: {entry['kind']}")
+
+    series = document["upstream_commit_series"]
+    if not isinstance(series, list):
+        raise EvidenceError("upstream commit series must be an array")
+    if document["upstream_commit_series_sha256"] != sha256_bytes(canonical_json(series)):
+        raise EvidenceError("upstream commit series SHA-256 mismatch")
+    commit_ids = [record.get("commit_oid") for record in series if isinstance(record, dict)]
+    if len(commit_ids) != len(series) or len(commit_ids) != len(set(commit_ids)):
+        raise EvidenceError("upstream commit series contains invalid or duplicate commits")
+    upstream_evidence = [entry for entry in entries if entry["kind"] == "upstream-commit"]
+    if [entry["commit_oid"] for entry in upstream_evidence] != commit_ids:
+        raise EvidenceError("upstream commit evidence coverage is incomplete")
+
+    mandatory_entries = [entry for entry in entries if entry["kind"] == "mandatory-range"]
+    mandatory_keys = {
+        (entry["crosscut_id"], entry["path"], entry["range"]["start"], entry["range"]["end"])
+        for entry in mandatory_entries
+    }
+    expected_mandatory_keys = set()
+    for definition in definitions:
+        for inventory_entry in contract["included"]:
+            matched = any(
+                fnmatch.fnmatchcase(inventory_entry["path"], selector["pattern"])
+                for selector in definition["mandatory_paths"]
+            )
+            if matched:
+                for line_range in inventory_entry["ranges"]:
+                    expected_mandatory_keys.add(
+                        (
+                            definition["id"],
+                            inventory_entry["path"],
+                            line_range["start"],
+                            line_range["end"],
+                        )
+                    )
+    if mandatory_keys != expected_mandatory_keys or len(mandatory_keys) != len(
+        mandatory_entries
+    ):
+        raise EvidenceError("mandatory range coverage is incomplete or duplicated")
+
+    expected_selector_coverage = []
+    included_paths = set(included_by_path)
+    excluded_paths = {entry["path"] for entry in contract["excluded"]}
+    for definition in definitions:
+        for selector in definition["mandatory_paths"]:
+            pattern = selector["pattern"]
+            matched_included = sorted(
+                path for path in included_paths if fnmatch.fnmatchcase(path, pattern)
+            )
+            matched_excluded = sorted(
+                path for path in excluded_paths if fnmatch.fnmatchcase(path, pattern)
+            )
+            if matched_excluded or len(matched_included) < selector["minimum_matches"]:
+                raise EvidenceError(
+                    f"mandatory selector coverage is invalid for {definition['id']}/{pattern}"
+                )
+            expected_selector_coverage.append(
+                {
+                    "crosscut_id": definition["id"],
+                    "matched_paths": matched_included,
+                    "minimum_matches": selector["minimum_matches"],
+                    "pattern": pattern,
+                }
+            )
+    if document["mandatory_path_coverage"] != expected_selector_coverage:
+        raise EvidenceError("mandatory path selector coverage is invalid")
+
+    crosscut_coverage = document["crosscut_coverage"]
+    if not isinstance(crosscut_coverage, list):
+        raise EvidenceError("crosscut coverage is incomplete")
+    expected_crosscut_coverage = []
+    for definition in definitions:
+        crosscut_id = definition["id"]
+        selector_paths = {
+            path
+            for record in expected_selector_coverage
+            if record["crosscut_id"] == crosscut_id
+            for path in record["matched_paths"]
+        }
+        expected_crosscut_coverage.append(
+            {
+                "applicable_paths": sum(
+                    crosscut_id in record["applicable_crosscuts"] for record in scanned
+                ),
+                "complete": True,
+                "id": crosscut_id,
+                "mandatory_paths": len(selector_paths),
+                "mandatory_ranges": sum(
+                    entry["crosscut_id"] == crosscut_id for entry in mandatory_entries
+                ),
+                "match_occurrences": sum(
+                    entry["kind"] == "matcher" and entry["crosscut_id"] == crosscut_id
+                    for entry in entries
+                ),
+                "source_type": definition["source_type"],
+                "upstream_commits": (
+                    len(series) if crosscut_id == "upstream-drift" else 0
+                ),
+            }
+        )
+    if crosscut_coverage != expected_crosscut_coverage:
+        raise EvidenceError("crosscut coverage is incomplete")
+    coverage = document["coverage"]
+    expected_coverage = {
+        "complete": True,
+        "crosscuts": len(definitions),
+        "definition_evaluations": len(scanned) * len(definitions),
+        "evidence_entries": len(entries),
+        "included_blobs": len(contract["included"]),
+        "mandatory_paths": sum(
+            len(record["matched_paths"]) for record in document["mandatory_path_coverage"]
+        ),
+        "mandatory_ranges": len(mandatory_entries),
+        "mandatory_selectors": len(document["mandatory_path_coverage"]),
+        "source_records": len(sources),
+        "target_blobs_scanned": len(scanned),
+        "target_match_occurrences": sum(1 for entry in entries if entry["kind"] == "matcher"),
+        "upstream_commits": len(series),
+    }
+    if coverage != expected_coverage:
+        raise EvidenceError("evidence coverage counters are invalid")
+
+
+def build_manifest(
+    document: dict[str, Any], evidence_sha256: str, definitions_filename: str
+) -> dict[str, Any]:
+    return {
+        "artifacts": {
+            "completion": "COMPLETE",
+            "definitions": definitions_filename,
+            "evidence": "crosscut-evidence.json",
+        },
+        "coverage": document["coverage"],
+        "definitions_sha256": document["definitions_sha256"],
+        "evidence_sha256": evidence_sha256,
+        "generator_version": GENERATOR_VERSION,
+        "inventory_manifest_sha256": document["inventory_manifest_sha256"],
+        "inventory_sha256": document["inventory_sha256"],
+        "merge_base_sha": document["merge_base_sha"],
+        "object_format": document["object_format"],
+        "schema_version": SCHEMA_VERSION,
+        "scope_sha256": document["scope_sha256"],
+        "target_sha": document["target_sha"],
+        "upstream_commit_series_sha256": document["upstream_commit_series_sha256"],
+        "upstream_sha": document["upstream_sha"],
+    }
+
+
+def reserve_output(output: Path) -> None:
+    try:
+        output.mkdir()
+    except FileExistsError as error:
+        raise EvidenceError(f"output path already exists: {output}") from error
+
+
+def write_output(
+    output: Path, document: dict[str, Any], definitions_contract: dict[str, Any]
+) -> None:
+    output = output.parent.resolve() / output.name
+    output.parent.mkdir(parents=True, exist_ok=True)
+    evidence_bytes = canonical_json(document)
+    evidence_sha256 = sha256_bytes(evidence_bytes)
+    definitions_name = "crosscuts.resolved.json"
+    manifest = build_manifest(document, evidence_sha256, definitions_name)
+    manifest_bytes = canonical_json(manifest)
+    manifest_sha256 = sha256_bytes(manifest_bytes)
+    artifacts = {
+        "crosscut-evidence.json": evidence_bytes,
+        "crosscut-evidence.sha256": f"{evidence_sha256}  crosscut-evidence.json\n".encode(
+            "ascii"
+        ),
+        definitions_name: definitions_contract["raw"],
+        "crosscuts.sha256": f"{definitions_contract['sha256']}  {definitions_name}\n".encode(
+            "ascii"
+        ),
+        "manifest.json": manifest_bytes,
+        "manifest.sha256": f"{manifest_sha256}  manifest.json\n".encode("ascii"),
+    }
+    reserve_output(output)
+    try:
+        for name, contents in artifacts.items():
+            with (output / name).open("xb") as artifact:
+                artifact.write(contents)
+                artifact.flush()
+                os.fsync(artifact.fileno())
+        temporary = output / ".COMPLETE.tmp"
+        with temporary.open("xb") as completion:
+            completion.write(f"{manifest_sha256}  manifest.json\n".encode("ascii"))
+            completion.flush()
+            os.fsync(completion.fileno())
+        os.link(temporary, output / "COMPLETE")
+        temporary.unlink()
+        directory_descriptor = os.open(output, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except BaseException as error:
+        raise EvidenceError(
+            f"output reservation is incomplete and was left in place: {output}"
+        ) from error
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--inventory-dir", type=Path, required=True)
+    parser.add_argument("--expected-manifest-sha256", required=True)
+    parser.add_argument("--definitions", type=Path, required=True)
+    parser.add_argument("--expected-definitions-sha256", required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        repo = args.repo.resolve()
+        reject_history_overrides(repo)
+        object_format, oid_length = repository_object_format(repo)
+        contract = load_inventory_contract(
+            args.inventory_dir, args.expected_manifest_sha256
+        )
+        if contract["manifest"]["object_format"] != object_format:
+            raise EvidenceError("repository/inventory object format mismatch")
+        target_sha = require_commit(
+            repo, contract["manifest"]["target_sha"], "target_sha", oid_length
+        )
+        upstream_sha = require_commit(
+            repo, contract["manifest"]["upstream_sha"], "upstream_sha", oid_length
+        )
+        merge_base_sha = require_commit(
+            repo,
+            contract["manifest"]["merge_base_sha"],
+            "merge_base_sha",
+            oid_length,
+        )
+        verify_merge_base(repo, target_sha, upstream_sha, merge_base_sha, oid_length)
+        validate_inventory_against_repo(contract, repo, oid_length)
+        definitions_contract = load_definitions(
+            args.definitions, args.expected_definitions_sha256
+        )
+        document = build_evidence(repo, contract, definitions_contract, oid_length)
+        write_output(args.output, document, definitions_contract)
+    except EvidenceError as error:
+        print(f"codebase audit crosscut evidence: {error}", file=sys.stderr)
+        return 1
+    print(f"codebase audit crosscut evidence: wrote {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
