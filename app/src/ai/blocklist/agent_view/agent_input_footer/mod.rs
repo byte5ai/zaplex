@@ -2028,21 +2028,17 @@ fn subscription_action_layout_element(
 ) -> Box<dyn Element> {
     #[cfg(feature = "integration_tests")]
     {
-        return WrapFill::new(
-            SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
-            SavePosition::new(
-                child,
-                &subscription_action_position_id(conversation_id, action),
-            )
-            .for_single_frame()
-            .finish(),
+        return SavePosition::new(
+            child,
+            &subscription_action_position_id(conversation_id, action),
         )
+        .for_single_frame()
         .finish();
     }
     #[cfg(not(feature = "integration_tests"))]
     {
         let _ = (conversation_id, action);
-        WrapFill::new(SUBSCRIPTION_ACTION_MIN_RUN_WIDTH, child).finish()
+        child
     }
 }
 
