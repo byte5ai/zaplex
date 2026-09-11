@@ -1,0 +1,637 @@
+#!/usr/bin/env python3
+
+"""Focused tests for the immutable codebase-audit verification runner."""
+
+from __future__ import annotations
+
+import concurrent.futures
+import copy
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest import mock
+
+
+SCRIPT_DIRECTORY = Path(__file__).resolve().parent
+RUNNER_SCRIPT = SCRIPT_DIRECTORY / "run-codebase-audit-verification-assignments"
+GENERATOR_SCRIPT = (
+    SCRIPT_DIRECTORY / "generate-codebase-audit-verification-assignments"
+)
+
+
+def load_script(name, path):
+    loader = importlib.machinery.SourceFileLoader(name, str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    loader.exec_module(module)
+    return module
+
+
+RUNNER = load_script("codebase_audit_verification_runner", RUNNER_SCRIPT)
+GENERATOR = load_script(
+    "codebase_audit_verification_assignment_generator", GENERATOR_SCRIPT
+)
+
+
+STUB = r'''#!/usr/bin/env python3
+import fcntl
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+state_directory = Path(os.environ["STUB_STATE_DIRECTORY"])
+state_path = state_directory / "state.json"
+lock_path = state_directory / "state.lock"
+behavior = os.environ.get("STUB_BEHAVIOR", "success")
+prompt_raw = sys.stdin.buffer.read()
+prompt = json.loads(prompt_raw)
+entry = prompt["tuple"]
+verification_id = entry["verification_id"]
+
+with lock_path.open("a+") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    state = json.loads(state_path.read_text())
+    state["active"] += 1
+    state["maximum"] = max(state["maximum"], state["active"])
+    state["calls"].append(verification_id)
+    state_path.write_text(json.dumps(state, sort_keys=True))
+    fcntl.flock(lock, fcntl.LOCK_UN)
+
+record = {
+    "argv": sys.argv[1:],
+    "prompt": prompt,
+}
+(state_directory / f"{verification_id}.json").write_text(
+    json.dumps(record, sort_keys=True)
+)
+
+if behavior == "timeout":
+    time.sleep(10)
+else:
+    time.sleep(0.12)
+
+with lock_path.open("a+") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    state = json.loads(state_path.read_text())
+    state["active"] -= 1
+    state_path.write_text(json.dumps(state, sort_keys=True))
+    fcntl.flock(lock, fcntl.LOCK_UN)
+
+if behavior == "nonzero":
+    print("stub failed", file=sys.stderr)
+    raise SystemExit(7)
+
+response = {
+    "schema_version": 1,
+    "verification_id": verification_id,
+    "finding_id": entry["finding_id"],
+    "lens": entry["lens"],
+    "aggregate_sha256": entry["aggregate_sha256"],
+    "issue_snapshot_sha256": entry["issue_snapshot_sha256"],
+    "github_repository": entry["github_repository"],
+    "source_sha256": prompt["source"]["sha256"],
+    "source_text": prompt["source"]["text"],
+}
+if entry["lens"] == "disprove":
+    response.update(
+        verdict="supported",
+        counter_evidence="No counterexample was found in the immutable target.",
+    )
+elif entry["lens"] == "impact":
+    response.update(
+        severity=entry["finding"]["severity"],
+        impact="The reported scenario has the stated concrete impact.",
+    )
+elif entry["lens"] == "reproduction-fix":
+    response.update(
+        reproducible=True,
+        reproduction="The scenario is reproducible from the cited range.",
+        fix_assessment="The proposed fix addresses the identified cause.",
+        test_assessment="The proposed regression test covers the scenario.",
+    )
+else:
+    raise AssertionError(entry["lens"])
+
+if behavior == "bad-response":
+    response.pop("finding_id")
+elif behavior == "boolean-schema-version":
+    response["schema_version"] = True
+elif behavior == "wrong-source-hash":
+    response["source_sha256"] = "0" * 64
+elif behavior == "wrong-source-text":
+    response["source_text"] += "changed"
+elif behavior == "missing-source-hash":
+    response.pop("source_sha256")
+elif behavior == "missing-source-text":
+    response.pop("source_text")
+if behavior != "missing-final":
+    output_path = Path(
+        sys.argv[sys.argv.index("--output-last-message") + 1]
+    )
+    output_path.write_text(json.dumps(response, sort_keys=True) + "\n")
+
+if behavior == "malformed-event":
+    print("not-json")
+elif behavior == "failure-event":
+    print(json.dumps({"type": "turn.failed"}))
+elif behavior == "duplicate-complete":
+    print(json.dumps({"type": "turn.completed"}))
+    print(json.dumps({"type": "turn.completed"}))
+else:
+    print(json.dumps({"type": "turn.completed"}))
+'''
+
+
+class CodebaseAuditVerificationRunnerTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(
+            prefix="zaplex-codebase-audit-verification-runner-test-"
+        )
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q")
+        self.git("config", "user.name", "Audit Test")
+        self.git("config", "user.email", "audit@example.invalid")
+        (self.repo / "a.rs").write_text("fn alpha() {}\n")
+        (self.repo / "b.rs").write_text("fn beta() {}\n")
+        self.git("add", "a.rs", "b.rs")
+        self.git("commit", "-q", "-m", "base")
+        self.base_sha = self.git("rev-parse", "HEAD").stdout.strip()
+        (self.repo / "a.rs").write_text("fn alpha() { println!(\"a\"); }\n")
+        (self.repo / "b.rs").write_text("fn beta() { println!(\"b\"); }\n")
+        self.git("add", "a.rs", "b.rs")
+        self.git("commit", "-q", "-m", "target")
+        self.target_sha = self.git("rev-parse", "HEAD").stdout.strip()
+        self.target_files = {
+            path: (self.repo / path).read_bytes() for path in ("a.rs", "b.rs")
+        }
+
+        self.github_repository = "example/project"
+        self.snapshot = [
+            {
+                "number": 245,
+                "title": "Complete codebase audit",
+                "body": "Tracks immutable audit evidence.",
+                "state": "OPEN",
+                "url": "https://github.com/example/project/issues/245",
+                "updated_at": "2026-09-11T12:00:00Z",
+                "labels": ["audit"],
+            }
+        ]
+        self.snapshot_path = self.root / "issues.json"
+        self.write_json(self.snapshot_path, self.snapshot)
+        self.snapshot_sha256 = RUNNER.sha256_bytes(self.snapshot_path.read_bytes())
+        self.aggregate = self.build_aggregate()
+        self.aggregate_path = self.root / "aggregate.json"
+        self.write_json(self.aggregate_path, self.aggregate)
+        self.assignments = GENERATOR.build_verification_assignments(
+            self.aggregate,
+            self.snapshot,
+            self.snapshot_sha256,
+            self.github_repository,
+        )
+        self.assignments_path = self.root / "verification-assignments.json"
+        self.write_json(self.assignments_path, self.assignments)
+
+        self.stub_state = self.root / "stub-state"
+        self.stub_state.mkdir()
+        (self.stub_state / "state.json").write_text(
+            json.dumps({"active": 0, "maximum": 0, "calls": []})
+        )
+        self.stub = self.root / "codex-stub"
+        self.stub.write_text(STUB)
+        self.stub.chmod(0o755)
+
+    def git(self, *arguments):
+        return subprocess.run(
+            ["git", "-C", str(self.repo), *arguments],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+
+    def write_json(self, path, value):
+        path.write_bytes(RUNNER.canonical_json(value))
+
+    def finding(self, bucket_id, path, severity):
+        return {
+            "bucket_id": bucket_id,
+            "path": path,
+            "range": {"start": 1, "end": 1},
+            "category": "correctness",
+            "severity": severity,
+            "evidence": f"Evidence for {path}.",
+            "scenario": f"Scenario for {path}.",
+            "fix": f"Fix {path} and add a regression test.",
+            "confidence": "high",
+        }
+
+    def build_aggregate(self):
+        findings = [
+            self.finding("bucket-1", "a.rs", "P1"),
+            self.finding("bucket-2", "b.rs", "P2"),
+        ]
+        findings.sort(key=GENERATOR.finding_sort_key)
+        bucket_results = []
+        for index in range(1, 4):
+            bucket_id = f"bucket-{index}"
+            bucket_results.append(
+                {
+                    "bucket_assignment_sha256": f"{index + 2:x}" * 64,
+                    "bucket_id": bucket_id,
+                    "finding_count": sum(
+                        finding["bucket_id"] == bucket_id for finding in findings
+                    ),
+                    "result_sha256": f"{index + 5:x}" * 64,
+                }
+            )
+        aggregate = {
+            "schema_version": 1,
+            "aggregator_version": 1,
+            "manifest_sha256": "a" * 64,
+            "inventory_sha256": "b" * 64,
+            "scope_sha256": "c" * 64,
+            "assignment_sha256": "d" * 64,
+            "run_summary_sha256": "e" * 64,
+            "target_sha": self.target_sha,
+            "upstream_sha": self.base_sha,
+            "merge_base_sha": self.base_sha,
+            "bucket_results": bucket_results,
+            "findings": findings,
+            "coverage": {
+                "assigned_ranges": 2,
+                "reviewed_ranges": 2,
+                "assigned_lines": 2,
+                "reviewed_lines": 2,
+                "bucket_count": 3,
+                "complete": True,
+            },
+            "remaining_ranges": [],
+        }
+        aggregate["aggregate_sha256"] = GENERATOR.aggregate_document_hash(aggregate)
+        return aggregate
+
+    def runner_command(
+        self,
+        run_directory,
+        aggregate_path=None,
+        snapshot_path=None,
+        assignments_path=None,
+        include_aggregate_pin=True,
+        include_snapshot_pin=True,
+        include_repository=True,
+        timeout_seconds=5,
+    ):
+        command = [
+            sys.executable,
+            str(RUNNER_SCRIPT),
+            "--repo",
+            str(self.repo),
+            "--aggregate",
+            str(self.aggregate_path if aggregate_path is None else aggregate_path),
+            "--issue-snapshot",
+            str(self.snapshot_path if snapshot_path is None else snapshot_path),
+            "--assignments",
+            str(self.assignments_path if assignments_path is None else assignments_path),
+            "--run-dir",
+            str(run_directory),
+            "--codex-cli",
+            str(self.stub),
+            "--timeout-seconds",
+            str(timeout_seconds),
+        ]
+        if include_aggregate_pin:
+            command.extend(
+                ["--expected-aggregate-sha256", self.aggregate["aggregate_sha256"]]
+            )
+        if include_snapshot_pin:
+            command.extend(
+                ["--expected-issue-snapshot-sha256", self.snapshot_sha256]
+            )
+        if include_repository:
+            command.extend(["--github-repository", self.github_repository])
+        return command
+
+    def run_runner(self, run_directory, behavior="success", **arguments):
+        environment = os.environ.copy()
+        environment["STUB_STATE_DIRECTORY"] = str(self.stub_state)
+        environment["STUB_BEHAVIOR"] = behavior
+        return subprocess.run(
+            self.runner_command(run_directory, **arguments),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=environment,
+        )
+
+    def expected_entries(self):
+        return [
+            entry
+            for bucket in self.assignments["buckets"]
+            for entry in bucket["entries"]
+        ]
+
+    def read_state(self):
+        return json.loads((self.stub_state / "state.json").read_text())
+
+    def test_runs_every_tuple_once_with_at_most_three_parallel(self):
+        run_directory = self.root / "run"
+        (self.repo / "a.rs").write_text("uncommitted mutable worktree text\n")
+        result = self.run_runner(run_directory)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        entries = self.expected_entries()
+        state = self.read_state()
+        self.assertEqual(sorted(state["calls"]), sorted(e["verification_id"] for e in entries))
+        self.assertEqual(len(state["calls"]), len(entries))
+        self.assertEqual(state["maximum"], 3)
+
+        by_id = {entry["verification_id"]: entry for entry in entries}
+        for verification_id, entry in by_id.items():
+            record = json.loads(
+                (self.stub_state / f"{verification_id}.json").read_text()
+            )
+            self.assertEqual(record["prompt"]["tuple"], entry)
+            path = entry["finding"]["path"]
+            expected_source = RUNNER.source_for_entry(
+                {path: self.target_files[path]}, entry
+            )
+            self.assertEqual(record["prompt"]["source"], expected_source)
+            self.assertEqual(
+                record["prompt"]["source"]["text"],
+                self.target_files[path].decode("utf-8"),
+            )
+            self.assertEqual(
+                record["prompt"]["assignment_sha256"],
+                self.assignments["assignment_sha256"],
+            )
+            arguments = record["argv"]
+            self.assertIn("--ephemeral", arguments)
+            self.assertIn("--ignore-user-config", arguments)
+            self.assertIn("--skip-git-repo-check", arguments)
+            self.assertEqual(arguments[arguments.index("--sandbox") + 1], "read-only")
+            self.assertIn('model_reasoning_effort="high"', arguments)
+
+        result_names = sorted(path.name for path in (run_directory / "results").iterdir())
+        self.assertEqual(
+            result_names,
+            [f"verification-bucket-{index}.json" for index in range(1, 4)],
+        )
+        run = json.loads((run_directory / "run.json").read_text())
+        self.assertTrue(run["complete"])
+        self.assertEqual(run["expected_tuples"], len(entries))
+        self.assertEqual(run["completed_tuples"], len(entries))
+        self.assertEqual(run["github_repository"], self.github_repository)
+        self.assertEqual(run["provenance"], self.assignments["provenance"])
+        self.assertEqual(run["run_sha256"], RUNNER.document_hash(run, "run_sha256"))
+        self.assertEqual(
+            run["assignments_input_sha256"],
+            RUNNER.sha256_bytes(self.assignments_path.read_bytes()),
+        )
+        self.assertEqual(
+            run["aggregate_input_sha256"],
+            RUNNER.sha256_bytes(self.aggregate_path.read_bytes()),
+        )
+        self.assertEqual(
+            run["issue_snapshot_input_sha256"], self.snapshot_sha256
+        )
+        self.assertEqual(
+            run["generator_stdout_sha256"],
+            RUNNER.sha256_bytes(
+                (run_directory / "logs" / "generator.stdout.log").read_bytes()
+            ),
+        )
+        self.assertEqual(
+            run["generator_stderr_sha256"],
+            RUNNER.sha256_bytes(
+                (run_directory / "logs" / "generator.stderr.log").read_bytes()
+            ),
+        )
+        self.assertEqual(len(run["executions"]), len(entries))
+        for execution in run["executions"]:
+            for key in (
+                "tuple_sha256",
+                "prompt_sha256",
+                "schema_sha256",
+                "source_sha256",
+                "events_sha256",
+                "stderr_sha256",
+                "final_message_sha256",
+                "response_sha256",
+            ):
+                self.assertRegex(execution[key], r"^[0-9a-f]{64}$")
+            self.assertEqual(
+                execution["schema_sha256"],
+                RUNNER.sha256_bytes(
+                    (
+                        run_directory
+                        / "inputs"
+                        / f"{execution['lens']}.response.schema.json"
+                    ).read_bytes()
+                ),
+            )
+        self.assertEqual(
+            len(list((run_directory / "logs").glob("*.events.jsonl"))),
+            len(entries),
+        )
+
+    def test_outputs_are_deterministic_and_hash_bound(self):
+        first = self.root / "first"
+        second = self.root / "second"
+        for run_directory in (first, second):
+            result = self.run_runner(run_directory)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            (first / "run.json").read_bytes(), (second / "run.json").read_bytes()
+        )
+        for index in range(1, 4):
+            name = f"verification-bucket-{index}.json"
+            self.assertEqual(
+                (first / "results" / name).read_bytes(),
+                (second / "results" / name).read_bytes(),
+            )
+            bucket = json.loads((first / "results" / name).read_text())
+            self.assertEqual(
+                bucket["result_sha256"], RUNNER.document_hash(bucket, "result_sha256")
+            )
+            for item in bucket["results"]:
+                self.assertEqual(
+                    item["response_sha256"],
+                    RUNNER.sha256_bytes(RUNNER.canonical_json(item["response"])),
+                )
+
+    def test_requires_all_external_pins_and_repository(self):
+        cases = (
+            ({"include_aggregate_pin": False}, "--expected-aggregate-sha256"),
+            ({"include_snapshot_pin": False}, "--expected-issue-snapshot-sha256"),
+            ({"include_repository": False}, "--github-repository"),
+        )
+        for index, (arguments, option) in enumerate(cases):
+            with self.subTest(option=option):
+                result = self.run_runner(self.root / f"missing-{index}", **arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(option, result.stderr)
+        self.assertEqual(self.read_state()["calls"], [])
+
+    def test_rejects_changed_assignments_aggregate_and_issue_snapshot(self):
+        changed_assignments = copy.deepcopy(self.assignments)
+        changed_assignments["buckets"][0]["entries"][0]["finding"]["evidence"] = (
+            "Changed evidence."
+        )
+        changed_assignments_path = self.root / "changed-assignments.json"
+        self.write_json(changed_assignments_path, changed_assignments)
+
+        changed_aggregate = copy.deepcopy(self.aggregate)
+        changed_aggregate["findings"][0]["evidence"] = "Changed aggregate evidence."
+        changed_aggregate_path = self.root / "changed-aggregate.json"
+        self.write_json(changed_aggregate_path, changed_aggregate)
+
+        changed_snapshot = copy.deepcopy(self.snapshot)
+        changed_snapshot[0]["title"] = "Changed issue title"
+        changed_snapshot_path = self.root / "changed-issues.json"
+        self.write_json(changed_snapshot_path, changed_snapshot)
+
+        cases = (
+            (
+                {"assignments_path": changed_assignments_path},
+                "not byte-exact generator output",
+            ),
+            (
+                {"aggregate_path": changed_aggregate_path},
+                "aggregate document SHA-256 mismatch",
+            ),
+            (
+                {"snapshot_path": changed_snapshot_path},
+                "issue snapshot does not match expected SHA-256",
+            ),
+            (
+                {"assignments_path": self.root / "missing-assignments.json"},
+                "cannot resolve a pinned verification input",
+            ),
+        )
+        for index, (arguments, message) in enumerate(cases):
+            with self.subTest(message=message):
+                result = self.run_runner(self.root / f"changed-{index}", **arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+        self.assertEqual(self.read_state()["calls"], [])
+
+    def test_rejects_broken_events_and_responses(self):
+        cases = (
+            ("malformed-event", "invalid"),
+            ("failure-event", "reports a failure"),
+            ("duplicate-complete", "exactly one completed turn"),
+            ("bad-response", "response shape is invalid"),
+            ("boolean-schema-version", "schema_version must be an integer"),
+            ("wrong-source-hash", "source_sha256 provenance mismatch"),
+            ("wrong-source-text", "source_text provenance mismatch"),
+            ("missing-source-hash", "response shape is invalid"),
+            ("missing-source-text", "response shape is invalid"),
+            ("missing-final", "did not write a final message"),
+        )
+        for behavior, message in cases:
+            with self.subTest(behavior=behavior):
+                result = self.run_runner(self.root / f"run-{behavior}", behavior)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertFalse((self.root / f"run-{behavior}" / "run.json").exists())
+                self.assertEqual(
+                    list((self.root / f"run-{behavior}" / "results").iterdir()), []
+                )
+
+    def test_rejects_nonzero_and_timeout(self):
+        nonzero = self.run_runner(self.root / "nonzero", "nonzero")
+        self.assertNotEqual(nonzero.returncode, 0)
+        self.assertIn("exited with status 7", nonzero.stderr)
+
+        timed_out = self.run_runner(
+            self.root / "timeout", "timeout", timeout_seconds=1
+        )
+        self.assertNotEqual(timed_out.returncode, 0)
+        self.assertIn("timed out after 1 seconds", timed_out.stderr)
+
+    def test_source_extraction_rejects_missing_out_of_range_and_non_utf8(self):
+        entry = copy.deepcopy(self.assignments["buckets"][0]["entries"][0])
+        path = entry["finding"]["path"]
+
+        with self.assertRaisesRegex(RUNNER.RunnerError, "source is missing"):
+            RUNNER.source_for_entry({}, entry)
+
+        out_of_range = copy.deepcopy(entry)
+        out_of_range["finding"]["range"] = {"start": 1, "end": 2}
+        with self.assertRaisesRegex(RUNNER.RunnerError, "target blob has 1 lines"):
+            RUNNER.source_for_entry({path: b"one line\n"}, out_of_range)
+
+        with self.assertRaisesRegex(RUNNER.RunnerError, "is not UTF-8"):
+            RUNNER.source_for_entry({path: b"valid\ninvalid: \xff\n"}, entry)
+
+    def test_no_overwrite_and_atomic_publish_race(self):
+        run_directory = self.root / "run"
+        first = self.run_runner(run_directory)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        call_count = len(self.read_state()["calls"])
+        second = self.run_runner(run_directory)
+        self.assertNotEqual(second.returncode, 0)
+        self.assertIn("run directory already exists", second.stderr)
+        self.assertEqual(len(self.read_state()["calls"]), call_count)
+
+        destination = self.root / "atomic.json"
+        barrier = threading.Barrier(2)
+        original_link = os.link
+
+        def synchronized_link(source, target, *arguments, **keywords):
+            barrier.wait(timeout=5)
+            return original_link(source, target, *arguments, **keywords)
+
+        def publish():
+            try:
+                RUNNER.atomic_publish(destination, b"content\n")
+                return "written"
+            except RUNNER.RunnerError as error:
+                return str(error)
+
+        with mock.patch.object(RUNNER.os, "link", synchronized_link):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                outcomes = list(executor.map(lambda _: publish(), range(2)))
+        self.assertEqual(outcomes.count("written"), 1)
+        self.assertEqual(sum("already exists" in item for item in outcomes), 1)
+        self.assertEqual(destination.read_bytes(), b"content\n")
+
+    def test_lens_schemas_are_strict_and_distinct(self):
+        expected_specific = {
+            "disprove": {"verdict", "counter_evidence"},
+            "impact": {"severity", "impact"},
+            "reproduction-fix": {
+                "reproducible",
+                "reproduction",
+                "fix_assessment",
+                "test_assessment",
+            },
+        }
+        for lens in RUNNER.LENSES:
+            schema = RUNNER.response_schema(lens)
+            self.assertFalse(schema["additionalProperties"])
+            self.assertEqual(schema["properties"]["lens"], {"const": lens})
+            self.assertEqual(
+                set(schema["required"]) - RUNNER.COMMON_RESPONSE_KEYS,
+                expected_specific[lens],
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

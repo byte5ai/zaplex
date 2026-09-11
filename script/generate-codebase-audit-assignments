@@ -1,0 +1,576 @@
+#!/usr/bin/env python3
+
+"""Generate three deterministic audit assignments from an immutable inventory."""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import sys
+import tempfile
+from typing import Any
+
+
+SCHEMA_VERSION = 1
+GENERATOR_VERSION = 1
+BUCKET_COUNT = 3
+OBJECT_FORMAT_LENGTHS = {"sha1": 40, "sha256": 64}
+OWNERSHIPS = {
+    "fork-owned",
+    "upstream-modified-by-fork",
+    "upstream-unmodified",
+}
+ASSIGNMENT_ENTRY_KEYS = {
+    "manifest_sha256",
+    "target_sha",
+    "upstream_sha",
+    "merge_base_sha",
+    "path",
+    "mode",
+    "type",
+    "object_id",
+    "blob_oid",
+    "range",
+    "ownership",
+}
+ASSIGNMENT_ROOT_KEYS = {
+    "schema_version",
+    "generator_version",
+    "manifest_sha256",
+    "inventory_sha256",
+    "scope_sha256",
+    "target_sha",
+    "upstream_sha",
+    "merge_base_sha",
+    "bucket_count",
+    "coverage",
+    "buckets",
+    "assignment_sha256",
+}
+BUCKET_KEYS = {
+    "id",
+    "range_count",
+    "line_count",
+    "entries",
+    "assignment_sha256",
+}
+
+
+class AssignmentError(RuntimeError):
+    """Raised when the immutable contract or assignment coverage is invalid."""
+
+
+def canonical_json(value: Any) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode(
+        "utf-8"
+    )
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def read_bytes(path: Path, label: str) -> bytes:
+    try:
+        return path.read_bytes()
+    except OSError as error:
+        raise AssignmentError(f"cannot read {label} {path}: {error}") from error
+
+
+def load_canonical_json(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
+    raw = read_bytes(path, label)
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AssignmentError(f"invalid {label} JSON in {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise AssignmentError(f"{label} must be a JSON object")
+    if canonical_json(value) != raw:
+        raise AssignmentError(f"{label} is not canonical JSON")
+    return value, raw
+
+
+def parse_hash_file(raw: bytes, filename: str, label: str) -> str:
+    match = re.fullmatch(
+        rb"([0-9a-f]{64})  " + re.escape(filename.encode("ascii")) + rb"\n", raw
+    )
+    if match is None:
+        raise AssignmentError(f"{label} must contain a canonical SHA-256 for {filename}")
+    return match.group(1).decode("ascii")
+
+
+def require_hash(value: Any, label: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise AssignmentError(f"{label} must be a canonical SHA-256")
+    return value
+
+
+def require_object_id(value: Any, label: str, length: int) -> str:
+    if not isinstance(value, str) or re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is None:
+        raise AssignmentError(
+            f"{label} must be a canonical {length}-character object ID"
+        )
+    return value
+
+
+def require_path(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value or "\0" in value:
+        raise AssignmentError(f"{label} must be a non-empty repository-relative path")
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or str(path) != value
+        or any(part in ("", ".", "..") for part in path.parts)
+    ):
+        raise AssignmentError(f"{label} must be a normalized repository-relative path")
+    return value
+
+
+def validate_ranges(path: str, line_count: Any, ranges: Any) -> None:
+    if not isinstance(line_count, int) or isinstance(line_count, bool) or line_count < 0:
+        raise AssignmentError(f"invalid line_count for {path}")
+    if not isinstance(ranges, list):
+        raise AssignmentError(f"ranges for {path} must be an array")
+    expected_start = 1
+    for line_range in ranges:
+        if not isinstance(line_range, dict) or set(line_range) != {"start", "end"}:
+            raise AssignmentError(f"invalid range for {path}: {line_range}")
+        start = line_range["start"]
+        end = line_range["end"]
+        if (
+            not isinstance(start, int)
+            or isinstance(start, bool)
+            or not isinstance(end, int)
+            or isinstance(end, bool)
+            or start != expected_start
+            or end < start
+        ):
+            raise AssignmentError(
+                f"inventory range gap or overlap for {path}: "
+                f"expected {expected_start}, got {line_range}"
+            )
+        expected_start = end + 1
+    if expected_start != line_count + 1:
+        raise AssignmentError(
+            f"inventory range coverage for {path} ends at {expected_start - 1}, "
+            f"expected {line_count}"
+        )
+
+
+def validate_inventory(
+    inventory: dict[str, Any], manifest: dict[str, Any], oid_length: int
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    for key in ("target_sha", "upstream_sha", "merge_base_sha", "object_format"):
+        if inventory.get(key) != manifest.get(key):
+            raise AssignmentError(f"manifest/inventory {key} mismatch")
+    if inventory.get("generator_version") != manifest.get("generator_version"):
+        raise AssignmentError("manifest/inventory generator_version mismatch")
+    if inventory.get("schema_version") != SCHEMA_VERSION:
+        raise AssignmentError(f"inventory.schema_version must be {SCHEMA_VERSION}")
+    require_object_id(inventory.get("target_sha"), "target_sha", oid_length)
+    require_object_id(inventory.get("upstream_sha"), "upstream_sha", oid_length)
+    require_object_id(inventory.get("merge_base_sha"), "merge_base_sha", oid_length)
+
+    included = inventory.get("included")
+    excluded = inventory.get("excluded")
+    if not isinstance(included, list) or not isinstance(excluded, list):
+        raise AssignmentError("inventory included/excluded fields must be arrays")
+
+    seen_paths = set()
+    for collection_name, entries in (("included", included), ("excluded", excluded)):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise AssignmentError(f"inventory {collection_name} entry must be an object")
+            path = require_path(entry.get("path"), f"{collection_name} path")
+            if path in seen_paths:
+                raise AssignmentError(f"inventory path appears more than once: {path}")
+            seen_paths.add(path)
+            entry_type = entry.get("type")
+            if entry_type not in ("blob", "commit"):
+                raise AssignmentError(f"invalid inventory entry type for {path}")
+            if not isinstance(entry.get("mode"), str) or not entry["mode"]:
+                raise AssignmentError(f"invalid mode for {path}")
+            object_id = require_object_id(
+                entry.get("object_id"), f"object_id for {path}", oid_length
+            )
+            if collection_name == "included":
+                if entry_type != "blob":
+                    raise AssignmentError(f"included inventory entry is not a blob: {path}")
+                if entry.get("blob_oid") != object_id:
+                    raise AssignmentError(f"blob_oid mismatch for {path}")
+                if entry.get("ownership") not in OWNERSHIPS:
+                    raise AssignmentError(f"invalid ownership for {path}")
+                validate_ranges(path, entry.get("line_count"), entry.get("ranges"))
+    return included, excluded
+
+
+def load_contract(directory: Path) -> dict[str, Any]:
+    directory = directory.resolve()
+    complete = read_bytes(directory / "COMPLETE", "completion marker")
+    manifest_hash_file = read_bytes(directory / "manifest.sha256", "manifest hash")
+    if complete != manifest_hash_file:
+        raise AssignmentError("COMPLETE must exactly equal manifest.sha256")
+    manifest_sha256 = parse_hash_file(
+        manifest_hash_file, "manifest.json", "manifest.sha256"
+    )
+    manifest, manifest_bytes = load_canonical_json(
+        directory / "manifest.json", "manifest"
+    )
+    if sha256_bytes(manifest_bytes) != manifest_sha256:
+        raise AssignmentError("manifest.json SHA-256 mismatch")
+
+    artifacts = manifest.get("artifacts")
+    if artifacts != {
+        "completion": "COMPLETE",
+        "inventory": "inventory.json",
+        "scope": "scope.resolved.json",
+    }:
+        raise AssignmentError("manifest artifact contract mismatch")
+    if manifest.get("schema_version") != SCHEMA_VERSION:
+        raise AssignmentError(f"manifest.schema_version must be {SCHEMA_VERSION}")
+    if manifest.get("generator_version") != GENERATOR_VERSION:
+        raise AssignmentError(
+            f"manifest.generator_version must be {GENERATOR_VERSION}"
+        )
+    object_format = manifest.get("object_format")
+    if object_format not in OBJECT_FORMAT_LENGTHS:
+        raise AssignmentError(f"unsupported object format: {object_format}")
+    oid_length = OBJECT_FORMAT_LENGTHS[object_format]
+
+    inventory_hash_file = read_bytes(directory / "inventory.sha256", "inventory hash")
+    inventory_hash_from_file = parse_hash_file(
+        inventory_hash_file, "inventory.json", "inventory.sha256"
+    )
+    inventory_sha256 = require_hash(
+        manifest.get("inventory_sha256"), "manifest.inventory_sha256"
+    )
+    if inventory_hash_from_file != inventory_sha256:
+        raise AssignmentError("manifest/inventory.sha256 mismatch")
+    inventory, inventory_bytes = load_canonical_json(
+        directory / "inventory.json", "inventory"
+    )
+    if sha256_bytes(inventory_bytes) != inventory_sha256:
+        raise AssignmentError("inventory.json SHA-256 mismatch")
+
+    scope, scope_bytes = load_canonical_json(
+        directory / "scope.resolved.json", "scope"
+    )
+    if scope.get("schema_version") != SCHEMA_VERSION:
+        raise AssignmentError(f"scope.schema_version must be {SCHEMA_VERSION}")
+    scope_sha256 = require_hash(manifest.get("scope_sha256"), "manifest.scope_sha256")
+    if inventory.get("scope_sha256") != scope_sha256:
+        raise AssignmentError("manifest/inventory scope SHA-256 mismatch")
+    if sha256_bytes(scope_bytes) != scope_sha256:
+        raise AssignmentError("scope.resolved.json SHA-256 mismatch")
+
+    included, excluded = validate_inventory(inventory, manifest, oid_length)
+    coverage = manifest.get("coverage")
+    if not isinstance(coverage, dict) or coverage.get("complete") is not True:
+        raise AssignmentError("manifest coverage.complete must be true")
+    expected_coverage = {
+        "tracked_entries": len(included) + len(excluded),
+        "included_paths": len(included),
+        "excluded_paths": len(excluded),
+        "included_lines": sum(entry["line_count"] for entry in included),
+        "ranges": sum(len(entry["ranges"]) for entry in included),
+        "complete": True,
+    }
+    if coverage != expected_coverage:
+        raise AssignmentError("manifest coverage counters do not match inventory")
+
+    return {
+        "manifest": manifest,
+        "manifest_sha256": manifest_sha256,
+        "inventory": inventory,
+        "inventory_sha256": inventory_sha256,
+        "scope_sha256": scope_sha256,
+        "included": included,
+        "excluded": excluded,
+    }
+
+
+def expected_assignment_entries(contract: dict[str, Any]) -> list[dict[str, Any]]:
+    manifest = contract["manifest"]
+    entries = []
+    for source in contract["included"]:
+        for line_range in source["ranges"]:
+            entries.append(
+                {
+                    "manifest_sha256": contract["manifest_sha256"],
+                    "target_sha": manifest["target_sha"],
+                    "upstream_sha": manifest["upstream_sha"],
+                    "merge_base_sha": manifest["merge_base_sha"],
+                    "path": source["path"],
+                    "mode": source["mode"],
+                    "type": source["type"],
+                    "object_id": source["object_id"],
+                    "blob_oid": source["blob_oid"],
+                    "range": {"start": line_range["start"], "end": line_range["end"]},
+                    "ownership": source["ownership"],
+                }
+            )
+    return sorted(
+        entries,
+        key=lambda entry: (
+            entry["path"],
+            entry["range"]["start"],
+            entry["range"]["end"],
+        ),
+    )
+
+
+def bucket_assignment_hash(bucket: dict[str, Any], manifest_sha256: str) -> str:
+    payload = {
+        "id": bucket.get("id"),
+        "manifest_sha256": manifest_sha256,
+        "entries": bucket.get("entries"),
+    }
+    return sha256_bytes(canonical_json(payload))
+
+
+def assignment_document_hash(assignments: dict[str, Any]) -> str:
+    payload = copy.deepcopy(assignments)
+    payload.pop("assignment_sha256", None)
+    return sha256_bytes(canonical_json(payload))
+
+
+def distribute_entries(
+    entries: list[dict[str, Any]],
+) -> tuple[list[list[dict[str, Any]]], list[int]]:
+    bucket_entries = [[] for _ in range(BUCKET_COUNT)]
+    bucket_lines = [0] * BUCKET_COUNT
+    for entry in entries:
+        bucket_index = min(range(BUCKET_COUNT), key=lambda index: (bucket_lines[index], index))
+        bucket_entries[bucket_index].append(entry)
+        bucket_lines[bucket_index] += entry["range"]["end"] - entry["range"]["start"] + 1
+    return bucket_entries, bucket_lines
+
+
+def build_assignments(contract: dict[str, Any]) -> dict[str, Any]:
+    entries = expected_assignment_entries(contract)
+    bucket_entries, bucket_lines = distribute_entries(entries)
+
+    buckets = []
+    for index, assigned in enumerate(bucket_entries):
+        bucket = {
+            "id": f"bucket-{index + 1}",
+            "range_count": len(assigned),
+            "line_count": bucket_lines[index],
+            "entries": assigned,
+        }
+        bucket["assignment_sha256"] = bucket_assignment_hash(
+            bucket, contract["manifest_sha256"]
+        )
+        buckets.append(bucket)
+
+    manifest = contract["manifest"]
+    assignments = {
+        "schema_version": SCHEMA_VERSION,
+        "generator_version": GENERATOR_VERSION,
+        "manifest_sha256": contract["manifest_sha256"],
+        "inventory_sha256": contract["inventory_sha256"],
+        "scope_sha256": contract["scope_sha256"],
+        "target_sha": manifest["target_sha"],
+        "upstream_sha": manifest["upstream_sha"],
+        "merge_base_sha": manifest["merge_base_sha"],
+        "bucket_count": BUCKET_COUNT,
+        "coverage": {
+            "inventory_ranges": len(entries),
+            "assigned_ranges": len(entries),
+            "assigned_lines": sum(bucket_lines),
+            "included_paths": len(contract["included"]),
+            "excluded_paths": len(contract["excluded"]),
+            "complete": True,
+        },
+        "buckets": buckets,
+    }
+    assignments["assignment_sha256"] = assignment_document_hash(assignments)
+    validate_assignments(assignments, contract)
+    return assignments
+
+
+def validate_assignments(
+    assignments: dict[str, Any], contract: dict[str, Any]
+) -> None:
+    if set(assignments) != ASSIGNMENT_ROOT_KEYS:
+        raise AssignmentError("assignment document shape is invalid")
+    manifest = contract["manifest"]
+    expected_root = {
+        "schema_version": SCHEMA_VERSION,
+        "generator_version": GENERATOR_VERSION,
+        "manifest_sha256": contract["manifest_sha256"],
+        "inventory_sha256": contract["inventory_sha256"],
+        "scope_sha256": contract["scope_sha256"],
+        "target_sha": manifest["target_sha"],
+        "upstream_sha": manifest["upstream_sha"],
+        "merge_base_sha": manifest["merge_base_sha"],
+        "bucket_count": BUCKET_COUNT,
+    }
+    for key, expected_value in expected_root.items():
+        if assignments.get(key) != expected_value:
+            raise AssignmentError(f"assignment {key} does not match immutable contract")
+
+    buckets = assignments.get("buckets")
+    if not isinstance(buckets, list) or len(buckets) != BUCKET_COUNT:
+        raise AssignmentError(f"assignments must contain exactly {BUCKET_COUNT} buckets")
+    if any(not isinstance(bucket, dict) or set(bucket) != BUCKET_KEYS for bucket in buckets):
+        raise AssignmentError("assignment bucket shape is invalid")
+    if [bucket["id"] for bucket in buckets] != [
+        f"bucket-{index + 1}" for index in range(BUCKET_COUNT)
+    ]:
+        raise AssignmentError("assignment bucket IDs are invalid")
+
+    expected_entries = expected_assignment_entries(contract)
+    expected_by_key = {
+        (entry["path"], entry["range"]["start"], entry["range"]["end"]): entry
+        for entry in expected_entries
+    }
+    excluded_paths = {entry["path"] for entry in contract["excluded"]}
+    assigned_entries = []
+    assigned_keys = []
+    for bucket in buckets:
+        entries = bucket.get("entries")
+        if not isinstance(entries, list):
+            raise AssignmentError(f"{bucket.get('id')} entries must be an array")
+        line_count = 0
+        for entry in entries:
+            if not isinstance(entry, dict) or set(entry) != ASSIGNMENT_ENTRY_KEYS:
+                raise AssignmentError("assignment entry shape is invalid")
+            path = require_path(entry.get("path"), "assignment path")
+            if path in excluded_paths:
+                raise AssignmentError(f"excluded path appears in assignments: {path}")
+            line_range = entry.get("range")
+            if not isinstance(line_range, dict) or set(line_range) != {"start", "end"}:
+                raise AssignmentError(f"invalid assignment range for {path}")
+            start = line_range["start"]
+            end = line_range["end"]
+            if (
+                not isinstance(start, int)
+                or isinstance(start, bool)
+                or not isinstance(end, int)
+                or isinstance(end, bool)
+                or start < 1
+                or end < start
+            ):
+                raise AssignmentError(f"invalid assignment range for {path}: {line_range}")
+            assigned_entries.append(entry)
+            assigned_keys.append((path, start, end))
+            line_count += end - start + 1
+        if bucket.get("range_count") != len(entries):
+            raise AssignmentError(f"{bucket['id']} range_count mismatch")
+        if bucket.get("line_count") != line_count:
+            raise AssignmentError(f"{bucket['id']} line_count mismatch")
+        expected_hash = bucket_assignment_hash(bucket, contract["manifest_sha256"])
+        if bucket.get("assignment_sha256") != expected_hash:
+            raise AssignmentError(f"{bucket['id']} assignment SHA-256 mismatch")
+
+    seen = set()
+    duplicates = set()
+    for key in assigned_keys:
+        if key in seen:
+            duplicates.add(key)
+        seen.add(key)
+    if duplicates:
+        raise AssignmentError(f"inventory range assigned more than once: {sorted(duplicates)}")
+
+    ranges_by_path: dict[str, list[tuple[int, int]]] = {}
+    for path, start, end in assigned_keys:
+        ranges_by_path.setdefault(path, []).append((start, end))
+    for path, ranges in ranges_by_path.items():
+        previous_end = 0
+        for start, end in sorted(ranges):
+            if start <= previous_end:
+                raise AssignmentError(f"assignment ranges overlap for {path}")
+            previous_end = end
+
+    unexpected = sorted(seen - set(expected_by_key))
+    missing = sorted(set(expected_by_key) - seen)
+    if unexpected:
+        raise AssignmentError(f"unexpected assignment ranges: {unexpected}")
+    if missing:
+        raise AssignmentError(f"missing assignment ranges: {missing}")
+    for entry, key in zip(assigned_entries, assigned_keys):
+        if entry != expected_by_key[key]:
+            raise AssignmentError(f"assignment metadata mismatch for {key}")
+
+    order = {key: index for index, key in enumerate(expected_by_key)}
+    for bucket in buckets:
+        indexes = [
+            order[(entry["path"], entry["range"]["start"], entry["range"]["end"])]
+            for entry in bucket["entries"]
+        ]
+        if indexes != sorted(indexes):
+            raise AssignmentError(f"{bucket['id']} entries are not in stable order")
+    expected_bucket_entries, _ = distribute_entries(expected_entries)
+    if [bucket["entries"] for bucket in buckets] != expected_bucket_entries:
+        raise AssignmentError("assignment buckets do not match deterministic distribution")
+
+    assigned_lines = sum(bucket["line_count"] for bucket in buckets)
+    expected_coverage = {
+        "inventory_ranges": len(expected_entries),
+        "assigned_ranges": len(assigned_entries),
+        "assigned_lines": assigned_lines,
+        "included_paths": len(contract["included"]),
+        "excluded_paths": len(contract["excluded"]),
+        "complete": True,
+    }
+    if assignments.get("coverage") != expected_coverage:
+        raise AssignmentError("assignment coverage summary mismatch")
+    expected_document_hash = assignment_document_hash(assignments)
+    if assignments.get("assignment_sha256") != expected_document_hash:
+        raise AssignmentError("assignments document SHA-256 mismatch")
+
+
+def write_output(output: Path, assignments: dict[str, Any]) -> None:
+    output = output.parent.resolve() / output.name
+    output.parent.mkdir(parents=True, exist_ok=True)
+    contents = canonical_json(assignments)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as temporary_file:
+            temporary_file.write(contents)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        try:
+            os.link(temporary, output)
+        except FileExistsError as error:
+            raise AssignmentError(f"output path already exists: {output}") from error
+        except OSError as error:
+            raise AssignmentError(f"cannot publish output {output}: {error}") from error
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--inventory-dir", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        contract = load_contract(args.inventory_dir)
+        assignments = build_assignments(contract)
+        write_output(args.output, assignments)
+    except AssignmentError as error:
+        print(f"codebase audit assignments: {error}", file=sys.stderr)
+        return 1
+    print(f"codebase audit assignments: wrote {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

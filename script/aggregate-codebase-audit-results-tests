@@ -1,0 +1,611 @@
+#!/usr/bin/env python3
+
+"""Focused tests for fail-closed codebase-audit result aggregation."""
+
+from __future__ import annotations
+
+import concurrent.futures
+import copy
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest import mock
+
+
+SCRIPT = Path(__file__).resolve().parent / "aggregate-codebase-audit-results"
+LOADER = importlib.machinery.SourceFileLoader("codebase_audit_aggregator", str(SCRIPT))
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
+assert SPEC is not None
+AGGREGATOR = importlib.util.module_from_spec(SPEC)
+LOADER.exec_module(AGGREGATOR)
+
+
+class CodebaseAuditAggregatorTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="zaplex-audit-aggregate-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.assignments_path = self.root / "assignments.json"
+        self.results_dir = self.root / "results"
+        self.results_dir.mkdir()
+        self.assignments = self.build_assignments()
+        self.write_json(self.assignments_path, self.assignments)
+        self.results = self.build_results(self.assignments)
+        self.write_results(self.results)
+        self.run_summary_path = self.root / "run.json"
+        self.run_summary = self.build_run_summary(self.results)
+        self.write_json(self.run_summary_path, self.run_summary)
+
+    def oid(self, value):
+        return hashlib.sha1(value.encode("utf-8")).hexdigest()
+
+    def assignment_entry(self, path, start, end, ownership="fork-owned"):
+        object_id = self.oid(path)
+        return {
+            "manifest_sha256": "a" * 64,
+            "target_sha": "1" * 40,
+            "upstream_sha": "2" * 40,
+            "merge_base_sha": "3" * 40,
+            "path": path,
+            "mode": "100644",
+            "type": "blob",
+            "object_id": object_id,
+            "blob_oid": object_id,
+            "range": {"start": start, "end": end},
+            "ownership": ownership,
+        }
+
+    def build_assignments(self):
+        bucket_entries = [
+            [self.assignment_entry("a.rs", 1, 3)],
+            [self.assignment_entry("a.rs", 4, 6)],
+            [self.assignment_entry("b.rs", 1, 2)],
+        ]
+        buckets = []
+        for index, entries in enumerate(bucket_entries, start=1):
+            bucket = {
+                "id": f"bucket-{index}",
+                "range_count": len(entries),
+                "line_count": sum(
+                    entry["range"]["end"] - entry["range"]["start"] + 1
+                    for entry in entries
+                ),
+                "entries": entries,
+            }
+            bucket["assignment_sha256"] = AGGREGATOR.bucket_assignment_hash(
+                bucket, "a" * 64
+            )
+            buckets.append(bucket)
+        assignments = {
+            "schema_version": 1,
+            "generator_version": 1,
+            "manifest_sha256": "a" * 64,
+            "inventory_sha256": "b" * 64,
+            "scope_sha256": "c" * 64,
+            "target_sha": "1" * 40,
+            "upstream_sha": "2" * 40,
+            "merge_base_sha": "3" * 40,
+            "bucket_count": 3,
+            "coverage": {
+                "inventory_ranges": 3,
+                "assigned_ranges": 3,
+                "assigned_lines": 8,
+                "included_paths": 2,
+                "excluded_paths": 1,
+                "complete": True,
+            },
+            "buckets": buckets,
+        }
+        assignments["assignment_sha256"] = AGGREGATOR.assignment_document_hash(
+            assignments
+        )
+        return assignments
+
+    def finding(self, path="a.rs", start=1, end=1, severity="P1"):
+        return {
+            "path": path,
+            "range": {"start": start, "end": end},
+            "category": "correctness",
+            "severity": severity,
+            "evidence": "A concrete failing call path reaches this line.",
+            "scenario": "The operation returns an incorrect successful result.",
+            "fix": "Propagate the failure and add a regression test.",
+            "confidence": "high",
+        }
+
+    def build_results(self, assignments):
+        results = {}
+        findings = {
+            "bucket-1": [self.finding()],
+            "bucket-2": [self.finding(start=4, end=5, severity="P2")],
+            "bucket-3": [self.finding(path="b.rs", start=2, end=2, severity="P0")],
+        }
+        for bucket in assignments["buckets"]:
+            bucket_id = bucket["id"]
+            results[bucket_id] = {
+                "schema_version": 1,
+                "bucket_id": bucket_id,
+                "manifest_sha256": assignments["manifest_sha256"],
+                "assignment_sha256": assignments["assignment_sha256"],
+                "bucket_assignment_sha256": bucket["assignment_sha256"],
+                "target_sha": assignments["target_sha"],
+                "upstream_sha": assignments["upstream_sha"],
+                "merge_base_sha": assignments["merge_base_sha"],
+                "reviewed_ranges": copy.deepcopy(bucket["entries"]),
+                "findings": findings[bucket_id],
+            }
+        return results
+
+    def build_run_summary(self, results):
+        return {
+            "schema_version": 1,
+            "runner_version": 1,
+            "target_sha": self.assignments["target_sha"],
+            "upstream_sha": self.assignments["upstream_sha"],
+            "merge_base_sha": self.assignments["merge_base_sha"],
+            "manifest_sha256": self.assignments["manifest_sha256"],
+            "inventory_sha256": self.assignments["inventory_sha256"],
+            "scope_sha256": self.assignments["scope_sha256"],
+            "assignment_sha256": self.assignments["assignment_sha256"],
+            "reasoning_effort": "high",
+            "bucket_count": 3,
+            "buckets": [
+                {
+                    "id": bucket_id,
+                    "prompt_sha256": str(index) * 64,
+                    "events_sha256": str(index + 3) * 64,
+                    "stderr_sha256": str(index + 6) * 64,
+                    "final_message_sha256": chr(ord("a") + index - 1) * 64,
+                    "response_sha256": AGGREGATOR.sha256_bytes(
+                        AGGREGATOR.canonical_json(results[bucket_id])
+                    ),
+                    "finding_count": len(results[bucket_id]["findings"]),
+                    "reviewed_range_count": len(
+                        self.assignments["buckets"][index - 1]["entries"]
+                    ),
+                }
+                for index, bucket_id in enumerate(
+                    ("bucket-1", "bucket-2", "bucket-3"), start=1
+                )
+            ],
+            "complete": True,
+        }
+
+    def write_json(self, path, value):
+        path.write_bytes(AGGREGATOR.canonical_json(value))
+
+    def write_results(self, results):
+        for bucket_id, result in results.items():
+            self.write_json(self.results_dir / f"{bucket_id}.json", result)
+
+    def run_aggregator(
+        self,
+        output,
+        assignments=None,
+        run_summary=None,
+        results_dir=None,
+    ):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--assignments",
+                str(self.assignments_path if assignments is None else assignments),
+                "--run-summary",
+                str(self.run_summary_path if run_summary is None else run_summary),
+                "--results-dir",
+                str(self.results_dir if results_dir is None else results_dir),
+                "--output",
+                str(output),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def assert_result_rejected(self, results, message, bind_run_summary=True):
+        self.write_results(results)
+        summary = self.build_run_summary(results) if bind_run_summary else self.run_summary
+        self.write_json(self.run_summary_path, summary)
+        output = self.root / "rejected.json"
+        result = self.run_aggregator(output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(message, result.stderr)
+        self.assertFalse(output.exists())
+
+    def test_happy_path_is_deterministic_complete_and_hash_bound(self):
+        first = self.root / "aggregate-first.json"
+        second = self.root / "aggregate-second.json"
+        for output in (first, second):
+            result = self.run_aggregator(output)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(first.read_bytes(), second.read_bytes())
+        aggregate = json.loads(first.read_text(encoding="utf-8"))
+        self.assertEqual(aggregate["remaining_ranges"], [])
+        self.assertEqual(
+            aggregate["coverage"],
+            {
+                "assigned_ranges": 3,
+                "reviewed_ranges": 3,
+                "assigned_lines": 8,
+                "reviewed_lines": 8,
+                "bucket_count": 3,
+                "complete": True,
+            },
+        )
+        self.assertEqual(
+            aggregate["aggregate_sha256"],
+            AGGREGATOR.aggregate_document_hash(aggregate),
+        )
+        self.assertEqual(
+            aggregate["run_summary_sha256"],
+            AGGREGATOR.sha256_bytes(self.run_summary_path.read_bytes()),
+        )
+        self.assertEqual(
+            [finding["path"] for finding in aggregate["findings"]],
+            ["a.rs", "a.rs", "b.rs"],
+        )
+        for summary in aggregate["bucket_results"]:
+            raw = (self.results_dir / f"{summary['bucket_id']}.json").read_bytes()
+            self.assertEqual(summary["result_sha256"], AGGREGATOR.sha256_bytes(raw))
+
+    def test_rejects_missing_and_extra_bucket_files(self):
+        missing_dir = self.root / "missing"
+        missing_dir.mkdir()
+        for bucket_id in ("bucket-1", "bucket-2"):
+            self.write_json(
+                missing_dir / f"{bucket_id}.json", self.results[bucket_id]
+            )
+        result = self.run_aggregator(self.root / "missing.json", results_dir=missing_dir)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing=['bucket-3.json']", result.stderr)
+
+        extra_dir = self.root / "extra"
+        extra_dir.mkdir()
+        for bucket_id, bucket_result in self.results.items():
+            self.write_json(extra_dir / f"{bucket_id}.json", bucket_result)
+        (extra_dir / "notes.txt").write_text("unexpected\n", encoding="utf-8")
+        result = self.run_aggregator(self.root / "extra.json", results_dir=extra_dir)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("extra=['notes.txt']", result.stderr)
+
+    def test_rejects_invalid_and_noncanonical_json(self):
+        cases = (
+            (b"{not json}\n", "invalid bucket-2.json JSON"),
+            (json.dumps(self.results["bucket-2"]).encode("utf-8"), "not canonical JSON"),
+        )
+        for index, (contents, message) in enumerate(cases):
+            with self.subTest(message=message):
+                directory = self.root / f"malformed-{index}"
+                directory.mkdir()
+                for bucket_id, bucket_result in self.results.items():
+                    self.write_json(directory / f"{bucket_id}.json", bucket_result)
+                (directory / "bucket-2.json").write_bytes(contents)
+                result = self.run_aggregator(
+                    self.root / f"malformed-{index}.json", results_dir=directory
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+        assignment_cases = (
+            (b"{not json}\n", "invalid assignments JSON"),
+            (
+                json.dumps(self.assignments).encode("utf-8"),
+                "assignments is not canonical JSON",
+            ),
+        )
+        for index, (contents, message) in enumerate(assignment_cases):
+            with self.subTest(message=message):
+                path = self.root / f"malformed-assignments-{index}.json"
+                path.write_bytes(contents)
+                result = self.run_aggregator(
+                    self.root / f"malformed-assignment-{index}-output.json",
+                    assignments=path,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_rejects_assignment_documents_without_exactly_three_buckets(self):
+        assignments = copy.deepcopy(self.assignments)
+        assignments["bucket_count"] = 2
+        assignments["buckets"].pop()
+        assignments["assignment_sha256"] = AGGREGATOR.assignment_document_hash(
+            assignments
+        )
+        path = self.root / "two-bucket-assignments.json"
+        self.write_json(path, assignments)
+        result = self.run_aggregator(self.root / "two-bucket-output.json", assignments=path)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("bucket_count must be 3", result.stderr)
+
+    def test_rejects_stale_assignment_root_and_bucket_hashes(self):
+        cases = (
+            ("root", lambda value: value.update(assignment_sha256="0" * 64), "document SHA-256"),
+            (
+                "bucket",
+                lambda value: value["buckets"][0].update(assignment_sha256="0" * 64),
+                "bucket-1 assignment SHA-256 mismatch",
+            ),
+            (
+                "manifest",
+                lambda value: value.update(manifest_sha256="d" * 64),
+                "manifest_sha256 does not match assignment provenance",
+            ),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                assignments = copy.deepcopy(self.assignments)
+                mutate(assignments)
+                path = self.root / f"assignments-{name}.json"
+                self.write_json(path, assignments)
+                result = self.run_aggregator(
+                    self.root / f"assignment-{name}-output.json", assignments=path
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_rejects_stale_result_hashes_and_provenance(self):
+        cases = (
+            ("manifest_sha256", "d" * 64),
+            ("assignment_sha256", "e" * 64),
+            ("bucket_assignment_sha256", "f" * 64),
+            ("target_sha", "4" * 40),
+            ("upstream_sha", "5" * 40),
+            ("merge_base_sha", "6" * 40),
+        )
+        for key, replacement in cases:
+            with self.subTest(key=key):
+                results = copy.deepcopy(self.results)
+                results["bucket-2"][key] = replacement
+                self.assert_result_rejected(results, f"bucket-2.json.{key}")
+
+    def test_rejects_changed_or_deleted_findings_not_bound_by_run_summary(self):
+        changed = copy.deepcopy(self.results)
+        changed["bucket-1"]["findings"][0]["fix"] = "Hide the finding."
+        self.assert_result_rejected(
+            changed,
+            "bucket-1.json SHA-256 does not match run summary",
+            bind_run_summary=False,
+        )
+
+        deleted = copy.deepcopy(self.results)
+        deleted["bucket-1"]["findings"] = []
+        self.assert_result_rejected(
+            deleted,
+            "bucket-1.json SHA-256 does not match run summary",
+            bind_run_summary=False,
+        )
+
+    def test_requires_canonical_complete_and_current_run_summary(self):
+        missing = self.root / "missing-run.json"
+        result = self.run_aggregator(
+            self.root / "missing-run-output.json", run_summary=missing
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot read run summary", result.stderr)
+
+        noncanonical = self.root / "noncanonical-run.json"
+        noncanonical.write_text(json.dumps(self.run_summary), encoding="utf-8")
+        result = self.run_aggregator(
+            self.root / "noncanonical-run-output.json", run_summary=noncanonical
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("run summary is not canonical JSON", result.stderr)
+
+        stale = copy.deepcopy(self.run_summary)
+        stale["assignment_sha256"] = "0" * 64
+        stale_path = self.root / "stale-run.json"
+        self.write_json(stale_path, stale)
+        result = self.run_aggregator(
+            self.root / "stale-run-output.json", run_summary=stale_path
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "run summary.assignment_sha256 does not match assignment provenance",
+            result.stderr,
+        )
+
+        incomplete = copy.deepcopy(self.run_summary)
+        incomplete["complete"] = False
+        incomplete_path = self.root / "incomplete-run.json"
+        self.write_json(incomplete_path, incomplete)
+        result = self.run_aggregator(
+            self.root / "incomplete-run-output.json", run_summary=incomplete_path
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("run summary complete must be true", result.stderr)
+
+    def test_rejects_run_summary_hash_count_and_bucket_mismatches(self):
+        cases = (
+            (
+                "response-hash",
+                lambda summary: summary["buckets"][0].update(
+                    response_sha256="0" * 64
+                ),
+                "bucket-1.json SHA-256 does not match run summary",
+            ),
+            (
+                "finding-count",
+                lambda summary: summary["buckets"][0].update(finding_count=2),
+                "bucket-1.json finding count does not match run summary",
+            ),
+            (
+                "range-count",
+                lambda summary: summary["buckets"][0].update(
+                    reviewed_range_count=2
+                ),
+                "run summary.bucket-1.reviewed_range_count mismatch",
+            ),
+            (
+                "invalid-hash",
+                lambda summary: summary["buckets"][0].update(
+                    prompt_sha256="not-a-hash"
+                ),
+                "run summary.bucket-1.prompt_sha256 must be a canonical SHA-256",
+            ),
+            (
+                "bucket-count",
+                lambda summary: summary.update(bucket_count=2),
+                "run summary bucket_count must be 3",
+            ),
+            (
+                "missing-bucket",
+                lambda summary: summary["buckets"].pop(),
+                "run summary must contain exactly 3 bucket summaries",
+            ),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                summary = copy.deepcopy(self.run_summary)
+                mutate(summary)
+                path = self.root / f"run-{name}.json"
+                self.write_json(path, summary)
+                result = self.run_aggregator(
+                    self.root / f"run-{name}-output.json", run_summary=path
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_rejects_partial_duplicate_overlap_and_reordered_reviews(self):
+        partial = copy.deepcopy(self.results)
+        partial["bucket-1"]["reviewed_ranges"] = []
+        self.assert_result_rejected(partial, "unreviewed assignment ranges")
+
+        duplicate = copy.deepcopy(self.results)
+        duplicate["bucket-1"]["reviewed_ranges"].append(
+            copy.deepcopy(duplicate["bucket-1"]["reviewed_ranges"][0])
+        )
+        self.assert_result_rejected(duplicate, "range more than once")
+
+        overlap = copy.deepcopy(self.results)
+        second = copy.deepcopy(overlap["bucket-1"]["reviewed_ranges"][0])
+        second["range"] = {"start": 2, "end": 3}
+        overlap["bucket-1"]["reviewed_ranges"].append(second)
+        self.assert_result_rejected(overlap, "ranges overlap")
+
+        reordered_assignments = self.build_assignments()
+        reordered_assignments["buckets"][0]["entries"] = [
+            self.assignment_entry("c.rs", 1, 1),
+            *reordered_assignments["buckets"][0]["entries"],
+        ]
+        reordered_assignments["buckets"][0]["range_count"] = 2
+        reordered_assignments["buckets"][0]["line_count"] = 4
+        reordered_assignments["buckets"][0]["assignment_sha256"] = (
+            AGGREGATOR.bucket_assignment_hash(
+                reordered_assignments["buckets"][0], "a" * 64
+            )
+        )
+        reordered_assignments["coverage"]["inventory_ranges"] = 4
+        reordered_assignments["coverage"]["assigned_ranges"] = 4
+        reordered_assignments["coverage"]["assigned_lines"] = 9
+        reordered_assignments["coverage"]["included_paths"] = 3
+        reordered_assignments["assignment_sha256"] = (
+            AGGREGATOR.assignment_document_hash(reordered_assignments)
+        )
+        path = self.root / "reordered-assignments.json"
+        self.write_json(path, reordered_assignments)
+        result = self.run_aggregator(
+            self.root / "reordered-output.json", assignments=path
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("entries are not in stable order", result.stderr)
+
+    def test_rejects_reviewed_range_metadata_drift(self):
+        results = copy.deepcopy(self.results)
+        results["bucket-2"]["reviewed_ranges"][0]["mode"] = "100755"
+        self.assert_result_rejected(results, "reviewed-range metadata drift")
+
+    def test_rejects_unknown_finding_locations_and_invalid_finding_shape(self):
+        cases = (
+            (
+                "path",
+                lambda finding: finding.update(path="unknown.rs"),
+                "outside this bucket's reviewed ranges",
+            ),
+            (
+                "line",
+                lambda finding: finding.update(range={"start": 4, "end": 4}),
+                "outside this bucket's reviewed ranges",
+            ),
+            (
+                "severity",
+                lambda finding: finding.update(severity="critical"),
+                "severity is invalid",
+            ),
+            (
+                "extra-key",
+                lambda finding: finding.update(identifier="finding-1"),
+                "shape is invalid",
+            ),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                results = copy.deepcopy(self.results)
+                mutate(results["bucket-1"]["findings"][0])
+                self.assert_result_rejected(results, message)
+
+    def test_atomic_publish_race_and_existing_target_never_overwrite(self):
+        buckets = AGGREGATOR.validate_assignments(self.assignments)
+        run_summary_raw = self.run_summary_path.read_bytes()
+        run_buckets = AGGREGATOR.validate_run_summary(
+            self.run_summary, self.assignments, buckets
+        )
+        loaded = AGGREGATOR.load_results_directory(self.results_dir)
+        aggregate = AGGREGATOR.build_aggregate(
+            self.assignments,
+            buckets,
+            run_buckets,
+            run_summary_raw,
+            loaded,
+        )
+        output = self.root / "race.json"
+        barrier = threading.Barrier(2)
+        original_link = os.link
+
+        def synchronized_link(source, destination, *args, **kwargs):
+            barrier.wait(timeout=5)
+            return original_link(source, destination, *args, **kwargs)
+
+        def writer():
+            try:
+                AGGREGATOR.write_output(output, aggregate)
+                return "written"
+            except AGGREGATOR.AggregationError as error:
+                return str(error)
+
+        with mock.patch.object(AGGREGATOR.os, "link", synchronized_link):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                outcomes = list(executor.map(lambda _: writer(), range(2)))
+        self.assertEqual(outcomes.count("written"), 1, outcomes)
+        self.assertEqual(
+            sum("output path already exists" in outcome for outcome in outcomes),
+            1,
+            outcomes,
+        )
+        self.assertEqual(list(self.root.glob(".race.json.*.tmp")), [])
+
+        sentinel = self.root / "sentinel.json"
+        sentinel.write_bytes(b"keep me")
+        with self.assertRaisesRegex(AGGREGATOR.AggregationError, "already exists"):
+            AGGREGATOR.write_output(sentinel, aggregate)
+        self.assertEqual(sentinel.read_bytes(), b"keep me")
+
+        symlink = self.root / "symlink.json"
+        target = self.root / "must-not-exist.json"
+        symlink.symlink_to(target)
+        with self.assertRaisesRegex(AGGREGATOR.AggregationError, "already exists"):
+            AGGREGATOR.write_output(symlink, aggregate)
+        self.assertFalse(target.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

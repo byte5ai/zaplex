@@ -147,6 +147,18 @@ jobs:
         run: script/pr-check-clippy-gate-tests
         shell: bash
 
+      # Audit contract regressions must fail this required context. Running the
+      # suite in `changes` would only turn this job into a passing "skipped" check.
+      - name: Verify immutable codebase-audit pipeline
+        run: |
+          script/codebase-audit-inventory-tests
+          script/codebase-audit-assignments-tests
+          script/run-codebase-audit-assignments-tests
+          script/aggregate-codebase-audit-results-tests
+          script/codebase-audit-verification-assignments-tests
+          script/run-codebase-audit-verification-assignments-tests
+        shell: bash
+
       - name: cargo deny check advisories
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:

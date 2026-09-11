@@ -1,0 +1,647 @@
+#!/usr/bin/env python3
+
+"""Focused tests for adversarial-verification assignment generation."""
+
+from __future__ import annotations
+
+import concurrent.futures
+import copy
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest import mock
+
+
+SCRIPT = (
+    Path(__file__).resolve().parent
+    / "generate-codebase-audit-verification-assignments"
+)
+LOADER = importlib.machinery.SourceFileLoader(
+    "codebase_audit_verification_assignments", str(SCRIPT)
+)
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
+assert SPEC is not None
+VERIFICATION = importlib.util.module_from_spec(SPEC)
+LOADER.exec_module(VERIFICATION)
+
+
+class CodebaseAuditVerificationAssignmentsTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(
+            prefix="zaplex-audit-verification-assignments-test-"
+        )
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.github_repository = "example/project"
+        self.aggregate = self.build_aggregate()
+        self.aggregate_path = self.root / "aggregate.json"
+        self.write_json(self.aggregate_path, self.aggregate)
+        self.snapshot = [
+            {
+                "number": 101,
+                "title": "Existing file transfer issue",
+                "body": "Tracks the known file transfer failure.",
+                "state": "OPEN",
+                "url": "https://github.com/example/project/issues/101",
+                "updated_at": "2026-09-10T09:00:00Z",
+                "labels": ["bug", "security"],
+            },
+            {
+                "number": 102,
+                "title": "Closed terminal issue",
+                "body": "The terminal defect has already been fixed.",
+                "state": "CLOSED",
+                "url": "https://github.com/example/project/issues/102",
+                "updated_at": "2026-09-10T10:00:00Z",
+                "labels": ["bug"],
+            },
+        ]
+        self.snapshot_path = self.root / "issues.json"
+        self.write_json(self.snapshot_path, self.snapshot)
+        self.snapshot_sha256 = VERIFICATION.sha256_bytes(
+            self.snapshot_path.read_bytes()
+        )
+
+    def finding(
+        self,
+        bucket_id,
+        path,
+        start,
+        end,
+        severity,
+        category="correctness",
+    ):
+        return {
+            "bucket_id": bucket_id,
+            "path": path,
+            "range": {"start": start, "end": end},
+            "category": category,
+            "severity": severity,
+            "evidence": f"Evidence for {path}:{start}-{end}.",
+            "scenario": f"Scenario for {path}:{start}-{end}.",
+            "fix": f"Fix {path}:{start}-{end} and add a regression test.",
+            "confidence": "high",
+        }
+
+    def build_aggregate(self):
+        findings = [
+            self.finding("bucket-1", "a.rs", 1, 2, "P1"),
+            self.finding("bucket-2", "b.rs", 3, 4, "P2", "security"),
+            self.finding("bucket-3", "c.rs", 5, 5, "P0", "concurrency"),
+            self.finding("bucket-1", "d.rs", 6, 8, "P3", "test-quality"),
+        ]
+        findings.sort(key=VERIFICATION.finding_sort_key)
+        bucket_results = []
+        for index in range(1, 4):
+            bucket_id = f"bucket-{index}"
+            bucket_results.append(
+                {
+                    "bucket_assignment_sha256": f"{index + 3:x}" * 64,
+                    "bucket_id": bucket_id,
+                    "finding_count": sum(
+                        finding["bucket_id"] == bucket_id for finding in findings
+                    ),
+                    "result_sha256": f"{index + 6:x}" * 64,
+                }
+            )
+        aggregate = {
+            "schema_version": 1,
+            "aggregator_version": 1,
+            "manifest_sha256": "a" * 64,
+            "inventory_sha256": "b" * 64,
+            "scope_sha256": "c" * 64,
+            "assignment_sha256": "d" * 64,
+            "run_summary_sha256": "e" * 64,
+            "target_sha": "1" * 40,
+            "upstream_sha": "2" * 40,
+            "merge_base_sha": "3" * 40,
+            "bucket_results": bucket_results,
+            "findings": findings,
+            "coverage": {
+                "assigned_ranges": 7,
+                "reviewed_ranges": 7,
+                "assigned_lines": 128,
+                "reviewed_lines": 128,
+                "bucket_count": 3,
+                "complete": True,
+            },
+            "remaining_ranges": [],
+        }
+        aggregate["aggregate_sha256"] = VERIFICATION.aggregate_document_hash(
+            aggregate
+        )
+        return aggregate
+
+    def write_json(self, path, value):
+        path.write_bytes(VERIFICATION.canonical_json(value))
+
+    def write_aggregate(self, name, aggregate):
+        path = self.root / name
+        self.write_json(path, aggregate)
+        return path
+
+    def run_generator(
+        self,
+        output,
+        aggregate_path=None,
+        snapshot_path=None,
+        expected_aggregate=True,
+        expected_snapshot=True,
+        github_repository=True,
+    ):
+        command = [
+            sys.executable,
+            str(SCRIPT),
+            "--aggregate",
+            str(self.aggregate_path if aggregate_path is None else aggregate_path),
+            "--issue-snapshot",
+            str(self.snapshot_path if snapshot_path is None else snapshot_path),
+            "--output",
+            str(output),
+        ]
+        if expected_aggregate is not False:
+            expected_aggregate_sha256 = (
+                self.aggregate["aggregate_sha256"]
+                if expected_aggregate is True
+                else expected_aggregate
+            )
+            command.extend(
+                ["--expected-aggregate-sha256", expected_aggregate_sha256]
+            )
+        if expected_snapshot is not False:
+            expected_snapshot_sha256 = (
+                self.snapshot_sha256
+                if expected_snapshot is True
+                else expected_snapshot
+            )
+            command.extend(
+                ["--expected-issue-snapshot-sha256", expected_snapshot_sha256]
+            )
+        if github_repository is not False:
+            command.extend(
+                [
+                    "--github-repository",
+                    self.github_repository
+                    if github_repository is True
+                    else github_repository,
+                ]
+            )
+        return subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def refresh_assignment_hashes(self, assignments):
+        for bucket in assignments["buckets"]:
+            bucket["tuple_count"] = len(bucket["entries"])
+            bucket["assignment_sha256"] = VERIFICATION.verification_bucket_hash(
+                bucket,
+                assignments["aggregate_sha256"],
+                assignments["issue_snapshot_sha256"],
+                assignments["github_repository"],
+            )
+        assignments["coverage"]["assigned_tuples"] = sum(
+            bucket["tuple_count"] for bucket in assignments["buckets"]
+        )
+        assignments["assignment_sha256"] = (
+            VERIFICATION.verification_document_hash(assignments)
+        )
+
+    def test_deterministic_balanced_three_lens_full_coverage(self):
+        first = self.root / "verification-first.json"
+        second = self.root / "verification-second.json"
+        for output in (first, second):
+            result = self.run_generator(output)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(first.read_bytes(), second.read_bytes())
+
+        assignments = json.loads(first.read_text(encoding="utf-8"))
+        VERIFICATION.validate_verification_assignments(
+            assignments,
+            self.aggregate,
+            self.snapshot,
+            self.snapshot_sha256,
+            self.github_repository,
+        )
+        self.assertEqual(
+            [bucket["tuple_count"] for bucket in assignments["buckets"]],
+            [4, 4, 4],
+        )
+        self.assertEqual(
+            [
+                {entry["lens"] for entry in bucket["entries"]}
+                for bucket in assignments["buckets"]
+            ],
+            [{"disprove"}, {"impact"}, {"reproduction-fix"}],
+        )
+        entries = [
+            entry for bucket in assignments["buckets"] for entry in bucket["entries"]
+        ]
+        expected_pairs = {
+            (finding_id, lens)
+            for finding_id in {entry["finding_id"] for entry in entries}
+            for lens in VERIFICATION.LENSES
+        }
+        self.assertEqual(
+            {(entry["finding_id"], entry["lens"]) for entry in entries},
+            expected_pairs,
+        )
+        self.assertEqual(len({entry["finding_id"] for entry in entries}), 4)
+        self.assertTrue(all(entry["finding"] in self.aggregate["findings"] for entry in entries))
+        self.assertTrue(
+            all(entry["provenance"] == assignments["provenance"] for entry in entries)
+        )
+        self.assertEqual(
+            assignments["provenance"]["run_summary_sha256"],
+            self.aggregate["run_summary_sha256"],
+        )
+        self.assertTrue(
+            all(entry["issue_snapshot"] == self.snapshot for entry in entries)
+        )
+        self.assertEqual(assignments["github_repository"], self.github_repository)
+        self.assertTrue(
+            all(
+                entry["github_repository"] == self.github_repository
+                for entry in entries
+            )
+        )
+        self.assertEqual(
+            assignments["assignment_sha256"],
+            VERIFICATION.verification_document_hash(assignments),
+        )
+
+    def test_requires_external_hash_pins_and_repository(self):
+        cases = (
+            (
+                "aggregate-pin",
+                {"expected_aggregate": False},
+                "--expected-aggregate-sha256",
+            ),
+            (
+                "snapshot-pin",
+                {"expected_snapshot": False},
+                "--expected-issue-snapshot-sha256",
+            ),
+            (
+                "repository",
+                {"github_repository": False},
+                "--github-repository",
+            ),
+        )
+        for name, arguments, missing_option in cases:
+            with self.subTest(name=name):
+                result = self.run_generator(
+                    self.root / f"missing-{name}.json", **arguments
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(missing_option, result.stderr)
+
+    def test_rejects_issue_url_repository_and_number_mismatch(self):
+        cases = (
+            (
+                "repository",
+                "https://github.com/other/project/issues/101",
+            ),
+            (
+                "number",
+                "https://github.com/example/project/issues/999",
+            ),
+        )
+        for name, url in cases:
+            with self.subTest(name=name):
+                snapshot = copy.deepcopy(self.snapshot)
+                snapshot[0]["url"] = url
+                snapshot_path = self.root / f"issues-{name}-mismatch.json"
+                self.write_json(snapshot_path, snapshot)
+                snapshot_sha256 = VERIFICATION.sha256_bytes(
+                    snapshot_path.read_bytes()
+                )
+                result = self.run_generator(
+                    self.root / f"url-{name}-mismatch.json",
+                    snapshot_path=snapshot_path,
+                    expected_snapshot=snapshot_sha256,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "issue snapshot[0].url must equal "
+                    "https://github.com/example/project/issues/101",
+                    result.stderr,
+                )
+
+    def test_rejects_noncanonical_or_invalid_updated_at(self):
+        timestamps = (
+            "2026-09-10T09:00:00+00:00",
+            "2026-02-30T09:00:00Z",
+        )
+        for index, timestamp in enumerate(timestamps):
+            with self.subTest(timestamp=timestamp):
+                snapshot = copy.deepcopy(self.snapshot)
+                snapshot[0]["updated_at"] = timestamp
+                snapshot_path = self.root / f"issues-invalid-timestamp-{index}.json"
+                self.write_json(snapshot_path, snapshot)
+                snapshot_sha256 = VERIFICATION.sha256_bytes(
+                    snapshot_path.read_bytes()
+                )
+                result = self.run_generator(
+                    self.root / f"invalid-timestamp-{index}.json",
+                    snapshot_path=snapshot_path,
+                    expected_snapshot=snapshot_sha256,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "updated_at must use canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+                    result.stderr,
+                )
+
+    def test_rejects_aggregate_snapshot_and_bucket_result_hash_manipulation(self):
+        aggregate = copy.deepcopy(self.aggregate)
+        aggregate["coverage"]["assigned_lines"] += 1
+        aggregate_path = self.write_aggregate("aggregate-stale-hash.json", aggregate)
+        result = self.run_generator(
+            self.root / "stale-hash-output.json", aggregate_path=aggregate_path
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("aggregate document SHA-256 mismatch", result.stderr)
+
+        aggregate = copy.deepcopy(self.aggregate)
+        aggregate["bucket_results"][0]["result_sha256"] = "9" * 64
+        aggregate["aggregate_sha256"] = VERIFICATION.aggregate_document_hash(aggregate)
+        aggregate_path = self.write_aggregate("aggregate-new-result-hash.json", aggregate)
+        result = self.run_generator(
+            self.root / "new-result-hash-output.json", aggregate_path=aggregate_path
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("aggregate does not match expected SHA-256", result.stderr)
+
+        aggregate = copy.deepcopy(self.aggregate)
+        aggregate["bucket_results"][0]["result_sha256"] = "not-a-hash"
+        aggregate["aggregate_sha256"] = VERIFICATION.aggregate_document_hash(aggregate)
+        aggregate_path = self.write_aggregate("aggregate-invalid-result-hash.json", aggregate)
+        result = self.run_generator(
+            self.root / "invalid-result-hash-output.json",
+            aggregate_path=aggregate_path,
+            expected_aggregate=aggregate["aggregate_sha256"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("bucket-1.result_sha256 must be a canonical SHA-256", result.stderr)
+
+        aggregate = copy.deepcopy(self.aggregate)
+        aggregate["bucket_results"][1]["bucket_assignment_sha256"] = "short"
+        aggregate["aggregate_sha256"] = VERIFICATION.aggregate_document_hash(aggregate)
+        aggregate_path = self.write_aggregate("aggregate-invalid-bucket-hash.json", aggregate)
+        result = self.run_generator(
+            self.root / "invalid-bucket-hash-output.json",
+            aggregate_path=aggregate_path,
+            expected_aggregate=aggregate["aggregate_sha256"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "bucket-2.bucket_assignment_sha256 must be a canonical SHA-256",
+            result.stderr,
+        )
+
+        aggregate = copy.deepcopy(self.aggregate)
+        aggregate["run_summary_sha256"] = "not-a-hash"
+        aggregate["aggregate_sha256"] = VERIFICATION.aggregate_document_hash(aggregate)
+        aggregate_path = self.write_aggregate("aggregate-invalid-run-summary.json", aggregate)
+        result = self.run_generator(
+            self.root / "invalid-run-summary-output.json",
+            aggregate_path=aggregate_path,
+            expected_aggregate=aggregate["aggregate_sha256"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "aggregate.run_summary_sha256 must be a canonical SHA-256",
+            result.stderr,
+        )
+
+        changed_snapshot = copy.deepcopy(self.snapshot)
+        changed_snapshot[0]["title"] = "Changed title"
+        changed_snapshot_path = self.root / "changed-issues.json"
+        self.write_json(changed_snapshot_path, changed_snapshot)
+        result = self.run_generator(
+            self.root / "changed-snapshot-output.json",
+            snapshot_path=changed_snapshot_path,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("issue snapshot does not match expected SHA-256", result.stderr)
+
+    def test_rejects_incomplete_coverage_remaining_ranges_and_finding_shape(self):
+        cases = (
+            (
+                "remaining",
+                lambda aggregate: aggregate.update(
+                    remaining_ranges=[{"path": "unreviewed.rs", "start": 1, "end": 2}]
+                ),
+                "remaining_ranges must be empty",
+            ),
+            (
+                "coverage",
+                lambda aggregate: aggregate["coverage"].update(complete=False),
+                "coverage.complete must be true",
+            ),
+            (
+                "finding-shape",
+                lambda aggregate: aggregate["findings"][0].pop("fix"),
+                "findings[0] shape is invalid",
+            ),
+            (
+                "finding-count",
+                lambda aggregate: aggregate["bucket_results"][0].update(
+                    finding_count=99
+                ),
+                "bucket-1 finding_count mismatch",
+            ),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                aggregate = copy.deepcopy(self.aggregate)
+                mutate(aggregate)
+                aggregate["aggregate_sha256"] = VERIFICATION.aggregate_document_hash(
+                    aggregate
+                )
+                path = self.write_aggregate(f"aggregate-{name}.json", aggregate)
+                result = self.run_generator(
+                    self.root / f"{name}-output.json",
+                    aggregate_path=path,
+                    expected_aggregate=aggregate["aggregate_sha256"],
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_validator_rejects_missing_duplicate_rebucket_and_metadata_drift(self):
+        assignments = VERIFICATION.build_verification_assignments(
+            self.aggregate,
+            self.snapshot,
+            self.snapshot_sha256,
+            self.github_repository,
+        )
+
+        missing = copy.deepcopy(assignments)
+        missing["buckets"][0]["entries"].pop()
+        self.refresh_assignment_hashes(missing)
+        with self.assertRaisesRegex(
+            VERIFICATION.VerificationAssignmentError,
+            "missing finding/lens tuples",
+        ):
+            VERIFICATION.validate_verification_assignments(
+                missing,
+                self.aggregate,
+                self.snapshot,
+                self.snapshot_sha256,
+                self.github_repository,
+            )
+
+        duplicate = copy.deepcopy(assignments)
+        duplicate["buckets"][1]["entries"].append(
+            copy.deepcopy(duplicate["buckets"][0]["entries"][0])
+        )
+        self.refresh_assignment_hashes(duplicate)
+        with self.assertRaisesRegex(
+            VERIFICATION.VerificationAssignmentError,
+            "assigned more than once",
+        ):
+            VERIFICATION.validate_verification_assignments(
+                duplicate,
+                self.aggregate,
+                self.snapshot,
+                self.snapshot_sha256,
+                self.github_repository,
+            )
+
+        rebucketed = copy.deepcopy(assignments)
+        rebucketed["buckets"][0]["entries"][0], rebucketed["buckets"][1]["entries"][0] = (
+            rebucketed["buckets"][1]["entries"][0],
+            rebucketed["buckets"][0]["entries"][0],
+        )
+        self.refresh_assignment_hashes(rebucketed)
+        with self.assertRaisesRegex(
+            VERIFICATION.VerificationAssignmentError,
+            "deterministic distribution",
+        ):
+            VERIFICATION.validate_verification_assignments(
+                rebucketed,
+                self.aggregate,
+                self.snapshot,
+                self.snapshot_sha256,
+                self.github_repository,
+            )
+
+        drift = copy.deepcopy(assignments)
+        drift["buckets"][2]["entries"][0]["provenance"]["target_sha"] = "4" * 40
+        self.refresh_assignment_hashes(drift)
+        with self.assertRaisesRegex(
+            VERIFICATION.VerificationAssignmentError,
+            "provenance metadata drift",
+        ):
+            VERIFICATION.validate_verification_assignments(
+                drift,
+                self.aggregate,
+                self.snapshot,
+                self.snapshot_sha256,
+                self.github_repository,
+            )
+
+        bucket_hash = copy.deepcopy(assignments)
+        bucket_hash["buckets"][0]["assignment_sha256"] = "0" * 64
+        bucket_hash["assignment_sha256"] = VERIFICATION.verification_document_hash(
+            bucket_hash
+        )
+        with self.assertRaisesRegex(
+            VERIFICATION.VerificationAssignmentError,
+            "verification-bucket-1 assignment SHA-256 mismatch",
+        ):
+            VERIFICATION.validate_verification_assignments(
+                bucket_hash,
+                self.aggregate,
+                self.snapshot,
+                self.snapshot_sha256,
+                self.github_repository,
+            )
+
+        document_hash = copy.deepcopy(assignments)
+        document_hash["assignment_sha256"] = "0" * 64
+        with self.assertRaisesRegex(
+            VERIFICATION.VerificationAssignmentError,
+            "document SHA-256 mismatch",
+        ):
+            VERIFICATION.validate_verification_assignments(
+                document_hash,
+                self.aggregate,
+                self.snapshot,
+                self.snapshot_sha256,
+                self.github_repository,
+            )
+
+    def test_atomic_no_overwrite_is_race_safe(self):
+        assignments = VERIFICATION.build_verification_assignments(
+            self.aggregate,
+            self.snapshot,
+            self.snapshot_sha256,
+            self.github_repository,
+        )
+        output = self.root / "race.json"
+        barrier = threading.Barrier(2)
+        original_link = os.link
+
+        def synchronized_link(source, destination, *args, **kwargs):
+            barrier.wait(timeout=5)
+            return original_link(source, destination, *args, **kwargs)
+
+        def writer():
+            try:
+                VERIFICATION.write_output(output, assignments)
+                return "written"
+            except VERIFICATION.VerificationAssignmentError as error:
+                return str(error)
+
+        with mock.patch.object(VERIFICATION.os, "link", synchronized_link):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(lambda _: writer(), range(2)))
+
+        self.assertEqual(results.count("written"), 1, results)
+        self.assertEqual(
+            sum("output path already exists" in result for result in results),
+            1,
+            results,
+        )
+        written = json.loads(output.read_text(encoding="utf-8"))
+        VERIFICATION.validate_verification_assignments(
+            written,
+            self.aggregate,
+            self.snapshot,
+            self.snapshot_sha256,
+            self.github_repository,
+        )
+        self.assertEqual(list(self.root.glob(".race.json.*.tmp")), [])
+
+        sentinel = self.root / "sentinel.json"
+        sentinel.write_bytes(b"preserve")
+        with self.assertRaisesRegex(
+            VERIFICATION.VerificationAssignmentError, "already exists"
+        ):
+            VERIFICATION.write_output(sentinel, assignments)
+        self.assertEqual(sentinel.read_bytes(), b"preserve")
+
+        symlink = self.root / "symlink.json"
+        target = self.root / "must-not-exist.json"
+        symlink.symlink_to(target)
+        with self.assertRaisesRegex(
+            VERIFICATION.VerificationAssignmentError, "already exists"
+        ):
+            VERIFICATION.write_output(symlink, assignments)
+        self.assertFalse(target.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

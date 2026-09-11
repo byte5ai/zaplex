@@ -1,0 +1,529 @@
+#!/usr/bin/env python3
+
+"""Focused tests for deterministic codebase-audit assignment generation."""
+
+from __future__ import annotations
+
+import concurrent.futures
+import copy
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest import mock
+
+
+SCRIPT = Path(__file__).resolve().parent / "generate-codebase-audit-assignments"
+INVENTORY_GENERATOR = Path(__file__).resolve().parent / "generate-codebase-audit-inventory"
+LOADER = importlib.machinery.SourceFileLoader("codebase_audit_assignments", str(SCRIPT))
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
+assert SPEC is not None
+ASSIGNMENTS = importlib.util.module_from_spec(SPEC)
+LOADER.exec_module(ASSIGNMENTS)
+
+
+class CodebaseAuditAssignmentsTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="zaplex-audit-assignments-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.contract_dir = self.root / "inventory"
+        self.write_contract(
+            [
+                ("a.rs", 9, [(1, 9)]),
+                ("b.rs", 8, [(1, 8)]),
+                ("c.rs", 7, [(1, 7)]),
+                ("d.rs", 6, [(1, 6)]),
+                ("e.rs", 5, [(1, 5)]),
+                ("f.rs", 4, [(1, 4)]),
+            ]
+        )
+
+    def oid(self, value):
+        return hashlib.sha1(value.encode("utf-8")).hexdigest()
+
+    def included_entry(self, path, line_count, ranges):
+        object_id = self.oid(path)
+        return {
+            "path": path,
+            "mode": "100644",
+            "type": "blob",
+            "object_id": object_id,
+            "scope_rule": "all-tracked-text",
+            "blob_oid": object_id,
+            "line_count": line_count,
+            "ranges": [{"start": start, "end": end} for start, end in ranges],
+            "ownership": "fork-owned",
+            "merge_base_entry": None,
+            "merge_base_blob_oid": None,
+            "upstream_entry": None,
+            "upstream_blob_oid": None,
+        }
+
+    def write_contract(self, specifications, directory=None):
+        directory = self.contract_dir if directory is None else directory
+        directory.mkdir(parents=True)
+        scope = {
+            "schema_version": 1,
+            "rules": [
+                {
+                    "id": "gitlinks",
+                    "action": "exclude",
+                    "entry_types": ["commit"],
+                    "patterns": ["**"],
+                    "reason": "external repository",
+                },
+                {
+                    "id": "all-tracked-text",
+                    "action": "include",
+                    "entry_types": ["blob"],
+                    "patterns": ["**"],
+                },
+            ],
+        }
+        scope_bytes = ASSIGNMENTS.canonical_json(scope)
+        scope_sha256 = ASSIGNMENTS.sha256_bytes(scope_bytes)
+        included = [self.included_entry(*specification) for specification in specifications]
+        excluded = [
+            {
+                "path": "vendor/submodule",
+                "mode": "160000",
+                "type": "commit",
+                "object_id": self.oid("submodule"),
+                "scope_rule": "gitlinks",
+                "reason": "external repository",
+            }
+        ]
+        inventory = {
+            "schema_version": 1,
+            "generator_version": 1,
+            "object_format": "sha1",
+            "target_sha": "1" * 40,
+            "upstream_sha": "2" * 40,
+            "merge_base_sha": "3" * 40,
+            "scope_sha256": scope_sha256,
+            "max_range_lines": 4000,
+            "included": included,
+            "excluded": excluded,
+        }
+        inventory_bytes = ASSIGNMENTS.canonical_json(inventory)
+        inventory_sha256 = ASSIGNMENTS.sha256_bytes(inventory_bytes)
+        manifest = {
+            "schema_version": 1,
+            "generator_version": 1,
+            "object_format": "sha1",
+            "target_sha": inventory["target_sha"],
+            "upstream_sha": inventory["upstream_sha"],
+            "merge_base_sha": inventory["merge_base_sha"],
+            "scope_sha256": scope_sha256,
+            "inventory_sha256": inventory_sha256,
+            "coverage": {
+                "tracked_entries": len(included) + len(excluded),
+                "included_paths": len(included),
+                "excluded_paths": len(excluded),
+                "included_lines": sum(entry["line_count"] for entry in included),
+                "ranges": sum(len(entry["ranges"]) for entry in included),
+                "complete": True,
+            },
+            "artifacts": {
+                "completion": "COMPLETE",
+                "inventory": "inventory.json",
+                "scope": "scope.resolved.json",
+            },
+        }
+        manifest_bytes = ASSIGNMENTS.canonical_json(manifest)
+        manifest_sha256 = ASSIGNMENTS.sha256_bytes(manifest_bytes)
+        inventory_hash_file = f"{inventory_sha256}  inventory.json\n".encode("ascii")
+        manifest_hash_file = f"{manifest_sha256}  manifest.json\n".encode("ascii")
+        (directory / "scope.resolved.json").write_bytes(scope_bytes)
+        (directory / "inventory.json").write_bytes(inventory_bytes)
+        (directory / "inventory.sha256").write_bytes(inventory_hash_file)
+        (directory / "manifest.json").write_bytes(manifest_bytes)
+        (directory / "manifest.sha256").write_bytes(manifest_hash_file)
+        (directory / "COMPLETE").write_bytes(manifest_hash_file)
+        return directory
+
+    def rewrite_manifest_hashes(self, directory):
+        manifest_bytes = (directory / "manifest.json").read_bytes()
+        manifest_sha256 = ASSIGNMENTS.sha256_bytes(manifest_bytes)
+        hash_file = f"{manifest_sha256}  manifest.json\n".encode("ascii")
+        (directory / "manifest.sha256").write_bytes(hash_file)
+        (directory / "COMPLETE").write_bytes(hash_file)
+
+    def run_generator(self, output, directory=None):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--inventory-dir",
+                str(self.contract_dir if directory is None else directory),
+                "--output",
+                str(output),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def refresh_assignment_hashes(self, assignments):
+        for bucket in assignments["buckets"]:
+            bucket["range_count"] = len(bucket["entries"])
+            bucket["line_count"] = sum(
+                entry["range"]["end"] - entry["range"]["start"] + 1
+                for entry in bucket["entries"]
+            )
+            bucket["assignment_sha256"] = ASSIGNMENTS.bucket_assignment_hash(
+                bucket, assignments["manifest_sha256"]
+            )
+        assignments["coverage"]["assigned_ranges"] = sum(
+            bucket["range_count"] for bucket in assignments["buckets"]
+        )
+        assignments["coverage"]["assigned_lines"] = sum(
+            bucket["line_count"] for bucket in assignments["buckets"]
+        )
+        assignments["assignment_sha256"] = ASSIGNMENTS.assignment_document_hash(
+            assignments
+        )
+
+    def test_outputs_are_deterministic_hash_bound_and_balanced(self):
+        first = self.root / "assignments-first.json"
+        second = self.root / "assignments-second.json"
+        for output in (first, second):
+            result = self.run_generator(output)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(first.read_bytes(), second.read_bytes())
+
+        assignments = json.loads(first.read_text())
+        contract = ASSIGNMENTS.load_contract(self.contract_dir)
+        ASSIGNMENTS.validate_assignments(assignments, contract)
+        self.assertEqual(len(assignments["buckets"]), 3)
+        self.assertEqual(
+            [bucket["line_count"] for bucket in assignments["buckets"]],
+            [13, 13, 13],
+        )
+        self.assertEqual(
+            [
+                [entry["path"] for entry in bucket["entries"]]
+                for bucket in assignments["buckets"]
+            ],
+            [["a.rs", "f.rs"], ["b.rs", "e.rs"], ["c.rs", "d.rs"]],
+        )
+        self.assertEqual(
+            assignments["assignment_sha256"],
+            ASSIGNMENTS.assignment_document_hash(assignments),
+        )
+        for bucket in assignments["buckets"]:
+            self.assertEqual(
+                bucket["assignment_sha256"],
+                ASSIGNMENTS.bucket_assignment_hash(
+                    bucket, assignments["manifest_sha256"]
+                ),
+            )
+        self.assertNotIn(
+            "vendor/submodule",
+            {
+                entry["path"]
+                for bucket in assignments["buckets"]
+                for entry in bucket["entries"]
+            },
+        )
+
+    def test_accepts_inventory_generated_by_the_pr410_contract(self):
+        repo = self.root / "repo"
+        repo.mkdir()
+
+        def git(*args):
+            result = subprocess.run(
+                ["git", "-C", str(repo), *args],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.strip()
+
+        git("init", "-q")
+        git("config", "user.name", "Assignment Test")
+        git("config", "user.email", "assignment@example.invalid")
+        (repo / "file.rs").write_text("base\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-q", "-m", "base")
+        merge_base_sha = git("rev-parse", "HEAD")
+        git("checkout", "-q", "-b", "upstream")
+        (repo / "upstream.rs").write_text("upstream\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-q", "-m", "upstream")
+        upstream_sha = git("rev-parse", "HEAD")
+        git("checkout", "-q", "-b", "target", merge_base_sha)
+        (repo / "file.rs").write_text("one\ntwo\nthree\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-q", "-m", "target")
+        target_sha = git("rev-parse", "HEAD")
+        scope = self.root / "real-scope.json"
+        scope.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "rules": [
+                        {
+                            "id": "text",
+                            "action": "include",
+                            "entry_types": ["blob"],
+                            "patterns": ["**"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        inventory_dir = self.root / "real-inventory"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(INVENTORY_GENERATOR),
+                "--repo",
+                str(repo),
+                "--target-sha",
+                target_sha,
+                "--upstream-sha",
+                upstream_sha,
+                "--merge-base-sha",
+                merge_base_sha,
+                "--scope",
+                str(scope),
+                "--output",
+                str(inventory_dir),
+                "--max-range-lines",
+                "2",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        contract = ASSIGNMENTS.load_contract(inventory_dir)
+        assignments = ASSIGNMENTS.build_assignments(contract)
+        ASSIGNMENTS.validate_assignments(assignments, contract)
+        entries = [
+            entry for bucket in assignments["buckets"] for entry in bucket["entries"]
+        ]
+        self.assertEqual(len(assignments["buckets"]), 3)
+        self.assertEqual(len(entries), 2)
+        self.assertTrue(all(entry["target_sha"] == target_sha for entry in entries))
+        self.assertTrue(
+            all(
+                entry["manifest_sha256"] == contract["manifest_sha256"]
+                for entry in entries
+            )
+        )
+
+    def test_contract_rejects_complete_and_all_hash_manipulations(self):
+        cases = (
+            (
+                "complete",
+                lambda directory: (directory / "COMPLETE").write_text("changed\n"),
+                "COMPLETE must exactly equal",
+            ),
+            (
+                "manifest",
+                lambda directory: (directory / "manifest.json").write_bytes(
+                    (directory / "manifest.json").read_bytes().replace(
+                        b'"generator_version": 1', b'"generator_version": 2'
+                    )
+                ),
+                "manifest.json SHA-256 mismatch",
+            ),
+            (
+                "manifest-sidecar",
+                lambda directory: (directory / "manifest.sha256").write_text(
+                    f"{'0' * 64}  manifest.json\n"
+                ),
+                "COMPLETE must exactly equal",
+            ),
+            (
+                "inventory",
+                lambda directory: (directory / "inventory.json").write_bytes(
+                    (directory / "inventory.json").read_bytes().replace(
+                        b'"max_range_lines": 4000', b'"max_range_lines": 4001'
+                    )
+                ),
+                "inventory.json SHA-256 mismatch",
+            ),
+            (
+                "inventory-sidecar",
+                lambda directory: (directory / "inventory.sha256").write_text(
+                    f"{'0' * 64}  inventory.json\n"
+                ),
+                "manifest/inventory.sha256 mismatch",
+            ),
+            (
+                "scope",
+                lambda directory: (directory / "scope.resolved.json").write_bytes(
+                    (directory / "scope.resolved.json").read_bytes().replace(
+                        b'"reason": "external repository"',
+                        b'"reason": "changed external repository"',
+                    )
+                ),
+                "scope.resolved.json SHA-256 mismatch",
+            ),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                directory = self.root / f"contract-{name}"
+                shutil.copytree(self.contract_dir, directory)
+                mutate(directory)
+                result = self.run_generator(self.root / f"{name}.json", directory)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+        incomplete = self.root / "contract-incomplete"
+        shutil.copytree(self.contract_dir, incomplete)
+        manifest = json.loads((incomplete / "manifest.json").read_text())
+        manifest["coverage"]["complete"] = False
+        (incomplete / "manifest.json").write_bytes(ASSIGNMENTS.canonical_json(manifest))
+        self.rewrite_manifest_hashes(incomplete)
+        result = self.run_generator(self.root / "incomplete.json", incomplete)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("coverage.complete must be true", result.stderr)
+
+    def test_validator_rejects_missing_duplicate_overlap_and_excluded_paths(self):
+        multi = self.write_contract(
+            [
+                ("multi.rs", 6, [(1, 3), (4, 6)]),
+                ("other.rs", 2, [(1, 2)]),
+            ],
+            self.root / "multi-inventory",
+        )
+        contract = ASSIGNMENTS.load_contract(multi)
+        original = ASSIGNMENTS.build_assignments(contract)
+
+        missing = copy.deepcopy(original)
+        next(bucket for bucket in missing["buckets"] if bucket["entries"])[
+            "entries"
+        ].pop()
+        self.refresh_assignment_hashes(missing)
+        with self.assertRaisesRegex(ASSIGNMENTS.AssignmentError, "missing assignment ranges"):
+            ASSIGNMENTS.validate_assignments(missing, contract)
+
+        duplicate = copy.deepcopy(original)
+        source_bucket = next(
+            bucket for bucket in duplicate["buckets"] if bucket["entries"]
+        )
+        entry = copy.deepcopy(source_bucket["entries"][0])
+        duplicate["buckets"][-1]["entries"].append(entry)
+        self.refresh_assignment_hashes(duplicate)
+        with self.assertRaisesRegex(ASSIGNMENTS.AssignmentError, "assigned more than once"):
+            ASSIGNMENTS.validate_assignments(duplicate, contract)
+
+        overlap = copy.deepcopy(original)
+        multi_entries = [
+            entry
+            for bucket in overlap["buckets"]
+            for entry in bucket["entries"]
+            if entry["path"] == "multi.rs"
+        ]
+        next(entry for entry in multi_entries if entry["range"]["start"] == 4)["range"][
+            "start"
+        ] = 3
+        self.refresh_assignment_hashes(overlap)
+        with self.assertRaisesRegex(ASSIGNMENTS.AssignmentError, "ranges overlap"):
+            ASSIGNMENTS.validate_assignments(overlap, contract)
+
+        excluded = copy.deepcopy(original)
+        next(bucket for bucket in excluded["buckets"] if bucket["entries"])["entries"][
+            0
+        ]["path"] = "vendor/submodule"
+        self.refresh_assignment_hashes(excluded)
+        with self.assertRaisesRegex(ASSIGNMENTS.AssignmentError, "excluded path"):
+            ASSIGNMENTS.validate_assignments(excluded, contract)
+
+        wrong_hash = copy.deepcopy(original)
+        wrong_hash["assignment_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ASSIGNMENTS.AssignmentError, "document SHA-256"):
+            ASSIGNMENTS.validate_assignments(wrong_hash, contract)
+
+        rebalanced = copy.deepcopy(original)
+        source = next(bucket for bucket in rebalanced["buckets"] if bucket["entries"])
+        destination = next(
+            bucket for bucket in rebalanced["buckets"] if bucket is not source
+        )
+        destination["entries"].append(source["entries"].pop())
+        destination["entries"].sort(
+            key=lambda entry: (
+                entry["path"],
+                entry["range"]["start"],
+                entry["range"]["end"],
+            )
+        )
+        self.refresh_assignment_hashes(rebalanced)
+        with self.assertRaisesRegex(
+            ASSIGNMENTS.AssignmentError, "deterministic distribution"
+        ):
+            ASSIGNMENTS.validate_assignments(rebalanced, contract)
+
+    def test_atomic_race_publishes_once_and_never_overwrites(self):
+        contract = ASSIGNMENTS.load_contract(self.contract_dir)
+        assignments = ASSIGNMENTS.build_assignments(contract)
+        output = self.root / "race.json"
+        barrier = threading.Barrier(2)
+        original_link = os.link
+
+        def synchronized_link(source, destination, *args, **kwargs):
+            barrier.wait(timeout=5)
+            return original_link(source, destination, *args, **kwargs)
+
+        def writer():
+            try:
+                ASSIGNMENTS.write_output(output, assignments)
+                return "written"
+            except ASSIGNMENTS.AssignmentError as error:
+                return str(error)
+
+        with mock.patch.object(ASSIGNMENTS.os, "link", synchronized_link):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(lambda _: writer(), range(2)))
+
+        self.assertEqual(results.count("written"), 1, results)
+        self.assertEqual(
+            sum("output path already exists" in result for result in results), 1, results
+        )
+        written = json.loads(output.read_text())
+        ASSIGNMENTS.validate_assignments(written, contract)
+        self.assertEqual(list(self.root.glob(".race.json.*.tmp")), [])
+
+        sentinel = self.root / "sentinel.json"
+        sentinel.write_bytes(b"keep me")
+        with self.assertRaisesRegex(ASSIGNMENTS.AssignmentError, "already exists"):
+            ASSIGNMENTS.write_output(sentinel, assignments)
+        self.assertEqual(sentinel.read_bytes(), b"keep me")
+
+        symlink = self.root / "symlink.json"
+        target = self.root / "must-not-exist.json"
+        symlink.symlink_to(target)
+        with self.assertRaisesRegex(ASSIGNMENTS.AssignmentError, "already exists"):
+            ASSIGNMENTS.write_output(symlink, assignments)
+        self.assertFalse(target.exists())
+
+    def test_cli_refuses_existing_output_without_resume(self):
+        output = self.root / "existing.json"
+        output.write_bytes(b"old artifact")
+        result = self.run_generator(output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("output path already exists", result.stderr)
+        self.assertEqual(output.read_bytes(), b"old artifact")
+
+
+if __name__ == "__main__":
+    unittest.main()
