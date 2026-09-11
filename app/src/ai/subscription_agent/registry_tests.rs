@@ -713,9 +713,9 @@ fn cwd_change_keeps_conversation_preferences_isolated_from_new_global_defaults()
         },
     );
 
-    let claude_target = claude_target();
-    registry.remember_target("claude-conversation", &claude_target);
-    registry.set_target("claude-conversation", claude_target);
+    let claude_conversation_target = claude_target();
+    registry.remember_target("claude-conversation", &claude_conversation_target);
+    registry.set_target("claude-conversation", claude_conversation_target);
 
     assert!(registry.select_working_directory(
         "codex-conversation",

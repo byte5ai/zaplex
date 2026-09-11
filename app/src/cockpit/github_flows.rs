@@ -993,6 +993,7 @@ pub async fn run_structured_analysis(
     )
     .await
     .map_err(|error| GitHubFlowError::CommandUnavailable(error.to_string()))?;
+    let account_identity = installation.account.clone();
     let capability = discover_capabilities(
         installation,
         repository.worktree.clone(),
@@ -1005,8 +1006,10 @@ pub async fn run_structured_analysis(
         &RoutePreferences {
             agent: Some(agent),
             account_id: Some(account.key.clone()),
+            account_identity: Some(account_identity),
             model_id: None,
             effort: None,
+            ..RoutePreferences::default()
         },
         repository.worktree.clone(),
     ) {

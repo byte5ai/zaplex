@@ -76,8 +76,8 @@ use warpui::{platform::WindowStyle, App, ViewHandle};
 #[cfg(not(target_family = "wasm"))]
 #[test]
 fn remote_model_discovery_preserves_exact_dynamic_metadata() {
-    let discovery = WorkspaceView::remote_model_capabilities(
-        remote_server::proto::AgentModelDiscoveryResponse {
+    let discovery =
+        Workspace::remote_model_capabilities(remote_server::proto::AgentModelDiscoveryResponse {
             schema_version: 1,
             cli_version: "1.2.3".to_string(),
             models: vec![remote_server::proto::AgentModelCapability {
@@ -93,9 +93,8 @@ fn remote_model_discovery_preserves_exact_dynamic_metadata() {
                 default_effort: Some("high".to_string()),
                 context_window: Some(200_000),
             }],
-        },
-    )
-    .expect("supported remote discovery response");
+        })
+        .expect("supported remote discovery response");
 
     assert_eq!(discovery.cli_version, "1.2.3");
     assert_eq!(discovery.models.len(), 1);
@@ -111,13 +110,12 @@ fn remote_model_discovery_preserves_exact_dynamic_metadata() {
 #[cfg(not(target_family = "wasm"))]
 #[test]
 fn remote_model_discovery_rejects_unknown_schema() {
-    let error = WorkspaceView::remote_model_capabilities(
-        remote_server::proto::AgentModelDiscoveryResponse {
+    let error =
+        Workspace::remote_model_capabilities(remote_server::proto::AgentModelDiscoveryResponse {
             schema_version: 2,
             ..Default::default()
-        },
-    )
-    .unwrap_err();
+        })
+        .unwrap_err();
 
     assert!(error.contains("unsupported model-discovery version"));
 }
