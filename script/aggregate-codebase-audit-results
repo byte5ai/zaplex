@@ -1,0 +1,592 @@
+#!/usr/bin/env python3
+
+"""Validate and aggregate three immutable codebase-audit bucket results."""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import stat
+import sys
+import tempfile
+from typing import Any
+
+
+SCHEMA_VERSION = 1
+AGGREGATOR_VERSION = 1
+BUCKET_COUNT = 3
+OBJECT_ID_LENGTHS = {40, 64}
+OWNERSHIPS = {
+    "fork-owned",
+    "upstream-modified-by-fork",
+    "upstream-unmodified",
+}
+SEVERITIES = {"P0", "P1", "P2", "P3"}
+CONFIDENCES = {"low", "medium", "high"}
+ASSIGNMENT_ROOT_KEYS = {
+    "schema_version",
+    "generator_version",
+    "manifest_sha256",
+    "inventory_sha256",
+    "scope_sha256",
+    "target_sha",
+    "upstream_sha",
+    "merge_base_sha",
+    "bucket_count",
+    "coverage",
+    "buckets",
+    "assignment_sha256",
+}
+ASSIGNMENT_COVERAGE_KEYS = {
+    "inventory_ranges",
+    "assigned_ranges",
+    "assigned_lines",
+    "included_paths",
+    "excluded_paths",
+    "complete",
+}
+BUCKET_KEYS = {
+    "id",
+    "range_count",
+    "line_count",
+    "entries",
+    "assignment_sha256",
+}
+ASSIGNMENT_ENTRY_KEYS = {
+    "manifest_sha256",
+    "target_sha",
+    "upstream_sha",
+    "merge_base_sha",
+    "path",
+    "mode",
+    "type",
+    "object_id",
+    "blob_oid",
+    "range",
+    "ownership",
+}
+RESULT_KEYS = {
+    "schema_version",
+    "bucket_id",
+    "manifest_sha256",
+    "assignment_sha256",
+    "bucket_assignment_sha256",
+    "target_sha",
+    "upstream_sha",
+    "merge_base_sha",
+    "reviewed_ranges",
+    "findings",
+}
+FINDING_KEYS = {
+    "path",
+    "range",
+    "category",
+    "severity",
+    "evidence",
+    "scenario",
+    "fix",
+    "confidence",
+}
+
+
+class AggregationError(RuntimeError):
+    """Raised when an input contract or audit result is invalid."""
+
+
+def canonical_json(value: Any) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode(
+        "utf-8"
+    )
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def require_plain_int(value: Any, label: str, minimum: int = 0) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        raise AggregationError(f"{label} must be an integer greater than or equal to {minimum}")
+    return value
+
+
+def require_hash(value: Any, label: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise AggregationError(f"{label} must be a canonical SHA-256")
+    return value
+
+
+def require_object_id(value: Any, label: str, length: int) -> str:
+    if not isinstance(value, str) or re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is None:
+        raise AggregationError(
+            f"{label} must be a canonical {length}-character object ID"
+        )
+    return value
+
+
+def require_path(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value or "\0" in value:
+        raise AggregationError(f"{label} must be a non-empty repository-relative path")
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or str(path) != value
+        or any(part in ("", ".", "..") for part in path.parts)
+    ):
+        raise AggregationError(f"{label} must be a normalized repository-relative path")
+    return value
+
+
+def require_range(value: Any, label: str) -> tuple[int, int]:
+    if not isinstance(value, dict) or set(value) != {"start", "end"}:
+        raise AggregationError(f"{label} must contain exactly start and end")
+    start = require_plain_int(value["start"], f"{label}.start", 1)
+    end = require_plain_int(value["end"], f"{label}.end", 1)
+    if end < start:
+        raise AggregationError(f"{label}.end must not precede start")
+    return start, end
+
+
+def read_canonical_json(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        raise AggregationError(f"cannot read {label} {path}: {error}") from error
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AggregationError(f"invalid {label} JSON in {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise AggregationError(f"{label} must be a JSON object")
+    if canonical_json(value) != raw:
+        raise AggregationError(f"{label} is not canonical JSON")
+    return value, raw
+
+
+def bucket_assignment_hash(bucket: dict[str, Any], manifest_sha256: str) -> str:
+    payload = {
+        "id": bucket.get("id"),
+        "manifest_sha256": manifest_sha256,
+        "entries": bucket.get("entries"),
+    }
+    return sha256_bytes(canonical_json(payload))
+
+
+def assignment_document_hash(assignments: dict[str, Any]) -> str:
+    payload = copy.deepcopy(assignments)
+    payload.pop("assignment_sha256", None)
+    return sha256_bytes(canonical_json(payload))
+
+
+def aggregate_document_hash(aggregate: dict[str, Any]) -> str:
+    payload = copy.deepcopy(aggregate)
+    payload.pop("aggregate_sha256", None)
+    return sha256_bytes(canonical_json(payload))
+
+
+def validate_assignment_entry(
+    entry: Any,
+    label: str,
+    root: dict[str, Any],
+    object_id_length: int,
+) -> tuple[str, int, int]:
+    if not isinstance(entry, dict) or set(entry) != ASSIGNMENT_ENTRY_KEYS:
+        raise AggregationError(f"{label} shape is invalid")
+    for key in ("manifest_sha256", "target_sha", "upstream_sha", "merge_base_sha"):
+        if entry.get(key) != root[key]:
+            raise AggregationError(f"{label}.{key} does not match assignment provenance")
+    path = require_path(entry.get("path"), f"{label}.path")
+    if not isinstance(entry.get("mode"), str) or not entry["mode"]:
+        raise AggregationError(f"{label}.mode must be a non-empty string")
+    if entry.get("type") != "blob":
+        raise AggregationError(f"{label}.type must be blob")
+    object_id = require_object_id(
+        entry.get("object_id"), f"{label}.object_id", object_id_length
+    )
+    if entry.get("blob_oid") != object_id:
+        raise AggregationError(f"{label}.blob_oid does not match object_id")
+    if entry.get("ownership") not in OWNERSHIPS:
+        raise AggregationError(f"{label}.ownership is invalid")
+    start, end = require_range(entry.get("range"), f"{label}.range")
+    return path, start, end
+
+
+def reject_duplicate_or_overlapping_ranges(
+    ranges: list[tuple[str, int, int]], label: str
+) -> None:
+    seen: set[tuple[str, int, int]] = set()
+    by_path: dict[str, list[tuple[int, int]]] = {}
+    for key in ranges:
+        if key in seen:
+            raise AggregationError(f"{label} contains a range more than once: {key}")
+        seen.add(key)
+        by_path.setdefault(key[0], []).append((key[1], key[2]))
+    for path, path_ranges in by_path.items():
+        previous_end = 0
+        for start, end in sorted(path_ranges):
+            if start <= previous_end:
+                raise AggregationError(f"{label} ranges overlap for {path}")
+            previous_end = end
+
+
+def validate_assignments(assignments: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    if set(assignments) != ASSIGNMENT_ROOT_KEYS:
+        raise AggregationError("assignment document shape is invalid")
+    if assignments.get("schema_version") != SCHEMA_VERSION:
+        raise AggregationError(f"assignment schema_version must be {SCHEMA_VERSION}")
+    if assignments.get("generator_version") != 1:
+        raise AggregationError("assignment generator_version must be 1")
+    for key in ("manifest_sha256", "inventory_sha256", "scope_sha256"):
+        require_hash(assignments.get(key), f"assignment.{key}")
+    assignment_sha256 = require_hash(
+        assignments.get("assignment_sha256"), "assignment.assignment_sha256"
+    )
+
+    target_sha = assignments.get("target_sha")
+    if not isinstance(target_sha, str) or len(target_sha) not in OBJECT_ID_LENGTHS:
+        raise AggregationError("assignment.target_sha has an unsupported object ID length")
+    object_id_length = len(target_sha)
+    for key in ("target_sha", "upstream_sha", "merge_base_sha"):
+        require_object_id(assignments.get(key), f"assignment.{key}", object_id_length)
+
+    if assignments.get("bucket_count") != BUCKET_COUNT:
+        raise AggregationError(f"assignment bucket_count must be {BUCKET_COUNT}")
+    buckets = assignments.get("buckets")
+    if not isinstance(buckets, list) or len(buckets) != BUCKET_COUNT:
+        raise AggregationError(f"assignments must contain exactly {BUCKET_COUNT} buckets")
+    expected_ids = [f"bucket-{index}" for index in range(1, BUCKET_COUNT + 1)]
+    if any(not isinstance(bucket, dict) or set(bucket) != BUCKET_KEYS for bucket in buckets):
+        raise AggregationError("assignment bucket shape is invalid")
+    if [bucket.get("id") for bucket in buckets] != expected_ids:
+        raise AggregationError("assignment bucket IDs are invalid")
+
+    all_ranges: list[tuple[str, int, int]] = []
+    all_paths: set[str] = set()
+    assigned_lines = 0
+    for bucket in buckets:
+        bucket_id = bucket["id"]
+        entries = bucket.get("entries")
+        if not isinstance(entries, list):
+            raise AggregationError(f"{bucket_id}.entries must be an array")
+        keys = [
+            validate_assignment_entry(
+                entry,
+                f"{bucket_id}.entries[{index}]",
+                assignments,
+                object_id_length,
+            )
+            for index, entry in enumerate(entries)
+        ]
+        if keys != sorted(keys):
+            raise AggregationError(f"{bucket_id} entries are not in stable order")
+        bucket_lines = sum(end - start + 1 for _, start, end in keys)
+        if bucket.get("range_count") != len(entries):
+            raise AggregationError(f"{bucket_id} range_count mismatch")
+        if bucket.get("line_count") != bucket_lines:
+            raise AggregationError(f"{bucket_id} line_count mismatch")
+        require_hash(bucket.get("assignment_sha256"), f"{bucket_id}.assignment_sha256")
+        if bucket["assignment_sha256"] != bucket_assignment_hash(
+            bucket, assignments["manifest_sha256"]
+        ):
+            raise AggregationError(f"{bucket_id} assignment SHA-256 mismatch")
+        all_ranges.extend(keys)
+        all_paths.update(path for path, _, _ in keys)
+        assigned_lines += bucket_lines
+
+    reject_duplicate_or_overlapping_ranges(all_ranges, "assignment")
+    coverage = assignments.get("coverage")
+    if not isinstance(coverage, dict) or set(coverage) != ASSIGNMENT_COVERAGE_KEYS:
+        raise AggregationError("assignment coverage shape is invalid")
+    inventory_ranges = require_plain_int(
+        coverage.get("inventory_ranges"), "assignment.coverage.inventory_ranges"
+    )
+    assigned_ranges = require_plain_int(
+        coverage.get("assigned_ranges"), "assignment.coverage.assigned_ranges"
+    )
+    if inventory_ranges != len(all_ranges) or assigned_ranges != len(all_ranges):
+        raise AggregationError("assignment range coverage is incomplete")
+    if coverage.get("assigned_lines") != assigned_lines:
+        raise AggregationError("assignment line coverage mismatch")
+    included_paths = require_plain_int(
+        coverage.get("included_paths"), "assignment.coverage.included_paths"
+    )
+    if included_paths < len(all_paths):
+        raise AggregationError("assignment included_paths is smaller than assigned paths")
+    require_plain_int(
+        coverage.get("excluded_paths"), "assignment.coverage.excluded_paths"
+    )
+    if coverage.get("complete") is not True:
+        raise AggregationError("assignment coverage.complete must be true")
+    if assignment_sha256 != assignment_document_hash(assignments):
+        raise AggregationError("assignment document SHA-256 mismatch")
+    return {bucket["id"]: bucket for bucket in buckets}
+
+
+def load_results_directory(directory: Path) -> dict[str, tuple[dict[str, Any], bytes]]:
+    try:
+        entries = list(directory.iterdir())
+    except OSError as error:
+        raise AggregationError(f"cannot read results directory {directory}: {error}") from error
+    expected_names = {f"bucket-{index}.json" for index in range(1, BUCKET_COUNT + 1)}
+    actual_names = {entry.name for entry in entries}
+    if actual_names != expected_names:
+        missing = sorted(expected_names - actual_names)
+        extra = sorted(actual_names - expected_names)
+        raise AggregationError(
+            f"results directory must contain exactly bucket-1.json through bucket-3.json; "
+            f"missing={missing}, extra={extra}"
+        )
+    results = {}
+    for name in sorted(expected_names):
+        path = directory / name
+        try:
+            mode = path.lstat().st_mode
+        except OSError as error:
+            raise AggregationError(f"cannot inspect result {path}: {error}") from error
+        if not stat.S_ISREG(mode):
+            raise AggregationError(f"result must be a regular file: {path}")
+        results[name.removesuffix(".json")] = read_canonical_json(path, name)
+    return results
+
+
+def validate_reviewed_ranges(
+    reviewed_ranges: Any,
+    expected_entries: list[dict[str, Any]],
+    result_label: str,
+    assignments: dict[str, Any],
+    object_id_length: int,
+) -> list[tuple[str, int, int]]:
+    if not isinstance(reviewed_ranges, list):
+        raise AggregationError(f"{result_label}.reviewed_ranges must be an array")
+    keys = [
+        validate_assignment_entry(
+            entry,
+            f"{result_label}.reviewed_ranges[{index}]",
+            assignments,
+            object_id_length,
+        )
+        for index, entry in enumerate(reviewed_ranges)
+    ]
+    reject_duplicate_or_overlapping_ranges(keys, f"{result_label}.reviewed_ranges")
+    expected_by_key = {
+        (entry["path"], entry["range"]["start"], entry["range"]["end"]): entry
+        for entry in expected_entries
+    }
+    actual_by_key = dict(zip(keys, reviewed_ranges))
+    unexpected = sorted(set(actual_by_key) - set(expected_by_key))
+    missing = sorted(set(expected_by_key) - set(actual_by_key))
+    if unexpected:
+        raise AggregationError(f"{result_label} contains unknown reviewed ranges: {unexpected}")
+    if missing:
+        raise AggregationError(f"{result_label} has unreviewed assignment ranges: {missing}")
+    for key, entry in actual_by_key.items():
+        if entry != expected_by_key[key]:
+            raise AggregationError(f"{result_label} reviewed-range metadata drift for {key}")
+    if reviewed_ranges != expected_entries:
+        raise AggregationError(f"{result_label} reviewed ranges are not in assignment order")
+    return keys
+
+
+def require_nonempty_text(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip() or "\0" in value:
+        raise AggregationError(f"{label} must be a non-empty string")
+    return value
+
+
+def validate_findings(
+    findings: Any,
+    reviewed_keys: list[tuple[str, int, int]],
+    result_label: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(findings, list):
+        raise AggregationError(f"{result_label}.findings must be an array")
+    validated = []
+    for index, finding in enumerate(findings):
+        label = f"{result_label}.findings[{index}]"
+        if not isinstance(finding, dict) or set(finding) != FINDING_KEYS:
+            raise AggregationError(f"{label} shape is invalid")
+        path = require_path(finding.get("path"), f"{label}.path")
+        start, end = require_range(finding.get("range"), f"{label}.range")
+        if not any(
+            path == reviewed_path
+            and start >= reviewed_start
+            and end <= reviewed_end
+            for reviewed_path, reviewed_start, reviewed_end in reviewed_keys
+        ):
+            raise AggregationError(
+                f"{label} location is outside this bucket's reviewed ranges"
+            )
+        if finding.get("severity") not in SEVERITIES:
+            raise AggregationError(f"{label}.severity is invalid")
+        if finding.get("confidence") not in CONFIDENCES:
+            raise AggregationError(f"{label}.confidence is invalid")
+        for key in ("category", "evidence", "scenario", "fix"):
+            require_nonempty_text(finding.get(key), f"{label}.{key}")
+        validated.append(finding)
+    return validated
+
+
+def validate_result(
+    result: dict[str, Any],
+    result_raw: bytes,
+    bucket_id: str,
+    bucket: dict[str, Any],
+    assignments: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    label = f"{bucket_id}.json"
+    if set(result) != RESULT_KEYS:
+        raise AggregationError(f"{label} shape is invalid")
+    if result.get("schema_version") != SCHEMA_VERSION:
+        raise AggregationError(f"{label}.schema_version must be {SCHEMA_VERSION}")
+    expected_metadata = {
+        "bucket_id": bucket_id,
+        "manifest_sha256": assignments["manifest_sha256"],
+        "assignment_sha256": assignments["assignment_sha256"],
+        "bucket_assignment_sha256": bucket["assignment_sha256"],
+        "target_sha": assignments["target_sha"],
+        "upstream_sha": assignments["upstream_sha"],
+        "merge_base_sha": assignments["merge_base_sha"],
+    }
+    for key, expected in expected_metadata.items():
+        if result.get(key) != expected:
+            raise AggregationError(f"{label}.{key} does not match assignment contract")
+    object_id_length = len(assignments["target_sha"])
+    reviewed_keys = validate_reviewed_ranges(
+        result.get("reviewed_ranges"),
+        bucket["entries"],
+        label,
+        assignments,
+        object_id_length,
+    )
+    findings = validate_findings(result.get("findings"), reviewed_keys, label)
+    summary = {
+        "bucket_assignment_sha256": bucket["assignment_sha256"],
+        "bucket_id": bucket_id,
+        "finding_count": len(findings),
+        "result_sha256": sha256_bytes(result_raw),
+    }
+    return findings, summary
+
+
+def finding_sort_key(finding: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        finding["path"],
+        finding["range"]["start"],
+        finding["range"]["end"],
+        finding["severity"],
+        finding["category"],
+        finding["bucket_id"],
+        finding["evidence"],
+        finding["scenario"],
+        finding["fix"],
+        finding["confidence"],
+    )
+
+
+def build_aggregate(
+    assignments: dict[str, Any],
+    buckets: dict[str, dict[str, Any]],
+    results: dict[str, tuple[dict[str, Any], bytes]],
+) -> dict[str, Any]:
+    findings = []
+    bucket_results = []
+    reviewed_ranges = 0
+    reviewed_lines = 0
+    for index in range(1, BUCKET_COUNT + 1):
+        bucket_id = f"bucket-{index}"
+        result, raw = results[bucket_id]
+        bucket_findings, summary = validate_result(
+            result, raw, bucket_id, buckets[bucket_id], assignments
+        )
+        findings.extend({"bucket_id": bucket_id, **finding} for finding in bucket_findings)
+        bucket_results.append(summary)
+        reviewed_ranges += len(result["reviewed_ranges"])
+        reviewed_lines += sum(
+            entry["range"]["end"] - entry["range"]["start"] + 1
+            for entry in result["reviewed_ranges"]
+        )
+    findings.sort(key=finding_sort_key)
+    aggregate = {
+        "schema_version": SCHEMA_VERSION,
+        "aggregator_version": AGGREGATOR_VERSION,
+        "manifest_sha256": assignments["manifest_sha256"],
+        "inventory_sha256": assignments["inventory_sha256"],
+        "scope_sha256": assignments["scope_sha256"],
+        "assignment_sha256": assignments["assignment_sha256"],
+        "target_sha": assignments["target_sha"],
+        "upstream_sha": assignments["upstream_sha"],
+        "merge_base_sha": assignments["merge_base_sha"],
+        "bucket_results": bucket_results,
+        "findings": findings,
+        "coverage": {
+            "assigned_ranges": assignments["coverage"]["assigned_ranges"],
+            "reviewed_ranges": reviewed_ranges,
+            "assigned_lines": assignments["coverage"]["assigned_lines"],
+            "reviewed_lines": reviewed_lines,
+            "bucket_count": BUCKET_COUNT,
+            "complete": True,
+        },
+        "remaining_ranges": [],
+    }
+    if reviewed_ranges != aggregate["coverage"]["assigned_ranges"]:
+        raise AggregationError("aggregate range coverage is incomplete")
+    if reviewed_lines != aggregate["coverage"]["assigned_lines"]:
+        raise AggregationError("aggregate line coverage is incomplete")
+    aggregate["aggregate_sha256"] = aggregate_document_hash(aggregate)
+    return aggregate
+
+
+def write_output(output: Path, aggregate: dict[str, Any]) -> None:
+    output = output.parent.resolve() / output.name
+    output.parent.mkdir(parents=True, exist_ok=True)
+    contents = canonical_json(aggregate)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as temporary_file:
+            temporary_file.write(contents)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        try:
+            os.link(temporary, output)
+        except FileExistsError as error:
+            raise AggregationError(f"output path already exists: {output}") from error
+        except OSError as error:
+            raise AggregationError(f"cannot publish output {output}: {error}") from error
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--assignments", type=Path, required=True)
+    parser.add_argument("--results-dir", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        assignments, _ = read_canonical_json(args.assignments, "assignments")
+        buckets = validate_assignments(assignments)
+        results = load_results_directory(args.results_dir)
+        aggregate = build_aggregate(assignments, buckets, results)
+        write_output(args.output, aggregate)
+    except AggregationError as error:
+        print(f"codebase audit aggregation: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
