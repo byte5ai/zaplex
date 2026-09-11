@@ -26,15 +26,13 @@ use pathfinder_geometry::{
     rect::{RectF, RectI},
     vector::Vector2F,
 };
-use resvg::usvg::fontdb;
-use resvg::usvg::fontdb::Query;
 use vec1::Vec1;
 
 use cosmic_text::{
+    fontdb::{self, Query, Source},
     Align, Attrs, AttrsList, BidiParagraphs, LayoutGlyph, LayoutLine, ShapeLine, Shaping, Wrap,
 };
 use dashmap::{mapref::entry::Entry, DashMap};
-use fontdb::Source;
 use itertools::Itertools;
 use parking_lot::RwLock;
 use pathfinder_geometry::vector::{vec2f, vec2i, Vector2I};

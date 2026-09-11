@@ -4,6 +4,7 @@ use super::{
 };
 use crate::fonts::FontId;
 use anyhow::Result;
+use cosmic_text::fontdb;
 use font_kit::loader::Loader as _;
 use font_kit::{
     family_name::FamilyName as FKFamilyName, properties::Properties as FKProperties,
