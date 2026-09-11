@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2016
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+assets="$repo_root/app/assets/bundled/ssh/bash_zsh"
+test_root="$(mktemp -d)"
+trap 'rm -rf -- "$test_root"' EXIT
+
+fail() {
+  echo "SSH tmux asset test: $*" >&2
+  exit 1
+}
+
+write_executable() {
+  local path="$1"
+  shift
+  printf '%s\n' "$@" > "$path"
+  chmod +x "$path"
+}
+
+fake_bin="$test_root/bin"
+mkdir -p "$fake_bin"
+
+write_executable "$fake_bin/uname" \
+  '#!/usr/bin/env bash' \
+  'if [ "${1:-}" = "-m" ]; then' \
+  '  echo x86_64' \
+  'else' \
+  '  echo Linux' \
+  'fi'
+
+write_executable "$fake_bin/curl" \
+  '#!/usr/bin/env bash' \
+  ': > tmux.tar.gz'
+
+write_executable "$fake_bin/sha256sum" \
+  '#!/usr/bin/env bash' \
+  'printf "%s  %s\n" 6d52c3badd5c73ecf3e80709510fb6913fa7497873478e31d513b37ac564a0f0 "${1:-tmux.tar.gz}"'
+
+write_executable "$fake_bin/tar" \
+  '#!/usr/bin/env bash' \
+  'install_dir="$HOME/.warp/tmux/local/bin"' \
+  'mkdir -p "$install_dir"' \
+  'cp "$TMUX_TEST_BINARY" "$install_dir/tmux"' \
+  'chmod +x "$install_dir/tmux"'
+
+tmux_test_binary="$test_root/tmux-test-binary"
+write_executable "$tmux_test_binary" \
+  '#!/usr/bin/env bash' \
+  'if [ "$#" -eq 1 ] && [ "$1" = "-V" ]; then' \
+  '  echo "tmux 3.5a"' \
+  '  exit 0' \
+  'fi' \
+  'printf "%s\n" "$0" > "${TMUX_CALL_LOG}.path"' \
+  'printf "%s\n" "$@" > "${TMUX_CALL_LOG}.args"'
+
+assert_tmux_call() {
+  local call_log="$1"
+  local expected_binary="$2"
+
+  [ "$(cat "${call_log}.path")" = "$expected_binary" ] ||
+    fail "tmux was not invoked through the expected wrapper target"
+  [ "$(sed -n '1p' "${call_log}.args")" = "-Lwarp" ] ||
+    fail "tmux did not receive -Lwarp as its first argument"
+  [ "$(sed -n '2p' "${call_log}.args")" = "-CC" ] ||
+    fail "tmux did not receive -CC as its second argument"
+  [ "$(wc -l < "${call_log}.args")" -eq 2 ] ||
+    fail "tmux received unexpected extra arguments"
+}
+
+exercise_home() {
+  local name="$1"
+  local case_root="$test_root/$name"
+  local home="$case_root/zaplex home"
+  local call_log="$case_root/tmux-call"
+  local expected_binary="$home/.warp/tmux/local/bin/tmux"
+
+  if [ "$name" = "normal" ]; then
+    home="$case_root/home"
+    expected_binary="$home/.warp/tmux/local/bin/tmux"
+  fi
+
+  mkdir -p "$case_root" "$home"
+
+  (
+    cd "$case_root"
+    HOME="$home" \
+      PATH="$fake_bin:/usr/bin:/bin" \
+      TMUX_CALL_LOG="$call_log" \
+      TMUX_TEST_BINARY="$tmux_test_binary" \
+      bash "$assets/install_tmux_and_zaplexify_linux.sh" >/dev/null
+  )
+
+  [ -x "$home/.warp/tmux/execute_tmux.sh" ] ||
+    fail "portable wrapper was not created below HOME ($name)"
+  assert_tmux_call "$call_log" "$expected_binary"
+
+  local detector
+  for detector in zaplexify_ssh_session.sh zaplexify_ssh_session_mac.sh; do
+    : > "${call_log}.path"
+    : > "${call_log}.args"
+    (
+      cd "$case_root"
+      HOME="$home" \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        TMUX_CALL_LOG="$call_log" \
+        bash "$assets/$detector" >/dev/null
+    )
+    assert_tmux_call "$call_log" "$expected_binary"
+  done
+}
+
+exercise_home normal
+exercise_home spaced
+
+for script in "$assets"/*.sh "$assets"/root/*.sh; do
+  bash -n "$script" || fail "$script is not valid Bash syntax"
+done
+
+mac_script_size="$(
+  python3 - "$assets/zaplexify_ssh_session_mac.sh" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+script = Path(sys.argv[1]).read_text()
+script = re.sub(r"(?m)^ *#.*", "", script)
+script = re.sub(r"^\n*", "", script)
+script = re.sub(r"\n+\s*", "\n", script)
+script = re.sub(r"(; ?|\{|do|then|else|in)\n", r"\1 ", script)
+script = script.replace("\n", ";") + "\n"
+print(len(script))
+PY
+)"
+[ "$mac_script_size" -le 1020 ] ||
+  fail "macOS zaplexification script exceeds the 1020-byte PTY limit"
+
+dnf_script="$assets/root/install_tmux_and_zaplexify_dnf.sh"
+yum_script="$assets/root/install_tmux_and_zaplexify_yum.sh"
+pacman_script="$assets/root/install_tmux_and_zaplexify_pacman.sh"
+
+grep -Fq 'sudo dnf install -y tmux' "$dnf_script" || fail "DNF tmux install is missing"
+grep -Fq 'sudo yum install -y tmux' "$yum_script" || fail "YUM tmux install is missing"
+grep -Fq 'sudo pacman -S --needed --noconfirm tmux' "$pacman_script" ||
+  fail "Pacman tmux-only install is missing"
+
+if grep -Eq 'sudo[[:space:]]+(dnf|yum)[[:space:]]+update|sudo[[:space:]]+pacman[[:space:]]+-Syu' \
+  "$dnf_script" "$yum_script" "$pacman_script"; then
+  fail "generic tmux install must not perform a full host upgrade"
+fi
+
+portable_installer="$assets/install_tmux_and_zaplexify_linux.sh"
+verification_line="$(grep -n -m1 'tmux archive SHA-256 mismatch' "$portable_installer" | cut -d: -f1)"
+extraction_line="$(grep -n -m1 'tar -xf tmux.tar.gz' "$portable_installer" | cut -d: -f1)"
+[ -n "$verification_line" ] && [ -n "$extraction_line" ] &&
+  [ "$verification_line" -lt "$extraction_line" ] ||
+  fail "portable archive must be integrity-checked before extraction"

@@ -42,7 +42,8 @@ _system_details() {
 
   # _check_tmux is used in tmux install script post install!
 _check_tmux() {
-    if _find $HOME/.warp/tmux/execute_tmux.sh; then
+    TMUX=""
+    if _find "$HOME/.warp/tmux/execute_tmux.sh"; then
         _log SshTmuxInstaller "\"warp\""
         TMUX="$HOME/.warp/tmux/execute_tmux.sh"
     elif _find tmux; then
@@ -50,8 +51,8 @@ _check_tmux() {
         _log SshTmuxInstaller "\"user\""
     fi
 
-    if [ $TMUX ]; then
-        VER=$(command $TMUX -V 2>/dev/null | awk '{print $2}')
+    if [ -n "$TMUX" ]; then
+        VER=$(command "$TMUX" -V 2>/dev/null | awk '{print $2}')
         if [ -z "$VER" ]; then
             _err "\"TmuxFailed\""
         elif [ "$(printf '%s\n' "$VER" "2.9" | sort -V | tail -n1)" = "2.9" ]; then
@@ -65,4 +66,4 @@ _check_tmux() {
     return 1
 }
 
-_check_tmux && command $TMUX -Lwarp -CC && exit
+_check_tmux && command "$TMUX" -Lwarp -CC && exit

@@ -85,6 +85,10 @@ jobs:
         run: script/check-linux-dev-container-security
         shell: bash
 
+      - name: Verify SSH tmux installer assets
+        run: script/ssh-tmux-asset-tests
+        shell: bash
+
       - name: Validate release tag classification
         run: script/classify-release-tag-tests
         shell: bash
