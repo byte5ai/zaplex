@@ -2,6 +2,12 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.14] — 2026-09-10
+
+- **Verbindliche Clippy-Policy:** Build-relevante Pull Requests verweigern nun
+  sämtliche Clippy-Warnungen; portable Zeitmessung und der gemeinsame
+  Prozess-Wrapper beseitigen die zuvor geduldeten Zaplex-Verstöße.
+
 ## [1.0.13] — 2026-09-10
 
 - **Effizientere Cockpit-Aktualisierung:** Wachsende Codex- und

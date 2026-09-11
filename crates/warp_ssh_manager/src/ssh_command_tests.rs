@@ -832,6 +832,10 @@ fn ssh_workspace_has_no_direct_std_process_command() {
         &repo_dir.join("app/src/remote_server/headless_connect.rs"),
         &mut violations,
     );
+    inspect_file(
+        &repo_dir.join("app/src/remote_server/session_host.rs"),
+        &mut violations,
+    );
     assert_eq!(violations, Vec::<String>::new());
 }
 

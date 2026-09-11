@@ -17,9 +17,9 @@ use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 #[cfg(not(target_family = "wasm"))]
 use zaplex_cockpit::{
-    Account, AccountStatus, AccountUsage, AgentInventoryStatus, CockpitSnapshot, FleetTree,
-    HostAvailability, PricingTable, Provider, ScanHealth, SessionSnapshot, SessionState,
-    UsageProvenance, WindowTotals, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK,
+    Account, AccountStatus, AccountUsage, AgentInventoryStatus, CockpitSnapshot, DEFAULT_BUDGET_5H,
+    DEFAULT_BUDGET_WEEK, FleetTree, HostAvailability, PricingTable, Provider, ScanHealth,
+    SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
 };
 
 pub const COCKPIT_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
@@ -381,7 +381,7 @@ impl CockpitSnapshotDocument {
                     .map(|usage| stable_account_id(&usage.account))
                     .or_else(|| {
                         (!host.is_local)
-                            .then(|| session.account_id.as_deref())
+                            .then_some(session.account_id.as_deref())
                             .flatten()
                             .map(|account_id| {
                                 remote_account_document_id(
@@ -410,10 +410,9 @@ impl CockpitSnapshotDocument {
                     continue;
                 }
                 if let Some(account) = accounts.iter_mut().find(|account| account.id == account_id)
+                    && account.sessions.iter().all(|known| known.id != session.id)
                 {
-                    if account.sessions.iter().all(|known| known.id != session.id) {
-                        account.sessions.push(session.clone());
-                    }
+                    account.sessions.push(session.clone());
                 }
                 if session.state == "waiting" {
                     attention.push(AttentionDocument {

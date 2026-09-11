@@ -5,8 +5,9 @@
 //! for masking. In System / Off modes, input fields are disabled and display hints; only Custom mode allows editing.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use instant::Instant;
 use settings::Setting;
 use warpui::{
     elements::{
@@ -194,7 +195,7 @@ impl NetworkPageView {
         );
 
         let mut me = Self {
-            page: PageType::new_monolith(NetworkPageWidget::default(), None, false),
+            page: PageType::new_monolith(NetworkPageWidget, None, false),
             mode_dropdown,
             url_editor,
             username_editor,

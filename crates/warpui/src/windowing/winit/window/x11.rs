@@ -1,3 +1,5 @@
+use std::cmp::Reverse;
+
 use anyhow::anyhow;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
@@ -138,7 +140,7 @@ impl X11Manager {
         let active_window_id = self.get_active_window()?;
         let mut monitors = self.get_monitors(active_window_id)?;
         // Ensure the primary display is first. This is not
-        monitors.sort_by(|a, b| b.primary.cmp(&a.primary));
+        monitors.sort_by_key(|monitor| Reverse(monitor.primary));
         Ok(monitors
             .iter()
             .map(monitor_info_to_physical_bounds)

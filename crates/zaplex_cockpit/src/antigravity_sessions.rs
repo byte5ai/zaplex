@@ -10,6 +10,7 @@
 //! live-state claim: every discovered conversation is [`SessionState::Idle`].
 //! Native terminal hooks remain responsible for live rich status.
 
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -94,7 +95,7 @@ pub fn idle_sessions(
             pid: 0,
         });
     }
-    sessions.sort_by(|left, right| right.last_activity.cmp(&left.last_activity));
+    sessions.sort_by_key(|session| Reverse(session.last_activity));
     sessions.truncate(limit);
     sessions
 }

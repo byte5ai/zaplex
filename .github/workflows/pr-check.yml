@@ -1,7 +1,7 @@
-# PR validation pipeline — cargo check + targeted keymap-validation unit tests.
+# PR validation pipeline — Clippy + macOS cargo check + targeted keymap tests.
 #
 # Division of labour with zap_release.yml:
-# - This workflow: runs Linux and macOS cargo checks on every build-relevant
+# - This workflow: runs Linux Clippy and a macOS cargo check on every build-relevant
 #   PR, plus a targeted `cargo test` that parse-validates every registered
 #   keybinding on BOTH platform variants. `cargo check` compiles the code but
 #   never parses the binding strings, so it cannot catch a malformed keybinding like `cmd-shift-o`
@@ -109,6 +109,12 @@ jobs:
         run: script/check-compact-row-actions
         shell: bash
 
+      # Keep this inside the required job for the same reason as the row-action
+      # guard above: a broken Clippy gate must fail the required context.
+      - name: Verify required Clippy gate
+        run: script/pr-check-clippy-gate-tests
+        shell: bash
+
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: linux
@@ -121,12 +127,12 @@ jobs:
         run: rustup target add x86_64-unknown-linux-gnu
         shell: bash
 
-      - name: cargo check (default = zaplex bin)
-        # `cargo check --workspace` would pull in wasm/preview channel-gated
-        # targets; check only the default oss bin + its dependency graph, matching
+      - name: cargo clippy (default = zaplex bin)
+        # `cargo clippy --workspace` would pull in wasm/preview channel-gated
+        # targets; lint only the default oss bin + its dependency graph, matching
         # the release_linux compile target. Cargo.lock is committed, so run --locked
-        # for a deterministic graph (immune to upstream version drift).
-        run: cargo check --locked --bin zaplex
+        # for a deterministic graph and deny the complete warning baseline.
+        run: cargo clippy --locked --bin zaplex -- -D warnings
         shell: bash
 
   cargo_check_macos:
@@ -192,6 +198,12 @@ jobs:
           test_per_platform_off_platform_binding_validated
           test_keystroke_invalid_shift_lowercase
           test_keystroke_invalid_no_shift_uppercase
+        shell: bash
+
+      - name: cargo test (SSH process-wrapper policy)
+        run: >
+          cargo test --locked -p warp_ssh_manager --lib --
+          ssh_workspace_has_no_direct_std_process_command
         shell: bash
 
       # Focused app-crate unit tests: the FM-toggle + spawn-card launch payload,

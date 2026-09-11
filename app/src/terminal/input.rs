@@ -5642,21 +5642,20 @@ impl Input {
                 ctx.notify();
             }
             AISettingsChangedEvent::AIAutoDetectionEnabled { .. }
-            | AISettingsChangedEvent::NLDInTerminalEnabled { .. } => {
-                // The input model handles updating the lock state via its own subscription.
-                // If NLD is now enabled for the current context and the buffer is non-empty,
-                // trigger autodetection on the current buffer contents.
+            | AISettingsChangedEvent::NLDInTerminalEnabled { .. }
                 if self
                     .ai_input_model
                     .as_ref(ctx)
                     .should_run_input_autodetection(ctx)
-                    && !self.editor.as_ref(ctx).buffer_text(ctx).is_empty()
-                {
-                    self.run_input_background_jobs(
-                        InputBackgroundJobOptions::default().with_ai_input_detection(),
-                        ctx,
-                    );
-                }
+                    && !self.editor.as_ref(ctx).buffer_text(ctx).is_empty() =>
+            {
+                // The input model handles updating the lock state via its own subscription.
+                // If NLD is now enabled for the current context and the buffer is non-empty,
+                // trigger autodetection on the current buffer contents.
+                self.run_input_background_jobs(
+                    InputBackgroundJobOptions::default().with_ai_input_detection(),
+                    ctx,
+                );
             }
             #[cfg(feature = "voice_input")]
             AISettingsChangedEvent::VoiceInputEnabled { .. } => {
@@ -6710,7 +6709,7 @@ impl Input {
             .iter()
             .map(|style_run| style_run.byte_range().clone())
             .collect::<Vec<_>>();
-        ranges.sort_by(|a, b| a.start.cmp(&b.start));
+        ranges.sort_by_key(|range| range.start);
 
         let capacity = ranges.len();
 
@@ -13380,13 +13379,10 @@ impl Input {
                         appearance.ui_font_family(),
                         appearance.monospace_font_size(),
                     )
-                    .with_color(
-                        blended_colors::text_main(
-                            appearance.theme(),
-                            appearance.theme().background(),
-                        )
-                        .into(),
-                    )
+                    .with_color(blended_colors::text_main(
+                        appearance.theme(),
+                        appearance.theme().background(),
+                    ))
                     .finish(),
                 )
                 .with_max_width(180.0)

@@ -10,8 +10,9 @@ use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use instant::Instant;
 use sha2::{Digest as _, Sha256};
 use zaplex_cockpit::{
     Account, CockpitSnapshot, Provider, ScanHealth, SessionSnapshot, TranscriptScanCache,
