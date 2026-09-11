@@ -156,6 +156,7 @@ jobs:
           script/run-codebase-audit-assignments-tests
           script/aggregate-codebase-audit-results-tests
           script/codebase-audit-verification-assignments-tests
+          script/run-codebase-audit-verification-assignments-tests
         shell: bash
 
       - name: cargo deny check advisories
