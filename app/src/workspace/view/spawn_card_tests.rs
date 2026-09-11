@@ -488,7 +488,7 @@ fn verified_default_login_is_launchable_without_cockpit_accounts() {
     let accounts = card.local_account_targets();
     assert_eq!(accounts.len(), 1);
     assert_eq!(accounts[0].config_dir, None);
-    assert_eq!(accounts[0].id.0.as_str(), "claude:local:default");
+    assert_eq!(accounts[0].id.0.as_str(), "Claude:local:default");
     assert!(card.launch_payload().is_some());
 }
 
@@ -507,6 +507,8 @@ fn removed_local_account_never_falls_back_to_default_login() {
 
 #[test]
 fn model_discovery_errors_distinguish_offline_incompatible_and_failed() {
+    crate::i18n::init(Some("en"));
+
     let offline =
         ModelDiscoveryFailure::classify(CLIAgent::Claude, "devbox", true, "ssh connection refused");
     assert_eq!(
