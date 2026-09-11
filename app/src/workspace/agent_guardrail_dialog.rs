@@ -130,7 +130,7 @@ impl View for AgentGuardrailDialog {
             .ui_builder()
             .button(ButtonVariant::Error, self.confirm_mouse_state.clone())
             .with_centered_text_label(confirm_label.to_string())
-            .with_style(button_style.clone())
+            .with_style(button_style)
             .build()
             .with_cursor(Cursor::PointingHand)
             .on_click(move |ctx, _, _| {

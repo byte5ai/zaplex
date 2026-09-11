@@ -16,13 +16,14 @@ use crate::themes::theme::WarpTheme;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 
 use core::mem;
+use instant::Instant;
 use lazy_static::lazy_static;
 use num_traits::Float as _;
 use smallvec::SmallVec;
 use std::cmp::Ordering;
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{collections::HashMap, ops::RangeInclusive};
 use unicode_width::UnicodeWidthChar;
 use warp_core::features::FeatureFlag;

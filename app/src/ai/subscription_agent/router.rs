@@ -10,6 +10,7 @@ pub(crate) struct RoutePreferences {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum RouteResult {
     NoReachableAgent,
     NeedsAgentChoice(Vec<SubscriptionAgent>),
