@@ -176,7 +176,7 @@ pub fn spawn_su_password_injector<O>(
                     let attempt_guard = attempt_guard_for_events.clone();
                     ctx.spawn(
                         warpui::r#async::Timer::after(SU_ROOT_ATTEMPT_TIMEOUT),
-                        move |_, _, _| {
+                        move |_owner, _, _ctx| {
                             attempt_guard.lock().expire(generation);
                         },
                     );
