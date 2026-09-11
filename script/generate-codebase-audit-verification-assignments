@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import datetime
 import hashlib
 import json
 import os
@@ -110,6 +111,7 @@ VERIFICATION_ENTRY_KEYS = {
     "lens",
     "aggregate_sha256",
     "issue_snapshot_sha256",
+    "github_repository",
     "finding",
     "provenance",
     "issue_snapshot",
@@ -125,6 +127,7 @@ VERIFICATION_ROOT_KEYS = {
     "generator_version",
     "aggregate_sha256",
     "issue_snapshot_sha256",
+    "github_repository",
     "provenance",
     "issue_snapshot",
     "finding_count",
@@ -182,6 +185,17 @@ def require_object_id(value: Any, label: str, length: int) -> str:
 def require_nonempty_text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip() or "\0" in value:
         raise VerificationAssignmentError(f"{label} must be a non-empty string")
+    return value
+
+
+def require_github_repository(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value) is None
+    ):
+        raise VerificationAssignmentError(
+            "github repository must use the canonical owner/repository form"
+        )
     return value
 
 
@@ -281,7 +295,7 @@ def build_provenance(aggregate: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_aggregate(
-    aggregate: Any, expected_sha256: str | None = None
+    aggregate: Any, expected_sha256: str
 ) -> dict[str, Any]:
     if not isinstance(aggregate, dict) or set(aggregate) != AGGREGATE_KEYS:
         raise VerificationAssignmentError("aggregate shape is invalid")
@@ -303,10 +317,9 @@ def validate_aggregate(
         require_hash(aggregate.get(key), f"aggregate.{key}")
     if aggregate["aggregate_sha256"] != aggregate_document_hash(aggregate):
         raise VerificationAssignmentError("aggregate document SHA-256 mismatch")
-    if expected_sha256 is not None:
-        require_hash(expected_sha256, "expected aggregate SHA-256")
-        if aggregate["aggregate_sha256"] != expected_sha256:
-            raise VerificationAssignmentError("aggregate does not match expected SHA-256")
+    require_hash(expected_sha256, "expected aggregate SHA-256")
+    if aggregate["aggregate_sha256"] != expected_sha256:
+        raise VerificationAssignmentError("aggregate does not match expected SHA-256")
 
     target_sha = aggregate.get("target_sha")
     if not isinstance(target_sha, str) or len(target_sha) not in OBJECT_ID_LENGTHS:
@@ -401,7 +414,9 @@ def validate_aggregate(
     return aggregate
 
 
-def validate_issue_snapshot(snapshot: Any) -> list[dict[str, Any]]:
+def validate_issue_snapshot(
+    snapshot: Any, github_repository: str
+) -> list[dict[str, Any]]:
     if not isinstance(snapshot, list):
         raise VerificationAssignmentError("issue snapshot root must be an array")
     numbers = []
@@ -416,8 +431,26 @@ def validate_issue_snapshot(snapshot: Any) -> list[dict[str, Any]]:
             raise VerificationAssignmentError(f"{label}.body must be a string")
         if issue.get("state") not in ("OPEN", "CLOSED"):
             raise VerificationAssignmentError(f"{label}.state is invalid")
-        require_nonempty_text(issue.get("url"), f"{label}.url")
-        require_nonempty_text(issue.get("updated_at"), f"{label}.updated_at")
+        expected_url = f"https://github.com/{github_repository}/issues/{number}"
+        if issue.get("url") != expected_url:
+            raise VerificationAssignmentError(
+                f"{label}.url must equal {expected_url}"
+            )
+        updated_at = require_nonempty_text(
+            issue.get("updated_at"), f"{label}.updated_at"
+        )
+        try:
+            parsed_updated_at = datetime.datetime.strptime(
+                updated_at, "%Y-%m-%dT%H:%M:%SZ"
+            )
+        except ValueError as error:
+            raise VerificationAssignmentError(
+                f"{label}.updated_at must use canonical UTC YYYY-MM-DDTHH:MM:SSZ"
+            ) from error
+        if parsed_updated_at.strftime("%Y-%m-%dT%H:%M:%SZ") != updated_at:
+            raise VerificationAssignmentError(
+                f"{label}.updated_at must use canonical UTC YYYY-MM-DDTHH:MM:SSZ"
+            )
         labels = issue.get("labels")
         if not isinstance(labels, list):
             raise VerificationAssignmentError(f"{label}.labels must be an array")
@@ -437,20 +470,21 @@ def validate_issue_snapshot(snapshot: Any) -> list[dict[str, Any]]:
 def load_inputs(
     aggregate_path: Path,
     issue_snapshot_path: Path,
-    expected_aggregate_sha256: str | None,
-    expected_issue_snapshot_sha256: str | None,
+    expected_aggregate_sha256: str,
+    expected_issue_snapshot_sha256: str,
+    github_repository: str,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    github_repository = require_github_repository(github_repository)
     aggregate, _ = read_canonical_json(aggregate_path, "aggregate")
     aggregate = validate_aggregate(aggregate, expected_aggregate_sha256)
     snapshot, snapshot_raw = read_canonical_json(issue_snapshot_path, "issue snapshot")
-    snapshot = validate_issue_snapshot(snapshot)
+    snapshot = validate_issue_snapshot(snapshot, github_repository)
     issue_snapshot_sha256 = sha256_bytes(snapshot_raw)
-    if expected_issue_snapshot_sha256 is not None:
-        require_hash(expected_issue_snapshot_sha256, "expected issue snapshot SHA-256")
-        if issue_snapshot_sha256 != expected_issue_snapshot_sha256:
-            raise VerificationAssignmentError(
-                "issue snapshot does not match expected SHA-256"
-            )
+    require_hash(expected_issue_snapshot_sha256, "expected issue snapshot SHA-256")
+    if issue_snapshot_sha256 != expected_issue_snapshot_sha256:
+        raise VerificationAssignmentError(
+            "issue snapshot does not match expected SHA-256"
+        )
     return aggregate, snapshot, issue_snapshot_sha256
 
 
@@ -470,12 +504,14 @@ def verification_id(
     lens: str,
     aggregate_sha256: str,
     issue_snapshot_sha256: str,
+    github_repository: str,
 ) -> str:
     payload = {
         "finding_id": finding_id,
         "lens": lens,
         "aggregate_sha256": aggregate_sha256,
         "issue_snapshot_sha256": issue_snapshot_sha256,
+        "github_repository": github_repository,
     }
     return f"verification-{sha256_bytes(canonical_json(payload))}"
 
@@ -484,6 +520,7 @@ def expected_entries(
     aggregate: dict[str, Any],
     snapshot: list[dict[str, Any]],
     issue_snapshot_sha256: str,
+    github_repository: str,
 ) -> list[dict[str, Any]]:
     provenance = build_provenance(aggregate)
     entries = []
@@ -497,11 +534,13 @@ def expected_entries(
                         lens,
                         aggregate["aggregate_sha256"],
                         issue_snapshot_sha256,
+                        github_repository,
                     ),
                     "finding_id": finding_id,
                     "lens": lens,
                     "aggregate_sha256": aggregate["aggregate_sha256"],
                     "issue_snapshot_sha256": issue_snapshot_sha256,
+                    "github_repository": github_repository,
                     "finding": copy.deepcopy(finding),
                     "provenance": copy.deepcopy(provenance),
                     "issue_snapshot": copy.deepcopy(snapshot),
@@ -511,12 +550,16 @@ def expected_entries(
 
 
 def verification_bucket_hash(
-    bucket: dict[str, Any], aggregate_sha256: str, issue_snapshot_sha256: str
+    bucket: dict[str, Any],
+    aggregate_sha256: str,
+    issue_snapshot_sha256: str,
+    github_repository: str,
 ) -> str:
     payload = {
         "id": bucket.get("id"),
         "aggregate_sha256": aggregate_sha256,
         "issue_snapshot_sha256": issue_snapshot_sha256,
+        "github_repository": github_repository,
         "entries": bucket.get("entries"),
     }
     return sha256_bytes(canonical_json(payload))
@@ -541,8 +584,12 @@ def build_verification_assignments(
     aggregate: dict[str, Any],
     snapshot: list[dict[str, Any]],
     issue_snapshot_sha256: str,
+    github_repository: str,
 ) -> dict[str, Any]:
-    entries = expected_entries(aggregate, snapshot, issue_snapshot_sha256)
+    github_repository = require_github_repository(github_repository)
+    entries = expected_entries(
+        aggregate, snapshot, issue_snapshot_sha256, github_repository
+    )
     distributed = distribute_entries(entries)
     buckets = []
     for index, bucket_entries in enumerate(distributed, start=1):
@@ -552,7 +599,10 @@ def build_verification_assignments(
             "entries": bucket_entries,
         }
         bucket["assignment_sha256"] = verification_bucket_hash(
-            bucket, aggregate["aggregate_sha256"], issue_snapshot_sha256
+            bucket,
+            aggregate["aggregate_sha256"],
+            issue_snapshot_sha256,
+            github_repository,
         )
         buckets.append(bucket)
 
@@ -563,6 +613,7 @@ def build_verification_assignments(
         "generator_version": GENERATOR_VERSION,
         "aggregate_sha256": aggregate["aggregate_sha256"],
         "issue_snapshot_sha256": issue_snapshot_sha256,
+        "github_repository": github_repository,
         "provenance": provenance,
         "issue_snapshot": copy.deepcopy(snapshot),
         "finding_count": finding_count,
@@ -579,7 +630,11 @@ def build_verification_assignments(
     }
     assignments["assignment_sha256"] = verification_document_hash(assignments)
     validate_verification_assignments(
-        assignments, aggregate, snapshot, issue_snapshot_sha256
+        assignments,
+        aggregate,
+        snapshot,
+        issue_snapshot_sha256,
+        github_repository,
     )
     return assignments
 
@@ -589,6 +644,7 @@ def validate_verification_entry(
     aggregate: dict[str, Any],
     snapshot: list[dict[str, Any]],
     issue_snapshot_sha256: str,
+    github_repository: str,
 ) -> tuple[str, str]:
     if not isinstance(entry, dict) or set(entry) != VERIFICATION_ENTRY_KEYS:
         raise VerificationAssignmentError("verification entry shape is invalid")
@@ -600,6 +656,8 @@ def validate_verification_entry(
         raise VerificationAssignmentError("verification aggregate metadata drift")
     if entry["issue_snapshot_sha256"] != issue_snapshot_sha256:
         raise VerificationAssignmentError("verification snapshot metadata drift")
+    if entry.get("github_repository") != github_repository:
+        raise VerificationAssignmentError("verification repository metadata drift")
     if entry.get("lens") not in LENSES:
         raise VerificationAssignmentError("verification lens is invalid")
     require_nonempty_text(entry.get("finding_id"), "verification finding_id")
@@ -614,6 +672,7 @@ def validate_verification_entry(
         entry["lens"],
         aggregate["aggregate_sha256"],
         issue_snapshot_sha256,
+        github_repository,
     )
     if entry["verification_id"] != expected_verification_id:
         raise VerificationAssignmentError("verification_id mismatch")
@@ -625,7 +684,9 @@ def validate_verification_assignments(
     aggregate: dict[str, Any],
     snapshot: list[dict[str, Any]],
     issue_snapshot_sha256: str,
+    github_repository: str,
 ) -> None:
+    github_repository = require_github_repository(github_repository)
     if not isinstance(assignments, dict) or set(assignments) != VERIFICATION_ROOT_KEYS:
         raise VerificationAssignmentError("verification assignment shape is invalid")
     expected_root = {
@@ -633,6 +694,7 @@ def validate_verification_assignments(
         "generator_version": GENERATOR_VERSION,
         "aggregate_sha256": aggregate["aggregate_sha256"],
         "issue_snapshot_sha256": issue_snapshot_sha256,
+        "github_repository": github_repository,
         "provenance": build_provenance(aggregate),
         "issue_snapshot": snapshot,
         "finding_count": len(aggregate["findings"]),
@@ -661,7 +723,9 @@ def validate_verification_assignments(
     if [bucket["id"] for bucket in buckets] != expected_bucket_ids:
         raise VerificationAssignmentError("verification bucket IDs are invalid")
 
-    expected = expected_entries(aggregate, snapshot, issue_snapshot_sha256)
+    expected = expected_entries(
+        aggregate, snapshot, issue_snapshot_sha256, github_repository
+    )
     expected_by_tuple = {
         (entry["finding_id"], entry["lens"]): entry for entry in expected
     }
@@ -676,7 +740,11 @@ def validate_verification_assignments(
         for entry in entries:
             assigned_tuples.append(
                 validate_verification_entry(
-                    entry, aggregate, snapshot, issue_snapshot_sha256
+                    entry,
+                    aggregate,
+                    snapshot,
+                    issue_snapshot_sha256,
+                    github_repository,
                 )
             )
             assigned_entries.append(entry)
@@ -685,7 +753,10 @@ def validate_verification_assignments(
             f"{bucket['id']}.assignment_sha256",
         )
         expected_hash = verification_bucket_hash(
-            bucket, aggregate["aggregate_sha256"], issue_snapshot_sha256
+            bucket,
+            aggregate["aggregate_sha256"],
+            issue_snapshot_sha256,
+            github_repository,
         )
         if bucket["assignment_sha256"] != expected_hash:
             raise VerificationAssignmentError(
@@ -780,8 +851,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--aggregate", type=Path, required=True)
     parser.add_argument("--issue-snapshot", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--expected-aggregate-sha256")
-    parser.add_argument("--expected-issue-snapshot-sha256")
+    parser.add_argument("--expected-aggregate-sha256", required=True)
+    parser.add_argument("--expected-issue-snapshot-sha256", required=True)
+    parser.add_argument("--github-repository", required=True)
     return parser.parse_args(argv)
 
 
@@ -793,9 +865,13 @@ def main(argv: list[str] | None = None) -> int:
             args.issue_snapshot,
             args.expected_aggregate_sha256,
             args.expected_issue_snapshot_sha256,
+            args.github_repository,
         )
         assignments = build_verification_assignments(
-            aggregate, snapshot, issue_snapshot_sha256
+            aggregate,
+            snapshot,
+            issue_snapshot_sha256,
+            args.github_repository,
         )
         write_output(args.output, assignments)
     except VerificationAssignmentError as error:
