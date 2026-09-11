@@ -847,12 +847,17 @@ fn claude_usage_cache_evicts_the_least_recently_used_transcript() {
 
     for index in 0..USAGE_CACHE_LIMIT {
         let path = tmp.path().join(format!("session-{index}.jsonl"));
-        write(
-            &path,
-            &format!(
-                "{{\"type\":\"assistant\",\"timestamp\":\"2026-09-09T10:00:00Z\",\"message\":{{\"model\":\"claude-opus-4-8\",\"usage\":{{\"input_tokens\":{index}}}}}}}}\n"
-            ),
-        );
+        let content = serde_json::json!({
+            "type": "assistant",
+            "timestamp": "2026-09-09T10:00:00Z",
+            "message": {
+                "model": "claude-opus-4-8",
+                "usage": { "input_tokens": index },
+            },
+        })
+        .to_string()
+            + "\n";
+        write(&path, &content);
         let key = ClaudeUsageCacheKey {
             account_root: account_root.clone(),
             transcript: std::fs::canonicalize(&path).unwrap(),

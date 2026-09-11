@@ -139,10 +139,10 @@ impl ConversationUsageView {
         ));
         values.push(render_section_header("".to_string(), appearance));
 
-        if self.display_mode == DisplayMode::Footer
-            && self.usage_info.credits_spent_for_last_block.is_some()
-        {
-            let last_block_credits = self.usage_info.credits_spent_for_last_block.unwrap();
+        if let (DisplayMode::Footer, Some(last_block_credits)) = (
+            self.display_mode,
+            self.usage_info.credits_spent_for_last_block,
+        ) {
             labels.push(render_label_text(
                 "Credits spent (last response)",
                 appearance,

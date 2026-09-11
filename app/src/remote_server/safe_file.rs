@@ -178,6 +178,7 @@ impl Journal {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .mode(0o600)
             .open(path)
     }
@@ -254,10 +255,7 @@ impl Journal {
         for entry in fs::read_dir(&self.directory)? {
             let entry = entry?;
             let path = entry.path();
-            if !path
-                .extension()
-                .is_some_and(|extension| extension == "json")
-            {
+            if path.extension().is_none_or(|extension| extension != "json") {
                 continue;
             }
             let bytes = fs::read(&path)?;
@@ -603,10 +601,10 @@ impl SafeFileServer {
         owner: ConnectionId,
         batch_handle_id: &str,
     ) -> Result<SafeFileMutationResult, String> {
-        if !self
+        if self
             .upload_batches
             .get(batch_handle_id)
-            .is_some_and(|batch| batch.owner == owner)
+            .is_none_or(|batch| batch.owner != owner)
         {
             return Err("Upload batch is unknown or belongs to another connection".to_string());
         }
@@ -959,10 +957,10 @@ impl SafeFileServer {
         {
             return self.cleanup_upload_batch(owner, handle_id);
         }
-        if !self
+        if self
             .handles
             .get(handle_id)
-            .is_some_and(|handle| handle.owner == owner)
+            .is_none_or(|handle| handle.owner != owner)
         {
             return Err("Safe-file handle is unknown or belongs to another connection".to_string());
         }

@@ -167,7 +167,7 @@ impl ZaplexifyPageView {
 
     fn build_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let mut categories = vec![
-            Category::new("", vec![Box::new(TitleWidget::default())]),
+            Category::new("", vec![Box::new(TitleWidget)]),
             Category::new(
                 Box::leak(crate::t!("settings-zaplexify-section-subshells").into_boxed_str()),
                 vec![Box::new(SubshellsWidget::default())],

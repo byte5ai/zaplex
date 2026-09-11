@@ -539,7 +539,7 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
             let fill = if state.is_hovered() {
                 theme.main_text_color(bg).into_solid()
             } else {
-                theme.sub_text_color(bg.into()).into_solid()
+                theme.sub_text_color(bg).into_solid()
             };
             Container::new(
                 ConstrainedBox::new(Icon::X.to_warpui_icon(fill.into()).finish())
@@ -638,18 +638,18 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
         vec![recent_conversations_section]
     } else {
         let mut body_items = vec![render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone()),
-                        MessageItem::text(crate::t!("terminal-zero-state-start-agent")),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation);
-                    },
-                    state_handles.start_new_conversation.clone(),
-                )]),
-                app,
-            )];
+            Message::new(vec![MessageItem::clickable(
+                vec![
+                    MessageItem::keystroke(ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone()),
+                    MessageItem::text(crate::t!("terminal-zero-state-start-agent")),
+                ],
+                |ctx| {
+                    ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation);
+                },
+                state_handles.start_new_conversation.clone(),
+            )]),
+            app,
+        )];
 
         // Only show "escape to go back" if there's a parent terminal
         if has_parent_terminal {

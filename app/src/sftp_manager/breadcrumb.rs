@@ -6,7 +6,7 @@
 //! date: 2026-05-26
 
 use std::collections::HashMap;
-use std::path::{Component, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
@@ -23,7 +23,7 @@ use crate::ui_components::icons::Icon;
 /// Traverse each component of the path; each segment is clickable and triggers a NavigateTo action.
 /// Segments are separated by ChevronRight icons; empty paths display "/".
 pub fn render_breadcrumb(
-    current_path: &PathBuf,
+    current_path: &Path,
     mouse_handles: &HashMap<PathBuf, MouseStateHandle>,
     appearance: &Appearance,
 ) -> Vec<Box<dyn Element>> {
@@ -56,7 +56,7 @@ pub fn render_breadcrumb(
         // Separator (added after the first segment)
         if i > 0 {
             let sep_icon =
-                ConstrainedBox::new(Icon::ChevronRight.to_warpui_icon(sub_color.into()).finish())
+                ConstrainedBox::new(Icon::ChevronRight.to_warpui_icon(sub_color).finish())
                     .with_width(12.0)
                     .with_height(12.0)
                     .finish();
