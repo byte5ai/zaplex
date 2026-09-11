@@ -118,6 +118,7 @@ class CodebaseAuditVerificationAssignmentsTest(unittest.TestCase):
             "inventory_sha256": "b" * 64,
             "scope_sha256": "c" * 64,
             "assignment_sha256": "d" * 64,
+            "run_summary_sha256": "e" * 64,
             "target_sha": "1" * 40,
             "upstream_sha": "2" * 40,
             "merge_base_sha": "3" * 40,
@@ -259,6 +260,10 @@ class CodebaseAuditVerificationAssignmentsTest(unittest.TestCase):
         self.assertTrue(all(entry["finding"] in self.aggregate["findings"] for entry in entries))
         self.assertTrue(
             all(entry["provenance"] == assignments["provenance"] for entry in entries)
+        )
+        self.assertEqual(
+            assignments["provenance"]["run_summary_sha256"],
+            self.aggregate["run_summary_sha256"],
         )
         self.assertTrue(
             all(entry["issue_snapshot"] == self.snapshot for entry in entries)
@@ -402,6 +407,21 @@ class CodebaseAuditVerificationAssignmentsTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
             "bucket-2.bucket_assignment_sha256 must be a canonical SHA-256",
+            result.stderr,
+        )
+
+        aggregate = copy.deepcopy(self.aggregate)
+        aggregate["run_summary_sha256"] = "not-a-hash"
+        aggregate["aggregate_sha256"] = VERIFICATION.aggregate_document_hash(aggregate)
+        aggregate_path = self.write_aggregate("aggregate-invalid-run-summary.json", aggregate)
+        result = self.run_generator(
+            self.root / "invalid-run-summary-output.json",
+            aggregate_path=aggregate_path,
+            expected_aggregate=aggregate["aggregate_sha256"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "aggregate.run_summary_sha256 must be a canonical SHA-256",
             result.stderr,
         )
 

@@ -47,6 +47,7 @@ AGGREGATE_KEYS = {
     "inventory_sha256",
     "scope_sha256",
     "assignment_sha256",
+    "run_summary_sha256",
     "target_sha",
     "upstream_sha",
     "merge_base_sha",
@@ -97,6 +98,7 @@ PROVENANCE_KEYS = {
     "inventory_sha256",
     "scope_sha256",
     "assignment_sha256",
+    "run_summary_sha256",
     "aggregate_sha256",
     "target_sha",
     "upstream_sha",
@@ -284,6 +286,7 @@ def build_provenance(aggregate: dict[str, Any]) -> dict[str, Any]:
         "inventory_sha256": aggregate["inventory_sha256"],
         "scope_sha256": aggregate["scope_sha256"],
         "assignment_sha256": aggregate["assignment_sha256"],
+        "run_summary_sha256": aggregate["run_summary_sha256"],
         "aggregate_sha256": aggregate["aggregate_sha256"],
         "target_sha": aggregate["target_sha"],
         "upstream_sha": aggregate["upstream_sha"],
@@ -312,6 +315,7 @@ def validate_aggregate(
         "inventory_sha256",
         "scope_sha256",
         "assignment_sha256",
+        "run_summary_sha256",
         "aggregate_sha256",
     ):
         require_hash(aggregate.get(key), f"aggregate.{key}")
@@ -489,10 +493,14 @@ def load_inputs(
 
 
 def stable_finding_id(
-    aggregate_sha256: str, index: int, finding: dict[str, Any]
+    aggregate_sha256: str,
+    run_summary_sha256: str,
+    index: int,
+    finding: dict[str, Any],
 ) -> str:
     payload = {
         "aggregate_sha256": aggregate_sha256,
+        "run_summary_sha256": run_summary_sha256,
         "finding_index": index,
         "finding": finding,
     }
@@ -505,6 +513,7 @@ def verification_id(
     aggregate_sha256: str,
     issue_snapshot_sha256: str,
     github_repository: str,
+    run_summary_sha256: str,
 ) -> str:
     payload = {
         "finding_id": finding_id,
@@ -512,6 +521,7 @@ def verification_id(
         "aggregate_sha256": aggregate_sha256,
         "issue_snapshot_sha256": issue_snapshot_sha256,
         "github_repository": github_repository,
+        "run_summary_sha256": run_summary_sha256,
     }
     return f"verification-{sha256_bytes(canonical_json(payload))}"
 
@@ -525,7 +535,12 @@ def expected_entries(
     provenance = build_provenance(aggregate)
     entries = []
     for index, finding in enumerate(aggregate["findings"]):
-        finding_id = stable_finding_id(aggregate["aggregate_sha256"], index, finding)
+        finding_id = stable_finding_id(
+            aggregate["aggregate_sha256"],
+            aggregate["run_summary_sha256"],
+            index,
+            finding,
+        )
         for lens in LENSES:
             entries.append(
                 {
@@ -535,6 +550,7 @@ def expected_entries(
                         aggregate["aggregate_sha256"],
                         issue_snapshot_sha256,
                         github_repository,
+                        aggregate["run_summary_sha256"],
                     ),
                     "finding_id": finding_id,
                     "lens": lens,
@@ -673,6 +689,7 @@ def validate_verification_entry(
         aggregate["aggregate_sha256"],
         issue_snapshot_sha256,
         github_repository,
+        aggregate["run_summary_sha256"],
     )
     if entry["verification_id"] != expected_verification_id:
         raise VerificationAssignmentError("verification_id mismatch")
