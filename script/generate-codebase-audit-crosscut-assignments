@@ -56,7 +56,12 @@ OWNERSHIPS = {
     "upstream-modified-by-fork",
     "upstream-unmodified",
 }
-MATCHER_FLAGS = {"dotall", "ignore-case", "multiline"}
+MATCHER_FLAG_VALUES = {
+    "dotall": re.DOTALL,
+    "ignore-case": re.IGNORECASE,
+    "multiline": re.MULTILINE,
+}
+MATCHER_FLAGS = set(MATCHER_FLAG_VALUES)
 EVIDENCE_MANIFEST_KEYS = {
     "artifacts",
     "coverage",
@@ -145,6 +150,7 @@ TARGET_EVIDENCE_KEYS = {
     "kind",
     "mandatory_patterns",
     "match_range",
+    "match_span",
     "matcher_id",
     "mode",
     "object_id",
@@ -397,6 +403,15 @@ def require_range(value: Any, label: str) -> tuple[int, int]:
     return start, end
 
 
+def require_span(value: Any, label: str) -> tuple[int, int]:
+    value = require_exact_keys(value, {"end", "start"}, label)
+    start = require_plain_int(value["start"], f"{label}.start", minimum=0)
+    end = require_plain_int(value["end"], f"{label}.end", minimum=1)
+    if end <= start:
+        raise CrosscutAssignmentError(f"{label}.end must follow start")
+    return start, end
+
+
 def validate_definition(definition: Any, expected_id: str) -> None:
     definition = require_exact_keys(definition, DEFINITION_KEYS, f"definition {expected_id}")
     if definition["id"] != expected_id:
@@ -523,7 +538,8 @@ def definition_includes_path(definition: dict[str, Any], path: str) -> bool:
 def validate_evidence_entry(
     entry: Any,
     oid_length: int,
-    source_hashes: set[str],
+    source_text_by_hash: dict[str, str],
+    compiled_matchers: dict[str, dict[str, re.Pattern[str]]],
 ) -> dict[str, Any]:
     if not isinstance(entry, dict):
         raise CrosscutAssignmentError("evidence entry must be an object")
@@ -541,7 +557,7 @@ def validate_evidence_entry(
     if crosscut_id not in EXPECTED_CROSSCUT_IDS:
         raise CrosscutAssignmentError(f"unknown evidence crosscut: {crosscut_id}")
     source_sha256 = require_hash(entry["source_sha256"], "evidence source SHA-256")
-    if source_sha256 not in source_hashes:
+    if source_sha256 not in source_text_by_hash:
         raise CrosscutAssignmentError(f"evidence references missing source: {evidence_id}")
     if kind == "upstream-commit":
         if crosscut_id != "upstream-drift":
@@ -574,11 +590,40 @@ def validate_evidence_entry(
         require_nonempty_text(entry[key], f"evidence {key}")
     if kind == "matcher":
         require_nonempty_text(entry["matcher_id"], "evidence matcher ID")
-        require_range(entry["match_range"], "evidence match range")
+        match_start_line, match_end_line = require_range(
+            entry["match_range"], "evidence match range"
+        )
+        match_start, match_end = require_span(
+            entry["match_span"], "evidence match span"
+        )
+        source_text = source_text_by_hash[source_sha256]
+        if match_end > len(source_text):
+            raise CrosscutAssignmentError("evidence match span exceeds its source")
+        matcher = compiled_matchers.get(crosscut_id, {}).get(entry["matcher_id"])
+        if matcher is None:
+            raise CrosscutAssignmentError("evidence references unknown matcher")
+        if not any(
+            match.start() == match_start and match.end() == match_end
+            for match in matcher.finditer(source_text)
+        ):
+            raise CrosscutAssignmentError(
+                "evidence match span does not match its declared matcher"
+            )
+        range_start, _ = require_range(entry["range"], "evidence range")
+        if (
+            match_start_line != range_start + source_text.count("\n", 0, match_start)
+            or match_end_line
+            != range_start + source_text.count("\n", 0, match_end - 1)
+        ):
+            raise CrosscutAssignmentError("evidence match range does not match its span")
         if entry["mandatory_patterns"]:
             raise CrosscutAssignmentError("matcher evidence must not carry mandatory patterns")
     else:
-        if entry["matcher_id"] is not None or entry["match_range"] is not None:
+        if (
+            entry["matcher_id"] is not None
+            or entry["match_range"] is not None
+            or entry["match_span"] is not None
+        ):
             raise CrosscutAssignmentError("mandatory evidence must not carry matcher metadata")
         if not entry["mandatory_patterns"]:
             raise CrosscutAssignmentError("mandatory evidence must identify a selector")
@@ -631,6 +676,7 @@ def validate_evidence_document(
     if not isinstance(sources, list):
         raise CrosscutAssignmentError("evidence sources must be an array")
     source_hashes = []
+    source_text_by_hash = {}
     for source in sources:
         source = require_exact_keys(source, SOURCE_KEYS, "evidence source")
         source_sha256 = require_hash(source["sha256"], "source SHA-256")
@@ -639,6 +685,7 @@ def validate_evidence_document(
         if sha256_bytes(source["text"].encode("utf-8")) != source_sha256:
             raise CrosscutAssignmentError("source SHA-256 mismatch")
         source_hashes.append(source_sha256)
+        source_text_by_hash[source_sha256] = source["text"]
     if source_hashes != sorted(set(source_hashes)):
         raise CrosscutAssignmentError("sources are duplicate or not in stable order")
     source_hash_set = set(source_hashes)
@@ -654,6 +701,24 @@ def validate_evidence_document(
     if target_paths != sorted(set(target_paths)):
         raise CrosscutAssignmentError("target blobs are duplicate or not in stable order")
     definition_by_id = {definition["id"]: definition for definition in definitions}
+    compiled_matchers = {}
+    for definition in definitions:
+        compiled_matchers[definition["id"]] = {}
+        for matcher in definition["matchers"]:
+            flags = 0
+            for flag in matcher["flags"]:
+                flags |= MATCHER_FLAG_VALUES[flag]
+            try:
+                compiled = re.compile(matcher["pattern"], flags)
+            except re.error as error:
+                raise CrosscutAssignmentError(
+                    f"definition {definition['id']} matcher regex is invalid"
+                ) from error
+            if compiled.search("") is not None:
+                raise CrosscutAssignmentError(
+                    f"definition {definition['id']} matcher must not match empty text"
+                )
+            compiled_matchers[definition["id"]][matcher["id"]] = compiled
     blob_by_path = {record["path"]: record for record in validated_blobs}
     for blob in validated_blobs:
         expected_applicable = [
@@ -670,7 +735,10 @@ def validate_evidence_document(
     if not isinstance(evidence, list):
         raise CrosscutAssignmentError("evidence must be an array")
     validated_evidence = [
-        validate_evidence_entry(entry, oid_length, source_hash_set) for entry in evidence
+        validate_evidence_entry(
+            entry, oid_length, source_text_by_hash, compiled_matchers
+        )
+        for entry in evidence
     ]
     evidence_ids = [entry["evidence_id"] for entry in validated_evidence]
     if len(evidence_ids) != len(set(evidence_ids)):

@@ -120,6 +120,10 @@ class CodebaseAuditCrosscutAssignmentsTest(unittest.TestCase):
                 "kind": "matcher",
                 "mandatory_patterns": [],
                 "match_range": {"end": 1, "start": 1},
+                "match_span": {
+                    "end": source["text"].index("unsafe") + len("unsafe"),
+                    "start": source["text"].index("unsafe"),
+                },
                 "matcher_id": "site",
                 "mode": "100644",
                 "object_id": target_blobs[index % 2]["object_id"],
@@ -139,6 +143,7 @@ class CodebaseAuditCrosscutAssignmentsTest(unittest.TestCase):
             "kind": "mandatory-range",
             "mandatory_patterns": ["src/a.rs"],
             "match_range": None,
+            "match_span": None,
             "matcher_id": None,
             "mode": "100644",
             "object_id": target_blobs[0]["object_id"],
@@ -539,6 +544,47 @@ class CodebaseAuditCrosscutAssignmentsTest(unittest.TestCase):
         result = self.run_generator(self.root / "missing-source.json", directory=directory)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing source", result.stderr)
+
+        span_tamper = copy.deepcopy(self.evidence)
+        matcher = next(
+            entry for entry in span_tamper["evidence"] if entry["kind"] == "matcher"
+        )
+        source_text = next(
+            source["text"]
+            for source in span_tamper["sources"]
+            if source["sha256"] == matcher["source_sha256"]
+        )
+        matcher["match_span"]["end"] = len(source_text) + 1
+        payload = dict(matcher)
+        payload.pop("evidence_id")
+        matcher["evidence_id"] = ASSIGNMENTS.sha256_bytes(
+            ASSIGNMENTS.canonical_json(payload)
+        )
+        directory = self.root / "span-tamper"
+        self.write_contract(copy.deepcopy(self.definitions), span_tamper, directory)
+        result = self.run_generator(
+            self.root / "span-tamper.json", directory=directory
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("match span exceeds", result.stderr)
+
+        matcher_tamper = copy.deepcopy(self.evidence)
+        matcher = next(
+            entry for entry in matcher_tamper["evidence"] if entry["kind"] == "matcher"
+        )
+        matcher["match_span"]["start"] += 1
+        payload = dict(matcher)
+        payload.pop("evidence_id")
+        matcher["evidence_id"] = ASSIGNMENTS.sha256_bytes(
+            ASSIGNMENTS.canonical_json(payload)
+        )
+        directory = self.root / "matcher-tamper"
+        self.write_contract(copy.deepcopy(self.definitions), matcher_tamper, directory)
+        result = self.run_generator(
+            self.root / "matcher-tamper.json", directory=directory
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("declared matcher", result.stderr)
 
     def test_rejects_assignment_tampering_and_duplicate_crosscuts(self):
         contract = self.load_contract()
