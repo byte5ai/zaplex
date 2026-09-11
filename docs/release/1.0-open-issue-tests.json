@@ -328,7 +328,7 @@
         "connection_server_rows_expose_favorite_connect_disconnect_and_management_actions",
         "session_node_dispatches_shared_session_open_plan",
         "primary_sidebar_keeps_cockpit_and_connections_separate",
-        "metric_column_width_does_not_change_with_label_length",
+        "style_has_no_unused_session_metric_width_contract",
         "compact_connection_secondary_action_survives_rerender_without_triggering_primary_row_click"
       ]
     },
