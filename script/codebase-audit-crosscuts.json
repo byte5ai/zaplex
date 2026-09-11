@@ -421,6 +421,10 @@
         {
           "minimum_matches": 1,
           "pattern": "app/src/workspace/view.rs"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/terminal/view/ssh_file_upload.rs"
         }
       ],
       "matchers": [
@@ -455,6 +459,7 @@
             "app/src/cockpit/**",
             "app/src/ssh_manager/**",
             "app/src/ai/subscription_agent/**",
+            "app/src/terminal/view/ssh_file_upload.rs",
             "app/src/workspace/view.rs"
           ]
         },

@@ -430,6 +430,7 @@ class CodebaseAuditCrosscutEvidenceTest(unittest.TestCase):
             "ssh-bootstrap-injection": {
                 "app/src/ai/subscription_agent/**",
                 "app/src/ssh_manager/**",
+                "app/src/terminal/view/ssh_file_upload.rs",
                 "app/src/workspace/view.rs",
             },
         }
