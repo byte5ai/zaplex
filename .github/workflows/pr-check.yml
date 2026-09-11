@@ -296,6 +296,8 @@ jobs:
           breadcrumb_click_survives_rerender_between_mouse_down_and_up
           absolute_breadcrumb_click_lists_exact_ancestor
           absolute_root_breadcrumb_click_lists_root
+          direct_skill_paths_reject_forbidden_components_for_qualified_and_unqualified_specs
+          direct_skill_path_rejects_symlink_outside_root_before_parsing
           ui_copy_has_no_space_before_ellipsis
           spaced_ellipsis_detection_covers_catalog_whitespace_and_punctuation
           spaced_ellipsis_detection_ignores_comments_and_leading_ellipses
