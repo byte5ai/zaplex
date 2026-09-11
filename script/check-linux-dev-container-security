@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+
+"""Guard the credential-free, docker-exec-only Linux development workflow."""
+
+from pathlib import Path
+import re
+import sys
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DOCKERFILE = REPO_ROOT / "docker" / "linux-dev" / "Dockerfile"
+README = REPO_ROOT / "docker" / "linux-dev" / "README.md"
+
+
+def fail(message: str) -> None:
+    print(f"linux-dev container security: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+readme = README.read_text(encoding="utf-8")
+
+for pattern, message in (
+    (r"\bopenssh-server\b", "OpenSSH server package returned"),
+    (r"\bsshd\b", "sshd returned"),
+    (r"(?m)^\s*EXPOSE\s+22\b", "SSH port is exposed"),
+    (r"\bchpasswd\b", "password provisioning returned"),
+    (r"(?m)^\s*CMD\s*\[[^\n]*(?:ssh|systemd)", "network login service is the default command"),
+):
+    if re.search(pattern, dockerfile, re.IGNORECASE):
+        fail(message)
+
+for required, message in (
+    ("passwd --lock dev", "development account must stay password-locked"),
+    ('USER dev', "container must default to the unprivileged development account"),
+    ('CMD ["sleep", "infinity"]', "container must use the docker-exec keepalive command"),
+    ("docker exec", "README must document docker exec as the entry point"),
+):
+    if required not in dockerfile and required not in readme:
+        fail(message)
+
+if re.search(r"(?m)^\s*ssh\s+dev@", readme):
+    fail("README documents an SSH login")
+if re.search(r"(?m)(?:-p|--publish)\s+[^\n]*\b22:22\b", readme):
+    fail("README publishes a stable SSH port")
+if re.search(r"(?m)(?:--volume|-v)\s+[^\n]*(?:\.ssh|\.config/gcloud)", readme):
+    fail("README mounts durable host credentials")
+
+print("linux-dev container security: ok")

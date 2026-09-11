@@ -77,6 +77,14 @@ jobs:
         run: script/dependency-security-baseline-tests
         shell: bash
 
+      - name: Verify Docker supply-chain policy
+        run: script/check-docker-supply-chain --self-test
+        shell: bash
+
+      - name: Verify Linux development container security
+        run: script/check-linux-dev-container-security
+        shell: bash
+
       - name: Validate release tag classification
         run: script/classify-release-tag-tests
         shell: bash
