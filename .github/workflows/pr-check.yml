@@ -290,6 +290,12 @@ jobs:
           confirm_payload_routes_remote_launch_to_node_id
           confirm_payload_none_when_nothing_installed
           explicit_overwrite_rejects_change_after_revalidation_and_restores_newer_target
+          absolute_path_segments_keep_absolute_navigation_targets
+          relative_path_segments_keep_relative_navigation_targets
+          root_path_has_exactly_one_root_segment
+          breadcrumb_click_survives_rerender_between_mouse_down_and_up
+          absolute_breadcrumb_click_lists_exact_ancestor
+          absolute_root_breadcrumb_click_lists_root
           ui_copy_has_no_space_before_ellipsis
           spaced_ellipsis_detection_covers_catalog_whitespace_and_punctuation
           spaced_ellipsis_detection_ignores_comments_and_leading_ellipses
