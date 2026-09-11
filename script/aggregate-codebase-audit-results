@@ -28,6 +28,7 @@ OWNERSHIPS = {
 }
 SEVERITIES = {"P0", "P1", "P2", "P3"}
 CONFIDENCES = {"low", "medium", "high"}
+REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max", "ultra"}
 ASSIGNMENT_ROOT_KEYS = {
     "schema_version",
     "generator_version",
@@ -91,6 +92,31 @@ FINDING_KEYS = {
     "scenario",
     "fix",
     "confidence",
+}
+RUN_SUMMARY_KEYS = {
+    "schema_version",
+    "runner_version",
+    "target_sha",
+    "upstream_sha",
+    "merge_base_sha",
+    "manifest_sha256",
+    "inventory_sha256",
+    "scope_sha256",
+    "assignment_sha256",
+    "reasoning_effort",
+    "bucket_count",
+    "buckets",
+    "complete",
+}
+RUN_BUCKET_SUMMARY_KEYS = {
+    "id",
+    "prompt_sha256",
+    "events_sha256",
+    "stderr_sha256",
+    "final_message_sha256",
+    "response_sha256",
+    "finding_count",
+    "reviewed_range_count",
 }
 
 
@@ -236,9 +262,13 @@ def reject_duplicate_or_overlapping_ranges(
 def validate_assignments(assignments: dict[str, Any]) -> dict[str, dict[str, Any]]:
     if set(assignments) != ASSIGNMENT_ROOT_KEYS:
         raise AggregationError("assignment document shape is invalid")
-    if assignments.get("schema_version") != SCHEMA_VERSION:
+    require_plain_int(assignments.get("schema_version"), "assignment.schema_version", 1)
+    if assignments["schema_version"] != SCHEMA_VERSION:
         raise AggregationError(f"assignment schema_version must be {SCHEMA_VERSION}")
-    if assignments.get("generator_version") != 1:
+    require_plain_int(
+        assignments.get("generator_version"), "assignment.generator_version", 1
+    )
+    if assignments["generator_version"] != 1:
         raise AggregationError("assignment generator_version must be 1")
     for key in ("manifest_sha256", "inventory_sha256", "scope_sha256"):
         require_hash(assignments.get(key), f"assignment.{key}")
@@ -253,7 +283,8 @@ def validate_assignments(assignments: dict[str, Any]) -> dict[str, dict[str, Any
     for key in ("target_sha", "upstream_sha", "merge_base_sha"):
         require_object_id(assignments.get(key), f"assignment.{key}", object_id_length)
 
-    if assignments.get("bucket_count") != BUCKET_COUNT:
+    require_plain_int(assignments.get("bucket_count"), "assignment.bucket_count", 1)
+    if assignments["bucket_count"] != BUCKET_COUNT:
         raise AggregationError(f"assignment bucket_count must be {BUCKET_COUNT}")
     buckets = assignments.get("buckets")
     if not isinstance(buckets, list) or len(buckets) != BUCKET_COUNT:
@@ -324,6 +355,86 @@ def validate_assignments(assignments: dict[str, Any]) -> dict[str, dict[str, Any
     if assignment_sha256 != assignment_document_hash(assignments):
         raise AggregationError("assignment document SHA-256 mismatch")
     return {bucket["id"]: bucket for bucket in buckets}
+
+
+def validate_run_summary(
+    run_summary: dict[str, Any],
+    assignments: dict[str, Any],
+    assignment_buckets: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    if set(run_summary) != RUN_SUMMARY_KEYS:
+        raise AggregationError("run summary shape is invalid")
+    require_plain_int(run_summary.get("schema_version"), "run summary.schema_version", 1)
+    if run_summary["schema_version"] != SCHEMA_VERSION:
+        raise AggregationError(f"run summary schema_version must be {SCHEMA_VERSION}")
+    require_plain_int(run_summary.get("runner_version"), "run summary.runner_version", 1)
+    if run_summary["runner_version"] != 1:
+        raise AggregationError("run summary runner_version must be 1")
+    expected_provenance = {
+        key: assignments[key]
+        for key in (
+            "target_sha",
+            "upstream_sha",
+            "merge_base_sha",
+            "manifest_sha256",
+            "inventory_sha256",
+            "scope_sha256",
+            "assignment_sha256",
+        )
+    }
+    for key, expected in expected_provenance.items():
+        if run_summary.get(key) != expected:
+            raise AggregationError(
+                f"run summary.{key} does not match assignment provenance"
+            )
+    if run_summary.get("reasoning_effort") not in REASONING_EFFORTS:
+        raise AggregationError("run summary.reasoning_effort is invalid")
+    require_plain_int(run_summary.get("bucket_count"), "run summary.bucket_count", 1)
+    if run_summary["bucket_count"] != BUCKET_COUNT:
+        raise AggregationError(f"run summary bucket_count must be {BUCKET_COUNT}")
+    if run_summary.get("complete") is not True:
+        raise AggregationError("run summary complete must be true")
+
+    buckets = run_summary.get("buckets")
+    if not isinstance(buckets, list) or len(buckets) != BUCKET_COUNT:
+        raise AggregationError(
+            f"run summary must contain exactly {BUCKET_COUNT} bucket summaries"
+        )
+    expected_ids = [f"bucket-{index}" for index in range(1, BUCKET_COUNT + 1)]
+    if any(
+        not isinstance(bucket, dict) or set(bucket) != RUN_BUCKET_SUMMARY_KEYS
+        for bucket in buckets
+    ):
+        raise AggregationError("run bucket summary shape is invalid")
+    if [bucket.get("id") for bucket in buckets] != expected_ids:
+        raise AggregationError("run bucket summary IDs are invalid")
+
+    validated = {}
+    for bucket in buckets:
+        bucket_id = bucket["id"]
+        for key in (
+            "prompt_sha256",
+            "events_sha256",
+            "stderr_sha256",
+            "final_message_sha256",
+            "response_sha256",
+        ):
+            require_hash(bucket.get(key), f"run summary.{bucket_id}.{key}")
+        require_plain_int(
+            bucket.get("finding_count"),
+            f"run summary.{bucket_id}.finding_count",
+        )
+        reviewed_range_count = require_plain_int(
+            bucket.get("reviewed_range_count"),
+            f"run summary.{bucket_id}.reviewed_range_count",
+        )
+        expected_range_count = len(assignment_buckets[bucket_id]["entries"])
+        if reviewed_range_count != expected_range_count:
+            raise AggregationError(
+                f"run summary.{bucket_id}.reviewed_range_count mismatch"
+            )
+        validated[bucket_id] = bucket
+    return validated
 
 
 def load_results_directory(directory: Path) -> dict[str, tuple[dict[str, Any], bytes]]:
@@ -435,12 +546,17 @@ def validate_result(
     result_raw: bytes,
     bucket_id: str,
     bucket: dict[str, Any],
+    run_bucket: dict[str, Any],
     assignments: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     label = f"{bucket_id}.json"
+    result_sha256 = sha256_bytes(result_raw)
+    if result_sha256 != run_bucket["response_sha256"]:
+        raise AggregationError(f"{label} SHA-256 does not match run summary")
     if set(result) != RESULT_KEYS:
         raise AggregationError(f"{label} shape is invalid")
-    if result.get("schema_version") != SCHEMA_VERSION:
+    require_plain_int(result.get("schema_version"), f"{label}.schema_version", 1)
+    if result["schema_version"] != SCHEMA_VERSION:
         raise AggregationError(f"{label}.schema_version must be {SCHEMA_VERSION}")
     expected_metadata = {
         "bucket_id": bucket_id,
@@ -462,12 +578,16 @@ def validate_result(
         assignments,
         object_id_length,
     )
+    if len(reviewed_keys) != run_bucket["reviewed_range_count"]:
+        raise AggregationError(f"{label} reviewed-range count does not match run summary")
     findings = validate_findings(result.get("findings"), reviewed_keys, label)
+    if len(findings) != run_bucket["finding_count"]:
+        raise AggregationError(f"{label} finding count does not match run summary")
     summary = {
         "bucket_assignment_sha256": bucket["assignment_sha256"],
         "bucket_id": bucket_id,
         "finding_count": len(findings),
-        "result_sha256": sha256_bytes(result_raw),
+        "result_sha256": result_sha256,
     }
     return findings, summary
 
@@ -490,6 +610,8 @@ def finding_sort_key(finding: dict[str, Any]) -> tuple[Any, ...]:
 def build_aggregate(
     assignments: dict[str, Any],
     buckets: dict[str, dict[str, Any]],
+    run_buckets: dict[str, dict[str, Any]],
+    run_summary_raw: bytes,
     results: dict[str, tuple[dict[str, Any], bytes]],
 ) -> dict[str, Any]:
     findings = []
@@ -500,7 +622,12 @@ def build_aggregate(
         bucket_id = f"bucket-{index}"
         result, raw = results[bucket_id]
         bucket_findings, summary = validate_result(
-            result, raw, bucket_id, buckets[bucket_id], assignments
+            result,
+            raw,
+            bucket_id,
+            buckets[bucket_id],
+            run_buckets[bucket_id],
+            assignments,
         )
         findings.extend({"bucket_id": bucket_id, **finding} for finding in bucket_findings)
         bucket_results.append(summary)
@@ -517,6 +644,7 @@ def build_aggregate(
         "inventory_sha256": assignments["inventory_sha256"],
         "scope_sha256": assignments["scope_sha256"],
         "assignment_sha256": assignments["assignment_sha256"],
+        "run_summary_sha256": sha256_bytes(run_summary_raw),
         "target_sha": assignments["target_sha"],
         "upstream_sha": assignments["upstream_sha"],
         "merge_base_sha": assignments["merge_base_sha"],
@@ -569,6 +697,7 @@ def write_output(output: Path, aggregate: dict[str, Any]) -> None:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assignments", type=Path, required=True)
+    parser.add_argument("--run-summary", type=Path, required=True)
     parser.add_argument("--results-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args(argv)
@@ -579,8 +708,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         assignments, _ = read_canonical_json(args.assignments, "assignments")
         buckets = validate_assignments(assignments)
+        run_summary, run_summary_raw = read_canonical_json(
+            args.run_summary, "run summary"
+        )
+        run_buckets = validate_run_summary(run_summary, assignments, buckets)
         results = load_results_directory(args.results_dir)
-        aggregate = build_aggregate(assignments, buckets, results)
+        aggregate = build_aggregate(
+            assignments, buckets, run_buckets, run_summary_raw, results
+        )
         write_output(args.output, aggregate)
     except AggregationError as error:
         print(f"codebase audit aggregation: {error}", file=sys.stderr)

@@ -40,6 +40,9 @@ class CodebaseAuditAggregatorTest(unittest.TestCase):
         self.write_json(self.assignments_path, self.assignments)
         self.results = self.build_results(self.assignments)
         self.write_results(self.results)
+        self.run_summary_path = self.root / "run.json"
+        self.run_summary = self.build_run_summary(self.results)
+        self.write_json(self.run_summary_path, self.run_summary)
 
     def oid(self, value):
         return hashlib.sha1(value.encode("utf-8")).hexdigest()
@@ -141,6 +144,41 @@ class CodebaseAuditAggregatorTest(unittest.TestCase):
             }
         return results
 
+    def build_run_summary(self, results):
+        return {
+            "schema_version": 1,
+            "runner_version": 1,
+            "target_sha": self.assignments["target_sha"],
+            "upstream_sha": self.assignments["upstream_sha"],
+            "merge_base_sha": self.assignments["merge_base_sha"],
+            "manifest_sha256": self.assignments["manifest_sha256"],
+            "inventory_sha256": self.assignments["inventory_sha256"],
+            "scope_sha256": self.assignments["scope_sha256"],
+            "assignment_sha256": self.assignments["assignment_sha256"],
+            "reasoning_effort": "high",
+            "bucket_count": 3,
+            "buckets": [
+                {
+                    "id": bucket_id,
+                    "prompt_sha256": str(index) * 64,
+                    "events_sha256": str(index + 3) * 64,
+                    "stderr_sha256": str(index + 6) * 64,
+                    "final_message_sha256": chr(ord("a") + index - 1) * 64,
+                    "response_sha256": AGGREGATOR.sha256_bytes(
+                        AGGREGATOR.canonical_json(results[bucket_id])
+                    ),
+                    "finding_count": len(results[bucket_id]["findings"]),
+                    "reviewed_range_count": len(
+                        self.assignments["buckets"][index - 1]["entries"]
+                    ),
+                }
+                for index, bucket_id in enumerate(
+                    ("bucket-1", "bucket-2", "bucket-3"), start=1
+                )
+            ],
+            "complete": True,
+        }
+
     def write_json(self, path, value):
         path.write_bytes(AGGREGATOR.canonical_json(value))
 
@@ -148,13 +186,21 @@ class CodebaseAuditAggregatorTest(unittest.TestCase):
         for bucket_id, result in results.items():
             self.write_json(self.results_dir / f"{bucket_id}.json", result)
 
-    def run_aggregator(self, output, assignments=None, results_dir=None):
+    def run_aggregator(
+        self,
+        output,
+        assignments=None,
+        run_summary=None,
+        results_dir=None,
+    ):
         return subprocess.run(
             [
                 sys.executable,
                 str(SCRIPT),
                 "--assignments",
                 str(self.assignments_path if assignments is None else assignments),
+                "--run-summary",
+                str(self.run_summary_path if run_summary is None else run_summary),
                 "--results-dir",
                 str(self.results_dir if results_dir is None else results_dir),
                 "--output",
@@ -166,8 +212,10 @@ class CodebaseAuditAggregatorTest(unittest.TestCase):
             check=False,
         )
 
-    def assert_result_rejected(self, results, message):
+    def assert_result_rejected(self, results, message, bind_run_summary=True):
         self.write_results(results)
+        summary = self.build_run_summary(results) if bind_run_summary else self.run_summary
+        self.write_json(self.run_summary_path, summary)
         output = self.root / "rejected.json"
         result = self.run_aggregator(output)
         self.assertNotEqual(result.returncode, 0)
@@ -197,6 +245,10 @@ class CodebaseAuditAggregatorTest(unittest.TestCase):
         self.assertEqual(
             aggregate["aggregate_sha256"],
             AGGREGATOR.aggregate_document_hash(aggregate),
+        )
+        self.assertEqual(
+            aggregate["run_summary_sha256"],
+            AGGREGATOR.sha256_bytes(self.run_summary_path.read_bytes()),
         )
         self.assertEqual(
             [finding["path"] for finding in aggregate["findings"]],
@@ -316,6 +368,113 @@ class CodebaseAuditAggregatorTest(unittest.TestCase):
                 results["bucket-2"][key] = replacement
                 self.assert_result_rejected(results, f"bucket-2.json.{key}")
 
+    def test_rejects_changed_or_deleted_findings_not_bound_by_run_summary(self):
+        changed = copy.deepcopy(self.results)
+        changed["bucket-1"]["findings"][0]["fix"] = "Hide the finding."
+        self.assert_result_rejected(
+            changed,
+            "bucket-1.json SHA-256 does not match run summary",
+            bind_run_summary=False,
+        )
+
+        deleted = copy.deepcopy(self.results)
+        deleted["bucket-1"]["findings"] = []
+        self.assert_result_rejected(
+            deleted,
+            "bucket-1.json SHA-256 does not match run summary",
+            bind_run_summary=False,
+        )
+
+    def test_requires_canonical_complete_and_current_run_summary(self):
+        missing = self.root / "missing-run.json"
+        result = self.run_aggregator(
+            self.root / "missing-run-output.json", run_summary=missing
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot read run summary", result.stderr)
+
+        noncanonical = self.root / "noncanonical-run.json"
+        noncanonical.write_text(json.dumps(self.run_summary), encoding="utf-8")
+        result = self.run_aggregator(
+            self.root / "noncanonical-run-output.json", run_summary=noncanonical
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("run summary is not canonical JSON", result.stderr)
+
+        stale = copy.deepcopy(self.run_summary)
+        stale["assignment_sha256"] = "0" * 64
+        stale_path = self.root / "stale-run.json"
+        self.write_json(stale_path, stale)
+        result = self.run_aggregator(
+            self.root / "stale-run-output.json", run_summary=stale_path
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "run summary.assignment_sha256 does not match assignment provenance",
+            result.stderr,
+        )
+
+        incomplete = copy.deepcopy(self.run_summary)
+        incomplete["complete"] = False
+        incomplete_path = self.root / "incomplete-run.json"
+        self.write_json(incomplete_path, incomplete)
+        result = self.run_aggregator(
+            self.root / "incomplete-run-output.json", run_summary=incomplete_path
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("run summary complete must be true", result.stderr)
+
+    def test_rejects_run_summary_hash_count_and_bucket_mismatches(self):
+        cases = (
+            (
+                "response-hash",
+                lambda summary: summary["buckets"][0].update(
+                    response_sha256="0" * 64
+                ),
+                "bucket-1.json SHA-256 does not match run summary",
+            ),
+            (
+                "finding-count",
+                lambda summary: summary["buckets"][0].update(finding_count=2),
+                "bucket-1.json finding count does not match run summary",
+            ),
+            (
+                "range-count",
+                lambda summary: summary["buckets"][0].update(
+                    reviewed_range_count=2
+                ),
+                "run summary.bucket-1.reviewed_range_count mismatch",
+            ),
+            (
+                "invalid-hash",
+                lambda summary: summary["buckets"][0].update(
+                    prompt_sha256="not-a-hash"
+                ),
+                "run summary.bucket-1.prompt_sha256 must be a canonical SHA-256",
+            ),
+            (
+                "bucket-count",
+                lambda summary: summary.update(bucket_count=2),
+                "run summary bucket_count must be 3",
+            ),
+            (
+                "missing-bucket",
+                lambda summary: summary["buckets"].pop(),
+                "run summary must contain exactly 3 bucket summaries",
+            ),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                summary = copy.deepcopy(self.run_summary)
+                mutate(summary)
+                path = self.root / f"run-{name}.json"
+                self.write_json(path, summary)
+                result = self.run_aggregator(
+                    self.root / f"run-{name}-output.json", run_summary=path
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
     def test_rejects_partial_duplicate_overlap_and_reordered_reviews(self):
         partial = copy.deepcopy(self.results)
         partial["bucket-1"]["reviewed_ranges"] = []
@@ -396,8 +555,18 @@ class CodebaseAuditAggregatorTest(unittest.TestCase):
 
     def test_atomic_publish_race_and_existing_target_never_overwrite(self):
         buckets = AGGREGATOR.validate_assignments(self.assignments)
+        run_summary_raw = self.run_summary_path.read_bytes()
+        run_buckets = AGGREGATOR.validate_run_summary(
+            self.run_summary, self.assignments, buckets
+        )
         loaded = AGGREGATOR.load_results_directory(self.results_dir)
-        aggregate = AGGREGATOR.build_aggregate(self.assignments, buckets, loaded)
+        aggregate = AGGREGATOR.build_aggregate(
+            self.assignments,
+            buckets,
+            run_buckets,
+            run_summary_raw,
+            loaded,
+        )
         output = self.root / "race.json"
         barrier = threading.Barrier(2)
         original_link = os.link
