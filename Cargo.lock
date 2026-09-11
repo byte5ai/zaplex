@@ -14585,7 +14585,6 @@ dependencies = [
  "pathfinder_color",
  "pathfinder_geometry",
  "rand 0.8.6",
- "resvg",
  "rust-embed 8.11.0",
  "serde",
  "sum_tree",
