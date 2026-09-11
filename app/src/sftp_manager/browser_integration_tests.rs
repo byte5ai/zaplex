@@ -28,6 +28,7 @@ use warpui::{
 use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusState};
 use crate::pane_group::pane::PaneId;
 use crate::pane_group::BackingView;
+use crate::remote_server::manager::RemoteServerManager;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 
@@ -78,6 +79,7 @@ fn initialize_app(app: &mut warpui::App) {
     app.add_singleton_model(|_| ToastStack);
     app.add_singleton_model(|_| super::fm_registry::FileManagerRegistry::new());
     app.add_singleton_model(|_| super::transfer_queue::TransferQueue::new());
+    app.add_singleton_model(RemoteServerManager::new);
 
     let temp_db = std::env::temp_dir().join("warp_sftp_integration_test.sqlite");
     let _ = warp_ssh_manager::set_database_path(temp_db);
