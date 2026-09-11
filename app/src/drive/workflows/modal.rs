@@ -1537,7 +1537,7 @@ impl WorkflowModal {
         .finish()
     }
 
-    fn render_footer(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    fn render_footer(&self, appearance: &Appearance) -> Box<dyn Element> {
         let default_button_styles = UiComponentStyles {
             font_size: Some(BUTTON_FONT_SIZE),
             font_family_id: Some(appearance.ui_font_family()),
@@ -1554,11 +1554,6 @@ impl WorkflowModal {
             padding: Some(Coords::uniform(BUTTON_PADDING)),
             background: Some(appearance.theme().surface_1().into()),
             ..Default::default()
-        };
-
-        let hovered_and_clicked_styles = UiComponentStyles {
-            background: Some(appearance.theme().surface_3().into()),
-            ..default_button_styles
         };
 
         let primary_button_styles = UiComponentStyles {
@@ -1739,7 +1734,7 @@ impl View for WorkflowModal {
                     .with_child(
                         Shrinkable::new(1., self.render_arguments_editors(appearance)).finish(),
                     )
-                    .with_child(self.render_footer(appearance, app))
+                    .with_child(self.render_footer(appearance))
                     .finish(),
             )
             .with_max_width(MODAL_WIDTH)

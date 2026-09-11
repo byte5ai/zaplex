@@ -362,13 +362,12 @@ fn subscription_api_error(error: anyhow::Error) -> AIApiError {
     AIApiError::Other(classify_subscription_error(error))
 }
 
-async fn discover_routed_target(
+async fn resolve_runtime_candidates(
     candidates: RuntimeCandidates,
     preferences: &RoutePreferences,
     registry: &SubscriptionSessionRegistry,
     conversation_id: &str,
-    working_directory: &std::path::Path,
-) -> Result<SubscriptionTarget> {
+) -> Result<Vec<RuntimeCandidate>> {
     let candidates = match candidates.resolve(preferences.agent).await {
         Ok(candidates) => candidates,
         Err(error) => {
@@ -386,6 +385,16 @@ async fn discover_routed_target(
         );
         bail!("Install Claude Code or Codex and sign in with a subscription account");
     }
+    Ok(candidates)
+}
+
+async fn discover_routed_target(
+    candidates: &[RuntimeCandidate],
+    preferences: &RoutePreferences,
+    registry: &SubscriptionSessionRegistry,
+    conversation_id: &str,
+    working_directory: &std::path::Path,
+) -> Result<SubscriptionTarget> {
     let mut attempted_agents: Vec<_> = candidates
         .iter()
         .map(|candidate| candidate.installation.agent)
@@ -400,7 +409,7 @@ async fn discover_routed_target(
     for candidate in candidates {
         let agent = candidate.installation.agent;
         let account_id = candidate.installation.account.id.clone();
-        match discover_candidate(candidate, working_directory).await {
+        match discover_candidate(candidate.clone(), working_directory).await {
             Ok(capability) => capabilities.push(capability),
             Err(error) => discovery_errors.push((agent, account_id, error.to_string())),
         }
@@ -523,8 +532,10 @@ pub(crate) async fn preflight_subscription_target(preflight: SubscriptionPreflig
         conversation_id,
         working_directory,
     } = preflight;
+    let candidates =
+        resolve_runtime_candidates(candidates, &preferences, &registry, &conversation_id).await?;
     let target = discover_routed_target(
-        candidates,
+        &candidates,
         &preferences,
         &registry,
         &conversation_id,
@@ -551,7 +562,10 @@ pub(crate) async fn generate_subscription_output(
         prompt,
         working_directory,
     } = dispatch;
-    let candidate_locations = candidates.clone();
+    let candidates =
+        resolve_runtime_candidates(candidates, &preferences, &registry, &conversation_id)
+            .await
+            .map_err(api::ConvertToAPITypeError::Other)?;
     let preflight_target = registry
         .lifecycle(&conversation_id)
         .filter(AgentLifecycle::accepts_prompt)
@@ -560,7 +574,7 @@ pub(crate) async fn generate_subscription_output(
     let target = match preflight_target {
         Some(target) => target,
         None => discover_routed_target(
-            candidates,
+            &candidates,
             &preferences,
             &registry,
             &conversation_id,
@@ -574,7 +588,7 @@ pub(crate) async fn generate_subscription_output(
     let resume = registry
         .get(&conversation_id)
         .and_then(|stored| same_resume_target(&stored.target, &target).then_some(stored.session));
-    let location = location_for_target(&target, &candidate_locations)
+    let location = location_for_target(&target, &candidates)
         .context("selected subscription target lost its process location")
         .map_err(api::ConvertToAPITypeError::Other)?;
     let mut session = match with_timeout(

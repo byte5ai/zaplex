@@ -145,7 +145,7 @@ use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentAttachment, AIAgentCitation,
     AIAgentContext, AIAgentOutputMessage, AIAgentOutputMessageType, CreateDocumentsRequest,
     CreateDocumentsResult, DocumentToCreate, EditDocumentsResult, ProgrammingLanguage,
-    RenderableAIError, RequestCommandOutputResult, SuggestedLoggingId, SummarizationType,
+    RequestCommandOutputResult, SuggestedLoggingId, SummarizationType,
 };
 use crate::ai::blocklist::inline_action::code_diff_view;
 use crate::ai::blocklist::inline_action::requested_command::{
@@ -1273,7 +1273,7 @@ impl AIBlock {
             AIBlockOutputStatus::Complete { .. } => {
                 me.finish(FinishReason::Complete, ctx);
             }
-            AIBlockOutputStatus::Failed { error, .. } => {
+            AIBlockOutputStatus::Failed { .. } => {
                 me.finish(FinishReason::Error, ctx);
             }
             AIBlockOutputStatus::Cancelled { .. } => {
@@ -1635,7 +1635,7 @@ impl AIBlock {
                     ctx
                 );
             }
-            AIBlockOutputStatus::Failed { error, .. } => {
+            AIBlockOutputStatus::Failed { .. } => {
                 let server_output_id = self.model.server_output_id(ctx);
                 send_telemetry_from_ctx!(
                     TelemetryEvent::AgentModeCreatedAIBlock {

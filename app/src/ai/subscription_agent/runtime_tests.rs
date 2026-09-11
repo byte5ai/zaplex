@@ -1,8 +1,8 @@
 use super::{
     discovery_failure_lifecycle, legacy_ssh_candidates, remote_candidates_for_resolved_ssh,
-    same_resume_target, AccountIdentity, AgentLifecycle, ExplicitRuntimeHost, HostIdentity,
-    InstallationIdentity, ProcessLocation, SubscriptionAgent, SubscriptionLocationPreference,
-    SubscriptionSessionRegistry, SubscriptionTarget,
+    remote_candidates_for_ssh, same_resume_target, AccountIdentity, AgentLifecycle,
+    ExplicitRuntimeHost, HostIdentity, InstallationIdentity, ProcessLocation, SubscriptionAgent,
+    SubscriptionLocationPreference, SubscriptionSessionRegistry, SubscriptionTarget,
 };
 use crate::ai::subscription_agent::{ModelCapability, SessionIdentity};
 use crate::remote_server::proto::{AgentAccountInfo, AgentAccountInventory};

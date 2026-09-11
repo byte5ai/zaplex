@@ -6,9 +6,6 @@ use crate::ai::subscription_agent::{
 use std::os::unix::fs::PermissionsExt as _;
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
-#[cfg(target_os = "linux")]
-use warpui::r#async::FutureExt as _;
-
 fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
     SubscriptionTarget {
         installation: InstallationIdentity {
@@ -95,10 +92,13 @@ fn claude_discovery_scrubs_all_provider_environment_variables() {
     );
     assert_eq!(
         launch.environment,
-        vec![(
-            CLAUDE_PROVIDER_MANAGED_BY_HOST.0,
-            CLAUDE_PROVIDER_MANAGED_BY_HOST.1.to_string(),
-        )]
+        vec![
+            (
+                CLAUDE_PROVIDER_MANAGED_BY_HOST.0,
+                CLAUDE_PROVIDER_MANAGED_BY_HOST.1.to_string(),
+            ),
+            ("CLAUDE_CONFIG_DIR", "/accounts/with space".to_string()),
+        ]
     );
 }
 

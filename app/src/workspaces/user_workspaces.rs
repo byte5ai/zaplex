@@ -16,10 +16,7 @@ use crate::{
     workspaces::workspace::{AiAutonomySettings, SandboxedAgentSettings},
 };
 use regex::Regex;
-use warp_core::{
-    features::FeatureFlag,
-    settings::{ChangeEventReason, Setting},
-};
+use warp_core::{features::FeatureFlag, settings::ChangeEventReason};
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, Tracked};
 
 #[cfg(test)]
