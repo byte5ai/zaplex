@@ -118,7 +118,7 @@ fn title_provider(provider: Provider) -> &'static str {
 }
 
 fn leaf_label(path: &str) -> String {
-    path.rsplit(|character| character == '/' || character == '\\')
+    path.rsplit(['/', '\\'])
         .next()
         .map(str::to_string)
         .filter(|name| !name.is_empty())

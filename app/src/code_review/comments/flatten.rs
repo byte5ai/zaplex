@@ -131,7 +131,7 @@ fn collect_pending_imported_thread_dfs<'a>(
     // Get children of this comment.
     if let Some(children) = children_map.get(comment.github_comment_id()) {
         let mut sorted_children = children.to_vec();
-        sorted_children.sort_by(|a, b| a.last_update_time.cmp(&b.last_update_time));
+        sorted_children.sort_by_key(|comment| comment.last_update_time);
         for child in sorted_children {
             collect_pending_imported_thread_dfs(child, children_map, result);
         }

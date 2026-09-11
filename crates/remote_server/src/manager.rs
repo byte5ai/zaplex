@@ -1092,6 +1092,7 @@ impl RemoteServerManager {
     ///   was in, because the entry is being removed from `sessions`
     ///   outright. Unlike `SessionDisconnected`, this one never fires for
     ///   spontaneous drops -- only for explicit teardown.
+    ///
     /// Surface a *pre-connect* setup failure for `session_id` to subscribers,
     /// for callers that fail before they could even invoke `connect_session`
     /// (e.g. bringing up the ControlMaster or installing the remote-server

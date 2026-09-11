@@ -111,6 +111,7 @@ fn valid_opaque_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+#[allow(clippy::result_large_err)]
 fn validate_request(
     request: &ReadAgentTranscript,
 ) -> Result<TranscriptProvider, AgentTranscriptResponse> {
@@ -148,6 +149,7 @@ pub(crate) fn busy_response(request: &ReadAgentTranscript) -> AgentTranscriptRes
 
 /// Resolve the request against a freshly scanned daemon account inventory. The
 /// resulting path never leaves this process and is canonicalized before use.
+#[allow(clippy::result_large_err)]
 pub(crate) fn resolve_request(
     routes: &AccountRoutes,
     request: ReadAgentTranscript,

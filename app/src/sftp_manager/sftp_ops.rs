@@ -914,10 +914,9 @@ fn build_auth_method(
 
 /// Expand ~ in path to user home directory
 fn shellexpand_path(path: &str) -> String {
-    if path.starts_with("~/") {
+    if let Some(suffix) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
             let home_path = home.display();
-            let suffix = &path[2..];
             return format!("{home_path}/{suffix}");
         }
     }

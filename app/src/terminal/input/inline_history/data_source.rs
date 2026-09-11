@@ -234,7 +234,7 @@ fn interleave_conversations(base: Vec<MenuEntry>, conversations: Vec<MenuEntry>)
 
     let base_current = base.into_iter().skip(current_start_idx).collect::<Vec<_>>();
     let mut conversations = conversations;
-    conversations.sort_by(|a, b| a.sort_timestamp.cmp(&b.sort_timestamp));
+    conversations.sort_by_key(|conversation| conversation.sort_timestamp);
 
     let mut i = 0;
     for conv in conversations {
