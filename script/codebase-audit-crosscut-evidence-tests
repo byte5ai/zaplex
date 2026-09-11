@@ -871,6 +871,19 @@ class CodebaseAuditCrosscutEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(EVIDENCE.EvidenceError, "match span is invalid"):
             EVIDENCE.validate_evidence(span_drift, contract, definitions)
 
+        matcher_drift = copy.deepcopy(document)
+        matcher = next(
+            entry for entry in matcher_drift["evidence"] if entry["kind"] == "matcher"
+        )
+        matcher["match_span"]["start"] += 1
+        payload = dict(matcher)
+        payload.pop("evidence_id")
+        matcher["evidence_id"] = hashlib.sha256(
+            EVIDENCE.canonical_json(payload)
+        ).hexdigest()
+        with self.assertRaisesRegex(EVIDENCE.EvidenceError, "declared matcher"):
+            EVIDENCE.validate_evidence(matcher_drift, contract, definitions)
+
         series_drift = copy.deepcopy(document)
         series_drift["upstream_commit_series"].pop()
         with self.assertRaisesRegex(EVIDENCE.EvidenceError, "series SHA-256 mismatch"):
