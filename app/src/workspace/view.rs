@@ -5109,7 +5109,9 @@ impl Workspace {
                 let Some(fork_cmd) = agent.fork_command_pinned(session_id, None) else {
                     return;
                 };
-                let legacy_fork_cmd = agent.fork_command_pinned(session_id, config_dir);
+                let legacy_fork_cmd = agent
+                    .fork_routed(session_id, config_dir)
+                    .map(|launch| launch.shell_command(ShellType::Bash));
                 self.run_agent_command_on_remote_host(
                     host,
                     host_id,
@@ -5978,7 +5980,8 @@ impl Workspace {
                 let Some(resume_cmd) = agent.resume_command_pinned(session_id, None) else {
                     return;
                 };
-                let legacy_resume_cmd = agent.resume_command_pinned(session_id, config_dir);
+                let legacy_resume_cmd =
+                    agent.resume_command_routed_with(session_id, config_dir, None, None);
                 if self.run_agent_command_on_remote_host(
                     host,
                     host_id,
@@ -6289,7 +6292,7 @@ impl Workspace {
                 return;
             };
             let legacy_resume_cmd =
-                agent.resume_command_pinned(session_id, config_dir.map(Path::new));
+                agent.resume_command_routed_with(session_id, config_dir.map(Path::new), None, None);
             #[cfg(all(unix, feature = "local_tty"))]
             {
                 self.run_agent_command_on_remote_host(

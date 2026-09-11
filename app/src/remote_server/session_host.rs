@@ -15,7 +15,9 @@ use std::fs::File;
 use std::io::Write as _;
 use std::os::fd::AsRawFd;
 use std::path::Path;
+use std::process::{Output, Stdio};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::terminal::shell::ShellType;
 use async_io::Async;
@@ -49,6 +51,10 @@ pub(super) const MAX_ACCEPTED_STARTUP_COMMANDS: usize = 64;
 
 /// Read chunk size for the per-session PTY reader.
 const READ_CHUNK: usize = 64 * 1024;
+
+/// The multiplexer probe is advisory and must never hold a Tokio worker while
+/// waiting for a slow or wedged `ps` process.
+const MULTIPLEXER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// One ordered write to a daemon-hosted PTY.
 #[derive(Debug, Eq, PartialEq)]
@@ -542,8 +548,8 @@ pub(super) async fn run_multiplexer_probe(
     spawner: ModelSpawner<ServerModel>,
 ) {
     for delay_secs in [4u64, 8] {
-        async_io::Timer::after(std::time::Duration::from_secs(delay_secs)).await;
-        if let Some(mux) = multiplexer_on_session_tty(child_pid) {
+        async_io::Timer::after(Duration::from_secs(delay_secs)).await;
+        if let Some(mux) = multiplexer_on_session_tty(child_pid).await {
             let id = session_id.clone();
             let _ = spawner
                 .spawn(move |me, _ctx| me.on_session_multiplexer_detected(&id, &mux))
@@ -557,19 +563,29 @@ pub(super) async fn run_multiplexer_probe(
 /// Portable (Linux/macOS): resolve the child's TTY via `ps -o tty=`, then list
 /// the commands on that TTY — a `tmux`/`screen` client there means the session
 /// landed inside a multiplexer.
-fn multiplexer_on_session_tty(child_pid: u32) -> Option<String> {
-    let tty_out = std::process::Command::new("ps")
-        .args(["-o", "tty=", "-p", &child_pid.to_string()])
-        .output()
-        .ok()?;
+async fn multiplexer_probe_output(args: &[&str]) -> Option<Output> {
+    let mut command = command::r#async::Command::new("ps");
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    tokio::time::timeout(MULTIPLEXER_PROBE_TIMEOUT, command.output())
+        .await
+        .ok()?
+        .ok()
+}
+
+async fn multiplexer_on_session_tty(child_pid: u32) -> Option<String> {
+    let child_pid = child_pid.to_string();
+    let tty_out = multiplexer_probe_output(&["-o", "tty=", "-p", &child_pid]).await?;
     let tty = String::from_utf8_lossy(&tty_out.stdout).trim().to_string();
     if tty.is_empty() || tty == "?" || tty == "??" {
         return None;
     }
-    let comm_out = std::process::Command::new("ps")
-        .args(["-o", "comm=", "-t", &tty])
-        .output()
-        .ok()?;
+    let comm_out = multiplexer_probe_output(&["-o", "comm=", "-t", &tty]).await?;
     let comms = String::from_utf8_lossy(&comm_out.stdout);
     for line in comms.lines() {
         let comm = line.trim();

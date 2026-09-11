@@ -1,7 +1,7 @@
-# PR validation pipeline — cargo check + targeted keymap-validation unit tests.
+# PR validation pipeline — Clippy + macOS cargo check + targeted keymap tests.
 #
 # Division of labour with zap_release.yml:
-# - This workflow: runs Linux and macOS cargo checks on every build-relevant
+# - This workflow: runs Linux Clippy and a macOS cargo check on every build-relevant
 #   PR, plus a targeted `cargo test` that parse-validates every registered
 #   keybinding on BOTH platform variants. `cargo check` compiles the code but
 #   never parses the binding strings, so it cannot catch a malformed keybinding like `cmd-shift-o`
@@ -69,8 +69,40 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify license policy configuration
+        run: script/check_license_config_sync
+        shell: bash
+
+      - name: Verify dependency security baseline
+        run: script/dependency-security-baseline-tests
+        shell: bash
+
+      - name: Verify Docker supply-chain policy
+        run: script/check-docker-supply-chain --self-test
+        shell: bash
+
+      - name: Verify Linux development container security
+        run: script/check-linux-dev-container-security
+        shell: bash
+
+      - name: Verify SSH tmux installer assets
+        run: script/ssh-tmux-asset-tests
+        shell: bash
+
       - name: Validate release tag classification
         run: script/classify-release-tag-tests
+        shell: bash
+
+      - name: Verify atomic release version updater
+        run: script/set-version-tests
+        shell: bash
+
+      - name: Verify release-readiness fixtures
+        run: script/check-v1-release-readiness --self-test
+        shell: bash
+
+      - name: Verify release metadata consistency
+        run: script/check-v1-release-readiness --phase-a
         shell: bash
 
       - name: Verify macOS packaging split
@@ -109,6 +141,17 @@ jobs:
         run: script/check-compact-row-actions
         shell: bash
 
+      # Keep this inside the required job for the same reason as the row-action
+      # guard above: a broken Clippy gate must fail the required context.
+      - name: Verify required Clippy gate
+        run: script/pr-check-clippy-gate-tests
+        shell: bash
+
+      - name: cargo deny check advisories
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: linux
@@ -121,12 +164,12 @@ jobs:
         run: rustup target add x86_64-unknown-linux-gnu
         shell: bash
 
-      - name: cargo check (default = zaplex bin)
-        # `cargo check --workspace` would pull in wasm/preview channel-gated
-        # targets; check only the default oss bin + its dependency graph, matching
+      - name: cargo clippy (default = zaplex bin)
+        # `cargo clippy --workspace` would pull in wasm/preview channel-gated
+        # targets; lint only the default oss bin + its dependency graph, matching
         # the release_linux compile target. Cargo.lock is committed, so run --locked
-        # for a deterministic graph (immune to upstream version drift).
-        run: cargo check --locked --bin zaplex
+        # for a deterministic graph and deny the complete warning baseline.
+        run: cargo clippy --locked --bin zaplex -- -D warnings
         shell: bash
 
   cargo_check_macos:
@@ -194,6 +237,74 @@ jobs:
           test_keystroke_invalid_no_shift_uppercase
         shell: bash
 
+      - name: cargo test (SSH process-wrapper policy)
+        run: >
+          cargo test --locked -p warp_ssh_manager --lib --
+          ssh_workspace_has_no_direct_std_process_command
+        shell: bash
+
+      - name: cargo test (HTTP client construction smoke)
+        run: >
+          cargo test --locked -p http_client --lib --
+          apply_off_disables_proxy_without_error
+          apply_custom_with_valid_url_succeeds
+        shell: bash
+
+      - name: cargo test (OSS settings schema channel)
+        run: >
+          cargo test --locked -p warp --bin generate_settings_schema --
+          oss_channel_keeps_runtime_and_release_flags_without_internal_tiers
+          unknown_channel_is_an_error
+          channel_option_requires_a_value
+        shell: bash
+
+      - name: cargo test (native minidump lifecycle)
+        run: >
+          cargo test --locked -p warp --lib --features crash_reporting --
+          minidump_backend_
+        shell: bash
+
+      - name: Native minidump smoke test
+        run: |
+          dump_dir="$(mktemp -d)"
+          cargo run --locked -p warp --bin zaplex --features crash_reporting -- \
+            minidump-smoke "$dump_dir"
+          test "$(find "$dump_dir" -type f -name 'zap-minidump-*.dmp' -size +0c | wc -l)" -eq 1
+        shell: bash
+
+      - name: cargo test (retired BYOP compatibility and subscription isolation)
+        run: >
+          cargo test --locked -p warp --lib --
+          restored_conversation_drops_retired_byop_sidecars_on_next_persist
+          identifies_provider_credentials_that_must_not_reach_cli_harnesses
+          legacy_gemini_harness_is_not_runnable
+          new_harness_picker_does_not_offer_legacy_gemini
+          retired_byop_model_preferences_are_ignored_on_profile_roundtrip
+          removes_all_retired_provider_secret_keys
+          missing_retired_provider_secrets_are_already_clean
+          provider_secret_cleanup_continues_after_a_storage_error
+          retired_provider_secret_cleanup_is_wired_after_storage_registration
+          retired_byop_settings_are_tolerated_without_eager_write
+          retired_byop_settings_are_removed_on_next_normal_write
+          claude_launch_uses_structured_protocol_and_subscription_environment
+          claude_discovery_scrubs_all_provider_environment_variables
+          remote_launch_quotes_working_directory_environment_and_model
+          selected_subscription_accounts_scrub_provider_auth_environment
+        shell: bash
+
+      - name: cargo test (retired BYOP persistence compatibility)
+        run: >
+          cargo test --locked -p persistence --lib --
+          agent_conversation_data_does_not_reserialize_retired_sidecars
+          model_token_usage_does_not_reserialize_retired_byok_fields
+        shell: bash
+
+      - name: cargo test (retired Gemini CLI selection)
+        run: >
+          cargo test --locked -p warp_cli --lib --
+          harness_parse_orchestration_harness_rejects_legacy_gemini
+        shell: bash
+
       # Focused app-crate unit tests: the FM-toggle + spawn-card launch payload,
       # catalog copy guard, plus the real boot/open smoke gate. Targeted by name so only these run —
       # the app crate's full test suite has known harness/env-dependent failures
@@ -204,14 +315,32 @@ jobs:
       # graph, so it constructs a workspace window headless and runs the binding
       # registration path — catching both the keymap-crash class and "does the UI
       # wiring survive construction", the thing `cargo check` cannot.
-      - name: cargo test (FM toggle + spawn-card + catalog + boot/open smoke gate)
+      - name: cargo test (app dependency + UI smoke gates)
         run: >
           cargo test --locked -p warp --lib --
+          maps_credentials_not_loaded_to_user_message
+          newer_profile_refresh_rejects_late_success_or_error_from_older_refresh
+          test_import_from_file
           file_manager_start_path_uses_session_cwd
           file_manager_start_path_falls_back_when_no_cwd
           confirm_payload_carries_local_selection
           confirm_payload_routes_remote_launch_to_node_id
           confirm_payload_none_when_nothing_installed
+          explicit_overwrite_rejects_change_after_revalidation_and_restores_newer_target
+          absolute_path_segments_keep_absolute_navigation_targets
+          relative_path_segments_keep_relative_navigation_targets
+          root_path_has_exactly_one_root_segment
+          breadcrumb_click_survives_rerender_between_mouse_down_and_up
+          absolute_breadcrumb_click_lists_exact_ancestor
+          absolute_root_breadcrumb_click_lists_root
+          direct_skill_paths_reject_forbidden_components_for_qualified_and_unqualified_specs
+          direct_skill_path_rejects_symlink_outside_root_before_parsing
+          remote_su_echo_and_password_prompt_do_not_authorize_confirmation
+          local_root_su_authorizes_exactly_one_confirmation
+          non_root_remote_and_non_user_commands_do_not_arm_attempt
+          timeout_later_command_and_session_change_clear_attempt
+          earlier_timeout_does_not_clear_newer_attempt
+          abort_or_shell_return_clear_attempt
           ui_copy_has_no_space_before_ellipsis
           spaced_ellipsis_detection_covers_catalog_whitespace_and_punctuation
           spaced_ellipsis_detection_ignores_comments_and_leading_ellipses

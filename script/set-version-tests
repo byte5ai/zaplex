@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Regression tests for script/set-version without touching the checkout."""
+
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+
+
+FILES = (
+    "VERSION",
+    "app/Cargo.toml",
+    "Cargo.lock",
+    "app/assets/resources/mac/CLI-Info.plist",
+    "app/DockTilePlugin/Info.plist",
+    "app/src/bin/zaplex.rs",
+    "script/windows/windows-installer.iss",
+    ".github/workflows/release_configurations.json",
+    ".github/workflows/test-dmg.yml",
+    ".github/workflows/zap_release.yml",
+    "README.md",
+    "docs/release/1.0-user-guide.md",
+    "CHANGELOG.md",
+    "script/set-version",
+)
+
+
+def copy_fixture(root: Path, fixture: Path) -> None:
+    for relative_path in FILES:
+        source = root / relative_path
+        target = fixture / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
+def hashes(root: Path) -> dict[str, str]:
+    return {
+        relative_path: hashlib.sha256((root / relative_path).read_bytes()).hexdigest()
+        for relative_path in FILES
+        if relative_path != "script/set-version"
+    }
+
+
+def run_updater(fixture: Path, version: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            fixture / "script/set-version",
+            version,
+            "--date",
+            "2030-01-02",
+            "--changelog-entry",
+            "Testet das atomare Versionsupdate.",
+        ],
+        cwd=fixture,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def main() -> int:
+    root = Path(__file__).resolve().parent.parent
+    old_version = (root / "VERSION").read_text(encoding="utf-8").strip()
+    major, minor, patch = (int(part) for part in old_version.split("."))
+    new_version = f"{major}.{minor}.{patch + 1}"
+
+    with tempfile.TemporaryDirectory(prefix="zaplex-set-version-") as directory:
+        fixture = Path(directory)
+        copy_fixture(root, fixture)
+        original_lock = (fixture / "Cargo.lock").read_text(encoding="utf-8")
+
+        completed = run_updater(fixture, new_version)
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr or completed.stdout)
+
+        expected_lock = original_lock.replace(
+            f'[[package]]\nname = "warp"\nversion = "{old_version}"\n',
+            f'[[package]]\nname = "warp"\nversion = "{new_version}"\n',
+            1,
+        )
+        actual_lock = (fixture / "Cargo.lock").read_text(encoding="utf-8")
+        if actual_lock != expected_lock:
+            raise RuntimeError("set-version changed Cargo.lock outside the warp package")
+
+        expected_markers = {
+            "VERSION": f"{new_version}\n",
+            "app/Cargo.toml": f'version = "{new_version}"',
+            "app/assets/resources/mac/CLI-Info.plist": f"<string>{new_version}</string>",
+            "app/DockTilePlugin/Info.plist": f"<string>{new_version}</string>",
+            "app/src/bin/zaplex.rs": f"<string>{new_version}</string>",
+            "script/windows/windows-installer.iss": f'#define MyAppVersion "{new_version}"',
+            ".github/workflows/release_configurations.json": f"Zaplex {new_version}",
+            ".github/workflows/test-dmg.yml": f"default: v{new_version}",
+            ".github/workflows/zap_release.yml": f"default: v{new_version}",
+            "README.md": f"Zaplex {new_version}",
+            "docs/release/1.0-user-guide.md": f"v{new_version}",
+            "CHANGELOG.md": f"## [{new_version}] — 2030-01-02",
+        }
+        for relative_path, marker in expected_markers.items():
+            text = (fixture / relative_path).read_text(encoding="utf-8")
+            if marker not in text:
+                raise RuntimeError(f"{relative_path} lacks {marker!r}")
+
+        before_invalid = hashes(fixture)
+        invalid = run_updater(fixture, f"{new_version}-rc1")
+        if invalid.returncode == 0:
+            raise RuntimeError("set-version accepted a prerelease version")
+        if hashes(fixture) != before_invalid:
+            raise RuntimeError("failed validation changed version-bearing files")
+
+    print("PASS script/set-version updates every release source atomically")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

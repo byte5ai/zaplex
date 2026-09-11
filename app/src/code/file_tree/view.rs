@@ -1,4 +1,6 @@
 use editing::sort_entries_for_file_tree;
+#[cfg(feature = "local_fs")]
+use instant::Instant;
 use itertools::Itertools;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
@@ -281,7 +283,7 @@ pub struct FileTreeView {
     /// an endless skeleton (issue #20). Restarted on enablement changes (a new
     /// session context is a fresh chance for data to arrive).
     #[cfg(feature = "local_fs")]
-    loading_since: Option<std::time::Instant>,
+    loading_since: Option<Instant>,
     /// Paths the user explicitly collapsed (per root).
     ///
     /// This is used to prevent automatic expansion behavior (e.g. when switching tabs,
@@ -709,7 +711,7 @@ impl FileTreeView {
             registered_lazy_loaded_paths: HashSet::new(),
             pending_focus_target: None,
             #[cfg(feature = "local_fs")]
-            loading_since: Some(std::time::Instant::now()),
+            loading_since: Some(Instant::now()),
         };
 
         // Re-render once the loading deadline passes so a view nothing else
@@ -911,7 +913,7 @@ impl FileTreeView {
         }
         self.enablement = enablement;
         // New session context → fresh bounded window for data to arrive.
-        self.loading_since = Some(std::time::Instant::now());
+        self.loading_since = Some(Instant::now());
         Self::schedule_loading_deadline_tick(ctx);
         ctx.notify();
     }

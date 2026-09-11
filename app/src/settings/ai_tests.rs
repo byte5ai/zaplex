@@ -753,7 +753,7 @@ fn test_mark_quota_banner_as_dismissed() {
 }
 
 #[test]
-fn retired_byop_settings_are_tolerated_without_writeback() {
+fn retired_byop_settings_are_tolerated_without_eager_write() {
     let directory = tempfile::tempdir().expect("temporary settings directory");
     let settings_path = directory.path().join("settings.toml");
     let legacy_settings = r#"
@@ -784,6 +784,8 @@ last_used_reasoning = { "OpenAi:legacy-model" = "high" }
         };
 
         let (preferences, parse_error) = TomlBackedUserPreferences::new(settings_path.clone());
+        let preferences = preferences
+            .with_retired_values(crate::settings::init::RETIRED_PUBLIC_SETTINGS_FILE_VALUES);
         assert!(
             parse_error.is_none(),
             "legacy BYOP settings must still parse"
@@ -832,4 +834,48 @@ last_used_reasoning = { "OpenAi:legacy-model" = "high" }
             }
         });
     });
+}
+
+#[test]
+fn retired_byop_settings_are_removed_on_next_normal_write() {
+    use warpui_extras::user_preferences::{
+        toml_backed::TomlBackedUserPreferences, UserPreferences as _,
+    };
+
+    let directory = tempfile::tempdir().expect("temporary settings directory");
+    let settings_path = directory.path().join("settings.toml");
+    std::fs::write(
+        &settings_path,
+        r#"
+[agents.warp_agent]
+providers = [{ id = "legacy-provider" }]
+
+[agents.byop_compaction]
+auto = true
+
+[agents.byop]
+last_used_model_id = "legacy-model"
+
+[appearance]
+theme = "Existing Theme"
+"#,
+    )
+    .expect("write legacy settings");
+
+    let (preferences, parse_error) = TomlBackedUserPreferences::new(settings_path.clone());
+    assert!(parse_error.is_none());
+    let preferences =
+        preferences.with_retired_values(crate::settings::init::RETIRED_PUBLIC_SETTINGS_FILE_VALUES);
+
+    preferences
+        .write_value_with_hierarchy("font_size", "14".to_string(), Some("appearance"), None)
+        .expect("write a normal setting");
+
+    let written = std::fs::read_to_string(settings_path).expect("read migrated settings");
+    assert!(!written.contains("providers"));
+    assert!(!written.contains("byop_compaction"));
+    assert!(!written.contains("[agents.byop]"));
+    assert!(!written.contains("[agents]"));
+    assert!(written.contains("theme = \"Existing Theme\""));
+    assert!(written.contains("font_size = 14"));
 }

@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+
+"""Reject mutable or unchecked downloads in the repository's Docker build inputs."""
+
+from __future__ import annotations
+
+from pathlib import Path
+import re
+import sys
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+FIXTURES = REPO_ROOT / "script" / "fixtures" / "docker-supply-chain"
+DOCKERFILES = tuple(sorted((REPO_ROOT / "docker").glob("**/Dockerfile*")))
+INSTALLERS = (
+    REPO_ROOT / "script" / "linux" / "install_build_deps",
+    REPO_ROOT / "script" / "linux" / "install_test_deps",
+    REPO_ROOT / "script" / "install_cargo_binstall",
+    REPO_ROOT / "script" / "install_cargo_build_deps",
+    REPO_ROOT / "script" / "install_cargo_test_deps",
+)
+
+DIGEST = re.compile(r"@sha256:[0-9a-f]{64}(?:\s|$)")
+MUTABLE_BASE_TAG = re.compile(
+    r":(?:latest|head|main|master|stable|testing|unstable|sid|edge)(?:@|\s|$)",
+    re.IGNORECASE,
+)
+MUTABLE_DOWNLOAD_REF = re.compile(r"/(?:HEAD|main|master)(?:/|$)", re.IGNORECASE)
+PIPE_TO_SHELL = re.compile(
+    r"\b(?:curl|wget)\b[^|]*(?:\\\n|\n|\s)*\|\s*(?:sudo\s+)?(?:ba|z)?sh\b",
+    re.IGNORECASE,
+)
+DOWNLOAD = re.compile(
+    r"(?m)(?:^\s*|[;&|]\s*|\bRUN\s+|\bthen\s+)(?:sudo\s+)?(?:curl|wget)[ \t]+(?=-|https?://|[\"'$])"
+)
+INTEGRITY_CHECK = re.compile(
+    r"\b(?:sha256sum\s+(?:--check|-c)|shasum\s+-a\s+256\s+-c|gpg\s+--verify|cosign\s+verify)\b"
+)
+EXECUTE_OR_EXTRACT = re.compile(
+    r"(?<![A-Za-z0-9._/-])(?:tar|unzip|chmod\s+(?:0?755|\+x)|(?:ba|z)?sh)\b"
+)
+LITERAL_SHA256 = re.compile(r"\b[0-9a-f]{64}\b")
+ERREXIT = re.compile(r"\bset\s+-[A-Za-z]*e[A-Za-z]*\b")
+GIT_INSTALL = re.compile(r"cargo\s+install\b[^;\n]*--git\b[^;\n]*")
+IMMUTABLE_REVISION = re.compile(r"--rev\s+[\"']?[0-9a-f]{40}\b")
+UNPINNED_BINSTALL = re.compile(
+    r"cargo\s+binstall\b[^\n]*(?<![@A-Za-z0-9_.-])(?:cargo-nextest|diesel_cli|cargo-binstall)(?!@[0-9])"
+)
+
+
+def logical_docker_instructions(text: str) -> list[str]:
+    instructions = []
+    current = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not current and (not stripped or stripped.startswith("#")):
+            continue
+        current = f"{current} {stripped}".strip()
+        if current.endswith("\\"):
+            current = current[:-1].rstrip()
+            continue
+        instructions.append(current)
+        current = ""
+    if current:
+        instructions.append(current)
+    return instructions
+
+
+def validate_download_block(block: str, label: str) -> list[str]:
+    errors = []
+    downloads = list(DOWNLOAD.finditer(block))
+    for index, match in enumerate(downloads):
+        end = downloads[index + 1].start() if index + 1 < len(downloads) else len(block)
+        segment = block[match.start() : end]
+        integrity = INTEGRITY_CHECK.search(segment)
+        if integrity is None:
+            errors.append(f"{label}: download without a checksum or signature check")
+            continue
+        risky_operation = EXECUTE_OR_EXTRACT.search(segment)
+        if risky_operation is not None and risky_operation.start() < integrity.start():
+            errors.append(f"{label}: integrity check must precede execution or extraction")
+    return errors
+
+
+def validate(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    logical_text = re.sub(r"\\\s*\n", " ", text)
+    label = str(path.relative_to(REPO_ROOT)) if path.is_relative_to(REPO_ROOT) else str(path)
+    errors = []
+
+    if MUTABLE_DOWNLOAD_REF.search(text):
+        errors.append(f"{label}: mutable download reference (HEAD/main/master)")
+    if PIPE_TO_SHELL.search(text):
+        errors.append(f"{label}: remote download is piped to a shell")
+    for install in GIT_INSTALL.finditer(logical_text):
+        if IMMUTABLE_REVISION.search(install.group(0)) is None:
+            errors.append(f"{label}: cargo git install must use an immutable commit revision")
+    if UNPINNED_BINSTALL.search(text):
+        errors.append(f"{label}: cargo-binstall package must use an exact version")
+
+    if path.name.startswith("Dockerfile") or path.suffix == ".Dockerfile":
+        instructions = logical_docker_instructions(text)
+        for instruction in instructions:
+            if instruction.upper().startswith("FROM "):
+                if MUTABLE_BASE_TAG.search(instruction):
+                    errors.append(f"{label}: mutable base-image tag")
+                if not DIGEST.search(instruction):
+                    errors.append(f"{label}: base image must be pinned by sha256 digest")
+            if instruction.upper().startswith("RUN ") and DOWNLOAD.search(instruction):
+                if ERREXIT.search(instruction) is None:
+                    errors.append(f"{label}: download RUN instruction must enable errexit")
+                errors.extend(validate_download_block(instruction, label))
+    elif DOWNLOAD.search(text):
+        first_download = DOWNLOAD.search(text)
+        assert first_download is not None
+        if ERREXIT.search(text[: first_download.start()]) is None:
+            errors.append(f"{label}: download script must enable errexit")
+        errors.extend(validate_download_block(text, label))
+
+    if DOWNLOAD.search(text) and LITERAL_SHA256.search(text) is None:
+        errors.append(f"{label}: download input has no repository-pinned SHA-256 value")
+    return errors
+
+
+def self_test() -> list[str]:
+    failures = []
+    valid_errors = validate(FIXTURES / "valid.Dockerfile")
+    if valid_errors:
+        failures.append(f"valid fixture was rejected: {'; '.join(valid_errors)}")
+
+    invalid_fixtures = {
+        "mutable-base.Dockerfile": "mutable base-image tag",
+        "unpinned-base.Dockerfile": "base image must be pinned",
+        "head-download.Dockerfile": "mutable download reference",
+        "pipe-to-shell.Dockerfile": "piped to a shell",
+        "unchecked-extract.Dockerfile": "download without a checksum",
+        "check-after-extract.Dockerfile": "integrity check must precede",
+        "movable-git-install.sh": "immutable commit revision",
+        "unpinned-binstall.sh": "exact version",
+    }
+    for fixture, expected in invalid_fixtures.items():
+        errors = validate(FIXTURES / fixture)
+        if not any(expected in error for error in errors):
+            failures.append(f"{fixture} did not report {expected!r}: {errors}")
+    return failures
+
+
+def main() -> int:
+    if sys.argv[1:] not in ([], ["--self-test"]):
+        print("usage: script/check-docker-supply-chain [--self-test]", file=sys.stderr)
+        return 2
+
+    errors = self_test() if sys.argv[1:] == ["--self-test"] else []
+    for path in (*DOCKERFILES, *INSTALLERS):
+        errors.extend(validate(path))
+
+    if errors:
+        for error in errors:
+            print(f"docker supply chain: {error}", file=sys.stderr)
+        return 1
+
+    print("docker supply chain: ok")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

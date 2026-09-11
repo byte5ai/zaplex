@@ -134,6 +134,16 @@ fn format_skill_resolution_error(err: ResolveSkillError) -> String {
         ResolveSkillError::ParseFailed { path, message } => {
             format!("Failed to parse skill file {}: {message}", path.display())
         }
+        ResolveSkillError::ConfinementFailed {
+            skill,
+            root,
+            message,
+        } => {
+            format!(
+                "Skill path '{skill}' is not confined to root {}: {message}",
+                root.display()
+            )
+        }
         ResolveSkillError::CloneFailed { org, repo, message } => {
             format!("Failed to clone repository '{org}/{repo}': {message}")
         }

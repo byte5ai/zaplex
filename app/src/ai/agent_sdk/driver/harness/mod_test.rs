@@ -1,5 +1,6 @@
-use super::validate_cli_installed;
+use super::{harness_kind, validate_cli_installed, HarnessKind};
 use crate::ai::agent_sdk::driver::AgentDriverError;
+use warp_cli::agent::Harness;
 
 fn assert_harness_setup_failed(err: &AgentDriverError) -> (&str, &str) {
     match err {
@@ -30,4 +31,11 @@ fn validate_cli_installed_includes_docs_url_in_error() {
     let (_, reason) = assert_harness_setup_failed(&err);
     assert!(reason.contains(url));
     assert!(reason.contains("Install it first"));
+}
+
+#[test]
+fn legacy_gemini_harness_is_not_runnable() {
+    let harness = harness_kind(Harness::Gemini).expect("legacy Gemini must remain parseable");
+
+    assert!(matches!(harness, HarnessKind::Unsupported(Harness::Gemini)));
 }

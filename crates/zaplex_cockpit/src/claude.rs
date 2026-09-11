@@ -23,6 +23,7 @@ use crate::types::{Account, Provider, UsageEntry};
 /// Directory-name fragments that mark a `.claude*` dir as a backup/scratch copy, not
 /// a real account (mirrors `claudeplex` discover.ts exclusions).
 const EXCLUDE_FRAGMENTS: &[&str] = &["mem", "backup", "bak", "old", "tmp", "temp", "observer"];
+const USAGE_CACHE_LIMIT: usize = 512;
 
 /// Result of account-root discovery before transcript/session scanning.
 #[derive(Debug, Default)]
@@ -585,6 +586,101 @@ struct AssistantUsageSnapshot {
     stop_reason: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ClaudeUsageCacheKey {
+    account_root: PathBuf,
+    transcript: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct CachedClaudeUsage {
+    fingerprint: crate::transcript::FileFingerprint,
+    entries: Vec<UsageEntry>,
+    last_used: u64,
+}
+
+/// Bounded process-local cache of distilled Claude usage records.
+///
+/// Raw transcript content is never retained. Each entry belongs to a canonical
+/// account root and transcript path, so equal relative paths in separate
+/// account profiles cannot collide.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ClaudeUsageCache {
+    entries: HashMap<ClaudeUsageCacheKey, CachedClaudeUsage>,
+    clock: u64,
+    #[cfg(test)]
+    parse_count: u64,
+}
+
+impl ClaudeUsageCache {
+    fn parse_file(&mut self, key: ClaudeUsageCacheKey, path: &Path) -> Vec<UsageEntry> {
+        let fingerprint = match crate::transcript::file_fingerprint(path) {
+            Ok(fingerprint) => fingerprint,
+            Err(_) => {
+                self.entries.remove(&key);
+                return Vec::new();
+            }
+        };
+        self.clock = self.clock.wrapping_add(1);
+        if let Some(cached) = self.entries.get_mut(&key) {
+            if cached.fingerprint == fingerprint {
+                cached.last_used = self.clock;
+                return cached.entries.clone();
+            }
+        }
+        let Ok(content) = fs::read_to_string(path) else {
+            self.entries.remove(&key);
+            return Vec::new();
+        };
+        #[cfg(test)]
+        {
+            self.parse_count = self.parse_count.saturating_add(1);
+        }
+        let session_id = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        let entries = parse_transcript_content(&content, session_id);
+        self.entries.insert(
+            key,
+            CachedClaudeUsage {
+                fingerprint,
+                entries: entries.clone(),
+                last_used: self.clock,
+            },
+        );
+        self.evict_lru();
+        entries
+    }
+
+    fn evict_lru(&mut self) {
+        while self.entries.len() > USAGE_CACHE_LIMIT {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone())
+            else {
+                return;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+
+    fn retain_account(
+        &mut self,
+        account_root: &Path,
+        seen: &HashSet<ClaudeUsageCacheKey>,
+        scan_complete: bool,
+    ) {
+        if !scan_complete {
+            return;
+        }
+        self.entries
+            .retain(|key, _| key.account_root != account_root || seen.contains(key));
+    }
+}
+
 impl AssistantUsageSnapshot {
     fn request_key(&self) -> Option<(&str, &str)> {
         Some((self.request_id.as_deref()?, self.message_id.as_deref()?))
@@ -661,6 +757,10 @@ pub fn parse_transcript(path: &Path) -> Vec<UsageEntry> {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or_default();
+    parse_transcript_content(&content, session_id)
+}
+
+fn parse_transcript_content(content: &str, session_id: &str) -> Vec<UsageEntry> {
     let mut snapshots = Vec::<AssistantUsageSnapshot>::new();
     let mut keyed_snapshots = HashMap::<(String, String), usize>::new();
     for snapshot in content
@@ -698,9 +798,20 @@ pub fn parse_transcript(path: &Path) -> Vec<UsageEntry> {
 /// scan is not mistaken for "never used" (which would also look maximally free to the
 /// launcher's freest-account routing).
 pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> (Vec<UsageEntry>, bool) {
+    usage_for_account_with_cache(account, since, &mut ClaudeUsageCache::default())
+}
+
+pub(crate) fn usage_for_account_with_cache(
+    account: &Account,
+    since: DateTime<Utc>,
+    cache: &mut ClaudeUsageCache,
+) -> (Vec<UsageEntry>, bool) {
     let projects = account.config_dir.join("projects");
+    let account_root =
+        fs::canonicalize(&account.config_dir).unwrap_or_else(|_| account.config_dir.clone());
     let mut entries = Vec::new();
     let mut io_error = false;
+    let mut seen = HashSet::new();
     for result in WalkDir::new(&projects) {
         let file = match result {
             Ok(f) => f,
@@ -731,12 +842,21 @@ pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> (Vec<UsageE
                 }
             }
         }
+        let transcript =
+            fs::canonicalize(file.path()).unwrap_or_else(|_| file.path().to_path_buf());
+        let key = ClaudeUsageCacheKey {
+            account_root: account_root.clone(),
+            transcript,
+        };
+        seen.insert(key.clone());
         entries.extend(
-            parse_transcript(file.path())
+            cache
+                .parse_file(key, file.path())
                 .into_iter()
                 .filter(|e| e.ts >= since),
         );
     }
+    cache.retain_account(&account_root, &seen, !io_error);
     (entries, io_error)
 }
 

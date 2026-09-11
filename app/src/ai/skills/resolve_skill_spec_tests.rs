@@ -182,6 +182,63 @@ fn resolve_with_full_path_returns_none_if_not_found() -> Result<()> {
 }
 
 #[test]
+fn direct_skill_paths_reject_forbidden_components_for_qualified_and_unqualified_specs() {
+    let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+    let root = temp_dir.path().join("trusted");
+    fs::create_dir_all(&root).expect("Failed to create repository root");
+
+    let specs = [
+        SkillSpec::without_repo("..".to_string()),
+        SkillSpec::without_repo(std::path::MAIN_SEPARATOR.to_string()),
+        SkillSpec::without_repo("../outside/.agents/skills/x/SKILL.md".to_string()),
+        "trusted:../outside/.agents/skills/x/SKILL.md"
+            .parse::<SkillSpec>()
+            .expect("Qualified test spec must parse"),
+        SkillSpec::without_repo(root.join("SKILL.md").display().to_string()),
+    ];
+
+    for spec in specs {
+        let error = resolve_from_root_path_by_directory_scan(&spec, &root)
+            .expect_err("Path with forbidden components must fail confinement");
+        assert!(matches!(error, ResolveSkillError::ConfinementFailed { .. }));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_skill_path_rejects_symlink_outside_root_before_parsing() -> Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let temp_dir = tempfile::TempDir::new().context("Failed to create temp dir")?;
+    let root = temp_dir.path().join("trusted");
+    let external_skill = temp_dir.path().join("outside/SKILL.md");
+    let linked_skill = root.join(".agents/skills/x/SKILL.md");
+
+    fs::create_dir_all(
+        external_skill
+            .parent()
+            .context("External skill must have a parent")?,
+    )?;
+    fs::write(&external_skill, "not valid skill front matter")?;
+    fs::create_dir_all(
+        linked_skill
+            .parent()
+            .context("Linked skill must have a parent")?,
+    )?;
+    symlink(&external_skill, &linked_skill)?;
+
+    let spec = SkillSpec::with_repo(
+        "trusted".to_string(),
+        ".agents/skills/x/SKILL.md".to_string(),
+    );
+    let error = resolve_from_root_path_by_directory_scan(&spec, &root)
+        .expect_err("Symlink outside the repository must fail confinement");
+
+    assert!(matches!(error, ResolveSkillError::ConfinementFailed { .. }));
+    Ok(())
+}
+
+#[test]
 fn resolve_simple_name_uses_directory_precedence() -> Result<()> {
     let temp_dir = tempfile::TempDir::new().context("Failed to create temp dir")?;
     let root = temp_dir.path();

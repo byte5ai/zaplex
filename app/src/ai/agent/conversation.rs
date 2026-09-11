@@ -1524,17 +1524,6 @@ impl AIConversation {
                         .or_default() += tokens;
                 }
             }
-            for (model_id, usage) in usage_metadata.byok_token_usage {
-                let entry = token_usage.entry(model_id.clone()).or_default();
-                entry.byok_tokens += usage.total_tokens;
-                for (category, tokens) in usage.token_usage_by_category {
-                    *entry
-                        .byok_token_usage_by_category
-                        .entry(category)
-                        .or_default() += tokens;
-                }
-            }
-
             self.conversation_usage_metadata.token_usage = token_usage
                 .into_iter()
                 .map(|(name, mut usage)| {

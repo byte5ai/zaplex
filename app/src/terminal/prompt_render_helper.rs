@@ -35,11 +35,37 @@ use super::settings::TerminalSettings;
 use super::{prompt, SizeInfo, TerminalModel};
 
 use crate::terminal::blockgrid_element::BlockGridElement;
+use crate::terminal::event::RemoteServerSetupState;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::view::PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT;
 
 use crate::terminal::model::ObfuscateSecrets;
 use warpui::units::Pixels;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteSetupPrompt {
+    Starting,
+    Installing(Option<u8>),
+    Updating,
+    Initializing,
+    ClassicSsh,
+}
+
+fn remote_setup_prompt(state: &RemoteServerSetupState) -> RemoteSetupPrompt {
+    match state {
+        RemoteServerSetupState::Checking | RemoteServerSetupState::Ready => {
+            RemoteSetupPrompt::Starting
+        }
+        RemoteServerSetupState::Installing { progress_percent } => {
+            RemoteSetupPrompt::Installing(*progress_percent)
+        }
+        RemoteServerSetupState::Updating => RemoteSetupPrompt::Updating,
+        RemoteServerSetupState::Initializing => RemoteSetupPrompt::Initializing,
+        RemoteServerSetupState::Failed { .. } | RemoteServerSetupState::Unsupported { .. } => {
+            RemoteSetupPrompt::ClassicSsh
+        }
+    }
+}
 
 /// How long we're willing to wait after precmd for a marker-based prompt to appear before we
 /// display an empty prompt grid in the input.
@@ -246,37 +272,26 @@ impl PromptRenderHelper {
     }
 
     fn bootstrapping_shell_message(&self, model: &TerminalModel, sessions: &Sessions) -> String {
-        use crate::terminal::event::RemoteServerSetupState;
-
-        // If a remote server setup is in progress for the pending session,
-        // show a stage-specific message instead of the generic "Starting shell...".
+        // If remote-server setup exists for the pending session, show its stage
+        // or the explicit classic-SSH fallback instead of a stale starting state.
         if let Some(pending_session_id) = model.pending_session_id() {
             if let Some(state) = sessions.remote_server_setup_state(pending_session_id) {
-                return match state {
-                    RemoteServerSetupState::Checking => crate::t!("terminal-starting-shell"),
-                    RemoteServerSetupState::Installing {
-                        progress_percent: Some(p),
-                    } => crate::t!(
+                return match remote_setup_prompt(state) {
+                    RemoteSetupPrompt::Starting => crate::t!("terminal-starting-shell"),
+                    RemoteSetupPrompt::Installing(Some(progress_percent)) => crate::t!(
                         "terminal-bootstrapping-installing-warp-ssh-extension-progress",
-                        p = p
+                        p = progress_percent
                     ),
-                    RemoteServerSetupState::Installing {
-                        progress_percent: None,
-                    } => crate::t!("terminal-bootstrapping-installing-warp-ssh-extension"),
-                    RemoteServerSetupState::Updating => {
+                    RemoteSetupPrompt::Installing(None) => {
+                        crate::t!("terminal-bootstrapping-installing-warp-ssh-extension")
+                    }
+                    RemoteSetupPrompt::Updating => {
                         crate::t!("terminal-bootstrapping-updating-warp-ssh-extension")
                     }
-                    RemoteServerSetupState::Initializing => {
+                    RemoteSetupPrompt::Initializing => {
                         crate::t!("terminal-bootstrapping-initializing")
                     }
-                    RemoteServerSetupState::Ready => crate::t!("terminal-starting-shell"),
-                    // Failed and Unsupported both fall back to the legacy SSH
-                    // flow, so we render the same generic prompt as a normal
-                    // SSH session that doesn't have the remote-server extension.
-                    RemoteServerSetupState::Failed { .. }
-                    | RemoteServerSetupState::Unsupported { .. } => {
-                        crate::t!("terminal-starting-shell")
-                    }
+                    RemoteSetupPrompt::ClassicSsh => crate::t!("terminal-classic-ssh"),
                 };
             }
         }
@@ -816,3 +831,7 @@ impl PromptRenderHelper {
             .read(ctx, |prompt_display, ctx| prompt_display.git_branch(ctx))
     }
 }
+
+#[cfg(test)]
+#[path = "prompt_render_helper_tests.rs"]
+mod tests;

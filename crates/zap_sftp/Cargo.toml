@@ -2,13 +2,15 @@
 name = "zap_sftp"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
+publish.workspace = true
 
 [dependencies]
 base64.workspace = true
 dirs.workspace = true
 sha2.workspace = true
 ssh2 = { version = "0.9", features = ["openssl-on-win32"] }
-openssl-sys = { version = "*", features = ["vendored"] }
+openssl-sys = { version = "0.9", features = ["vendored"] }
 shell-escape.workspace = true
 smol = "2"
 thiserror = "2"

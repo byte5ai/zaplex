@@ -264,7 +264,7 @@ pub fn send_verified_process_signal(
 ) -> Result<(), ProcessSignalError> {
     #[cfg(target_os = "linux")]
     {
-        return send_verified_linux_signal(pid, expected, signal);
+        send_verified_linux_signal(pid, expected, signal)
     }
     #[cfg(target_os = "macos")]
     {

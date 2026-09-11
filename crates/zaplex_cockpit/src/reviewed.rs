@@ -36,6 +36,7 @@
 //! — but only past [`REVIEWED_LIMIT`] of them, which is orders of magnitude
 //! beyond any working set a person reads through.
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -85,7 +86,7 @@ impl ReviewedSessions {
             .map(|(id, at)| (*at, id.clone()))
             .collect();
         // Most recent first, then drop the tail.
-        by_age.sort_by(|a, b| b.0.cmp(&a.0));
+        by_age.sort_by_key(|entry| Reverse(entry.0));
         for (_, id) in by_age.into_iter().skip(limit) {
             self.marks.remove(&id);
         }

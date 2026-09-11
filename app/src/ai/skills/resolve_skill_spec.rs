@@ -11,7 +11,7 @@
 //! - Applies consistent skill-directory precedence (e.g. `.claude/` vs `.codex/`, etc.).
 //! - Falls back to scanning disk when the manager cache has not warmed yet.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use ai::skills::{
     home_skills_path, parse_skill, ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS,
@@ -40,7 +40,7 @@ fn resolve_from_skill_dirs_by_directory_scan(
     spec: &SkillSpec,
     skill_dirs: impl IntoIterator<Item = PathBuf>,
 ) -> Result<Option<ResolvedSkill>, ResolveSkillError> {
-    if spec.is_full_path() {
+    if is_direct_skill_path(spec) {
         return Ok(None);
     }
 
@@ -99,6 +99,12 @@ pub enum ResolveSkillError {
     },
     #[error("Failed to parse skill file {path}: {message}")]
     ParseFailed { path: PathBuf, message: String },
+    #[error("Skill path '{skill}' is not confined to root {root}: {message}")]
+    ConfinementFailed {
+        skill: String,
+        root: PathBuf,
+        message: String,
+    },
     #[error("Failed to clone repository '{org}/{repo}': {message}")]
     CloneFailed {
         org: String,
@@ -281,9 +287,9 @@ fn resolve_unqualified(
     ctx: &AppContext,
     skill_manager: &SkillManager,
 ) -> Result<ResolvedSkill, ResolveSkillError> {
-    // If the skill_path is a full path, skip cache lookup and go straight to disk resolution.
-    // Full paths don't match skill names in the cache.
-    if spec.is_full_path() {
+    // Direct paths skip cache lookup and go straight to confined disk resolution.
+    // Malformed single-component paths also take this route so they cannot reach name lookup.
+    if is_direct_skill_path(spec) {
         if let Some(resolved) = resolve_from_root_path_by_directory_scan(spec, working_dir)? {
             return Ok(resolved);
         }
@@ -366,9 +372,9 @@ fn resolve_in_single_repo_root(
     repo_root: &Path,
     skill_manager: &SkillManager,
 ) -> Result<ResolvedSkill, ResolveSkillError> {
-    // If the skill_path is a full path, skip cache lookup and go straight to disk resolution.
-    // Full paths don't match skill names in the cache.
-    if spec.is_full_path() {
+    // Direct paths skip cache lookup and go straight to confined disk resolution.
+    // Malformed single-component paths also take this route so they cannot reach name lookup.
+    if is_direct_skill_path(spec) {
         if let Some(resolved) = resolve_from_root_path_by_directory_scan(spec, repo_root)? {
             return Ok(resolved);
         }
@@ -405,19 +411,9 @@ fn resolve_from_root_path_by_directory_scan(
     spec: &SkillSpec,
     root: &Path,
 ) -> Result<Option<ResolvedSkill>, ResolveSkillError> {
-    // If the skill_path is a full path (contains "/" or ends with ".md"),
-    // try to resolve it directly without iterating through SKILL_PROVIDER_DEFINITIONS.
-    if spec.is_full_path() {
-        // Reject absolute paths to prevent escaping the root directory
-        let skill_path = Path::new(&spec.skill_identifier);
-        if skill_path.is_absolute() {
-            return Err(ResolveSkillError::NotFound {
-                skill: spec.skill_identifier.clone(),
-            });
-        }
-
-        let path = root.join(&spec.skill_identifier);
-        if path.exists() {
+    // Resolve direct paths through one confinement helper without consulting provider precedence.
+    if is_direct_skill_path(spec) {
+        if let Some(path) = confined_direct_skill_path(root, &spec.skill_identifier)? {
             let parsed = parse_skill(&path).map_err(|err| ResolveSkillError::ParseFailed {
                 path: path.clone(),
                 message: err.to_string(),
@@ -425,7 +421,7 @@ fn resolve_from_root_path_by_directory_scan(
 
             return Ok(Some(to_resolved_skill(path, parsed)));
         }
-        // If full path doesn't exist, return None (don't fall through to directory scan)
+        // If the direct path doesn't exist, return None without falling through to name lookup.
         return Ok(None);
     }
 
@@ -447,6 +443,61 @@ fn resolve_from_root_path_by_directory_scan(
     }
 
     Ok(None)
+}
+
+fn confined_direct_skill_path(
+    root: &Path,
+    skill_identifier: &str,
+) -> Result<Option<PathBuf>, ResolveSkillError> {
+    let skill_path = Path::new(skill_identifier);
+    if has_forbidden_path_component(skill_path) {
+        return Err(ResolveSkillError::ConfinementFailed {
+            skill: skill_identifier.to_string(),
+            root: root.to_path_buf(),
+            message: "path contains a parent, root, or prefix component".to_string(),
+        });
+    }
+
+    let candidate = root.join(skill_path);
+    if !candidate.exists() {
+        return Ok(None);
+    }
+
+    let canonical_root =
+        dunce::canonicalize(root).map_err(|err| ResolveSkillError::ConfinementFailed {
+            skill: skill_identifier.to_string(),
+            root: root.to_path_buf(),
+            message: format!("failed to canonicalize root: {err}"),
+        })?;
+    let canonical_candidate =
+        dunce::canonicalize(&candidate).map_err(|err| ResolveSkillError::ConfinementFailed {
+            skill: skill_identifier.to_string(),
+            root: canonical_root.clone(),
+            message: format!("failed to canonicalize candidate: {err}"),
+        })?;
+
+    if !canonical_candidate.starts_with(&canonical_root) {
+        return Err(ResolveSkillError::ConfinementFailed {
+            skill: skill_identifier.to_string(),
+            root: canonical_root,
+            message: "canonical candidate is outside the root".to_string(),
+        });
+    }
+
+    Ok(Some(canonical_candidate))
+}
+
+fn is_direct_skill_path(spec: &SkillSpec) -> bool {
+    spec.is_full_path() || has_forbidden_path_component(Path::new(&spec.skill_identifier))
+}
+
+fn has_forbidden_path_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    })
 }
 
 fn parsed_skill_from_manager_or_disk(

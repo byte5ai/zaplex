@@ -735,6 +735,23 @@ def expect_readiness_failure(name: str, check) -> None:
     raise ReadinessError(f"red fixture unexpectedly passed: {name}")
 
 
+def expect_readiness_failure_with_fragments(
+    name: str, check, expected_fragments: tuple[str, ...]
+) -> None:
+    try:
+        check()
+    except ReadinessError as error:
+        message = str(error)
+        missing = [fragment for fragment in expected_fragments if fragment not in message]
+        if missing:
+            raise ReadinessError(
+                f"red fixture {name} omitted expected diagnostics: {missing}"
+            ) from error
+        print(f"PASS red fixture: {name}")
+        return
+    raise ReadinessError(f"red fixture unexpectedly passed: {name}")
+
+
 def run_self_test() -> None:
     root = Path(__file__).resolve().parent.parent
     with tempfile.TemporaryDirectory(prefix="zaplex-release-readiness-") as directory:
@@ -776,23 +793,52 @@ def run_self_test() -> None:
 
         cargo_manifest = fixture / "app/Cargo.toml"
         fixture_version = read_text(fixture / "VERSION").strip()
+        major, minor, patch = (int(part) for part in fixture_version.split("."))
+        next_version = f"{major}.{minor}.{patch + 1}"
         manifest_text = read_text(cargo_manifest)
         version_marker = f'version = "{fixture_version}"'
         if version_marker not in manifest_text:
             raise ReadinessError(
                 "self-test could not locate VERSION in the fixture Cargo manifest"
             )
+        (fixture / "VERSION").write_text(f"{next_version}\n", encoding="utf-8")
         cargo_manifest.write_text(
-            manifest_text.replace(version_marker, 'version = "0.1.0"', 1),
+            manifest_text.replace(version_marker, f'version = "{next_version}"', 1),
             encoding="utf-8",
         )
-        expect_readiness_failure(
-            "release_metadata_is_consistent_across_manifests_resources_and_docs",
+        cargo_lock = fixture / "Cargo.lock"
+        lock_text = read_text(cargo_lock)
+        lock_marker = (
+            f'[[package]]\nname = "warp"\nversion = "{fixture_version}"\n'
+        )
+        if lock_marker not in lock_text:
+            raise ReadinessError("self-test could not locate VERSION in the warp lock block")
+        cargo_lock.write_text(
+            lock_text.replace(
+                lock_marker,
+                f'[[package]]\nname = "warp"\nversion = "{next_version}"\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        expect_readiness_failure_with_fragments(
+            "partial_version_bump_names_every_stale_bundle_source",
             lambda: release_metadata_is_consistent_across_manifests_resources_and_docs(
                 fixture
             ),
+            (
+                "CLI-Info.plist short",
+                "CLI-Info.plist build",
+                "DockTilePlugin short",
+                "DockTilePlugin build",
+                "embedded Info.plist short",
+                "embedded Info.plist build",
+                "Windows installer default",
+            ),
         )
+        shutil.copy2(root / "VERSION", fixture / "VERSION")
         shutil.copy2(root / "app/Cargo.toml", cargo_manifest)
+        shutil.copy2(root / "Cargo.lock", cargo_lock)
 
         readiness = fixture / "docs/release/1.0-readiness.md"
         readiness.write_text(

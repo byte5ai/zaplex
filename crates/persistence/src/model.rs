@@ -1041,11 +1041,7 @@ pub struct ModelTokenUsage {
     #[serde(default, alias = "total_tokens")]
     pub warp_tokens: u32,
     #[serde(default)]
-    pub byok_tokens: u32,
-    #[serde(default)]
     pub warp_token_usage_by_category: HashMap<TokenUsageCategory, u32>,
-    #[serde(default)]
-    pub byok_token_usage_by_category: HashMap<TokenUsageCategory, u32>,
 }
 
 impl ModelTokenUsage {
@@ -1075,23 +1071,12 @@ impl ModelTokenUsage {
         self.to_proto_usage(self.warp_tokens, &self.warp_token_usage_by_category)
     }
 
-    pub fn to_proto_byok_usage(&self) -> Option<(String, stream_finished::ModelTokenUsage)> {
-        self.to_proto_usage(self.byok_tokens, &self.byok_token_usage_by_category)
-    }
-
     #[allow(deprecated)]
     pub fn to_proto_combined(&self) -> stream_finished::ModelTokenUsage {
         stream_finished::ModelTokenUsage {
             model_id: self.model_id.clone(),
-            total_tokens: self.warp_tokens + self.byok_tokens,
-            token_usage_by_category: self
-                .warp_token_usage_by_category
-                .iter()
-                .chain(self.byok_token_usage_by_category.iter())
-                .fold(HashMap::new(), |mut acc, (cat, tokens)| {
-                    *acc.entry(cat.clone()).or_insert(0) += tokens;
-                    acc
-                }),
+            total_tokens: self.warp_tokens,
+            token_usage_by_category: self.warp_token_usage_by_category.clone(),
         }
     }
 }
@@ -1299,7 +1284,7 @@ pub struct NewMCPServerInstallation {
 
 #[cfg(test)]
 mod tests {
-    use super::AgentConversationData;
+    use super::{AgentConversationData, ModelTokenUsage};
 
     #[test]
     fn agent_conversation_data_roundtrips_last_event_sequence() {
@@ -1372,6 +1357,25 @@ mod tests {
 
         assert!(!json.contains("compaction_state_json"));
         assert!(!json.contains("byop_repair_state_json"));
+    }
+
+    #[test]
+    fn model_token_usage_does_not_reserialize_retired_byok_fields() {
+        let usage: ModelTokenUsage = serde_json::from_str(
+            r#"{
+                "model_id": "legacy-model",
+                "warp_tokens": 4,
+                "byok_tokens": 12,
+                "warp_token_usage_by_category": {"primary_agent": 4},
+                "byok_token_usage_by_category": {"primary_agent": 12}
+            }"#,
+        )
+        .expect("legacy BYOK usage must deserialize");
+        let json = serde_json::to_string(&usage).expect("serialize");
+
+        assert_eq!(usage.warp_tokens, 4);
+        assert!(!json.contains("byok_tokens"));
+        assert!(!json.contains("byok_token_usage_by_category"));
     }
 }
 

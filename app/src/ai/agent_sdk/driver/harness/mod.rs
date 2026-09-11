@@ -27,11 +27,9 @@ use super::{
 };
 
 mod claude_code;
-mod gemini;
 mod json_utils;
 
 pub(crate) use claude_code::ClaudeHarness;
-use gemini::GeminiHarness;
 
 /// Trait for third-party agent harnesses that execute prompts via their own CLIs.
 ///
@@ -117,7 +115,7 @@ pub(crate) fn harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverE
         Harness::Oz => Ok(HarnessKind::Oz),
         Harness::Claude => Ok(HarnessKind::ThirdParty(Box::new(ClaudeHarness))),
         Harness::OpenCode => Ok(HarnessKind::Unsupported(Harness::OpenCode)),
-        Harness::Gemini => Ok(HarnessKind::ThirdParty(Box::new(GeminiHarness))),
+        Harness::Gemini => Ok(HarnessKind::Unsupported(Harness::Gemini)),
         Harness::Unknown => Err(AgentDriverError::InvalidRuntimeState),
     }
 }

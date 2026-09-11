@@ -381,13 +381,7 @@ pub async fn preflight_daemon_transport(
     log::info!("daemon connect [{host}]: establishing ControlMaster");
     ensure_control_master(&server, &socket_path)
         .await
-        .map_err(|error| {
-            if error.to_string().contains(HOST_KEY_CHANGED) {
-                HOST_KEY_CHANGED.to_string()
-            } else {
-                format!("ControlMaster setup failed: {error:#}")
-            }
-        })?;
+        .map_err(format_control_master_setup_error)?;
     let transport = SshTransport::new(socket_path, auth_context);
     log::info!("daemon connect [{host}]: checking remote-server binary");
     match transport.check_binary().await {
@@ -413,6 +407,14 @@ pub async fn preflight_daemon_transport(
             }
         }
         Err(e) => Err(format!("remote-server binary check failed: {e}")),
+    }
+}
+
+fn format_control_master_setup_error(error: anyhow::Error) -> String {
+    if error.to_string().contains(HOST_KEY_CHANGED) {
+        HOST_KEY_CHANGED.to_string()
+    } else {
+        format!("{error:#}")
     }
 }
 

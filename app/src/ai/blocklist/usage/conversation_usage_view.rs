@@ -78,7 +78,7 @@ impl ConversationUsageView {
     }
     /// Helper to collect models grouped by category.
     /// Returns a map from usage category to the model IDs recorded for that category.
-    /// Handles both category-based fields and legacy warp_tokens/byok_tokens fields.
+    /// Handles both category-based fields and the legacy aggregate warp token field.
     fn collect_models_by_category(&self) -> HashMap<String, Vec<String>> {
         let mut entries_by_category: HashMap<String, Vec<String>> = HashMap::new();
 
@@ -92,26 +92,12 @@ impl ConversationUsageView {
                         .push(model.model_id.clone());
                 }
             }
-            for (category, &tokens) in &model.byok_token_usage_by_category {
-                if tokens > 0 {
-                    entries_by_category
-                        .entry(category.clone())
-                        .or_default()
-                        .push(model.model_id.clone());
-                }
-            }
         }
 
         // Fallback to legacy fields for backwards compatibility
         if entries_by_category.is_empty() {
             for model in &self.usage_info.models {
                 if model.warp_tokens > 0 {
-                    entries_by_category
-                        .entry(PRIMARY_AGENT_CATEGORY.to_string())
-                        .or_default()
-                        .push(model.model_id.clone());
-                }
-                if model.byok_tokens > 0 {
                     entries_by_category
                         .entry(PRIMARY_AGENT_CATEGORY.to_string())
                         .or_default()

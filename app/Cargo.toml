@@ -5,7 +5,7 @@ description = "The terminal cockpit for AI coding agents on remote machines"
 edition = "2021"
 autobins = false
 name = "warp"
-version = "1.0.17"
+version = "1.0.25"
 publish.workspace = true
 license.workspace = true
 
@@ -24,7 +24,7 @@ test = false
 [[bin]]
 name = "generate_settings_schema"
 path = "src/bin/generate_settings_schema.rs"
-test = false
+test = true
 
 [dependencies]
 addr = "0.15.6"
@@ -75,7 +75,7 @@ email_address = { git = "https://github.com/warpdotdev/rust-email_address", bran
 embed_plist = "1.2"
 enclose = "1.1.8"
 enum-iterator.workspace = true
-event-listener = "5.4.0"
+event-listener = "5.4.2"
 field_mask.workspace = true
 flate2 = "1.0.17"
 float-cmp.workspace = true
@@ -257,7 +257,7 @@ inquire = "0.9.1"
 diesel = { workspace = true, features = ["sqlite", "chrono"] }
 diesel_migrations = { version = "2.2.0", features = ["sqlite"] }
 env_logger.workspace = true
-git2 = { version = "0.20.4", default-features = false, features = [
+git2 = { version = "0.21.0", default-features = false, features = [
     "vendored-libgit2",
 ] }
 http_server.workspace = true
@@ -366,7 +366,6 @@ command = { workspace = true, features = ["test-util"] }
 ctor = "0.1.18"
 http_client = { workspace = true, features = ["test-util"] }
 mockall = "0.13.1"
-mockito.workspace = true
 serial_test = "0.8.0"
 sum_tree = { workspace = true, features = ["test-util"] }
 tokio-util = { workspace = true, features = ["compat"] }

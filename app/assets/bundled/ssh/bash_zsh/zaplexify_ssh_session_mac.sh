@@ -27,12 +27,12 @@ _check_tmux() {
     if _find "$TMUX"; then
         _log SshTmuxInstaller "\"warp\""
     elif _find tmux; then
-        TMUX="tmux"
+        TMUX=tmux
         _log SshTmuxInstaller "\"user\""
     fi
 
-    if [ $TMUX ]; then
-        VER=$($TMUX -V 2>/dev/null | awk '{print $2}')
+    if [ "$TMUX" ]; then
+        VER=$("$TMUX" -V 2>/dev/null | awk '{print $2}')
         if [ -z "$VER" ]; then
             _err "\"TmuxFailed\""
         elif [ "$(printf '%s\n' "$VER" "2.9" | sort -V | tail -n1)" = "2.9" ]; then
@@ -46,4 +46,4 @@ _check_tmux() {
     return 1
 }
 
-_check_tmux && $TMUX -Lwarp -CC && exit
+_check_tmux && "$TMUX" -Lwarp -CC && exit

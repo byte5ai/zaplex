@@ -2,15 +2,87 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.25] — 2026-09-11
+
+- BYOP vollständig entfernt; Claude- und Codex-Subscription-Routing isoliert Provider-Zugangsdaten und bereinigt Legacy-Einstellungen sowie Secrets.
+
+## [1.0.24] — 2026-09-11
+
+- **Gebundene Root-Passwortfreigabe:** Nur ein lokal vom Nutzer gestarteter Root-su-Befehl autorisiert genau die nächste Passwortbestätigung; Remote-Ausgabe, spätere Befehle, Abbruch, Sessionwechsel und Zeitablauf löschen die Freigabe.
+
+## [1.0.23] — 2026-09-11
+
+- **Sichere tmux-Installation:** SSH-Zaplexify behandelt Home-Verzeichnisse mit Leerzeichen korrekt und installiert tmux ohne vollständige Paketaktualisierung; ausführbare Asset-Tests sichern Pfade, Argumente, Integrität und macOS-Längenvertrag ab.
+
+## [1.0.22] — 2026-09-11
+
+- **Eingegrenzte Skill-Pfade:** Direkte Skill-Verweise werden vor dem Parsen kanonisiert und müssen innerhalb ihres vertrauenswürdigen Wurzelverzeichnisses bleiben; absolute Pfade, Elternsegmente und Symlink-Ausbrüche werden abgewiesen.
+
+## [1.0.21] — 2026-09-11
+
+- **Korrekte SFTP-Breadcrumbs:** Absolute und Root-Pfade behalten ihren führenden Slash; Rerenders verwenden stabile Klickziele und navigieren exakt zum dargestellten Segment.
+
+## [1.0.20] — 2026-09-11
+
+- **Gehärtete Entwicklungscontainer:** Linux-Container verwenden keinen SSH-Dienst oder Shared Login mehr; Toolchain-Downloads, Images und Hilfsquellen sind unveränderlich gepinnt und vor Ausführung kryptografisch geprüft.
+
+## [1.0.19] — 2026-09-11
+
+- **Sicheres Download-Überschreiben:** Bestätigte lokale Ziele werden atomar verdrängt und anhand des tatsächlich ersetzten Dateisystemobjekts geprüft; konkurrierend erneuerte Dateien werden wiederhergestellt statt überschrieben.
+
+## [1.0.18] — 2026-09-11
+
+- Lokale native Absturzdiagnose startet bei Opt-in idempotent, beendet und reapet den Minidump-Dienst bei Opt-out und wird durch einen echten Linux-Smoke-Test abgesichert.
+
 ## [1.0.17] — 2026-09-11
 
-- **Ausschließlich Subscription-Agenten:** Der interne BYOP-/Custom-Provider-
-  Stack einschließlich API-Key- und AWS-Bedrock-Credential-Pfaden ist entfernt;
-  „Frag Zaplex“ nutzt nur noch erkannte Claude-Code- und Codex-Abonnements.
-- **Sicherer Übergang:** Veraltete Provider-Secrets werden beim Start
-  idempotent gelöscht, bekannte API-Key-Umgebungsvariablen für CLI-Agenten
-  weiterhin entfernt und alte Settings-/Persistenzdaten nur noch kompatibel
-  gelesen, aber nicht mehr produktiv ausgewertet.
+- OSS-Einstellungsschema verwendet den expliziten OSS-Kanal und die tatsächlich kompilierten Laufzeit-Features; ungültige Kanäle brechen ab.
+
+## [1.0.16] — 2026-09-11
+
+- **Atomare Release-Versionen:** Ein einziges validiertes Skript aktualisiert
+  App-, Lockfile-, Bundle-, Installer- und Release-Dokumentation gemeinsam;
+  Pull Requests prüfen dieselben Invarianten vor teuren Builds.
+
+## [1.0.15] — 2026-09-10
+
+- **Geschlossene Dependency-Lücken:** Betroffene HTTP/2-, TLS-, XML-, Git-
+  und Nebenabhängigkeiten sind auf korrigierte Stände aktualisiert; der alte
+  Hyper-/Rustls-Pfad des AWS-Clients wurde entfernt.
+- **Dauerhafte Sicherheitsprüfung:** Pull Requests und ein wöchentlicher Lauf
+  prüfen RustSec-Advisories; die immer laufende Vorprüfung erzwingt synchronen
+  Lizenzumfang, exakte Git-Quellen und die bereinigte Dependency-Baseline.
+
+## [1.0.14] — 2026-09-10
+
+- **Verbindliche Clippy-Policy:** Build-relevante Pull Requests verweigern nun
+  sämtliche Clippy-Warnungen; portable Zeitmessung und der gemeinsame
+  Prozess-Wrapper beseitigen die zuvor geduldeten Zaplex-Verstöße.
+
+## [1.0.13] — 2026-09-10
+
+- **Effizientere Cockpit-Aktualisierung:** Wachsende Codex- und
+  Claude-Transkripte werden für Sitzungs- und Aufgabenstatus nur noch ab dem
+  geprüften Append-Offset verarbeitet; Truncate, Ersetzung und geänderte
+  Prüfsummen lösen sicher einen vollständigen Neuaufbau aus.
+- **Zwischengespeicherte Claude-Nutzung:** Unveränderte Transkripte werden für
+  die Nutzungsanzeige nicht erneut eingelesen; ein begrenzter LRU-Cache hält
+  ausschließlich destillierte Nutzungsdaten und wendet Zeitfenster bei jedem
+  Refresh neu an.
+
+## [1.0.12] — 2026-09-10
+
+- **Reaktionsfähige Remote-Dateitransfers:** Datei-Chunks laufen außerhalb des
+  Model-Threads mit begrenzter Parallelität und Warteschlange; Abbrüche räumen
+  wartende Arbeit auf, während Schreibreihenfolge und Offsets pro Datei stabil
+  bleiben.
+
+## [1.0.11] — 2026-09-10
+
+- **Verständlicher SSH-Fallback:** ControlMaster-Fehler erscheinen ohne
+  doppeltes Präfix; nach einem fehlgeschlagenen oder inkompatiblen
+  Remote-Server-Setup zeigt der Prompt den aktiven Standard-SSH-Modus statt
+  dauerhaft „Shell wird gestartet…“.
 
 ## [1.0.10] — 2026-09-10
 
@@ -257,7 +329,10 @@ First preview release of the Zap community fork.
 - **AI**: CJK input classification, reasoning split out, BYOP `tool_call` diagnostics, LRC tag-in synthesizes a virtual subagent + floating spawn flow
 - **CI**: Release workflow explicitly declares `contents: write` permission, fixing a 403
 
-[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.9...HEAD
+[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.12...HEAD
+[1.0.12]: https://github.com/byte5ai/zaplex/compare/v1.0.11...v1.0.12
+[1.0.11]: https://github.com/byte5ai/zaplex/compare/v1.0.10...v1.0.11
+[1.0.10]: https://github.com/byte5ai/zaplex/compare/v1.0.9...v1.0.10
 [1.0.9]: https://github.com/byte5ai/zaplex/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/byte5ai/zaplex/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/byte5ai/zaplex/compare/v1.0.6...v1.0.7

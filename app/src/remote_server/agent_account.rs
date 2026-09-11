@@ -10,12 +10,17 @@ use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use instant::Instant;
 use sha2::{Digest as _, Sha256};
 use zaplex_cockpit::{
     Account, CockpitSnapshot, Provider, ScanHealth, SessionSnapshot, TranscriptScanCache,
     UsageProvenance, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK,
+};
+
+use crate::ai::subscription_agent::{
+    CLAUDE_PROVIDER_MANAGED_BY_HOST, CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES,
 };
 
 use super::proto::{AgentAccountInfo, AgentAccountInventory, AgentLaunchRoute};
@@ -24,6 +29,7 @@ pub(crate) const ACCOUNT_ROUTING_SCHEMA_VERSION: u32 = 1;
 const ACCOUNT_ROUTE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const CLAUDE_CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
 const CODEX_HOME: &str = "CODEX_HOME";
+const CODEX_SUBSCRIPTION_PROVIDER_ENVIRONMENT: [&str; 1] = ["OPENAI_API_KEY"];
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct AccountRouteKey {
@@ -433,8 +439,25 @@ pub(crate) fn prepare_launch_environment_from_routes(
         return Err("agent account provider mismatch".to_string());
     }
 
+    let (config_env_name, provider_environment): (&str, &[&str]) = match route.provider.as_str() {
+        "claude" => (
+            CLAUDE_CONFIG_DIR,
+            &CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES,
+        ),
+        "codex" => (CODEX_HOME, &CODEX_SUBSCRIPTION_PROVIDER_ENVIRONMENT),
+        _ => return Err("invalid agent account provider".to_string()),
+    };
     env.remove(CLAUDE_CONFIG_DIR);
     env.remove(CODEX_HOME);
+    for env_name in provider_environment {
+        env.remove(*env_name);
+    }
+    if route.provider == "claude" {
+        env.insert(
+            CLAUDE_PROVIDER_MANAGED_BY_HOST.0.to_string(),
+            CLAUDE_PROVIDER_MANAGED_BY_HOST.1.to_string(),
+        );
+    }
     let Some(config_dir) = target.config_dir.as_ref() else {
         return Ok(());
     };
@@ -446,12 +469,7 @@ pub(crate) fn prepare_launch_environment_from_routes(
     let config_dir = canonical
         .to_str()
         .ok_or_else(|| "selected daemon account path is not UTF-8".to_string())?;
-    let env_name = match route.provider.as_str() {
-        "claude" => CLAUDE_CONFIG_DIR,
-        "codex" => CODEX_HOME,
-        _ => return Err("invalid agent account provider".to_string()),
-    };
-    env.insert(env_name.to_string(), config_dir.to_string());
+    env.insert(config_env_name.to_string(), config_dir.to_string());
     Ok(())
 }
 

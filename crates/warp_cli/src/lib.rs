@@ -319,6 +319,17 @@ pub enum WorkerCommand {
     MinidumpServer {
         /// Socket name for the minidump server.
         socket_name: std::path::PathBuf,
+        /// Override the dump directory for the native smoke test.
+        #[arg(long, hide = true)]
+        dump_dir: Option<std::path::PathBuf>,
+    },
+
+    /// Run the native minidump client/server smoke test.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[command(hide = true)]
+    MinidumpSmoke {
+        /// Directory in which the smoke test must create its dump.
+        dump_dir: std::path::PathBuf,
     },
 
     /// Run the remote development server proxy over SSH stdio.

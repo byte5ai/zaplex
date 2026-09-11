@@ -7,7 +7,6 @@ _on_error() {
 }
 trap "_on_error \"\${LINENO}\" \"\$BASH_COMMAND\"" ERR
 
-sudo pacman -Syu --noconfirm
-sudo pacman -S --noconfirm tmux'
+sudo pacman -S --needed --noconfirm tmux'
 
 bash <<< "$INSTALL_TMUX" && _check_tmux && command tmux -Lwarp -CC && exit

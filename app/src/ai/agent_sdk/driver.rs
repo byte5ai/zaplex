@@ -382,9 +382,17 @@ impl AgentDriver {
             env_vars.insert(OsString::from(env_name), OsString::from(env_value));
         }
 
-        for name in PROVIDER_CREDENTIAL_ENVIRONMENT_VARIABLES {
+        for name in
+            crate::ai::subscription_agent::CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES
+                .into_iter()
+                .chain(OTHER_PROVIDER_CREDENTIAL_ENVIRONMENT_VARIABLES)
+        {
             env_vars.insert(OsString::from(name), OsString::new());
         }
+        env_vars.insert(
+            OsString::from(crate::ai::subscription_agent::CLAUDE_PROVIDER_MANAGED_BY_HOST.0),
+            OsString::from(crate::ai::subscription_agent::CLAUDE_PROVIDER_MANAGED_BY_HOST.1),
+        );
 
         env_vars.extend(task_env_vars(
             task_id.as_ref(),
@@ -1483,18 +1491,13 @@ impl AgentDriver {
     }
 }
 
-const PROVIDER_CREDENTIAL_ENVIRONMENT_VARIABLES: [&str; 7] = [
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "OPENAI_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
-    "AWS_BEARER_TOKEN_BEDROCK",
-    "CLAUDE_CODE_USE_BEDROCK",
-];
+const OTHER_PROVIDER_CREDENTIAL_ENVIRONMENT_VARIABLES: [&str; 3] =
+    ["OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"];
 
 fn is_provider_credential_environment_variable(name: &str) -> bool {
-    PROVIDER_CREDENTIAL_ENVIRONMENT_VARIABLES.contains(&name)
+    crate::ai::subscription_agent::CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES
+        .contains(&name)
+        || OTHER_PROVIDER_CREDENTIAL_ENVIRONMENT_VARIABLES.contains(&name)
 }
 
 impl Entity for AgentDriver {

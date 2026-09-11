@@ -18,6 +18,7 @@ use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
+use instant::Instant;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
@@ -757,9 +758,7 @@ pub struct SftpBrowserView {
     upload_btn: MouseStateHandle,
     /// New folder button
     new_folder_btn: MouseStateHandle,
-    /// Root breadcrumb button
-    root_breadcrumb_btn: MouseStateHandle,
-    /// Persistent click state for each non-root breadcrumb segment.
+    /// Persistent click state for each breadcrumb segment.
     breadcrumb_mouse_handles: HashMap<PathBuf, MouseStateHandle>,
     /// Dialog confirm button
     dialog_confirm_btn: MouseStateHandle,
@@ -865,7 +864,7 @@ pub struct SftpBrowserView {
     /// row navigates on double click (no tail click exists), and breadcrumb /
     /// toolbar targets are not over the rows. 250 ms is far below any
     /// deliberate see-then-click reaction on a fresh listing.
-    suppress_row_clicks_until: Option<std::time::Instant>,
+    suppress_row_clicks_until: Option<Instant>,
     // ---- Scrolling ----
     /// Scroll state handle
     scroll_state: ClippedScrollStateHandle,
@@ -936,17 +935,13 @@ impl SftpBrowserView {
     /// handles across renders preserves a mouse-down until the matching
     /// mouse-up arrives.
     fn sync_breadcrumb_mouse_handles(&mut self) {
-        let mut accumulated = PathBuf::new();
-        let mut visible = HashSet::new();
-        for component in self
-            .current_path
-            .components()
-            .filter(|component| !matches!(component, Component::RootDir))
-        {
-            accumulated.push(component);
-            visible.insert(accumulated.clone());
+        let visible: HashSet<_> = super::breadcrumb::breadcrumb_segments(&self.current_path)
+            .into_iter()
+            .map(|segment| segment.target)
+            .collect();
+        for target in &visible {
             self.breadcrumb_mouse_handles
-                .entry(accumulated.clone())
+                .entry(target.clone())
                 .or_default();
         }
         self.breadcrumb_mouse_handles
@@ -1000,7 +995,6 @@ impl SftpBrowserView {
             forward_btn: MouseStateHandle::default(),
             upload_btn: MouseStateHandle::default(),
             new_folder_btn: MouseStateHandle::default(),
-            root_breadcrumb_btn: MouseStateHandle::default(),
             breadcrumb_mouse_handles: HashMap::new(),
             dialog_confirm_btn: MouseStateHandle::default(),
             dialog_cancel_btn: MouseStateHandle::default(),
@@ -1939,7 +1933,7 @@ impl SftpBrowserView {
     /// moves need not.
     fn row_clicks_suppressed(&self) -> bool {
         self.suppress_row_clicks_until
-            .is_some_and(|until| std::time::Instant::now() < until)
+            .is_some_and(|until| Instant::now() < until)
     }
 
     /// Test-only fast-forward past the stray-click window — tests dispatch
@@ -4163,8 +4157,6 @@ impl SftpBrowserView {
     /// Render the breadcrumb navigation
     fn render_breadcrumb(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let text_color = theme.sub_text_color(theme.background());
-
         let parts: Vec<Box<dyn Element>> = super::breadcrumb::render_breadcrumb(
             &self.current_path,
             &self.breadcrumb_mouse_handles,
@@ -4174,26 +4166,6 @@ impl SftpBrowserView {
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(2.0);
-
-        // Add the root directory "/" as a clickable entry point
-        let root_text_color = text_color;
-        let root_hoverable = Hoverable::new(self.root_breadcrumb_btn.clone(), move |_| {
-            let t = Text::new_inline(
-                "/".to_string(),
-                appearance.ui_font_family(),
-                appearance.ui_font_size(),
-            )
-            .with_color(root_text_color.into())
-            .finish();
-            Container::new(t).finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(SftpBrowserAction::NavigateTo(PathBuf::from("/")));
-        })
-        .finish();
-        let root_el = SavePosition::new(root_hoverable, "sftp_breadcrumb:/").finish();
-        row.add_child(root_el);
 
         for part in parts {
             row.add_child(part);
@@ -5792,7 +5764,7 @@ impl TypedActionView for SftpBrowserView {
                 // second click is still in flight when the rows swap (see
                 // `suppress_row_clicks_until`).
                 self.suppress_row_clicks_until =
-                    Some(std::time::Instant::now() + std::time::Duration::from_millis(250));
+                    Some(Instant::now() + std::time::Duration::from_millis(250));
                 self.go_up(ctx);
             }
             SftpBrowserAction::DeleteSelected => {

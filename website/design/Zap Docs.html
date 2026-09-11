@@ -855,13 +855,13 @@
                         target="_blank"
                         rel="noopener"
                         data-lang="en"
-                        >Providers</a
+                        >Agents</a
                     ><a
                         href="https://github.com/zerx-lab/zap"
                         target="_blank"
                         rel="noopener"
                         data-lang="zh"
-                        >提供方</a
+                        >Agent</a
                     >
                     <a
                         href="https://github.com/zerx-lab/zap/blob/main/CHANGELOG.md"
@@ -1099,8 +1099,8 @@
                         >
                             <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h7" />
                         </svg>
-                        <span data-lang="en">Providers</span
-                        ><span data-lang="zh">Provider 配置</span>
+                        <span data-lang="en">Subscription agents</span
+                        ><span data-lang="zh">订阅 Agent</span>
                         <svg
                             class="chev"
                             viewBox="0 0 12 12"
@@ -1112,7 +1112,7 @@
                         </svg>
                     </div>
                     <div class="sb-list">
-                        <a href="#providers-overview"
+                        <a href="#agents-overview"
                             ><svg
                                 class="icn"
                                 viewBox="0 0 16 16"
@@ -1124,7 +1124,7 @@
                             ><span data-lang="en">Overview</span
                             ><span data-lang="zh">总览</span></a
                         >
-                        <a href="#providers-protocols"
+                        <a href="#agents-claude"
                             ><svg
                                 class="icn"
                                 viewBox="0 0 16 16"
@@ -1133,10 +1133,10 @@
                                 stroke-width="1.6"
                             >
                                 <path d="M3 8h10M9 4l4 4-4 4" /></svg
-                            ><span data-lang="en">Native protocols</span
-                            ><span data-lang="zh">原生协议</span></a
+                            ><span data-lang="en">Claude Code</span
+                            ><span data-lang="zh">Claude Code</span></a
                         >
-                        <a href="#providers-openai"
+                        <a href="#agents-codex"
                             ><svg
                                 class="icn"
                                 viewBox="0 0 16 16"
@@ -1145,10 +1145,10 @@
                                 stroke-width="1.6"
                             >
                                 <path d="M3 4l5-2 5 2v8l-5 2-5-2z" /></svg
-                            ><span data-lang="en">OpenAI-compatible</span
-                            ><span data-lang="zh">OpenAI 兼容</span></a
+                            ><span data-lang="en">Codex</span
+                            ><span data-lang="zh">Codex</span></a
                         >
-                        <a href="#providers-deepseek"
+                        <a href="#agents-local"
                             ><svg
                                 class="icn"
                                 viewBox="0 0 16 16"
@@ -1157,9 +1157,10 @@
                                 stroke-width="1.6"
                             >
                                 <path d="M3 11l5-6 5 6" /></svg
-                            ><span>DeepSeek</span></a
+                            ><span data-lang="en">Local sessions</span
+                            ><span data-lang="zh">本地会话</span></a
                         >
-                        <a href="#providers-ollama"
+                        <a href="#agents-ssh"
                             ><svg
                                 class="icn"
                                 viewBox="0 0 16 16"
@@ -1169,8 +1170,8 @@
                             >
                                 <circle cx="8" cy="8" r="3" />
                                 <circle cx="8" cy="8" r="5.5" /></svg
-                            ><span data-lang="en">Ollama (local)</span
-                            ><span data-lang="zh">Ollama(本地)</span></a
+                            ><span data-lang="en">SSH sessions</span
+                            ><span data-lang="zh">SSH 会话</span></a
                         >
                     </div>
                 </div>
@@ -1394,8 +1395,8 @@
                     Zap is a Rust-based terminal that reuses the upstream Warp
                     UI &mdash; <code>Blocks</code>, <code>Workflows</code>,
                     command suggestions, the keymap layer &mdash; and replaces
-                    the closed AI gateway with explicit, local, editable
-                    plumbing. It is <strong>not</strong> the official Warp
+                    static model assumptions with explicit Claude Code and
+                    Codex subscription sessions. It is <strong>not</strong> the official Warp
                     product, and it is not affiliated with Warp Inc.
                 </p>
                 <p data-lang="zh">
@@ -1403,32 +1404,31 @@
                     <code>Blocks</code
                     >、<code>Workflows</code>、命令建议、keymap 层 ── 把封闭的
                     AI gateway
-                    替换成显式、本地、可编辑的管线。它<strong>不是</strong>官方
+                    替换成显式的 Claude Code 与 Codex 订阅会话。它<strong>不是</strong>官方
                     Warp,也与 Warp Inc. 无任何关联。
                 </p>
 
                 <div class="feat-grid">
                     <div class="cell">
-                        <div class="ftitle" data-lang="en">Any provider</div>
-                        <div class="ftitle" data-lang="zh">任意 Provider</div>
+                        <div class="ftitle" data-lang="en">Subscription agents</div>
+                        <div class="ftitle" data-lang="zh">订阅 Agent</div>
                         <div class="fdesc" data-lang="en">
-                            Any OpenAI Chat Completions compatible endpoint.
+                            Signed-in Claude Code and Codex installations.
                         </div>
                         <div class="fdesc" data-lang="zh">
-                            任意 OpenAI Chat Completions 兼容端点。
+                            已登录的 Claude Code 与 Codex 安装。
                         </div>
                     </div>
                     <div class="cell">
                         <div class="ftitle" data-lang="en">
-                            Local credentials
+                            CLI-managed accounts
                         </div>
-                        <div class="ftitle" data-lang="zh">本地凭证</div>
+                        <div class="ftitle" data-lang="zh">CLI 管理的账号</div>
                         <div class="fdesc" data-lang="en">
-                            Stored only in <code>settings.toml</code>. Never
-                            leaves the device.
+                            Authentication remains managed by the selected CLI.
                         </div>
                         <div class="fdesc" data-lang="zh">
-                            仅存于 <code>settings.toml</code>,永不离开本机。
+                            认证由所选 CLI 管理。
                         </div>
                     </div>
                     <div class="cell">
@@ -1481,18 +1481,15 @@
                 <h2 id="why-fork" data-lang="en">Why this product?</h2>
                 <h2 id="why-fork" data-lang="zh">为什么做 Zap</h2>
                 <p data-lang="en">
-                    Upstream Warp routes AI traffic through its own gateway.
-                    That works for most people, but it doesn't work for users
-                    who want to bring their own keys, point at a self-hosted
-                    model, or audit the system prompt that's getting sent on
-                    their behalf. Zap changes <em>five</em> things; everything
-                    else stays.
+                    Zap keeps the terminal experience while running the in-app
+                    agent through signed-in Claude Code or Codex subscriptions.
+                    The selected agent reports its own accounts, models, and
+                    sessions instead of relying on static provider settings.
                 </p>
                 <p data-lang="zh">
-                    上游 Warp 把 AI 流量经过自己的
-                    gateway。对大部分人没问题,但对要自带
-                    key、指向自托管模型、审计系统提示词的用户来说不够。Zap 只改
-                    <em>五件事</em>,其他全留。
+                    Zap 保留完整终端体验，并通过已登录的 Claude Code 或 Codex
+                    订阅运行内置 Agent。所选 Agent 会动态提供账号、模型与会话，
+                    不再依赖静态服务商设置。
                 </p>
 
                 <table class="props">
@@ -1508,15 +1505,15 @@
                     </thead>
                     <tbody>
                         <tr>
-                            <td class="t" data-lang="en">AI provider</td>
-                            <td class="t" data-lang="zh">AI 提供方</td>
+                            <td class="t" data-lang="en">AI agent</td>
+                            <td class="t" data-lang="zh">AI Agent</td>
                             <td class="d" data-lang="en">Cloud gateway</td>
                             <td class="d" data-lang="zh">云端 gateway</td>
                             <td class="d" data-lang="en">
-                                Any OpenAI-compatible endpoint
+                                Claude Code or Codex subscription
                             </td>
                             <td class="d" data-lang="zh">
-                                任意 OpenAI 兼容端点
+                                Claude Code 或 Codex 订阅
                             </td>
                         </tr>
                         <tr>
@@ -1524,8 +1521,8 @@
                             <td class="t" data-lang="zh">凭证</td>
                             <td class="d" data-lang="en">Cloud account</td>
                             <td class="d" data-lang="zh">云端账号</td>
-                            <td class="d" data-lang="en">Local file only</td>
-                            <td class="d" data-lang="zh">仅本地文件</td>
+                            <td class="d" data-lang="en">Managed by the CLI</td>
+                            <td class="d" data-lang="zh">由 CLI 管理</td>
                         </tr>
                         <tr>
                             <td class="t" data-lang="en">System prompt</td>
@@ -1628,37 +1625,27 @@ cargo run --release <span class="acc">--bin zap-oss</span></pre>
                 <h2 id="first-run" data-lang="en">First run</h2>
                 <h2 id="first-run" data-lang="zh">首次运行</h2>
                 <p data-lang="en">
-                    After launch, open
-                    <code>Settings → Agents → Providers</code> and add at least
-                    one provider. The minimal config looks like this:
+                    Install Claude Code or Codex and complete sign-in in that
+                    CLI. Zap then discovers the accounts and reported models.
                 </p>
                 <p data-lang="zh">
-                    启动后,打开 <code>设置 → Agents → 提供商</code>,至少添加一个
-                    provider。最小配置如下:
+                    安装 Claude Code 或 Codex，并在对应 CLI 中完成登录。Zap
+                    随后会发现账号与已报告的模型。
                 </p>
 
                 <div class="code-card">
                     <div class="code-head">
                         <span class="dot"></span>
                         <span class="file mono"
-                            >~/.config/zap/settings.toml</span
+                            >subscription agents</span
                         >
-                        <span class="lang-tag">TOML</span>
+                        <span class="lang-tag">STATUS</span>
                         <button class="copy" data-copy>Copy</button>
                     </div>
                     <pre
                         class="code"
-                    ><span class="com"># Pick any OpenAI-compatible endpoint</span>
-<span class="key">[providers.deepseek]</span>
-base_url = <span class="str">"https://api.deepseek.com/v1"</span>
-protocol = <span class="str">"deepseek"</span>     <span class="com"># or: openai, anthropic, gemini, ollama</span>
-api_key  = <span class="str">"sk-•••"</span>          <span class="com"># stored locally, never sent home</span>
-
-<span class="key">[[providers.deepseek.models]]</span>
-display = <span class="str">"DeepSeek V4 Pro"</span>
-id      = <span class="str">"deepseek-v4-pro"</span>
-context = <span class="num">1000000</span>
-output  = <span class="num">384000</span></pre>
+                    ><span class="key">Claude Code</span>  <span class="str">signed in</span>
+<span class="key">Codex</span>        <span class="str">signed in</span></pre>
                 </div>
 
                 <p class="muted" data-lang="en">
@@ -1771,7 +1758,7 @@ forward_agent = <span class="acc">true</span></pre>
                             <td class="d" data-lang="zh">关闭</td>
                         </tr>
                         <tr>
-                            <td class="k">api_keys.location</td>
+                            <td class="k">agent_accounts</td>
                             <td
                                 class="d mono"
                                 style="
@@ -1779,7 +1766,7 @@ forward_agent = <span class="acc">true</span></pre>
                                         &quot;Geist Mono&quot;, monospace;
                                 "
                             >
-                                ~/.config/zap/settings.toml
+                                managed by Claude Code / Codex CLI
                             </td>
                         </tr>
                     </tbody>
