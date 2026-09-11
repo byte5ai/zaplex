@@ -7,10 +7,10 @@ use std::sync::Arc;
 use warpui::{
     elements::{
         Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, DropShadow, Empty, Expanded, Flex, Hoverable, MainAxisSize,
-        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement as _, ParentOffsetBounds,
-        Percentage, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect,
-        SavePosition, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+        CrossAxisAlignment, DropShadow, Empty, Expanded, Flex, Hoverable, MouseStateHandle,
+        OffsetPositioning, ParentAnchor, ParentElement as _, ParentOffsetBounds, Percentage,
+        PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect, SavePosition, Stack,
+        Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
     },
     platform::Cursor,
     text_layout::ClipConfig,
@@ -1864,10 +1864,10 @@ impl View for ProfileModelSelector {
                         .and_then(|i| i.spec.as_ref())
                         .cloned();
                     Some(self.render_sidecar_spec_panel(&kind, &sidecar_spec, app))
-                } else if let Some(spec) = info.spec.as_ref() {
-                    Some(self.render_model_spec(spec, app))
                 } else {
-                    None
+                    info.spec
+                        .as_ref()
+                        .map(|spec| self.render_model_spec(spec, app))
                 };
 
                 if let Some(model_spec_sidecar) = model_spec_sidecar {

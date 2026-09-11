@@ -5,16 +5,12 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
-use warpui::elements::{
-    ConstrainedBox, Container, CornerRadius, Highlight, MouseStateHandle, Radius, Text,
-};
+use warpui::elements::{ConstrainedBox, Container, CornerRadius, Highlight, Radius, Text};
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::text_layout::ClipConfig;
 use warpui::{AppContext, Element, Entity, EntityId, SingletonEntity as _};
 
-use crate::ai::llms::{
-    DisableReason, LLMId, LLMInfo, LLMPreferences, LLMSpec,
-};
+use crate::ai::llms::{DisableReason, LLMId, LLMInfo, LLMPreferences, LLMSpec};
 use crate::features::FeatureFlag;
 use crate::search::data_source::{Query, QueryFilter, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
@@ -165,7 +161,7 @@ impl SyncDataSource for ModelSelectorDataSource {
         if query_text.is_empty() {
             return Ok(choices
                 .into_iter()
-                .map(|llm| QueryResult::from(ModelSearchItem::new(llm, &active_llm_id, app)))
+                .map(|llm| QueryResult::from(ModelSearchItem::new(llm, &active_llm_id)))
                 .collect());
         }
 
@@ -183,7 +179,7 @@ impl SyncDataSource for ModelSelectorDataSource {
                 }
 
                 Some(QueryResult::from(
-                    ModelSearchItem::new(llm, &active_llm_id, app)
+                    ModelSearchItem::new(llm, &active_llm_id)
                         .with_name_match_result(Some(match_result.clone()))
                         .with_score(OrderedFloat(match_result.score as f64)),
                 ))
@@ -211,7 +207,7 @@ struct ModelSearchItem {
 }
 
 impl ModelSearchItem {
-    fn new(llm: &LLMInfo, active_llm_id: &LLMId, app: &AppContext) -> Self {
+    fn new(llm: &LLMInfo, active_llm_id: &LLMId) -> Self {
         Self {
             id: llm.id.clone(),
             spec: llm.spec.clone(),
