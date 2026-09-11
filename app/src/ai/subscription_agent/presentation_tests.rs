@@ -5,6 +5,10 @@ use crate::ai::subscription_agent::{
 };
 use std::path::PathBuf;
 
+fn isolated(value: &str) -> String {
+    format!("\u{2068}{value}\u{2069}")
+}
+
 fn assert_policy(
     lifecycle: AgentLifecycle,
     status: &str,
@@ -41,7 +45,7 @@ fn not_signed_in_presentation_requires_authentication() {
         AgentLifecycle::NotSignedIn {
             agent: SubscriptionAgent::ClaudeCode,
         },
-        "Claude Code is not signed in",
+        &format!("{} is not signed in", isolated("Claude Code")),
         false,
         &[
             ConversationAction::OpenAgentSettings,
@@ -86,7 +90,7 @@ fn running_tool_presentation_names_the_tool() {
         AgentLifecycle::RunningTool {
             name: "terminal command".to_string(),
         },
-        "Running terminal command",
+        &format!("Running {}", isolated("terminal command")),
         false,
         &[],
     );
@@ -187,8 +191,14 @@ fn identity_fields_are_stable_and_omit_a_missing_session() {
         ["Agent", "Account", "Host", "Directory", "Model", "Status"]
     );
     assert_eq!(fields[0].value, "Codex");
-    assert_eq!(fields[1].value, "Work account · ID work");
-    assert_eq!(fields[2].value, "Local machine · ID local");
+    assert_eq!(
+        fields[1].value,
+        format!("{} · ID {}", isolated("Work account"), isolated("work"))
+    );
+    assert_eq!(
+        fields[2].value,
+        format!("{} · ID {}", isolated("Local machine"), isolated("local"))
+    );
     assert_eq!(
         fields[3].value,
         target.working_directory.display().to_string()
@@ -206,7 +216,11 @@ fn model_identity_names_alias_launch_id_and_resolved_version() {
 
     assert_eq!(
         model_identity_label(&target.model),
-        "Claude Sonnet · ID sonnet · resolved claude-sonnet-4-5-20250929"
+        format!(
+            "Claude Sonnet · ID {} · resolved {}",
+            isolated("sonnet"),
+            isolated("claude-sonnet-4-5-20250929")
+        )
     );
     let fields = conversation_identity_fields(&target, None, &AgentLifecycle::Ready);
     assert_eq!(fields[4].value, model_identity_label(&target.model));
@@ -219,7 +233,10 @@ fn model_identity_does_not_duplicate_equal_names_or_resolved_ids() {
     model.display_name = model.id.clone();
     model.resolved_model = Some(model.id.clone());
 
-    assert_eq!(model_identity_label(&model), "ID gpt-5");
+    assert_eq!(
+        model_identity_label(&model),
+        format!("ID {}", isolated("gpt-5"))
+    );
 }
 
 #[test]
@@ -235,7 +252,7 @@ fn identity_fields_include_the_exact_session_for_resume() {
         },
     );
     assert_eq!(fields[5].label, "Session");
-    assert_eq!(fields[5].value, "Codex thread-42");
+    assert_eq!(fields[5].value, format!("Codex {}", isolated("thread-42")));
     assert_eq!(fields[6].value, "Turn complete");
 }
 
@@ -333,7 +350,15 @@ fn selected_location_exposes_stable_host_id_and_exact_directory() {
 
     assert_eq!(
         location_identity_label(&location),
-        "Host devhost · ID daemon-42 · Directory /srv/project"
+        format!(
+            "Host {} · Directory {}",
+            isolated(&format!(
+                "{} · ID {}",
+                isolated("devhost"),
+                isolated("daemon-42")
+            )),
+            isolated("/srv/project")
+        )
     );
 }
 
