@@ -6,6 +6,7 @@ use crate::ai::agent_conversations_model::{
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use fuzzy_match::match_indices_case_insensitive;
+use std::cmp::Reverse;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -182,7 +183,7 @@ impl ConversationListViewModel {
                 })
                 .collect();
 
-            matched_items.sort_by(|a, b| b.0.cmp(&a.0));
+            matched_items.sort_by_key(|item| Reverse(item.0));
             self.filtered_items = matched_items.into_iter().map(|(_, item)| item).collect();
         }
     }

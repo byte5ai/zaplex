@@ -1931,92 +1931,88 @@ impl BlockListElement {
         ctx: &mut EventContext,
         app: &AppContext,
     ) -> bool {
-        if self.is_terminal_selecting && self.bounds.is_some() {
-            let bounds = self.bounds.unwrap();
+        if !self.is_terminal_selecting {
+            return false;
+        }
+        let Some(bounds) = self.bounds else {
+            return false;
+        };
 
-            let snackbar_height = self
-                .snackbar_header_state()
-                .header_rect()
-                .map_or(0., |rect| rect.height());
-            let bounds_top = bounds.origin_y();
-            let snackbar_bottom = bounds_top + snackbar_height;
-            let bottom = bounds.lower_left().y() - BOTTOM_VERTICAL_MARGIN;
+        let snackbar_height = self
+            .snackbar_header_state()
+            .header_rect()
+            .map_or(0., |rect| rect.height());
+        let bounds_top = bounds.origin_y();
+        let snackbar_bottom = bounds_top + snackbar_height;
+        let bottom = bounds.lower_left().y() - BOTTOM_VERTICAL_MARGIN;
 
-            // Adjust the scroll delta if the mouse position is not within the current element.
-            let delta_y = if position.y() < snackbar_bottom {
-                // In order to make scrolling feel smooth when there is a block based
-                // snackbar, we only calculate exponential scroll acceleration on the
-                // portion of the scroll delta that is above the bounds of the element.
-                // Otherwise, if you exponentially scroll on the snackbar portion of the
-                // delta, you end up with "jumps" in scroll once one snackbar scrolls offscreen
-                // and the next header shows.
-                let (delta_outside_bounds, delta_from_snackbar_bottom) = (
-                    (bounds_top - position.y()).max(0.),
-                    (snackbar_bottom - position.y())
-                        .min(snackbar_height)
-                        .max(0.),
-                );
-                POLYNOMIAL_SCROLLING.accelerated_delta(delta_outside_bounds)
-                    + LINEAR_SCROLLING.accelerated_delta(delta_from_snackbar_bottom)
-            } else if position.y() > bottom {
-                -POLYNOMIAL_SCROLLING.accelerated_delta(position.y() - bottom)
-            } else {
-                0.0
-            };
+        // Adjust the scroll delta if the mouse position is not within the current element.
+        let delta_y = if position.y() < snackbar_bottom {
+            // In order to make scrolling feel smooth when there is a block based
+            // snackbar, we only calculate exponential scroll acceleration on the
+            // portion of the scroll delta that is above the bounds of the element.
+            // Otherwise, if you exponentially scroll on the snackbar portion of the
+            // delta, you end up with "jumps" in scroll once one snackbar scrolls offscreen
+            // and the next header shows.
+            let (delta_outside_bounds, delta_from_snackbar_bottom) = (
+                (bounds_top - position.y()).max(0.),
+                (snackbar_bottom - position.y())
+                    .min(snackbar_height)
+                    .max(0.),
+            );
+            POLYNOMIAL_SCROLLING.accelerated_delta(delta_outside_bounds)
+                + LINEAR_SCROLLING.accelerated_delta(delta_from_snackbar_bottom)
+        } else if position.y() > bottom {
+            -POLYNOMIAL_SCROLLING.accelerated_delta(position.y() - bottom)
+        } else {
+            0.0
+        };
 
-            let side = self
-                .size_info
-                .get_mouse_side(position - vec2f(bounds.origin().x(), snackbar_bottom));
-            if !is_selecting_blocks {
-                if let Some(point) = self.coord_to_point(
-                    SnackbarPoint::underneath_snackbar(position),
-                    ClampingMode::ClampToGrid,
-                ) {
-                    ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(
-                        BlockTextSelectAction::Update {
-                            point,
-                            delta: delta_y.into_lines(),
-                            side,
-                            position,
-                        },
+        let side = self
+            .size_info
+            .get_mouse_side(position - vec2f(bounds.origin().x(), snackbar_bottom));
+        if !is_selecting_blocks {
+            if let Some(point) = self.coord_to_point(
+                SnackbarPoint::underneath_snackbar(position),
+                ClampingMode::ClampToGrid,
+            ) {
+                ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(
+                    BlockTextSelectAction::Update {
+                        point,
+                        delta: delta_y.into_lines(),
+                        side,
+                        position,
+                    },
+                ));
+            }
+        }
+
+        if let Some(point) = self.coord_to_point(
+            SnackbarPoint::within_snackbar(position),
+            ClampingMode::ReturnNoneIfNotInGrid,
+        ) {
+            let model = self.model.lock();
+            let viewport = self.viewport_state_after_layout(model.block_list());
+
+            if let Some(within_block) = viewport.block_list_point_to_grid_point(point) {
+                let on_long_running_block = model
+                    .block_list()
+                    .block_at(within_block.block_index)
+                    .is_some_and(|block| block.is_active_and_long_running());
+
+                if on_long_running_block && !should_intercept_mouse(&model, modifiers.shift, app) {
+                    let grid_point = point_from_first_visible_row(&viewport, within_block);
+                    let mouse_state =
+                        MouseState::new(MouseButton::LeftDrag, MouseAction::Pressed, *modifiers);
+                    drop(model);
+                    ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
+                        mouse_state.set_point(grid_point),
                     ));
                 }
             }
-
-            if let Some(point) = self.coord_to_point(
-                SnackbarPoint::within_snackbar(position),
-                ClampingMode::ReturnNoneIfNotInGrid,
-            ) {
-                let model = self.model.lock();
-                let viewport = self.viewport_state_after_layout(model.block_list());
-
-                if let Some(within_block) = viewport.block_list_point_to_grid_point(point) {
-                    let on_long_running_block = model
-                        .block_list()
-                        .block_at(within_block.block_index)
-                        .is_some_and(|block| block.is_active_and_long_running());
-
-                    if on_long_running_block
-                        && !should_intercept_mouse(&model, modifiers.shift, app)
-                    {
-                        let grid_point = point_from_first_visible_row(&viewport, within_block);
-                        let mouse_state = MouseState::new(
-                            MouseButton::LeftDrag,
-                            MouseAction::Pressed,
-                            *modifiers,
-                        );
-                        drop(model);
-                        ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
-                            mouse_state.set_point(grid_point),
-                        ));
-                    }
-                }
-            }
-
-            true
-        } else {
-            false
         }
+
+        true
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4630,21 +4626,17 @@ impl Element for BlockListElement {
                 selected_range,
             } => self.set_marked_text(marked_text, selected_range, ctx),
             Event::ClearMarkedText => self.clear_marked_text(ctx),
-            Event::ModifierKeyChanged { key_code, state } => {
-                if self.is_terminal_focused {
-                    let is_press = matches!(state, KeyState::Pressed);
-                    if let Some(escape_sequence) = maybe_kitty_keyboard_escape_sequence(
-                        self.model.lock().deref(),
-                        key_code,
-                        is_press,
-                    ) {
-                        ctx.dispatch_typed_action(TerminalAction::ControlSequence(escape_sequence));
-                        return true;
-                    }
-                    self.maybe_handle_voice_toggle(key_code, state, ctx)
-                } else {
-                    false
+            Event::ModifierKeyChanged { key_code, state } if self.is_terminal_focused => {
+                let is_press = matches!(state, KeyState::Pressed);
+                if let Some(escape_sequence) = maybe_kitty_keyboard_escape_sequence(
+                    self.model.lock().deref(),
+                    key_code,
+                    is_press,
+                ) {
+                    ctx.dispatch_typed_action(TerminalAction::ControlSequence(escape_sequence));
+                    return true;
                 }
+                self.maybe_handle_voice_toggle(key_code, state, ctx)
             }
             _ => false,
         };

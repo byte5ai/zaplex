@@ -272,12 +272,7 @@ mod appimage {
         // defending against CDN man-in-the-middle attacks and network corruption. Other channels skip this (they have their own process).
         if matches!(channel, warp_core::channel::Channel::Oss) {
             let temp_path = new_appimage.path().to_path_buf();
-            if let Err(e) =
-                crate::autoupdate::verify_oss_asset_sha256(&temp_path, OSS_APPIMAGE_ASSET_NAME)
-            {
-                // Temporary file is automatically cleaned up when NamedTempFile is dropped; just return the error here.
-                return Err(e);
-            }
+            crate::autoupdate::verify_oss_asset_sha256(&temp_path, OSS_APPIMAGE_ASSET_NAME)?;
         }
 
         log::info!(

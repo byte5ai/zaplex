@@ -28,6 +28,7 @@ use super::{alacritty_parser::AlacrittyConfig, model::TerminalType};
 use super::iterm_parser::ITermProfile;
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ThemeType {
     LightAndDark { light: WarpTheme, dark: WarpTheme },
     Single(WarpTheme),

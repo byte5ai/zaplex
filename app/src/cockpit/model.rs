@@ -767,6 +767,7 @@ impl CockpitModel {
         ctx.emit(CockpitEvent::Updated);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply(
         &mut self,
         snapshot: CockpitSnapshot,
