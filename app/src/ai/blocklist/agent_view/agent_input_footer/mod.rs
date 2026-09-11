@@ -158,9 +158,9 @@ enum CLIVoiceInputState {
 /// Gives the plugin time to connect and send its `SessionStart` event.
 #[cfg(not(target_family = "wasm"))]
 const PLUGIN_CHIP_DEBOUNCE: Duration = Duration::from_secs(3);
-const SUBSCRIPTION_IDENTITY_LABEL_MAX_WIDTH: f32 = 320.;
+const SUBSCRIPTION_IDENTITY_LABEL_MAX_WIDTH: f32 = 240.;
 const SUBSCRIPTION_IDENTITY_MIN_RUN_WIDTH: f32 = 360.;
-const SUBSCRIPTION_ACTION_LABEL_MAX_WIDTH: f32 = 280.;
+const SUBSCRIPTION_ACTION_LABEL_MAX_WIDTH: f32 = 240.;
 const SUBSCRIPTION_ACTION_MIN_RUN_WIDTH: f32 = 320.;
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
