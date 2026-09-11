@@ -27,6 +27,12 @@ pub struct SyncEngine<C: GistOps> {
     client: C,
 }
 
+impl Default for SyncEngine<GistClient> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SyncEngine<GistClient> {
     /// Create a new SyncEngine instance (using real GistClient)
     pub fn new() -> Self {

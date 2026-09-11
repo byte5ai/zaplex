@@ -272,7 +272,7 @@ fn remote_loaded_transcript_rejects_nonempty_status_messages() {
     loaded.message = "credential-must-not-cross-projection".into();
     assert_eq!(
         project_remote_transcript(Provider::Claude, "session-1", None, loaded),
-        Err(RemoteTranscriptProjectionError::InvalidPayload)
+        Err(RemoteTranscriptProjectionError::Payload)
     );
 }
 
@@ -298,7 +298,7 @@ fn remote_projection_rejects_retargeted_or_forged_not_modified_responses() {
     wrong_session.session_id = "other".into();
     assert_eq!(
         project_remote_transcript(Provider::Claude, "session-1", None, wrong_session),
-        Err(RemoteTranscriptProjectionError::InvalidEnvelope)
+        Err(RemoteTranscriptProjectionError::Envelope)
     );
 
     assert_eq!(
@@ -308,7 +308,7 @@ fn remote_projection_rejects_retargeted_or_forged_not_modified_responses() {
             Some("b"),
             response(AgentTranscriptStatus::NotModified),
         ),
-        Err(RemoteTranscriptProjectionError::InvalidPayload)
+        Err(RemoteTranscriptProjectionError::Payload)
     );
 }
 
@@ -404,21 +404,21 @@ fn remote_transcript_fails_closed_for_invalid_status_envelope_or_payload() {
     invalid_envelope.schema_version = 2;
     assert_eq!(
         project_remote_transcript(Provider::Claude, "session-1", None, invalid_envelope),
-        Err(RemoteTranscriptProjectionError::InvalidEnvelope)
+        Err(RemoteTranscriptProjectionError::Envelope)
     );
 
     let mut invalid_status = response(AgentTranscriptStatus::Missing);
     invalid_status.status = i32::MAX;
     assert_eq!(
         project_remote_transcript(Provider::Claude, "session-1", None, invalid_status),
-        Err(RemoteTranscriptProjectionError::InvalidStatus)
+        Err(RemoteTranscriptProjectionError::Status)
     );
 
     let mut invalid_payload = response(AgentTranscriptStatus::Loaded);
     invalid_payload.turns = vec![turn("assistant", &"x".repeat(64 * 1024 + 1))];
     assert_eq!(
         project_remote_transcript(Provider::Claude, "session-1", None, invalid_payload),
-        Err(RemoteTranscriptProjectionError::InvalidPayload)
+        Err(RemoteTranscriptProjectionError::Payload)
     );
 
     let mut oversized_aggregate = response(AgentTranscriptStatus::Loaded);
@@ -427,28 +427,28 @@ fn remote_transcript_fails_closed_for_invalid_status_envelope_or_payload() {
         .collect();
     assert_eq!(
         project_remote_transcript(Provider::Claude, "session-1", None, oversized_aggregate),
-        Err(RemoteTranscriptProjectionError::InvalidEnvelope)
+        Err(RemoteTranscriptProjectionError::Envelope)
     );
 
     let mut state_with_turns = response(AgentTranscriptStatus::Missing);
     state_with_turns.turns = vec![turn("assistant", "must not be accepted")];
     assert_eq!(
         project_remote_transcript(Provider::Claude, "session-1", None, state_with_turns),
-        Err(RemoteTranscriptProjectionError::InvalidPayload)
+        Err(RemoteTranscriptProjectionError::Payload)
     );
 
     let mut empty_without_revision = response(AgentTranscriptStatus::Empty);
     empty_without_revision.source_revision.clear();
     assert_eq!(
         project_remote_transcript(Provider::Claude, "session-1", None, empty_without_revision),
-        Err(RemoteTranscriptProjectionError::InvalidPayload)
+        Err(RemoteTranscriptProjectionError::Payload)
     );
 
     let mut missing_with_revision = response(AgentTranscriptStatus::Missing);
     missing_with_revision.source_revision = REVISION.into();
     assert_eq!(
         project_remote_transcript(Provider::Claude, "session-1", None, missing_with_revision),
-        Err(RemoteTranscriptProjectionError::InvalidPayload)
+        Err(RemoteTranscriptProjectionError::Payload)
     );
 
     let mut loaded_matching_known = response(AgentTranscriptStatus::Loaded);
@@ -460,14 +460,14 @@ fn remote_transcript_fails_closed_for_invalid_status_envelope_or_payload() {
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
             loaded_matching_known,
         ),
-        Err(RemoteTranscriptProjectionError::InvalidPayload)
+        Err(RemoteTranscriptProjectionError::Payload)
     );
 
     let mut unknown_role = response(AgentTranscriptStatus::Loaded);
     unknown_role.turns = vec![turn("system", "must not be silently skipped")];
     assert_eq!(
         project_remote_transcript(Provider::Claude, "session-1", None, unknown_role),
-        Err(RemoteTranscriptProjectionError::InvalidPayload)
+        Err(RemoteTranscriptProjectionError::Payload)
     );
 }
 

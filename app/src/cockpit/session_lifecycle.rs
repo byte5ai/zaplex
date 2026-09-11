@@ -253,7 +253,7 @@ pub(crate) fn plan_restart(
         || route
             .process_fingerprint
             .as_deref()
-            .map_or(true, |fingerprint| fingerprint.trim().is_empty())
+            .is_none_or(|fingerprint| fingerprint.trim().is_empty())
     {
         return Err(RestartPlanError::ProcessIdentityUnavailable);
     }

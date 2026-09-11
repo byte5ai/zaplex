@@ -1513,7 +1513,7 @@ impl AppearanceSettingsPageView {
         let mut text_settings_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
             Box::new(TerminalFontWidget::default()),
             Box::new(AIFontWidget::default()),
-            Box::new(UIFontWidget::default()),
+            Box::new(UIFontWidget),
             Box::new(NotebookFontSizeWidget::default()),
             Box::new(MarkdownHeadingScaleWidget::default()),
         ];
@@ -4954,7 +4954,7 @@ impl SettingsWidget for MarkdownHeadingScaleWidget {
                 .finish(),
         );
 
-        for (editor, label) in editors.iter().zip(row_labels.into_iter()) {
+        for (editor, label) in editors.iter().zip(row_labels) {
             rows.add_child(
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)

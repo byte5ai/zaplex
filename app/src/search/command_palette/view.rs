@@ -84,6 +84,7 @@ struct ViewState {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Action {
     ResultClicked { action: CommandPaletteItemAction },
     Close,

@@ -262,7 +262,7 @@ impl ShellCommandExecutor {
     ///
     /// Even if all of the above fail, `action_result_future`'s `MAX_UNTIL_COMPLETION_DURATION`
     /// fallback ensures the agent will never hang **forever**.
-    fn turn_off_pager_for_command(&self, command: &String, ctx: &mut ModelContext<Self>) -> String {
+    fn turn_off_pager_for_command(&self, command: &str, ctx: &mut ModelContext<Self>) -> String {
         wrap_command_without_pager(self.active_session.as_ref(ctx).shell_type(ctx), command)
     }
 
