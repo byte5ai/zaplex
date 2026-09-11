@@ -288,9 +288,9 @@ impl AgentPtyBindings {
         let ptys = &self.ptys;
         let is_closed_history = |binding: &AgentPtyBinding| {
             !binding.foreground
-                && !ptys
+                && ptys
                     .get(&binding.pty_session_id)
-                    .is_some_and(|registration| registration.generation == binding.pty_generation)
+                    .is_none_or(|registration| registration.generation != binding.pty_generation)
         };
         let mut to_prune = self
             .bindings

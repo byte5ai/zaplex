@@ -161,7 +161,7 @@ fn favorites_file() -> std::path::PathBuf {
 
 #[cfg(not(target_family = "wasm"))]
 fn load_favorites_from(path: &std::path::Path) -> (Favorites, FavoritesFileState) {
-    match std::fs::read_to_string(&path) {
+    match std::fs::read_to_string(path) {
         Ok(contents) => match serde_json::from_str(&contents) {
             Ok(favorites) => (favorites, FavoritesFileState::Loaded),
             Err(err) => {

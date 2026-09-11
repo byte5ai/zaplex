@@ -655,25 +655,25 @@ impl CLISubagentView {
             }
             AIAgentActionType::ReadFiles(_)
             | AIAgentActionType::Grep { .. }
-            | AIAgentActionType::FileGlobV2 { .. } => {
-                if should_show_read_files_speedbump(ctx) {
-                    AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                        let _ = settings
-                            .should_show_agent_mode_autoread_files_speedbump
-                            .set_value(false, ctx);
-                    });
+            | AIAgentActionType::FileGlobV2 { .. }
+                if should_show_read_files_speedbump(ctx) =>
+            {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let _ = settings
+                        .should_show_agent_mode_autoread_files_speedbump
+                        .set_value(false, ctx);
+                });
 
-                    BlocklistAIPermissions::handle(ctx).update(ctx, |permissions, ctx| {
-                        if let Err(e) = permissions.set_always_allow_read_files(
-                            self.always_allow_read_files_checked,
-                            self.terminal_view_id,
-                            ctx,
-                        ) {
-                            report_error!(e);
-                        }
-                    });
-                    ctx.notify();
-                }
+                BlocklistAIPermissions::handle(ctx).update(ctx, |permissions, ctx| {
+                    if let Err(e) = permissions.set_always_allow_read_files(
+                        self.always_allow_read_files_checked,
+                        self.terminal_view_id,
+                        ctx,
+                    ) {
+                        report_error!(e);
+                    }
+                });
+                ctx.notify();
             }
             _ => {}
         }
@@ -1184,31 +1184,27 @@ impl View for CLISubagentView {
                             }
                         }
                     }
-                    AIAgentOutputMessageType::WebSearch(WebSearchStatus::Searching { query }) => {
-                        if !should_hide_responses {
-                            result.add_child(
-                                render_scrollable_container(
-                                    ScrollableContainerProps {
-                                        scroll_state: self
-                                            .state_handles
-                                            .action_scroll_state
-                                            .clone(),
-                                        child: render_web_search(query.clone(), app),
-                                        background_color: internal_colors::neutral_2(
-                                            appearance.theme(),
-                                        ),
-                                        border: Some(
-                                            Border::all(1.).with_border_fill(
-                                                internal_colors::neutral_3(theme),
-                                            ),
-                                        ),
-                                    },
-                                    app,
-                                )
-                                .with_margin_bottom(8.)
-                                .finish(),
-                            );
-                        }
+                    AIAgentOutputMessageType::WebSearch(WebSearchStatus::Searching { query })
+                        if !should_hide_responses =>
+                    {
+                        result.add_child(
+                            render_scrollable_container(
+                                ScrollableContainerProps {
+                                    scroll_state: self.state_handles.action_scroll_state.clone(),
+                                    child: render_web_search(query.clone(), app),
+                                    background_color: internal_colors::neutral_2(
+                                        appearance.theme(),
+                                    ),
+                                    border: Some(
+                                        Border::all(1.)
+                                            .with_border_fill(internal_colors::neutral_3(theme)),
+                                    ),
+                                },
+                                app,
+                            )
+                            .with_margin_bottom(8.)
+                            .finish(),
+                        );
                     }
                     _ => (),
                 }

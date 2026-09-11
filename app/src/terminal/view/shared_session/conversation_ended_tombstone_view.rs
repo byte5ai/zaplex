@@ -431,13 +431,14 @@ impl ConversationEndedTombstoneView {
             // show the button.
             let harness_allows_continue =
                 !matches!(self.display_data.harness, Some(h) if h != Harness::Oz);
-            if self.continue_locally_button.is_some()
-                && AISettings::as_ref(app).is_any_ai_enabled(app)
-                && harness_allows_continue
-            {
-                row.add_child(
-                    ChildView::new(self.continue_locally_button.as_ref().unwrap()).finish(),
-                );
+            let continue_locally_button =
+                if AISettings::as_ref(app).is_any_ai_enabled(app) && harness_allows_continue {
+                    self.continue_locally_button.as_ref()
+                } else {
+                    None
+                };
+            if let Some(continue_locally_button) = continue_locally_button {
+                row.add_child(ChildView::new(continue_locally_button).finish());
                 has_button = true;
             }
         }

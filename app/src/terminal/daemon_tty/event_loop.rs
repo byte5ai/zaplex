@@ -209,6 +209,7 @@ pub(super) struct EventLoop {
 impl EventLoop {
     /// Starts the event loop: subscribes to live output, begins draining
     /// input, and opens the daemon-hosted session.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn start(
         model: Arc<FairMutex<TerminalModel>>,
         event_loop_rx: Receiver<EventLoopMessage>,

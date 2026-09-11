@@ -2002,10 +2002,7 @@ impl RenderState {
         } else {
             0
         };
-        loop {
-            let Some(item) = cursor.positioned_item() else {
-                break;
-            };
+        while let Some(item) = cursor.positioned_item() {
             if item.start_line != previous_line {
                 index_within_line = 0;
             } else {
@@ -2921,9 +2918,12 @@ impl RenderState {
                 self.reveal_offset_in_table(*character_offset)
             }
             AutoScrollMode::ScrollToActiveSelections { .. } => {
-                self.selections().iter().fold(false, |changed, selection| {
-                    self.reveal_offset_in_table(selection.head) || changed
-                })
+                let mut changed = false;
+                let selections = self.selections();
+                for selection in &*selections {
+                    changed = self.reveal_offset_in_table(selection.head) || changed;
+                }
+                changed
             }
         }
     }

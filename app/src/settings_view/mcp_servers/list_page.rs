@@ -1069,10 +1069,9 @@ impl MCPServersListPageView {
 
         // Dropped "supported providers" link: no Zaplex MCP docs yet.
         let file_based_mcp_description_fragments: Vec<FormattedTextFragment> =
-            vec![FormattedTextFragment::plain_text(format!(
-                "{}",
-                crate::t!("settings-mcp-list-file-based-description")
-            ))];
+            vec![FormattedTextFragment::plain_text(
+                crate::t!("settings-mcp-list-file-based-description").to_string(),
+            )];
 
         let description = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(
@@ -1105,10 +1104,9 @@ impl MCPServersListPageView {
 
     fn render_page_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         // Dropped "learn more" link: no Zaplex MCP docs yet.
-        let description_fragments = vec![FormattedTextFragment::plain_text(format!(
-            "{}",
-            crate::t!("settings-mcp-list-description")
-        ))];
+        let description_fragments = vec![FormattedTextFragment::plain_text(
+            crate::t!("settings-mcp-list-description").to_string(),
+        )];
 
         let description = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(description_fragments)]),

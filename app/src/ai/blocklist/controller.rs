@@ -18,7 +18,7 @@ use super::{
     action_model::{BlocklistAIActionEvent, BlocklistAIActionModel},
     agent_view::{AgentViewController, AgentViewControllerEvent},
     context_model::BlocklistAIContextModel,
-    history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel},
+    history_model::BlocklistAIHistoryModel,
     input_model::InputConfig,
     BlocklistAIInputModel, InputType,
 };

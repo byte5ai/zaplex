@@ -760,6 +760,7 @@ fn recovery_error(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cleanup_recovery_error(
     message: impl Into<String>,
     backend: Arc<dyn SftpBackend>,
@@ -857,6 +858,7 @@ fn cleanup_recovery_error(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cleanup_failure_with_backend_recovery(
     message: impl Into<String>,
     error: &SftpOpsError,
@@ -1750,12 +1752,7 @@ pub fn run_transfer(
                 .map(|snapshot| snapshot.path.clone())
                 .into_iter()
                 .collect::<Vec<_>>();
-            paths.extend(
-                backup
-                    .as_ref()
-                    .map(|snapshot| snapshot.path.clone())
-                    .into_iter(),
-            );
+            paths.extend(backup.as_ref().map(|snapshot| snapshot.path.clone()));
             return Err(recovery_error(
                 format!("Transfer committed; cleanup was cancelled before finalizing: {error}"),
                 paths,
@@ -1895,6 +1892,7 @@ fn try_atomic_same_backend_directory_move(
     })
 }
 
+#[allow(clippy::result_large_err)]
 pub fn run_directory_transfer(
     job: &TransferJob,
     control: &TransferControl,
@@ -2745,12 +2743,7 @@ pub fn run_directory_transfer(
                 .map(|snapshot| snapshot.path.clone())
                 .into_iter()
                 .collect::<Vec<_>>();
-            paths.extend(
-                backup
-                    .as_ref()
-                    .map(|snapshot| snapshot.path.clone())
-                    .into_iter(),
-            );
+            paths.extend(backup.as_ref().map(|snapshot| snapshot.path.clone()));
             return Err(recovery_error(
                 format!(
                     "Directory transfer committed; cleanup was cancelled before finalizing: {error}"
@@ -3210,6 +3203,7 @@ fn exchange_staged_with_target(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_publish(
     backend: &dyn SftpBackend,
     staged_path: &Path,
@@ -3949,7 +3943,7 @@ struct MergeResult {
     had_skips: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 fn merge_snapshot_into_existing_root(
     source_backend: &dyn SftpBackend,
     source: &EntrySnapshot,
@@ -4077,6 +4071,7 @@ fn create_path_failure(
     OwnedPathError { error, ownership }
 }
 
+#[allow(clippy::result_large_err)]
 fn capture_reserved_anchor(
     path: &Path,
     anchor: Option<Arc<dyn BackendOwnershipAnchor>>,
@@ -4109,6 +4104,7 @@ fn capture_reserved_anchor(
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn create_owned_directory(
     backend: &dyn SftpBackend,
     path: &Path,
@@ -4125,6 +4121,7 @@ fn create_owned_directory(
     Ok(ownership)
 }
 
+#[allow(clippy::result_large_err)]
 fn create_owned_writer(
     backend: &dyn SftpBackend,
     path: &Path,
@@ -4306,6 +4303,7 @@ fn refresh_owned_mutation(
     refresh_owned_ancestors(backend, path, ownership)
 }
 
+#[allow(clippy::result_large_err)]
 fn copy_snapshot_to_new_root(
     source_backend: &dyn SftpBackend,
     source: &EntrySnapshot,
@@ -4378,6 +4376,7 @@ fn copy_snapshot_to_new_root(
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn copy_file_without_progress_owned(
     source_backend: &dyn SftpBackend,
     source_path: &Path,
@@ -4430,6 +4429,7 @@ fn copy_file_without_progress_owned(
     Ok(ownership)
 }
 
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 fn copy_file_without_progress(
     source_backend: &dyn SftpBackend,
     source_path: &Path,
@@ -4524,7 +4524,7 @@ fn combine_owned_write_result(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 fn copy_snapshot_to_new_root_with_progress(
     source_backend: &dyn SftpBackend,
     source: &EntrySnapshot,
@@ -4618,7 +4618,7 @@ fn copy_snapshot_to_new_root_with_progress(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 fn stream_file_to_new_path(
     source_backend: &dyn SftpBackend,
     source_path: &Path,
@@ -4649,7 +4649,7 @@ fn stream_file_to_new_path(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 fn stream_file_to_new_path_owned(
     source_backend: &dyn SftpBackend,
     source_path: &Path,
@@ -4679,7 +4679,7 @@ fn stream_file_to_new_path_owned(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 fn stream_file_to_new_path_tracked(
     source_backend: &dyn SftpBackend,
     source_path: &Path,
@@ -5589,6 +5589,7 @@ fn remove_snapshot_root_controlled(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rollback_file_publish(
     job: &TransferJob,
     primary: SftpOpsError,
@@ -5611,6 +5612,7 @@ fn rollback_file_publish(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rollback_directory_publish(
     job: &TransferJob,
     primary: SftpOpsError,
@@ -5633,6 +5635,7 @@ fn rollback_directory_publish(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rollback_published_entry(
     job: &TransferJob,
     primary: SftpOpsError,
@@ -5826,6 +5829,7 @@ fn rollback_published_entry(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn restore_quarantine_after_validation_failure(
     job: &TransferJob,
     quarantine: &Path,

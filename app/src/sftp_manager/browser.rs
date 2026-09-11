@@ -62,6 +62,7 @@ use super::types::{
 /// copy/move light up fully once a second file panel exists. Captions come
 /// from [`function_bar_caption`] — localized, not the raw English the bar
 /// used to carry in an otherwise localized app (polish audit FM.3).
+#[allow(clippy::type_complexity)]
 const FUNCTION_BAR: &[(&str, fn() -> SftpBrowserAction)] = &[
     ("F2", || SftpBrowserAction::RenameCursor),
     ("F3", || SftpBrowserAction::ViewCursorDetails),
@@ -1768,9 +1769,9 @@ impl SftpBrowserView {
                 if !self.show_hidden && entry.name.starts_with('.') {
                     return false;
                 }
-                self.search_filter.as_ref().map_or(true, |filter| {
-                    entry.name.to_lowercase().contains(&filter.to_lowercase())
-                })
+                self.search_filter
+                    .as_ref()
+                    .is_none_or(|filter| entry.name.to_lowercase().contains(&filter.to_lowercase()))
             })
             .map(|(i, _)| i)
             .collect();
@@ -3477,6 +3478,7 @@ impl SftpBrowserView {
     /// directory move: on completion it reports back to that batch (see
     /// [`Self::note_dir_move_progress`]) instead of deleting a single source.
     /// Returns the new transfer's task id.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_transfer_with_backend(
         &mut self,
         local_path: PathBuf,
@@ -3746,7 +3748,7 @@ impl SftpBrowserView {
     /// Go up to the parent directory
     fn go_up(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(parent) = self.current_path.parent() {
-            let parent = normalize_remote_path(&parent.to_path_buf());
+            let parent = normalize_remote_path(parent);
             if parent != self.current_path {
                 self.navigate_to(parent, ctx);
             }
@@ -5298,18 +5300,18 @@ fn local_entry_exists(path: &Path) -> Result<bool, sftp_ops::SftpOpsError> {
 }
 
 /// Build the full path for a renamed entry
-fn build_rename_path(original_path: &PathBuf, new_name: &str) -> Option<PathBuf> {
+fn build_rename_path(original_path: &Path, new_name: &str) -> Option<PathBuf> {
     let parent = original_path.parent().unwrap_or(Path::new("/"));
     safe_join_name(parent, new_name).map(|p| normalize_remote_path(&p))
 }
 
 /// Build the full path for a new folder
-fn build_new_folder_path(parent_path: &PathBuf, folder_name: &str) -> Option<PathBuf> {
+fn build_new_folder_path(parent_path: &Path, folder_name: &str) -> Option<PathBuf> {
     safe_join_name(parent_path, folder_name).map(|p| normalize_remote_path(&p))
 }
 
 /// Build the remote path for an uploaded file
-fn build_upload_remote_path(current_path: &PathBuf, local_file_name: &str) -> Option<PathBuf> {
+fn build_upload_remote_path(current_path: &Path, local_file_name: &str) -> Option<PathBuf> {
     safe_join_name(current_path, local_file_name).map(|p| normalize_remote_path(&p))
 }
 
@@ -6359,7 +6361,7 @@ impl View for SftpBrowserView {
                 }
                 let action = shifted_function_key_action(&keystroke.key, keystroke.shift)
                     .or_else(|| function_key_action(&keystroke.key))
-                    .or_else(|| match keystroke.key.as_str() {
+                    .or(match keystroke.key.as_str() {
                         // Cursor movement
                         "down" => Some(SftpBrowserAction::CursorDown),
                         "up" => Some(SftpBrowserAction::CursorUp),

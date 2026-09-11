@@ -4921,10 +4921,9 @@ impl AIFactWidget {
 
         let rules_description = vec![
             // No Zaplex docs destination for the AI rules "Learn more"; drop the dead link.
-            FormattedTextFragment::plain_text(format!(
-                "{}",
-                crate::t!("settings-ai-rules-description")
-            )),
+            FormattedTextFragment::plain_text(
+                crate::t!("settings-ai-rules-description").to_string(),
+            ),
         ];
         let description = Container::new(
             FormattedTextElement::new(
@@ -5754,7 +5753,7 @@ impl CLIAgentWidget {
                 .hook_bridge_toggle_states
                 .borrow_mut()
                 .entry(agent)
-                .or_insert_with(SwitchStateHandle::default)
+                .or_default()
                 .clone();
             let toggle = render_ai_feature_switch(
                 switch_state,
@@ -5970,7 +5969,7 @@ impl CLIAgentWidget {
             .per_agent_chip_states
             .borrow_mut()
             .entry((agent, dimension))
-            .or_insert_with(MouseStateHandle::default)
+            .or_default()
             .clone();
 
         let mut chip = Hoverable::new(mouse, move |_| {

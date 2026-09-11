@@ -234,12 +234,12 @@ impl CommentEditor {
             EditorViewEvent::CmdEnter => {
                 self.save_comment(ctx);
             }
-            EditorViewEvent::EscapePressed => {
+            EditorViewEvent::EscapePressed
+                if self.editor.as_ref(ctx).model().as_ref(ctx).is_empty(ctx) =>
+            {
                 // Dismiss the comment composer when pressing Escape on an empty draft.
-                if self.editor.as_ref(ctx).model().as_ref(ctx).is_empty(ctx) {
-                    self.reset(ctx);
-                    ctx.emit(CommentEditorEvent::CloseEditor);
-                }
+                self.reset(ctx);
+                ctx.emit(CommentEditorEvent::CloseEditor);
             }
             _ => {}
         }

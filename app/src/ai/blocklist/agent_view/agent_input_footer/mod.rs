@@ -2362,6 +2362,8 @@ fn render_ftu_callout(
 }
 
 #[derive(Debug, Clone)]
+// TypedActionView requires a public associated action type even though this module is crate-only.
+#[allow(private_interfaces)]
 pub enum AgentInputFooterAction {
     #[cfg(feature = "voice_input")]
     ToggleVoiceInput,
