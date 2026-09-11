@@ -41,6 +41,16 @@ def argument(name):
     return sys.argv[sys.argv.index(name) + 1]
 
 
+expected_effort = os.environ.get("AUDIT_STUB_EXPECTED_REASONING", "high")
+config_values = [
+    sys.argv[index + 1]
+    for index, value in enumerate(sys.argv[:-1])
+    if value in ("-c", "--config")
+]
+if config_values != [f'model_reasoning_effort="{expected_effort}"']:
+    print(json.dumps({"type": "turn.failed", "message": "wrong reasoning effort"}))
+    raise SystemExit(13)
+
 prompt = json.loads(sys.stdin.read())
 bucket_id = prompt["provenance"]["bucket_id"]
 snapshot = Path(argument("--cd")).resolve()
@@ -231,7 +241,16 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
             )
         assignments["assignment_sha256"] = RUNNER.assignment_document_hash(assignments)
 
-    def run_runner(self, run_dir, *, mode="success", timeout=10, sync=False, assignments=None):
+    def run_runner(
+        self,
+        run_dir,
+        *,
+        mode="success",
+        timeout=10,
+        sync=False,
+        assignments=None,
+        reasoning_effort=None,
+    ):
         assignments_path = self.assignments_path
         if assignments is not None:
             assignments_path = self.root / f"assignments-{run_dir.name}.json"
@@ -239,31 +258,50 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
         environment = os.environ.copy()
         environment["AUDIT_STUB_MODE"] = mode
         environment["AUDIT_STUB_ORIGINAL_REPO"] = str(self.repo)
+        environment["AUDIT_STUB_EXPECTED_REASONING"] = reasoning_effort or "high"
         if sync:
             environment["AUDIT_STUB_SYNC_DIR"] = str(self.root / f"sync-{run_dir.name}")
         else:
             environment.pop("AUDIT_STUB_SYNC_DIR", None)
+        command = [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(self.repo),
+            "--assignments",
+            str(assignments_path),
+            "--run-dir",
+            str(run_dir),
+            "--codex-cli",
+            str(self.stub),
+            "--timeout-seconds",
+            str(timeout),
+        ]
+        if reasoning_effort is not None:
+            command.extend(("--reasoning-effort", reasoning_effort))
         return subprocess.run(
-            [
-                sys.executable,
-                str(SCRIPT),
-                "--repo",
-                str(self.repo),
-                "--assignments",
-                str(assignments_path),
-                "--run-dir",
-                str(run_dir),
-                "--codex-cli",
-                str(self.stub),
-                "--timeout-seconds",
-                str(timeout),
-            ],
+            command,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
             env=environment,
         )
+
+    def test_reasoning_effort_defaults_to_high_and_accepts_override(self):
+        default_run = self.root / "reasoning-default"
+        default_result = self.run_runner(default_run)
+        self.assertEqual(default_result.returncode, 0, default_result.stderr)
+        default_summary = json.loads((default_run / "run.json").read_text())
+        self.assertEqual(default_summary["reasoning_effort"], "high")
+
+        override_run = self.root / "reasoning-override"
+        override_result = self.run_runner(
+            override_run, reasoning_effort="xhigh"
+        )
+        self.assertEqual(override_result.returncode, 0, override_result.stderr)
+        override_summary = json.loads((override_run / "run.json").read_text())
+        self.assertEqual(override_summary["reasoning_effort"], "xhigh")
 
     def test_stub_cli_runs_exactly_three_buckets_in_parallel_on_target_snapshot(self):
         run_dir = self.root / "parallel-run"

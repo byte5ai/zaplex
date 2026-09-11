@@ -98,6 +98,7 @@ FINDING_KEYS = {
 }
 SEVERITIES = {"P0", "P1", "P2", "P3"}
 CONFIDENCES = {"low", "medium", "high"}
+REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 
 
 class RunnerError(RuntimeError):
@@ -814,6 +815,7 @@ def communicate_with_timeout(
 def execute_bucket(
     codex_cli: str,
     model: str | None,
+    reasoning_effort: str,
     snapshot: Path,
     schema_path: Path,
     control_directory: Path,
@@ -832,6 +834,8 @@ def execute_bucket(
         "exec",
         "--ephemeral",
         "--ignore-user-config",
+        "-c",
+        f'model_reasoning_effort="{reasoning_effort}"',
         "--json",
         "--color",
         "never",
@@ -927,7 +931,11 @@ def create_snapshot(files: dict[str, bytes], parent: Path) -> Path:
     return snapshot
 
 
-def build_run_summary(assignments: dict[str, Any], results: list[BucketResult]) -> dict[str, Any]:
+def build_run_summary(
+    assignments: dict[str, Any],
+    results: list[BucketResult],
+    reasoning_effort: str,
+) -> dict[str, Any]:
     ordered = sorted(results, key=lambda result: result.bucket_id)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -939,6 +947,7 @@ def build_run_summary(assignments: dict[str, Any], results: list[BucketResult]) 
         "inventory_sha256": assignments["inventory_sha256"],
         "scope_sha256": assignments["scope_sha256"],
         "assignment_sha256": assignments["assignment_sha256"],
+        "reasoning_effort": reasoning_effort,
         "bucket_count": BUCKET_COUNT,
         "buckets": [
             {
@@ -967,6 +976,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--codex-cli", default="codex")
     parser.add_argument("--model")
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=REASONING_EFFORTS,
+        default="high",
+    )
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     return parser.parse_args(argv)
 
@@ -1014,6 +1028,7 @@ def main(argv: list[str] | None = None) -> int:
                         execute_bucket,
                         args.codex_cli,
                         args.model,
+                        args.reasoning_effort,
                         snapshot,
                         schema_path,
                         control_directory,
@@ -1036,7 +1051,9 @@ def main(argv: list[str] | None = None) -> int:
             raise RunnerError("; ".join(sorted(failures)))
         if len(results) != BUCKET_COUNT:
             raise RunnerError(f"runner completed {len(results)} of {BUCKET_COUNT} buckets")
-        summary = canonical_json(build_run_summary(assignments, results))
+        summary = canonical_json(
+            build_run_summary(assignments, results, args.reasoning_effort)
+        )
         atomic_publish(run_directory / "run.json", summary)
     except (OSError, RunnerError) as error:
         print(f"codebase audit runner: {error}", file=sys.stderr)
