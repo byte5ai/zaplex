@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import copy
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
@@ -20,6 +21,10 @@ from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parent / "run-codebase-audit-assignments"
+INVENTORY_GENERATOR = Path(__file__).resolve().parent / "generate-codebase-audit-inventory"
+ASSIGNMENT_GENERATOR = (
+    Path(__file__).resolve().parent / "generate-codebase-audit-assignments"
+)
 LOADER = importlib.machinery.SourceFileLoader("codebase_audit_runner", str(SCRIPT))
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 assert SPEC is not None
@@ -29,10 +34,11 @@ LOADER.exec_module(RUNNER)
 
 
 STUB_SOURCE = r'''#!/usr/bin/env python3
+import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import time
 
@@ -52,7 +58,9 @@ if config_values != [f'model_reasoning_effort="{expected_effort}"']:
     raise SystemExit(13)
 
 prompt = json.loads(sys.stdin.read())
-bucket_id = prompt["provenance"]["bucket_id"]
+range_id = prompt["range_id"]
+entry = prompt["assignment_entry"]
+source = prompt["source"]
 snapshot = Path(argument("--cd")).resolve()
 original = os.environ.get("AUDIT_STUB_ORIGINAL_REPO")
 if original and snapshot == Path(original).resolve():
@@ -61,32 +69,60 @@ if original and snapshot == Path(original).resolve():
 if (snapshot / ".git").exists():
     print(json.dumps({"type": "turn.failed", "message": "snapshot exposes Git metadata"}))
     raise SystemExit(10)
-for entry in prompt["assignment"]["entries"]:
-    object_id = subprocess.run(
-        ["git", "hash-object", str(snapshot / entry["path"])],
-        check=True,
-        stdout=subprocess.PIPE,
-        text=True,
-    ).stdout.strip()
-    if object_id != entry["blob_oid"]:
-        print(json.dumps({"type": "turn.failed", "message": "wrong target blob"}))
-        raise SystemExit(12)
+lines = (snapshot / entry["path"]).read_text().splitlines(keepends=True)
+expected_text = "".join(lines[entry["range"]["start"] - 1 : entry["range"]["end"]])
+if source != {
+    "encoding": "utf-8",
+    "sha256": hashlib.sha256(expected_text.encode()).hexdigest(),
+    "text": expected_text,
+}:
+    print(json.dumps({"type": "turn.failed", "message": "wrong in-band source"}))
+    raise SystemExit(12)
 
-sync = os.environ.get("AUDIT_STUB_SYNC_DIR")
-if sync:
-    sync_path = Path(sync)
-    sync_path.mkdir(parents=True, exist_ok=True)
-    (sync_path / bucket_id).write_text("started\n")
-    deadline = time.monotonic() + 5
-    while len(list(sync_path.glob("bucket-*"))) != 3:
-        if time.monotonic() >= deadline:
-            print(json.dumps({"type": "turn.failed", "message": "not parallel"}))
-            raise SystemExit(11)
-        time.sleep(0.01)
+invocations = Path(os.environ["AUDIT_STUB_INVOCATIONS_DIR"])
+invocations.mkdir(parents=True, exist_ok=True)
+try:
+    marker = invocations / range_id
+    with marker.open("x", encoding="utf-8") as marker_file:
+        marker_file.write("started\n")
+except FileExistsError:
+    print(json.dumps({"type": "turn.failed", "message": "range invoked twice"}))
+    raise SystemExit(14)
+
+state_path = Path(os.environ["AUDIT_STUB_CONCURRENCY_FILE"])
+with state_path.open("a+", encoding="utf-8") as state_file:
+    fcntl.flock(state_file, fcntl.LOCK_EX)
+    state_file.seek(0)
+    raw_state = state_file.read()
+    state = json.loads(raw_state) if raw_state else {"active": 0, "maximum": 0, "total": 0}
+    state["active"] += 1
+    state["maximum"] = max(state["maximum"], state["active"])
+    state["total"] += 1
+    state_file.seek(0)
+    state_file.truncate()
+    json.dump(state, state_file, sort_keys=True)
+    state_file.flush()
+    fcntl.flock(state_file, fcntl.LOCK_UN)
 
 mode = os.environ.get("AUDIT_STUB_MODE", "success")
-if mode == "timeout":
-    time.sleep(10)
+try:
+    if mode == "timeout":
+        time.sleep(10)
+    else:
+        delay = 0.01 * (8 - int(range_id.rsplit("-", 1)[1]))
+        time.sleep(max(delay, 0.01))
+finally:
+    if mode != "timeout":
+        with state_path.open("r+", encoding="utf-8") as state_file:
+            fcntl.flock(state_file, fcntl.LOCK_EX)
+            state = json.load(state_file)
+            state["active"] -= 1
+            state_file.seek(0)
+            state_file.truncate()
+            json.dump(state, state_file, sort_keys=True)
+            state_file.flush()
+            fcntl.flock(state_file, fcntl.LOCK_UN)
+
 if mode == "cli-error":
     print(json.dumps({"type": "turn.failed", "message": "stub failure"}))
     raise SystemExit(7)
@@ -94,22 +130,34 @@ if mode == "cli-error":
 provenance = prompt["provenance"]
 response = {
     "schema_version": 1,
-    "bucket_id": provenance["bucket_id"],
-    "manifest_sha256": provenance["manifest_sha256"],
-    "assignment_sha256": provenance["assignment_sha256"],
-    "bucket_assignment_sha256": provenance["bucket_assignment_sha256"],
-    "target_sha": provenance["target_sha"],
-    "upstream_sha": provenance["upstream_sha"],
-    "merge_base_sha": provenance["merge_base_sha"],
-    "reviewed_ranges": prompt["required_reviewed_ranges"],
+    **provenance,
+    "range_id": range_id,
+    "reviewed_range": entry,
+    "source_sha256": source["sha256"],
+    "source_text": source["text"],
     "findings": [],
 }
+if mode == "ordered-findings":
+    response["findings"] = [{
+        "path": entry["path"],
+        "range": entry["range"],
+        "category": range_id,
+        "severity": "P2",
+        "evidence": "range evidence",
+        "scenario": "range scenario",
+        "fix": "range fix",
+        "confidence": "high",
+    }]
 if mode == "bad-provenance":
     response["manifest_sha256"] = "0" * 64
-if mode == "partial":
-    response["reviewed_ranges"] = response["reviewed_ranges"][:-1]
-if mode == "extra":
-    response["reviewed_ranges"].append(response["reviewed_ranges"][0])
+if mode == "changed-text":
+    response["source_text"] += "changed"
+if mode == "missing-text":
+    response.pop("source_text")
+if mode == "changed-hash":
+    response["source_sha256"] = "0" * 64
+if mode == "changed-range":
+    response["reviewed_range"] = {**entry, "ownership": "fork-owned"}
 
 output = Path(argument("--output-last-message"))
 if mode == "non-json":
@@ -119,7 +167,7 @@ else:
 if mode == "bad-events":
     print("not JSON events")
 else:
-    print(json.dumps({"type": "thread.started", "thread_id": bucket_id}))
+    print(json.dumps({"type": "thread.started", "thread_id": range_id}))
     print(json.dumps({"type": "turn.completed", "usage": {}}))
 '''
 
@@ -129,31 +177,25 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="zaplex-audit-runner-test-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.repo = self.root / "repo"
-        self.repo.mkdir()
-        self.git("init", "-q")
-        self.git("config", "user.name", "Audit Runner Test")
-        self.git("config", "user.email", "audit-runner@example.invalid")
         files = {
             "a.rs": "\n".join(f"a-{line}" for line in range(1, 10)) + "\n",
-            "b.rs": "\n".join(f"b-{line}" for line in range(1, 9)) + "\n",
+            "b.rs": "\n".join(f"β-{line}" for line in range(1, 9)) + "\n",
             "c.rs": "\n".join(f"c-{line}" for line in range(1, 8)) + "\n",
         }
-        for path, contents in files.items():
-            (self.repo / path).write_text(contents)
-        self.git("add", ".")
-        self.git("commit", "-q", "-m", "fixture")
-        self.target_sha = self.git("rev-parse", "HEAD")
-        self.assignments = self.build_assignments(files)
-        self.assignments_path = self.root / "assignments.json"
-        self.assignments_path.write_bytes(RUNNER.canonical_json(self.assignments))
+        (
+            self.repo,
+            self.target_sha,
+            self.inventory_directory,
+            self.assignments_path,
+            self.assignments,
+        ) = self.create_contract("main-contract", files)
         self.stub = self.root / "stub codex"
         self.stub.write_text(STUB_SOURCE)
         self.stub.chmod(0o755)
 
-    def git(self, *arguments):
+    def git_in(self, repo, *arguments):
         result = subprocess.run(
-            ["git", "-C", str(self.repo), *arguments],
+            ["git", "-C", str(repo), *arguments],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -162,77 +204,91 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
-    def tree_entry(self, path):
-        record = subprocess.run(
-            ["git", "-C", str(self.repo), "ls-tree", self.target_sha, "--", path],
-            text=True,
-            stdout=subprocess.PIPE,
-            check=True,
-        ).stdout.strip()
-        metadata, actual_path = record.split("\t", 1)
-        mode, entry_type, object_id = metadata.split(" ", 2)
-        self.assertEqual(actual_path, path)
-        return mode, entry_type, object_id
+    def git(self, *arguments):
+        return self.git_in(self.repo, *arguments)
 
-    def build_assignments(self, files):
-        manifest_sha256 = "a" * 64
-        entries = []
-        for path, contents in sorted(files.items()):
-            mode, entry_type, object_id = self.tree_entry(path)
-            line_count = len(contents.splitlines())
-            entries.append(
+    def create_contract(self, name, files, max_range_lines=4):
+        contract_root = self.root / name
+        repo = contract_root / "repo"
+        repo.mkdir(parents=True)
+        self.git_in(repo, "init", "-q")
+        self.git_in(repo, "config", "user.name", "Audit Runner Test")
+        self.git_in(
+            repo, "config", "user.email", "audit-runner@example.invalid"
+        )
+        for path, contents in files.items():
+            destination = repo / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(contents)
+        self.git_in(repo, "add", ".")
+        self.git_in(repo, "commit", "-q", "-m", "fixture")
+        target_sha = self.git_in(repo, "rev-parse", "HEAD")
+        scope = contract_root / "scope.json"
+        scope.write_text(
+            json.dumps(
                 {
-                    "manifest_sha256": manifest_sha256,
-                    "target_sha": self.target_sha,
-                    "upstream_sha": self.target_sha,
-                    "merge_base_sha": self.target_sha,
-                    "path": path,
-                    "mode": mode,
-                    "type": entry_type,
-                    "object_id": object_id,
-                    "blob_oid": object_id,
-                    "range": {"start": 1, "end": line_count},
-                    "ownership": "fork-owned",
+                    "schema_version": 1,
+                    "rules": [
+                        {
+                            "id": "all-text",
+                            "action": "include",
+                            "entry_types": ["blob"],
+                            "patterns": ["**"],
+                        }
+                    ],
                 }
             )
-        distributed = RUNNER.distribute_entries(entries)
-        buckets = []
-        for index, bucket_entries in enumerate(distributed):
-            bucket = {
-                "id": f"bucket-{index + 1}",
-                "range_count": len(bucket_entries),
-                "line_count": sum(
-                    entry["range"]["end"] - entry["range"]["start"] + 1
-                    for entry in bucket_entries
-                ),
-                "entries": bucket_entries,
-            }
-            bucket["assignment_sha256"] = RUNNER.bucket_assignment_hash(
-                bucket, manifest_sha256
-            )
-            buckets.append(bucket)
-        assignments = {
-            "schema_version": 1,
-            "generator_version": 1,
-            "manifest_sha256": manifest_sha256,
-            "inventory_sha256": "b" * 64,
-            "scope_sha256": "c" * 64,
-            "target_sha": self.target_sha,
-            "upstream_sha": self.target_sha,
-            "merge_base_sha": self.target_sha,
-            "bucket_count": 3,
-            "coverage": {
-                "inventory_ranges": len(entries),
-                "assigned_ranges": len(entries),
-                "assigned_lines": sum(len(contents.splitlines()) for contents in files.values()),
-                "included_paths": len(files),
-                "excluded_paths": 0,
-                "complete": True,
-            },
-            "buckets": buckets,
-        }
-        assignments["assignment_sha256"] = RUNNER.assignment_document_hash(assignments)
-        return assignments
+        )
+        inventory_directory = contract_root / "inventory"
+        inventory = subprocess.run(
+            [
+                sys.executable,
+                str(INVENTORY_GENERATOR),
+                "--repo",
+                str(repo),
+                "--target-sha",
+                target_sha,
+                "--upstream-sha",
+                target_sha,
+                "--merge-base-sha",
+                target_sha,
+                "--scope",
+                str(scope),
+                "--output",
+                str(inventory_directory),
+                "--max-range-lines",
+                str(max_range_lines),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(inventory.returncode, 0, inventory.stderr)
+        assignments_path = contract_root / "assignments.json"
+        assignments = subprocess.run(
+            [
+                sys.executable,
+                str(ASSIGNMENT_GENERATOR),
+                "--inventory-dir",
+                str(inventory_directory),
+                "--output",
+                str(assignments_path),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(assignments.returncode, 0, assignments.stderr)
+        assignment_value = json.loads(assignments_path.read_text())
+        return (
+            repo,
+            target_sha,
+            inventory_directory,
+            assignments_path,
+            assignment_value,
+        )
 
     def refresh_hashes(self, assignments):
         for bucket in assignments["buckets"]:
@@ -247,8 +303,9 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
         *,
         mode="success",
         timeout=10,
-        sync=False,
         assignments=None,
+        inventory_directory=None,
+        repo=None,
         reasoning_effort=None,
     ):
         assignments_path = self.assignments_path
@@ -256,18 +313,23 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
             assignments_path = self.root / f"assignments-{run_dir.name}.json"
             assignments_path.write_bytes(RUNNER.canonical_json(assignments))
         environment = os.environ.copy()
+        selected_repo = repo or self.repo
         environment["AUDIT_STUB_MODE"] = mode
-        environment["AUDIT_STUB_ORIGINAL_REPO"] = str(self.repo)
+        environment["AUDIT_STUB_ORIGINAL_REPO"] = str(selected_repo)
         environment["AUDIT_STUB_EXPECTED_REASONING"] = reasoning_effort or "high"
-        if sync:
-            environment["AUDIT_STUB_SYNC_DIR"] = str(self.root / f"sync-{run_dir.name}")
-        else:
-            environment.pop("AUDIT_STUB_SYNC_DIR", None)
+        environment["AUDIT_STUB_INVOCATIONS_DIR"] = str(
+            self.root / f"invocations-{run_dir.name}"
+        )
+        environment["AUDIT_STUB_CONCURRENCY_FILE"] = str(
+            self.root / f"concurrency-{run_dir.name}.json"
+        )
         command = [
             sys.executable,
             str(SCRIPT),
             "--repo",
-            str(self.repo),
+            str(selected_repo),
+            "--inventory-dir",
+            str(inventory_directory or self.inventory_directory),
             "--assignments",
             str(assignments_path),
             "--run-dir",
@@ -303,29 +365,74 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
         override_summary = json.loads((override_run / "run.json").read_text())
         self.assertEqual(override_summary["reasoning_effort"], "xhigh")
 
-    def test_stub_cli_runs_exactly_three_buckets_in_parallel_on_target_snapshot(self):
+    def test_stub_cli_runs_once_per_range_with_three_process_global_limit(self):
         run_dir = self.root / "parallel-run"
-        result = self.run_runner(run_dir, sync=True)
+        result = self.run_runner(run_dir)
         self.assertEqual(result.returncode, 0, result.stderr)
         summary = json.loads((run_dir / "run.json").read_text())
         self.assertTrue(summary["complete"])
         self.assertEqual(summary["bucket_count"], 3)
-        self.assertEqual([bucket["id"] for bucket in summary["buckets"]], [
-            "bucket-1",
-            "bucket-2",
-            "bucket-3",
-        ])
+        self.assertEqual(
+            [bucket["id"] for bucket in summary["buckets"]],
+            ["bucket-1", "bucket-2", "bucket-3"],
+        )
+        range_count = self.assignments["coverage"]["assigned_ranges"]
+        invocations = self.root / "invocations-parallel-run"
+        self.assertEqual(len(list(invocations.iterdir())), range_count)
+        concurrency = json.loads(
+            (self.root / "concurrency-parallel-run.json").read_text()
+        )
+        self.assertEqual(concurrency["total"], range_count)
+        self.assertEqual(concurrency["active"], 0)
+        self.assertEqual(concurrency["maximum"], 3)
         for bucket in self.assignments["buckets"]:
             response = json.loads(
                 (run_dir / "results" / f"{bucket['id']}.json").read_text()
             )
             self.assertEqual(response["reviewed_ranges"], bucket["entries"])
-            self.assertEqual(response["bucket_assignment_sha256"], bucket["assignment_sha256"])
+            self.assertEqual(
+                response["bucket_assignment_sha256"], bucket["assignment_sha256"]
+            )
         self.assertEqual(
             sorted(path.name for path in (run_dir / "results").iterdir()),
             ["bucket-1.json", "bucket-2.json", "bucket-3.json"],
         )
         self.assertEqual(list(run_dir.rglob(".*.tmp")), [])
+
+    def test_prompt_stdin_contains_verified_utf8_range_text_and_hash(self):
+        (self.repo / "a.rs").write_text("changed working tree\n")
+        (self.repo / "b.rs").unlink()
+        run_dir = self.root / "source-run"
+        result = self.run_runner(run_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prompts = sorted((run_dir / "inputs").glob("bucket-*-range-*.prompt.json"))
+        self.assertEqual(
+            len(prompts), self.assignments["coverage"]["assigned_ranges"]
+        )
+        for prompt_path in prompts:
+            prompt = json.loads(prompt_path.read_text())
+            entry = prompt["assignment_entry"]
+            blob = subprocess.run(
+                [
+                    "git",
+                    "--no-replace-objects",
+                    "-C",
+                    str(self.repo),
+                    "cat-file",
+                    "blob",
+                    entry["blob_oid"],
+                ],
+                stdout=subprocess.PIPE,
+                check=True,
+            ).stdout
+            source = RUNNER.range_bytes(
+                blob, entry["range"]["start"], entry["range"]["end"]
+            )
+            self.assertEqual(prompt["source"]["encoding"], "utf-8")
+            self.assertEqual(prompt["source"]["text"], source.decode("utf-8"))
+            self.assertEqual(
+                prompt["source"]["sha256"], hashlib.sha256(source).hexdigest()
+            )
 
     def test_successful_stub_runs_are_byte_deterministic(self):
         first = self.root / "deterministic-first"
@@ -343,6 +450,72 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
         for name in first_files:
             self.assertEqual((first / name).read_bytes(), (second / name).read_bytes(), name)
 
+    def test_aggregation_order_and_run_summary_hashes_are_deterministic(self):
+        run_dir = self.root / "ordered-run"
+        result = self.run_runner(run_dir, mode="ordered-findings")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary = json.loads((run_dir / "run.json").read_text())
+        self.assertEqual(
+            set(summary),
+            {
+                "schema_version",
+                "runner_version",
+                "target_sha",
+                "upstream_sha",
+                "merge_base_sha",
+                "manifest_sha256",
+                "inventory_sha256",
+                "scope_sha256",
+                "assignment_sha256",
+                "reasoning_effort",
+                "bucket_count",
+                "buckets",
+                "complete",
+            },
+        )
+        summary_by_id = {bucket["id"]: bucket for bucket in summary["buckets"]}
+        for bucket in self.assignments["buckets"]:
+            bucket_id = bucket["id"]
+            response_path = run_dir / "results" / f"{bucket_id}.json"
+            response = json.loads(response_path.read_text())
+            expected_range_ids = [
+                f"{bucket_id}-range-{index:06d}"
+                for index in range(1, len(bucket["entries"]) + 1)
+            ]
+            self.assertEqual(
+                [finding["category"] for finding in response["findings"]],
+                expected_range_ids,
+            )
+            run_bucket = summary_by_id[bucket_id]
+            self.assertEqual(
+                set(run_bucket),
+                {
+                    "id",
+                    "prompt_sha256",
+                    "events_sha256",
+                    "stderr_sha256",
+                    "final_message_sha256",
+                    "response_sha256",
+                    "finding_count",
+                    "reviewed_range_count",
+                },
+            )
+            artifacts = {
+                "prompt_sha256": run_dir
+                / "inputs"
+                / f"{bucket_id}.prompts.json",
+                "events_sha256": run_dir / "logs" / f"{bucket_id}.events.json",
+                "stderr_sha256": run_dir / "logs" / f"{bucket_id}.stderr.json",
+                "final_message_sha256": run_dir
+                / "logs"
+                / f"{bucket_id}.final-messages.json",
+                "response_sha256": response_path,
+            }
+            for field, path in artifacts.items():
+                self.assertEqual(
+                    run_bucket[field], hashlib.sha256(path.read_bytes()).hexdigest()
+                )
+
     def test_rejects_noncanonical_and_hash_manipulated_assignments(self):
         noncanonical = self.root / "noncanonical.json"
         noncanonical.write_text(json.dumps(self.assignments))
@@ -352,6 +525,8 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
                 str(SCRIPT),
                 "--repo",
                 str(self.repo),
+                "--inventory-dir",
+                str(self.inventory_directory),
                 "--assignments",
                 str(noncanonical),
                 "--run-dir",
@@ -371,7 +546,7 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
         manipulated["assignment_sha256"] = "0" * 64
         result = self.run_runner(self.root / "hash-run", assignments=manipulated)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("assignments document SHA-256 mismatch", result.stderr)
+        self.assertIn("do not byte-match", result.stderr)
 
     def test_rejects_bucket_count_and_entry_provenance_manipulation(self):
         wrong_count = copy.deepcopy(self.assignments)
@@ -379,7 +554,7 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
         self.refresh_hashes(wrong_count)
         result = self.run_runner(self.root / "count-run", assignments=wrong_count)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("exactly 3 buckets", result.stderr)
+        self.assertIn("do not byte-match", result.stderr)
 
         wrong_provenance = copy.deepcopy(self.assignments)
         wrong_provenance["buckets"][0]["entries"][0]["target_sha"] = "0" * 40
@@ -388,7 +563,7 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
             self.root / "provenance-run", assignments=wrong_provenance
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("target_sha provenance mismatch", result.stderr)
+        self.assertIn("do not byte-match", result.stderr)
 
         truncated = copy.deepcopy(self.assignments)
         entry = truncated["buckets"][0]["entries"][0]
@@ -398,7 +573,31 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
         self.refresh_hashes(truncated)
         result = self.run_runner(self.root / "truncated-run", assignments=truncated)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("expected 9", result.stderr)
+        self.assertIn("do not byte-match", result.stderr)
+
+    def test_rejects_assignments_from_a_different_inventory_contract(self):
+        _, _, other_inventory, _, _ = self.create_contract(
+            "other-contract", {"different.rs": "different\n"}
+        )
+        result = self.run_runner(
+            self.root / "other-contract-run",
+            inventory_directory=other_inventory,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("do not byte-match", result.stderr)
+
+    def test_rejects_valid_contract_with_zero_range_coverage(self):
+        empty_repo, _, empty_inventory, _, empty_assignments = self.create_contract(
+            "empty-contract", {"empty.rs": ""}
+        )
+        result = self.run_runner(
+            self.root / "empty-run",
+            assignments=empty_assignments,
+            inventory_directory=empty_inventory,
+            repo=empty_repo,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("coverage must contain non-empty reviewed ranges", result.stderr)
 
     def test_git_replace_ref_cannot_substitute_the_target(self):
         (self.repo / "a.rs").write_text("replacement\n")
@@ -411,8 +610,8 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
 
     def test_rejects_non_json_response_and_event_stream(self):
         for mode, message in (
-            ("non-json", "invalid bucket-1 response JSON"),
-            ("bad-events", "invalid bucket-1 Codex event line"),
+            ("non-json", "invalid bucket-1-range-000001 response JSON"),
+            ("bad-events", "invalid bucket-1-range-000001 Codex event line"),
         ):
             with self.subTest(mode=mode):
                 result = self.run_runner(self.root / f"{mode}-run", mode=mode)
@@ -420,11 +619,13 @@ class CodebaseAuditRunnerTest(unittest.TestCase):
                 self.assertIn(message, result.stderr)
                 self.assertFalse((self.root / f"{mode}-run" / "run.json").exists())
 
-    def test_rejects_response_provenance_and_incomplete_or_extra_coverage(self):
+    def test_rejects_changed_or_missing_in_band_source_and_range(self):
         for mode, message in (
             ("bad-provenance", "manifest_sha256 provenance mismatch"),
-            ("partial", "missing, additional, reordered, or changed reviewed ranges"),
-            ("extra", "missing, additional, reordered, or changed reviewed ranges"),
+            ("changed-text", "source text mismatch"),
+            ("missing-text", "range response shape is invalid"),
+            ("changed-hash", "source SHA-256 mismatch"),
+            ("changed-range", "reviewed_range mismatch"),
         ):
             with self.subTest(mode=mode):
                 result = self.run_runner(self.root / f"{mode}-run", mode=mode)

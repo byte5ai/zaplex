@@ -18,7 +18,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import threading
 from typing import Any
 
 
@@ -86,6 +85,21 @@ RESPONSE_ROOT_KEYS = {
     "reviewed_ranges",
     "findings",
 }
+RANGE_RESPONSE_ROOT_KEYS = {
+    "schema_version",
+    "target_sha",
+    "upstream_sha",
+    "merge_base_sha",
+    "manifest_sha256",
+    "assignment_sha256",
+    "bucket_id",
+    "bucket_assignment_sha256",
+    "range_id",
+    "reviewed_range",
+    "source_sha256",
+    "source_text",
+    "findings",
+}
 FINDING_KEYS = {
     "path",
     "range",
@@ -103,6 +117,28 @@ REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 
 class RunnerError(RuntimeError):
     """Raised when an immutable audit run cannot be accepted."""
+
+
+@dataclass(frozen=True)
+class RangeTask:
+    order: int
+    range_id: str
+    bucket_id: str
+    bucket_assignment_sha256: str
+    entry: dict[str, Any]
+    source_text: str
+    source_sha256: str
+
+
+@dataclass(frozen=True)
+class RangeResult:
+    task: RangeTask
+    prompt_sha256: str
+    events_sha256: str
+    stderr_sha256: str
+    final_message_sha256: str
+    response_sha256: str
+    response: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -170,6 +206,43 @@ def load_canonical_assignments(path: Path) -> tuple[dict[str, Any], bytes]:
     if canonical_json(value) != raw:
         raise RunnerError("assignments are not canonical JSON")
     return value, raw
+
+
+def validate_inventory_contract(inventory_directory: Path, assignments: bytes) -> None:
+    generator = Path(__file__).resolve().parent / "generate-codebase-audit-assignments"
+    if not generator.is_file():
+        raise RunnerError(f"assignment generator is missing: {generator}")
+    with tempfile.TemporaryDirectory(
+        prefix="zaplex-codebase-audit-contract-"
+    ) as temporary_name:
+        regenerated = Path(temporary_name) / "assignments.json"
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(generator),
+                    "--inventory-dir",
+                    str(inventory_directory),
+                    "--output",
+                    str(regenerated),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        except OSError as error:
+            raise RunnerError(f"cannot run assignment generator: {error}") from error
+        if completed.returncode != 0:
+            message = completed.stderr.decode("utf-8", errors="replace").strip()
+            raise RunnerError(f"immutable inventory contract is invalid: {message}")
+        try:
+            regenerated_bytes = regenerated.read_bytes()
+        except OSError as error:
+            raise RunnerError(f"cannot read regenerated assignments: {error}") from error
+    if regenerated_bytes != assignments:
+        raise RunnerError(
+            "assignments do not byte-match the canonical immutable inventory contract"
+        )
 
 
 def require_exact_keys(value: Any, expected: set[str], label: str) -> dict[str, Any]:
@@ -414,6 +487,16 @@ def validate_assignments(
         require_int(coverage[key], f"assignment.coverage.{key}")
     if coverage["complete"] is not True:
         raise RunnerError("assignment coverage.complete must be true")
+    if any(
+        coverage[key] == 0
+        for key in (
+            "inventory_ranges",
+            "assigned_ranges",
+            "assigned_lines",
+            "included_paths",
+        )
+    ):
+        raise RunnerError("assignment coverage must contain non-empty reviewed ranges")
 
     buckets = assignments["buckets"]
     if not isinstance(buckets, list) or len(buckets) != BUCKET_COUNT:
@@ -527,19 +610,10 @@ def validate_assignments(
     return {path: blobs[object_id] for path, object_id in oid_by_path.items()}
 
 
-def response_schema() -> dict[str, Any]:
-    object_id_pattern = "^[0-9a-f]{40}([0-9a-f]{24})?$"
-    hash_pattern = "^[0-9a-f]{64}$"
-    line_range = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["start", "end"],
-        "properties": {
-            "start": {"type": "integer", "minimum": 1},
-            "end": {"type": "integer", "minimum": 1},
-        },
-    }
-    assignment_entry = {
+def assignment_entry_schema(
+    object_id_pattern: str, hash_pattern: str, line_range: dict[str, Any]
+) -> dict[str, Any]:
+    return {
         "type": "object",
         "additionalProperties": False,
         "required": sorted(ASSIGNMENT_ENTRY_KEYS),
@@ -557,11 +631,43 @@ def response_schema() -> dict[str, Any]:
             "ownership": {"enum": sorted(OWNERSHIPS)},
         },
     }
+
+
+def finding_schema(line_range: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": sorted(FINDING_KEYS),
+        "properties": {
+            "path": {"type": "string", "minLength": 1},
+            "range": line_range,
+            "category": {"type": "string", "minLength": 1},
+            "severity": {"enum": sorted(SEVERITIES)},
+            "evidence": {"type": "string", "minLength": 1},
+            "scenario": {"type": "string", "minLength": 1},
+            "fix": {"type": "string", "minLength": 1},
+            "confidence": {"enum": sorted(CONFIDENCES)},
+        },
+    }
+
+
+def range_response_schema() -> dict[str, Any]:
+    object_id_pattern = "^[0-9a-f]{40}([0-9a-f]{24})?$"
+    hash_pattern = "^[0-9a-f]{64}$"
+    line_range = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["start", "end"],
+        "properties": {
+            "start": {"type": "integer", "minimum": 1},
+            "end": {"type": "integer", "minimum": 1},
+        },
+    }
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": False,
-        "required": sorted(RESPONSE_ROOT_KEYS),
+        "required": sorted(RANGE_RESPONSE_ROOT_KEYS),
         "properties": {
             "schema_version": {"const": SCHEMA_VERSION},
             "target_sha": {"type": "string", "pattern": object_id_pattern},
@@ -571,28 +677,13 @@ def response_schema() -> dict[str, Any]:
             "assignment_sha256": {"type": "string", "pattern": hash_pattern},
             "bucket_id": {"type": "string", "pattern": "^bucket-[1-3]$"},
             "bucket_assignment_sha256": {"type": "string", "pattern": hash_pattern},
-            "reviewed_ranges": {
-                "type": "array",
-                "items": assignment_entry,
-            },
-            "findings": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": sorted(FINDING_KEYS),
-                    "properties": {
-                        "path": {"type": "string", "minLength": 1},
-                        "range": line_range,
-                        "category": {"type": "string", "minLength": 1},
-                        "severity": {"enum": sorted(SEVERITIES)},
-                        "evidence": {"type": "string", "minLength": 1},
-                        "scenario": {"type": "string", "minLength": 1},
-                        "fix": {"type": "string", "minLength": 1},
-                        "confidence": {"enum": sorted(CONFIDENCES)},
-                    },
-                },
-            },
+            "range_id": {"type": "string", "minLength": 1},
+            "reviewed_range": assignment_entry_schema(
+                object_id_pattern, hash_pattern, line_range
+            ),
+            "source_sha256": {"type": "string", "pattern": hash_pattern},
+            "source_text": {"type": "string"},
+            "findings": {"type": "array", "items": finding_schema(line_range)},
         },
     }
 
@@ -601,7 +692,9 @@ def expected_reviewed_ranges(bucket: dict[str, Any]) -> list[dict[str, Any]]:
     return copy.deepcopy(bucket["entries"])
 
 
-def prompt_for_bucket(assignments: dict[str, Any], bucket: dict[str, Any]) -> bytes:
+def bucket_provenance(
+    assignments: dict[str, Any], bucket_id: str, bucket_assignment_sha256: str
+) -> dict[str, Any]:
     provenance = {
         key: assignments[key]
         for key in (
@@ -612,114 +705,208 @@ def prompt_for_bucket(assignments: dict[str, Any], bucket: dict[str, Any]) -> by
             "assignment_sha256",
         )
     }
-    provenance.update(
-        {
-            "bucket_id": bucket["id"],
-            "bucket_assignment_sha256": bucket["assignment_sha256"],
-        }
-    )
+    provenance["bucket_id"] = bucket_id
+    provenance["bucket_assignment_sha256"] = bucket_assignment_sha256
+    return provenance
+
+
+def range_bytes(blob: bytes, start: int, end: int) -> bytes:
+    lines = blob.split(b"\n")
+    ends_with_newline = blob.endswith(b"\n")
+    if ends_with_newline:
+        lines = lines[:-1]
+    selected = b"\n".join(lines[start - 1 : end])
+    if end < len(lines) or ends_with_newline:
+        selected += b"\n"
+    return selected
+
+
+def build_range_tasks(
+    assignments: dict[str, Any], snapshot_files: dict[str, bytes]
+) -> list[RangeTask]:
+    tasks = []
+    order = 0
+    for bucket in assignments["buckets"]:
+        for index, entry in enumerate(bucket["entries"], start=1):
+            start = entry["range"]["start"]
+            end = entry["range"]["end"]
+            source = range_bytes(snapshot_files[entry["path"]], start, end)
+            try:
+                source_text = source.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise RunnerError(
+                    f"assigned source range is not UTF-8: {entry['path']}:{start}-{end}"
+                ) from error
+            tasks.append(
+                RangeTask(
+                    order=order,
+                    range_id=f"{bucket['id']}-range-{index:06d}",
+                    bucket_id=bucket["id"],
+                    bucket_assignment_sha256=bucket["assignment_sha256"],
+                    entry=copy.deepcopy(entry),
+                    source_text=source_text,
+                    source_sha256=sha256_bytes(source),
+                )
+            )
+            order += 1
+    if not tasks:
+        raise RunnerError("assignments contain no reviewable ranges")
+    return tasks
+
+
+def prompt_for_range(assignments: dict[str, Any], task: RangeTask) -> bytes:
     prompt = {
         "task": (
-            "Audit every assigned line range for concrete correctness, security, "
+            "Audit this exact line range for concrete correctness, security, "
             "reliability, and data-loss defects."
         ),
         "rules": [
-            (
-                "The working directory is an isolated read-only snapshot materialized "
-                "directly from target_sha Git blobs."
-            ),
-            "Read every line in every assigned range; do not claim unreviewed ranges.",
+            "The source text below was read and verified directly from target_sha.",
+            "Review every byte of source.text; do not claim another range.",
             (
                 "Do not edit files, access another checkout, use the network, or "
                 "inspect another revision."
             ),
-            "Report findings only when their complete line range is inside an assigned range.",
+            "Report findings only inside assignment_entry.range.",
             (
                 "Return only one JSON object matching the supplied response schema, "
                 "with no prose or fences."
             ),
             (
-                "Echo every provenance value exactly and echo all reviewed_ranges "
-                "exactly once in assignment order."
+                "Echo provenance, range_id, assignment_entry, source.sha256, and "
+                "source.text exactly."
             ),
             "Use an empty findings array when no defect is found.",
         ],
-        "provenance": provenance,
-        "assignment": {
-            "range_count": bucket["range_count"],
-            "line_count": bucket["line_count"],
-            "entries": bucket["entries"],
+        "provenance": bucket_provenance(
+            assignments, task.bucket_id, task.bucket_assignment_sha256
+        ),
+        "range_id": task.range_id,
+        "assignment_entry": task.entry,
+        "source": {
+            "encoding": "utf-8",
+            "sha256": task.source_sha256,
+            "text": task.source_text,
         },
-        "required_reviewed_ranges": expected_reviewed_ranges(bucket),
     }
     return canonical_json(prompt)
 
 
-def validate_response(
-    response: Any, assignments: dict[str, Any], bucket: dict[str, Any]
+def validate_finding(finding: Any, entry: dict[str, Any]) -> None:
+    require_exact_keys(finding, FINDING_KEYS, "finding")
+    path = require_path(finding["path"], "finding path")
+    start, end = require_range(finding["range"], f"finding range for {path}")
+    assigned_start = entry["range"]["start"]
+    assigned_end = entry["range"]["end"]
+    if path != entry["path"] or not assigned_start <= start <= end <= assigned_end:
+        raise RunnerError(f"finding for {path} is outside its assigned range")
+    if finding["severity"] not in SEVERITIES:
+        raise RunnerError(f"finding for {path} has invalid severity")
+    if finding["confidence"] not in CONFIDENCES:
+        raise RunnerError(f"finding for {path} has invalid confidence")
+    for key in ("category", "evidence", "scenario", "fix"):
+        if not isinstance(finding[key], str) or not finding[key].strip():
+            raise RunnerError(f"finding for {path} {key} must be non-empty")
+
+
+def validate_range_response(
+    response: Any, assignments: dict[str, Any], task: RangeTask
 ) -> dict[str, Any]:
-    response = require_exact_keys(response, RESPONSE_ROOT_KEYS, "model response")
-    require_int(response["schema_version"], "model response schema_version", 1)
+    response = require_exact_keys(response, RANGE_RESPONSE_ROOT_KEYS, "range response")
+    require_int(response["schema_version"], "range response schema_version", 1)
     if response["schema_version"] != SCHEMA_VERSION:
-        raise RunnerError("model response schema_version mismatch")
-    expected_provenance = {
-        key: assignments[key]
-        for key in (
-            "target_sha",
-            "upstream_sha",
-            "merge_base_sha",
-            "manifest_sha256",
-            "assignment_sha256",
-        )
-    }
-    expected_provenance["bucket_id"] = bucket["id"]
-    expected_provenance["bucket_assignment_sha256"] = bucket["assignment_sha256"]
+        raise RunnerError("range response schema_version mismatch")
+    expected_provenance = bucket_provenance(
+        assignments, task.bucket_id, task.bucket_assignment_sha256
+    )
     for key, expected in expected_provenance.items():
         if response[key] != expected:
-            raise RunnerError(f"model response {key} provenance mismatch")
-
-    reviewed_ranges = response["reviewed_ranges"]
-    if not isinstance(reviewed_ranges, list):
-        raise RunnerError("model response reviewed_ranges must be an array")
-    if reviewed_ranges != expected_reviewed_ranges(bucket):
-        raise RunnerError(
-            "model response has missing, additional, reordered, or changed reviewed ranges"
-        )
-
-    assigned = [
-        (
-            entry["path"],
-            entry["range"]["start"],
-            entry["range"]["end"],
-        )
-        for entry in bucket["entries"]
-    ]
+            raise RunnerError(f"range response {key} provenance mismatch")
+    if response["range_id"] != task.range_id:
+        raise RunnerError("range response range_id mismatch")
+    if response["reviewed_range"] != task.entry:
+        raise RunnerError(f"{task.range_id} reviewed_range mismatch")
+    if response["source_sha256"] != task.source_sha256:
+        raise RunnerError(f"{task.range_id} source SHA-256 mismatch")
+    if response["source_text"] != task.source_text:
+        raise RunnerError(f"{task.range_id} source text mismatch")
     findings = response["findings"]
     if not isinstance(findings, list):
-        raise RunnerError("model response findings must be an array")
+        raise RunnerError("range response findings must be an array")
     finding_hashes = set()
     for finding in findings:
-        require_exact_keys(finding, FINDING_KEYS, "finding")
-        path = require_path(finding["path"], "finding path")
-        start, end = require_range(finding["range"], f"finding range for {path}")
-        if not any(
-            path == assigned_path
-            and assigned_start <= start <= end <= assigned_end
-            for assigned_path, assigned_start, assigned_end in assigned
-        ):
-            raise RunnerError(f"finding for {path} is outside its assigned range")
-        if finding["severity"] not in SEVERITIES:
-            raise RunnerError(f"finding for {path} has invalid severity")
-        if finding["confidence"] not in CONFIDENCES:
-            raise RunnerError(f"finding for {path} has invalid confidence")
-        for key in ("category", "evidence", "scenario", "fix"):
-            if not isinstance(finding[key], str) or not finding[key].strip():
-                raise RunnerError(f"finding for {path} {key} must be non-empty")
+        validate_finding(finding, task.entry)
+        finding_hash = sha256_bytes(canonical_json(finding))
+        if finding_hash in finding_hashes:
+            raise RunnerError(f"duplicate finding for {task.entry['path']}")
+        finding_hashes.add(finding_hash)
+    return response
+
+
+def validate_bucket_response(
+    response: Any, assignments: dict[str, Any], bucket: dict[str, Any]
+) -> dict[str, Any]:
+    response = require_exact_keys(response, RESPONSE_ROOT_KEYS, "bucket response")
+    require_int(response["schema_version"], "bucket response schema_version", 1)
+    if response["schema_version"] != SCHEMA_VERSION:
+        raise RunnerError("bucket response schema_version mismatch")
+    expected_provenance = bucket_provenance(
+        assignments, bucket["id"], bucket["assignment_sha256"]
+    )
+    for key, expected in expected_provenance.items():
+        if response[key] != expected:
+            raise RunnerError(f"bucket response {key} provenance mismatch")
+    if response["reviewed_ranges"] != expected_reviewed_ranges(bucket):
+        raise RunnerError(f"{bucket['id']} aggregate reviewed ranges mismatch")
+    findings = response["findings"]
+    if not isinstance(findings, list):
+        raise RunnerError("bucket response findings must be an array")
+    finding_hashes = set()
+    entries_by_path: dict[str, list[dict[str, Any]]] = {}
+    for entry in bucket["entries"]:
+        entries_by_path.setdefault(entry["path"], []).append(entry)
+    for finding in findings:
+        path = finding.get("path") if isinstance(finding, dict) else None
+        entries = entries_by_path.get(path, [])
+        if not entries:
+            raise RunnerError(f"bucket finding has unassigned path: {path}")
+        errors = []
+        for entry in entries:
+            try:
+                validate_finding(finding, entry)
+                break
+            except RunnerError as error:
+                errors.append(error)
+        else:
+            raise RunnerError(str(errors[-1]))
         finding_hash = sha256_bytes(canonical_json(finding))
         if finding_hash in finding_hashes:
             raise RunnerError(f"duplicate finding for {path}")
         finding_hashes.add(finding_hash)
     return response
+
+
+def aggregate_bucket(
+    assignments: dict[str, Any],
+    bucket: dict[str, Any],
+    range_results: list[RangeResult],
+) -> dict[str, Any]:
+    ordered = sorted(range_results, key=lambda result: result.task.order)
+    if [result.task.entry for result in ordered] != bucket["entries"]:
+        raise RunnerError(f"{bucket['id']} range results are missing or reordered")
+    response = {
+        "schema_version": SCHEMA_VERSION,
+        **bucket_provenance(
+            assignments, bucket["id"], bucket["assignment_sha256"]
+        ),
+        "reviewed_ranges": expected_reviewed_ranges(bucket),
+        "findings": [
+            copy.deepcopy(finding)
+            for result in ordered
+            for finding in result.response["findings"]
+        ],
+    }
+    return validate_bucket_response(response, assignments, bucket)
 
 
 def atomic_publish(path: Path, contents: bytes) -> None:
@@ -812,23 +999,21 @@ def communicate_with_timeout(
     return process.returncode, stdout, stderr
 
 
-def execute_bucket(
+def execute_range(
     codex_cli: str,
     model: str | None,
     reasoning_effort: str,
     snapshot: Path,
     schema_path: Path,
     control_directory: Path,
-    results_directory: Path,
     logs_directory: Path,
     assignments: dict[str, Any],
-    bucket: dict[str, Any],
+    task: RangeTask,
     prompt: bytes,
     timeout_seconds: int,
-    start_barrier: threading.Barrier,
-) -> BucketResult:
-    bucket_id = bucket["id"]
-    final_message_path = control_directory / f"{bucket_id}.final-message.json"
+) -> RangeResult:
+    range_id = task.range_id
+    final_message_path = control_directory / f"{range_id}.final-message.json"
     command = [
         codex_cli,
         "exec",
@@ -856,7 +1041,6 @@ def execute_bucket(
     stdout = b""
     stderr = b""
     cli_error = None
-    start_barrier.wait(timeout=10)
     try:
         returncode, stdout, stderr = communicate_with_timeout(
             command, prompt, timeout_seconds
@@ -867,38 +1051,37 @@ def execute_bucket(
             stdout, stderr = error.args[1]
         returncode = -1
 
-    atomic_publish(logs_directory / f"{bucket_id}.events.jsonl", stdout)
-    atomic_publish(logs_directory / f"{bucket_id}.stderr.log", stderr)
+    atomic_publish(logs_directory / f"{range_id}.events.jsonl", stdout)
+    atomic_publish(logs_directory / f"{range_id}.stderr.log", stderr)
     if final_message_path.is_file() and not final_message_path.is_symlink():
         try:
             final_message = final_message_path.read_bytes()
         except OSError as error:
-            raise RunnerError(f"cannot read {bucket_id} final message: {error}") from error
+            raise RunnerError(f"cannot read {range_id} final message: {error}") from error
     else:
         final_message = b""
-    atomic_publish(logs_directory / f"{bucket_id}.final-message.log", final_message)
+    atomic_publish(logs_directory / f"{range_id}.final-message.log", final_message)
 
     if cli_error is not None:
-        raise RunnerError(f"{bucket_id}: {cli_error.args[0]}") from cli_error
+        raise RunnerError(f"{range_id}: {cli_error.args[0]}") from cli_error
     if returncode != 0:
-        raise RunnerError(f"{bucket_id}: Codex CLI exited with status {returncode}")
-    validate_event_stream(stdout, bucket_id)
+        raise RunnerError(f"{range_id}: Codex CLI exited with status {returncode}")
+    validate_event_stream(stdout, range_id)
     if not final_message:
-        raise RunnerError(f"{bucket_id}: Codex CLI did not write a final message")
-    response = validate_response(
-        decode_json(final_message, f"{bucket_id} response"), assignments, bucket
+        raise RunnerError(f"{range_id}: Codex CLI did not write a final message")
+    response = validate_range_response(
+        decode_json(final_message, f"{range_id} response"), assignments, task
     )
     response_bytes = canonical_json(response)
-    atomic_publish(results_directory / f"{bucket_id}.json", response_bytes)
-    return BucketResult(
-        bucket_id=bucket_id,
+    atomic_publish(logs_directory / f"{range_id}.response.json", response_bytes)
+    return RangeResult(
+        task=task,
         prompt_sha256=sha256_bytes(prompt),
         events_sha256=sha256_bytes(stdout),
         stderr_sha256=sha256_bytes(stderr),
         final_message_sha256=sha256_bytes(final_message),
         response_sha256=sha256_bytes(response_bytes),
-        finding_count=len(response["findings"]),
-        reviewed_range_count=len(response["reviewed_ranges"]),
+        response=response,
     )
 
 
@@ -931,12 +1114,35 @@ def create_snapshot(files: dict[str, bytes], parent: Path) -> Path:
     return snapshot
 
 
+def combined_artifact_index(
+    bucket_id: str,
+    range_results: list[RangeResult],
+    artifact: str,
+    hash_attribute: str,
+) -> bytes:
+    ordered = sorted(range_results, key=lambda result: result.task.order)
+    return canonical_json(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "bucket_id": bucket_id,
+            "artifact": artifact,
+            "ranges": [
+                {
+                    "range_id": result.task.range_id,
+                    "sha256": getattr(result, hash_attribute),
+                }
+                for result in ordered
+            ],
+        }
+    )
+
+
 def build_run_summary(
     assignments: dict[str, Any],
-    results: list[BucketResult],
+    bucket_results: list[BucketResult],
     reasoning_effort: str,
 ) -> dict[str, Any]:
-    ordered = sorted(results, key=lambda result: result.bucket_id)
+    ordered_buckets = sorted(bucket_results, key=lambda result: result.bucket_id)
     return {
         "schema_version": SCHEMA_VERSION,
         "runner_version": RUNNER_VERSION,
@@ -960,7 +1166,7 @@ def build_run_summary(
                 "finding_count": result.finding_count,
                 "reviewed_range_count": result.reviewed_range_count,
             }
-            for result in ordered
+            for result in ordered_buckets
         ],
         "complete": True,
     }
@@ -972,6 +1178,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         epilog="Resume and import are intentionally unsupported; --run-dir must not exist.",
     )
     parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--inventory-dir", type=Path, required=True)
     parser.add_argument("--assignments", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--codex-cli", default="codex")
@@ -992,73 +1199,135 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         repo = args.repo.resolve(strict=True)
+        inventory_directory = args.inventory_dir.resolve(strict=True)
         assignments, assignments_bytes = load_canonical_assignments(args.assignments)
+        validate_inventory_contract(inventory_directory, assignments_bytes)
         snapshot_files = validate_assignments(assignments, repo)
+        tasks = build_range_tasks(assignments, snapshot_files)
         run_directory = create_run_directory(args.run_dir)
         inputs_directory = run_directory / "inputs"
         logs_directory = run_directory / "logs"
         results_directory = run_directory / "results"
         for directory in (inputs_directory, logs_directory, results_directory):
             directory.mkdir(mode=0o700)
-        schema_bytes = canonical_json(response_schema())
+        schema_bytes = canonical_json(range_response_schema())
         atomic_publish(inputs_directory / "assignments.json", assignments_bytes)
-        atomic_publish(inputs_directory / "response.schema.json", schema_bytes)
+        atomic_publish(inputs_directory / "range-response.schema.json", schema_bytes)
         prompts = {}
-        for bucket in assignments["buckets"]:
-            prompt = prompt_for_bucket(assignments, bucket)
-            prompts[bucket["id"]] = prompt
-            atomic_publish(inputs_directory / f"{bucket['id']}.prompt.json", prompt)
+        for task in tasks:
+            prompt = prompt_for_range(assignments, task)
+            prompts[task.range_id] = prompt
+            atomic_publish(inputs_directory / f"{task.range_id}.prompt.json", prompt)
 
-        results = []
+        range_results = []
         failures = []
         with tempfile.TemporaryDirectory(prefix="zaplex-codebase-audit-run-") as temporary_name:
             temporary = Path(temporary_name)
-            schema_path = temporary / "response.schema.json"
+            schema_path = temporary / "range-response.schema.json"
             schema_path.write_bytes(schema_bytes)
             snapshot = create_snapshot(snapshot_files, temporary)
             control_directory = temporary / "control"
             control_directory.mkdir()
-            start_barrier = threading.Barrier(BUCKET_COUNT)
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=BUCKET_COUNT,
                 thread_name_prefix="codebase-audit",
             ) as executor:
                 futures = [
                     executor.submit(
-                        execute_bucket,
+                        execute_range,
                         args.codex_cli,
                         args.model,
                         args.reasoning_effort,
                         snapshot,
                         schema_path,
                         control_directory,
-                        results_directory,
                         logs_directory,
                         assignments,
-                        bucket,
-                        prompts[bucket["id"]],
+                        task,
+                        prompts[task.range_id],
                         args.timeout_seconds,
-                        start_barrier,
                     )
-                    for bucket in assignments["buckets"]
+                    for task in tasks
                 ]
                 for future in concurrent.futures.as_completed(futures):
                     try:
-                        results.append(future.result())
+                        range_results.append(future.result())
                     except Exception as error:
                         failures.append(str(error))
         if failures:
             raise RunnerError("; ".join(sorted(failures)))
-        if len(results) != BUCKET_COUNT:
-            raise RunnerError(f"runner completed {len(results)} of {BUCKET_COUNT} buckets")
+        if len(range_results) != len(tasks):
+            raise RunnerError(
+                f"runner completed {len(range_results)} of {len(tasks)} ranges"
+            )
+        bucket_results = []
+        for bucket in assignments["buckets"]:
+            bucket_range_results = [
+                result
+                for result in range_results
+                if result.task.bucket_id == bucket["id"]
+            ]
+            aggregate = aggregate_bucket(
+                assignments,
+                bucket,
+                bucket_range_results,
+            )
+            prompt_index = combined_artifact_index(
+                bucket["id"], bucket_range_results, "prompts", "prompt_sha256"
+            )
+            events_index = combined_artifact_index(
+                bucket["id"], bucket_range_results, "events", "events_sha256"
+            )
+            stderr_index = combined_artifact_index(
+                bucket["id"], bucket_range_results, "stderr", "stderr_sha256"
+            )
+            final_message_index = combined_artifact_index(
+                bucket["id"],
+                bucket_range_results,
+                "final-messages",
+                "final_message_sha256",
+            )
+            atomic_publish(
+                inputs_directory / f"{bucket['id']}.prompts.json", prompt_index
+            )
+            atomic_publish(
+                logs_directory / f"{bucket['id']}.events.json", events_index
+            )
+            atomic_publish(
+                logs_directory / f"{bucket['id']}.stderr.json", stderr_index
+            )
+            atomic_publish(
+                logs_directory / f"{bucket['id']}.final-messages.json",
+                final_message_index,
+            )
+            response_bytes = canonical_json(aggregate)
+            atomic_publish(results_directory / f"{bucket['id']}.json", response_bytes)
+            bucket_results.append(
+                BucketResult(
+                    bucket_id=bucket["id"],
+                    prompt_sha256=sha256_bytes(prompt_index),
+                    events_sha256=sha256_bytes(events_index),
+                    stderr_sha256=sha256_bytes(stderr_index),
+                    final_message_sha256=sha256_bytes(final_message_index),
+                    response_sha256=sha256_bytes(response_bytes),
+                    finding_count=len(aggregate["findings"]),
+                    reviewed_range_count=len(aggregate["reviewed_ranges"]),
+                )
+            )
         summary = canonical_json(
-            build_run_summary(assignments, results, args.reasoning_effort)
+            build_run_summary(
+                assignments,
+                bucket_results,
+                args.reasoning_effort,
+            )
         )
         atomic_publish(run_directory / "run.json", summary)
     except (OSError, RunnerError) as error:
         print(f"codebase audit runner: {error}", file=sys.stderr)
         return 1
-    print(f"codebase audit runner: completed {BUCKET_COUNT} buckets in {run_directory}")
+    print(
+        f"codebase audit runner: completed {len(tasks)} ranges in {run_directory}"
+    )
     return 0
 
 
