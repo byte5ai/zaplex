@@ -2,10 +2,11 @@
 //!
 //! Usage:
 //! ```
-//! cargo run --bin generate_settings_schema -- [--channel dev|preview|stable] [output_path]
+//! cargo run --bin generate_settings_schema -- [--channel dev|preview|stable|oss] [output_path]
 //! ```
 
 use std::collections::HashSet;
+use std::fmt;
 use std::io::Write;
 
 use schemars::SchemaGenerator;
@@ -85,17 +86,48 @@ fn strip_empty_enum_entries(value: &mut Value) {
     }
 }
 
-fn active_flags_for_channel(channel: &str) -> HashSet<FeatureFlag> {
-    let mut flags = HashSet::new();
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SchemaChannel {
+    Stable,
+    Preview,
+    Dev,
+    Oss,
+}
+
+impl SchemaChannel {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "stable" => Ok(Self::Stable),
+            "preview" => Ok(Self::Preview),
+            "dev" => Ok(Self::Dev),
+            "oss" => Ok(Self::Oss),
+            other => Err(format!("Unknown channel: {other}")),
+        }
+    }
+}
+
+impl fmt::Display for SchemaChannel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Stable => "stable",
+            Self::Preview => "preview",
+            Self::Dev => "dev",
+            Self::Oss => "oss",
+        })
+    }
+}
+
+fn active_flags_for_channel(
+    channel: SchemaChannel,
+    runtime_flags: impl IntoIterator<Item = FeatureFlag>,
+) -> HashSet<FeatureFlag> {
+    // Keep feature-gated schema entries aligned with the features compiled into the app.
+    let mut flags: HashSet<FeatureFlag> = runtime_flags.into_iter().collect();
 
     let flag_lists: &[&[FeatureFlag]] = match channel {
-        "stable" => &[RELEASE_FLAGS],
-        "preview" => &[RELEASE_FLAGS, PREVIEW_FLAGS],
-        "dev" => &[RELEASE_FLAGS, PREVIEW_FLAGS, DOGFOOD_FLAGS, DEBUG_FLAGS],
-        other => {
-            eprintln!("Unknown channel '{other}', defaulting to dev");
-            &[RELEASE_FLAGS, PREVIEW_FLAGS, DOGFOOD_FLAGS, DEBUG_FLAGS]
-        }
+        SchemaChannel::Stable | SchemaChannel::Oss => &[RELEASE_FLAGS],
+        SchemaChannel::Preview => &[RELEASE_FLAGS, PREVIEW_FLAGS],
+        SchemaChannel::Dev => &[RELEASE_FLAGS, PREVIEW_FLAGS, DOGFOOD_FLAGS, DEBUG_FLAGS],
     };
 
     for list in flag_lists {
@@ -104,10 +136,43 @@ fn active_flags_for_channel(channel: &str) -> HashSet<FeatureFlag> {
         }
     }
 
-    #[cfg(feature = "windows_high_performance_gpu_default")]
-    flags.insert(FeatureFlag::WindowsHighPerformanceGpuDefault);
-
     flags
+}
+
+#[derive(Debug)]
+struct Arguments {
+    channel: SchemaChannel,
+    output_path: Option<String>,
+}
+
+fn parse_arguments(args: impl IntoIterator<Item = String>) -> Result<Arguments, String> {
+    let mut args = args.into_iter();
+    let _program = args.next();
+    let mut channel = SchemaChannel::Dev;
+    let mut output_path = None;
+
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--channel" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--channel requires a value".to_string())?;
+                channel = SchemaChannel::parse(&value)?;
+            }
+            value if !value.starts_with('-') && output_path.is_none() => {
+                output_path = Some(value.to_string());
+            }
+            value if !value.starts_with('-') => {
+                return Err(format!("Unexpected positional argument: {value}"));
+            }
+            other => return Err(format!("Unknown argument: {other}")),
+        }
+    }
+
+    Ok(Arguments {
+        channel,
+        output_path,
+    })
 }
 
 /// Creates intermediate hierarchy objects so that a setting at e.g.
@@ -143,34 +208,15 @@ fn ensure_hierarchy<'a>(
     current
 }
 
-fn main() {
+fn main() -> Result<(), String> {
     ensure_settings_linked();
 
-    let args: Vec<String> = std::env::args().collect();
+    let Arguments {
+        channel,
+        output_path,
+    } = parse_arguments(std::env::args())?;
 
-    let mut channel = "dev";
-    let mut output_path: Option<&str> = None;
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--channel" => {
-                i += 1;
-                if i < args.len() {
-                    channel = &args[i];
-                }
-            }
-            arg if !arg.starts_with('-') => {
-                output_path = Some(arg);
-            }
-            other => {
-                eprintln!("Unknown argument: {other}");
-                std::process::exit(1);
-            }
-        }
-        i += 1;
-    }
-
-    let active_flags = active_flags_for_channel(channel);
+    let active_flags = active_flags_for_channel(channel, warp::enabled_features());
     for flag in &active_flags {
         flag.set_enabled(true);
     }
@@ -262,7 +308,7 @@ fn main() {
 
     let output = serde_json::to_string_pretty(&root_value).expect("schema should serialize");
 
-    if let Some(path) = output_path {
+    if let Some(path) = output_path.as_deref() {
         let mut file = std::fs::File::create(path)
             .unwrap_or_else(|e| panic!("Failed to create output file '{path}': {e}"));
         file.write_all(output.as_bytes())
@@ -271,4 +317,10 @@ fn main() {
     } else {
         println!("{output}");
     }
+
+    Ok(())
 }
+
+#[cfg(test)]
+#[path = "generate_settings_schema_tests.rs"]
+mod tests;

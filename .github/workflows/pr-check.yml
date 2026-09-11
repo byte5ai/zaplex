@@ -238,6 +238,14 @@ jobs:
           apply_custom_with_valid_url_succeeds
         shell: bash
 
+      - name: cargo test (OSS settings schema channel)
+        run: >
+          cargo test --locked -p warp --bin generate_settings_schema --
+          oss_channel_keeps_runtime_and_release_flags_without_internal_tiers
+          unknown_channel_is_an_error
+          channel_option_requires_a_value
+        shell: bash
+
       # Focused app-crate unit tests: the FM-toggle + spawn-card launch payload,
       # catalog copy guard, plus the real boot/open smoke gate. Targeted by name so only these run —
       # the app crate's full test suite has known harness/env-dependent failures
