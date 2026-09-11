@@ -1,5 +1,8 @@
 # Self-contained cleanup & template-preservation plan
 
+> **Historical amendment (2026-09-10):** #152 supersedes the BYOP preservation assumptions in
+> this dated plan. They do not describe current Zaplex product behavior.
+
 > Remove everything **Warp/Oz-specific and out-of-scope** from the shipped UI, but
 > **preserve reusable pane/sidebar scaffolding as templates** so the later
 > claudeplex migration (which may well need an agent panel again) does not have to

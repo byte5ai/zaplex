@@ -5,6 +5,10 @@ use chrono::{DateTime, Local, Utc};
 use itertools::Itertools;
 use warpui::{App, EntityId};
 
+use super::{
+    AIConversationMetadata, AIQueryHistoryOutputStatus, BlocklistAIHistoryModel, PersistedAIInput,
+    PersistedAIInputType,
+};
 use crate::{
     ai::{
         agent::{
@@ -14,7 +18,6 @@ use crate::{
         },
         ambient_agents::AmbientAgentTaskId,
         blocklist::{controller::RequestInput, ResponseStreamId},
-        byop_readiness::{RepairRecord, RepairSource, RepairState, RepairStateStatus, ToolCallKey},
         llms::LLMId,
     },
     input_suggestions::HistoryInputSuggestion,
@@ -22,12 +25,6 @@ use crate::{
     terminal::model::session::SessionId,
     test_util::settings::initialize_settings_for_tests,
     GlobalResourceHandles, GlobalResourceHandlesProvider,
-};
-use warp_multi_agent_api as api;
-
-use super::{
-    AIConversationMetadata, AIQueryHistoryOutputStatus, BlocklistAIHistoryModel, PersistedAIInput,
-    PersistedAIInputType,
 };
 
 fn initialize_history_model_test_app(app: &mut App) {
@@ -92,208 +89,6 @@ fn create_exchange_with_query(
         computer_use_model_id: LLMId::from("test-computer-use-model"),
         response_initiator: None,
     }
-}
-
-fn byop_test_task(task_id: &str, messages: Vec<api::Message>) -> api::Task {
-    api::Task {
-        id: task_id.to_owned(),
-        messages,
-        dependencies: None,
-        description: String::new(),
-        summary: String::new(),
-        server_data: String::new(),
-    }
-}
-
-fn byop_tool_call_message(task_id: &str, message_id: &str, call_id: &str) -> api::Message {
-    api::Message {
-        id: message_id.to_owned(),
-        task_id: task_id.to_owned(),
-        server_message_data: String::new(),
-        citations: vec![],
-        message: Some(api::message::Message::ToolCall(api::message::ToolCall {
-            tool_call_id: call_id.to_owned(),
-            tool: None,
-        })),
-        request_id: "request-1".to_owned(),
-        timestamp: None,
-    }
-}
-
-fn byop_tool_result_message(task_id: &str, message_id: &str, call_id: &str) -> api::Message {
-    api::Message {
-        id: message_id.to_owned(),
-        task_id: task_id.to_owned(),
-        server_message_data: "{}".to_owned(),
-        citations: vec![],
-        message: Some(api::message::Message::ToolCallResult(
-            api::message::ToolCallResult {
-                tool_call_id: call_id.to_owned(),
-                context: None,
-                result: None,
-            },
-        )),
-        request_id: "request-1".to_owned(),
-        timestamp: None,
-    }
-}
-
-#[test]
-fn byop_fork_repair_records_cover_tool_results_omitted_by_fork() {
-    let source_tasks = vec![byop_test_task(
-        "source-task",
-        vec![
-            byop_tool_call_message("source-task", "assistant-1", "call-a"),
-            byop_tool_call_message("source-task", "assistant-2", "call-b"),
-            byop_tool_result_message("source-task", "result-a", "call-a"),
-            byop_tool_result_message("source-task", "result-b", "call-b"),
-        ],
-    )];
-    let forked_tasks = vec![byop_test_task(
-        "fork-task",
-        vec![
-            byop_tool_call_message("fork-task", "assistant-1", "call-a"),
-            byop_tool_call_message("fork-task", "assistant-2", "call-b"),
-            byop_tool_result_message("fork-task", "result-a", "call-a"),
-        ],
-    )];
-
-    let records = super::collect_byop_fork_repair_records(
-        &source_tasks,
-        &forked_tasks,
-        &RepairStateStatus::default(),
-        Some("exchange-1".to_owned()),
-    );
-
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].source, RepairSource::ForkedHistory);
-    assert_eq!(
-        records[0].key,
-        ToolCallKey::new("fork-task", "assistant-1", "call-b")
-    );
-    assert_eq!(records[0].exchange_id.as_deref(), Some("exchange-1"));
-}
-
-#[test]
-fn byop_fork_repair_records_match_duplicate_call_ids_by_assistant_message() {
-    let source_tasks = vec![byop_test_task(
-        "source-task",
-        vec![
-            byop_tool_call_message("source-task", "assistant-1", "call-a"),
-            byop_tool_result_message("source-task", "result-a-1", "call-a"),
-            byop_tool_call_message("source-task", "assistant-2", "call-a"),
-            byop_tool_result_message("source-task", "result-a-2", "call-a"),
-        ],
-    )];
-    let forked_tasks = vec![byop_test_task(
-        "fork-task",
-        vec![
-            byop_tool_call_message("fork-task", "assistant-1", "call-a"),
-            byop_tool_result_message("fork-task", "result-a-1", "call-a"),
-            byop_tool_call_message("fork-task", "assistant-2", "call-a"),
-        ],
-    )];
-
-    let records = super::collect_byop_fork_repair_records(
-        &source_tasks,
-        &forked_tasks,
-        &RepairStateStatus::default(),
-        None,
-    );
-
-    assert_eq!(records.len(), 1);
-    assert_eq!(
-        records[0].key,
-        ToolCallKey::new("fork-task", "assistant-2", "call-a")
-    );
-}
-
-#[test]
-fn byop_fork_repair_records_do_not_convert_orphan_results() {
-    let source_tasks = vec![byop_test_task(
-        "source-task",
-        vec![byop_tool_result_message(
-            "source-task",
-            "orphan-result",
-            "call-a",
-        )],
-    )];
-    let forked_tasks = vec![byop_test_task(
-        "fork-task",
-        vec![byop_tool_result_message(
-            "fork-task",
-            "orphan-result",
-            "call-a",
-        )],
-    )];
-
-    let records = super::collect_byop_fork_repair_records(
-        &source_tasks,
-        &forked_tasks,
-        &RepairStateStatus::default(),
-        None,
-    );
-
-    assert!(records.is_empty());
-}
-
-#[test]
-fn byop_fork_repair_records_do_not_infer_unexplained_missing_results() {
-    let source_tasks = vec![byop_test_task(
-        "source-task",
-        vec![byop_tool_call_message(
-            "source-task",
-            "assistant-1",
-            "call-a",
-        )],
-    )];
-    let forked_tasks = vec![byop_test_task(
-        "fork-task",
-        vec![byop_tool_call_message("fork-task", "assistant-1", "call-a")],
-    )];
-
-    let records = super::collect_byop_fork_repair_records(
-        &source_tasks,
-        &forked_tasks,
-        &RepairStateStatus::default(),
-        None,
-    );
-
-    assert!(records.is_empty());
-}
-
-#[test]
-fn byop_fork_repair_records_translate_existing_repair_keys() {
-    let source_tasks = vec![byop_test_task(
-        "source-task",
-        vec![byop_tool_call_message(
-            "source-task",
-            "assistant-1",
-            "call-a",
-        )],
-    )];
-    let forked_tasks = vec![byop_test_task(
-        "fork-task",
-        vec![byop_tool_call_message("fork-task", "assistant-1", "call-a")],
-    )];
-    let source_record = RepairRecord::new(
-        RepairSource::RestoredLegacyHistory,
-        ToolCallKey::new("source-task", "assistant-1", "call-a"),
-    );
-
-    let records = super::collect_byop_fork_repair_records(
-        &source_tasks,
-        &forked_tasks,
-        &RepairStateStatus::Valid(RepairState::new(vec![source_record])),
-        None,
-    );
-
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].source, RepairSource::RestoredLegacyHistory);
-    assert_eq!(
-        records[0].key,
-        ToolCallKey::new("fork-task", "assistant-1", "call-a")
-    );
 }
 
 #[test]

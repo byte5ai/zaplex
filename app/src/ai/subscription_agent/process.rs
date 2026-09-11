@@ -1,4 +1,7 @@
-use super::{InstallationIdentity, SubscriptionAgent, SubscriptionTarget};
+use super::{
+    InstallationIdentity, SubscriptionAgent, SubscriptionTarget, CLAUDE_PROVIDER_MANAGED_BY_HOST,
+    CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES,
+};
 use anyhow::{Context, Result};
 use async_process::{Child, ChildStdin, ChildStdout};
 use command::r#async::Command;
@@ -65,7 +68,11 @@ impl ProcessLaunch {
                 ]);
                 launch
                     .unset_environment
-                    .extend(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
+                    .extend(CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES);
+                launch.environment.push((
+                    CLAUDE_PROVIDER_MANAGED_BY_HOST.0,
+                    CLAUDE_PROVIDER_MANAGED_BY_HOST.1.to_string(),
+                ));
                 if let Some(config_dir) = installation.account.config_dir.as_ref() {
                     launch.environment.push((
                         "CLAUDE_CONFIG_DIR",
@@ -129,7 +136,11 @@ impl ProcessLaunch {
                 }
                 launch
                     .unset_environment
-                    .extend(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
+                    .extend(CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES);
+                launch.environment.push((
+                    CLAUDE_PROVIDER_MANAGED_BY_HOST.0,
+                    CLAUDE_PROVIDER_MANAGED_BY_HOST.1.to_string(),
+                ));
                 if let Some(config_dir) = target.installation.account.config_dir.as_ref() {
                     launch.environment.push((
                         "CLAUDE_CONFIG_DIR",

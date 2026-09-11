@@ -20,7 +20,7 @@ body:
           required: true
         - label: "I have included relevant logs (`RUST_LOG=info` output, panic traces, etc.). Optional, but greatly speeds up triage."
           required: false
-        - label: "If the bug is in the AI / BYOP path, I have included the provider name, base URL pattern (redacted), and model id."
+        - label: "If the bug is in the AI agent path, I have included the agent (Claude Code or Codex), local/remote host, CLI version, and displayed model."
           required: false
   - type: textarea
     id: "describe-the-bug"
@@ -89,19 +89,19 @@ body:
   - type: dropdown
     id: "ai-path"
     attributes:
-      label: "AI / BYOP path involved?"
-      description: "Does this bug involve the AI agent, model picker, prompt templates, or a configured BYOP provider?"
+      label: "AI agent path involved?"
+      description: "Does this bug involve the Claude Code or Codex subscription agent, its model selection, or session lifecycle?"
       multiple: false
       options:
         - "No — non-AI bug (terminal, blocks, UI, shortcuts, etc.)"
-        - "Yes — BYOP / model / prompt template / agent path"
+        - "Yes — Claude Code / Codex subscription agent path"
     validations:
       required: true
   - type: input
-    id: "byop-provider"
+    id: "subscription-agent"
     attributes:
-      label: "BYOP provider (if applicable)"
-      description: "If the bug is in the AI path, which provider/protocol? e.g. OpenAI / Anthropic / DeepSeek / Gemini / Ollama / OpenRouter / custom proxy. Do NOT paste API keys."
+      label: "Subscription agent details (if applicable)"
+      description: "Which agent is affected (Claude Code or Codex), where does it run, and which CLI version/model is displayed? Do NOT paste tokens or credentials."
     validations:
       required: false
   - type: dropdown

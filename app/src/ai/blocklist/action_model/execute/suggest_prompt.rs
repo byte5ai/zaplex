@@ -52,12 +52,8 @@ impl PromptSuggestionExecutor {
             return ActionExecution::InvalidAction;
         };
 
-        // Zaplex: emit unconditionally (upstream gated this behind the PromptSuggestionsViaMAA cargo
-        // feature, which OSS leaves off by default → the chip never shows → the oneshot hangs
-        // forever). In the BYOP scenario, when the model actively calls suggest_prompt, the view
-        // layer must subscribe to this event to show the chip to the user; once accepted, it calls
-        // complete_suggest_prompt_action to close the channel. See
-        // app/src/terminal/view.rs::handle_prompt_suggestion_executor_event.
+        // Emit unconditionally so the view can show the model's prompt suggestion and complete the
+        // executor without leaving the request waiting on the result channel.
         if let SuggestPromptRequest::PromptSuggestion { prompt, label } = request {
             ctx.emit(PromptSuggestionExecutorEvent::NewPromptSuggestion {
                 prompt: prompt.clone(),

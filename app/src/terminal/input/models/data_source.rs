@@ -1,46 +1,31 @@
 use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
 use itertools::Itertools;
-use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use ordered_float::OrderedFloat;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
-use warpui::elements::{
-    ConstrainedBox, Container, CornerRadius, FormattedTextElement, Highlight, HighlightedHyperlink,
-    MouseStateHandle, Radius, Text,
-};
+use warpui::elements::{ConstrainedBox, Container, CornerRadius, Highlight, Radius, Text};
 use warpui::fonts::{Properties, Style, Weight};
-use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, Entity, EntityId, SingletonEntity as _};
 
-use crate::ai::agent_providers::{llm_id as byop_llm_id, lookup_byop};
-use crate::ai::llms::{
-    is_using_api_key_for_provider, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider,
-    LLMSpec,
-};
+use crate::ai::llms::{DisableReason, LLMId, LLMInfo, LLMPreferences, LLMSpec};
 use crate::features::FeatureFlag;
 use crate::search::data_source::{Query, QueryFilter, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::search::{SearchItem, SyncDataSource};
-use crate::settings_view::SettingsSection;
 use crate::terminal::input::inline_menu::{
     default_navigation_message_items, InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
 };
 use crate::terminal::input::inline_menu::{styles as inline_styles, DetailsRenderConfig};
 use crate::terminal::input::message_bar::{Message, MessageItem};
-use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::UserWorkspaces;
 use warpui::keymap::Keystroke;
 use warpui::platform::OperatingSystem;
 
 use super::model_spec_scores::{
-    render_byop_spec_scores, render_model_spec_header, render_model_spec_scores, CostRow,
-    ModelSpecScoresLayout,
+    render_model_spec_header, render_model_spec_scores, CostRow, ModelSpecScoresLayout,
 };
 
 #[derive(Clone, Debug)]
@@ -176,7 +161,7 @@ impl SyncDataSource for ModelSelectorDataSource {
         if query_text.is_empty() {
             return Ok(choices
                 .into_iter()
-                .map(|llm| QueryResult::from(ModelSearchItem::new(llm, &active_llm_id, app)))
+                .map(|llm| QueryResult::from(ModelSearchItem::new(llm, &active_llm_id)))
                 .collect());
         }
 
@@ -194,7 +179,7 @@ impl SyncDataSource for ModelSelectorDataSource {
                 }
 
                 Some(QueryResult::from(
-                    ModelSearchItem::new(llm, &active_llm_id, app)
+                    ModelSearchItem::new(llm, &active_llm_id)
                         .with_name_match_result(Some(match_result.clone()))
                         .with_score(OrderedFloat(match_result.score as f64)),
                 ))
@@ -210,7 +195,6 @@ impl Entity for ModelSelectorDataSource {
 #[derive(Clone)]
 struct ModelSearchItem {
     id: LLMId,
-    provider: LLMProvider,
     spec: Option<LLMSpec>,
     provider_icon: Option<Icon>,
     display_text: String,
@@ -218,33 +202,21 @@ struct ModelSearchItem {
     disable_reason: Option<DisableReason>,
     name_match_result: Option<FuzzyMatchResult>,
     score: OrderedFloat<f64>,
-    manage_api_key_mouse_state: MouseStateHandle,
     reasoning_level: Option<String>,
     discount_percentage: Option<f32>,
 }
 
 impl ModelSearchItem {
-    fn new(llm: &LLMInfo, active_llm_id: &LLMId, app: &AppContext) -> Self {
-        // If the model requires an upgrade but the user already has a BYOK key
-        // for this provider, treat it as enabled by clearing the disable reason.
-        let disable_reason = if llm.disable_reason == Some(DisableReason::RequiresUpgrade)
-            && is_using_api_key_for_provider(&llm.provider, app)
-        {
-            None
-        } else {
-            llm.disable_reason.clone()
-        };
+    fn new(llm: &LLMInfo, active_llm_id: &LLMId) -> Self {
         Self {
             id: llm.id.clone(),
-            provider: llm.provider.clone(),
             spec: llm.spec.clone(),
             provider_icon: llm.provider.icon(),
             display_text: llm.display_name.clone(),
             is_selected: &llm.id == active_llm_id,
-            disable_reason,
+            disable_reason: llm.disable_reason.clone(),
             name_match_result: None,
             score: OrderedFloat(f64::MIN),
-            manage_api_key_mouse_state: Default::default(),
             reasoning_level: llm.reasoning_level(),
             discount_percentage: llm.discount_percentage,
         }
@@ -332,15 +304,6 @@ impl SearchItem for ModelSearchItem {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(text.finish());
 
-        if is_using_api_key_for_provider(&self.provider, app) {
-            let key_icon =
-                ConstrainedBox::new(Icon::Key.to_warpui_icon(secondary_text_color).finish())
-                    .with_width(font_size)
-                    .with_height(font_size)
-                    .finish();
-            row = row.with_child(Container::new(key_icon).with_margin_left(6.).finish());
-        }
-
         if self.is_selected {
             let selected_label = "(selected)";
             let selected_text = Text::new_inline(
@@ -379,10 +342,7 @@ impl SearchItem for ModelSearchItem {
             row = row.with_child(Container::new(disabled_text).with_margin_left(6.).finish());
         }
 
-        if should_show_discount_chip(
-            self.discount_percentage,
-            is_using_api_key_for_provider(&self.provider, app),
-        ) {
+        if should_show_discount_chip(self.discount_percentage) {
             let discount_percentage = self.discount_percentage.unwrap_or(0.);
             let chip = Container::new(
                 Text::new_inline(
@@ -432,99 +392,8 @@ impl SearchItem for ModelSearchItem {
         };
         let header = render_model_spec_header(&title, &description, app);
 
-        // BYOP uses dedicated score rendering: Context / Output (bar uses log2 normalization) + Cost = BilledToApi.
-        // Visually identical to the default Zaplex panel, just with different row semantics.
-        if byop_llm_id::is_byop(&self.id) {
-            if let Some((provider, _api_key, model_id)) = lookup_byop(app, &self.id) {
-                let model_entry = provider.models.iter().find(|m| m.id == model_id);
-                let context_window = model_entry.map(|m| m.context_window).filter(|n| *n > 0);
-                let max_output_tokens = model_entry.map(|m| m.max_output_tokens).filter(|n| *n > 0);
-
-                let manage_button = appearance
-                    .ui_builder()
-                    .button(
-                        ButtonVariant::Outlined,
-                        self.manage_api_key_mouse_state.clone(),
-                    )
-                    .with_text_label(crate::t!("common-manage"))
-                    .with_style(UiComponentStyles {
-                        height: Some(24.),
-                        padding: Some(Coords {
-                            top: 2.,
-                            bottom: 2.,
-                            left: 4.,
-                            right: 4.,
-                        }),
-                        ..Default::default()
-                    })
-                    .with_cursor(Some(Cursor::PointingHand))
-                    .build()
-                    .on_click(|ctx, _, _| {
-                        ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
-                            search_query: "agent provider".to_string(),
-                            section: Some(SettingsSection::WarpAgent),
-                        });
-                    })
-                    .finish();
-
-                let scores = render_byop_spec_scores(
-                    context_window,
-                    max_output_tokens,
-                    Container::new(manage_button).finish(),
-                    ModelSpecScoresLayout {
-                        bg_bar_color: internal_colors::neutral_3(theme),
-                    },
-                    app,
-                );
-
-                let column = Flex::column()
-                    .with_child(Container::new(header).with_margin_bottom(12.).finish())
-                    .with_child(scores);
-
-                return Some(
-                    ConstrainedBox::new(column.finish())
-                        .with_width(model_specs_width(app))
-                        .finish(),
-                );
-            }
-        }
-
-        let is_using_api_key = is_using_api_key_for_provider(&self.provider, app);
-        let cost_row = if is_using_api_key {
-            let manage_button = appearance
-                .ui_builder()
-                .button(
-                    ButtonVariant::Outlined,
-                    self.manage_api_key_mouse_state.clone(),
-                )
-                .with_text_label(crate::t!("common-manage"))
-                .with_style(UiComponentStyles {
-                    height: Some(24.),
-                    padding: Some(Coords {
-                        top: 2.,
-                        bottom: 2.,
-                        left: 4.,
-                        right: 4.,
-                    }),
-                    ..Default::default()
-                })
-                .with_cursor(Some(Cursor::PointingHand))
-                .build()
-                .on_click(|ctx, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
-                        search_query: "api".to_string(),
-                        section: Some(SettingsSection::WarpAgent),
-                    });
-                })
-                .finish();
-
-            CostRow::BilledToApi {
-                manage_button: Container::new(manage_button).finish(),
-            }
-        } else {
-            CostRow::Bar {
-                value: self.spec.as_ref().map(|spec| spec.cost),
-            }
+        let cost_row = CostRow::Bar {
+            value: self.spec.as_ref().map(|spec| spec.cost),
         };
 
         let scores = render_model_spec_scores(
@@ -546,58 +415,13 @@ impl SearchItem for ModelSearchItem {
                 first.make_ascii_uppercase();
             }
 
-            // Show a BYOK option when the user's tier supports it and the provider
-            // is one that accepts user-supplied API keys.
-            let byok_available = UserWorkspaces::as_ref(app).is_byo_api_key_enabled()
-                && matches!(
-                    self.provider,
-                    LLMProvider::OpenAI | LLMProvider::Anthropic | LLMProvider::Google
-                );
-
-            let text_fragments = if byok_available {
-                vec![
-                    FormattedTextFragment::plain_text(format!(
-                        "{display_name} can be used by adding your own key. "
-                    )),
-                    FormattedTextFragment::hyperlink_action(
-                        "Bring your own key",
-                        WorkspaceAction::ShowSettingsPageWithSearch {
-                            search_query: "api".to_string(),
-                            section: Some(SettingsSection::WarpAgent),
-                        },
-                    ),
-                ]
-            } else {
-                vec![FormattedTextFragment::plain_text(format!(
-                    "{display_name} is not available in the current local configuration."
-                ))]
-            };
-
-            let upgrade_text = FormattedTextElement::new(
-                FormattedText::new([FormattedTextLine::Line(text_fragments)]),
+            let upgrade_text = Text::new(
+                format!("{display_name} is not available in the current local configuration."),
+                appearance.ui_font_family(),
                 inline_styles::font_size(appearance),
-                appearance.ui_font_family(),
-                appearance.ui_font_family(),
-                theme.disabled_ui_text_color().into_solid(),
-                HighlightedHyperlink::default(),
             )
-            .with_heading_to_font_size_multipliers(
-                appearance.heading_font_size_multipliers().clone(),
-            )
-            .with_hyperlink_font_color(theme.accent().into_solid())
-            .register_default_click_handlers_with_action_support(|hyperlink_lens, event, ctx| {
-                match hyperlink_lens {
-                    warpui::elements::HyperlinkLens::Url(url) => {
-                        ctx.open_url(url);
-                    }
-                    warpui::elements::HyperlinkLens::Action(action_ref) => {
-                        if let Some(action) = action_ref.as_any().downcast_ref::<WorkspaceAction>()
-                        {
-                            event.dispatch_typed_action(action.clone());
-                        }
-                    }
-                }
-            })
+            .with_color(theme.disabled_ui_text_color().into())
+            .soft_wrap(true)
             .finish();
 
             column = column.with_child(Container::new(upgrade_text).with_margin_top(12.).finish());
@@ -655,8 +479,6 @@ impl SearchItem for ModelSearchItem {
 }
 
 /// Returns true when a promo discount chip should be shown for a model.
-/// Discounts only apply when the user is billing through Zaplex credits,
-/// so we suppress the chip when the user is routing through their own API key.
-fn should_show_discount_chip(discount_percentage: Option<f32>, is_using_byok: bool) -> bool {
-    discount_percentage.is_some_and(|p| p > 0.) && !is_using_byok
+fn should_show_discount_chip(discount_percentage: Option<f32>) -> bool {
+    discount_percentage.is_some_and(|percentage| percentage > 0.)
 }

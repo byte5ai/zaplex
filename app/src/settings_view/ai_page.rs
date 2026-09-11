@@ -1,5 +1,3 @@
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::aws_credentials::refresh_aws_credentials;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::{
     AgentToolbarEditorMode, AgentToolbarInlineEditor,
 };
@@ -24,13 +22,12 @@ use crate::settings::InputSettings;
 use crate::settings::{
     AIAutoDetectionEnabled, AICommandDenylist, AISettingsChangedEvent,
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
-    AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
-    AwsBedrockCredentialsEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
-    IncludeAgentCommandsInHistory, IntelligentAutosuggestionsEnabled, MemoryEnabled,
-    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, RuleSuggestionsEnabled,
-    ShouldRenderCLIAgentToolbar, ShouldRenderUseAgentToolbarForUserCommands, ShowAgentTips,
-    ShowAgentZeroStateHints, ShowConversationHistory, ShowHintText, ThinkingDisplayMode,
-    VoiceInputEnabled,
+    AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, FileBasedMcpEnabled,
+    GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory,
+    IntelligentAutosuggestionsEnabled, MemoryEnabled, NLDInTerminalEnabled,
+    NaturalLanguageAutosuggestionsEnabled, RuleSuggestionsEnabled, ShouldRenderCLIAgentToolbar,
+    ShouldRenderUseAgentToolbarForUserCommands, ShowAgentTips, ShowAgentZeroStateHints,
+    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
 };
 use crate::terminal::cli_agent::{CLIAgentInstallEvent, CLIAgentInstallModel};
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
@@ -40,7 +37,6 @@ use crate::view_components::{
     FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
 };
 use crate::workspaces::user_workspaces::UserWorkspacesEvent;
-use ::ai::api_keys::ApiKeyManager;
 use enum_iterator::all;
 use itertools::Itertools;
 use regex::Regex;
@@ -770,17 +766,8 @@ impl AISettingsPageView {
                 LLMPreferencesEvent::UpdatedActiveCodingLLM => {
                     Self::refresh_coding_model_menu(&me.coding_model_dropdown, ctx);
                 }
-                LLMPreferencesEvent::UpdatedReasoningEffort => {}
             },
         );
-
-        // Refresh model dropdowns when BYO API keys update so key icons reflect latest state.
-        ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), |me, _model, _event, ctx| {
-            Self::refresh_base_model_menu(&me.base_model_dropdown, ctx);
-            Self::refresh_coding_model_menu(&me.coding_model_dropdown, ctx);
-            me.sync_context_window_editor(ctx, false);
-            ctx.notify();
-        });
 
         ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
             match event {
@@ -1414,9 +1401,8 @@ impl AISettingsPageView {
     }
 
     /// Rebuild the widget list for the current subpage.
-    /// Used when a widget's internal state depends on complex collections in `AISettings`
-    /// (e.g. custom Agent Provider lists); the ViewHandle held by the widget must be recreated
-    /// when the collection size changes.
+    /// Used when a widget's internal state depends on complex collections in `AISettings`; the
+    /// `ViewHandle` held by the widget must be recreated when the collection size changes.
     pub fn rebuild_current_page(&mut self, ctx: &mut ViewContext<Self>) {
         // Reuse scroll handle from old page to avoid jumping back to top after rebuild.
         let preserved_scroll = self.page.scroll_states();
@@ -1429,8 +1415,6 @@ impl AISettingsPageView {
 
     fn build_page(subpage: Option<AISubpage>, ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let ai_settings = AISettings::as_ref(ctx);
-        let should_show_usage_widget = !UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled();
-
         let mut widgets: Vec<Box<dyn SettingsWidget<View = AISettingsPageView>>> = Vec::new();
 
         // When viewing a specific subpage, only include its widgets.
@@ -1439,9 +1423,7 @@ impl AISettingsPageView {
             None => {
                 // Full page: all widgets (legacy behavior)
                 widgets.push(Box::new(WarpAgentHeaderWidget));
-                if should_show_usage_widget {
-                    widgets.push(Box::new(UsageWidget::default()));
-                }
+                widgets.push(Box::new(UsageWidget::default()));
                 if ai_settings
                     .intelligent_autosuggestions_enabled_internal
                     .is_supported_on_current_platform()
@@ -1475,7 +1457,6 @@ impl AISettingsPageView {
                     widgets.push(Box::new(VoiceWidget::default()));
                 }
                 widgets.push(Box::new(CLIAgentWidget::default()));
-                widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(OtherAIWidget::default()));
             }
             Some(AISubpage::WarpAgent) => {
@@ -1506,13 +1487,10 @@ impl AISettingsPageView {
                 if voice_supported {
                     widgets.push(Box::new(VoiceWidget::default()));
                 }
-                widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(OtherAIWidget::default()));
             }
             Some(AISubpage::Profiles) => {
-                if should_show_usage_widget {
-                    widgets.push(Box::new(UsageWidget::default()));
-                }
+                widgets.push(Box::new(UsageWidget::default()));
                 widgets.push(Box::new(AgentsWidget::default()));
             }
             Some(AISubpage::Knowledge) => {
@@ -1698,7 +1676,6 @@ impl AISettingsPageView {
                 None,
                 false,
                 false,
-                ctx,
             );
             menu.set_rich_items(items, ctx);
 
@@ -1733,7 +1710,6 @@ impl AISettingsPageView {
                 None,
                 false,
                 false,
-                ctx,
             );
             menu.set_rich_items(items, ctx);
             let active = LLMPreferences::as_ref(ctx).get_active_coding_model(ctx, None);
@@ -2131,41 +2107,6 @@ impl AISettingsPageView {
             })
             .collect()
     }
-
-    fn save_agent_provider_edits(
-        provider_id: &str,
-        name: &str,
-        base_url: &str,
-        api_key: &str,
-        headers: &[(String, String)],
-        models: &[(usize, String, String, u32, u32)],
-        ctx: &mut ViewContext<Self>,
-    ) {
-        AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            let mut providers = settings.agent_providers.value().clone();
-            if let Some(p) = providers.iter_mut().find(|p| p.id == provider_id) {
-                p.name = name.to_owned();
-                p.base_url = base_url.to_owned();
-                p.extra_headers = headers.to_vec();
-                // Update by model_index, skip out-of-bounds indices (rebuild form and settings may be transiently inconsistent).
-                for (idx, m_name, m_id, ctx_window, max_out) in models {
-                    if let Some(m) = p.models.get_mut(*idx) {
-                        m.name = m_name.clone();
-                        m.id = m_id.clone();
-                        m.context_window = *ctx_window;
-                        m.max_output_tokens = *max_out;
-                    }
-                }
-            }
-            let _ = settings.agent_providers.set_value(providers, ctx);
-        });
-        crate::ai::agent_providers::AgentProviderSecrets::handle(ctx).update(
-            ctx,
-            |secrets, ctx| {
-                secrets.set(provider_id, api_key.to_owned(), ctx);
-            },
-        );
-    }
 }
 
 impl View for AISettingsPageView {
@@ -2216,7 +2157,6 @@ pub enum AISettingsPageAction {
     ToggleCLIAgentHookBridge(CLIAgent),
     ToggleUseAgentToolbar,
     ToggleVoiceInput,
-    ToggleCanUseWarpCreditsWithByok,
     HyperlinkClick(HyperlinkUrl),
     ToggleShowInputHintText,
     ToggleShowAgentTips,
@@ -2257,9 +2197,6 @@ pub enum AISettingsPageAction {
     AddToMCPDenylist(uuid::Uuid),
     RemoveFromMCPDenylist(uuid::Uuid),
     CreateProfile,
-    ToggleAwsBedrockAutoLogin,
-    ToggleAwsBedrockCredentialsEnabled,
-    RefreshAwsBedrockCredentials,
     ToggleFileBasedMcp,
     ToggleIncludeAgentCommandsInHistory,
     #[cfg(feature = "local_fs")]
@@ -2272,133 +2209,6 @@ pub enum AISettingsPageAction {
         pattern: String,
         agent: Option<CLIAgent>,
     },
-    // Custom Agent Provider management actions
-    AddAgentProvider,
-    RemoveAgentProvider {
-        provider_id: String,
-    },
-    UpdateAgentProviderName {
-        provider_id: String,
-        name: String,
-    },
-    UpdateAgentProviderBaseUrl {
-        provider_id: String,
-        base_url: String,
-    },
-    /// Explicitly set provider's API protocol type (OpenAI / OpenAI-Response / Gemini / Anthropic / Ollama).
-    /// chat_stream explicitly binds genai AdapterKind based on this, bypassing model name detection.
-    SetAgentProviderApiType {
-        provider_id: String,
-        api_type: crate::settings::AgentProviderApiType,
-    },
-    UpdateAgentProviderApiKey {
-        provider_id: String,
-        api_key: String,
-    },
-    /// Save all editable fields on a provider card at once (name / base_url / api_key /
-    /// extra_headers / models). Replaces the previous "blur/Enter push-per-field" UX — the user
-    /// clicks "Save" in settings_view and all fields are sent together.
-    SaveAgentProviderEdits {
-        provider_id: String,
-        name: String,
-        base_url: String,
-        api_key: String,
-        headers: Vec<(String, String)>,
-        /// Only carries editable parts: `(model_index, name, id, context_window, max_output_tokens)`.
-        /// reasoning / tool_call / image / pdf / audio are maintained by independent chip actions, not here.
-        models: Vec<(usize, String, String, u32, u32)>,
-    },
-    SaveAgentProviderEditsThen {
-        provider_id: String,
-        name: String,
-        base_url: String,
-        api_key: String,
-        headers: Vec<(String, String)>,
-        /// Only carries editable parts: `(model_index, name, id, context_window, max_output_tokens)`.
-        models: Vec<(usize, String, String, u32, u32)>,
-        action: Box<AISettingsPageAction>,
-    },
-    UpdateAgentProviderModels {
-        provider_id: String,
-        models: Vec<crate::settings::AgentProviderModel>,
-    },
-    AddAgentProviderModel {
-        provider_id: String,
-    },
-    RemoveAgentProviderModel {
-        provider_id: String,
-        model_index: usize,
-    },
-    UpdateAgentProviderModelName {
-        provider_id: String,
-        model_index: usize,
-        name: String,
-    },
-    UpdateAgentProviderModelId {
-        provider_id: String,
-        model_index: usize,
-        id: String,
-    },
-    /// Update context_window (tokens) for a single model; 0 = unspecified.
-    UpdateAgentProviderModelContextWindow {
-        provider_id: String,
-        model_index: usize,
-        context_window: u32,
-    },
-    /// Update max_output_tokens for a single model; 0 = unspecified.
-    UpdateAgentProviderModelMaxOutput {
-        provider_id: String,
-        model_index: usize,
-        max_output_tokens: u32,
-    },
-    AddAgentProviderHeader {
-        provider_id: String,
-    },
-    RemoveAgentProviderHeader {
-        provider_id: String,
-        header_index: usize,
-    },
-    UpdateAgentProviderHeader {
-        provider_id: String,
-        header_index: usize,
-        key: String,
-        value: String,
-    },
-    FetchAgentProviderModels {
-        provider_id: String,
-    },
-
-    // ----- Single model entry detail panel -----
-    /// Toggle expand/collapse state of a single model's detail panel.
-    ToggleAgentProviderModelExpanded {
-        provider_id: String,
-        model_index: usize,
-    },
-    /// Three-state cycle toggle a single model's multimodal capability (image/pdf/audio).
-    /// `None → Some(true) → Some(false) → None`.
-    CycleAgentProviderModelCapability {
-        provider_id: String,
-        model_index: usize,
-        kind: ModelCapabilityKind,
-    },
-    /// Toggle reasoning flag for a single model (ordinary bool field, not three-state).
-    ToggleAgentProviderModelReasoning {
-        provider_id: String,
-        model_index: usize,
-    },
-    /// Toggle tool_call flag for a single model.
-    ToggleAgentProviderModelToolCall {
-        provider_id: String,
-        model_index: usize,
-    },
-}
-
-/// Type of three-state capability chip in model detail panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelCapabilityKind {
-    Image,
-    Pdf,
-    Audio,
 }
 
 impl TypedActionView for AISettingsPageView {
@@ -2692,14 +2502,6 @@ impl TypedActionView for AISettingsPageView {
                         log::warn!("Failed to set value for Voice Input: {e:?}");
                     }
                 }
-                ctx.notify();
-            }
-            AISettingsPageAction::ToggleCanUseWarpCreditsWithByok => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .can_use_warp_credits_with_byok
-                        .toggle_and_save_value(ctx));
-                });
                 ctx.notify();
             }
             AISettingsPageAction::HyperlinkClick(hyperlink) => {
@@ -3017,27 +2819,6 @@ impl TypedActionView for AISettingsPageView {
                 }
                 ctx.notify();
             }
-            AISettingsPageAction::ToggleAwsBedrockAutoLogin => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.aws_bedrock_auto_login.toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::ToggleAwsBedrockCredentialsEnabled => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .aws_bedrock_credentials_enabled
-                        .toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::RefreshAwsBedrockCredentials => {
-                #[cfg(not(target_family = "wasm"))]
-                ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                    drop(refresh_aws_credentials(manager, ctx));
-                });
-                ctx.notify();
-            }
             AISettingsPageAction::ToggleFileBasedMcp => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.file_based_mcp_enabled.toggle_and_save_value(ctx));
@@ -3079,388 +2860,6 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
-            AISettingsPageAction::AddAgentProvider => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    providers.push(crate::settings::AgentProvider::new_empty());
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                self.rebuild_current_page(ctx);
-            }
-            AISettingsPageAction::RemoveAgentProvider { provider_id } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    providers.retain(|p| p.id != *provider_id);
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                crate::ai::agent_providers::AgentProviderSecrets::handle(ctx).update(
-                    ctx,
-                    |secrets, ctx| {
-                        secrets.remove(provider_id, ctx);
-                    },
-                );
-                super::agent_providers_widget::clear_expanded_models_for_provider(provider_id);
-                self.rebuild_current_page(ctx);
-            }
-            AISettingsPageAction::UpdateAgentProviderName { provider_id, name } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        p.name = name.clone();
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::UpdateAgentProviderBaseUrl {
-                provider_id,
-                base_url,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        p.base_url = base_url.clone();
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::SetAgentProviderApiType {
-                provider_id,
-                api_type,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        p.api_type = *api_type;
-                        // If base_url is empty, conveniently fill the default endpoint for this type (helps beginners).
-                        // Don't touch if user already filled base_url.
-                        if p.base_url.trim().is_empty() {
-                            p.base_url = api_type.default_base_url().to_owned();
-                        }
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                self.rebuild_current_page(ctx);
-            }
-            AISettingsPageAction::UpdateAgentProviderApiKey {
-                provider_id,
-                api_key,
-            } => {
-                crate::ai::agent_providers::AgentProviderSecrets::handle(ctx).update(
-                    ctx,
-                    |secrets, ctx| {
-                        secrets.set(provider_id, api_key.clone(), ctx);
-                    },
-                );
-                ctx.notify();
-            }
-            AISettingsPageAction::SaveAgentProviderEdits {
-                provider_id,
-                name,
-                base_url,
-                api_key,
-                headers,
-                models,
-            } => {
-                Self::save_agent_provider_edits(
-                    provider_id,
-                    name,
-                    base_url,
-                    api_key,
-                    headers,
-                    models,
-                    ctx,
-                );
-                ctx.notify();
-            }
-            AISettingsPageAction::SaveAgentProviderEditsThen {
-                provider_id,
-                name,
-                base_url,
-                api_key,
-                headers,
-                models,
-                action,
-            } => {
-                Self::save_agent_provider_edits(
-                    provider_id,
-                    name,
-                    base_url,
-                    api_key,
-                    headers,
-                    models,
-                    ctx,
-                );
-                self.handle_action(action.as_ref(), ctx);
-            }
-            AISettingsPageAction::UpdateAgentProviderModels {
-                provider_id,
-                models,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        p.models = models.clone();
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                self.rebuild_current_page(ctx);
-            }
-            AISettingsPageAction::AddAgentProviderModel { provider_id } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        p.models
-                            .push(crate::settings::AgentProviderModel::from_id(String::new()));
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                // Row-level add needs to create EditorView, so take the rebuild path; rebuild_current_page already preserves scroll.
-                self.rebuild_current_page(ctx);
-            }
-            AISettingsPageAction::RemoveAgentProviderModel {
-                provider_id,
-                model_index,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        if *model_index < p.models.len() {
-                            p.models.remove(*model_index);
-                        }
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                // Deleting shifts subsequent indices; clear all expand records for this provider to avoid accidental re-expansion.
-                super::agent_providers_widget::clear_expanded_models_for_provider(provider_id);
-                self.rebuild_current_page(ctx);
-            }
-            AISettingsPageAction::UpdateAgentProviderModelName {
-                provider_id,
-                model_index,
-                name,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        if let Some(m) = p.models.get_mut(*model_index) {
-                            m.name = name.clone();
-                        }
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::UpdateAgentProviderModelId {
-                provider_id,
-                model_index,
-                id,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        if let Some(m) = p.models.get_mut(*model_index) {
-                            m.id = id.clone();
-                        }
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::UpdateAgentProviderModelContextWindow {
-                provider_id,
-                model_index,
-                context_window,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        if let Some(m) = p.models.get_mut(*model_index) {
-                            m.context_window = *context_window;
-                        }
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::UpdateAgentProviderModelMaxOutput {
-                provider_id,
-                model_index,
-                max_output_tokens,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        if let Some(m) = p.models.get_mut(*model_index) {
-                            m.max_output_tokens = *max_output_tokens;
-                        }
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::FetchAgentProviderModels { provider_id } => {
-                let provider_id = provider_id.clone();
-                let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
-                let Some(provider) = providers.into_iter().find(|p| p.id == provider_id) else {
-                    return;
-                };
-                let api_key = crate::ai::agent_providers::AgentProviderSecrets::as_ref(ctx)
-                    .get(&provider_id)
-                    .map(str::to_owned);
-                let client = http_client::Client::new();
-                let provider_id_for_handler = provider_id.clone();
-                ctx.spawn(
-                    async move {
-                        crate::ai::agent_providers::fetch_openai_compatible_models(
-                            client,
-                            &provider.base_url,
-                            api_key.as_deref(),
-                        )
-                        .await
-                    },
-                    move |view, result, ctx| match result {
-                        Ok(fetched) => {
-                            AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                                let mut providers = settings.agent_providers.value().clone();
-                                if let Some(p) = providers
-                                    .iter_mut()
-                                    .find(|p| p.id == provider_id_for_handler)
-                                {
-                                    // Merge and preserve: keep existing ids with user-modified names,
-                                    // append new ids, don't delete local extras (user manually removed).
-                                    let existing: std::collections::HashSet<String> =
-                                        p.models.iter().map(|m| m.id.clone()).collect();
-                                    for m in fetched {
-                                        if !existing.contains(&m.id) {
-                                            p.models.push(
-                                                crate::settings::AgentProviderModel::from_id(m.id),
-                                            );
-                                        }
-                                    }
-                                }
-                                let _ = settings.agent_providers.set_value(providers, ctx);
-                            });
-                            // Model row count may have changed; need to rebuild widget rows.
-                            view.rebuild_current_page(ctx);
-                        }
-                        Err(e) => {
-                            log::error!(
-                                "Failed to fetch models for provider {provider_id_for_handler}: {e}"
-                            );
-                            ctx.notify();
-                        }
-                    },
-                );
-            }
-            AISettingsPageAction::AddAgentProviderHeader { provider_id } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        p.extra_headers.push((String::new(), String::new()));
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                // After header row count changes, need to create/destroy EditorView handles; notify alone won't refresh rows.
-                self.rebuild_current_page(ctx);
-            }
-            AISettingsPageAction::RemoveAgentProviderHeader {
-                provider_id,
-                header_index,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        if *header_index < p.extra_headers.len() {
-                            p.extra_headers.remove(*header_index);
-                        }
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                // Deletion also causes index shift with existing HeaderRow handles; page rebuild is needed.
-                self.rebuild_current_page(ctx);
-            }
-            AISettingsPageAction::UpdateAgentProviderHeader {
-                provider_id,
-                header_index,
-                key,
-                value,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        if let Some(h) = p.extra_headers.get_mut(*header_index) {
-                            *h = (key.clone(), value.clone());
-                        }
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::ToggleAgentProviderModelExpanded {
-                provider_id,
-                model_index,
-            } => {
-                super::agent_providers_widget::toggle_model_expanded(provider_id, *model_index);
-                self.rebuild_current_page(ctx);
-            }
-            AISettingsPageAction::CycleAgentProviderModelCapability {
-                provider_id,
-                model_index,
-                kind,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        if let Some(m) = p.models.get_mut(*model_index) {
-                            let slot = match kind {
-                                ModelCapabilityKind::Image => &mut m.image,
-                                ModelCapabilityKind::Pdf => &mut m.pdf,
-                                ModelCapabilityKind::Audio => &mut m.audio,
-                            };
-                            // Three-state cycle: None → Some(true) → Some(false) → None.
-                            *slot = match *slot {
-                                None => Some(true),
-                                Some(true) => Some(false),
-                                Some(false) => None,
-                            };
-                        }
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                self.rebuild_current_page(ctx);
-            }
-            AISettingsPageAction::ToggleAgentProviderModelReasoning {
-                provider_id,
-                model_index,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        if let Some(m) = p.models.get_mut(*model_index) {
-                            m.reasoning = !m.reasoning;
-                        }
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                self.rebuild_current_page(ctx);
-            }
-            AISettingsPageAction::ToggleAgentProviderModelToolCall {
-                provider_id,
-                model_index,
-            } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        if let Some(m) = p.models.get_mut(*model_index) {
-                            m.tool_call = !m.tool_call;
-                        }
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                self.rebuild_current_page(ctx);
-            }
         }
     }
 }
@@ -3475,10 +2874,6 @@ impl SettingsPageMeta for AISettingsPageView {
     }
 
     fn on_page_selected(&mut self, _: bool, ctx: &mut ViewContext<Self>) {
-        if UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled() {
-            return;
-        }
-
         AIRequestUsageModel::handle(ctx).update(ctx, |ai_request_usage_model, ctx| {
             ai_request_usage_model.refresh_request_usage_async(ctx)
         });
@@ -3688,7 +3083,7 @@ impl SettingsWidget for WarpAgentHeaderWidget {
 
     fn search_terms(&self) -> &str {
         "oz warp agent ai a.i. active next command prompt code diffs suggestion suggested suggestions \
-                agent mode natural language detection input hint api keys bring your own byo google anthropic openai"
+                agent mode natural language detection input hint"
     }
 
     fn render(
@@ -6626,457 +6021,6 @@ impl CLIAgentWidget {
         }
 
         chip.finish()
-    }
-}
-
-struct AwsBedrockWidget {
-    aws_auth_refresh_command_editor: ViewHandle<EditorView>,
-    aws_auth_refresh_profile_editor: ViewHandle<EditorView>,
-    credentials_enabled_toggle: SwitchStateHandle,
-    auto_login_toggle: SwitchStateHandle,
-    refresh_credentials_button: ViewHandle<ActionButton>,
-}
-
-impl AwsBedrockWidget {
-    fn new(ctx: &mut ViewContext<<Self as SettingsWidget>::View>) -> Self {
-        let ai_settings = AISettings::as_ref(ctx);
-        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(ctx);
-
-        let aws_auth_refresh_command = ai_settings.aws_bedrock_auth_refresh_command.value().clone();
-        let aws_auth_refresh_profile = ai_settings.aws_bedrock_profile.value().clone();
-        let is_usage_enabled = is_any_ai_enabled
-            && UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx);
-
-        let aws_auth_refresh_command_editor = ctx.add_typed_action_view(move |ctx| {
-            let appearance = Appearance::as_ref(ctx);
-            let options = SingleLineEditorOptions {
-                is_password: false,
-                text: TextOptions {
-                    font_size_override: Some(appearance.ui_font_size()),
-                    font_family_override: Some(appearance.monospace_font_family()),
-                    text_colors_override: Some(TextColors {
-                        default_color: appearance.theme().active_ui_text_color(),
-                        disabled_color: appearance.theme().disabled_ui_text_color(),
-                        hint_color: appearance.theme().disabled_ui_text_color(),
-                    }),
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text(crate::t!("settings-ai-aws-login-placeholder"), ctx);
-            editor.set_buffer_text(&aws_auth_refresh_command, ctx);
-            editor
-        });
-        AISettingsPageView::update_editor_interaction_state(
-            aws_auth_refresh_command_editor.clone(),
-            is_usage_enabled,
-            ctx,
-        );
-        ctx.subscribe_to_view(&aws_auth_refresh_command_editor, |_, editor, event, ctx| {
-            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
-                let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                let should_reset = buffer_text.trim().is_empty();
-                let value = if should_reset {
-                    "aws login".to_string()
-                } else {
-                    buffer_text
-                };
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let _ = settings
-                        .aws_bedrock_auth_refresh_command
-                        .set_value(value, ctx);
-                });
-                if should_reset {
-                    editor.update(ctx, |editor, ctx| {
-                        editor.set_buffer_text("aws login", ctx);
-                    });
-                }
-            }
-        });
-
-        let aws_auth_refresh_profile_editor = ctx.add_typed_action_view(move |ctx| {
-            let appearance = Appearance::as_ref(ctx);
-            let options = SingleLineEditorOptions {
-                is_password: false,
-                text: TextOptions {
-                    font_size_override: Some(appearance.ui_font_size()),
-                    font_family_override: Some(appearance.monospace_font_family()),
-                    text_colors_override: Some(TextColors {
-                        default_color: appearance.theme().active_ui_text_color(),
-                        disabled_color: appearance.theme().disabled_ui_text_color(),
-                        hint_color: appearance.theme().disabled_ui_text_color(),
-                    }),
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text(crate::t!("settings-ai-default-placeholder"), ctx);
-            editor.set_buffer_text(&aws_auth_refresh_profile, ctx);
-            editor
-        });
-        AISettingsPageView::update_editor_interaction_state(
-            aws_auth_refresh_profile_editor.clone(),
-            is_usage_enabled,
-            ctx,
-        );
-        ctx.subscribe_to_view(&aws_auth_refresh_profile_editor, |_, editor, event, ctx| {
-            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
-                let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                let should_reset = buffer_text.trim().is_empty();
-                let value = if should_reset {
-                    "default".to_string()
-                } else {
-                    buffer_text
-                };
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let _ = settings.aws_bedrock_profile.set_value(value, ctx);
-                });
-                if should_reset {
-                    editor.update(ctx, |editor, ctx| {
-                        editor.set_buffer_text("default", ctx);
-                    });
-                }
-            }
-        });
-
-        let refresh_credentials_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new(crate::t!("settings-ai-refresh"), SecondaryTheme)
-                .with_icon(Icon::RefreshCw04)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AISettingsPageAction::RefreshAwsBedrockCredentials);
-                })
-        });
-        refresh_credentials_button.update(ctx, |button, ctx| {
-            button.set_disabled(!is_usage_enabled, ctx);
-        });
-
-        // Keep enablement in sync with the Global AI toggle.
-        let aws_auth_refresh_command_editor_clone = aws_auth_refresh_command_editor.clone();
-        let aws_auth_refresh_profile_editor_clone = aws_auth_refresh_profile_editor.clone();
-        let refresh_credentials_button_clone = refresh_credentials_button.clone();
-        ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, event, ctx| {
-            if matches!(
-                event,
-                AISettingsChangedEvent::IsAnyAIEnabled { .. }
-                    | AISettingsChangedEvent::AwsBedrockCredentialsEnabled { .. }
-            ) {
-                let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
-                let is_usage_enabled = is_any_ai_enabled
-                    && UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx);
-
-                AISettingsPageView::update_editor_interaction_state(
-                    aws_auth_refresh_command_editor_clone.clone(),
-                    is_usage_enabled,
-                    ctx,
-                );
-                AISettingsPageView::update_editor_interaction_state(
-                    aws_auth_refresh_profile_editor_clone.clone(),
-                    is_usage_enabled,
-                    ctx,
-                );
-                refresh_credentials_button_clone.update(ctx, |button, ctx| {
-                    button.set_disabled(!is_usage_enabled, ctx);
-                });
-
-                ctx.notify();
-            }
-        });
-
-        let aws_auth_refresh_command_editor_clone = aws_auth_refresh_command_editor.clone();
-        let aws_auth_refresh_profile_editor_clone = aws_auth_refresh_profile_editor.clone();
-        let refresh_credentials_button_clone = refresh_credentials_button.clone();
-        ctx.subscribe_to_model(
-            &UserWorkspaces::handle(ctx),
-            move |_, workspace, event, ctx| {
-                if let UserWorkspacesEvent::TeamsChanged = event {
-                    let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
-                    let is_usage_enabled = is_any_ai_enabled
-                        && workspace
-                            .as_ref(ctx)
-                            .is_aws_bedrock_credentials_enabled(ctx);
-
-                    AISettingsPageView::update_editor_interaction_state(
-                        aws_auth_refresh_command_editor_clone.clone(),
-                        is_usage_enabled,
-                        ctx,
-                    );
-                    AISettingsPageView::update_editor_interaction_state(
-                        aws_auth_refresh_profile_editor_clone.clone(),
-                        is_usage_enabled,
-                        ctx,
-                    );
-                    refresh_credentials_button_clone.update(ctx, |button, ctx| {
-                        button.set_disabled(!is_usage_enabled, ctx);
-                    });
-
-                    ctx.notify();
-                }
-            },
-        );
-
-        Self {
-            aws_auth_refresh_command_editor,
-            aws_auth_refresh_profile_editor,
-            credentials_enabled_toggle: SwitchStateHandle::default(),
-            auto_login_toggle: SwitchStateHandle::default(),
-            refresh_credentials_button,
-        }
-    }
-
-    fn render_aws_bedrock_section(
-        &self,
-        appearance: &Appearance,
-        app: &AppContext,
-        is_bedrock_available: bool,
-    ) -> Box<dyn Element> {
-        let ai_settings = AISettings::as_ref(app);
-        let user_workspaces = UserWorkspaces::as_ref(app);
-        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
-        let is_section_enabled = is_any_ai_enabled && is_bedrock_available;
-        let is_admin_enforced = matches!(
-            user_workspaces.aws_bedrock_host_enablement_setting(),
-            crate::workspaces::workspace::HostEnablementSetting::Enforce
-        );
-        let is_toggleable =
-            is_section_enabled && user_workspaces.is_aws_bedrock_credentials_toggleable();
-        let are_credentials_enabled = user_workspaces.is_aws_bedrock_credentials_enabled(app);
-        let is_usage_enabled = is_section_enabled && are_credentials_enabled;
-        let toggle_description = if is_admin_enforced {
-            crate::t!("settings-ai-aws-bedrock-description-managed")
-        } else {
-            crate::t!("settings-ai-aws-bedrock-description")
-        };
-
-        let mut column = Flex::column().with_spacing(16.).with_child(
-            Flex::column()
-                .with_child(render_ai_setting_toggle::<AwsBedrockCredentialsEnabled>(
-                    crate::t!("settings-ai-aws-bedrock-toggle"),
-                    AISettingsPageAction::ToggleAwsBedrockCredentialsEnabled,
-                    are_credentials_enabled,
-                    is_toggleable,
-                    self.credentials_enabled_toggle.clone(),
-                    &RefCell::new(HashMap::new()),
-                    app,
-                ))
-                .with_child(render_ai_setting_description(
-                    toggle_description,
-                    is_section_enabled,
-                    app,
-                ))
-                .finish(),
-        );
-
-        /// Helper function to render the UI for an input field.
-        fn render_input(
-            appearance: &Appearance,
-            label: &'static str,
-            editor: ViewHandle<EditorView>,
-            is_enabled: bool,
-            app: &AppContext,
-        ) -> Box<dyn Element> {
-            let ui_font_size = appearance.ui_font_size();
-            let padding = Some(Coords {
-                top: ui_font_size * 5. / 6.,
-                bottom: ui_font_size * 5. / 6.,
-                left: ui_font_size * 4. / 3.,
-                right: ui_font_size * 4. / 3.,
-            });
-            let editor_style = UiComponentStyles {
-                padding,
-                background: Some(appearance.theme().surface_2().into()),
-                ..Default::default()
-            };
-
-            let label = Text::new_inline(
-                label,
-                appearance.ui_font_family(),
-                appearance.ui_font_body(),
-            )
-            .with_color(styles::header_font_color(is_enabled, app).into())
-            .finish();
-
-            let input = appearance
-                .ui_builder()
-                .text_input(editor)
-                .with_style(editor_style)
-                .build()
-                .finish();
-
-            Flex::column()
-                .with_spacing(8.)
-                .with_child(label)
-                .with_child(input)
-                .finish()
-        }
-
-        fn render_credential_status_card(
-            refresh_button: &ViewHandle<ActionButton>,
-            appearance: &Appearance,
-            are_credentials_enabled: bool,
-            app: &AppContext,
-        ) -> Box<dyn Element> {
-            let (title_color, detail_color) = (
-                styles::header_font_color(are_credentials_enabled, app),
-                styles::description_font_color(are_credentials_enabled, app),
-            );
-            let (title_text, detail_text, icon) = ApiKeyManager::as_ref(app)
-                .aws_credentials_state()
-                .user_facing_components();
-
-            let icon = Container::new(
-                ConstrainedBox::new(icon.to_warpui_icon(title_color).finish())
-                    .with_width(16.)
-                    .with_height(16.)
-                    .finish(),
-            )
-            .with_horizontal_padding(4.)
-            .finish();
-
-            let text_column = Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Start)
-                .with_spacing(4.)
-                .with_child(
-                    Text::new_inline(
-                        title_text,
-                        appearance.ui_font_family(),
-                        appearance.ui_font_body(),
-                    )
-                    .with_style(Properties::default().weight(Weight::Semibold))
-                    .with_color(title_color.into())
-                    .finish(),
-                )
-                .with_child(
-                    Text::new(
-                        detail_text,
-                        appearance.ui_font_family(),
-                        appearance.ui_font_body(),
-                    )
-                    .with_color(detail_color.into())
-                    .soft_wrap(true)
-                    .finish(),
-                );
-
-            Container::new(
-                Flex::row()
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(12.)
-                    .with_child(
-                        Expanded::new(
-                            1.,
-                            Flex::row()
-                                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                                .with_spacing(12.)
-                                .with_child(icon)
-                                .with_child(Expanded::new(1., text_column.finish()).finish())
-                                .finish(),
-                        )
-                        .finish(),
-                    )
-                    .with_child(ChildView::new(refresh_button).finish())
-                    .finish(),
-            )
-            .with_uniform_padding(12.)
-            .with_background(appearance.theme().surface_2())
-            .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
-            .finish()
-        }
-
-        column.add_child(
-            Container::new(render_credential_status_card(
-                &self.refresh_credentials_button,
-                appearance,
-                are_credentials_enabled,
-                app,
-            ))
-            .with_margin_top(-styles::DESCRIPTION_MARGIN_BOTTOM)
-            .finish(),
-        );
-        column.add_child(render_input(
-            appearance,
-            Box::leak(crate::t!("settings-ai-aws-login-command").into_boxed_str()),
-            self.aws_auth_refresh_command_editor.clone(),
-            is_usage_enabled,
-            app,
-        ));
-        column.add_child(render_input(
-            appearance,
-            Box::leak(crate::t!("settings-ai-aws-profile").into_boxed_str()),
-            self.aws_auth_refresh_profile_editor.clone(),
-            is_usage_enabled,
-            app,
-        ));
-
-        let auto_login_enabled = *AISettings::as_ref(app).aws_bedrock_auto_login.value();
-
-        let toggle = render_ai_setting_toggle::<AwsBedrockAutoLogin>(
-            crate::t!("settings-ai-aws-auto-login"),
-            AISettingsPageAction::ToggleAwsBedrockAutoLogin,
-            auto_login_enabled,
-            is_usage_enabled,
-            self.auto_login_toggle.clone(),
-            &RefCell::new(HashMap::new()),
-            app,
-        );
-        let description = render_ai_setting_description(
-            crate::t!("settings-ai-aws-auto-login-description"),
-            is_usage_enabled,
-            app,
-        );
-        column.add_child(
-            Flex::column()
-                .with_child(toggle)
-                .with_child(description)
-                .finish(),
-        );
-
-        column.finish()
-    }
-}
-
-impl SettingsWidget for AwsBedrockWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "aws bedrock amazon credentials login profile"
-    }
-
-    fn should_render(&self, app: &AppContext) -> bool {
-        // Only show if admin has enabled AWS Bedrock for the workspace
-        UserWorkspaces::as_ref(app).is_aws_bedrock_available_from_workspace()
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let ai_settings = AISettings::as_ref(app);
-        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
-        let is_bedrock_available =
-            UserWorkspaces::as_ref(app).is_aws_bedrock_available_from_workspace();
-
-        let column = Flex::column()
-            .with_child(render_separator(appearance))
-            .with_child(
-                build_sub_header(
-                    appearance,
-                    crate::t!("settings-ai-aws-bedrock-section"),
-                    Some(styles::header_font_color(is_any_ai_enabled, app)),
-                )
-                .with_padding_bottom(HEADER_PADDING)
-                .finish(),
-            )
-            .with_child(self.render_aws_bedrock_section(appearance, app, is_bedrock_available));
-
-        Container::new(column.finish())
-            .with_margin_bottom(HEADER_PADDING)
-            .finish()
     }
 }
 

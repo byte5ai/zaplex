@@ -309,8 +309,6 @@ pub enum AgentDriverError {
     SkillResolutionFailed(String),
     #[error("Failed to build agent configuration")]
     ConfigBuildFailed(#[source] anyhow::Error),
-    #[error("Failed to initialize AWS Bedrock credentials: {0}")]
-    AwsBedrockCredentialsFailed(String),
     #[error("Harness command exited with code {exit_code}")]
     HarnessCommandFailed { exit_code: i32 },
     #[error("Harness '{harness}' setup failed: {reason}")]
@@ -358,70 +356,23 @@ impl AgentDriver {
             return Err(AgentDriverError::NotLoggedIn);
         }
 
-        // Build environment variables from secrets for the terminal session.
-        // Do not override env vars that are already set to a non-empty value in the current
-        // process. This ensures that worker-injected credentials (e.g. harness auth secrets)
-        // and user-provided env vars (e.g. on self-hosted workers) take precedence over
-        // generic managed secrets.
+        // Build environment variables from generic secrets for the terminal session.
+        // Provider credentials are deliberately ignored: CLI harnesses authenticate through
+        // their detected subscriptions, not through a second managed-key path.
         let mut env_vars = HashMap::with_capacity(secrets.len() + 1);
         for (name, secret) in &secrets {
             let (env_name, env_value) = match secret {
-                ManagedSecretValue::RawValue { value } => (name.as_str(), value.as_str()),
-                ManagedSecretValue::AnthropicApiKey { api_key } => {
-                    ("ANTHROPIC_API_KEY", api_key.as_str())
+                ManagedSecretValue::RawValue { value }
+                    if !is_provider_credential_environment_variable(name) =>
+                {
+                    (name.as_str(), value.as_str())
                 }
-                ManagedSecretValue::AnthropicBedrockAccessKey {
-                    aws_access_key_id,
-                    aws_secret_access_key,
-                    aws_session_token,
-                    aws_region,
-                } => {
-                    // Inject env vars needed for Claude Code Bedrock access key authentication.
-                    // AWS_SESSION_TOKEN is only injected when the user provided one (i.e. for
-                    // temporary/STS credentials).
-                    let mut vars = vec![
-                        ("AWS_ACCESS_KEY_ID", aws_access_key_id.as_str()),
-                        ("AWS_SECRET_ACCESS_KEY", aws_secret_access_key.as_str()),
-                        ("CLAUDE_CODE_USE_BEDROCK", "1"),
-                        ("AWS_REGION", aws_region.as_str()),
-                    ];
-                    if let Some(token) = aws_session_token.as_deref() {
-                        vars.push(("AWS_SESSION_TOKEN", token));
-                    }
-                    for (env_name, env_value) in vars {
-                        if std::env::var(env_name).is_ok_and(|v| !v.is_empty()) {
-                            log::warn!(
-                                "Skipping managed secret {env_name}: already set in environment"
-                            );
-                            continue;
-                        }
-                        env_vars.insert(OsString::from(env_name), OsString::from(env_value));
-                    }
-                    continue; // Skip the single-var insert below since we handled all vars inline.
-                }
-                ManagedSecretValue::AnthropicBedrockApiKey {
-                    aws_bearer_token_bedrock,
-                    aws_region,
-                } => {
-                    // Inject all three env vars needed for Claude Code Bedrock authentication.
-                    let vars = [
-                        (
-                            "AWS_BEARER_TOKEN_BEDROCK",
-                            aws_bearer_token_bedrock.as_str(),
-                        ),
-                        ("CLAUDE_CODE_USE_BEDROCK", "1"),
-                        ("AWS_REGION", aws_region.as_str()),
-                    ];
-                    for (env_name, env_value) in vars {
-                        if std::env::var(env_name).is_ok_and(|v| !v.is_empty()) {
-                            log::warn!(
-                                "Skipping managed secret {env_name}: already set in environment"
-                            );
-                            continue;
-                        }
-                        env_vars.insert(OsString::from(env_name), OsString::from(env_value));
-                    }
-                    continue; // Skip the single-var insert below since we handled all vars inline.
+                ManagedSecretValue::RawValue { .. }
+                | ManagedSecretValue::AnthropicApiKey { .. }
+                | ManagedSecretValue::AnthropicBedrockAccessKey { .. }
+                | ManagedSecretValue::AnthropicBedrockApiKey { .. } => {
+                    log::warn!("Ignoring retired AI provider credential {name}");
+                    continue;
                 }
             };
             if std::env::var(env_name).is_ok_and(|v| !v.is_empty()) {
@@ -430,6 +381,18 @@ impl AgentDriver {
             }
             env_vars.insert(OsString::from(env_name), OsString::from(env_value));
         }
+
+        for name in
+            crate::ai::subscription_agent::CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES
+                .into_iter()
+                .chain(OTHER_PROVIDER_CREDENTIAL_ENVIRONMENT_VARIABLES)
+        {
+            env_vars.insert(OsString::from(name), OsString::new());
+        }
+        env_vars.insert(
+            OsString::from(crate::ai::subscription_agent::CLAUDE_PROVIDER_MANAGED_BY_HOST.0),
+            OsString::from(crate::ai::subscription_agent::CLAUDE_PROVIDER_MANAGED_BY_HOST.1),
+        );
 
         env_vars.extend(task_env_vars(
             task_id.as_ref(),
@@ -1075,12 +1038,8 @@ impl AgentDriver {
         let system_prompt: Option<String> = None;
         let resumption_prompt: Option<String> = None;
 
-        // Prepare harness config files (onboarding, trust dialog, API-key approval, etc.).
-        let secrets = foreground
-            .spawn(|me, _| Arc::clone(&me.secrets))
-            .await
-            .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
-        harness.prepare_environment_config(&working_dir, system_prompt.as_deref(), &secrets)?;
+        // Prepare harness-owned onboarding and trust configuration.
+        harness.prepare_environment_config(&working_dir, system_prompt.as_deref())?;
 
         let runner: Arc<dyn HarnessRunner> = harness
             .build_runner(
@@ -1532,6 +1491,15 @@ impl AgentDriver {
     }
 }
 
+const OTHER_PROVIDER_CREDENTIAL_ENVIRONMENT_VARIABLES: [&str; 3] =
+    ["OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"];
+
+fn is_provider_credential_environment_variable(name: &str) -> bool {
+    crate::ai::subscription_agent::CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES
+        .contains(&name)
+        || OTHER_PROVIDER_CREDENTIAL_ENVIRONMENT_VARIABLES.contains(&name)
+}
+
 impl Entity for AgentDriver {
     type Event = ();
 }
@@ -1539,6 +1507,10 @@ impl Entity for AgentDriver {
 /// The only reason that `AgentDriver` is a singleton entity is to ensure the UI framework
 /// doesn't drop it. Generally, we should not assume there's only one running agent.
 impl SingletonEntity for AgentDriver {}
+
+#[cfg(test)]
+#[path = "driver_tests.rs"]
+mod tests;
 
 /// Write the run ID to stdout using the appropriate output format.
 pub(super) fn write_run_started(run_id: &str, output_format: OutputFormat) {

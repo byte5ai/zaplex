@@ -130,7 +130,7 @@ impl SearchItem for WarpAISearchItem {
     }
 }
 
-/// Zaplex only retains synchronous entry points: open BYOP Agent or write natural language back to input box.
+/// Zaplex only retains synchronous entry points: open Agent Mode or write natural language back to the input box.
 /// The cloud “natural-language-to-command” async source has been removed.
 pub struct WarpAIDataSource;
 

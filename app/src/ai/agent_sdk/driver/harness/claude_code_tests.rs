@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -403,78 +402,6 @@ fn prepare_claude_config_none_suffix_preserves_existing_responses() {
         claude_config["customApiKeyResponses"]["rejected"],
         serde_json::json!(["bad-key"]),
     );
-}
-
-#[test]
-fn resolve_suffix_from_raw_value_secret() {
-    let key = "sk-ant-api03-abcdefghij1234567890ABCDEFGHIJ1234567890abcdefghij1234567890QLWn-dUnuwQ-hIhDiAAA";
-    let secrets = HashMap::from([(
-        "ANTHROPIC_API_KEY".to_string(),
-        ManagedSecretValue::raw_value(key),
-    )]);
-    let suffix = resolve_anthropic_api_key_suffix(&secrets);
-    assert_eq!(suffix.as_deref(), Some("QLWn-dUnuwQ-hIhDiAAA"));
-}
-
-#[test]
-fn resolve_suffix_from_anthropic_api_key_secret() {
-    let key = "sk-ant-api03-abcdefghij1234567890ABCDEFGHIJ1234567890abcdefghij1234567890QLWn-dUnuwQ-hIhDiAAA";
-    let secrets = HashMap::from([(
-        "ANTHROPIC_API_KEY".to_string(),
-        ManagedSecretValue::anthropic_api_key(key),
-    )]);
-    let suffix = resolve_anthropic_api_key_suffix(&secrets);
-    assert_eq!(suffix.as_deref(), Some("QLWn-dUnuwQ-hIhDiAAA"));
-}
-
-#[test]
-fn resolve_suffix_from_anthropic_api_key_with_different_secret_name() {
-    let key = "sk-ant-api03-abcdefghij1234567890ABCDEFGHIJ1234567890abcdefghij1234567890QLWn-dUnuwQ-hIhDiAAA";
-    // Secret name doesn't match the env var, but the AnthropicApiKey variant
-    // should still be found by iterating all secrets.
-    let secrets = HashMap::from([(
-        "my-anthropic-key".to_string(),
-        ManagedSecretValue::anthropic_api_key(key),
-    )]);
-    let suffix = resolve_anthropic_api_key_suffix(&secrets);
-    assert_eq!(suffix.as_deref(), Some("QLWn-dUnuwQ-hIhDiAAA"));
-}
-
-#[test]
-fn resolve_suffix_prefers_anthropic_api_key_variant_over_raw_value() {
-    let anthropic_key = "sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-anthropic-suffix";
-    let raw_key = "sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB-raw-suffix";
-    let secrets = HashMap::from([
-        (
-            "my-anthropic-key".to_string(),
-            ManagedSecretValue::anthropic_api_key(anthropic_key),
-        ),
-        (
-            "ANTHROPIC_API_KEY".to_string(),
-            ManagedSecretValue::raw_value(raw_key),
-        ),
-    ]);
-    let suffix = resolve_anthropic_api_key_suffix(&secrets);
-    // AnthropicApiKey variant should be preferred.
-    assert_eq!(suffix.as_deref(), Some("AAA-anthropic-suffix"));
-}
-
-#[test]
-fn resolve_suffix_returns_none_for_short_key() {
-    let secrets = HashMap::from([(
-        "ANTHROPIC_API_KEY".to_string(),
-        ManagedSecretValue::raw_value("short"),
-    )]);
-    assert_eq!(resolve_anthropic_api_key_suffix(&secrets), None);
-}
-
-#[test]
-fn resolve_suffix_returns_none_for_short_anthropic_api_key() {
-    let secrets = HashMap::from([(
-        "ANTHROPIC_API_KEY".to_string(),
-        ManagedSecretValue::anthropic_api_key("short"),
-    )]);
-    assert_eq!(resolve_anthropic_api_key_suffix(&secrets), None);
 }
 
 #[test]

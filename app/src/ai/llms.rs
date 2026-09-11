@@ -1,6 +1,5 @@
 use parking_lot::FairMutex;
 use serde::{de, Deserialize, Serialize};
-use settings::Setting as _;
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, OnceLock},
@@ -20,23 +19,6 @@ use crate::{
 use super::execution_profiles::profiles::AIExecutionProfilesModel;
 
 pub use ai::LLMId;
-
-/// Checks if a user's' API key is being used for the given provider.
-/// Returns `true` if BYO API key is enabled and a key exists for the provider.
-pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
-    use ai::api_keys::ApiKeyManager;
-
-    let api_keys = UserWorkspaces::as_ref(app)
-        .is_byo_api_key_enabled()
-        .then(|| ApiKeyManager::as_ref(app).keys().clone());
-
-    match provider {
-        LLMProvider::OpenAI => api_keys.is_some_and(|keys| keys.openai.is_some()),
-        LLMProvider::Anthropic => api_keys.is_some_and(|keys| keys.anthropic.is_some()),
-        LLMProvider::Google => api_keys.is_some_and(|keys| keys.google.is_some()),
-        _ => false,
-    }
-}
 
 /// Key for cached LLM metadata in user preferences.
 ///
@@ -522,39 +504,11 @@ pub struct LLMPreferences {
     // from the base LLM for the active profile. This means that if the user selects the
     // profile's default model and changes their profile, the model will update to that profile's default.
     base_llm_for_terminal_view: HashMap<EntityId, LLMId>,
-    /// Per-terminal reasoning effort selection (driven by input box picker).
-    /// Session-only, not persisted to settings.toml. If key is missing, falls back to `last_used_reasoning`;
-    /// if still missing, falls back to `default_reasoning_for(api_type, model_id)`.
-    reasoning_effort_per_terminal: HashMap<EntityId, crate::settings::ReasoningEffortSetting>,
-    /// Remembers "the last reasoning effort level used for a given (api_type, model)" for soft UX memory.
-    /// Session-only.
-    last_used_reasoning: HashMap<
-        (crate::settings::AgentProviderApiType, String),
-        crate::settings::ReasoningEffortSetting,
-    >,
 }
 
 impl LLMPreferences {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        // BYOP-only mode: picker is entirely populated by user-configured agent_providers,
-        // and no longer consumes the upstream cloud model list at all.
-        // Cache (MODELS_BY_FEATURE_CACHE_KEY) is also skipped -- rebuilt directly from settings at startup.
-        let models_by_feature = crate::ai::agent_providers::build_byop_models_by_feature(&*ctx);
-
-        // Listen for settings.agent_providers changes → rebuild byop model list.
-        ctx.subscribe_to_model(
-            &crate::settings::AISettings::handle(ctx),
-            |me, _event, ctx| {
-                me.refresh_byop_models(ctx);
-            },
-        );
-        // Listen for secrets changes (API key add/remove) → rebuild, because validity depends on api_key existence.
-        ctx.subscribe_to_model(
-            &crate::ai::agent_providers::AgentProviderSecrets::handle(ctx),
-            |me, _event, ctx| {
-                me.refresh_byop_models(ctx);
-            },
-        );
+        let models_by_feature = get_cached_models(ctx).unwrap_or_default();
 
         ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, event, ctx| {
             if let NetworkStatusEvent::NetworkStatusChanged {
@@ -583,30 +537,10 @@ impl LLMPreferences {
 
         let base_llm_for_terminal_view = HashMap::new();
 
-        // Hydrate `last_used_reasoning` from persisted BYOP settings so picker
-        // remembers per-(api_type, model) effort across restarts and new tabs.
-        let last_used_reasoning = {
-            use crate::settings::AISettings;
-            let s = AISettings::as_ref(&*ctx);
-            let mut map = HashMap::new();
-            for (key, effort) in s.byop_last_used_reasoning.iter() {
-                if let Some((api_type_str, model_id)) = key.split_once(':') {
-                    if let Some(api_type) =
-                        crate::settings::AgentProviderApiType::from_debug_str(api_type_str)
-                    {
-                        map.insert((api_type, model_id.to_owned()), *effort);
-                    }
-                }
-            }
-            map
-        };
-
         let me = Self {
             models_by_feature,
             last_update: None,
             base_llm_for_terminal_view,
-            reasoning_effort_per_terminal: HashMap::new(),
-            last_used_reasoning,
         };
 
         // In agent mode eval builds, eagerly kick off a fetch of the model list from the server
@@ -630,9 +564,7 @@ impl LLMPreferences {
 
     /// Returns `LLMInfo` for the currently selected LLM to be used for Agent Mode.
     ///
-    /// Priority: terminal-view override > AISettings.byop_last_used_model_id (global
-    /// most-recently-used -- written immediately after picker switch, persisted across new tabs/restarts)
-    /// > profile.base_model > default_llm_info().
+    /// Priority: terminal-view override > profile base model > default model.
     fn get_preferred_base_model(
         &self,
         app: &AppContext,
@@ -644,17 +576,6 @@ impl LLMPreferences {
                 if let Some(llm_info) = self.models_by_feature.agent_mode.info_for_id(llm_id) {
                     return llm_info;
                 }
-            }
-        }
-
-        // BYOP picker last_used is closer to the user's latest intent than profile default.
-        let last_used = crate::settings::AISettings::as_ref(app)
-            .byop_last_used_model_id
-            .to_string();
-        if !last_used.is_empty() {
-            let llm_id: LLMId = last_used.into();
-            if let Some(llm_info) = self.models_by_feature.agent_mode.info_for_id(&llm_id) {
-                return llm_info;
             }
         }
 
@@ -674,92 +595,6 @@ impl LLMPreferences {
         terminal_view_id: Option<EntityId>,
     ) -> &'a LLMInfo {
         self.get_preferred_coding_model(app, terminal_view_id)
-    }
-
-    /// Returns the LLM currently used for "conversation title generation".
-    ///
-    /// Priority: explicitly set `title_model` in profile → otherwise fall back to `base_model` (active).
-    /// Candidate set reuses `get_base_llm_choices_for_agent_mode()`.
-    pub fn get_active_title_model<'a>(
-        &'a self,
-        app: &'a AppContext,
-        terminal_view_id: Option<EntityId>,
-    ) -> &'a LLMInfo {
-        let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
-
-        if let Some(id) = profile.data().title_model.clone() {
-            if let Some(info) = self.models_by_feature.agent_mode.info_for_id(&id) {
-                return info;
-            }
-        }
-
-        self.get_preferred_base_model(app, terminal_view_id)
-    }
-
-    /// Default title model -- used when no independent setting exists, same as base model.
-    pub fn get_default_title_model<'a>(
-        &'a self,
-        app: &'a AppContext,
-        terminal_view_id: Option<EntityId>,
-    ) -> &'a LLMInfo {
-        self.get_preferred_base_model(app, terminal_view_id)
-    }
-
-    /// Returns the LLM currently used for "proactive AI" (prompt suggestions / NLD / relevant files).
-    ///
-    /// Priority: explicitly set `active_ai_model` in profile → otherwise fall back to `base_model` (active).
-    /// Candidate set reuses `get_base_llm_choices_for_agent_mode()`.
-    pub fn get_active_ai_model<'a>(
-        &'a self,
-        app: &'a AppContext,
-        terminal_view_id: Option<EntityId>,
-    ) -> &'a LLMInfo {
-        let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
-
-        if let Some(id) = profile.data().active_ai_model.clone() {
-            if let Some(info) = self.models_by_feature.agent_mode.info_for_id(&id) {
-                return info;
-            }
-        }
-
-        self.get_preferred_base_model(app, terminal_view_id)
-    }
-
-    /// Default active AI model -- used when no independent setting exists, same as base model.
-    pub fn get_default_active_ai_model<'a>(
-        &'a self,
-        app: &'a AppContext,
-        terminal_view_id: Option<EntityId>,
-    ) -> &'a LLMInfo {
-        self.get_preferred_base_model(app, terminal_view_id)
-    }
-
-    /// Returns the LLM currently used for "Next Command" (gray completion / zero-state suggestions).
-    ///
-    /// Priority: explicitly set `next_command_model` in profile → otherwise fall back to `base_model` (active).
-    pub fn get_active_next_command_model<'a>(
-        &'a self,
-        app: &'a AppContext,
-        terminal_view_id: Option<EntityId>,
-    ) -> &'a LLMInfo {
-        let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
-
-        if let Some(id) = profile.data().next_command_model.clone() {
-            if let Some(info) = self.models_by_feature.agent_mode.info_for_id(&id) {
-                return info;
-            }
-        }
-
-        self.get_preferred_base_model(app, terminal_view_id)
-    }
-
-    /// Default next command model -- used when no independent setting exists, same as base model.
-    pub fn get_default_next_command_model<'a>(
-        &'a self,
-        app: &'a AppContext,
-        terminal_view_id: Option<EntityId>,
-    ) -> &'a LLMInfo {
-        self.get_preferred_base_model(app, terminal_view_id)
     }
 
     /// Returns `LLMInfo` for user's preferred coding model.
@@ -934,16 +769,6 @@ impl LLMPreferences {
             self.trigger_snapshot_save(ctx);
             ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
         }
-
-        // Always write byop_last_used_model_id (overwrite even if changed=false, to unify new tab behavior).
-        // Explicit picker switch = strongest user intent, should persist across new tabs/restarts.
-        use warp_core::errors::report_if_error;
-        let llm_id_str = preferred_llm_id.as_str().to_owned();
-        crate::settings::AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            if settings.byop_last_used_model_id.to_string() != llm_id_str {
-                report_if_error!(settings.byop_last_used_model_id.set_value(llm_id_str, ctx));
-            }
-        });
     }
 
     /// Triggers a snapshot save to persist LLM override changes.
@@ -1024,21 +849,10 @@ impl LLMPreferences {
         *last_update.popup_visibility_state.lock() = UpdatePopupVisibilityState::Hidden;
     }
 
-    /// BYOP-only mode: picker is entirely populated by local `agent_providers`, no longer pulls models from warp backend.
-    /// These two refresh functions keep their signatures for existing call sites (NetworkOnline / AuthComplete / TeamsChanged)
-    /// but are internal no-ops.
+    /// Model discovery is provided by the subscription-agent catalog.
     pub fn refresh_authed_models(&self, _ctx: &mut ModelContext<Self>) {}
 
     fn refresh_public_models(&self, _ctx: &mut ModelContext<Self>) {}
-
-    /// Rebuilds `models_by_feature` from settings.agent_providers + AgentProviderSecrets,
-    /// called when settings or secrets change.
-    pub fn refresh_byop_models(&mut self, ctx: &mut ModelContext<Self>) {
-        let new = crate::ai::agent_providers::build_byop_models_by_feature(&*ctx);
-        if new != self.models_by_feature {
-            self.on_server_update(new, ctx);
-        }
-    }
 
     pub fn refresh_available_models(&self, ctx: &mut ModelContext<Self>) {
         if AuthStateProvider::as_ref(ctx).get().is_logged_in() {
@@ -1187,59 +1001,6 @@ impl LLMPreferences {
             ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
         }
     }
-
-    /// Gets the current reasoning effort selection for the specified terminal-view.
-    /// Priority: per-terminal selection > last-used (api_type, model) > default from variants table > Auto.
-    pub fn get_reasoning_effort(
-        &self,
-        terminal_view_id: Option<EntityId>,
-        api_type: crate::settings::AgentProviderApiType,
-        model_id: &str,
-    ) -> crate::settings::ReasoningEffortSetting {
-        if let Some(tv) = terminal_view_id {
-            if let Some(eff) = self.reasoning_effort_per_terminal.get(&tv) {
-                return *eff;
-            }
-        }
-        if let Some(eff) = self
-            .last_used_reasoning
-            .get(&(api_type, model_id.to_owned()))
-        {
-            return *eff;
-        }
-        crate::ai::agent_providers::reasoning::default_reasoning_for(api_type, model_id)
-            .unwrap_or(crate::settings::ReasoningEffortSetting::Auto)
-    }
-
-    /// Sets the reasoning effort for the specified terminal-view, while also updating last-used memory,
-    /// and immediately writes the (api_type, model) → effort mapping to the AISettings persistence layer
-    /// (new tabs / restarts will read the latest value).
-    pub fn set_reasoning_effort(
-        &mut self,
-        terminal_view_id: EntityId,
-        api_type: crate::settings::AgentProviderApiType,
-        model_id: &str,
-        effort: crate::settings::ReasoningEffortSetting,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.reasoning_effort_per_terminal
-            .insert(terminal_view_id, effort);
-        self.last_used_reasoning
-            .insert((api_type, model_id.to_owned()), effort);
-
-        // Synchronously write AISettings.byop_last_used_reasoning (per-(api_type, model)).
-        use warp_core::errors::report_if_error;
-        let key = crate::settings::BYOPLastUsedReasoningMap::make_key(api_type, model_id);
-        crate::settings::AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            let mut map = settings.byop_last_used_reasoning.value().0.clone();
-            map.insert(key, effort);
-            report_if_error!(settings
-                .byop_last_used_reasoning
-                .set_value(crate::settings::BYOPLastUsedReasoningMap::new(map), ctx));
-        });
-
-        ctx.emit(LLMPreferencesEvent::UpdatedReasoningEffort);
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -1247,8 +1008,6 @@ pub enum LLMPreferencesEvent {
     UpdatedAvailableLLMs,
     UpdatedActiveAgentModeLLM,
     UpdatedActiveCodingLLM,
-    /// The reasoning effort for the current terminal-view changed (picker selected a new level).
-    UpdatedReasoningEffort,
 }
 
 impl Entity for LLMPreferences {

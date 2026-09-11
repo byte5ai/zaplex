@@ -1057,9 +1057,6 @@ impl View for AIBlock {
                 shared_session_status: &shared_session_status,
                 terminal_view_id: self.terminal_view_id,
                 is_conversation_transcript_viewer,
-                aws_bedrock_credentials_error_view: self
-                    .aws_bedrock_credentials_error_view
-                    .as_ref(),
                 imported_comments: &self.imported_comments,
                 #[cfg(feature = "local_fs")]
                 resolved_code_block_paths: &self.resolved_code_block_paths,

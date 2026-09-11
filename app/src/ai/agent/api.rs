@@ -3,7 +3,6 @@ mod convert_from;
 mod convert_to;
 
 pub use ai::agent::convert::ConvertToAPITypeError;
-use ai::api_keys::ApiKeyManager;
 pub use convert_from::{
     user_inputs_from_messages, ConversionParams, ConvertAPIMessageToClientOutputMessage,
     MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError,
@@ -25,18 +24,13 @@ use crate::{
     ai::{blocklist::SessionContext, llms::LLMId},
 };
 
-use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, RunningCommand, Suggestions};
+use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, Suggestions};
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::facts::{AIFact, AIFactObjectModel};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerInfo;
 use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
-use crate::cloud_object::model::persistence::ObjectStoreModel;
-use crate::cloud_object::StoredObject;
 use crate::settings::AISettings;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::workspaces::user_workspaces::UserWorkspaces;
 use warp_core::user_preferences::GetUserPreferences;
 use warpui::{AppContext, EntityId, SingletonEntity as _};
 
@@ -93,22 +87,11 @@ pub struct RequestParams {
     pub cli_agent_model: LLMId,
     pub computer_use_model: LLMId,
     pub is_memory_enabled: bool,
-    /// Zaplex BYOP exclusive: snapshot of global Rules (`AIFact::Memory`)
-    /// created by the user in Settings → Agents → Rules. Fetched once from `ObjectStoreModel`
-    /// in `new()` and plumbed with the request to `chat_stream::build_chat_request` → `prompt_renderer`,
-    /// where `partials/user_rules.j2` renders them into the system prompt.
-    /// Collected only when `is_memory_enabled` is true and not trashed; for prompt cache
-    /// stability, sorted lexicographically by `(name, content)`.
-    pub user_rules: Vec<(Option<String>, String)>,
     pub warp_drive_context_enabled: bool,
     pub context_window_limit: Option<u32>,
     pub mcp_context: Option<MCPContext>,
     pub planning_enabled: bool,
     should_redact_secrets: bool,
-
-    /// User-provided API keys for AI providers (BYO API Key).
-    pub api_keys: Option<warp_multi_agent_api::request::settings::ApiKeys>,
-    pub allow_use_of_warp_credits_with_byok: bool,
     pub autonomy_level: warp_multi_agent_api::AutonomyLevel,
     pub isolation_level: warp_multi_agent_api::IsolationLevel,
     pub web_search_enabled: bool,
@@ -116,62 +99,13 @@ pub struct RequestParams {
     pub ask_user_question_enabled: bool,
     pub research_agent_enabled: bool,
     pub supported_tools_override: Option<Vec<warp_multi_agent_api::ToolType>>,
-    /// Zaplex BYOP exclusive: local session id, used only for request-readiness diagnostic logs.
-    pub byop_conversation_id: Option<AIConversationId>,
-    /// Zaplex BYOP exclusive: non-persistent diagnostic correlation id within a single request.
-    pub byop_readiness_attempt_id: Option<String>,
     /// The conversation ID of the parent agent that spawned this child agent, if any.
     pub parent_agent_id: Option<String>,
     /// The display name for this agent (e.g. "Agent 1"), assigned by the orchestrator.
     pub agent_name: Option<String>,
-    /// Zaplex BYOP exclusive: the LRC (Long Running Command) block id associated when initiating this request.
-    /// Populated in the first turn after tag-in and subsequent turns of CLI subagent under agent control,
-    /// used to keep BYOP prompt/tools bound to the current PTY, preventing the model from spawning a new shell for the same TUI.
-    pub lrc_command_id: Option<String>,
-    /// Zaplex BYOP exclusive: current LRC snapshot. `UserQuery.running_command` only covers user input turns;
-    /// auto-resume / tool result subsequent turns need to carry the latest PTY content via this field.
-    pub lrc_running_command: Option<RunningCommand>,
-    /// Zaplex BYOP local session compression sidecar snapshot (controller injects conversation.compaction_state.clone() here).
-    /// `chat_stream::build_chat_request` uses this to:
-    ///   1. Filter messages in [`crate::ai::byop_compaction::state::CompactionState::hidden_message_ids`]
-    ///   2. Insert "summary user/assistant pairs" at hidden interval boundaries
-    ///   3. Replace ToolCallResults with non-empty `tool_output_compacted_at` with placeholders
-    ///   4. In the `AIAgentInput::SummarizeConversation` path, take head + combine SUMMARY_TEMPLATE as user message
-    ///
-    /// Default `None` = compatibility path (no compression).
-    pub compaction_state: Option<crate::ai::byop_compaction::state::CompactionState>,
-    /// Zaplex BYOP repair sidecar snapshot. serializer uses read-only, does not deserialize persisted JSON during request construction.
-    pub byop_repair_state: crate::ai::byop_readiness::RepairStateStatus,
-    /// Zaplex BYOP exclusive: whether this turn needs to simulate upstream CreateTask flow to upgrade optimistic CLI subtask.
-    /// Only required on the first turn after user tag-in; subsequent turns with existing CLI subagent reuse the task and cannot re-spawn.
+    /// Whether this turn needs to simulate the CreateTask flow to upgrade an optimistic CLI subtask.
+    /// Only required on the first turn after user tag-in; subsequent turns reuse the existing task.
     pub lrc_should_spawn_subagent: bool,
-    /// Zaplex BYOP exclusive: the task that this turn's response should be written to. Normal conversations use root task;
-    /// CLI subagent subsequent turns use the corresponding subtask.
-    pub byop_target_task_id: Option<String>,
-}
-
-/// Collect a snapshot of global Rules (`AIFact::Memory`) created by the user in
-/// Settings → Agents → Rules for injection into BYOP system prompt (Issue #116).
-///
-/// - Filters out trashed items
-/// - Sorts lexicographically by `(name, content)` to avoid cross-request order drift from HashMap iteration
-///   (otherwise would break upstream Anthropic / OpenAI prompt cache)
-///
-/// Does not check `is_memory_enabled` internally; gating is caller's responsibility.
-/// This allows the function to be tested independently as pure set logic, without
-/// dependency on `AISettings` or other singletons.
-pub(crate) fn collect_user_rules(
-    object_store_model: &ObjectStoreModel,
-) -> Vec<(Option<String>, String)> {
-    let mut rules: Vec<(Option<String>, String)> = object_store_model
-        .get_all_objects_of_type::<GenericStringObjectId, AIFactObjectModel>()
-        .filter(|ai_fact| !ai_fact.is_trashed(object_store_model))
-        .map(|ai_fact| match &ai_fact.model().string_model {
-            AIFact::Memory(memory) => (memory.name.clone(), memory.content.clone()),
-        })
-        .collect();
-    rules.sort();
-    rules
 }
 
 pub type Event = Result<warp_multi_agent_api::ResponseEvent, Arc<AIApiError>>;
@@ -206,24 +140,20 @@ impl RequestParams {
             conversation_token: None,
             forked_from_conversation_token: None,
             ambient_agent_task_id: None,
-            byop_target_task_id: tasks.first().map(|task| task.id.clone()),
             tasks,
             existing_suggestions: None,
             metadata: None,
             session_context: SessionContext::new_for_test(),
-            model: LLMId::from("byop:test"),
-            coding_model: LLMId::from("byop:test"),
-            cli_agent_model: LLMId::from("byop:test"),
-            computer_use_model: LLMId::from("byop:test"),
+            model: LLMId::from("test-model"),
+            coding_model: LLMId::from("test-model"),
+            cli_agent_model: LLMId::from("test-model"),
+            computer_use_model: LLMId::from("test-model"),
             is_memory_enabled: false,
-            user_rules: Vec::new(),
             warp_drive_context_enabled: false,
             context_window_limit: None,
             mcp_context: None,
             planning_enabled: true,
             should_redact_secrets: false,
-            api_keys: None,
-            allow_use_of_warp_credits_with_byok: false,
             autonomy_level: warp_multi_agent_api::AutonomyLevel::Supervised,
             isolation_level: warp_multi_agent_api::IsolationLevel::None,
             web_search_enabled: false,
@@ -231,14 +161,8 @@ impl RequestParams {
             ask_user_question_enabled: false,
             research_agent_enabled: false,
             supported_tools_override: None,
-            byop_conversation_id: Some(AIConversationId::new()),
-            byop_readiness_attempt_id: None,
             parent_agent_id: None,
             agent_name: None,
-            lrc_command_id: None,
-            lrc_running_command: None,
-            compaction_state: None,
-            byop_repair_state: Default::default(),
             lrc_should_spawn_subagent: false,
         }
     }
@@ -254,15 +178,6 @@ impl RequestParams {
         let ai_settings = AISettings::as_ref(app);
         let is_memory_enabled = ai_settings.is_memory_enabled(app);
         let warp_drive_context_enabled = ai_settings.is_warp_drive_context_enabled(app);
-
-        // Zaplex BYOP fix for Issue #116: gate on `is_memory_enabled`, collection logic
-        // extracted to `collect_user_rules` pure function that takes only `&ObjectStoreModel` parameter for testing,
-        // does not depend on full AppContext singleton.
-        let user_rules = if is_memory_enabled {
-            collect_user_rules(ObjectStoreModel::as_ref(app))
-        } else {
-            Vec::new()
-        };
 
         // Build MCP context - either grouped by server or flat lists based on feature flag
         let mcp_context = if FeatureFlag::MCPGroupedServerContext.is_enabled() {
@@ -332,14 +247,6 @@ impl RequestParams {
 
         let should_redact_secrets = get_secret_obfuscation_mode(app).should_redact_secret();
 
-        let user_workspaces = UserWorkspaces::as_ref(app);
-        let api_keys = ApiKeyManager::as_ref(app).api_keys_for_request(
-            user_workspaces.is_byo_api_key_enabled(),
-            user_workspaces.is_aws_bedrock_credentials_enabled(app),
-        );
-        let allow_use_of_warp_credits_with_byok =
-            *AISettings::as_ref(app).can_use_warp_credits_with_byok;
-
         let app_execution_mode = AppExecutionMode::as_ref(app);
         let autonomy_level = if app_execution_mode.is_autonomous() {
             warp_multi_agent_api::AutonomyLevel::Unsupervised
@@ -372,16 +279,6 @@ impl RequestParams {
         let ask_user_question_enabled = BlocklistAIPermissions::as_ref(app)
             .get_ask_user_question_setting(app, terminal_view_id)
             != crate::ai::execution_profiles::AskUserQuestionPermission::Never;
-
-        let byop_target_task_id = if request_input.input_messages.len() == 1 {
-            request_input
-                .input_messages
-                .keys()
-                .next()
-                .map(ToString::to_string)
-        } else {
-            None
-        };
 
         // Reconcile the persisted override against the active base model's
         // current `LLMContextWindow` instead of trusting whatever was stored
@@ -417,13 +314,10 @@ impl RequestParams {
             cli_agent_model: request_input.cli_agent_model_id.clone(),
             computer_use_model: request_input.computer_use_model_id.clone(),
             is_memory_enabled,
-            user_rules,
             warp_drive_context_enabled,
             mcp_context,
             planning_enabled: true,
             should_redact_secrets,
-            api_keys,
-            allow_use_of_warp_credits_with_byok,
             autonomy_level,
             isolation_level,
             web_search_enabled,
@@ -431,22 +325,9 @@ impl RequestParams {
             ask_user_question_enabled,
             research_agent_enabled,
             supported_tools_override: request_input.supported_tools_override.clone(),
-            byop_conversation_id: Some(conversation.id),
-            byop_readiness_attempt_id: None,
             parent_agent_id: None,
             agent_name: None,
-            lrc_command_id: None,
-            lrc_running_command: None,
             lrc_should_spawn_subagent: false,
-            byop_target_task_id,
-            // BYOP-only: filled in by controller before dispatch to BYOP exec (setter style,
-            // avoids threading through ConversationRequestData / non-BYOP paths).
-            compaction_state: None,
-            byop_repair_state: Default::default(),
         }
     }
 }
-
-#[cfg(test)]
-#[path = "api_tests.rs"]
-mod tests;

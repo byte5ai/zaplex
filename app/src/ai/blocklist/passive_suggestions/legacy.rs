@@ -15,10 +15,6 @@ use crate::ai::blocklist::{
     read_local_file_context, BlocklistAIHistoryModel, BlocklistAIPermissions,
 };
 use crate::ai::paths::host_native_absolute_path;
-use crate::ai::predict::generate_am_query_suggestions::{
-    GenerateAMQuerySuggestionsRequest, GenerateAMQuerySuggestionsResponse, Suggestion,
-};
-use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::network::NetworkStatus;
 use crate::server::telemetry::PromptSuggestionFallbackReason;
 use crate::settings::AISettings;
@@ -27,17 +23,14 @@ use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::{active_session::ActiveSession, SessionType};
 use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::terminal::view::{AgentModePromptSuggestion, PromptSuggestion};
+use crate::terminal::view::AgentModePromptSuggestion;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use chrono::Utc;
 use parking_lot::FairMutex;
 use serde_json::json;
 use warp_core::features::FeatureFlag;
 use warpui::r#async::{FutureExt as AsyncFutureExt, SpawnedFutureHandle, Timer};
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-const NUM_TOP_BLOCK_LINES: usize = 100;
-const NUM_BOTTOM_BLOCK_LINES: usize = 200;
 const PASSIVE_CODE_DIFF_LONG_FILE_LINE_LIMIT: usize = 2000;
 const PASSIVE_CODE_DIFF_LONG_FILE_BYTE_LIMIT: usize = 100_000;
 const PASSIVE_CODE_DIFF_TOTAL_LINE_LIMIT: usize = 2500;
@@ -68,7 +61,6 @@ pub struct PassiveSuggestionsModel {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     ai_controller: ModelHandle<BlocklistAIController>,
     terminal_view_id: EntityId,
-    prompt_suggestions_future_handle: Option<SpawnedFutureHandle>,
     unit_test_generation_future_handle: Option<SpawnedFutureHandle>,
     code_diff_preflight_future_handle: Option<SpawnedFutureHandle>,
     code_diff_timeout_future_handle: Option<SpawnedFutureHandle>,
@@ -97,7 +89,6 @@ impl PassiveSuggestionsModel {
             terminal_model,
             ai_controller,
             terminal_view_id,
-            prompt_suggestions_future_handle: None,
             unit_test_generation_future_handle: None,
             code_diff_preflight_future_handle: None,
             code_diff_timeout_future_handle: None,
@@ -115,9 +106,6 @@ impl PassiveSuggestionsModel {
         ctx: &mut ModelContext<Self>,
     ) -> Vec<ResponseStreamId> {
         let mut aborted_stream_ids = Vec::new();
-        if let Some(handle) = self.prompt_suggestions_future_handle.take() {
-            handle.abort();
-        }
         if let Some(handle) = self.unit_test_generation_future_handle.take() {
             handle.abort();
         }
@@ -234,8 +222,6 @@ impl PassiveSuggestionsModel {
     ) {
         let block_id = block_completed.serialized_block.id.clone();
         let command = block_completed.command.clone();
-        let start_ts_ms = Utc::now().timestamp_millis();
-
         if let Some(suggestion) = fetch_static_prompt_suggestion(&block_completed) {
             ctx.emit(PassiveSuggestionsEvent::PromptSuggestionsGenerated {
                 prompt_suggestion: suggestion.clone(),
@@ -244,51 +230,7 @@ impl PassiveSuggestionsModel {
                 request_duration_ms: 0,
             });
             self.maybe_generate_passive_code_diff(suggestion, block_id, ctx);
-            return;
         }
-
-        let Some(execution_context) = self
-            .active_session
-            .as_ref(ctx)
-            .ai_execution_environment(ctx)
-        else {
-            return;
-        };
-
-        // BYOP path: replace the ServerApi call with a BYOP one-shot completion.
-        // Zaplex has stripped out the Zaplex Inc cloud; with no BYOP config this is a silent no-op.
-        let Some(rendered) = build_prompt_suggestions_byop_request(
-            &block_completed,
-            execution_context,
-            &self.terminal_model,
-            self.terminal_view_id,
-            ctx,
-        ) else {
-            return;
-        };
-
-        let request_future = async move {
-            crate::ai::agent_providers::active_ai::prompt_suggestions::run(rendered).await
-        };
-
-        self.prompt_suggestions_future_handle =
-            Some(ctx.spawn(request_future, move |me, result, ctx| {
-                me.prompt_suggestions_future_handle = None;
-                let end_ts_ms = Utc::now().timestamp_millis();
-                let request_duration_ms = end_ts_ms.saturating_sub(start_ts_ms) as u64;
-                let prompt_suggestion = match result {
-                    Some(response) => map_prompt_suggestions_response(response),
-                    None => AgentModePromptSuggestion::Error,
-                };
-
-                ctx.emit(PassiveSuggestionsEvent::PromptSuggestionsGenerated {
-                    prompt_suggestion: prompt_suggestion.clone(),
-                    block_id: block_id.clone(),
-                    command,
-                    request_duration_ms,
-                });
-                me.maybe_generate_passive_code_diff(prompt_suggestion, block_id, ctx);
-            }));
     }
 
     fn generate_unit_test_suggestion(
@@ -587,131 +529,4 @@ fn fetch_static_prompt_suggestion(block: &UserBlockCompleted) -> Option<AgentMod
         return None;
     }
     static_suggested_query(&block.command).map(AgentModePromptSuggestion::Success)
-}
-
-#[allow(dead_code)]
-fn build_prompt_suggestions_request(
-    block: &UserBlockCompleted,
-    execution_context: WarpAiExecutionContext,
-    terminal_model: &Arc<FairMutex<TerminalModel>>,
-) -> Option<GenerateAMQuerySuggestionsRequest> {
-    let exit_code = block.serialized_block.exit_code;
-    let working_dir = block.serialized_block.pwd.as_ref();
-    let (processed_input, processed_output) = {
-        let model = terminal_model.lock();
-        let terminal_width = model.block_list().size().columns();
-        let Some(current_block) = model.block_list().block_with_id(&block.serialized_block.id)
-        else {
-            log::error!(
-                "Failed to fetch prompt suggestions, could not find block with ID: {:?}",
-                block.serialized_block.id
-            );
-            return None;
-        };
-        current_block.get_block_content_summary(
-            terminal_width,
-            NUM_TOP_BLOCK_LINES,
-            NUM_BOTTOM_BLOCK_LINES,
-        )
-    };
-
-    let json_message = json!({
-        "command": processed_input,
-        "output": processed_output,
-        "exit_code": exit_code,
-        "pwd": working_dir,
-    });
-    Some(GenerateAMQuerySuggestionsRequest {
-        context_messages: vec![json_message.to_string()],
-        system_context: execution_context.to_json_string(),
-        exit_code: exit_code.value(),
-    })
-}
-
-/// Builds the BYOP-path prompt_suggestions request: extracts the block info plus system context,
-/// then delegates to `active_ai::prompt_suggestions::dispatch` to render the prompt and resolve the BYOP config.
-/// Returns `None` when there is no BYOP config or the block content is missing; the caller silently no-ops.
-fn build_prompt_suggestions_byop_request(
-    block: &UserBlockCompleted,
-    execution_context: WarpAiExecutionContext,
-    terminal_model: &Arc<FairMutex<TerminalModel>>,
-    terminal_view_id: EntityId,
-    ctx: &warpui::AppContext,
-) -> Option<crate::ai::agent_providers::active_ai::RenderedRequest> {
-    use crate::ai::agent_providers::active_ai::{prompt_suggestions, BlockSnippet};
-
-    let exit_code = block.serialized_block.exit_code;
-    let working_dir = block
-        .serialized_block
-        .pwd
-        .as_ref()
-        .cloned()
-        .unwrap_or_default();
-
-    let (processed_input, processed_output) = {
-        let model = terminal_model.lock();
-        let terminal_width = model.block_list().size().columns();
-        let current_block = model
-            .block_list()
-            .block_with_id(&block.serialized_block.id)?;
-        current_block.get_block_content_summary(
-            terminal_width,
-            NUM_TOP_BLOCK_LINES,
-            NUM_BOTTOM_BLOCK_LINES,
-        )
-    };
-
-    let snippet = BlockSnippet {
-        command: processed_input,
-        output_summary: processed_output,
-        exit_code: exit_code.value(),
-        pwd: working_dir,
-    };
-
-    prompt_suggestions::dispatch(
-        ctx,
-        Some(terminal_view_id),
-        prompt_suggestions::Input {
-            recent_blocks: vec![snippet],
-            system_context: execution_context.to_json_string(),
-            last_exit_code: exit_code.value(),
-        },
-    )
-}
-
-fn map_prompt_suggestions_response(
-    response: GenerateAMQuerySuggestionsResponse,
-) -> AgentModePromptSuggestion {
-    let is_valid_code_delegation = response.is_valid_code_delegation();
-    let Some(suggestion) = response.suggestion else {
-        return AgentModePromptSuggestion::None;
-    };
-
-    match suggestion {
-        Suggestion::Coding(coding_query) if is_valid_code_delegation => {
-            AgentModePromptSuggestion::Success(PromptSuggestion {
-                id: response.id,
-                label: None,
-                prompt: coding_query.query,
-                coding_query_context: Some(
-                    coding_query
-                        .files
-                        .into_iter()
-                        .map(Into::into)
-                        .collect::<Vec<_>>(),
-                ),
-                static_prompt_suggestion_name: None,
-                should_start_new_conversation: true,
-            })
-        }
-        Suggestion::Simple(simple_query) => AgentModePromptSuggestion::Success(PromptSuggestion {
-            id: response.id,
-            label: None,
-            prompt: simple_query.query,
-            coding_query_context: None,
-            static_prompt_suggestion_name: None,
-            should_start_new_conversation: true,
-        }),
-        _ => AgentModePromptSuggestion::None,
-    }
 }

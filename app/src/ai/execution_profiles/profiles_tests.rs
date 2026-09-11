@@ -16,6 +16,25 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::LaunchMode;
 
+#[test]
+fn retired_byop_model_preferences_are_ignored_on_profile_roundtrip() {
+    let profile: AIExecutionProfile = serde_json::from_value(serde_json::json!({
+        "name": "Legacy",
+        "title_model": "byop:provider:model",
+        "active_ai_model": "byop:provider:model",
+        "next_command_model": "byop:provider:model"
+    }))
+    .expect("legacy profile fields must remain loadable");
+
+    let serialized = serde_json::to_value(profile).expect("profile must remain serializable");
+    for retired_field in ["title_model", "active_ai_model", "next_command_model"] {
+        assert!(
+            serialized.get(retired_field).is_none(),
+            "retired field {retired_field} must not be written back"
+        );
+    }
+}
+
 /// Install the minimal singleton graph needed to construct an
 /// `AIExecutionProfilesModel` and exercise its ObjectStoreModel interactions.
 fn install_singletons(app: &mut App, auth_state: AuthStateProvider) {

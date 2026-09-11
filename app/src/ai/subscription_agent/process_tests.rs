@@ -6,9 +6,6 @@ use crate::ai::subscription_agent::{
 use std::os::unix::fs::PermissionsExt as _;
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
-#[cfg(target_os = "linux")]
-use warpui::r#async::FutureExt as _;
-
 fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
     SubscriptionTarget {
         installation: InstallationIdentity {
@@ -53,11 +50,17 @@ fn claude_launch_uses_structured_protocol_and_subscription_environment() {
 
     assert_eq!(
         launch.unset_environment,
-        vec!["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
+        CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES
     );
     assert_eq!(
         launch.environment,
-        vec![("CLAUDE_CONFIG_DIR", "/accounts/with space".to_string())]
+        vec![
+            (
+                CLAUDE_PROVIDER_MANAGED_BY_HOST.0,
+                CLAUDE_PROVIDER_MANAGED_BY_HOST.1.to_string(),
+            ),
+            ("CLAUDE_CONFIG_DIR", "/accounts/with space".to_string()),
+        ]
     );
     assert_eq!(launch.args.contains(&"stream-json".to_string()), true);
     assert_eq!(launch.args.contains(&"default".to_string()), true);
@@ -73,6 +76,28 @@ fn claude_launch_uses_structured_protocol_and_subscription_environment() {
             .windows(2)
             .any(|args| args == ["--resume", "session-1"]),
         true
+    );
+}
+
+#[test]
+fn claude_discovery_scrubs_all_provider_environment_variables() {
+    let installation = target(SubscriptionAgent::ClaudeCode).installation;
+    let launch =
+        ProcessLaunch::for_discovery(&installation, "/workspace".into(), ProcessLocation::Local);
+
+    assert_eq!(
+        launch.unset_environment,
+        CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES
+    );
+    assert_eq!(
+        launch.environment,
+        vec![
+            (
+                CLAUDE_PROVIDER_MANAGED_BY_HOST.0,
+                CLAUDE_PROVIDER_MANAGED_BY_HOST.1.to_string(),
+            ),
+            ("CLAUDE_CONFIG_DIR", "/accounts/with space".to_string()),
+        ]
     );
 }
 
@@ -104,7 +129,10 @@ fn remote_launch_quotes_working_directory_environment_and_model() {
     let command = launch.remote_command();
 
     assert_eq!(command.starts_with("cd -- '/workspace/with space'"), true);
-    assert_eq!(command.contains("-u ANTHROPIC_API_KEY"), true);
+    for name in CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES {
+        assert!(command.contains(&format!("-u {name}")));
+    }
+    assert!(command.contains("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=zaplex"));
     assert_eq!(
         command.contains("'CLAUDE_CONFIG_DIR=/accounts/with space'"),
         true

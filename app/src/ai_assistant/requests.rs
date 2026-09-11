@@ -142,7 +142,7 @@ impl Requests {
             TranscriptPartSubType::Question,
             raw_request,
         );
-        let response = "Zaplex AI Assistant cloud requests are disabled in Zaplex. Use Agent Mode with a configured BYOP model instead.".to_owned();
+        let response = "Zaplex AI Assistant cloud requests are disabled. Use Agent Mode with Claude Code or Codex instead.".to_owned();
         let response_in_markdown = markdown_segments_from_text(
             transcript_part_index,
             TranscriptPartSubType::Answer,

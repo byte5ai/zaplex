@@ -286,10 +286,6 @@ pub struct RunAgentArgs {
     /// Whether we are running the agent in a sandboxed environment.
     #[arg(long = "sandboxed", hide = true)]
     pub sandboxed: bool,
-    /// IAM role ARN to use for federated AWS Bedrock credentials for this run.
-    #[arg(long = "bedrock-inference-role", value_name = "ROLE_ARN", hide = true)]
-    pub bedrock_inference_role: Option<String>,
-
     #[command(flatten)]
     pub computer_use: HiddenComputerUseArgs,
 

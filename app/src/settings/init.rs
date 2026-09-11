@@ -377,6 +377,7 @@ pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_p
                     user_preferences::toml_backed::TomlBackedUserPreferences::new(
                         super::user_preferences_toml_file_path(),
                     );
+                let prefs = prefs.with_retired_values(RETIRED_PUBLIC_SETTINGS_FILE_VALUES);
                 if let Some(err) = &parse_error {
                     log::warn!("Settings file has syntax errors and could not be parsed: {err}");
                 }
@@ -387,6 +388,12 @@ pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_p
         }
     }
 }
+
+pub(super) const RETIRED_PUBLIC_SETTINGS_FILE_VALUES: [(&str, Option<&str>); 3] = [
+    ("providers", Some("agents.warp_agent")),
+    ("byop_compaction", Some("agents")),
+    ("byop", Some("agents")),
+];
 
 /// Returns `true` when we should migrate public settings from the
 /// platform-native store into the TOML settings file.

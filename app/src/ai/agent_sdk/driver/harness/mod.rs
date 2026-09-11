@@ -9,7 +9,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
-use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
 use crate::ai::agent_events::AgentEventStreamClient;
@@ -28,11 +27,9 @@ use super::{
 };
 
 mod claude_code;
-mod gemini;
 mod json_utils;
 
 pub(crate) use claude_code::ClaudeHarness;
-use gemini::GeminiHarness;
 
 /// Trait for third-party agent harnesses that execute prompts via their own CLIs.
 ///
@@ -63,7 +60,6 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         &self,
         _working_dir: &Path,
         _system_prompt: Option<&str>,
-        _secrets: &HashMap<String, ManagedSecretValue>,
     ) -> Result<(), AgentDriverError> {
         Ok(())
     }
@@ -119,7 +115,7 @@ pub(crate) fn harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverE
         Harness::Oz => Ok(HarnessKind::Oz),
         Harness::Claude => Ok(HarnessKind::ThirdParty(Box::new(ClaudeHarness))),
         Harness::OpenCode => Ok(HarnessKind::Unsupported(Harness::OpenCode)),
-        Harness::Gemini => Ok(HarnessKind::ThirdParty(Box::new(GeminiHarness))),
+        Harness::Gemini => Ok(HarnessKind::Unsupported(Harness::Gemini)),
         Harness::Unknown => Err(AgentDriverError::InvalidRuntimeState),
     }
 }

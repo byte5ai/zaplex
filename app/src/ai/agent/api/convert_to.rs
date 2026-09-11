@@ -197,10 +197,7 @@ pub(super) fn convert_input(
                     )),
                 });
             }
-            AIAgentInput::SummarizeConversation {
-                prompt,
-                overflow: _,
-            } => {
+            AIAgentInput::SummarizeConversation { prompt } => {
                 return Ok(api::request::Input {
                     context: None,
                     r#type: Some(api::request::input::Type::SummarizeConversation(

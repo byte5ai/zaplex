@@ -1,4 +1,4 @@
-use warp_managed_secrets::{ManagedSecretValue, UploadKey, init_envelope};
+use warp_managed_secrets::{init_envelope, ManagedSecretValue, UploadKey};
 use wasm_bindgen::prelude::*;
 
 /// Called once when the WASM module is instantiated.
@@ -35,21 +35,5 @@ pub fn encrypt_raw_secret(
         actor_uid,
         secret_name,
         &ManagedSecretValue::raw_value(secret_value),
-    )
-}
-
-/// Encrypt an Anthropic API key secret.
-#[wasm_bindgen]
-pub fn encrypt_anthropic_api_key_secret(
-    public_key_base64: &str,
-    actor_uid: &str,
-    secret_name: &str,
-    api_key: &str,
-) -> Result<String, JsValue> {
-    do_encrypt(
-        public_key_base64,
-        actor_uid,
-        secret_name,
-        &ManagedSecretValue::anthropic_api_key(api_key),
     )
 }

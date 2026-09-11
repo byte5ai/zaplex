@@ -1149,7 +1149,7 @@ fn local_restore_binding_uses_terminal_cwd_fallback() {
     assert_eq!(binding.account, None);
     assert_eq!(
         binding.resume_command().as_deref(),
-        Some("env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude --resume session-1")
+        Some("env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u AWS_BEARER_TOKEN_BEDROCK -u CLAUDE_CODE_USE_BEDROCK claude --resume session-1")
     );
 }
 
@@ -1197,7 +1197,7 @@ fn persisted_restore_binding_round_trips_and_rejects_control_characters() {
     assert_eq!(restored, binding);
     assert_eq!(
         restored.resume_command().as_deref(),
-        Some("env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude --resume 'session with spaces'")
+        Some("env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u AWS_BEARER_TOKEN_BEDROCK -u CLAUDE_CODE_USE_BEDROCK claude --resume 'session with spaces'")
     );
 
     let invalid = PersistedCLIAgentBinding {

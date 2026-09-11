@@ -93,14 +93,6 @@ impl Workspace {
                 .first()
                 .is_some_and(|m| m.email == current_user_email)
     }
-
-    pub fn is_custom_llm_enabled(&self) -> bool {
-        self.settings.llm_settings.enabled
-    }
-
-    pub fn is_byo_api_key_enabled(&self) -> bool {
-        self.billing_metadata.is_byo_api_key_enabled()
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -273,11 +265,6 @@ pub struct UsageBasedPricingPolicy {
 }
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
-pub struct ByoApiKeyPolicy {
-    pub enabled: bool,
-}
-
-#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct PurchaseAddOnCreditsPolicy {
     pub enabled: bool,
 }
@@ -331,7 +318,6 @@ pub struct Tier {
     pub telemetry_data_collection_policy: Option<TelemetryDataCollectionPolicy>,
     pub ugc_data_collection_policy: Option<UgcDataCollectionPolicy>,
     pub usage_based_pricing_policy: Option<UsageBasedPricingPolicy>,
-    pub byo_api_key_policy: Option<ByoApiKeyPolicy>,
     pub purchase_add_on_credits_policy: Option<PurchaseAddOnCreditsPolicy>,
     pub enterprise_pay_as_you_go_policy: Option<EnterprisePayAsYouGoPolicy>,
     pub enterprise_credits_auto_reload_policy: Option<EnterpriseCreditsAutoReloadPolicy>,
@@ -339,7 +325,7 @@ pub struct Tier {
     pub ambient_agents_policy: Option<AmbientAgentsPolicy>,
 }
 
-/// Local representation of persisted billing/entitlement metadata used by BYOP and local workspace policy checks.
+/// Local representation of persisted billing and entitlement metadata.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BillingMetadata {
@@ -535,12 +521,6 @@ impl BillingMetadata {
         } else {
             false
         }
-    }
-
-    pub fn is_byo_api_key_enabled(&self) -> bool {
-        self.tier
-            .byo_api_key_policy
-            .is_some_and(|policy| policy.enabled)
     }
 
     pub fn has_overages_used(&self) -> bool {

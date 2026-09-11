@@ -1,4 +1,3 @@
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use indexmap::IndexMap;
 use instant::{Duration, Instant};
 use parking_lot::FairMutex;
@@ -8,10 +7,10 @@ use std::sync::Arc;
 use warpui::{
     elements::{
         Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, DropShadow, Empty, Expanded, Flex, Hoverable, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement as _,
-        ParentOffsetBounds, Percentage, PositionedElementAnchor, PositionedElementOffsetBounds,
-        Radius, Rect, SavePosition, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+        CrossAxisAlignment, DropShadow, Empty, Expanded, Flex, Hoverable, MouseStateHandle,
+        OffsetPositioning, ParentAnchor, ParentElement as _, ParentOffsetBounds, Percentage,
+        PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect, SavePosition, Stack,
+        Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
     },
     platform::Cursor,
     text_layout::ClipConfig,
@@ -34,8 +33,8 @@ use crate::{
             profiles::{AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId},
         },
         llms::{
-            dedupe_model_display_names, is_using_api_key_for_provider, LLMId, LLMInfo,
-            LLMPreferences, LLMPreferencesEvent, LLMSpec,
+            dedupe_model_display_names, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent,
+            LLMSpec,
         },
     },
     appearance::Appearance,
@@ -53,10 +52,9 @@ use crate::{
     },
     ui_components::icons::Icon,
     view_components::{
-        action_button::{ActionButton, ActionButtonTheme, ButtonSize, SecondaryTheme},
+        action_button::{ActionButton, ActionButtonTheme, ButtonSize},
         FeaturePopup, NewFeaturePopupEvent, NewFeaturePopupLabel,
     },
-    workspace::WorkspaceAction,
 };
 
 use warp_core::ui::theme::{color::internal_colors, Fill};
@@ -174,7 +172,6 @@ pub struct ProfileModelSelector {
     ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
     render_compact: bool,
     hovered_llm_info: Option<LLMInfo>,
-    manage_api_key_button: ViewHandle<ActionButton>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     all_model_choices: Vec<LLMInfo>,
 }
@@ -476,15 +473,6 @@ impl ProfileModelSelector {
             me.handle_appearance_change(ctx);
         });
 
-        // Refresh model menu when BYO API keys update so the key icons reflect the latest state.
-        ctx.subscribe_to_model(
-            &ApiKeyManager::handle(ctx),
-            |me, _model, _event: &ApiKeyManagerEvent, ctx| {
-                me.refresh_model_menu(ctx);
-                ctx.notify();
-            },
-        );
-
         ctx.subscribe_to_model(
             &AIExecutionProfilesModel::handle(ctx),
             |me, _, event, ctx| {
@@ -504,18 +492,6 @@ impl ProfileModelSelector {
                 }
             },
         );
-
-        let manage_api_key_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new(crate::t!("common-manage"), SecondaryTheme)
-                .with_tooltip(crate::t!("terminal-manage-api-keys-tooltip"))
-                .with_size(ButtonSize::XSmall)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
-                        search_query: "api".to_string(),
-                        section: Some(SettingsSection::WarpAgent),
-                    });
-                })
-        });
 
         let mut me = Self {
             profile_button,
@@ -541,7 +517,6 @@ impl ProfileModelSelector {
             ambient_agent_view_model,
             render_compact: false,
             hovered_llm_info: None,
-            manage_api_key_button,
             terminal_model,
             all_model_choices: Vec::new(),
         };
@@ -830,7 +805,6 @@ impl ProfileModelSelector {
             Some(&|llm_id| self.model_menu_item_position_id(llm_id)),
             true,
             true,
-            ctx,
         );
 
         let selected_index = Self::find_selected_index(&items, active_llm);
@@ -1627,54 +1601,14 @@ impl ProfileModelSelector {
         .finish()
     }
 
-    fn render_model_spec_api_key(&self, app: &AppContext) -> Box<dyn Element> {
-        let appearance = Appearance::as_ref(app);
-        let theme = appearance.theme();
-
-        Container::new(
-            Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(self.render_model_spec_value_label("Cost".to_string(), app))
-                .with_child(
-                    Expanded::new(
-                        1.,
-                        Flex::row()
-                            .with_main_axis_size(MainAxisSize::Max)
-                            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                            .with_child(
-                                Container::new(
-                                    Text::new(
-                                        "Billed to API".to_string(),
-                                        appearance.ui_font_family(),
-                                        14.,
-                                    )
-                                    .with_color(theme.disabled_ui_text_color().into())
-                                    .finish(),
-                                )
-                                .finish(),
-                            )
-                            .with_child(ChildView::new(&self.manage_api_key_button).finish())
-                            .finish(),
-                    )
-                    .finish(),
-                )
-                .finish(),
-        )
-        .with_margin_top(12.)
-        .finish()
-    }
-
     // Renders all model spec values for a given model spec
     fn render_all_model_spec_values(
         &self,
         spec: &LLMSpec,
-        is_using_api_key: bool,
         bg_bar_color: ColorU,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let mut spec_values = vec![
+        let spec_values = vec![
             self.render_model_spec_value(
                 "Intelligence".to_string(),
                 spec.quality,
@@ -1682,27 +1616,13 @@ impl ProfileModelSelector {
                 app,
             ),
             self.render_model_spec_value("Speed".to_string(), spec.speed, bg_bar_color, app),
+            self.render_model_spec_value("Cost".to_string(), spec.cost, bg_bar_color, app),
         ];
-        if is_using_api_key {
-            spec_values.push(self.render_model_spec_api_key(app));
-        } else {
-            spec_values.push(self.render_model_spec_value(
-                "Cost".to_string(),
-                spec.cost,
-                bg_bar_color,
-                app,
-            ));
-        }
         Flex::column().with_children(spec_values).finish()
     }
 
     // Renders entire modal for a given model spec
-    fn render_model_spec(
-        &self,
-        spec: &LLMSpec,
-        is_using_api_key: bool,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
+    fn render_model_spec(&self, spec: &LLMSpec, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let header = self.render_model_spec_header(
@@ -1710,12 +1630,7 @@ impl ProfileModelSelector {
             crate::t!("terminal-model-specs-description"),
             app,
         );
-        let spec = self.render_all_model_spec_values(
-            spec,
-            is_using_api_key,
-            internal_colors::neutral_3(theme),
-            app,
-        );
+        let spec = self.render_all_model_spec_values(spec, internal_colors::neutral_3(theme), app);
 
         ConstrainedBox::new(
             Container::new(
@@ -1759,7 +1674,6 @@ impl ProfileModelSelector {
         let sidecar_menu = ChildView::new(&self.model_spec_sidecar.dropdown).finish();
         let spec_values = self.render_all_model_spec_values(
             &spec.clone().unwrap_or_default(),
-            false,
             internal_colors::neutral_5(theme),
             app,
         );
@@ -1950,11 +1864,10 @@ impl View for ProfileModelSelector {
                         .and_then(|i| i.spec.as_ref())
                         .cloned();
                     Some(self.render_sidecar_spec_panel(&kind, &sidecar_spec, app))
-                } else if let Some(spec) = info.spec.as_ref() {
-                    let is_using_api_key = is_using_api_key_for_provider(&info.provider, app);
-                    Some(self.render_model_spec(spec, is_using_api_key, app))
                 } else {
-                    None
+                    info.spec
+                        .as_ref()
+                        .map(|spec| self.render_model_spec(spec, app))
                 };
 
                 if let Some(model_spec_sidecar) = model_spec_sidecar {

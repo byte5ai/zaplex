@@ -10,39 +10,39 @@ const t = {
     h1a:    { en: 'The terminal,',         zh: '把终端,',              ja: 'ターミナルを、' },
     h1b:    { en: 'rebuilt around you.',   zh: '重新交还给你。',         ja: 'あなたの手元に戻す。' },
     lede:   {
-      en: 'Zap is a derivative product built on Warp — a fully open, local-first take on the agentic terminal. Every credential, conversation and key stays on your machine. Bring your own provider, your own keys, your own rules.',
-      zh: 'Zap 是基于 Warp 的衍生产品 — 完全开放、本地优先的 agentic 终端。凭证、会话与密钥全部保存在本地。自带服务商、自带密钥、自带规则。',
-      ja: 'Zap は Warp を基にした派生プロダクト — 完全オープンでローカルファーストな agentic ターミナル。認証情報、会話、鍵はすべて手元のマシンに残ります。プロバイダーも鍵もルールも自分のもの。',
+      en: 'Zap is a derivative product built on Warp — a fully open, local-first take on the agentic terminal. Use your existing Claude Code or Codex subscription while sessions and credentials stay under your control.',
+      zh: 'Zap 是基于 Warp 的衍生产品 — 完全开放、本地优先的 agentic 终端。使用现有的 Claude Code 或 Codex 订阅，同时由你掌控会话与凭证。',
+      ja: 'Zap は Warp を基にした派生プロダクト — 完全オープンでローカルファーストな agentic ターミナル。既存の Claude Code または Codex サブスクリプションを使用し、セッションと認証情報は自分で管理できます。',
     },
     primary:   { en: 'Install Zap',     zh: '安装 Zap',     ja: 'Zap をインストール' },
     secondary: { en: 'View on GitHub',  zh: '在 GitHub 查看', ja: 'GitHub で見る' },
   },
   logos: {
     title: {
-      en: 'Native protocols — bring any provider',
-      zh: '原生协议 — 自带任意服务商',
-      ja: 'ネイティブプロトコル — 任意のプロバイダーを接続',
+      en: 'Native subscription agents',
+      zh: '原生订阅 Agent',
+      ja: 'ネイティブのサブスクリプション Agent',
     },
   },
   feat1: {
     eyebrow: { en: 'TERMINAL',    zh: '终端',          ja: 'ターミナル' },
     h:       { en: 'A real terminal, with an AI you actually own.',  zh: '一个真正的终端,搭配你自己掌控的 AI。',  ja: '本物のターミナル、自分で制御できる AI 付き。' },
     p:       {
-      en: 'Every Block — cwd, env, exit code — feeds an AI conversation you can swap, replay or kill at any time. No telemetry, no remote calls, no hidden cloud.',
-      zh: '每一个 Block(工作目录、环境变量、退出码)都为 AI 会话提供上下文,而对话本身可以随时替换、重放、终止。无遥测、无远程调用、无隐藏云服务。',
-      ja: 'すべての Block(cwd、env、終了コード)が AI 会話に流れ込み、いつでも切り替え・再実行・停止できます。テレメトリも遠隔呼び出しも隠れたクラウドもありません。',
+      en: 'Every Block — cwd, env, exit code — feeds an AI conversation you can swap, replay or kill at any time. No custom provider keys and no hidden routing.',
+      zh: '每一个 Block(工作目录、环境变量、退出码)都为 AI 会话提供上下文,而对话本身可以随时替换、重放、终止。无需自定义服务商密钥，也没有隐藏路由。',
+      ja: 'すべての Block(cwd、env、終了コード)が AI 会話に流れ込み、いつでも切り替え・再実行・停止できます。独自のプロバイダーキーも隠れたルーティングもありません。',
     },
     more: { en: 'Read the docs →', zh: '查看文档 →', ja: 'ドキュメントを見る →' },
   },
   feat2: {
-    eyebrow: { en: 'PROVIDERS',   zh: '服务商',        ja: 'プロバイダー' },
-    h:       { en: 'Six native protocols. Hundreds of presets. Your keys.', zh: '6 种原生协议,数百个预设,你的密钥。', ja: '6 種のネイティブプロトコル、数百のプリセット、あなたの鍵。' },
+    eyebrow: { en: 'SUBSCRIPTIONS',   zh: '订阅',        ja: 'サブスクリプション' },
+    h:       { en: 'Claude Code and Codex, using the accounts you already trust.', zh: 'Claude Code 与 Codex，使用你已经信任的账号。', ja: 'Claude Code と Codex を、信頼済みのアカウントで利用。' },
     p:       {
-      en: 'Pick from a directory of 250+ providers — OpenAI-compatible, Anthropic, Gemini, Ollama, DeepSeek, OpenAI-Response — or wire your own endpoint in one paste. Keys live in the OS keychain.',
-      zh: '从内置 250+ 服务商目录中挑选 — OpenAI 兼容、Anthropic、Gemini、Ollama、DeepSeek、OpenAI-Response — 也可一键粘贴你自己的端点。密钥仅保存在系统密钥库。',
-      ja: '内蔵の 250+ プロバイダーディレクトリから選択(OpenAI 互換、Anthropic、Gemini、Ollama、DeepSeek、OpenAI-Response)。あるいは自分のエンドポイントを 1 度の貼り付けで接続。鍵は OS のキーチェーンに保管されます。',
+      en: 'Zap discovers signed-in Claude Code and Codex installations, reports their available models, and runs them locally or over your SSH connection. No provider API keys or custom endpoints.',
+      zh: 'Zap 会发现已登录的 Claude Code 与 Codex，读取它们提供的模型，并在本地或你的 SSH 连接上运行。无需服务商 API 密钥或自定义端点。',
+      ja: 'Zap はログイン済みの Claude Code と Codex を検出し、利用可能なモデルを取得してローカルまたは SSH 接続先で実行します。プロバイダー API キーや独自エンドポイントは不要です。',
     },
-    more: { en: 'See provider list →', zh: '查看服务商列表 →', ja: 'プロバイダー一覧を見る →' },
+    more: { en: 'View agent setup →', zh: '查看 Agent 设置 →', ja: 'Agent の設定を見る →' },
   },
   feat3: {
     eyebrow: { en: 'LOCALIZED',   zh: '本地化',        ja: 'ローカライズ' },
@@ -73,18 +73,14 @@ const t = {
     tabMac: 'macOS', tabLinux: 'Linux', tabWin: 'Windows',
   },
   cta: {
-    h:       { en: 'Your terminal. Your keys.',  zh: '你的终端。你的密钥。', ja: 'あなたのターミナル。あなたの鍵。' },
+    h:       { en: 'Your terminal. Your agents.',  zh: '你的终端。你的 Agent。', ja: 'あなたのターミナル。あなたの Agent。' },
     p:       { en: 'Source-available · Self-hostable · Built with Rust', zh: '源码公开 · 可自托管 · 基于 Rust 构建', ja: 'ソース公開 · セルフホスト可能 · Rust 製' },
     primary: { en: 'Quickstart',  zh: '快速开始',  ja: 'クイックスタート' },
     secondary: { en: 'Read the changelog', zh: '查看更新日志', ja: '変更履歴を読む' },
   },
 };
 
-// 提供商示例(对应仿真 2 的 chip-grid)
-const providerChips = ['302.AI (97)', 'Abacus (65)', 'abliteration.ai (1)', 'AIHubMix (50)', 'Alibaba (48)', 'Alibaba (China) (80)', 'Alibaba Coding (9)', 'Together (16)'];
-
-// Logos(信赖墙)— 我们没有真实合作伙伴,改成"原生支持的协议名"
-const protocols = ['OpenAI', 'Anthropic', 'Gemini', 'Ollama', 'DeepSeek', 'OpenAI-Response'];
+const subscriptionAgents = ['Claude Code', 'Codex'];
 ---
 <LandingLayout>
   <!-- ============== HERO ============== -->
@@ -168,7 +164,7 @@ const protocols = ['OpenAI', 'Anthropic', 'Gemini', 'Ollama', 'DeepSeek', 'OpenA
                 </div>
               </div>
               <div class="hero-status">
-                <span class="ok">anthropic / claude-4-7</span>
+                <span class="ok">Claude Code / subscription</span>
                 <span>local · no telemetry</span>
               </div>
             </div>
@@ -185,21 +181,21 @@ const protocols = ['OpenAI', 'Anthropic', 'Gemini', 'Ollama', 'DeepSeek', 'OpenA
                     autocomplete="off"
                     spellcheck="false"
                     data-lang="en"
-                    placeholder="Try: help, ls, agent fix the linker error, provider list"
+                    placeholder="Try: help, ls, agent fix the linker error"
                   />
                   <input
                     type="text"
                     autocomplete="off"
                     spellcheck="false"
                     data-lang="zh"
-                    placeholder="试试:help、ls、agent 修复链接错误、provider list"
+                    placeholder="试试:help、ls、agent 修复链接错误"
                   />
                   <input
                     type="text"
                     autocomplete="off"
                     spellcheck="false"
                     data-lang="ja"
-                    placeholder="例:help、ls、agent リンカーエラーを修正、provider list"
+                    placeholder="例:help、ls、agent リンカーエラーを修正"
                   />
                 </div>
                 <div class="ti-help">
@@ -221,7 +217,7 @@ const protocols = ['OpenAI', 'Anthropic', 'Gemini', 'Ollama', 'DeepSeek', 'OpenA
       <span data-lang="en">{t.logos.title.en}</span><span data-lang="zh">{t.logos.title.zh}</span><span data-lang="ja">{t.logos.title.ja}</span>
     </p>
     <div class="logos-track">
-      {protocols.map((p) => <span class="item">{p}</span>)}
+      {subscriptionAgents.map((agent) => <span class="item">{agent}</span>)}
     </div>
   </div>
 
@@ -278,7 +274,7 @@ const protocols = ['OpenAI', 'Anthropic', 'Gemini', 'Ollama', 'DeepSeek', 'OpenA
     </div>
   </section>
 
-  <!-- ============== FEAT 2: 服务商(reverse 布局) ============== -->
+  <!-- ============== FEAT 2: subscription agents ============== -->
   <section class="section" id="adapt">
     <div class="wrap">
       <article class="feat-card reverse fade-in">
@@ -322,7 +318,7 @@ const protocols = ['OpenAI', 'Anthropic', 'Gemini', 'Ollama', 'DeepSeek', 'OpenA
                 </div>
                 <a class="ss-item" data-lang="en">Zap agent</a><a class="ss-item" data-lang="zh">Zap 智能体</a><a class="ss-item" data-lang="ja">Zap エージェント</a>
                 <a class="ss-item" data-lang="en">Config</a><a class="ss-item" data-lang="zh">配置</a><a class="ss-item" data-lang="ja">設定</a>
-                <a class="ss-item active" data-lang="en">Providers</a><a class="ss-item active" data-lang="zh">提供商</a><a class="ss-item active" data-lang="ja">プロバイダー</a>
+                <a class="ss-item active" data-lang="en">Agent accounts</a><a class="ss-item active" data-lang="zh">Agent 账号</a><a class="ss-item active" data-lang="ja">Agent アカウント</a>
                 <a class="ss-item" data-lang="en">MCP servers</a><a class="ss-item" data-lang="zh">MCP 服务器</a><a class="ss-item" data-lang="ja">MCP サーバー</a>
                 <a class="ss-item">Rules</a>
                 <a class="ss-top muted" data-lang="en">Code</a><a class="ss-top muted" data-lang="zh">代码</a><a class="ss-top muted" data-lang="ja">コード</a>
@@ -334,26 +330,24 @@ const protocols = ['OpenAI', 'Anthropic', 'Gemini', 'Ollama', 'DeepSeek', 'OpenA
               <div class="set-content">
                 <div class="sc-head">
                   <h4 class="sc-h3">
-                    <span data-lang="en">Agent providers</span><span data-lang="zh">Agent 提供商</span><span data-lang="ja">Agent プロバイダー</span>
+                    <span data-lang="en">Subscription agents</span><span data-lang="zh">订阅 Agent</span><span data-lang="ja">サブスクリプション Agent</span>
                   </h4>
-                  <button class="sc-add" type="button">+ <span data-lang="en">Add</span><span data-lang="zh">添加提供商</span><span data-lang="ja">追加</span></button>
+                  <button class="sc-add" type="button"><span data-lang="en">Refresh</span><span data-lang="zh">刷新</span><span data-lang="ja">更新</span></button>
                 </div>
                 <p class="sc-desc">
-                  <span data-lang="en">Configure any OpenAI-compatible / Anthropic / Gemini / Ollama / DeepSeek endpoint. Keys are stored in the OS keychain.</span>
-                  <span data-lang="zh">配置任意 OpenAI 兼容 / Anthropic / Gemini / Ollama / DeepSeek 端点。密钥保存在系统密钥库。</span>
-                  <span data-lang="ja">任意の OpenAI 互換 / Anthropic / Gemini / Ollama / DeepSeek エンドポイントを設定。鍵は OS のキーチェーンに保管されます。</span>
+                  <span data-lang="en">Use an existing Claude Code or Codex sign-in. Models are reported by the selected agent and account.</span>
+                  <span data-lang="zh">使用现有的 Claude Code 或 Codex 登录。模型由所选 Agent 与账号提供。</span>
+                  <span data-lang="ja">既存の Claude Code または Codex ログインを使用します。モデルは選択した Agent とアカウントから取得されます。</span>
                 </p>
 
                 <div class="sc-quickadd">
                   <div class="qa-head">
-                    <span data-lang="en">Quick add</span><span data-lang="zh">快速添加</span><span data-lang="ja">クイック追加</span>
-                    <span class="qa-search" data-lang="en">Search providers…</span><span class="qa-search" data-lang="zh">搜索提供商…</span><span class="qa-search" data-lang="ja">プロバイダーを検索…</span>
+                    <span data-lang="en">Available agents</span><span data-lang="zh">可用 Agent</span><span data-lang="ja">利用可能な Agent</span>
                   </div>
                   <div class="chip-grid">
-                    {providerChips.map((p) => (
-                      <span class="pchip"><span class="plus">+</span>{p}</span>
+                    {subscriptionAgents.map((agent) => (
+                      <span class="pchip">{agent}</span>
                     ))}
-                    <span class="pchip more">+ 247 more ▾</span>
                   </div>
                 </div>
 
@@ -362,22 +356,18 @@ const protocols = ['OpenAI', 'Anthropic', 'Gemini', 'Ollama', 'DeepSeek', 'OpenA
                     <div class="sf-label">
                       <span data-lang="en">Name</span><span data-lang="zh">名称</span><span data-lang="ja">名前</span>
                     </div>
-                    <div class="sf-val">Anthropic</div>
+                    <div class="sf-val">Claude Code</div>
                   </div>
                   <div class="sf-row">
-                    <div class="sf-label">API <span data-lang="en">protocol</span><span data-lang="zh">协议</span><span data-lang="ja">プロトコル</span></div>
+                    <div class="sf-label"><span data-lang="en">Account</span><span data-lang="zh">账号</span><span data-lang="ja">アカウント</span></div>
                     <div class="sf-protocols">
-                      <span class="ptab">OpenAI</span>
-                      <span class="ptab">OpenAI-Response</span>
-                      <span class="ptab">Gemini</span>
-                      <span class="ptab active">Anthropic</span>
-                      <span class="ptab">Ollama</span>
-                      <span class="ptab">DeepSeek</span>
+                      <span class="ptab active">Claude Code</span>
+                      <span class="ptab">Codex</span>
                     </div>
                   </div>
                   <div class="sf-actions">
-                    <button class="sf-btn" type="button" data-lang="en">+ Add model</button><button class="sf-btn" type="button" data-lang="zh">+ 添加模型</button><button class="sf-btn" type="button" data-lang="ja">+ モデル追加</button>
-                    <button class="sf-btn primary" type="button" data-lang="en">Save</button><button class="sf-btn primary" type="button" data-lang="zh">保存</button><button class="sf-btn primary" type="button" data-lang="ja">保存</button>
+                    <button class="sf-btn" type="button" data-lang="en">Sign in</button><button class="sf-btn" type="button" data-lang="zh">登录</button><button class="sf-btn" type="button" data-lang="ja">ログイン</button>
+                    <button class="sf-btn primary" type="button" data-lang="en">Use agent</button><button class="sf-btn primary" type="button" data-lang="zh">使用 Agent</button><button class="sf-btn primary" type="button" data-lang="ja">Agent を使用</button>
                   </div>
                 </div>
               </div>
@@ -556,7 +546,7 @@ git clone https://github.com/zerx-lab/zap.git zap
 <script>
   // ============================================================
   // Hero 仿真终端:可执行的 fake shell
-  // - 预设几个命令(help / ls / pwd / clear / agent / provider / theme / whoami / echo)
+  // - 预设几个命令(help / ls / pwd / clear / agent / theme / whoami / echo)
   // - 响应按当前 locale 切换三语
   // - 上/下箭头可走历史
   // ============================================================
@@ -640,8 +630,7 @@ git clone https://github.com/zerx-lab/zap.git zap
           '  pwd                print working directory',
           '  whoami             print current user',
           '  echo &lt;text&gt;        print text back',
-          '  agent &lt;prompt&gt;     send a prompt to the local AI agent',
-          '  provider list      list configured AI providers',
+          '  agent &lt;prompt&gt;     send a prompt to a subscription agent',
           '  theme              toggle dark / light',
           '  clear              clear the screen',
         ],
@@ -652,8 +641,7 @@ git clone https://github.com/zerx-lab/zap.git zap
           '  pwd                输出当前路径',
           '  whoami             输出当前用户',
           '  echo &lt;文本&gt;        原样输出文本',
-          '  agent &lt;prompt&gt;     向本地 AI 代理发送提示',
-          '  provider list      列出已配置的服务商',
+          '  agent &lt;prompt&gt;     向订阅 Agent 发送提示',
           '  theme              切换深/浅色主题',
           '  clear              清屏',
         ],
@@ -664,8 +652,7 @@ git clone https://github.com/zerx-lab/zap.git zap
           '  pwd                現在のパスを表示',
           '  whoami             現在のユーザーを表示',
           '  echo &lt;テキスト&gt;    テキストをそのまま出力',
-          '  agent &lt;prompt&gt;     ローカル AI エージェントに送信',
-          '  provider list      設定済みプロバイダー一覧',
+          '  agent &lt;prompt&gt;     サブスクリプション Agent に送信',
           '  theme              ダーク / ライトを切り替え',
           '  clear              画面をクリア',
         ],
@@ -677,29 +664,6 @@ git clone https://github.com/zerx-lab/zap.git zap
       },
       pwd: { en: ['/home/you/zap'], zh: ['/home/you/zap'], ja: ['/home/you/zap'] },
       whoami: { en: ['you'], zh: ['you'], ja: ['you'] },
-      providerList: {
-        en: [
-          '<span class="k">PROTOCOL</span>           <span class="k">NAME</span>          <span class="k">STATUS</span>',
-          'openai            anthropic     <span class="s">ready</span>',
-          'anthropic         claude-4-7    <span class="s">ready</span>',
-          'deepseek          deepseek-v4   <span class="s">ready</span>',
-          'ollama            local         <span class="s">ready</span>',
-        ],
-        zh: [
-          '<span class="k">协议</span>             <span class="k">名称</span>          <span class="k">状态</span>',
-          'openai            anthropic     <span class="s">就绪</span>',
-          'anthropic         claude-4-7    <span class="s">就绪</span>',
-          'deepseek          deepseek-v4   <span class="s">就绪</span>',
-          'ollama            local         <span class="s">就绪</span>',
-        ],
-        ja: [
-          '<span class="k">プロトコル</span>         <span class="k">名前</span>          <span class="k">状態</span>',
-          'openai            anthropic     <span class="s">準備完了</span>',
-          'anthropic         claude-4-7    <span class="s">準備完了</span>',
-          'deepseek          deepseek-v4   <span class="s">準備完了</span>',
-          'ollama            local         <span class="s">準備完了</span>',
-        ],
-      },
     };
 
     function agentResponse(prompt: string): string[] {
@@ -707,28 +671,28 @@ git clone https://github.com/zerx-lab/zap.git zap
       const cleaned = prompt.trim() || (lc === 'zh' ? '没有输入提示' : lc === 'ja' ? 'プロンプトがありません' : 'no prompt');
       if (lc === 'zh') {
         return [
-          `<span class="k">[agent]</span> <span class="dim">路由至</span> anthropic/claude-4-7`,
+          `<span class="k">[agent]</span> <span class="dim">运行</span> Claude Code subscription`,
           `<span class="k">[agent]</span> <span class="dim">提示</span>: ${escape(cleaned)}`,
           `<span class="dim">思考中...</span>`,
-          `<span class="s">→</span> 这是一个仿真响应。实际使用时会在本地调用你配置的服务商。`,
-          `<span class="dim">凭证、会话、上下文全部在本地。</span>`,
+          `<span class="s">→</span> 这是一个仿真响应。实际使用时会运行已登录的 Claude Code 或 Codex。`,
+          `<span class="dim">账号与会话仍由对应的 CLI 管理。</span>`,
         ];
       }
       if (lc === 'ja') {
         return [
-          `<span class="k">[agent]</span> <span class="dim">ルーティング:</span> anthropic/claude-4-7`,
+          `<span class="k">[agent]</span> <span class="dim">実行:</span> Claude Code subscription`,
           `<span class="k">[agent]</span> <span class="dim">プロンプト</span>: ${escape(cleaned)}`,
           `<span class="dim">考え中...</span>`,
-          `<span class="s">→</span> これはシミュレーションです。実際にはローカルで設定済みプロバイダーを呼び出します。`,
-          `<span class="dim">認証、会話、コンテキストはすべてローカルに残ります。</span>`,
+          `<span class="s">→</span> これはシミュレーションです。実際にはログイン済みの Claude Code または Codex を実行します。`,
+          `<span class="dim">アカウントとセッションは各 CLI が管理します。</span>`,
         ];
       }
       return [
-        `<span class="k">[agent]</span> <span class="dim">routing to</span> anthropic/claude-4-7`,
+        `<span class="k">[agent]</span> <span class="dim">running</span> Claude Code subscription`,
         `<span class="k">[agent]</span> <span class="dim">prompt</span>: ${escape(cleaned)}`,
         `<span class="dim">thinking...</span>`,
-        `<span class="s">→</span> This is a simulated response. In real Zap this would call your configured provider locally.`,
-        `<span class="dim">Credentials, conversation and context all stay on your machine.</span>`,
+        `<span class="s">→</span> This is a simulated response. In real Zap this runs your signed-in Claude Code or Codex CLI.`,
+        `<span class="dim">Accounts and sessions remain managed by the selected CLI.</span>`,
       ];
     }
 
@@ -771,10 +735,6 @@ git clone https://github.com/zerx-lab/zap.git zap
           ? `テーマを${themeName}に切り替えました`
           : `Theme switched to ${themeName}`;
         printRaw(msg, 'ok');
-        return;
-      }
-      if (head === 'provider' && rest === 'list') {
-        printLines(responses.providerList[lc]);
         return;
       }
       if (head === 'agent') { printLines(agentResponse(rest)); return; }

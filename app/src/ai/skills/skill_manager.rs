@@ -344,8 +344,8 @@ impl SkillManager {
 
     /// Find the best match by skill name (SKILL.md frontmatter `name` field).
     ///
-    /// Used for BYOP `read_skill` tool: the model only sees `<name>` in the system prompt,
-    /// doesn't know the SKILL.md absolute path, so name → ParsedSkill resolution is required.
+    /// Used when a structured agent transport supplies a skill name without its absolute
+    /// SKILL.md path, so name → ParsedSkill resolution is required.
     ///
     /// When multiple skills have the same name, pick the first in [`provider_rank`] order
     /// (`Agents > Zaplex > Claude > …`), aligning with priority in `unique_skills`/`list_skill_inventory`.

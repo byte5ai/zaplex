@@ -1,7 +1,7 @@
 //! Global HTTP proxy settings.
 //!
 //! See Issue #72. Provides a user-configurable global proxy configuration that is injected into both
-//! `http_client::Client` and `websocket` outlets, covering all BYOP calls, autoupdate, conversation loading,
+//! `http_client::Client` and `websocket` outlets, covering autoupdate, conversation loading,
 //! MCP OAuth, cloud workflow fetch, and other outbound HTTP/WS requests.
 //!
 //! Three fields:
@@ -10,7 +10,7 @@
 //! - `proxy_no_proxy`: comma-separated list of host exceptions, e.g., `localhost,127.0.0.1,.internal`.
 //!
 //! Username / password are not stored here: username will go in a separate setting (or inline in URL),
-//! password flows through `managed_secrets` (same pattern as BYOP API key), managed separately by UI.
+//! password flows through `managed_secrets` and is managed separately by the UI.
 //!
 //! To simplify v1, a username field is also provided here; password remains managed by managed_secrets.
 

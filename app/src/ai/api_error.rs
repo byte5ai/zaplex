@@ -1,6 +1,4 @@
-use crate::ai::{
-    byop_readiness::BlockedByopReadinessError, subscription_agent::SubscriptionAuthenticationError,
-};
+use crate::ai::subscription_agent::SubscriptionAuthenticationError;
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use warp_core::errors::{AnyhowErrorExt, ErrorExt};
@@ -165,12 +163,9 @@ impl AIApiError {
             | AIApiError::Deserialization(_)
             | AIApiError::NoContextFound
             | AIApiError::Stream { .. } => true,
-            AIApiError::Other(error) => {
-                error.downcast_ref::<BlockedByopReadinessError>().is_none()
-                    && error
-                        .downcast_ref::<SubscriptionAuthenticationError>()
-                        .is_none()
-            }
+            AIApiError::Other(error) => error
+                .downcast_ref::<SubscriptionAuthenticationError>()
+                .is_none(),
         }
     }
 }
@@ -178,17 +173,6 @@ impl AIApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::byop_readiness::{BlockedByopReadinessError, ReadinessCategory};
-
-    #[test]
-    fn byop_blocked_readiness_error_is_not_retryable() {
-        let error = AIApiError::Other(
-            BlockedByopReadinessError::new(ReadinessCategory::MissingResultWithoutRepairSource)
-                .into(),
-        );
-
-        assert!(!error.is_retryable());
-    }
 
     #[test]
     fn subscription_authentication_error_is_not_retryable() {

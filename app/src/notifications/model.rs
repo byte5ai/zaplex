@@ -1,7 +1,7 @@
 //! Notification center data model (singleton).
 //!
 //! Commit 002ce467 cloud-removal removed the `agent_management` and this model alongside it, but:
-//! - BYOP agent (Oz) completion/error notifications from the software itself
+//! - In-app subscription-agent completion/error notifications from the software itself
 //! - Status notifications from third-party CLI agents (Claude / Codex / DeepSeek, etc.)
 //!
 //! still need to go through the notification center. This module is a streamlined version
@@ -38,7 +38,7 @@ use crate::workspace::{Workspace, WorkspaceRegistry};
 use crate::BlocklistAIHistoryModel;
 
 /// Singleton model for the notification center:
-/// - Pushes notifications to mailbox when key state changes occur in BYOP agent
+/// - Pushes notifications to the mailbox when key state changes occur in the in-app agent
 ///   conversation state (`BlocklistAIHistoryModel`) and CLI agent session state
 ///   (`CLIAgentSessionsModel`);
 /// - Maintains `pending_artifacts` (artifacts accumulated per conversation per turn)

@@ -848,7 +848,7 @@
             .review-card .vis {
                 margin-top: 18px;
             }
-            /* Mock provider switch UI */
+            /* Mock subscription account status UI */
             .mini-toml {
                 background: var(--dark);
                 color: var(--dark-fg);
@@ -1426,14 +1426,14 @@
                     </h1>
                     <p class="lede" data-lang="en">
                         A derivative product built on Warp that keeps the full
-                        terminal experience and opens the AI layer. Bring your
-                        own provider, edit the prompts, manage SSH hosts &mdash;
-                        everything runs locally.
+                        terminal experience and opens the AI layer. Use your
+                        Claude Code or Codex subscription, edit prompts, and
+                        manage SSH hosts from one place.
                     </p>
                     <p class="lede" data-lang="zh">
                         基于 Warp 构建的衍生产品。完整保留终端体验,把 AI
-                        层完全打开 —— 自带 provider、可编辑提示词、内置 SSH
-                        管理,全部本地运行。
+                        层完全打开 —— 使用 Claude Code 或 Codex
+                        订阅、可编辑提示词、内置 SSH 管理。
                     </p>
                     <div class="hero-cta">
                         <a class="btn" href="#install"
@@ -1454,8 +1454,8 @@
                     <pre class="ascii-fill">
 ▓▓▒▒░░  ▓▓▒▒░░  ▓▓▒▒░░  ▓▓▒▒░░
 ░▒▓█  $ zap
-█▓▒░  ▸ provider: deepseek
-░▒▓█  ▸ model:    v4-pro
+█▓▒░  ▸ agent:    Claude Code
+░▒▓█  ▸ account:  signed in
 █▓▒░  ▸ ssh:      prod-edge
 ░▒▓█  ▸ block:    ▓▓▓▓▓▓▓▓▓▓
 █▓▒░  ▸ context:  cwd=~/zap
@@ -1478,30 +1478,14 @@
         <!-- logos band -->
         <div class="logos">
             <div class="logos-track">
-                <span class="item">DeepSeek</span>
-                <span class="item">OpenAI</span>
-                <span class="item">Anthropic</span>
-                <span class="item">Gemini</span>
-                <span class="item">Ollama</span>
-                <span class="item">Kimi</span>
-                <span class="item">Qwen</span>
-                <span class="item">GLM</span>
-                <span class="item">Mistral</span>
-                <span class="item">Together</span>
-                <span class="item">Groq</span>
-                <span class="item">SiliconFlow</span>
-                <span class="item">DeepSeek</span>
-                <span class="item">OpenAI</span>
-                <span class="item">Anthropic</span>
-                <span class="item">Gemini</span>
-                <span class="item">Ollama</span>
-                <span class="item">Kimi</span>
-                <span class="item">Qwen</span>
-                <span class="item">GLM</span>
-                <span class="item">Mistral</span>
-                <span class="item">Together</span>
-                <span class="item">Groq</span>
-                <span class="item">SiliconFlow</span>
+                <span class="item">Claude Code</span>
+                <span class="item">Codex</span>
+                <span class="item">Local</span>
+                <span class="item">SSH</span>
+                <span class="item">Claude Code</span>
+                <span class="item">Codex</span>
+                <span class="item">Local</span>
+                <span class="item">SSH</span>
             </div>
         </div>
 
@@ -1510,13 +1494,13 @@
             <div class="wrap">
                 <blockquote>
                     <span data-lang="en"
-                        >&ldquo;I shouldn't have to ship my prompts, my keys,
-                        and my <span class="accent">cwd</span> to a server I
-                        don't control just to use a smart terminal.&rdquo;</span
+                        >&ldquo;I should be able to use the agent account I
+                        already trust, in my local or remote
+                        <span class="accent">cwd</span>.&rdquo;</span
                     >
                     <span data-lang="zh"
-                        >&ldquo;我不该为了用一个聪明的终端,就把 prompt、API key
-                        和当前目录全交给一台我不掌控的服务器。&rdquo;</span
+                        >&ldquo;我应该能在本地或远程目录中，使用自己已经信任的
+                        Agent 账号。&rdquo;</span
                     >
                 </blockquote>
                 <div class="who">
@@ -1553,13 +1537,13 @@
                         <p class="sec-sub" data-lang="en">
                             Zap keeps the upstream Warp UI &mdash; Blocks,
                             Workflows, command suggestions &mdash; and replaces
-                            the closed AI gateway with explicit, local, editable
-                            plumbing.
+                            static model assumptions with explicit Claude Code
+                            and Codex subscription sessions.
                         </p>
                         <p class="sec-sub" data-lang="zh">
                             Zap 完整保留上游 Warp 的 Blocks / Workflows /
-                            命令建议,只把封闭的 AI gateway
-                            换成显式、本地、可编辑的管线。
+                            命令建议,并使用显式的 Claude Code 与 Codex
+                            订阅会话。
                         </p>
                     </div>
                     <span class="pill" data-lang="en">3 stages</span>
@@ -1641,20 +1625,18 @@
                     <div class="how-card">
                         <div class="num">STAGE 02</div>
                         <div class="ttl" data-lang="en">
-                            Routes to your provider
+                            Starts your subscription agent
                         </div>
                         <div class="ttl" data-lang="zh">
-                            路由到你的 Provider
+                            启动你的订阅 Agent
                         </div>
                         <div class="desc" data-lang="en">
-                            Your <code>settings.toml</code> picks the model. The
-                            request goes straight from your laptop to the
-                            endpoint &mdash; no middle hop.
+                            Choose a signed-in Claude Code or Codex account and
+                            one of the models reported by that installation.
                         </div>
                         <div class="desc" data-lang="zh">
-                            由
-                            <code>settings.toml</code>
-                            决定走哪个模型。请求直接从你的设备打到端点,没有中间一跳。
+                            选择已登录的 Claude Code 或 Codex 账号，以及该安装
+                            报告的模型。
                         </div>
                         <div class="vis">
                             <svg
@@ -1752,139 +1734,136 @@
 
                 <!-- Catch them all -->
                 <div class="catch-h">
-                    <h3 data-lang="en">Bring any provider you want.</h3>
-                    <h3 data-lang="zh">想接什么 provider,就接什么.</h3>
+                    <h3 data-lang="en">Use the subscription agent you trust.</h3>
+                    <h3 data-lang="zh">使用你信任的订阅 Agent.</h3>
                     <p data-lang="en">
-                        Native protocols, OpenAI-compatible endpoints,
-                        self-hosted Ollama &mdash; configured by editing one
-                        TOML file.
+                        Claude Code and Codex accounts, with models discovered
+                        from the installed CLI.
                     </p>
                     <p data-lang="zh">
-                        原生协议、OpenAI 兼容端点、自托管 Ollama ── 编辑一个
-                        TOML 文件就能切换。
+                        Claude Code 与 Codex 账号，模型由已安装的 CLI
+                        动态提供。
                     </p>
                 </div>
                 <div class="catch-tabs" role="tablist">
-                    <button class="active" data-pf="frontier">FRONTIER</button>
-                    <button data-pf="oss">OPEN SOURCE</button>
-                    <button data-pf="local">LOCAL</button>
+                    <button class="active" data-pf="frontier">CLAUDE CODE</button>
+                    <button data-pf="oss">CODEX</button>
+                    <button data-pf="local">ROUTING</button>
                 </div>
 
                 <div class="stat-grid" data-pf-pane="frontier">
                     <div class="stat-card">
-                        <div class="label">DEEPSEEK</div>
-                        <div class="h">deepseek-v4-pro</div>
-                        <div class="sub">128k ctx · native protocol</div>
+                        <div class="label">CLAUDE CODE</div>
+                        <div class="h">subscription session</div>
+                        <div class="sub">official CLI process</div>
                         <div class="bar"><span style="width: 92%"></span></div>
                         <div class="desc" data-lang="en">
-                            First-class native protocol &mdash; no compatibility
-                            shim.
+                            Runs through the signed-in Claude Code installation.
                         </div>
                         <div class="desc" data-lang="zh">
-                            原生协议直连,无任何兼容垫片。
+                            通过已登录的 Claude Code 安装运行。
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="label">ANTHROPIC</div>
-                        <div class="h">claude-sonnet-4.5</div>
-                        <div class="sub">200k ctx · native protocol</div>
+                        <div class="label">ACCOUNTS</div>
+                        <div class="h">detected locally</div>
+                        <div class="sub">default or selected login</div>
                         <div class="bar"><span style="width: 88%"></span></div>
                         <div class="desc" data-lang="en">
-                            Tool-use loop and prompt caching wired through.
+                            Choose an account discovered by the installed CLI.
                         </div>
                         <div class="desc" data-lang="zh">
-                            工具调用循环与 prompt cache 已打通。
+                            选择已安装 CLI 发现的账号。
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="label">OPENAI</div>
-                        <div class="h">gpt-5.1</div>
-                        <div class="sub">128k ctx · native protocol</div>
+                        <div class="label">MODELS</div>
+                        <div class="h">reported at runtime</div>
+                        <div class="sub">no static catalog</div>
                         <div class="bar"><span style="width: 80%"></span></div>
                         <div class="desc" data-lang="en">
-                            Function calling and streaming, no proxy.
+                            Model choices come from the selected Claude Code CLI.
                         </div>
                         <div class="desc" data-lang="zh">
-                            function calling 与流式输出,无代理。
+                            模型选项由所选 Claude Code CLI 提供。
                         </div>
                     </div>
                 </div>
 
                 <div class="stat-grid" data-pf-pane="oss" hidden>
                     <div class="stat-card">
-                        <div class="label">QWEN</div>
-                        <div class="h">qwen3-coder-480b</div>
-                        <div class="sub">256k ctx · OpenAI-compatible</div>
+                        <div class="label">CODEX</div>
+                        <div class="h">subscription session</div>
+                        <div class="sub">official CLI process</div>
                         <div class="bar"><span style="width: 75%"></span></div>
                         <div class="desc" data-lang="en">
-                            Self-hosted or via SiliconFlow / DashScope.
+                            Runs through the signed-in Codex installation.
                         </div>
                         <div class="desc" data-lang="zh">
-                            自托管,或通过 SiliconFlow / DashScope。
+                            通过已登录的 Codex 安装运行。
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="label">GLM</div>
-                        <div class="h">glm-4.6</div>
-                        <div class="sub">128k ctx · OpenAI-compatible</div>
+                        <div class="label">ACCOUNTS</div>
+                        <div class="h">detected locally</div>
+                        <div class="sub">default or selected login</div>
                         <div class="bar"><span style="width: 70%"></span></div>
                         <div class="desc" data-lang="en">
-                            Smart Z.ai endpoint, low-latency in CN.
+                            Choose an account discovered by the installed CLI.
                         </div>
                         <div class="desc" data-lang="zh">
-                            Z.ai 端点,在国内延迟极低。
+                            选择已安装 CLI 发现的账号。
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="label">KIMI</div>
-                        <div class="h">kimi-k2-instruct</div>
-                        <div class="sub">256k ctx · OpenAI-compatible</div>
+                        <div class="label">MODELS</div>
+                        <div class="h">reported at runtime</div>
+                        <div class="sub">no static catalog</div>
                         <div class="bar"><span style="width: 72%"></span></div>
                         <div class="desc" data-lang="en">
-                            Long context, strong on Chinese reading.
+                            Model choices come from the selected Codex CLI.
                         </div>
                         <div class="desc" data-lang="zh">
-                            长上下文,中文阅读强势。
+                            模型选项由所选 Codex CLI 提供。
                         </div>
                     </div>
                 </div>
 
                 <div class="stat-grid" data-pf-pane="local" hidden>
                     <div class="stat-card">
-                        <div class="label">OLLAMA</div>
-                        <div class="h">llama3.3:70b</div>
-                        <div class="sub">localhost:11434</div>
+                        <div class="label">LOCAL</div>
+                        <div class="h">current machine</div>
+                        <div class="sub">detected CLI accounts</div>
                         <div class="bar"><span style="width: 60%"></span></div>
                         <div class="desc" data-lang="en">
-                            No keys, no network &mdash; just
-                            <code>ollama serve</code>.
+                            Start the selected subscription agent in this workspace.
                         </div>
                         <div class="desc" data-lang="zh">
-                            不要 key、不出网,只需要 <code>ollama serve</code>。
+                            在当前工作区启动所选订阅 Agent。
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="label">LM STUDIO</div>
-                        <div class="h">qwen2.5-coder:32b</div>
-                        <div class="sub">localhost:1234</div>
+                        <div class="label">SSH</div>
+                        <div class="h">connected host</div>
+                        <div class="sub">daemon account routing</div>
                         <div class="bar"><span style="width: 55%"></span></div>
                         <div class="desc" data-lang="en">
-                            Drop-in OpenAI-compatible endpoint.
+                            Resolve the account and run the CLI on the remote host.
                         </div>
                         <div class="desc" data-lang="zh">
-                            即插即用的 OpenAI 兼容端点。
+                            在远程主机解析账号并运行 CLI。
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="label">VLLM</div>
-                        <div class="h">your-finetune</div>
-                        <div class="sub">your-cluster:8000</div>
+                        <div class="label">ISOLATION</div>
+                        <div class="h">subscription auth only</div>
+                        <div class="sub">provider credentials scrubbed</div>
                         <div class="bar"><span style="width: 50%"></span></div>
                         <div class="desc" data-lang="en">
-                            Production-grade inference, your hardware.
+                            Inherited provider credentials never override the login.
                         </div>
                         <div class="desc" data-lang="zh">
-                            生产级推理,跑在你自己的硬件上。
+                            继承的服务商凭据不会覆盖已登录账号。
                         </div>
                     </div>
                 </div>
@@ -1918,29 +1897,24 @@
                 <div class="reviews-grid">
                     <div class="review-card">
                         <div class="h" data-lang="en">
-                            Bring your own provider
+                            Use your existing subscription
                         </div>
-                        <div class="h" data-lang="zh">自带 Provider</div>
+                        <div class="h" data-lang="zh">使用现有订阅</div>
                         <div class="d" data-lang="en">
-                            Point at any OpenAI-compatible endpoint, or speak
-                            the native protocol of DeepSeek / Anthropic / Gemini
-                            / Ollama.
+                            Sign in with Claude Code or Codex, then select the
+                            account and model reported by that CLI.
                         </div>
                         <div class="d" data-lang="zh">
-                            指向任意 OpenAI 兼容端点,或直接走 DeepSeek /
-                            Anthropic / Gemini / Ollama 的原生协议。
+                            登录 Claude Code 或 Codex，然后选择该 CLI
+                            提供的账号与模型。
                         </div>
                         <div class="vis">
                             <div class="mini-toml">
-                                <span class="c"># settings.toml</span>
-                                <span class="k">[providers.deepseek]</span>
-                                base_url =
-                                <span class="s"
-                                    >"https://api.deepseek.com/v1"</span
-                                >
-                                protocol =
-                                <span class="s">"deepseek"</span> api_key =
-                                <span class="s">"sk-•••"</span>
+                                <span class="c"># detected CLI accounts</span>
+                                <span class="k">Claude Code</span>
+                                <span class="s">signed in</span>
+                                <span class="k">Codex</span>
+                                <span class="s">signed in</span>
                             </div>
                         </div>
                     </div>
@@ -1960,13 +1934,13 @@
                         </div>
                         <div class="vis role-list">
                             <span class="chip k">default</span>
-                            <span class="chip">anthropic</span>
-                            <span class="chip">gpt</span>
-                            <span class="chip">beast</span>
-                            <span class="chip">gemini</span>
-                            <span class="chip">kimi</span>
-                            <span class="chip">codex</span>
-                            <span class="chip">trinity</span>
+                            <span class="chip">review</span>
+                            <span class="chip">plan</span>
+                            <span class="chip">debug</span>
+                            <span class="chip">refactor</span>
+                            <span class="chip">docs</span>
+                            <span class="chip">tests</span>
+                            <span class="chip">security</span>
                         </div>
                     </div>
                 </div>
@@ -2352,22 +2326,22 @@
                         ><span class="val">OFF</span>
                     </div>
                     <div class="pl-row">
-                        <span class="key">api_keys.location</span
+                        <span class="key">agent_accounts</span
                         ><span
                             class="val warn"
                             style="
                                 font-family:
                                     &quot;JetBrains Mono&quot;, monospace;
                             "
-                            >~/.config/zap</span
+                            >CLI MANAGED</span
                         >
                     </div>
                     <div class="pl-row">
                         <span class="key">network_egress</span
                         ><span class="val warn" data-lang="en"
-                            >PROVIDER ONLY</span
+                            >SUBSCRIPTION AGENT</span
                         ><span class="val warn" data-lang="zh"
-                            >仅 PROVIDER</span
+                            >仅订阅 AGENT</span
                         >
                     </div>
                 </div>
@@ -2513,10 +2487,10 @@ cargo run --release <span class="a">--bin zap-oss</span></pre>
                                 >
                             </div>
                             <div class="d" data-lang="en">
-                                Provider catalog and prompt templates.
+                                Agent interaction patterns and prompt templates.
                             </div>
                             <div class="d" data-lang="zh">
-                                Provider 目录与提示词模板。
+                                Agent 交互模式与提示词模板。
                             </div>
                         </div>
                     </div>
@@ -2524,23 +2498,13 @@ cargo run --release <span class="a">--bin zap-oss</span></pre>
                         <div class="ico">M</div>
                         <div>
                             <div class="h">
-                                <a
-                                    href="https://models.dev"
-                                    target="_blank"
-                                    rel="noopener"
-                                    style="
-                                        color: inherit;
-                                        border-bottom: 1px dashed
-                                            var(--accent-line);
-                                    "
-                                    >models.dev</a
-                                >
+                                CLI model reports
                             </div>
                             <div class="d" data-lang="en">
-                                Model metadata index, kept in sync.
+                                Available models are read from the selected installation.
                             </div>
                             <div class="d" data-lang="zh">
-                                模型元数据索引,保持同步。
+                                可用模型由所选安装动态提供。
                             </div>
                         </div>
                     </div>
@@ -2576,37 +2540,17 @@ cargo run --release <span class="a">--bin zap-oss</span></pre>
                             </div>
                             <div class="d" data-lang="en">
                                 Sibling project &mdash; a focused TUI for
-                                DeepSeek that informed our DeepSeek-native
-                                protocol path.
+                                DeepSeek that informed early terminal-agent
+                                interaction experiments.
                             </div>
                             <div class="d" data-lang="zh">
                                 姊妹项目 ── 一个聚焦 DeepSeek 的
-                                TUI,启发了我们对 DeepSeek 原生协议的支持。
+                                TUI,启发了早期终端 Agent 交互实验。
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <p
-                    class="sec-sub"
-                    style="
-                        margin-top: 32px;
-                        font-size: 12px;
-                        color: var(--muted-2);
-                        font-family: &quot;JetBrains Mono&quot;, monospace;
-                    "
-                >
-                    <span data-lang="en"
-                        >Related: terminal AI, Rust TUI, BYOP terminal, DeepSeek
-                        TUI, OpenAI-compatible terminal, Zap fork, open-source
-                        agent shell, SSH manager terminal.</span
-                    >
-                    <span data-lang="zh"
-                        >相关关键词:终端 AI、Rust TUI、BYOP 终端、DeepSeek
-                        TUI、OpenAI 兼容终端、Zap fork、开源 agent shell、终端
-                        SSH 管理器。</span
-                    >
-                </p>
             </div>
         </section>
 
@@ -2651,15 +2595,12 @@ cargo run --release <span class="a">--bin zap-oss</span></pre>
                             ><span class="plus">+</span>
                         </summary>
                         <div class="faq-a" data-lang="en">
-                            Yes &mdash; if it speaks any of the supported native
-                            protocols or exposes an OpenAI-compatible Chat
-                            Completions endpoint, just point
-                            <code>base_url</code> at it.
+                            Not through the in-app agent. It intentionally uses
+                            signed-in Claude Code or Codex subscriptions only.
                         </div>
                         <div class="faq-a" data-lang="zh">
-                            可以 ── 只要支持任一原生协议,或暴露 OpenAI 兼容的
-                            Chat Completions 端点,把
-                            <code>base_url</code> 指过去就行。
+                            内置 Agent 不支持。它只使用已登录的 Claude Code 或
+                            Codex 订阅。
                         </div>
                     </details>
                     <details class="faq-item">
@@ -2670,17 +2611,15 @@ cargo run --release <span class="a">--bin zap-oss</span></pre>
                             ><span class="plus">+</span>
                         </summary>
                         <div class="faq-a" data-lang="en">
-                            Five things: AI provider (any vs cloud gateway),
-                            credentials (local vs cloud account), prompts
-                            (editable vs server-assembled), SSH (built-in
-                            manager vs none), cloud features (off vs on by
-                            default). Everything else stays.
+                            The in-app agent uses signed-in Claude Code or Codex
+                            subscriptions with dynamically reported accounts,
+                            models, and sessions. Zap also adds its SSH manager
+                            and keeps prompts editable.
                         </div>
                         <div class="faq-a" data-lang="zh">
-                            五件事:AI provider(任意 vs 云端 gateway)、凭证(本地
-                            vs 云端账号)、prompt(可编辑 vs
-                            服务端组装)、SSH(内置管理器 vs
-                            没有)、云端能力(默认关 vs 默认开)。其他全部保留。
+                            内置 Agent 使用已登录的 Claude Code 或 Codex
+                            订阅，账号、模型与会话都由 Agent 动态提供。Zap
+                            还增加了 SSH 管理器，并保留可编辑提示词。
                         </div>
                     </details>
                     <details class="faq-item">
@@ -2731,12 +2670,11 @@ cargo run --release <span class="a">--bin zap-oss</span></pre>
                     把终端的 <span class="em">主导权</span> 还给你.
                 </h2>
                 <p data-lang="en">
-                    Bring your provider, edit your prompts, manage your hosts.
-                    All local, all editable, all yours.
+                    Use your subscription agents, edit your prompts, and manage
+                    your hosts from one terminal.
                 </p>
                 <p data-lang="zh">
-                    自带 provider,改你的
-                    prompt,管你的主机。全部本地、全部可改、全部归你。
+                    使用你的订阅 Agent，修改 prompt，管理主机，一切都在同一个终端。
                 </p>
                 <div class="btn-row">
                     <a class="btn" href="#install"
@@ -2958,7 +2896,7 @@ cargo run --release <span class="a">--bin zap-oss</span></pre>
                     });
                 });
 
-                // Provider tabs
+                // Subscription agent tabs
                 document
                     .querySelectorAll(".catch-tabs")
                     .forEach(function (tabs) {

@@ -579,39 +579,6 @@ impl BlocklistAIActionModel {
         has_pending || has_running
     }
 
-    pub(super) fn has_unfinished_action_for_tool_call(
-        &self,
-        conversation_id: AIConversationId,
-        task_id: &str,
-        tool_call_id: &str,
-        app: &AppContext,
-    ) -> bool {
-        // In action model, `AIAgentActionId` is tool_call_id; this is just making the input parameter explicitly renamed,
-        // to make the call site (controller's byop preflight) more intuitive to read.
-        let action_id = crate::ai::agent::AIAgentActionId::from(tool_call_id.to_owned());
-        let has_pending = self
-            .pending_actions
-            .get(&conversation_id)
-            .is_some_and(|queue| {
-                queue
-                    .iter()
-                    .any(|action| action.id == action_id && action.task_id.to_string() == task_id)
-            });
-        let has_running = self
-            .running_actions
-            .get(&conversation_id)
-            .is_some_and(|running| running.contains(&action_id))
-            && self
-                .executor
-                .as_ref(app)
-                .async_executing_action(&action_id)
-                .is_some_and(|action| {
-                    action.id == action_id && action.task_id.to_string() == task_id
-                });
-
-        has_pending || has_running
-    }
-
     /// Returns finished action results received from the most recent AI output for the active conversation.
     pub fn get_finished_action_results(
         &self,
@@ -822,7 +789,7 @@ impl BlocklistAIActionModel {
         let action_id = action.id.clone();
         let phase = self.action_phase_for_action(&action, ctx);
         log::info!(
-            "[byop-diag] try_to_execute_action: enter action_id={action_id:?} \
+            "[agent-diag] try_to_execute_action: enter action_id={action_id:?} \
              is_user_initiated={is_user_initiated} phase={phase:?}"
         );
         let execute_result = self.executor.update(ctx, |executor, ctx| {
@@ -832,7 +799,7 @@ impl BlocklistAIActionModel {
         match execute_result {
             TryExecuteResult::ExecutedAsync => {
                 log::info!(
-                    "[byop-diag] try_to_execute_action: ExecutedAsync action_id={action_id:?}"
+                    "[agent-diag] try_to_execute_action: ExecutedAsync action_id={action_id:?}"
                 );
                 self.update_conversation_in_progress_status(conversation_id, ctx);
                 self.add_running_action(conversation_id, action_id, phase);
@@ -840,14 +807,14 @@ impl BlocklistAIActionModel {
             }
             TryExecuteResult::ExecutedSync => {
                 log::info!(
-                    "[byop-diag] try_to_execute_action: ExecutedSync action_id={action_id:?}"
+                    "[agent-diag] try_to_execute_action: ExecutedSync action_id={action_id:?}"
                 );
                 self.update_conversation_in_progress_status(conversation_id, ctx);
                 Some(StartedAction::Sync)
             }
             TryExecuteResult::NotExecuted { reason, action } => {
                 log::info!(
-                    "[byop-diag] try_to_execute_action: NotExecuted action_id={:?} reason={:?} \
+                    "[agent-diag] try_to_execute_action: NotExecuted action_id={:?} reason={:?} \
                      → entering pending_actions[{:?}]",
                     action.id,
                     reason,
@@ -892,7 +859,7 @@ impl BlocklistAIActionModel {
     /// (internally takes `is_user_initiated=true` path, bypassing `NeedsConfirmation` checks),
     /// instead of the default `try_to_execute_available_actions`(`is_user_initiated=false`).
     ///
-    /// Purpose: Zaplex BYOP path LRC tag-in scenario — user actively SetInputModeAgent to
+    /// Purpose: Zaplex LRC tag-in scenario — user actively uses SetInputModeAgent to
     /// give control to agent, but cannot see RequestedCommand's Accept button in alt-screen fullscreen,
     /// controller detects LRC state then uses this method to bypass manual confirmation deadlock.
     pub(super) fn queue_actions_with_options(
@@ -992,7 +959,7 @@ impl BlocklistAIActionModel {
             // try_to_execute_available_actions(is_user_initiated=false),
             // directly call execute_action for each action just pushed (equivalent to user Accept).
             log::info!(
-                "[byop-diag] queue_actions_with_options(auto_accept=true): \
+                "[agent-diag] queue_actions_with_options(auto_accept=true): \
                  invoking execute_action for {} action(s)",
                 auto_accept_ids.len()
             );
@@ -1147,51 +1114,6 @@ impl BlocklistAIActionModel {
             .collect_vec()
     }
 
-    pub(super) fn finished_action_results_matching(
-        &self,
-        conversation_id: AIConversationId,
-        keys: &HashSet<(String, String)>,
-    ) -> Vec<AIAgentActionResult> {
-        self.finished_action_results
-            .get(&conversation_id)
-            .into_iter()
-            .flat_map(|results| results.iter())
-            .filter(|result| keys.contains(&(result.task_id.to_string(), result.id.to_string())))
-            .map(|result| (**result).clone())
-            .collect_vec()
-    }
-
-    pub(super) fn remove_finished_action_results_matching(
-        &mut self,
-        conversation_id: AIConversationId,
-        keys: &HashSet<(String, String)>,
-    ) -> usize {
-        let mut should_remove_bucket = false;
-        let mut removed = 0;
-        if let Some(results) = self.finished_action_results.get_mut(&conversation_id) {
-            let mut index = 0;
-            while index < results.len() {
-                let key = (
-                    results[index].task_id.to_string(),
-                    results[index].id.to_string(),
-                );
-                if keys.contains(&key) {
-                    let result = results.remove(index);
-                    self.past_action_results.insert(result.id.clone(), result);
-                    removed += 1;
-                } else {
-                    index += 1;
-                }
-            }
-            should_remove_bucket = results.is_empty();
-        }
-        if should_remove_bucket {
-            self.action_order.remove(&conversation_id);
-            self.finished_action_results.remove(&conversation_id);
-        }
-        removed
-    }
-
     /// Clears finished action results for a conversation. Used when reverting.
     pub(super) fn clear_finished_action_results(&mut self, conversation_id: AIConversationId) {
         self.action_order.remove(&conversation_id);
@@ -1228,7 +1150,7 @@ impl BlocklistAIActionModel {
 
         let Some(conversation_id) = found_conversation_id else {
             log::error!(
-                "[byop-diag] handle_requested_command_accepted: action_id={action_id:?} NOT FOUND \
+                "[agent-diag] handle_requested_command_accepted: action_id={action_id:?} NOT FOUND \
                  in pending_actions. pending_conversations=[{}] (action did not enter pending_actions correctly,\
                  chain broke in controller.queue_actions → action_model.try_to_execute_action segment)",
                 self.pending_actions
@@ -1242,7 +1164,7 @@ impl BlocklistAIActionModel {
         };
 
         log::info!(
-            "[byop-diag] handle_requested_command_accepted: action_id={action_id:?} found in \
+            "[agent-diag] handle_requested_command_accepted: action_id={action_id:?} found in \
              conversation_id={conversation_id:?}, calling execute_action"
         );
         self.execute_action(action_id, conversation_id, ctx);

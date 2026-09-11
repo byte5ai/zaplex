@@ -177,35 +177,6 @@ const {
           });
         });
 
-        // 服务商标签页与动画轨道
-        document.querySelectorAll<HTMLElement>('.prov-tabs').forEach((tabs) => {
-          const rail = tabs.querySelector<HTMLElement>('[data-prov-rail]');
-          const moveRail = (b: HTMLButtonElement) => {
-            if (!rail) return;
-            const r = b.getBoundingClientRect();
-            const t = tabs.getBoundingClientRect();
-            rail.style.width = `${r.width}px`;
-            rail.style.transform = `translateX(${r.left - t.left - 4}px)`;
-          };
-          const buttons = tabs.querySelectorAll<HTMLButtonElement>('button');
-          const initial = tabs.querySelector<HTMLButtonElement>('button.active') ?? buttons[0];
-          if (initial) requestAnimationFrame(() => moveRail(initial));
-          window.addEventListener('resize', () => {
-            const a = tabs.querySelector<HTMLButtonElement>('button.active');
-            if (a) moveRail(a);
-          });
-          buttons.forEach((b) => {
-            b.addEventListener('click', () => {
-              const name = b.getAttribute('data-pf');
-              buttons.forEach((x) => x.classList.toggle('active', x === b));
-              moveRail(b);
-              document.querySelectorAll<HTMLElement>('[data-pf-pane]').forEach((p) => {
-                p.hidden = p.getAttribute('data-pf-pane') !== name;
-              });
-            });
-          });
-        });
-
         // 安装方式标签页
         document.querySelectorAll<HTMLElement>('.install-tabs').forEach((tabs) => {
           tabs.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {

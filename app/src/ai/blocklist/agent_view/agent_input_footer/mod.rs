@@ -1,7 +1,6 @@
 pub(super) mod chips;
 pub mod editor;
 // Zaplex Wave 7-3:`environment_selector` was removed with the hosted-mode footer.
-mod reasoning_depth_selector;
 pub mod toolbar_item;
 
 use crate::{
@@ -112,11 +111,6 @@ use warpui::{
 #[cfg(not(target_family = "wasm"))]
 use warpui::r#async::Timer;
 
-// Zaplex Wave 7-3:`EnvironmentSelector` / `EnvironmentSelectorEvent` re-export was removed
-// with the hosted-mode footer.
-pub(crate) use self::reasoning_depth_selector::{
-    ReasoningDepthSelector, ReasoningDepthSelectorEvent,
-};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::telemetry::PluginChipTelemetryAction;
 #[cfg(not(target_family = "wasm"))]
@@ -198,7 +192,6 @@ pub struct AgentInputFooter {
     model_selector: ViewHandle<ProfileModelSelector>,
     ftu_callout_close_button: ViewHandle<ActionButton>,
     // Zaplex Wave 7-3:`environment_selector` field was removed with the hosted-mode footer.
-    reasoning_depth_selector: ViewHandle<ReasoningDepthSelector>,
     prompt_alert: ViewHandle<PromptAlertView>,
     ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
     left_display_chips: Vec<ViewHandle<DisplayChip>>,
@@ -588,15 +581,6 @@ impl AgentInputFooter {
         // Zaplex Wave 7-3: `EnvironmentSelector` initialization + subscription + ambient_agent
         // status rerender subscription was removed with the hosted-mode footer.
 
-        let reasoning_depth_selector = ctx.add_typed_action_view(|ctx| {
-            ReasoningDepthSelector::new(menu_positioning_provider.clone(), terminal_view_id, ctx)
-        });
-        ctx.subscribe_to_view(&reasoning_depth_selector, |_, _, event, ctx| match event {
-            ReasoningDepthSelectorEvent::MenuVisibilityChanged { open } => {
-                ctx.emit(AgentInputFooterEvent::ToggledChipMenu { open: *open });
-            }
-        });
-
         let prompt_alert = ctx.add_typed_action_view(PromptAlertView::new);
 
         ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |_, _, _, ctx| {
@@ -707,7 +691,6 @@ impl AgentInputFooter {
             model_selector: profile_model_selector_full,
             // Zaplex Wave 7-3: `environment_selector` field init was removed with hosted-mode UI.
             // Subsystem physically deleted.
-            reasoning_depth_selector,
             prompt_alert,
             terminal_model,
             render_ftu_callout: false,

@@ -53,6 +53,10 @@ pub struct TomlBackedUserPreferences {
     /// Cleared on successful [`reload_from_disk`](Self::reload_from_disk)
     /// and re-derived by the settings reload logic.
     write_inhibited_keys: RefCell<HashSet<String>>,
+
+    /// Values that should remain readable until the next successful write, then
+    /// be removed from the settings file instead of being serialized again.
+    retired_values: Vec<(String, Option<String>)>,
 }
 
 impl TomlBackedUserPreferences {
@@ -85,9 +89,23 @@ impl TomlBackedUserPreferences {
                 document: RefCell::new(document),
                 write_inhibited: Cell::new(write_inhibited),
                 write_inhibited_keys: RefCell::new(HashSet::new()),
+                retired_values: Vec::new(),
             },
             error,
         )
+    }
+
+    /// Configures values that are accepted when loading legacy files but are
+    /// removed as part of the next successful settings write.
+    pub fn with_retired_values<'a>(
+        mut self,
+        retired_values: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    ) -> Self {
+        self.retired_values = retired_values
+            .into_iter()
+            .map(|(key, hierarchy)| (key.to_owned(), hierarchy.map(str::to_owned)))
+            .collect();
+        self
     }
 
     /// Loads the TOML document from disk, or returns an empty document if
@@ -195,8 +213,37 @@ impl TomlBackedUserPreferences {
         if self.write_inhibited.get() {
             return Ok(());
         }
+
+        if !self.retired_values.is_empty() {
+            let mut document = self.document.borrow_mut();
+            for (key, hierarchy) in &self.retired_values {
+                let mut path = hierarchy
+                    .as_deref()
+                    .map(|hierarchy| hierarchy.split('.').collect::<Vec<_>>())
+                    .unwrap_or_default();
+                path.push(key);
+                Self::remove_path_and_prune_empty_tables(document.as_table_mut(), &path);
+            }
+        }
+
         let data = self.document.borrow().to_string();
         atomic_write(&self.file_path, data.as_bytes())
+    }
+
+    fn remove_path_and_prune_empty_tables(table: &mut Table, path: &[&str]) -> bool {
+        let Some((segment, remaining)) = path.split_first() else {
+            return table.is_empty();
+        };
+
+        if remaining.is_empty() {
+            table.remove(segment);
+        } else if let Some(child) = table.get_mut(segment).and_then(Item::as_table_mut) {
+            if Self::remove_path_and_prune_empty_tables(child, remaining) {
+                table.remove(segment);
+            }
+        }
+
+        table.is_empty()
     }
 
     /// Navigates to or creates the table for the given hierarchy path.

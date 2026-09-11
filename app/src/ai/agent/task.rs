@@ -194,14 +194,14 @@ impl Task {
         }
     }
 
-    /// Zaplex BYOP-exclusive: when an agent's self-hosted LRC receives a snapshot, create a Server-backed subagent task
+    /// When a local agent's LRC receives a snapshot, create a Server-backed subagent task
     /// directly in the conversation.
     ///
     /// Cannot reuse `new_optimistic_cli_agent_subtask` because its resulting `TaskImpl::Optimistic`
     /// will directly return `TaskNotInitialized` at entry points that require source to exist,
     /// such as `add_messages` (`task.rs:649-651`) / `try_get_source` (`task.rs:627-631`).
     /// The upstream path relies on the server returning `ApplyClientAction::CreateTask` to upgrade
-    /// optimistic to server; BYOP has no server, so it needs to construct `api::Task` locally as source,
+    /// optimistic to server; the local transport has no task server, so it constructs `api::Task` locally as source,
     /// with the task being Server-backed from the start.
     ///
     /// `subagent_params` uses synthesized `Subagent { command_id, ... }` so queries like
@@ -209,7 +209,7 @@ impl Task {
     /// `tool_call_id` uses a new UUID; since there is no corresponding ToolCall in root.messages,
     /// `is_subagent_task_finished` will always return `Ok(false)` (not completed) — semantically,
     /// during LRC execution, it is indeed "not completed"; the `BlockCompleted` hook cleans up when LRC truly ends.
-    pub(super) fn new_byop_silent_cli_subtask(block_id: BlockId, parent_task_id: String) -> Self {
+    pub(super) fn new_silent_cli_subtask(block_id: BlockId, parent_task_id: String) -> Self {
         let task_id_str = Uuid::new_v4().to_string();
         let subagent_call = api::message::tool_call::Subagent {
             task_id: task_id_str.clone(),
@@ -705,24 +705,6 @@ impl Task {
             should_convert_input_messages,
         )?;
         self.try_get_source_mut()?.messages.extend(messages);
-        Ok(())
-    }
-
-    pub(super) fn append_source_messages(
-        &mut self,
-        messages: Vec<api::Message>,
-    ) -> Result<(), UpdateTaskError> {
-        self.try_get_source_mut()?.messages.extend(messages);
-        Ok(())
-    }
-
-    pub(super) fn remove_source_messages_by_ids(
-        &mut self,
-        message_ids: &std::collections::HashSet<String>,
-    ) -> Result<(), UpdateTaskError> {
-        self.try_get_source_mut()?
-            .messages
-            .retain(|message| !message_ids.contains(&message.id));
         Ok(())
     }
 

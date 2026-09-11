@@ -388,12 +388,9 @@ impl PassiveSuggestionsModel {
     ) {
         self.abort_pending_requests(ctx);
 
-        // Zaplex: temporarily disable cloud requests for passive suggestions triggered by AgentResponseCompleted,
-        // to avoid sending a failed HTTP request to ${server_root_url}/ai/multi-agent after each Agent response
-        // (no cloud auth + ShowSuggestions proto action cannot be synthesized by BYOP).
-        // TODO(byop-suggestions): if later needing to replicate "Suggested Workflow / Rule" chip in BYOP,
-        // need to add independent BYOP one-shot path: mainstream finish → have LLM output structured JSON candidate
-        // → client parse → inject output.suggestions (refer to title_model implementation approach).
+        // Cloud requests for passive suggestions remain disabled because this distribution has no
+        // cloud authentication. A future local implementation needs its own structured suggestion
+        // transport and must not call the removed cloud endpoint.
         let _ = conversation_id;
         return;
         #[allow(unreachable_code)]

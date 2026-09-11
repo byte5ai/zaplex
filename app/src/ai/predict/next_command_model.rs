@@ -35,11 +35,6 @@ use super::generate_ai_input_suggestions::{
     GenerateAIInputSuggestionsRequest, GenerateAIInputSuggestionsResponseV2, NextCommandContext,
 };
 
-use crate::ai::agent::api::collect_user_rules;
-use crate::ai::agent_providers::active_ai::next_command as byop_next_command;
-use crate::ai::agent_providers::oneshot::OneshotConfig;
-use crate::cloud_object::model::persistence::ObjectStoreModel;
-
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use diesel::SqliteConnection;
@@ -51,57 +46,10 @@ cfg_if::cfg_if! {
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 const MAX_NUM_SIMILAR_HISTORY_CONTEXT: usize = 25;
 
-/// Call BYOP next_command one-shot, wrap result as `GenerateAIInputSuggestionsResponseV2`.
-///
-/// `byop_cfg` must be extracted by caller from `&AppContext` before spawn (unavailable at runtime).
-/// `byop_cfg = None` ⇒ silent no-op, return Ok empty response (avoid 401 error noise).
-async fn byop_generate_input_suggestions(
-    byop_cfg: Option<OneshotConfig>,
-    request: &GenerateAIInputSuggestionsRequest,
-    user_rules: Vec<(Option<String>, String)>,
+async fn generate_input_suggestions(
+    _request: &GenerateAIInputSuggestionsRequest,
 ) -> Result<GenerateAIInputSuggestionsResponseV2, AIApiError> {
-    let Some(cfg) = byop_cfg else {
-        // Zaplex is cloud-removed; without BYOP config, no longer fallback to ServerApi ——
-        // return empty response, UI naturally won't show suggestions or spam error logs.
-        return Ok(GenerateAIInputSuggestionsResponseV2::default());
-    };
-    // Map flat fields of request to active_ai prompt template input.
-    // recent_blocks left empty — context_messages + history_context already contain serialized history.
-    let mut history_context = request.history_context.clone();
-    if !request.context_messages.is_empty() {
-        if !history_context.is_empty() {
-            history_context.push('\n');
-        }
-        history_context.push_str(&request.context_messages.join("\n"));
-    }
-    let input = byop_next_command::Input {
-        recent_blocks: Vec::new(),
-        history_context,
-        system_context: request.system_context.clone(),
-        prefix: request.prefix.clone(),
-        rejected_suggestions: request.rejected_suggestions.clone(),
-        user_rules,
-    };
-    let suggestion = byop_next_command::run_with(cfg, input).await;
-    match suggestion {
-        Some(cmd) => {
-            // If user has entered prefix, model output must start with prefix to be accepted.
-            if let Some(prefix) = request.prefix.as_deref() {
-                if !cmd.starts_with(prefix) {
-                    log::debug!(
-                        "[byop next_command] response `{cmd}` does not start with prefix `{prefix}`; dropping"
-                    );
-                    return Ok(GenerateAIInputSuggestionsResponseV2::default());
-                }
-            }
-            Ok(GenerateAIInputSuggestionsResponseV2 {
-                commands: vec![cmd.clone()],
-                ai_queries: vec![],
-                most_likely_action: cmd,
-            })
-        }
-        None => Ok(GenerateAIInputSuggestionsResponseV2::default()),
-    }
+    Ok(GenerateAIInputSuggestionsResponseV2::default())
 }
 
 /// The number of additional preceding commands for each HistoryContext
@@ -394,20 +342,6 @@ impl NextCommandModel {
     ) {
         let terminal_model = self.model.clone();
         let cached_next_command_context = self.cached_zerostate_next_command_context.clone();
-        // BYOP cfg must be extracted before spawn (unavailable inside spawn).
-        // Use None terminal_view_id to run global current active profile.
-        let byop_cfg = byop_next_command::resolve(ctx, None);
-        // Global Rules also extracted before spawn (unavailable inside spawn).
-        // Gate aligns with chat path (`api.rs::RequestParams::new`): both use
-        // `is_memory_enabled` as upstream unified gate, product-layer design decision, not defensive code.
-        // `collect_user_rules` only iterates `ObjectStoreModel.objects_by_id` (pure in-memory HashMap),
-        // no I/O triggered; overhead same magnitude as `byop_next_command::resolve` above.
-        let user_rules = if AISettings::as_ref(ctx).is_memory_enabled(ctx) {
-            collect_user_rules(ObjectStoreModel::as_ref(ctx))
-        } else {
-            Vec::new()
-        };
-
         let completion_context = completer_data.completion_session_context(ctx);
         // This is only needed if we have a prefix.
         let reverse_chronological_potential_autosuggestions = if let Some(prefix) = &prefix {
@@ -528,7 +462,7 @@ impl NextCommandModel {
                     // For zero-state next command suggestions, return the result immediately.
                     let Some(prefix) = prefix else {
                         return (
-                            byop_generate_input_suggestions(byop_cfg.clone(), &request, user_rules.clone()).await,
+                            generate_input_suggestions(&request).await,
                             request,
                             true,
                             start_ts_ms,
@@ -608,8 +542,8 @@ impl NextCommandModel {
                         }
                     };
 
-                    // Only if we have no commands from history and no completions, use the LLM to generate a partial suggestion.
-                    let response = byop_generate_input_suggestions(byop_cfg, &request, user_rules).await;
+                    // Subscription agents do not provide a low-latency completion endpoint.
+                    let response = generate_input_suggestions(&request).await;
                     (
                         response,
                         request,

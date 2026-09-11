@@ -214,12 +214,6 @@ pub fn init(app: &mut AppContext) {
         {
             app.register_editable_bindings([
                 EditableBinding::new(
-                    "workspace:debug_reset_aws_bedrock_login_banner_dismissed",
-                    crate::t!("keybinding-desc-workspace-undismiss-aws-login-banner"),
-                    WorkspaceAction::DebugResetAwsBedrockLoginBannerDismissed,
-                )
-                .with_context_predicate(id!("Workspace")),
-                EditableBinding::new(
                     "workspace:open_zap_launch_modal",
                     crate::t!("keybinding-desc-workspace-open-zap-launch-modal"),
                     WorkspaceAction::OpenZapLaunchModal,
