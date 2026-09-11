@@ -82,11 +82,9 @@ impl InlineDiffView {
             CodeEditorEvent::UnifiedDiffComputed(diff) => {
                 ctx.emit(InlineDiffViewEvent::DiffAccepted { diff: diff.clone() });
             }
-            CodeEditorEvent::ContentChanged { origin } => {
-                if origin.from_user() && !me.was_edited {
-                    me.was_edited = true;
-                    ctx.emit(InlineDiffViewEvent::UserEdited);
-                }
+            CodeEditorEvent::ContentChanged { origin } if origin.from_user() && !me.was_edited => {
+                me.was_edited = true;
+                ctx.emit(InlineDiffViewEvent::UserEdited);
             }
             _ => {}
         });

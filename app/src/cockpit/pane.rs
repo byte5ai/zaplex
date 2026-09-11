@@ -286,6 +286,7 @@ impl SortColumn {
 
 /// One line of the flattened table: the sum-tree wants a flat row list, so a
 /// group header is a row of its own rather than a nesting level.
+#[allow(clippy::large_enum_variant)]
 enum TableRow {
     /// A project group header (F9: the repo, not one of its worktrees).
     ///
@@ -1472,6 +1473,7 @@ impl CockpitPaneView {
         // same repo on another machine is its own group. Merging those would give
         // the group's "+" no host to launch on, and mix two working trees under
         // one count.
+        #[allow(clippy::type_complexity)]
         let mut by_repo: BTreeMap<
             String,
             Vec<(SessionSnapshot, Option<String>, Option<String>, bool)>,
@@ -1707,6 +1709,7 @@ impl CockpitPaneView {
     fn render_session_lifecycle_dialog(&self, app: &AppContext) -> Option<Box<dyn Element>> {
         let state = self.session_lifecycle_dialog.as_ref()?;
         let appearance = Appearance::as_ref(app);
+        #[allow(clippy::type_complexity)]
         let (title, body, child, confirm): (
             String,
             String,

@@ -18,7 +18,7 @@ use super::{
     action_model::{BlocklistAIActionEvent, BlocklistAIActionModel},
     agent_view::{AgentViewController, AgentViewControllerEvent},
     context_model::BlocklistAIContextModel,
-    history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel},
+    history_model::BlocklistAIHistoryModel,
     input_model::InputConfig,
     BlocklistAIInputModel, InputType,
 };
@@ -35,7 +35,7 @@ use crate::ai::api_error::AIApiError;
 use crate::ai::byop_readiness::{
     BlockedByopReadinessError, PendingByopToolResultsError, ReadinessCategory,
     ReadinessDiagnosticCoalescer, ReadinessDiagnosticContext, ReadinessDiagnosticLevel,
-    ReadinessTriggerLayer, BLOCKED_BYOP_REQUEST_MESSAGE,
+    ReadinessTriggerLayer,
 };
 use crate::ai::document::ai_document_model::{
     AIDocumentId, AIDocumentModel, AIDocumentUserEditStatus,
