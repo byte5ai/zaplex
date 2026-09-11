@@ -120,7 +120,7 @@ runs:
           do
             if [[ -f "$source_file" ]]; then
               sudo sed -E -i \
-                's|http://(([a-z]{2}\.)?archive\.ubuntu\.com|security\.ubuntu\.com)/ubuntu|https://\1/ubuntu|g' \
+                's#http://(([a-z]{2}\.)?archive\.ubuntu\.com|security\.ubuntu\.com)/ubuntu#https://\1/ubuntu#g' \
                 "$source_file"
             fi
           done
