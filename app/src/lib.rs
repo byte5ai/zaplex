@@ -581,13 +581,30 @@ pub fn run() -> Result<()> {
                 return crate::run_plugin_host();
             }
             #[cfg(feature = "local_tty")]
-            warp_cli::Command::Worker(warp_cli::WorkerCommand::MinidumpServer { socket_name }) => {
+            warp_cli::Command::Worker(warp_cli::WorkerCommand::MinidumpServer {
+                socket_name,
+                dump_dir,
+            }) => {
                 cfg_if::cfg_if! {
                     if #[cfg(all(linux_or_windows, feature = "crash_reporting"))] {
-                        return crate::crash_reporting::run_minidump_server(socket_name);
+                        return crate::crash_reporting::run_minidump_server(
+                            socket_name,
+                            dump_dir.as_deref(),
+                        );
                     } else {
-                        let _ = socket_name;
+                        let _ = (socket_name, dump_dir);
                         panic!("The minidump server is not supported on this platform");
+                    }
+                }
+            }
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            warp_cli::Command::Worker(warp_cli::WorkerCommand::MinidumpSmoke { dump_dir }) => {
+                cfg_if::cfg_if! {
+                    if #[cfg(feature = "crash_reporting")] {
+                        return crate::crash_reporting::run_minidump_smoke_test(dump_dir);
+                    } else {
+                        let _ = dump_dir;
+                        panic!("The minidump smoke test requires crash reporting support");
                     }
                 }
             }
