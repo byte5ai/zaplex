@@ -546,7 +546,7 @@ class CodebaseAuditCrosscutAssignmentsTest(unittest.TestCase):
         tampered = copy.deepcopy(document)
         tampered["buckets"][0]["entries"][0]["model_invocations"] = 2
         with self.assertRaisesRegex(
-            ASSIGNMENTS.CrosscutAssignmentError, "metadata mismatch"
+            ASSIGNMENTS.CrosscutAssignmentError, "model_invocations must be 1"
         ):
             ASSIGNMENTS.validate_assignments(tampered, contract)
 
@@ -566,6 +566,23 @@ class CodebaseAuditCrosscutAssignmentsTest(unittest.TestCase):
             "exactly once",
         ):
             ASSIGNMENTS.validate_assignments(duplicate, contract)
+
+    def test_rejects_boolean_assignment_counters_even_when_equal_to_one(self):
+        contract = self.load_contract()
+        document = ASSIGNMENTS.build_assignments(contract)
+
+        cases = (
+            ("execution", lambda value: value["execution_contract"].__setitem__("invocations_per_crosscut", True)),
+            ("entry", lambda value: value["buckets"][0]["entries"][0].__setitem__("model_invocations", True)),
+            ("bucket", lambda value: value["buckets"][0].__setitem__("estimated_input_bytes", True)),
+            ("coverage", lambda value: value["coverage"].__setitem__("complete", 1)),
+        )
+        for label, mutate in cases:
+            with self.subTest(label=label):
+                tampered = copy.deepcopy(document)
+                mutate(tampered)
+                with self.assertRaises(ASSIGNMENTS.CrosscutAssignmentError):
+                    ASSIGNMENTS.validate_assignments(tampered, contract)
 
 
 if __name__ == "__main__":

@@ -1120,6 +1120,15 @@ def build_assignments(contract: dict[str, Any]) -> dict[str, Any]:
 
 def validate_assignment_entry(entry: Any, expected: dict[str, Any]) -> None:
     entry = require_exact_keys(entry, ASSIGNMENT_ENTRY_KEYS, "assignment entry")
+    for key in (
+        "estimated_input_bytes",
+        "lens_count",
+        "max_attempts",
+        "model_invocations",
+    ):
+        require_plain_int(
+            entry[key], f"assignment entry {expected['crosscut_id']}.{key}", expected=expected[key]
+        )
     if entry != expected:
         raise CrosscutAssignmentError(f"assignment metadata mismatch: {expected['crosscut_id']}")
     if entry["assignment_id"] != assignment_entry_hash(entry):
@@ -1152,6 +1161,14 @@ def validate_assignments(assignments: dict[str, Any], contract: dict[str, Any]) 
         "lenses": list(LENSES),
         "max_attempts_per_invocation": 3,
     }
+    for key in (
+        "invocations_per_crosscut",
+        "lens_count",
+        "max_attempts_per_invocation",
+    ):
+        require_plain_int(
+            execution[key], f"execution contract.{key}", expected=expected_execution[key]
+        )
     if execution != expected_execution:
         raise CrosscutAssignmentError("execution contract mismatch")
     require_plain_int(assignments["bucket_count"], "assignment.bucket_count", expected=3)
@@ -1168,11 +1185,22 @@ def validate_assignments(assignments: dict[str, Any], contract: dict[str, Any]) 
         entries = bucket["entries"]
         if not isinstance(entries, list):
             raise CrosscutAssignmentError("assignment bucket entries must be an array")
+        require_plain_int(
+            bucket["crosscut_count"],
+            f"assignment bucket {bucket['id']}.crosscut_count",
+            expected=len(entries),
+        )
         if bucket["crosscut_count"] != len(entries):
             raise CrosscutAssignmentError("assignment bucket crosscut_count mismatch")
-        if bucket["estimated_input_bytes"] != sum(
+        expected_input_bytes = sum(
             entry.get("estimated_input_bytes", -1) for entry in entries if isinstance(entry, dict)
-        ):
+        )
+        require_plain_int(
+            bucket["estimated_input_bytes"],
+            f"assignment bucket {bucket['id']}.estimated_input_bytes",
+            expected=expected_input_bytes,
+        )
+        if bucket["estimated_input_bytes"] != expected_input_bytes:
             raise CrosscutAssignmentError("assignment bucket input byte count mismatch")
         for entry in entries:
             if not isinstance(entry, dict) or entry.get("crosscut_id") not in expected_by_id:
@@ -1199,6 +1227,19 @@ def validate_assignments(assignments: dict[str, Any], contract: dict[str, Any]) 
         "model_invocations": 13,
         "source_records": len(contract["evidence"]["sources"]),
     }
+    for key in (
+        "assigned_crosscuts",
+        "bucket_count",
+        "crosscuts",
+        "evidence_entries",
+        "model_invocations",
+        "source_records",
+    ):
+        require_plain_int(
+            coverage[key], f"assignment coverage.{key}", expected=expected_coverage[key]
+        )
+    if coverage["complete"] is not True:
+        raise CrosscutAssignmentError("assignment coverage.complete must be true boolean")
     if coverage != expected_coverage:
         raise CrosscutAssignmentError("assignment coverage mismatch")
     if assignments["assignment_sha256"] != assignment_document_hash(assignments):
