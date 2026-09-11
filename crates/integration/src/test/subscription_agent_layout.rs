@@ -22,6 +22,7 @@ const GEOMETRY_EPSILON: f32 = 1.;
 
 pub fn test_subscription_agent_conversation_layout_evidence() -> Builder {
     let mut builder = new_builder()
+        .with_setup(|_| warp::i18n::init(Some("en")))
         .with_real_display()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(enter_agent_view());
