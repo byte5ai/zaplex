@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+
+"""Focused regression tests for the deny.toml/about.toml license-list guard."""
+
+from pathlib import Path
+import os
+import subprocess
+import tempfile
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CHECK = REPO_ROOT / "script" / "check_license_config_sync"
+
+
+def run_check(
+    deny_licenses: list[str], about_licenses: list[str]
+) -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryDirectory(prefix="zaplex-license-policy-") as temporary_directory:
+        root = Path(temporary_directory)
+        deny_values = "\n".join(f'    "{license_id}",' for license_id in deny_licenses)
+        about_values = "\n".join(f'    "{license_id}",' for license_id in about_licenses)
+        (root / "deny.toml").write_text(f"[licenses]\nallow = [\n{deny_values}\n]\n")
+        (root / "about.toml").write_text(f"accepted = [\n{about_values}\n]\n")
+        environment = os.environ.copy()
+        environment["ZAPLEX_LICENSE_CONFIG_ROOT"] = str(root)
+        return subprocess.run(
+            [str(CHECK)],
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+
+matching = run_check(["Apache-2.0", "MIT"], ["MIT", "Apache-2.0"])
+if matching.returncode != 0 or "License config in sync." not in matching.stdout:
+    raise SystemExit("matching license sets must pass")
+
+about_only = run_check(["MIT"], ["MIT", "Zlib"])
+if (
+    about_only.returncode == 0
+    or "In about.toml but not deny.toml: ['Zlib']" not in about_only.stdout
+):
+    raise SystemExit("an SPDX identifier added only to about.toml must fail")
+
+deny_only = run_check(["MIT", "Zlib"], ["MIT"])
+if deny_only.returncode == 0 or "In deny.toml but not about.toml: ['Zlib']" not in deny_only.stdout:
+    raise SystemExit("an SPDX identifier added only to deny.toml must fail")
+
+print("license config sync tests: ok")

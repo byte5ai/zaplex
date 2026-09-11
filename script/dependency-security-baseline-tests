@@ -107,6 +107,17 @@ if "RUSTSEC-2023-0081" in ignored:
 for advisory in ("RUSTSEC-2026-0192", "RUSTSEC-2026-0206"):
     if advisory not in ignored or "#243" not in ignored[advisory]:
         fail(f"temporary {advisory} ignore must carry its tracking reference")
+if "pop-os/cosmic-text/issues/352" not in ignored["RUSTSEC-2026-0192"]:
+    fail("the ttf-parser exception must link its upstream removal tracker")
+if "pop-os/cosmic-text/pull/417" not in ignored["RUSTSEC-2026-0206"]:
+    fail("the rustybuzz exception must link the upstream harfrust migration")
+if not all(
+    dependency in ignored["RUSTSEC-2026-0192"]
+    for dependency in ("cosmic-text", "fontdb", "owned_ttf_parser", "rustybuzz")
+):
+    fail("the ttf-parser ignore must identify every remaining direct dependency path")
+if "cosmic-text" not in ignored["RUSTSEC-2026-0206"]:
+    fail("the rustybuzz ignore must identify its remaining direct dependency path")
 
 allowed_git = string_array(section(deny, "sources"), "allow-git")
 for repository in (
@@ -124,6 +135,7 @@ for package in packages:
 for name, minimum in {
     "anyhow": "1.0.103",
     "crossbeam-epoch": "0.9.20",
+    "defmt": "1.1.1",
     "event-listener": "5.4.2",
     "git2": "0.21.0",
     "h2": "0.4.16",
@@ -140,6 +152,43 @@ for name, minimum in {
 
 if "number_prefix" in versions:
     fail("unmaintained dependency number_prefix returned to Cargo.lock")
+
+for package in packages:
+    if package["name"] in ("proc-macro-error2", "proc-macro-error-attr2"):
+        fail(f"unmaintained dependency {package['name']} returned to Cargo.lock")
+
+for name, minimum in {"resvg": "0.48.1", "usvg": "0.48.1"}.items():
+    if name not in versions:
+        fail(f"expected font dependency {name} is absent from Cargo.lock")
+    too_old = [version for version in versions[name] if version_tuple(version) < version_tuple(minimum)]
+    if too_old:
+        fail(f"{name} versions below {minimum}: {', '.join(too_old)}")
+
+for package in packages:
+    dependencies = str(package["dependencies"])
+    if package["name"] in ("resvg", "usvg") and (
+        '"rustybuzz"' in dependencies or '"ttf-parser"' in dependencies
+    ):
+        fail(f"{package['name']} returned to the unmaintained font stack")
+
+expected_font_dependents = {
+    "rustybuzz": {"cosmic-text"},
+    "ttf-parser": {"cosmic-text", "fontdb", "owned_ttf_parser", "rustybuzz"},
+}
+for dependency_name, expected in expected_font_dependents.items():
+    actual = {
+        str(package["name"])
+        for package in packages
+        if any(
+            dependency.split(" ", 1)[0] == dependency_name
+            for dependency in re.findall(r'"([^"]+)"', str(package["dependencies"]))
+        )
+    }
+    if actual != expected:
+        fail(
+            f"temporary {dependency_name} exception paths changed: "
+            f"expected {sorted(expected)}, found {sorted(actual)}"
+        )
 
 i18n_embed_fl = next(package for package in packages if package["name"] == "i18n-embed-fl")
 if version_tuple(str(i18n_embed_fl["version"])) < version_tuple("0.10.1"):
@@ -162,12 +211,30 @@ for name, prefix in legacy_versions.items():
 pr_workflow = (REPO_ROOT / ".github" / "workflows" / "pr-check.yml").read_text()
 changes = job_block(pr_workflow, "changes")
 cargo_check = job_block(pr_workflow, "cargo_check")
-if "script/check_license_config_sync" not in changes:
-    fail("the always-running changes job must check license configuration sync")
-if "script/dependency-security-baseline-tests" not in changes:
-    fail("the always-running changes job must verify this baseline")
-if DENY_ACTION not in cargo_check or "command: check advisories" not in cargo_check:
-    fail("the build-relevant cargo_check job must enforce cargo-deny advisories")
+required_policy_checks = {
+    "script/check_license_config_sync": "license configuration sync",
+    "script/check-license-config-sync-tests": "license policy guard",
+    "script/dependency-security-baseline-tests": "dependency security baseline",
+}
+for command, description in required_policy_checks.items():
+    if command in changes:
+        fail(f"the non-required changes job must not own the {description}")
+    if command not in cargo_check:
+        fail(f"the required cargo_check job must enforce the {description}")
+if (
+    DENY_ACTION not in cargo_check
+    or "arguments: --all-features --locked" not in cargo_check
+    or "command: check advisories bans licenses sources" not in cargo_check
+):
+    fail("the build-relevant cargo_check job must enforce the complete cargo-deny policy")
+if "install_release_deps: true" not in cargo_check:
+    fail("the dependency-policy job must install cargo-about")
+if "cargo about generate --workspace --manifest-path Cargo.toml" not in cargo_check:
+    fail("the dependency-policy job must generate third-party attribution")
+
+keymap_smoke_test = job_block(pr_workflow, "keymap_smoke_test")
+if "test_svg_text_rasterizes_with_loaded_system_fonts" not in keymap_smoke_test:
+    fail("the required smoke job must rasterize SVG text with the migrated font stack")
 
 scheduled = (REPO_ROOT / ".github" / "workflows" / "dependency-security.yml").read_text()
 if "schedule:" not in scheduled or DENY_ACTION not in scheduled:
