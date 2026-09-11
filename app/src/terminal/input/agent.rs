@@ -103,6 +103,10 @@ impl Input {
             Some(reason) => subscription_composer_unavailable(reason, appearance),
             None => self.render_input_box(/*show_vim_status=*/ false, appearance, app),
         };
+        #[cfg(feature = "integration_tests")]
+        let composer = SavePosition::new(composer, &self.subscription_composer_save_position_id())
+            .for_single_frame()
+            .finish();
         column.add_child(
             Container::new(composer)
                 .with_margin_top(

@@ -189,7 +189,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.needs_build == 'true'
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -207,6 +207,32 @@ jobs:
       - name: cargo check (default = zaplex bin)
         run: cargo check --locked --bin zaplex
         shell: bash
+
+      - name: Native subscription Agent layout evidence
+        env:
+          WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS: "1"
+          ZAPLEX_INTEGRATION_TEST_ARTIFACTS_DIR: ${{ runner.temp }}/subscription-agent-layout
+          ZAPLEX_SHELL_PATH: /bin/zsh
+        run: >
+          cargo test --locked -p integration --test integration
+          ui_tests::test_subscription_agent_conversation_layout_evidence
+          -- --exact --nocapture
+        shell: bash
+
+      - name: Verify native subscription Agent screenshots
+        run: |
+          test "$(find "${{ runner.temp }}/subscription-agent-layout" -type f -name 'subscription-agent-normal-1180x640.png' -size +0c | wc -l | tr -d ' ')" -ge 1
+          test "$(find "${{ runner.temp }}/subscription-agent-layout" -type f -name 'subscription-agent-narrow-540x640.png' -size +0c | wc -l | tr -d ' ')" -ge 1
+        shell: bash
+
+      - name: Upload native subscription Agent layout evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: subscription-agent-layout-evidence
+          path: ${{ runner.temp }}/subscription-agent-layout/
+          if-no-files-found: warn
+          retention-days: 14
 
   keymap_smoke_test:
     name: keymap validation (Linux x86_64)

@@ -1,6 +1,8 @@
 mod assertions;
 pub mod llm_judge;
 mod step;
+#[cfg(feature = "integration_tests")]
+mod subscription_layout;
 mod user_defaults;
 mod util;
 use std::collections::HashSet;
@@ -13,6 +15,8 @@ use crate::BlocklistAIHistoryModel;
 use crate::{ai::agent::AIAgentActionType, integration_testing::view_getters::terminal_view};
 pub use assertions::*;
 pub use step::*;
+#[cfg(feature = "integration_tests")]
+pub use subscription_layout::*;
 pub use user_defaults::*;
 pub use util::*;
 use warpui::integration::PersistedDataMap;
