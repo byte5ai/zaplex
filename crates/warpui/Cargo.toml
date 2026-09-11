@@ -90,7 +90,7 @@ bytemuck.workspace = true
 command.workspace = true
 cosmic-text = { git = "https://github.com/warpdotdev/cosmic-text.git", rev = "15198beba692162201c0ea8b15222cf5643ea068" }
 derivative.workspace = true
-fontdb = "0.23.0"
+fontdb = "0.24.0"
 memmap2 = "0.9.3"
 owned_ttf_parser = "0.25.0"
 resvg.workspace = true

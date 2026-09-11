@@ -14556,7 +14556,7 @@ dependencies = [
  "env_logger",
  "font-kit",
  "fontconfig",
- "fontdb 0.23.0",
+ "fontdb 0.24.0",
  "foreign-types 0.5.0",
  "futures",
  "futures-lite 1.13.0",
