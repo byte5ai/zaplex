@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.29] — 2026-09-11
+
+- Gehärtete Dependency-Policy: CI prüft den vollständigen Cargo-Deny-Vertrag und erzeugt die auslieferbare Lizenzattribution; aktualisierte Makro-, SVG- und Font-Abhängigkeiten entfernen überholte Pfade, während verbleibende Ausnahmen exakt dokumentiert und statisch abgesichert sind.
+
 ## [1.0.28] — 2026-09-11
 
 - Der Subscription-Agent wendet erkannte Modelle nur noch auf das exakt ausgewählte Konto an, überspringt Auth-Fehler anderer Konten und erlaubt frei eingegebene Remote-Verzeichnisse im laufenden Agent-Footer.

@@ -9,8 +9,8 @@ ignore = [
     { id = "RUSTSEC-2024-0384", reason = "instant is unmaintained; we should migrate to web-time." },
     { id = "RUSTSEC-2020-0077", reason = "memmap is unmaintained; we should migrate to memmap2." },
     { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; this is a dependency of metal, which we should eliminate by moving to the objc2 family of crates."},
-    { id = "RUSTSEC-2026-0192", reason = "Temporary: WarpUI's cosmic-text fork still depends on ttf-parser; the skrifa migration is tracked in #243." },
-    { id = "RUSTSEC-2026-0206", reason = "Temporary: WarpUI's cosmic-text fork still depends on rustybuzz; the harfrust migration is tracked in #243." },
+    { id = "RUSTSEC-2026-0192", reason = "Temporary and accepted by #243: the customized cosmic-text fork, rustybuzz, fontdb, and owned_ttf_parser still require ttf-parser; upstream removal is tracked at https://github.com/pop-os/cosmic-text/issues/352 and https://github.com/pop-os/cosmic-text/pull/526." },
+    { id = "RUSTSEC-2026-0206", reason = "Temporary and accepted by #243: the customized cosmic-text fork still requires rustybuzz; upstream replaced it in https://github.com/pop-os/cosmic-text/pull/417 and follow-up work continues in https://github.com/pop-os/cosmic-text/pull/513." },
 ]
 
 [licenses]
