@@ -967,12 +967,16 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
             candidates.push(RuntimeCandidate {
                 installation: installation(
                     agent,
-                    "local",
-                    "Local",
-                    format!("{}:default", provider.as_str()),
-                    "Default subscription".to_string(),
-                    None,
-                    dirs::home_dir().map(|home| home.join(default_dir)),
+                    HostIdentity {
+                        id: "local".to_string(),
+                        display_name: "Local".to_string(),
+                    },
+                    AccountIdentity {
+                        id: format!("{}:default", provider.as_str()),
+                        display_name: "Default subscription".to_string(),
+                        provider_account_id: None,
+                        config_dir: dirs::home_dir().map(|home| home.join(default_dir)),
+                    },
                     executable.clone(),
                 ),
                 location: ProcessLocation::Local,
@@ -981,12 +985,16 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
             candidates.extend(accounts.into_iter().map(|usage| RuntimeCandidate {
                 installation: installation(
                     agent,
-                    "local",
-                    "Local",
-                    usage.account.key.clone(),
-                    usage.account.label.clone(),
-                    usage.account.provider_account_id.clone(),
-                    Some(usage.account.config_dir.clone()),
+                    HostIdentity {
+                        id: "local".to_string(),
+                        display_name: "Local".to_string(),
+                    },
+                    AccountIdentity {
+                        id: usage.account.key.clone(),
+                        display_name: usage.account.label.clone(),
+                        provider_account_id: usage.account.provider_account_id.clone(),
+                        config_dir: Some(usage.account.config_dir.clone()),
+                    },
                     executable.clone(),
                 ),
                 location: ProcessLocation::Local,
@@ -1169,16 +1177,20 @@ fn remote_candidates_for_ssh(
         candidates.push(RuntimeCandidate {
             installation: installation(
                 agent,
-                host_id,
-                host_name,
-                account.account_id.clone(),
-                if account_name.is_empty() {
-                    "Remote default subscription".to_string()
-                } else {
-                    account_name.to_string()
+                HostIdentity {
+                    id: host_id.to_string(),
+                    display_name: host_name.to_string(),
                 },
-                Some(provider_account_id.to_string()),
-                None,
+                AccountIdentity {
+                    id: account.account_id.clone(),
+                    display_name: if account_name.is_empty() {
+                        "Remote default subscription".to_string()
+                    } else {
+                        account_name.to_string()
+                    },
+                    provider_account_id: Some(provider_account_id.to_string()),
+                    config_dir: None,
+                },
                 PathBuf::from(command),
             ),
             location: ProcessLocation::Remote {
@@ -1223,26 +1235,14 @@ fn agent_provider(agent: SubscriptionAgent) -> Provider {
 
 fn installation(
     agent: SubscriptionAgent,
-    host_id: &str,
-    host_name: &str,
-    account_id: String,
-    account_name: String,
-    provider_account_id: Option<String>,
-    config_dir: Option<PathBuf>,
+    host: HostIdentity,
+    account: AccountIdentity,
     executable: PathBuf,
 ) -> InstallationIdentity {
     InstallationIdentity {
         agent,
-        host: HostIdentity {
-            id: host_id.to_string(),
-            display_name: host_name.to_string(),
-        },
-        account: AccountIdentity {
-            id: account_id,
-            display_name: account_name,
-            provider_account_id,
-            config_dir,
-        },
+        host,
+        account,
         executable,
         version: String::new(),
     }

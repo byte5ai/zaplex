@@ -300,7 +300,8 @@ jobs:
         shell: bash
 
       - name: cargo test (subscription agent acceptance)
-        run: cargo test --locked -p warp --lib ai::subscription_agent::
+        run: >
+          cargo test --locked -p warp --lib ai::subscription_agent::
         shell: bash
 
       - name: cargo test (remote subscription identity compatibility)
