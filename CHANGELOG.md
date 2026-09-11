@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.22] — 2026-09-11
+
+- **Eingegrenzte Skill-Pfade:** Direkte Skill-Verweise werden vor dem Parsen kanonisiert und müssen innerhalb ihres vertrauenswürdigen Wurzelverzeichnisses bleiben; absolute Pfade, Elternsegmente und Symlink-Ausbrüche werden abgewiesen.
+
 ## [1.0.21] — 2026-09-11
 
 - **Korrekte SFTP-Breadcrumbs:** Absolute und Root-Pfade behalten ihren führenden Slash; Rerenders verwenden stabile Klickziele und navigieren exakt zum dargestellten Segment.
