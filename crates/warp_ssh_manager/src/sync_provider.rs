@@ -567,7 +567,7 @@ fn encrypt_optional(
     match value {
         None => Ok(None),
         // Empty string treated as "no password", don't upload (compatible with past behavior, avoid empty-string ciphertext pollution)
-        Some(s) if s.is_empty() => Ok(None),
+        Some("") => Ok(None),
         Some(s) => Ok(Some(secret_crypto.encrypt(s)?)),
     }
 }

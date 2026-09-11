@@ -114,7 +114,7 @@ impl SessionNameStore {
     pub(crate) fn load() -> Self {
         #[cfg(not(target_family = "wasm"))]
         {
-            return Self::load_from(session_names_file());
+            Self::load_from(session_names_file())
         }
         #[cfg(target_family = "wasm")]
         Self {

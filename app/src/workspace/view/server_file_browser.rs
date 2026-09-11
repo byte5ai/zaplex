@@ -1877,6 +1877,7 @@ impl ServerFileBrowserView {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn begin_upload_batch_impl(
         &mut self,
         client: Arc<RemoteServerClient>,
@@ -4883,7 +4884,7 @@ async fn scan_upload_conflicts(
         if !seen.insert(path.clone()) {
             continue;
         }
-        if let Some(conflict) = remote_path_conflict(client, &path).await? {
+        if let Some(conflict) = remote_path_conflict(client, path).await? {
             if conflict.kind != FileSystemEntryKind::Directory {
                 return Err(upload_type_conflict(path, "directory", conflict.kind));
             }

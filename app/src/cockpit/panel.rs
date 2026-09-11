@@ -1111,6 +1111,7 @@ impl CockpitPanel {
     /// One compact agent leaf: state glyph, provider, and optional model only.
     /// The delayed fixed-size peek retains activity/task detail without adding a
     /// task subrow or changing the tree's geometry.
+    #[allow(clippy::too_many_arguments)]
     fn render_conductor_row(
         &self,
         host_label: &str,
@@ -1224,6 +1225,7 @@ impl CockpitPanel {
         .finish()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn render_task_peek(
         title: &str,
         account: &str,
