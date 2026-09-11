@@ -13,13 +13,12 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
 from typing import Any
 
 
 SCHEMA_VERSION = 1
 GENERATOR_VERSION = 1
-FULL_OBJECT_ID = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\Z")
+OBJECT_FORMAT_LENGTHS = {"sha1": 40, "sha256": 64}
 
 
 class InventoryError(RuntimeError):
@@ -37,10 +36,26 @@ def sha256_bytes(value: bytes) -> str:
 
 
 def run_git(repo: Path, *args: str) -> bytes:
+    environment = os.environ.copy()
+    for name in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_WORK_TREE",
+    ):
+        environment.pop(name, None)
+    environment["GIT_GRAFT_FILE"] = os.devnull
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=environment,
         check=False,
     )
     if result.returncode != 0:
@@ -49,19 +64,62 @@ def run_git(repo: Path, *args: str) -> bytes:
     return result.stdout
 
 
-def require_commit(repo: Path, value: str, label: str) -> str:
-    if FULL_OBJECT_ID.fullmatch(value) is None:
-        raise InventoryError(f"{label} must be a full immutable Git object ID")
-    object_id = value.lower()
+def repository_object_format(repo: Path) -> tuple[str, int]:
+    value = run_git(repo, "rev-parse", "--show-object-format=storage").decode("ascii").strip()
+    if value not in OBJECT_FORMAT_LENGTHS:
+        raise InventoryError(f"unsupported Git object format: {value or 'empty'}")
+    return value, OBJECT_FORMAT_LENGTHS[value]
+
+
+def require_object_id(value: str, label: str, length: int) -> str:
+    if re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is None:
+        raise InventoryError(
+            f"{label} must be the full canonical {length}-character lowercase object ID"
+        )
+    return value
+
+
+def require_commit(repo: Path, value: str, label: str, oid_length: int) -> str:
+    object_id = require_object_id(value, label, oid_length)
+    canonical = (
+        run_git(repo, "rev-parse", "--verify", f"{object_id}^{{commit}}")
+        .decode("ascii")
+        .strip()
+    )
+    if canonical != object_id:
+        raise InventoryError(f"{label} is not the exact canonical commit object ID")
     object_type = run_git(repo, "cat-file", "-t", object_id).decode("ascii").strip()
     if object_type != "commit":
         raise InventoryError(f"{label} {object_id} is a {object_type}, not a commit")
     return object_id
 
 
-def verify_merge_base(repo: Path, target: str, upstream: str, expected: str) -> None:
+def git_common_directory(repo: Path) -> Path:
+    raw = run_git(repo, "rev-parse", "--git-common-dir").decode("utf-8").strip()
+    path = Path(raw)
+    return path.resolve() if path.is_absolute() else (repo / path).resolve()
+
+
+def reject_history_overrides(repo: Path) -> None:
+    replace_refs = (
+        run_git(repo, "for-each-ref", "--format=%(refname)", "refs/replace/")
+        .decode("utf-8")
+        .splitlines()
+    )
+    if replace_refs:
+        raise InventoryError(
+            f"Git replace refs are not allowed: {', '.join(sorted(replace_refs))}"
+        )
+    grafts = git_common_directory(repo) / "info" / "grafts"
+    if grafts.exists():
+        raise InventoryError(f"Git grafts are not allowed: {grafts}")
+
+
+def verify_merge_base(
+    repo: Path, target: str, upstream: str, expected: str, oid_length: int
+) -> None:
     merge_bases = sorted(
-        line
+        require_object_id(line, "computed merge-base", oid_length)
         for line in run_git(repo, "merge-base", "--all", target, upstream)
         .decode("ascii")
         .splitlines()
@@ -74,7 +132,7 @@ def verify_merge_base(repo: Path, target: str, upstream: str, expected: str) -> 
         )
 
 
-def load_tree(repo: Path, commit: str) -> list[dict[str, str]]:
+def load_tree(repo: Path, commit: str, oid_length: int) -> list[dict[str, str]]:
     raw = run_git(repo, "ls-tree", "-r", "-z", "--full-tree", commit)
     entries = []
     seen = set()
@@ -89,6 +147,7 @@ def load_tree(repo: Path, commit: str) -> list[dict[str, str]]:
             raise InventoryError(f"cannot decode ls-tree record: {record!r}") from error
         if path in seen:
             raise InventoryError(f"duplicate path in Git tree: {path}")
+        require_object_id(object_id, f"object ID for {path}", oid_length)
         seen.add(path)
         entries.append(
             {
@@ -195,15 +254,14 @@ def ownership(
     upstream: dict[str, str] | None,
     merge_base: dict[str, str] | None,
 ) -> str:
-    if merge_base is not None and merge_base["type"] == "blob":
-        if target["object_id"] == merge_base["object_id"]:
+    def identity(entry: dict[str, str]) -> tuple[str, str, str]:
+        return entry["type"], entry["mode"], entry["object_id"]
+
+    if merge_base is not None:
+        if identity(target) == identity(merge_base):
             return "upstream-unmodified"
         return "upstream-modified-by-fork"
-    if (
-        upstream is not None
-        and upstream["type"] == "blob"
-        and target["object_id"] == upstream["object_id"]
-    ):
+    if upstream is not None and identity(target) == identity(upstream):
         return "upstream-unmodified"
     return "fork-owned"
 
@@ -216,10 +274,16 @@ def build_inventory(
     scope: dict[str, Any],
     scope_sha256: str,
     max_range_lines: int,
+    object_format: str,
+    oid_length: int,
 ) -> dict[str, Any]:
-    target_tree = load_tree(repo, target_sha)
-    upstream_tree = {entry["path"]: entry for entry in load_tree(repo, upstream_sha)}
-    merge_base_tree = {entry["path"]: entry for entry in load_tree(repo, merge_base_sha)}
+    target_tree = load_tree(repo, target_sha, oid_length)
+    upstream_tree = {
+        entry["path"]: entry for entry in load_tree(repo, upstream_sha, oid_length)
+    }
+    merge_base_tree = {
+        entry["path"]: entry for entry in load_tree(repo, merge_base_sha, oid_length)
+    }
     included = []
     excluded = []
 
@@ -258,9 +322,25 @@ def build_inventory(
                 "line_count": lines,
                 "ranges": ranges,
                 "ownership": ownership(entry, upstream_entry, base_entry),
+                "merge_base_entry": (
+                    {
+                        key: base_entry[key]
+                        for key in ("mode", "type", "object_id")
+                    }
+                    if base_entry is not None
+                    else None
+                ),
                 "merge_base_blob_oid": (
                     base_entry["object_id"]
                     if base_entry is not None and base_entry["type"] == "blob"
+                    else None
+                ),
+                "upstream_entry": (
+                    {
+                        key: upstream_entry[key]
+                        for key in ("mode", "type", "object_id")
+                    }
+                    if upstream_entry is not None
                     else None
                 ),
                 "upstream_blob_oid": (
@@ -274,6 +354,7 @@ def build_inventory(
     inventory = {
         "schema_version": SCHEMA_VERSION,
         "generator_version": GENERATOR_VERSION,
+        "object_format": object_format,
         "target_sha": target_sha,
         "upstream_sha": upstream_sha,
         "merge_base_sha": merge_base_sha,
@@ -322,6 +403,7 @@ def build_manifest(
     return {
         "schema_version": SCHEMA_VERSION,
         "generator_version": GENERATOR_VERSION,
+        "object_format": inventory["object_format"],
         "target_sha": inventory["target_sha"],
         "upstream_sha": inventory["upstream_sha"],
         "merge_base_sha": inventory["merge_base_sha"],
@@ -336,19 +418,23 @@ def build_manifest(
             "complete": True,
         },
         "artifacts": {
+            "completion": "COMPLETE",
             "inventory": "inventory.json",
             "scope": "scope.resolved.json",
         },
     }
 
 
-def write_output(
-    output: Path, inventory: dict[str, Any], normalized_scope: bytes
-) -> None:
-    if output.exists():
-        raise InventoryError(f"output path already exists: {output}")
-    parent = output.parent.resolve()
-    parent.mkdir(parents=True, exist_ok=True)
+def reserve_output(output: Path) -> None:
+    try:
+        output.mkdir()
+    except FileExistsError as error:
+        raise InventoryError(f"output path already exists: {output}") from error
+
+
+def write_output(output: Path, inventory: dict[str, Any], normalized_scope: bytes) -> None:
+    output = output.parent.resolve() / output.name
+    output.parent.mkdir(parents=True, exist_ok=True)
     inventory_bytes = canonical_json(inventory)
     inventory_sha256 = sha256_bytes(inventory_bytes)
     scope_sha256 = sha256_bytes(normalized_scope)
@@ -356,23 +442,31 @@ def write_output(
     manifest_bytes = canonical_json(manifest)
     manifest_sha256 = sha256_bytes(manifest_bytes)
 
-    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=parent))
+    artifacts = {
+        "inventory.json": inventory_bytes,
+        "inventory.sha256": f"{inventory_sha256}  inventory.json\n".encode("ascii"),
+        "scope.resolved.json": normalized_scope,
+        "manifest.json": manifest_bytes,
+        "manifest.sha256": f"{manifest_sha256}  manifest.json\n".encode("ascii"),
+    }
+    reserve_output(output)
     try:
-        (staging / "inventory.json").write_bytes(inventory_bytes)
-        (staging / "inventory.sha256").write_text(
-            f"{inventory_sha256}  inventory.json\n", encoding="ascii"
-        )
-        (staging / "scope.resolved.json").write_bytes(normalized_scope)
-        (staging / "manifest.json").write_bytes(manifest_bytes)
-        (staging / "manifest.sha256").write_text(
-            f"{manifest_sha256}  manifest.json\n", encoding="ascii"
-        )
-        os.replace(staging, output)
-    except BaseException:
-        for child in staging.iterdir():
-            child.unlink()
-        staging.rmdir()
-        raise
+        for name, contents in artifacts.items():
+            with (output / name).open("xb") as artifact:
+                artifact.write(contents)
+                artifact.flush()
+                os.fsync(artifact.fileno())
+        completion_temporary = output / ".COMPLETE.tmp"
+        with completion_temporary.open("xb") as completion:
+            completion.write(f"{manifest_sha256}  manifest.json\n".encode("ascii"))
+            completion.flush()
+            os.fsync(completion.fileno())
+        os.link(completion_temporary, output / "COMPLETE")
+        completion_temporary.unlink()
+    except BaseException as error:
+        raise InventoryError(
+            f"output reservation is incomplete and was left in place: {output}"
+        ) from error
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -391,10 +485,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         repo = args.repo.resolve()
-        target_sha = require_commit(repo, args.target_sha, "target-sha")
-        upstream_sha = require_commit(repo, args.upstream_sha, "upstream-sha")
-        merge_base_sha = require_commit(repo, args.merge_base_sha, "merge-base-sha")
-        verify_merge_base(repo, target_sha, upstream_sha, merge_base_sha)
+        reject_history_overrides(repo)
+        object_format, oid_length = repository_object_format(repo)
+        target_sha = require_commit(repo, args.target_sha, "target-sha", oid_length)
+        upstream_sha = require_commit(repo, args.upstream_sha, "upstream-sha", oid_length)
+        merge_base_sha = require_commit(
+            repo, args.merge_base_sha, "merge-base-sha", oid_length
+        )
+        verify_merge_base(repo, target_sha, upstream_sha, merge_base_sha, oid_length)
         scope, normalized_scope = load_scope(args.scope)
         scope_sha256 = sha256_bytes(normalized_scope)
         inventory = build_inventory(
@@ -405,6 +503,8 @@ def main(argv: list[str] | None = None) -> int:
             scope,
             scope_sha256,
             args.max_range_lines,
+            object_format,
+            oid_length,
         )
         write_output(args.output, inventory, normalized_scope)
     except InventoryError as error:

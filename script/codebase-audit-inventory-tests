@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -12,7 +13,9 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parent / "generate-codebase-audit-inventory"
@@ -36,6 +39,8 @@ class CodebaseAuditInventoryTest(unittest.TestCase):
 
         self.write("src/code.rs", b"base\n")
         self.write("README.md", b"stable\n")
+        self.write("script/tool", b"#!/bin/sh\nexit 0\n")
+        (self.repo / "script/tool").chmod(0o644)
         self.git("add", ".")
         self.git("commit", "-q", "-m", "base")
         self.merge_base_sha = self.rev_parse("HEAD")
@@ -50,6 +55,7 @@ class CodebaseAuditInventoryTest(unittest.TestCase):
         self.write("src/code.rs", b"one\ntwo\nthree")
         self.write("src/target-only.rs", b"")
         self.write("assets/image.png", b"\x89PNG\x00binary")
+        (self.repo / "script/tool").chmod(0o755)
         self.git("add", ".")
         self.git("commit", "-q", "-m", "target")
         self.target_sha = self.rev_parse("HEAD")
@@ -140,6 +146,10 @@ class CodebaseAuditInventoryTest(unittest.TestCase):
         self.assertEqual(by_path["README.md"]["ownership"], "upstream-unmodified")
         self.assertEqual(by_path["src/target-only.rs"]["ownership"], "fork-owned")
         self.assertEqual(by_path["src/target-only.rs"]["ranges"], [])
+        tool = by_path["script/tool"]
+        self.assertEqual(tool["blob_oid"], tool["merge_base_blob_oid"])
+        self.assertNotEqual(tool["mode"], tool["merge_base_entry"]["mode"])
+        self.assertEqual(tool["ownership"], "upstream-modified-by-fork")
         self.assertEqual(
             [entry["path"] for entry in inventory["excluded"]], ["assets/image.png"]
         )
@@ -152,6 +162,7 @@ class CodebaseAuditInventoryTest(unittest.TestCase):
             result = self.run_generator(output)
             self.assertEqual(result.returncode, 0, result.stderr)
         for name in (
+            "COMPLETE",
             "inventory.json",
             "inventory.sha256",
             "manifest.json",
@@ -165,9 +176,14 @@ class CodebaseAuditInventoryTest(unittest.TestCase):
         self.assertEqual(manifest["target_sha"], self.target_sha)
         self.assertEqual(manifest["upstream_sha"], self.upstream_sha)
         self.assertEqual(manifest["merge_base_sha"], self.merge_base_sha)
+        self.assertEqual(manifest["object_format"], "sha1")
         self.assertEqual(manifest["inventory_sha256"], hashlib.sha256(inventory_bytes).hexdigest())
         self.assertTrue(manifest["coverage"]["complete"])
-        self.assertEqual(manifest["coverage"]["tracked_entries"], 4)
+        self.assertEqual(manifest["coverage"]["tracked_entries"], 5)
+        self.assertEqual(
+            (first / "COMPLETE").read_text(),
+            (first / "manifest.sha256").read_text(),
+        )
         repeated = self.run_generator(first)
         self.assertNotEqual(repeated.returncode, 0)
         self.assertIn("output path already exists", repeated.stderr)
@@ -192,7 +208,12 @@ class CodebaseAuditInventoryTest(unittest.TestCase):
         ]
         symbolic = subprocess.run(command, text=True, capture_output=True, check=False)
         self.assertNotEqual(symbolic.returncode, 0)
-        self.assertIn("full immutable Git object ID", symbolic.stderr)
+        self.assertIn("full canonical 40-character lowercase object ID", symbolic.stderr)
+
+        command[command.index("target")] = self.target_sha.upper()
+        uppercase = subprocess.run(command, text=True, capture_output=True, check=False)
+        self.assertNotEqual(uppercase.returncode, 0)
+        self.assertIn("full canonical 40-character lowercase object ID", uppercase.stderr)
 
         wrong = self.run_generator(self.root / "wrong-base", "--merge-base-sha", self.target_sha)
         self.assertNotEqual(wrong.returncode, 0)
@@ -239,6 +260,7 @@ class CodebaseAuditInventoryTest(unittest.TestCase):
                     INVENTORY.validate_ranges("file.rs", 4, ranges)
 
     def test_inventory_validator_rejects_missing_and_duplicate_paths(self):
+        object_format, oid_length = INVENTORY.repository_object_format(self.repo)
         scope, normalized = INVENTORY.load_scope(self.scope)
         inventory = INVENTORY.build_inventory(
             self.repo,
@@ -248,8 +270,10 @@ class CodebaseAuditInventoryTest(unittest.TestCase):
             scope,
             INVENTORY.sha256_bytes(normalized),
             2,
+            object_format,
+            oid_length,
         )
-        target_tree = INVENTORY.load_tree(self.repo, self.target_sha)
+        target_tree = INVENTORY.load_tree(self.repo, self.target_sha, oid_length)
 
         missing = json.loads(json.dumps(inventory))
         missing["included"].pop()
@@ -260,6 +284,162 @@ class CodebaseAuditInventoryTest(unittest.TestCase):
         duplicate["excluded"].append(dict(duplicate["included"][0]))
         with self.assertRaisesRegex(INVENTORY.InventoryError, "more than once"):
             INVENTORY.validate_inventory(duplicate, target_tree)
+
+    def test_replace_refs_and_grafts_fail_closed(self):
+        original_blob = self.rev_parse(f"{self.target_sha}:src/code.rs")
+        self.git("replace", self.target_sha, self.upstream_sha)
+        replacement_safe_blob = (
+            INVENTORY.run_git(self.repo, "rev-parse", f"{self.target_sha}:src/code.rs")
+            .decode("ascii")
+            .strip()
+        )
+        self.assertEqual(replacement_safe_blob, original_blob)
+
+        replaced = self.run_generator(self.root / "replace-ref")
+        self.assertNotEqual(replaced.returncode, 0)
+        self.assertIn("Git replace refs are not allowed", replaced.stderr)
+        self.git("replace", "-d", self.target_sha)
+
+        grafts = self.repo / ".git/info/grafts"
+        grafts.write_text(f"{self.target_sha} {self.upstream_sha}\n", encoding="ascii")
+        graft_safe_base = (
+            INVENTORY.run_git(
+                self.repo, "merge-base", self.target_sha, self.upstream_sha
+            )
+            .decode("ascii")
+            .strip()
+        )
+        self.assertEqual(graft_safe_base, self.merge_base_sha)
+        grafted = self.run_generator(self.root / "grafts")
+        self.assertNotEqual(grafted.returncode, 0)
+        self.assertIn("Git grafts are not allowed", grafted.stderr)
+
+    def test_sha256_repository_when_supported(self):
+        repo = self.root / "sha256-repo"
+        init = subprocess.run(
+            ["git", "init", "-q", "--object-format=sha256", str(repo)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if init.returncode != 0:
+            self.skipTest("installed Git does not support SHA-256 repositories")
+
+        def git(*args):
+            result = subprocess.run(
+                ["git", "-C", str(repo), *args],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.strip()
+
+        git("config", "user.name", "Inventory Test")
+        git("config", "user.email", "inventory@example.invalid")
+        (repo / "file.rs").write_text("base\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-q", "-m", "base")
+        merge_base = git("rev-parse", "HEAD")
+        git("checkout", "-q", "-b", "upstream")
+        (repo / "upstream.rs").write_text("upstream\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-q", "-m", "upstream")
+        upstream = git("rev-parse", "HEAD")
+        git("checkout", "-q", "-b", "target", merge_base)
+        (repo / "file.rs").write_text("target\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-q", "-m", "target")
+        target = git("rev-parse", "HEAD")
+
+        output = self.root / "sha256-output"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--repo",
+                str(repo),
+                "--target-sha",
+                target,
+                "--upstream-sha",
+                upstream,
+                "--merge-base-sha",
+                merge_base,
+                "--scope",
+                str(self.scope),
+                "--output",
+                str(output),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads((output / "manifest.json").read_text())
+        inventory = json.loads((output / "inventory.json").read_text())
+        self.assertEqual(manifest["object_format"], "sha256")
+        self.assertEqual(len(manifest["target_sha"]), 64)
+        self.assertTrue(all(len(entry["blob_oid"]) == 64 for entry in inventory["included"]))
+
+        command = list(result.args)
+        command[command.index(target)] = target[:40]
+        command[command.index(str(output))] = str(self.root / "sha256-short")
+        short = subprocess.run(command, text=True, capture_output=True, check=False)
+        self.assertNotEqual(short.returncode, 0)
+        self.assertIn("full canonical 64-character lowercase object ID", short.stderr)
+
+    def test_output_reservation_is_atomic_under_a_reproducible_race(self):
+        object_format, oid_length = INVENTORY.repository_object_format(self.repo)
+        scope, normalized = INVENTORY.load_scope(self.scope)
+        inventory = INVENTORY.build_inventory(
+            self.repo,
+            self.target_sha,
+            self.upstream_sha,
+            self.merge_base_sha,
+            scope,
+            INVENTORY.sha256_bytes(normalized),
+            2,
+            object_format,
+            oid_length,
+        )
+        output = self.root / "race-output"
+        barrier = threading.Barrier(2)
+        original_reserve = INVENTORY.reserve_output
+
+        def synchronized_reserve(path):
+            barrier.wait(timeout=5)
+            original_reserve(path)
+
+        def writer():
+            try:
+                INVENTORY.write_output(output, inventory, normalized)
+                return "written"
+            except INVENTORY.InventoryError as error:
+                return str(error)
+
+        with mock.patch.object(INVENTORY, "reserve_output", synchronized_reserve):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(lambda _: writer(), range(2)))
+
+        self.assertEqual(results.count("written"), 1, results)
+        self.assertEqual(
+            sum("output path already exists" in result for result in results), 1, results
+        )
+        self.assertTrue((output / "COMPLETE").is_file())
+        self.assertFalse((output / ".COMPLETE.tmp").exists())
+        self.assertEqual(
+            hashlib.sha256((output / "inventory.json").read_bytes()).hexdigest(),
+            json.loads((output / "manifest.json").read_text())["inventory_sha256"],
+        )
+
+        symlink_output = self.root / "reserved-symlink"
+        symlink_target = self.root / "must-not-be-created"
+        symlink_output.symlink_to(symlink_target, target_is_directory=True)
+        with self.assertRaisesRegex(INVENTORY.InventoryError, "already exists"):
+            INVENTORY.write_output(symlink_output, inventory, normalized)
+        self.assertFalse(symlink_target.exists())
 
 
 if __name__ == "__main__":
