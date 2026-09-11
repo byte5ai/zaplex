@@ -59,3 +59,16 @@ fn only_states_with_native_session_can_resume() {
         false
     );
 }
+
+#[test]
+fn stored_account_identity_without_provider_id_remains_readable() {
+    let identity: AccountIdentity = serde_json::from_value(serde_json::json!({
+        "id": "codex:default",
+        "display_name": "developer@example.com",
+        "config_dir": "/accounts/codex"
+    }))
+    .unwrap();
+
+    assert_eq!(identity.id, "codex:default");
+    assert_eq!(identity.provider_account_id, None);
+}

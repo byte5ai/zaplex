@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use dashmap::DashMap;
@@ -139,6 +139,11 @@ pub struct RemoteServerClient {
     /// `send_request` after inserting into `pending_requests` to avoid hanging
     /// on a dead connection.
     disconnected: Arc<AtomicBool>,
+
+    /// Latest path-free account inventory returned by this exact connection.
+    /// A newly connected client starts empty, so cached identities can never
+    /// leak across daemon reconnects or hosts.
+    agent_account_inventory: RwLock<Option<AgentAccountInventory>>,
 }
 
 impl fmt::Debug for RemoteServerClient {
@@ -215,6 +220,7 @@ impl RemoteServerClient {
                 outbound_tx,
                 pending_requests,
                 disconnected,
+                agent_account_inventory: RwLock::new(None),
             },
             event_rx,
         )
@@ -1061,12 +1067,27 @@ impl RemoteServerClient {
         };
         let response = self.send_request(request_id, msg).await?;
         match response.message {
-            Some(server_message::Message::AgentAccountInventory(response)) => Ok(response),
+            Some(server_message::Message::AgentAccountInventory(response)) => {
+                *self
+                    .agent_account_inventory
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(response.clone());
+                Ok(response)
+            }
             other => {
                 log::error!("Unexpected response variant for ListAgentAccounts: {other:?}");
                 Err(ClientError::UnexpectedResponse)
             }
         }
+    }
+
+    /// Returns the latest account inventory fetched over this exact live
+    /// connection. `None` means no successful inventory request has completed.
+    pub fn cached_agent_accounts(&self) -> Option<AgentAccountInventory> {
+        self.agent_account_inventory
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Reads a bounded transcript snapshot from the daemon that owns the

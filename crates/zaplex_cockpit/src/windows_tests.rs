@@ -31,6 +31,7 @@ fn acct() -> Account {
         key: "claude:default".into(),
         config_dir: "/tmp/x".into(),
         label: "test".into(),
+        provider_account_id: None,
         email: None,
         org: None,
         role: None,

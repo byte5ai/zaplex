@@ -91,6 +91,7 @@ fn account_from_root(
         .get("tokens")
         .and_then(|tokens| tokens.get("account_id"))
         .and_then(Value::as_str)
+        .map(str::trim)
         .filter(|id| !id.is_empty())
         .map(str::to_string);
 
@@ -122,6 +123,7 @@ fn account_from_root(
             key: account_key(codex_home, home, is_default),
             config_dir: codex_home.to_path_buf(),
             label,
+            provider_account_id: account_id.clone(),
             email,
             org: None,
             role: None,

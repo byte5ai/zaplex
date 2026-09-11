@@ -35,8 +35,13 @@ pub(crate) struct HostIdentity {
 /// Account identity reported by the CLI, coupled to its isolated config directory.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub(crate) struct AccountIdentity {
+    /// Host-local routing identity, normally the cockpit account key.
     pub(crate) id: String,
     pub(crate) display_name: String,
+    /// Provider-issued identity used to verify the account selected by the
+    /// account-scoped CLI configuration before a turn can start.
+    #[serde(default)]
+    pub(crate) provider_account_id: Option<String>,
     pub(crate) config_dir: Option<PathBuf>,
 }
 

@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use warpui::{AppContext, SingletonEntity};
 use zaplex_cockpit::{AccountUsage, Provider};
+use zaplex_remote_session::types::{has_feature, FEATURE_AGENT_ACCOUNT_ROUTING_V1};
 
 #[derive(Clone)]
 struct RuntimeCandidate {
@@ -27,8 +28,63 @@ struct RuntimeCandidate {
     location: ProcessLocation,
 }
 
+#[derive(Clone)]
+enum RuntimeCandidates {
+    Ready(Vec<RuntimeCandidate>),
+    Remote {
+        client: Arc<crate::remote_server::client::RemoteServerClient>,
+        host_id: String,
+        host_name: String,
+        ssh_argv: Vec<String>,
+        use_cached_inventory: bool,
+    },
+}
+
+impl RuntimeCandidates {
+    fn is_known_empty(&self) -> bool {
+        matches!(self, Self::Ready(candidates) if candidates.is_empty())
+    }
+
+    async fn resolve(
+        self,
+        preferred_agent: Option<SubscriptionAgent>,
+    ) -> Result<Vec<RuntimeCandidate>> {
+        match self {
+            Self::Ready(candidates) => Ok(candidates),
+            Self::Remote {
+                client,
+                host_id,
+                host_name,
+                ssh_argv,
+                use_cached_inventory,
+            } => {
+                let inventory =
+                    if use_cached_inventory {
+                        match client.cached_agent_accounts() {
+                            Some(inventory) => inventory,
+                            None => client.list_agent_accounts().await.context(
+                                "failed to read the remote subscription-account inventory",
+                            )?,
+                        }
+                    } else {
+                        client.list_agent_accounts().await.context(
+                            "failed to refresh the remote subscription-account inventory",
+                        )?
+                    };
+                remote_candidates_for_ssh(
+                    &host_id,
+                    &host_name,
+                    ssh_argv,
+                    &inventory,
+                    preferred_agent,
+                )
+            }
+        }
+    }
+}
+
 pub(crate) struct SubscriptionDispatch {
-    candidates: Vec<RuntimeCandidate>,
+    candidates: RuntimeCandidates,
     preferences: RoutePreferences,
     registry: SubscriptionSessionRegistry,
     conversation_id: String,
@@ -39,7 +95,7 @@ pub(crate) struct SubscriptionDispatch {
 }
 
 pub(crate) struct SubscriptionPreflight {
-    candidates: Vec<RuntimeCandidate>,
+    candidates: RuntimeCandidates,
     preferences: RoutePreferences,
     registry: SubscriptionSessionRegistry,
     conversation_id: String,
@@ -49,8 +105,9 @@ pub(crate) struct SubscriptionPreflight {
 fn runtime_candidates(
     session_context: &SessionContext,
     registry: &SubscriptionSessionRegistry,
+    use_cached_remote_inventory: bool,
     ctx: &AppContext,
-) -> Result<(Vec<RuntimeCandidate>, RoutePreferences, PathBuf)> {
+) -> Result<(RuntimeCandidates, RoutePreferences, PathBuf)> {
     let working_directory = if session_context.is_legacy_ssh() {
         // A legacy SSH session has no remote shell hook, so its reported cwd
         // belongs to the local client. Start the remote CLI in its login cwd.
@@ -65,16 +122,16 @@ fn runtime_candidates(
     };
     let mut preferences = registry.preferences();
     let candidates = match session_context.host_id() {
-        Some(host_id) => remote_candidates(host_id.as_str(), ctx)?,
-        None if session_context.is_legacy_ssh() => legacy_ssh_candidates(
+        Some(host_id) => remote_candidates(host_id.as_str(), use_cached_remote_inventory, ctx)?,
+        None if session_context.is_legacy_ssh() => RuntimeCandidates::Ready(legacy_ssh_candidates(
             session_context
                 .ssh_connection_info()
                 .context("the active SSH session has no reusable connection details")?,
-        )?,
+        )?),
         None if session_context.is_remote() => {
             bail!("the active remote host is not connected; reconnect it and try again")
         }
-        None => local_candidates(&mut preferences, ctx),
+        None => RuntimeCandidates::Ready(local_candidates(&mut preferences, ctx)),
     };
     Ok((candidates, preferences, working_directory))
 }
@@ -87,7 +144,7 @@ pub(crate) fn subscription_preflight_info(
     let registry = SubscriptionSessionRegistry::as_ref(ctx).clone();
     registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Starting);
     let (candidates, preferences, working_directory) =
-        match runtime_candidates(session_context, &registry, ctx) {
+        match runtime_candidates(session_context, &registry, false, ctx) {
             Ok(runtime) => runtime,
             Err(error) => {
                 registry.set_lifecycle(
@@ -100,7 +157,7 @@ pub(crate) fn subscription_preflight_info(
                 return Err(error);
             }
         };
-    if candidates.is_empty() {
+    if candidates.is_known_empty() {
         registry.set_lifecycle(conversation_id, AgentLifecycle::NoAgentInstalled);
         bail!("Install Claude Code or Codex and sign in with a subscription account");
     }
@@ -130,8 +187,8 @@ pub(crate) fn subscription_dispatch_info(
     let prompt = prompt_from_inputs(&params.input)?;
     let registry = SubscriptionSessionRegistry::as_ref(ctx).clone();
     let (candidates, preferences, working_directory) =
-        runtime_candidates(&params.session_context, &registry, ctx)?;
-    if candidates.is_empty() {
+        runtime_candidates(&params.session_context, &registry, true, ctx)?;
+    if candidates.is_known_empty() {
         registry.set_lifecycle(
             conversation_id_string.clone(),
             AgentLifecycle::NoAgentInstalled,
@@ -156,6 +213,8 @@ fn is_authentication_failure(message: &str) -> bool {
         || message.contains("not logged in")
         || message.contains("please run /login")
         || message.contains("not using a chatgpt subscription account")
+        || message.contains("authenticated account does not match selected account")
+        || message.contains("did not report an account id for selected account")
 }
 
 fn discovery_failure_lifecycle(
@@ -204,8 +263,34 @@ fn subscription_api_error(error: anyhow::Error) -> AIApiError {
     AIApiError::Other(classify_subscription_error(error))
 }
 
+async fn resolve_runtime_candidates(
+    candidates: RuntimeCandidates,
+    preferences: &RoutePreferences,
+    registry: &SubscriptionSessionRegistry,
+    conversation_id: &str,
+) -> Result<Vec<RuntimeCandidate>> {
+    let candidates = match candidates.resolve(preferences.agent).await {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            registry.set_lifecycle(
+                conversation_id.to_string(),
+                recoverable_lifecycle(registry, conversation_id, error.to_string()),
+            );
+            return Err(error);
+        }
+    };
+    if candidates.is_empty() {
+        registry.set_lifecycle(
+            conversation_id.to_string(),
+            AgentLifecycle::NoAgentInstalled,
+        );
+        bail!("Install Claude Code or Codex and sign in with a subscription account");
+    }
+    Ok(candidates)
+}
+
 async fn discover_routed_target(
-    candidates: Vec<RuntimeCandidate>,
+    candidates: &[RuntimeCandidate],
     preferences: &RoutePreferences,
     registry: &SubscriptionSessionRegistry,
     conversation_id: &str,
@@ -225,7 +310,7 @@ async fn discover_routed_target(
     for candidate in candidates {
         let agent = candidate.installation.agent;
         let account_id = candidate.installation.account.id.clone();
-        match discover_candidate(candidate, working_directory).await {
+        match discover_candidate(candidate.clone(), working_directory).await {
             Ok(capability) => capabilities.push(capability),
             Err(error) => discovery_errors.push((agent, account_id, error.to_string())),
         }
@@ -338,8 +423,10 @@ pub(crate) async fn preflight_subscription_target(preflight: SubscriptionPreflig
         conversation_id,
         working_directory,
     } = preflight;
+    let candidates =
+        resolve_runtime_candidates(candidates, &preferences, &registry, &conversation_id).await?;
     let target = discover_routed_target(
-        candidates,
+        &candidates,
         &preferences,
         &registry,
         &conversation_id,
@@ -366,7 +453,10 @@ pub(crate) async fn generate_subscription_output(
         prompt,
         working_directory,
     } = dispatch;
-    let candidate_locations = candidates.clone();
+    let candidates =
+        resolve_runtime_candidates(candidates, &preferences, &registry, &conversation_id)
+            .await
+            .map_err(api::ConvertToAPITypeError::Other)?;
     let preflight_target = registry
         .lifecycle(&conversation_id)
         .filter(AgentLifecycle::accepts_prompt)
@@ -375,7 +465,7 @@ pub(crate) async fn generate_subscription_output(
     let target = match preflight_target {
         Some(target) => target,
         None => discover_routed_target(
-            candidates,
+            &candidates,
             &preferences,
             &registry,
             &conversation_id,
@@ -389,7 +479,7 @@ pub(crate) async fn generate_subscription_output(
     let resume = registry
         .get(&conversation_id)
         .and_then(|stored| same_resume_target(&stored.target, &target).then_some(stored.session));
-    let location = location_for_target(&target, &candidate_locations)
+    let location = location_for_target(&target, &candidates)
         .context("selected subscription target lost its process location")
         .map_err(api::ConvertToAPITypeError::Other)?;
     let mut session = match with_timeout(
@@ -749,11 +839,16 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
             candidates.push(RuntimeCandidate {
                 installation: installation(
                     agent,
-                    "local",
-                    "Local",
-                    format!("{}:default", provider.as_str()),
-                    "Default subscription".to_string(),
-                    dirs::home_dir().map(|home| home.join(default_dir)),
+                    HostIdentity {
+                        id: "local".to_string(),
+                        display_name: "Local".to_string(),
+                    },
+                    AccountIdentity {
+                        id: format!("{}:default", provider.as_str()),
+                        display_name: "Default subscription".to_string(),
+                        provider_account_id: None,
+                        config_dir: dirs::home_dir().map(|home| home.join(default_dir)),
+                    },
                     executable.clone(),
                 ),
                 location: ProcessLocation::Local,
@@ -762,11 +857,16 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
             candidates.extend(accounts.into_iter().map(|usage| RuntimeCandidate {
                 installation: installation(
                     agent,
-                    "local",
-                    "Local",
-                    usage.account.key.clone(),
-                    usage.account.label.clone(),
-                    Some(usage.account.config_dir.clone()),
+                    HostIdentity {
+                        id: "local".to_string(),
+                        display_name: "Local".to_string(),
+                    },
+                    AccountIdentity {
+                        id: usage.account.key.clone(),
+                        display_name: usage.account.label.clone(),
+                        provider_account_id: usage.account.provider_account_id.clone(),
+                        config_dir: Some(usage.account.config_dir.clone()),
+                    },
                     executable.clone(),
                 ),
                 location: ProcessLocation::Local,
@@ -816,14 +916,22 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
     candidates
 }
 
-fn remote_candidates(host_id: &str, ctx: &AppContext) -> Result<Vec<RuntimeCandidate>> {
+fn remote_candidates(
+    host_id: &str,
+    use_cached_inventory: bool,
+    ctx: &AppContext,
+) -> Result<RuntimeCandidates> {
     let daemon = RemoteServerManager::as_ref(ctx)
         .connected_daemons()
         .into_iter()
         .find(|daemon| daemon.host_id == host_id)
         .with_context(|| format!("remote host {host_id} is not connected"))?;
+    if !has_feature(&daemon.features, FEATURE_AGENT_ACCOUNT_ROUTING_V1) {
+        bail!("remote host cannot verify subscription account identity; update its Zaplex daemon");
+    }
     let node_id = daemon
         .registry_node_id
+        .clone()
         .context("remote host has no SSH registry identity")?;
     let connection = warp_ssh_manager::with_conn(|database| {
         let connection =
@@ -831,70 +939,128 @@ fn remote_candidates(host_id: &str, ctx: &AppContext) -> Result<Vec<RuntimeCandi
                 .ok_or_else(|| warp_ssh_manager::SshRepositoryError::NotFound(node_id.clone()))?;
         Ok(connection)
     })?;
-    Ok(remote_candidates_for_resolved_ssh(
-        host_id,
-        &daemon.host_label,
-        &connection,
-    ))
+    Ok(RuntimeCandidates::Remote {
+        client: daemon.client,
+        host_id: host_id.to_string(),
+        host_name: daemon.host_label,
+        ssh_argv: warp_ssh_manager::ssh_command::build_ssh_args(&connection.server),
+        use_cached_inventory,
+    })
 }
 
+#[cfg(test)]
 fn remote_candidates_for_resolved_ssh(
     host_id: &str,
     host_label: &str,
     connection: &warp_ssh_manager::ResolvedSshConnection,
-) -> Vec<RuntimeCandidate> {
+    inventory: &crate::remote_server::proto::AgentAccountInventory,
+) -> Result<Vec<RuntimeCandidate>> {
     remote_candidates_for_ssh(
         host_id,
         host_label,
         warp_ssh_manager::ssh_command::build_ssh_args(&connection.server),
+        inventory,
+        None,
     )
 }
 
 fn legacy_ssh_candidates(connection: &InteractiveSshCommand) -> Result<Vec<RuntimeCandidate>> {
-    let host = connection
+    connection
         .host
         .as_deref()
         .filter(|host| !host.is_empty())
         .context("the active SSH session has no reusable host")?;
-    let mut ssh_argv = vec![
-        "ssh".to_string(),
-        "-o".to_string(),
-        "StrictHostKeyChecking=ask".to_string(),
-    ];
-    if let Some(port) = connection.port.as_deref().filter(|port| !port.is_empty()) {
-        ssh_argv.extend(["-p".to_string(), port.to_string()]);
-    }
-    ssh_argv.extend(["--".to_string(), host.to_string()]);
-    let host_id = format!(
-        "legacy-ssh:{host}:{}",
-        connection.port.as_deref().unwrap_or("22")
-    );
-
-    Ok(remote_candidates_for_ssh(&host_id, host, ssh_argv))
+    bail!(
+        "subscription agents on legacy SSH cannot verify the selected remote account; reconnect this host with the Zaplex remote daemon"
+    )
 }
 
 fn remote_candidates_for_ssh(
     host_id: &str,
     host_name: &str,
     ssh_argv: Vec<String>,
-) -> Vec<RuntimeCandidate> {
-    local_agent_specs()
-        .into_iter()
-        .map(|(agent, provider, command, _)| RuntimeCandidate {
+    inventory: &crate::remote_server::proto::AgentAccountInventory,
+    preferred_agent: Option<SubscriptionAgent>,
+) -> Result<Vec<RuntimeCandidate>> {
+    if inventory.schema_version != 1 {
+        bail!("remote host returned an unsupported subscription-account inventory");
+    }
+    if inventory.health != "loaded" {
+        bail!("remote subscription-account discovery is incomplete; refresh the host and retry");
+    }
+
+    let mut candidates = Vec::new();
+    let mut has_unverifiable_default = false;
+    for (agent, provider, command, _) in local_agent_specs() {
+        let mut matching = inventory.accounts.iter().filter(|account| {
+            account.provider == provider.as_str()
+                && account.is_default
+                && account.health == "loaded"
+        });
+        let Some(account) = matching.next() else {
+            if preferred_agent == Some(agent) {
+                bail!(
+                    "the selected {} subscription account is unavailable on remote host {host_name}",
+                    agent.display_name()
+                );
+            }
+            continue;
+        };
+        if matching.next().is_some() || account.account_id.trim().is_empty() {
+            bail!(
+                "remote host {host_name} returned an ambiguous {} subscription account",
+                agent.display_name()
+            );
+        }
+        let Some(provider_account_id) = account
+            .provider_account_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+        else {
+            if preferred_agent == Some(agent) {
+                bail!(
+                    "remote host cannot verify the selected {} subscription account; update its Zaplex daemon or refresh that CLI login",
+                    agent.display_name()
+                );
+            }
+            has_unverifiable_default = true;
+            continue;
+        };
+        let account_name = if account.display_label.trim().is_empty() {
+            account.email.trim()
+        } else {
+            account.display_label.trim()
+        };
+        candidates.push(RuntimeCandidate {
             installation: installation(
                 agent,
-                host_id,
-                host_name,
-                format!("{}:remote-default:{host_id}", provider.as_str()),
-                "Remote default subscription".to_string(),
-                None,
+                HostIdentity {
+                    id: host_id.to_string(),
+                    display_name: host_name.to_string(),
+                },
+                AccountIdentity {
+                    id: account.account_id.clone(),
+                    display_name: if account_name.is_empty() {
+                        "Remote default subscription".to_string()
+                    } else {
+                        account_name.to_string()
+                    },
+                    provider_account_id: Some(provider_account_id.to_string()),
+                    config_dir: None,
+                },
                 PathBuf::from(command),
             ),
             location: ProcessLocation::Remote {
                 ssh_argv: ssh_argv.clone(),
             },
-        })
-        .collect()
+        });
+    }
+    if candidates.is_empty() && has_unverifiable_default {
+        bail!(
+            "remote host cannot verify its subscription account identity; update its Zaplex daemon or refresh the CLI login"
+        );
+    }
+    Ok(candidates)
 }
 
 fn local_agent_specs() -> [(SubscriptionAgent, Provider, &'static str, &'static str); 2] {
@@ -926,24 +1092,14 @@ fn agent_provider(agent: SubscriptionAgent) -> Provider {
 
 fn installation(
     agent: SubscriptionAgent,
-    host_id: &str,
-    host_name: &str,
-    account_id: String,
-    account_name: String,
-    config_dir: Option<PathBuf>,
+    host: HostIdentity,
+    account: AccountIdentity,
     executable: PathBuf,
 ) -> InstallationIdentity {
     InstallationIdentity {
         agent,
-        host: HostIdentity {
-            id: host_id.to_string(),
-            display_name: host_name.to_string(),
-        },
-        account: AccountIdentity {
-            id: account_id,
-            display_name: account_name,
-            config_dir,
-        },
+        host,
+        account,
         executable,
         version: String::new(),
     }

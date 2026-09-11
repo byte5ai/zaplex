@@ -53,6 +53,7 @@ fn account(
             key: key.to_string(),
             config_dir: config_dir.into(),
             label: label.to_string(),
+            provider_account_id: None,
             email: Some(email.to_string()),
             org: None,
             role: None,

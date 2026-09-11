@@ -1,10 +1,11 @@
 use prost::Message;
 
 use crate::proto::{
-    client_message, server_message, AgentSessionInfo, AgentTaskItem, BindAgentPty, ClientMessage,
-    Initialize, InitializeResponse, ManagedLaunch, ManagedSessionExitInfo, ManagedSessionInfo,
-    MemoryMeasurement, MemoryMeasurementStatus, MultiplexerKind, MultiplexerSessionInfo,
-    MultiplexerSessionList, OpenSession, ServerMessage, SessionInfo, SessionList, SessionSize,
+    client_message, server_message, AgentAccountInfo, AgentSessionInfo, AgentTaskItem,
+    BindAgentPty, ClientMessage, Initialize, InitializeResponse, ManagedLaunch,
+    ManagedSessionExitInfo, ManagedSessionInfo, MemoryMeasurement, MemoryMeasurementStatus,
+    MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList, OpenSession, ServerMessage,
+    SessionInfo, SessionList, SessionSize,
 };
 
 use super::*;
@@ -147,6 +148,14 @@ struct LegacyAgentSessionInfo {
 }
 
 #[derive(Clone, PartialEq, Message)]
+struct LegacyAgentAccountInfo {
+    #[prost(string, tag = "1")]
+    provider: String,
+    #[prost(string, tag = "2")]
+    account_id: String,
+}
+
+#[derive(Clone, PartialEq, Message)]
 struct LegacyServerEnvelope {
     #[prost(string, tag = "1")]
     request_id: String,
@@ -200,6 +209,35 @@ fn older_client_schema_ignores_new_bind_host_identity() {
 
     assert_eq!(legacy.pty_session_id, "pty-7");
     assert_eq!(legacy.pty_session_generation, 42);
+}
+
+#[test]
+fn older_client_ignores_provider_account_identity() {
+    let current = AgentAccountInfo {
+        provider: "codex".to_string(),
+        account_id: "daemon-opaque-route".to_string(),
+        provider_account_id: Some("provider-account-42".to_string()),
+        ..Default::default()
+    };
+
+    let legacy = LegacyAgentAccountInfo::decode(current.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(legacy.provider, "codex");
+    assert_eq!(legacy.account_id, "daemon-opaque-route");
+}
+
+#[test]
+fn newer_client_decodes_missing_provider_account_identity_as_none() {
+    let legacy = LegacyAgentAccountInfo {
+        provider: "claude".to_string(),
+        account_id: "daemon-opaque-route".to_string(),
+    };
+
+    let current = AgentAccountInfo::decode(legacy.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(current.provider, "claude");
+    assert_eq!(current.account_id, "daemon-opaque-route");
+    assert_eq!(current.provider_account_id, None);
 }
 
 #[test]

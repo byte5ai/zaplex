@@ -422,13 +422,20 @@ fn account_from_dir(
 
     let stable_identity = oauth.as_ref().and_then(|o| {
         s(o, "accountUuid")
-            .map(|id| id.to_ascii_lowercase())
+            .filter(|id| !id.trim().is_empty())
+            .map(|id| id.trim().to_ascii_lowercase())
             .or_else(|| {
                 let email = o
                     .get("emailAddress")
                     .or_else(|| o.get("email"))
-                    .and_then(Value::as_str)?;
-                let organization = o.get("organizationUuid").and_then(Value::as_str)?;
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|email| !email.is_empty())?;
+                let organization = o
+                    .get("organizationUuid")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|organization| !organization.is_empty())?;
                 Some(format!(
                     "{}:{}",
                     email.to_ascii_lowercase(),
@@ -443,6 +450,7 @@ fn account_from_dir(
             key,
             config_dir: config_dir.to_path_buf(),
             label,
+            provider_account_id: stable_identity.clone(),
             email,
             org,
             role,

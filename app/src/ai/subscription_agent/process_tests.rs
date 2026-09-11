@@ -17,6 +17,7 @@ fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
             account: AccountIdentity {
                 id: "account-1".to_string(),
                 display_name: "developer@example.com".to_string(),
+                provider_account_id: None,
                 config_dir: Some("/accounts/with space".into()),
             },
             executable: match agent {
@@ -193,6 +194,7 @@ fn remote_version_probe_uses_noninteractive_ssh_options() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[serial_test::serial]
 fn timed_out_version_probe_kills_child() {
     let directory = tempfile::tempdir().unwrap();
     let executable = directory.path().join("version-probe");

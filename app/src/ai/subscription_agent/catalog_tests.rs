@@ -14,6 +14,7 @@ fn installation(version: &str) -> InstallationIdentity {
         account: AccountIdentity {
             id: "account-1".to_string(),
             display_name: "developer@example.com".to_string(),
+            provider_account_id: None,
             config_dir: Some(PathBuf::from("/accounts/claude-1")),
         },
         executable: PathBuf::from("/usr/bin/claude"),
@@ -83,6 +84,26 @@ fn cli_version_is_part_of_cache_identity() {
             AgentCapability {
                 installation: installation(version),
                 models: vec![model(version, "versioned")],
+            },
+            None,
+        );
+    }
+
+    assert_eq!(catalog.all().count(), 2);
+}
+
+#[test]
+fn provider_account_id_is_part_of_cache_identity() {
+    let mut first = installation("2.1.0");
+    first.account.provider_account_id = Some("provider-account-1".to_string());
+    let mut second = first.clone();
+    second.account.provider_account_id = Some("provider-account-2".to_string());
+    let mut catalog = CapabilityCatalog::default();
+    for installation in [first, second] {
+        catalog.replace(
+            AgentCapability {
+                installation,
+                models: vec![model("sonnet", "account-scoped")],
             },
             None,
         );

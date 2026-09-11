@@ -1,9 +1,10 @@
 use super::{
     discovery_failure_lifecycle, legacy_ssh_candidates, remote_candidates_for_resolved_ssh,
-    AccountIdentity, AgentLifecycle, HostIdentity, InstallationIdentity, ProcessLocation,
-    SubscriptionAgent, SubscriptionSessionRegistry, SubscriptionTarget,
+    remote_candidates_for_ssh, AccountIdentity, AgentLifecycle, HostIdentity, InstallationIdentity,
+    ProcessLocation, SubscriptionAgent, SubscriptionSessionRegistry, SubscriptionTarget,
 };
 use crate::ai::subscription_agent::{ModelCapability, SessionIdentity};
+use crate::remote_server::proto::{AgentAccountInfo, AgentAccountInventory};
 use crate::terminal::ssh::util::InteractiveSshCommand;
 use warp_ssh_manager::{
     AuthType, ResolvedSshConnection, SecretKind, SessionResilience, SshServerInfo,
@@ -20,6 +21,7 @@ fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
             account: AccountIdentity {
                 id: "account".to_string(),
                 display_name: "Account".to_string(),
+                provider_account_id: None,
                 config_dir: None,
             },
             executable: agent.display_name().into(),
@@ -40,6 +42,32 @@ fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
     }
 }
 
+fn remote_inventory(accounts: Vec<AgentAccountInfo>) -> AgentAccountInventory {
+    AgentAccountInventory {
+        schema_version: 1,
+        accounts,
+        health: "loaded".to_string(),
+        health_message: String::new(),
+    }
+}
+
+fn remote_account(
+    provider: &str,
+    route_id: &str,
+    provider_account_id: Option<&str>,
+) -> AgentAccountInfo {
+    AgentAccountInfo {
+        provider: provider.to_string(),
+        account_id: route_id.to_string(),
+        display_label: format!("{provider} account"),
+        email: format!("{provider}@example.test"),
+        is_default: true,
+        health: "loaded".to_string(),
+        provider_account_id: provider_account_id.map(str::to_string),
+        ..Default::default()
+    }
+}
+
 #[test]
 fn signed_out_agents_are_not_recoverable_even_with_a_session_identity() {
     for (agent, message, session) in [
@@ -52,6 +80,16 @@ fn signed_out_agents_are_not_recoverable_even_with_a_session_identity() {
             SubscriptionAgent::Codex,
             "Codex is not using a ChatGPT subscription account",
             SessionIdentity::Codex("thread-1".to_string()),
+        ),
+        (
+            SubscriptionAgent::ClaudeCode,
+            "Claude Code authenticated account does not match selected account Work",
+            SessionIdentity::ClaudeCode("session-2".to_string()),
+        ),
+        (
+            SubscriptionAgent::Codex,
+            "Codex did not report an account ID for selected account Work",
+            SessionIdentity::Codex("thread-2".to_string()),
         ),
     ] {
         let registry = SubscriptionSessionRegistry::default();
@@ -68,41 +106,18 @@ fn signed_out_agents_are_not_recoverable_even_with_a_session_identity() {
 }
 
 #[test]
-fn legacy_ssh_candidates_run_both_agents_on_the_active_host() {
-    let candidates = legacy_ssh_candidates(&InteractiveSshCommand {
+fn legacy_ssh_fails_closed_without_remote_account_identity() {
+    let error = legacy_ssh_candidates(&InteractiveSshCommand {
         host: Some("developer@ssh.example.test".to_string()),
         port: Some("2222".to_string()),
     })
+    .err()
     .unwrap();
 
-    assert_eq!(candidates.len(), 2);
     assert_eq!(
-        candidates
-            .iter()
-            .map(|candidate| candidate.installation.agent)
-            .collect::<Vec<_>>(),
-        vec![SubscriptionAgent::ClaudeCode, SubscriptionAgent::Codex],
+        error.to_string(),
+        "subscription agents on legacy SSH cannot verify the selected remote account; reconnect this host with the Zaplex remote daemon"
     );
-    for candidate in candidates {
-        assert_eq!(
-            candidate.installation.host.id,
-            "legacy-ssh:developer@ssh.example.test:2222"
-        );
-        assert_eq!(
-            candidate.location,
-            ProcessLocation::Remote {
-                ssh_argv: vec![
-                    "ssh".to_string(),
-                    "-o".to_string(),
-                    "StrictHostKeyChecking=ask".to_string(),
-                    "-p".to_string(),
-                    "2222".to_string(),
-                    "--".to_string(),
-                    "developer@ssh.example.test".to_string(),
-                ],
-            }
-        );
-    }
 }
 
 #[test]
@@ -138,19 +153,114 @@ fn remote_onekey_key_uses_shared_credential() {
         secret_kind: SecretKind::Passphrase,
     };
 
-    let candidates = remote_candidates_for_resolved_ssh("daemon-1", "edge", &connection);
+    let inventory = remote_inventory(vec![
+        remote_account("claude", "opaque-claude", Some("claude-provider-42")),
+        remote_account("codex", "opaque-codex", Some("codex-provider-42")),
+    ]);
+    let candidates =
+        remote_candidates_for_resolved_ssh("daemon-1", "edge", &connection, &inventory).unwrap();
     for candidate in candidates {
         let ProcessLocation::Remote { ssh_argv } = candidate.location else {
             panic!("resolved OneKey host must remain remote");
         };
-        assert!(
-            ssh_argv
-                .windows(2)
-                .any(|args| args == ["-i", "/keys/deploy"])
-        );
+        assert!(ssh_argv
+            .windows(2)
+            .any(|args| args == ["-i", "/keys/deploy"]));
         assert_eq!(
             ssh_argv.last().map(String::as_str),
             Some("deploy@example.test")
         );
     }
+}
+
+#[test]
+fn remote_candidates_keep_route_and_provider_identities_separate() {
+    let inventory = remote_inventory(vec![remote_account(
+        "codex",
+        "daemon-opaque-route",
+        Some("provider-account-42"),
+    )]);
+
+    let candidates = remote_candidates_for_ssh(
+        "daemon-1",
+        "edge",
+        vec!["ssh".to_string(), "--".to_string(), "edge".to_string()],
+        &inventory,
+        Some(SubscriptionAgent::Codex),
+    )
+    .unwrap();
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].installation.account.id, "daemon-opaque-route");
+    assert_eq!(
+        candidates[0]
+            .installation
+            .account
+            .provider_account_id
+            .as_deref(),
+        Some("provider-account-42")
+    );
+    assert_eq!(candidates[0].installation.account.config_dir, None);
+}
+
+#[test]
+fn old_remote_inventory_without_provider_identity_fails_closed_when_selected() {
+    let inventory = remote_inventory(vec![remote_account("claude", "daemon-opaque-route", None)]);
+
+    let error = remote_candidates_for_ssh(
+        "daemon-1",
+        "edge",
+        vec!["ssh".to_string(), "--".to_string(), "edge".to_string()],
+        &inventory,
+        Some(SubscriptionAgent::ClaudeCode),
+    )
+    .err()
+    .unwrap();
+
+    assert_eq!(
+        error.to_string(),
+        "remote host cannot verify the selected Claude Code subscription account; update its Zaplex daemon or refresh that CLI login"
+    );
+}
+
+#[test]
+fn old_remote_inventory_without_provider_identity_requires_daemon_upgrade() {
+    let inventory = remote_inventory(vec![remote_account("codex", "daemon-opaque-route", None)]);
+
+    let error = remote_candidates_for_ssh(
+        "daemon-1",
+        "edge",
+        vec!["ssh".to_string(), "--".to_string(), "edge".to_string()],
+        &inventory,
+        None,
+    )
+    .err()
+    .unwrap();
+
+    assert_eq!(
+        error.to_string(),
+        "remote host cannot verify its subscription account identity; update its Zaplex daemon or refresh the CLI login"
+    );
+}
+
+#[test]
+fn non_default_remote_account_is_not_launched_without_a_daemon_route() {
+    let mut account = remote_account("codex", "daemon-opaque-route", Some("provider-account-42"));
+    account.is_default = false;
+    let inventory = remote_inventory(vec![account]);
+
+    let error = remote_candidates_for_ssh(
+        "daemon-1",
+        "edge",
+        vec!["ssh".to_string(), "--".to_string(), "edge".to_string()],
+        &inventory,
+        Some(SubscriptionAgent::Codex),
+    )
+    .err()
+    .unwrap();
+
+    assert_eq!(
+        error.to_string(),
+        "the selected Codex subscription account is unavailable on remote host edge"
+    );
 }

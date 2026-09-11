@@ -11,6 +11,7 @@ fn installation() -> InstallationIdentity {
         account: AccountIdentity {
             id: "configured-account".to_string(),
             display_name: "Configured account".to_string(),
+            provider_account_id: Some("account-42".to_string()),
             config_dir: Some("/accounts/claude".into()),
         },
         executable: "/usr/bin/claude".into(),
@@ -27,6 +28,7 @@ fn parses_models_and_account_from_initialize_response() {
             "request_id": "init-1",
             "response": {
                 "account": {
+                    "accountUuid": " ACCOUNT-42 ",
                     "email": "developer@example.com",
                     "organizationId": "org-1",
                     "subscriptionType": "pro"
@@ -49,7 +51,19 @@ fn parses_models_and_account_from_initialize_response() {
 
     let capability = ClaudeProtocol::parse_capability(&frame, installation()).unwrap();
 
-    assert_eq!(capability.installation.account.id, "developer@example.com");
+    assert_eq!(capability.installation.account.id, "configured-account");
+    assert_eq!(
+        capability
+            .installation
+            .account
+            .provider_account_id
+            .as_deref(),
+        Some("account-42")
+    );
+    assert_eq!(
+        capability.installation.account.display_name,
+        "developer@example.com"
+    );
     assert_eq!(capability.models.len(), 2);
     assert_eq!(capability.models[0].id, "default");
     assert_eq!(
@@ -64,6 +78,43 @@ fn parses_models_and_account_from_initialize_response() {
             .map(|effort| effort.id.as_str())
             .collect::<Vec<_>>(),
         vec!["low", "high"]
+    );
+}
+
+#[test]
+fn rejects_same_display_name_when_provider_account_id_differs() {
+    let frame = json!({
+        "response": {
+            "account": {
+                "accountUuid": "different-account",
+                "email": "Configured account"
+            },
+            "models": [{"value": "default"}]
+        }
+    });
+
+    let error = ClaudeProtocol::parse_capability(&frame, installation()).unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "Claude Code authenticated account does not match selected account Configured account; sign in to that account in the selected CLI profile and retry"
+    );
+}
+
+#[test]
+fn rejects_selected_account_when_structured_identity_is_missing() {
+    let frame = json!({
+        "response": {
+            "account": {"email": "Configured account"},
+            "models": [{"value": "default"}]
+        }
+    });
+
+    let error = ClaudeProtocol::parse_capability(&frame, installation()).unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "Claude Code did not report an account ID for selected account Configured account; refresh that CLI login and retry"
     );
 }
 
@@ -107,6 +158,38 @@ fn parses_session_text_tool_approval_usage_and_completion() {
     );
     assert_eq!(
         ClaudeProtocol::parse_event(&json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "thinking_delta", "thinking": "Checking the file"}
+            }
+        }))
+        .unwrap(),
+        vec![SubscriptionEvent::ReasoningDelta(
+            "Checking the file".to_string()
+        )]
+    );
+    assert_eq!(
+        ClaudeProtocol::parse_event(&json!({
+            "type": "user",
+            "message": {
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "tool-1",
+                    "content": "permission denied",
+                    "is_error": true
+                }]
+            }
+        }))
+        .unwrap(),
+        vec![SubscriptionEvent::ToolOutput {
+            id: "tool-1".to_string(),
+            output: "permission denied".to_string(),
+            is_error: true,
+        }]
+    );
+    assert_eq!(
+        ClaudeProtocol::parse_event(&json!({
             "type": "control_request",
             "request_id": "approval-1",
             "request": {
@@ -146,6 +229,20 @@ fn parses_session_text_tool_approval_usage_and_completion() {
             },
         ]
     );
+    assert_eq!(
+        ClaudeProtocol::parse_event(&json!({
+            "type": "result",
+            "session_id": "session-1",
+            "is_error": true,
+            "result": "tool execution failed"
+        }))
+        .unwrap(),
+        vec![SubscriptionEvent::Error {
+            message: "tool execution failed".to_string(),
+            recoverable: true,
+            session: Some(SessionIdentity::ClaudeCode("session-1".to_string())),
+        }]
+    );
 }
 
 #[test]
@@ -172,7 +269,7 @@ fn approval_response_never_bypasses_the_protocol() {
     assert_eq!(
         ClaudeProtocol::approval_response(
             "approval-2",
-            ApprovalDecision::Cancel,
+            ApprovalDecision::Deny,
             &json!({"command": "rm file"}),
         ),
         json!({
@@ -182,7 +279,7 @@ fn approval_response_never_bypasses_the_protocol() {
                 "request_id": "approval-2",
                 "response": {
                     "behavior": "deny",
-                    "message": "Cancelled by user"
+                    "message": "Denied by user"
                 }
             }
         })

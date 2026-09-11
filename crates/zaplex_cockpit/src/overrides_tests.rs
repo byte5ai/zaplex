@@ -10,6 +10,7 @@ fn account(key: &str) -> AccountUsage {
             key: key.into(),
             config_dir: format!("/tmp/{key}").into(),
             label: key.into(),
+            provider_account_id: None,
             email: None,
             org: None,
             role: None,

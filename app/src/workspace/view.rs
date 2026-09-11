@@ -22246,6 +22246,7 @@ impl Workspace {
                     account: crate::ai::subscription_agent::AccountIdentity {
                         id: account_name.clone(),
                         display_name: account_name,
+                        provider_account_id: None,
                         config_dir,
                     },
                     executable,

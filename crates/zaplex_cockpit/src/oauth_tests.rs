@@ -156,6 +156,7 @@ fn account(provider: Provider, key: &str, dir: &str) -> Account {
         key: key.to_string(),
         config_dir: PathBuf::from(dir),
         label: key.to_string(),
+        provider_account_id: None,
         email: None,
         org: None,
         role: None,

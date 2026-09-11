@@ -14,6 +14,7 @@ fn account(key: &str, config_dir: &str) -> Account {
         key: key.to_string(),
         config_dir: PathBuf::from(config_dir),
         label: "Account".to_string(),
+        provider_account_id: None,
         email: Some("agent@example.com".to_string()),
         org: None,
         role: None,
@@ -70,6 +71,36 @@ fn stable_account_id_is_opaque_and_does_not_embed_a_config_path() {
     assert_eq!(id.len(), 32);
     assert!(!id.contains("secret"));
     assert!(!id.contains("claude-work"));
+}
+
+#[test]
+fn inventory_preserves_provider_identity_separately_from_the_opaque_route() {
+    let mut discovered = account("claude:work", "/daemon/.claude-work");
+    discovered.provider_account_id = Some("provider-account-42".to_string());
+    let scan = inventory_from_snapshot(CockpitSnapshot {
+        accounts: vec![usage(discovered)],
+        generated_at: chrono::Utc::now(),
+        health: ScanHealth::Loaded,
+    });
+
+    assert_eq!(scan.inventory.accounts.len(), 1);
+    let remote = &scan.inventory.accounts[0];
+    assert_ne!(remote.account_id, "provider-account-42");
+    assert_eq!(
+        remote.provider_account_id.as_deref(),
+        Some("provider-account-42")
+    );
+}
+
+#[test]
+fn inventory_keeps_missing_provider_identity_backward_compatible() {
+    let scan = inventory_from_snapshot(CockpitSnapshot {
+        accounts: vec![usage(account("claude:work", "/daemon/.claude-work"))],
+        generated_at: chrono::Utc::now(),
+        health: ScanHealth::Loaded,
+    });
+
+    assert_eq!(scan.inventory.accounts[0].provider_account_id, None);
 }
 
 #[test]

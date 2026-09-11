@@ -315,6 +315,7 @@ pub struct GitHubAnalysisAccount {
     pub key: String,
     pub label: String,
     pub provider: Provider,
+    pub provider_account_id: Option<String>,
     pub config_dir: Option<PathBuf>,
     pub binding_percent: u32,
     pub over_budget: bool,
@@ -333,6 +334,7 @@ pub fn analysis_accounts(snapshot: &CockpitSnapshot) -> Vec<GitHubAnalysisAccoun
             key: usage.account.key.clone(),
             label: usage.account.label.clone(),
             provider: usage.account.provider,
+            provider_account_id: usage.account.provider_account_id.clone(),
             config_dir: (!usage.account.is_default).then(|| usage.account.config_dir.clone()),
             binding_percent: (zaplex_cockpit::binding_window(usage).0.max(0.) * 100.).round()
                 as u32,
@@ -978,6 +980,7 @@ pub async fn run_structured_analysis(
         account: AccountIdentity {
             id: account.key.clone(),
             display_name: account.label.clone(),
+            provider_account_id: account.provider_account_id.clone(),
             config_dir: account.config_dir.clone(),
         },
         executable,

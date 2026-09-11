@@ -50,6 +50,11 @@ pub struct Account {
     pub config_dir: PathBuf,
     /// Human label (email/org/plan-derived; falls back to the dir name).
     pub label: String,
+    /// Stable identity reported by the provider for this authenticated account.
+    /// This is account metadata, never a credential or token. It is kept
+    /// separate from [`Self::key`], which identifies the host-local route.
+    #[serde(default)]
+    pub provider_account_id: Option<String>,
     pub email: Option<String>,
     pub org: Option<String>,
     pub role: Option<String>,

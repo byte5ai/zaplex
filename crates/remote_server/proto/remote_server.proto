@@ -1315,6 +1315,10 @@ message AgentAccountInfo {
   string health = 11;
   // "real" or "estimate"; descriptive only, never a credential.
   string usage_provenance = 12;
+  // Stable identity reported by the provider for the authenticated account.
+  // Optional for compatibility with older daemons and accounts whose provider
+  // does not expose an identity. This is metadata, never a token or host path.
+  optional string provider_account_id = 13;
 }
 
 message AgentAccountInventory {

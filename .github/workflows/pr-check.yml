@@ -299,6 +299,18 @@ jobs:
           model_token_usage_does_not_reserialize_retired_byok_fields
         shell: bash
 
+      - name: cargo test (subscription agent acceptance)
+        run: >
+          cargo test --locked -p warp --lib ai::subscription_agent::
+        shell: bash
+
+      - name: cargo test (remote subscription identity compatibility)
+        run: |
+          cargo test --locked -p remote_server --lib older_client_ignores_provider_account_identity
+          cargo test --locked -p remote_server --lib newer_client_decodes_missing_provider_account_identity_as_none
+          cargo test --locked -p remote_server --lib old_agent_account_frame_defaults_provider_identity_to_none
+        shell: bash
+
       - name: cargo test (retired Gemini CLI selection)
         run: >
           cargo test --locked -p warp_cli --lib --

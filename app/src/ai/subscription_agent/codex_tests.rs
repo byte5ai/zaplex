@@ -11,6 +11,7 @@ fn installation() -> InstallationIdentity {
         account: AccountIdentity {
             id: "configured-account".to_string(),
             display_name: "Configured account".to_string(),
+            provider_account_id: Some("account-42".to_string()),
             config_dir: Some("/accounts/codex".into()),
         },
         executable: "/usr/bin/codex".into(),
@@ -82,10 +83,31 @@ fn parses_subscription_account_and_exact_reported_models() {
             }]
         }
     });
+    let account_rate_limits = json!({
+        "id": 3,
+        "result": {
+            "accountId": "account-42",
+            "rateLimits": {}
+        }
+    });
 
-    let capability = CodexProtocol::parse_capability(&account, &models, installation()).unwrap();
+    let capability =
+        CodexProtocol::parse_capability(&account, &account_rate_limits, &models, installation())
+            .unwrap();
 
-    assert_eq!(capability.installation.account.id, "developer@example.com");
+    assert_eq!(capability.installation.account.id, "configured-account");
+    assert_eq!(
+        capability
+            .installation
+            .account
+            .provider_account_id
+            .as_deref(),
+        Some("account-42")
+    );
+    assert_eq!(
+        capability.installation.account.display_name,
+        "developer@example.com"
+    );
     assert_eq!(capability.models.len(), 1);
     assert_eq!(capability.models[0].id, "gpt-reported-current");
     assert_eq!(capability.models[0].is_default, true);
@@ -104,6 +126,7 @@ fn rejects_api_key_account_in_subscription_path() {
                 "requiresOpenaiAuth": true
             }
         }),
+        &json!({"result": {"accountId": "account-42", "rateLimits": {}}}),
         &json!({"result": {"data": []}}),
         installation(),
     );
@@ -115,8 +138,61 @@ fn rejects_api_key_account_in_subscription_path() {
 }
 
 #[test]
+fn rejects_same_display_name_when_provider_account_id_differs() {
+    let error = CodexProtocol::parse_capability(
+        &json!({
+            "result": {
+                "account": {
+                    "type": "chatgpt",
+                    "email": "Configured account",
+                    "planType": "plus"
+                }
+            }
+        }),
+        &json!({"result": {"accountId": "different-account", "rateLimits": {}}}),
+        &json!({"result": {"data": [{"id": "gpt-reported-current"}]}}),
+        installation(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "Codex authenticated account does not match selected account Configured account; sign in to that account in the selected CLI profile and retry"
+    );
+}
+
+#[test]
+fn rejects_selected_account_when_app_server_omits_account_id() {
+    let error = CodexProtocol::parse_capability(
+        &json!({
+            "result": {
+                "account": {"type": "chatgpt", "email": "Configured account"}
+            }
+        }),
+        &json!({"result": {"accountId": null, "rateLimits": {}}}),
+        &json!({"result": {"data": [{"id": "gpt-reported-current"}]}}),
+        installation(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "Codex did not report an account ID for selected account Configured account; refresh that CLI login and retry"
+    );
+}
+
+#[test]
 fn request_sequence_uses_native_threads_turns_and_manual_approvals() {
     let target = target();
+
+    assert_eq!(
+        CodexProtocol::account_rate_limits_request(3),
+        json!({
+            "id": 3,
+            "method": "account/rateLimits/read",
+            "params": null
+        })
+    );
 
     assert_eq!(
         CodexProtocol::thread_start_request(4, &target),
@@ -160,6 +236,57 @@ fn parses_text_reasoning_tool_approval_usage_diff_and_completion() {
         }))
         .unwrap(),
         vec![SubscriptionEvent::TextDelta("Hello".to_string())]
+    );
+    assert_eq!(
+        CodexProtocol::parse_event(&json!({
+            "method": "item/reasoning/summaryTextDelta",
+            "params": {"delta": "Inspecting", "threadId": "thread-1"}
+        }))
+        .unwrap(),
+        vec![SubscriptionEvent::ReasoningDelta("Inspecting".to_string())]
+    );
+    assert_eq!(
+        CodexProtocol::parse_event(&json!({
+            "method": "item/started",
+            "params": {
+                "threadId": "thread-1",
+                "item": {"id": "item-1", "type": "commandExecution", "command": "pwd"}
+            }
+        }))
+        .unwrap(),
+        vec![SubscriptionEvent::ToolStarted {
+            id: "item-1".to_string(),
+            name: "commandExecution".to_string(),
+            input: json!({"id": "item-1", "type": "commandExecution", "command": "pwd"}),
+        }]
+    );
+    assert_eq!(
+        CodexProtocol::parse_event(&json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread-1",
+                "item": {
+                    "id": "item-1",
+                    "type": "commandExecution",
+                    "aggregatedOutput": "denied",
+                    "status": "failed"
+                }
+            }
+        }))
+        .unwrap(),
+        vec![SubscriptionEvent::ToolOutput {
+            id: "item-1".to_string(),
+            output: "denied".to_string(),
+            is_error: true,
+        }]
+    );
+    assert_eq!(
+        CodexProtocol::parse_event(&json!({
+            "method": "turn/diff/updated",
+            "params": {"threadId": "thread-1", "diff": "@@ -1 +1 @@"}
+        }))
+        .unwrap(),
+        vec![SubscriptionEvent::Diff("@@ -1 +1 @@".to_string())]
     );
     assert_eq!(
         CodexProtocol::parse_event(&json!({
@@ -226,6 +353,25 @@ fn parses_text_reasoning_tool_approval_usage_diff_and_completion() {
             session: SessionIdentity::Codex("thread-1".to_string())
         }]
     );
+    assert_eq!(
+        CodexProtocol::parse_event(&json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turn": {
+                    "id": "turn-2",
+                    "status": "failed",
+                    "error": {"message": "sandbox denied the command"}
+                }
+            }
+        }))
+        .unwrap(),
+        vec![SubscriptionEvent::Error {
+            message: "sandbox denied the command".to_string(),
+            recoverable: true,
+            session: Some(SessionIdentity::Codex("thread-1".to_string())),
+        }]
+    );
 }
 
 #[test]
@@ -247,11 +393,11 @@ fn approval_responses_preserve_json_rpc_request_id() {
             json!(42),
             "item/fileChange/requestApproval",
             &json!({}),
-            ApprovalDecision::Cancel,
+            ApprovalDecision::Deny,
         ),
         json!({
             "id": 42,
-            "result": {"decision": "cancel"}
+            "result": {"decision": "decline"}
         })
     );
 }

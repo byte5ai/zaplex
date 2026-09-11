@@ -111,6 +111,32 @@ runs:
             ./script/install_cargo_build_deps
           fi
         elif ${{ inputs.target_os == 'linux' }}; then
+          # Linux CI runners occasionally cannot reach Ubuntu's legacy HTTP
+          # endpoints while HTTPS remains available. Use HTTPS and let apt retry
+          # transient mirror failures for every install script below.
+          for source_file in \
+            /etc/apt/sources.list \
+            /etc/apt/sources.list.d/ubuntu.sources
+          do
+            if [[ -f "$source_file" ]]; then
+              sudo sed -E -i \
+                's#http://(([a-z]{2}\.)?archive\.ubuntu\.com|security\.ubuntu\.com)/ubuntu#https://\1/ubuntu#g' \
+                "$source_file"
+            fi
+          done
+          # Blacksmith images route the Ubuntu source through a generated
+          # mirror list, so rewriting ubuntu.sources alone does not affect the
+          # package downloads selected by apt.
+          blacksmith_mirror_file=/etc/apt/blacksmith-ubuntu-mirrors.txt
+          if [[ -f "$blacksmith_mirror_file" ]]; then
+            sudo sed -E -i 's#^http://#https://#' "$blacksmith_mirror_file"
+          fi
+          printf '%s\n' \
+            'Acquire::Retries "5";' \
+            'Acquire::http::Timeout "30";' \
+            'Acquire::https::Timeout "30";' \
+            | sudo tee /etc/apt/apt.conf.d/80-zaplex-network-retries >/dev/null
+
           # Update the apt cache before installing dependencies - it can be slow, so the install scripts
           # don't do it.
           sudo apt-get update -y

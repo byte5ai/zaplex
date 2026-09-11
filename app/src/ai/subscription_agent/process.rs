@@ -233,7 +233,7 @@ impl ProcessLaunch {
 
 pub(crate) struct JsonLineProcess {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
 }
 
@@ -261,7 +261,7 @@ impl JsonLineProcess {
             .context("subscription agent stdout was not piped")?;
         Ok(Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             stdout: BufReader::new(stdout),
         })
     }
@@ -269,11 +269,15 @@ impl JsonLineProcess {
     pub(crate) async fn send(&mut self, value: &Value) -> Result<()> {
         let mut line = serde_json::to_vec(value)?;
         line.push(b'\n');
-        self.stdin
+        let stdin = self
+            .stdin
+            .as_mut()
+            .context("subscription agent stdin is closed")?;
+        stdin
             .write_all(&line)
             .await
             .context("failed to write subscription-agent protocol frame")?;
-        self.stdin.flush().await?;
+        stdin.flush().await?;
         Ok(())
     }
 
@@ -302,8 +306,10 @@ impl JsonLineProcess {
         graceful_timeout: Duration,
         forced_timeout: Duration,
     ) -> Result<ProcessTermination> {
-        if let Err(error) = self.stdin.close().await {
-            log::debug!("Failed to close subscription-agent stdin before exit: {error}");
+        if let Some(mut stdin) = self.stdin.take() {
+            if let Err(error) = stdin.close().await {
+                log::debug!("Failed to close subscription-agent stdin before exit: {error}");
+            }
         }
 
         match wait_for_exit(&mut self.child, graceful_timeout).await {
