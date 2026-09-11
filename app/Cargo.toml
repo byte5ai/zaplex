@@ -5,7 +5,7 @@ description = "The terminal cockpit for AI coding agents on remote machines"
 edition = "2021"
 autobins = false
 name = "warp"
-version = "1.0.14"
+version = "1.0.15"
 publish.workspace = true
 license.workspace = true
 
@@ -75,7 +75,7 @@ email_address = { git = "https://github.com/warpdotdev/rust-email_address", bran
 embed_plist = "1.2"
 enclose = "1.1.8"
 enum-iterator.workspace = true
-event-listener = "5.4.0"
+event-listener = "5.4.2"
 field_mask.workspace = true
 flate2 = "1.0.17"
 float-cmp.workspace = true
@@ -263,7 +263,7 @@ inquire = "0.9.1"
 diesel = { workspace = true, features = ["sqlite", "chrono"] }
 diesel_migrations = { version = "2.2.0", features = ["sqlite"] }
 env_logger.workspace = true
-git2 = { version = "0.20.4", default-features = false, features = [
+git2 = { version = "0.21.0", default-features = false, features = [
     "vendored-libgit2",
 ] }
 http_server.workspace = true
@@ -276,7 +276,10 @@ tokio-util.workspace = true
 # AWS SDK (loading credentials for BYO LLM)
 aws-config = { version = "1.8.12", features = ["credentials-login"] }
 aws-credential-types = "1"
-aws-sdk-sts = "1"
+aws-sdk-sts = { version = "1", default-features = false, features = [
+    "default-https-client",
+    "rt-tokio",
+] }
 aws-types = "1"
 
 rmcp = { workspace = true, features = [

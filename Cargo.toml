@@ -93,7 +93,7 @@ websocket = { path = "crates/websocket" }
 # Workspace-level dependencies used by multiple crates. Prefer adding dependencies
 # here to copying-and-pasting versions.
 axum = "0.8.4"
-anyhow = "1.0"
+anyhow = "1.0.103"
 arboard = { version = "3.6.1", default-features = false }
 arrayvec = "0.7.4"
 async-broadcast = "0.7.2"
@@ -255,9 +255,9 @@ reqwest-eventsource = "0.6.0"
 resvg = "0.47.0"
 rust-embed = { version = "8.7.0", features = ["include-exclude"] }
 # i18n: Fluent-based localization with fallback chain (zh-CN → zh → en)
-i18n-embed = { version = "0.15", features = ["fluent-system", "desktop-requester"] }
-i18n-embed-fl = "0.9"
-fluent = "0.16"
+i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
+i18n-embed-fl = "0.10.1"
+fluent = "0.17"
 unic-langid = { version = "0.9", features = ["macros"] }
 sys-locale = "0.3"
 rustc-hash = "2.1.1"

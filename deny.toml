@@ -9,7 +9,8 @@ ignore = [
     { id = "RUSTSEC-2024-0384", reason = "instant is unmaintained; we should migrate to web-time." },
     { id = "RUSTSEC-2020-0077", reason = "memmap is unmaintained; we should migrate to memmap2." },
     { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; this is a dependency of metal, which we should eliminate by moving to the objc2 family of crates."},
-    { id = "RUSTSEC-2023-0081", reason = "safemem is unmaintained; this is a dependency of plist." },
+    { id = "RUSTSEC-2026-0192", reason = "Temporary: WarpUI's cosmic-text fork still depends on ttf-parser; the skrifa migration is tracked in #243." },
+    { id = "RUSTSEC-2026-0206", reason = "Temporary: WarpUI's cosmic-text fork still depends on rustybuzz; the harfrust migration is tracked in #243." },
 ]
 
 [licenses]
@@ -48,6 +49,10 @@ allow-git = [
     # Allow git reference to Core Foundation crates until they publish an updated
     # version to crates.io.
     "https://github.com/servo/core-foundation-rs",
+    # Forks carried by zaplex. Keep these scoped to the exact repositories;
+    # do not trust their whole GitHub organizations.
+    "https://github.com/chenx-dust/winit.git",
+    "https://github.com/zerx-lab/warp-proto-apis.git",
 ]
 # Allow git references to all GitHub repositories in the warpdotdev organization.
 allow-org = { github = ["warpdotdev"] }
