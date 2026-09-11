@@ -125,6 +125,8 @@ else:
 
 if behavior == "bad-response":
     response.pop("finding_id")
+elif behavior == "boolean-schema-version":
+    response["schema_version"] = True
 elif behavior == "wrong-source-hash":
     response["source_sha256"] = "0" * 64
 elif behavior == "wrong-source-text":
@@ -535,6 +537,7 @@ class CodebaseAuditVerificationRunnerTest(unittest.TestCase):
             ("failure-event", "reports a failure"),
             ("duplicate-complete", "exactly one completed turn"),
             ("bad-response", "response shape is invalid"),
+            ("boolean-schema-version", "schema_version must be an integer"),
             ("wrong-source-hash", "source_sha256 provenance mismatch"),
             ("wrong-source-text", "source_text provenance mismatch"),
             ("missing-source-hash", "response shape is invalid"),

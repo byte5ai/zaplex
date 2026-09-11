@@ -622,6 +622,7 @@ def validate_response(
         COMMON_RESPONSE_KEYS | LENS_RESPONSE_KEYS[lens],
         f"{lens} response",
     )
+    require_plain_int(response["schema_version"], f"{lens} response schema_version", 1)
     expected = {
         "schema_version": SCHEMA_VERSION,
         "verification_id": entry["verification_id"],
