@@ -188,13 +188,7 @@
         {
           "action": "include",
           "patterns": [
-            "app/src/terminal/**",
-            "app/src/ai/**",
-            "app/src/cockpit/**",
-            "app/src/workspace/**",
-            "app/src/pane_group/**",
-            "app/src/remote_server/**",
-            "app/src/sftp_manager/**"
+            "app/src/**"
           ]
         },
         {
@@ -272,6 +266,26 @@
         {
           "minimum_matches": 1,
           "pattern": "crates/managed_secrets/src/*.rs"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/warp_cli/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/zap_sync/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "crates/warpui_extras/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": ".github/workflows/*.yml"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "script/macos/bundle"
         }
       ],
       "matchers": [
@@ -298,7 +312,12 @@
             "crates/zaplex_remote_session/**",
             "crates/remote_server/**",
             "crates/managed_secrets*/**",
-            "crates/zap_sftp/**"
+            "crates/zap_sftp/**",
+            "crates/zap_sync/**",
+            "crates/warp_cli/**",
+            "crates/warpui_extras/**",
+            ".github/workflows/*.yml",
+            "script/macos/**"
           ]
         },
         {
@@ -325,6 +344,14 @@
         {
           "minimum_matches": 1,
           "pattern": "app/src/workspace/view/server_file_browser.rs"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/workspace/view.rs"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/terminal/view/ssh_file_upload.rs"
         }
       ],
       "matchers": [
@@ -351,6 +378,8 @@
             "crates/remote_server/**",
             "app/src/sftp_manager/**",
             "app/src/workspace/view/server_file_browser.rs",
+            "app/src/workspace/view.rs",
+            "app/src/terminal/view/ssh_file_upload.rs",
             "app/src/remote_server/**",
             "app/src/drive/**",
             "app/src/autoupdate/**"
@@ -380,6 +409,18 @@
         {
           "minimum_matches": 1,
           "pattern": "app/src/remote_server/ssh_transport.rs"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/ssh_manager/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/ai/subscription_agent/**"
+        },
+        {
+          "minimum_matches": 1,
+          "pattern": "app/src/workspace/view.rs"
         }
       ],
       "matchers": [
@@ -411,7 +452,10 @@
             "app/assets/bundled/ssh/**",
             "app/assets/bundled/bootstrap/**",
             "app/src/remote_server/**",
-            "app/src/cockpit/**"
+            "app/src/cockpit/**",
+            "app/src/ssh_manager/**",
+            "app/src/ai/subscription_agent/**",
+            "app/src/workspace/view.rs"
           ]
         },
         {
@@ -696,11 +740,11 @@
         },
         {
           "minimum_matches": 1,
-          "pattern": "app/channels/**/*.desktop"
+          "pattern": "app/channels/*.desktop"
         },
         {
           "minimum_matches": 1,
-          "pattern": "app/channels/**/*.json"
+          "pattern": "app/channels/*.json"
         },
         {
           "minimum_matches": 1,
@@ -712,7 +756,7 @@
         },
         {
           "minimum_matches": 1,
-          "pattern": "app/i18n/**/*.ftl"
+          "pattern": "app/i18n/*.ftl"
         }
       ],
       "matchers": [
@@ -722,6 +766,11 @@
           ],
           "id": "feature-flag",
           "pattern": "FeatureFlag::[A-Za-z0-9_]+|\\.is_enabled\\s*\\(|(?:RELEASE|PREVIEW|DOGFOOD)_FLAGS|cfg\\s*\\(\\s*feature|^\\[features\\]"
+        },
+        {
+          "flags": [],
+          "id": "hardcoded-ui-text",
+          "pattern": "\\b(?:Text::(?:new|new_inline)|FormattedTextElement::from_str|Span::new)\\s*\\(\\s*(?:\"|r#*\")|\\bui_builder\\s*\\.\\s*label\\s*\\(\\s*(?:\"|r#*\")"
         },
         {
           "flags": [
@@ -746,8 +795,8 @@
             "crates/warp_core/src/features.rs",
             "app/src/features.rs",
             "app/src/i18n.rs",
-            "app/src/**/*.rs",
-            "crates/**/*.rs",
+            "app/src/*.rs",
+            "crates/*.rs",
             "app/channels/**",
             "app/i18n.toml",
             "app/i18n/**",
