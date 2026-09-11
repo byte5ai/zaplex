@@ -62,6 +62,8 @@ COMMON_RESPONSE_KEYS = {
     "aggregate_sha256",
     "issue_snapshot_sha256",
     "github_repository",
+    "source_sha256",
+    "source_text",
 }
 LENS_RESPONSE_KEYS = {
     "disprove": {"verdict", "counter_evidence"},
@@ -95,6 +97,7 @@ class TupleResult:
     tuple_sha256: str
     prompt_sha256: str
     schema_sha256: str
+    source_sha256: str
     events_sha256: str
     stderr_sha256: str
     final_message_sha256: str
@@ -190,6 +193,13 @@ def require_path(value: Any, label: str) -> str:
     ):
         raise RunnerError(f"{label} must be a normalized repository-relative path")
     return value
+
+
+def require_range(value: Any, label: str) -> tuple[int, int]:
+    value = require_exact_keys(value, {"start", "end"}, label)
+    start = require_plain_int(value["start"], f"{label}.start", 1)
+    end = require_plain_int(value["end"], f"{label}.end", start)
+    return start, end
 
 
 def document_hash(value: dict[str, Any], hash_key: str) -> str:
@@ -328,6 +338,45 @@ def validate_repo_and_load_files(
             raise RunnerError(f"target tree object ID for {path} is not canonical")
         files[path] = run_git(repo, "cat-file", "blob", object_id)
     return files
+
+
+def blob_lines(data: bytes) -> list[bytes]:
+    if not data:
+        return []
+    pieces = data.split(b"\n")
+    lines = [piece + b"\n" for piece in pieces[:-1]]
+    if pieces[-1]:
+        lines.append(pieces[-1])
+    return lines
+
+
+def source_for_entry(
+    files: dict[str, bytes], entry: dict[str, Any]
+) -> dict[str, Any]:
+    finding = entry["finding"]
+    path = require_path(finding.get("path"), "finding path")
+    start, end = require_range(finding.get("range"), f"finding range for {path}")
+    if path not in files:
+        raise RunnerError(f"immutable target source is missing for {path}")
+    blob = files[path]
+    try:
+        blob.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RunnerError(f"immutable target blob for {path} is not UTF-8") from error
+    lines = blob_lines(blob)
+    if end > len(lines):
+        raise RunnerError(
+            f"finding range for {path} ends at {end}, but target blob has "
+            f"{len(lines)} lines"
+        )
+    selected = b"".join(lines[start - 1 : end])
+    text = selected.decode("utf-8")
+    return {
+        "path": path,
+        "range": copy.deepcopy(finding["range"]),
+        "sha256": sha256_bytes(selected),
+        "text": text,
+    }
 
 
 def regenerate_assignments(
@@ -498,6 +547,8 @@ def response_schema(lens: str) -> dict[str, Any]:
         "aggregate_sha256": {"type": "string", "pattern": hash_pattern},
         "issue_snapshot_sha256": {"type": "string", "pattern": hash_pattern},
         "github_repository": {"type": "string", "minLength": 3},
+        "source_sha256": {"type": "string", "pattern": hash_pattern},
+        "source_text": {"type": "string"},
     }
     lens_properties = {
         "disprove": {
@@ -524,7 +575,11 @@ def response_schema(lens: str) -> dict[str, Any]:
     }
 
 
-def prompt_for_tuple(assignments: dict[str, Any], entry: dict[str, Any]) -> bytes:
+def prompt_for_tuple(
+    assignments: dict[str, Any],
+    entry: dict[str, Any],
+    source: dict[str, Any],
+) -> bytes:
     lens_instructions = {
         "disprove": (
             "Try to disprove the finding. Return supported, rejected, or needs-evidence "
@@ -550,12 +605,16 @@ def prompt_for_tuple(assignments: dict[str, Any], entry: dict[str, Any]) -> byte
         ],
         "assignment_sha256": assignments["assignment_sha256"],
         "tuple": copy.deepcopy(entry),
+        "source": copy.deepcopy(source),
     }
     return canonical_json(prompt)
 
 
 def validate_response(
-    response: Any, entry: dict[str, Any], assignments: dict[str, Any]
+    response: Any,
+    entry: dict[str, Any],
+    assignments: dict[str, Any],
+    source: dict[str, Any],
 ) -> dict[str, Any]:
     lens = entry["lens"]
     response = require_exact_keys(
@@ -571,6 +630,8 @@ def validate_response(
         "aggregate_sha256": assignments["aggregate_sha256"],
         "issue_snapshot_sha256": assignments["issue_snapshot_sha256"],
         "github_repository": assignments["github_repository"],
+        "source_sha256": source["sha256"],
+        "source_text": source["text"],
     }
     for key, value in expected.items():
         if response.get(key) != value:
@@ -710,6 +771,7 @@ def execute_tuple(
     bucket_id: str,
     position: int,
     entry: dict[str, Any],
+    source: dict[str, Any],
     prompt: bytes,
     schema_sha256: str,
     timeout_seconds: int,
@@ -766,7 +828,10 @@ def execute_tuple(
     if not final_message:
         raise RunnerError(f"{verification_id}: Codex CLI did not write a final message")
     response = validate_response(
-        decode_json(final_message, f"{verification_id} response"), entry, assignments
+        decode_json(final_message, f"{verification_id} response"),
+        entry,
+        assignments,
+        source,
     )
     response_bytes = canonical_json(response)
     return TupleResult(
@@ -778,6 +843,7 @@ def execute_tuple(
         tuple_sha256=sha256_bytes(canonical_json(entry)),
         prompt_sha256=sha256_bytes(prompt),
         schema_sha256=schema_sha256,
+        source_sha256=source["sha256"],
         events_sha256=sha256_bytes(stdout),
         stderr_sha256=sha256_bytes(stderr),
         final_message_sha256=sha256_bytes(final_message),
@@ -794,6 +860,7 @@ def result_record(result: TupleResult) -> dict[str, Any]:
         "tuple_sha256": result.tuple_sha256,
         "prompt_sha256": result.prompt_sha256,
         "schema_sha256": result.schema_sha256,
+        "source_sha256": result.source_sha256,
         "events_sha256": result.events_sha256,
         "stderr_sha256": result.stderr_sha256,
         "final_message_sha256": result.final_message_sha256,
@@ -962,11 +1029,12 @@ def main(argv: list[str] | None = None) -> int:
         work = []
         for bucket in assignments["buckets"]:
             for position, entry in enumerate(bucket["entries"]):
-                prompt = prompt_for_tuple(assignments, entry)
+                source = source_for_entry(snapshot_files, entry)
+                prompt = prompt_for_tuple(assignments, entry, source)
                 atomic_publish(
                     inputs_directory / f"{entry['verification_id']}.prompt.json", prompt
                 )
-                work.append((bucket["id"], position, entry, prompt))
+                work.append((bucket["id"], position, entry, source, prompt))
         results = []
         failures = []
         with tempfile.TemporaryDirectory(
@@ -1001,11 +1069,12 @@ def main(argv: list[str] | None = None) -> int:
                         bucket_id,
                         position,
                         entry,
+                        source,
                         prompt,
                         sha256_bytes(schemas[entry["lens"]]),
                         args.timeout_seconds,
                     )
-                    for bucket_id, position, entry, prompt in work
+                    for bucket_id, position, entry, source, prompt in work
                 ]
                 for future in concurrent.futures.as_completed(futures):
                     try:

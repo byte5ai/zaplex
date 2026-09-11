@@ -100,6 +100,8 @@ response = {
     "aggregate_sha256": entry["aggregate_sha256"],
     "issue_snapshot_sha256": entry["issue_snapshot_sha256"],
     "github_repository": entry["github_repository"],
+    "source_sha256": prompt["source"]["sha256"],
+    "source_text": prompt["source"]["text"],
 }
 if entry["lens"] == "disprove":
     response.update(
@@ -123,6 +125,14 @@ else:
 
 if behavior == "bad-response":
     response.pop("finding_id")
+elif behavior == "wrong-source-hash":
+    response["source_sha256"] = "0" * 64
+elif behavior == "wrong-source-text":
+    response["source_text"] += "changed"
+elif behavior == "missing-source-hash":
+    response.pop("source_sha256")
+elif behavior == "missing-source-text":
+    response.pop("source_text")
 if behavior != "missing-final":
     output_path = Path(
         sys.argv[sys.argv.index("--output-last-message") + 1]
@@ -163,6 +173,9 @@ class CodebaseAuditVerificationRunnerTest(unittest.TestCase):
         self.git("add", "a.rs", "b.rs")
         self.git("commit", "-q", "-m", "target")
         self.target_sha = self.git("rev-parse", "HEAD").stdout.strip()
+        self.target_files = {
+            path: (self.repo / path).read_bytes() for path in ("a.rs", "b.rs")
+        }
 
         self.github_repository = "example/project"
         self.snapshot = [
@@ -336,6 +349,7 @@ class CodebaseAuditVerificationRunnerTest(unittest.TestCase):
 
     def test_runs_every_tuple_once_with_at_most_three_parallel(self):
         run_directory = self.root / "run"
+        (self.repo / "a.rs").write_text("uncommitted mutable worktree text\n")
         result = self.run_runner(run_directory)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -351,6 +365,15 @@ class CodebaseAuditVerificationRunnerTest(unittest.TestCase):
                 (self.stub_state / f"{verification_id}.json").read_text()
             )
             self.assertEqual(record["prompt"]["tuple"], entry)
+            path = entry["finding"]["path"]
+            expected_source = RUNNER.source_for_entry(
+                {path: self.target_files[path]}, entry
+            )
+            self.assertEqual(record["prompt"]["source"], expected_source)
+            self.assertEqual(
+                record["prompt"]["source"]["text"],
+                self.target_files[path].decode("utf-8"),
+            )
             self.assertEqual(
                 record["prompt"]["assignment_sha256"],
                 self.assignments["assignment_sha256"],
@@ -403,6 +426,7 @@ class CodebaseAuditVerificationRunnerTest(unittest.TestCase):
                 "tuple_sha256",
                 "prompt_sha256",
                 "schema_sha256",
+                "source_sha256",
                 "events_sha256",
                 "stderr_sha256",
                 "final_message_sha256",
@@ -511,6 +535,10 @@ class CodebaseAuditVerificationRunnerTest(unittest.TestCase):
             ("failure-event", "reports a failure"),
             ("duplicate-complete", "exactly one completed turn"),
             ("bad-response", "response shape is invalid"),
+            ("wrong-source-hash", "source_sha256 provenance mismatch"),
+            ("wrong-source-text", "source_text provenance mismatch"),
+            ("missing-source-hash", "response shape is invalid"),
+            ("missing-source-text", "response shape is invalid"),
             ("missing-final", "did not write a final message"),
         )
         for behavior, message in cases:
@@ -533,6 +561,21 @@ class CodebaseAuditVerificationRunnerTest(unittest.TestCase):
         )
         self.assertNotEqual(timed_out.returncode, 0)
         self.assertIn("timed out after 1 seconds", timed_out.stderr)
+
+    def test_source_extraction_rejects_missing_out_of_range_and_non_utf8(self):
+        entry = copy.deepcopy(self.assignments["buckets"][0]["entries"][0])
+        path = entry["finding"]["path"]
+
+        with self.assertRaisesRegex(RUNNER.RunnerError, "source is missing"):
+            RUNNER.source_for_entry({}, entry)
+
+        out_of_range = copy.deepcopy(entry)
+        out_of_range["finding"]["range"] = {"start": 1, "end": 2}
+        with self.assertRaisesRegex(RUNNER.RunnerError, "target blob has 1 lines"):
+            RUNNER.source_for_entry({path: b"one line\n"}, out_of_range)
+
+        with self.assertRaisesRegex(RUNNER.RunnerError, "is not UTF-8"):
+            RUNNER.source_for_entry({path: b"valid\ninvalid: \xff\n"}, entry)
 
     def test_no_overwrite_and_atomic_publish_race(self):
         run_directory = self.root / "run"
