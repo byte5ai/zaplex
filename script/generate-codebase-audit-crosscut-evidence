@@ -887,12 +887,17 @@ def parse_commit_object(
     raw = run_git(repo, "cat-file", "commit", commit_oid)
     try:
         headers, message = raw.split(b"\n\n", 1)
-        decoded_headers = headers.decode("ascii").splitlines()
         decoded_message = message.decode("utf-8")
     except (ValueError, UnicodeDecodeError) as error:
         raise EvidenceError(f"cannot decode commit object {commit_oid}") from error
-    tree_lines = [line[5:] for line in decoded_headers if line.startswith("tree ")]
-    parent_lines = [line[7:] for line in decoded_headers if line.startswith("parent ")]
+    header_lines = headers.split(b"\n")
+    tree_values = [line[5:] for line in header_lines if line.startswith(b"tree ")]
+    parent_values = [line[7:] for line in header_lines if line.startswith(b"parent ")]
+    try:
+        tree_lines = [value.decode("ascii") for value in tree_values]
+        parent_lines = [value.decode("ascii") for value in parent_values]
+    except UnicodeDecodeError as error:
+        raise EvidenceError(f"cannot decode commit object {commit_oid}") from error
     if len(tree_lines) != 1:
         raise EvidenceError(f"commit {commit_oid} does not have exactly one tree header")
     tree_oid = require_object_id(tree_lines[0], f"tree for {commit_oid}", oid_length)
