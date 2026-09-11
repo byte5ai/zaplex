@@ -2218,15 +2218,11 @@ impl SpawnCard {
 
     fn context_label(context_window: u64) -> String {
         if context_window >= 1_000_000 {
-            crate::t!(
-                "cockpit-spawn-card-sum-context-million",
-                count = context_window / 1_000_000_u64
-            )
+            let count = context_window / 1_000_000_u64;
+            crate::t!("cockpit-spawn-card-sum-context-million", count = count)
         } else {
-            crate::t!(
-                "cockpit-spawn-card-sum-context-thousand",
-                count = context_window / 1_000_u64
-            )
+            let count = context_window / 1_000_u64;
+            crate::t!("cockpit-spawn-card-sum-context-thousand", count = count)
         }
     }
 
