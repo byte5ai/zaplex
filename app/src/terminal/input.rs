@@ -13508,6 +13508,11 @@ impl Input {
         format!("prompt_area_{}", self.view_id)
     }
 
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn subscription_composer_save_position_id(&self) -> String {
+        format!("subscription_composer_{}", self.view_id)
+    }
+
     /// A save position for the bordered input alone,
     /// not including the status bar.
     pub fn status_free_input_save_position_id(&self) -> String {

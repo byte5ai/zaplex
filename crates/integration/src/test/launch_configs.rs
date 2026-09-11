@@ -178,6 +178,7 @@ pub fn test_launch_config_single_child_branch() -> Builder {
                 active_tab_index: Some(0),
                 tabs: vec![TabTemplate {
                     title: Some("First tab".to_owned()),
+                    is_pinned: false,
                     layout: PaneTemplateType::PaneBranchTemplate {
                         split_direction: SplitDirection::Horizontal,
                         panes: vec![PaneTemplateType::PaneTemplate {
@@ -307,6 +308,7 @@ pub fn test_with_launch_config_with_active_tab_index() -> Builder {
                 tabs: vec![
                     TabTemplate {
                         title: None,
+                        is_pinned: false,
                         layout: PaneTemplateType::PaneBranchTemplate {
                             split_direction: SplitDirection::Horizontal,
                             panes: vec![PaneTemplateType::PaneTemplate {
@@ -365,6 +367,7 @@ pub fn test_with_launch_config_with_active_pane() -> Builder {
                 active_tab_index: Some(0),
                 tabs: vec![TabTemplate {
                     title: None,
+                    is_pinned: false,
                     layout: PaneTemplateType::PaneBranchTemplate {
                         split_direction: SplitDirection::Horizontal,
                         panes: vec![
@@ -443,6 +446,7 @@ pub fn test_with_launch_config_with_no_active_pane() -> Builder {
                 active_tab_index: Some(0),
                 tabs: vec![TabTemplate {
                     title: None,
+                    is_pinned: false,
                     layout: PaneTemplateType::PaneBranchTemplate {
                         split_direction: SplitDirection::Horizontal,
                         panes: vec![

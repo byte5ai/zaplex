@@ -53,7 +53,7 @@ use crate::{
     view_components::{
         action_button::{
             ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, NakedTheme,
-            SecondaryTheme, TooltipAlignment,
+            PaneHeaderTheme, SecondaryTheme, TooltipAlignment,
         },
         DismissibleToast,
     },
@@ -107,12 +107,15 @@ use warpui::{
         Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
         CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Expanded, Flex,
         MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentElement, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Radius, Shrinkable, Stack, Text, Wrap, WrapFill,
-        WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
+        PositionedElementOffsetBounds, Radius, Stack, Text, Wrap, WrapFill, WrapFillEntireRun,
+        DEFAULT_UI_LINE_HEIGHT_RATIO,
     },
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
+
+#[cfg(feature = "integration_tests")]
+use warpui::elements::SavePosition;
 
 #[cfg(not(target_family = "wasm"))]
 use warpui::r#async::Timer;
@@ -155,6 +158,10 @@ enum CLIVoiceInputState {
 /// Gives the plugin time to connect and send its `SessionStart` event.
 #[cfg(not(target_family = "wasm"))]
 const PLUGIN_CHIP_DEBOUNCE: Duration = Duration::from_secs(3);
+const SUBSCRIPTION_IDENTITY_LABEL_MAX_WIDTH: f32 = 240.;
+const SUBSCRIPTION_IDENTITY_MIN_RUN_WIDTH: f32 = 360.;
+const SUBSCRIPTION_ACTION_LABEL_MAX_WIDTH: f32 = 240.;
+const SUBSCRIPTION_ACTION_MIN_RUN_WIDTH: f32 = 320.;
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1954,7 +1961,6 @@ fn subscription_target_status(
     lifecycle: &AgentLifecycle,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let appearance = Appearance::as_ref(app);
     let presentation = ConversationPresentation::for_lifecycle(lifecycle);
     let mut fields = Wrap::row()
         .with_main_axis_size(MainAxisSize::Min)
@@ -1962,17 +1968,78 @@ fn subscription_target_status(
         .with_run_spacing(4.)
         .with_spacing(4.);
     for field in conversation_identity_fields(target, session, lifecycle) {
-        fields.add_child(subscription_status_text(
-            format!("{}: {}", field.label, field.value),
-            appearance,
-        ));
+        fields.add_child(
+            WrapFill::new(
+                SUBSCRIPTION_IDENTITY_MIN_RUN_WIDTH,
+                subscription_status_text(format!("{}: {}", field.label, field.value), app),
+            )
+            .finish(),
+        );
     }
     if !presentation.composer.accepts_prompt() {
         if let Some(detail) = presentation.detail {
-            fields.add_child(subscription_status_text(detail, appearance));
+            fields.add_child(
+                WrapFill::new(
+                    SUBSCRIPTION_IDENTITY_MIN_RUN_WIDTH,
+                    subscription_status_text(detail, app),
+                )
+                .finish(),
+            );
         }
     }
     fields.finish()
+}
+
+#[cfg(feature = "integration_tests")]
+pub(crate) fn subscription_identity_position_id(conversation_id: &str) -> String {
+    format!("subscription_agent_identity_{conversation_id}")
+}
+
+#[cfg(feature = "integration_tests")]
+pub(crate) fn subscription_action_position_id(conversation_id: &str, action: &str) -> String {
+    format!("subscription_agent_action_{conversation_id}_{action}")
+}
+
+fn subscription_identity_layout_element(
+    conversation_id: &str,
+    child: Box<dyn Element>,
+) -> Box<dyn Element> {
+    #[cfg(feature = "integration_tests")]
+    {
+        return WrapFill::new(
+            SUBSCRIPTION_IDENTITY_MIN_RUN_WIDTH,
+            SavePosition::new(child, &subscription_identity_position_id(conversation_id))
+                .for_single_frame()
+                .finish(),
+        )
+        .finish();
+    }
+    #[cfg(not(feature = "integration_tests"))]
+    {
+        let _ = conversation_id;
+        WrapFill::new(SUBSCRIPTION_IDENTITY_MIN_RUN_WIDTH, child).finish()
+    }
+}
+
+fn subscription_action_layout_element(
+    conversation_id: &str,
+    action: &str,
+    child: Box<dyn Element>,
+) -> Box<dyn Element> {
+    #[cfg(feature = "integration_tests")]
+    {
+        return SavePosition::new(
+            child,
+            &subscription_action_position_id(conversation_id, action),
+        )
+        .for_single_frame()
+        .finish();
+    }
+    #[cfg(not(feature = "integration_tests"))]
+    {
+        let _ = (conversation_id, action);
+        child
+    }
 }
 
 fn subscription_lifecycle_status(lifecycle: &AgentLifecycle, app: &AppContext) -> Box<dyn Element> {
@@ -1981,27 +2048,16 @@ fn subscription_lifecycle_status(lifecycle: &AgentLifecycle, app: &AppContext) -
         Some(detail) => format!("{} — {detail}", presentation.status),
         None => presentation.status,
     };
-    subscription_status_text(label, Appearance::as_ref(app))
+    subscription_status_text(label, app)
 }
 
-fn subscription_status_text(label: String, appearance: &Appearance) -> Box<dyn Element> {
-    Container::new(
-        Text::new_inline(
-            label,
-            appearance.ui_font_family(),
-            appearance.monospace_font_size() - 2.,
-        )
-        .with_color(
-            appearance
-                .theme()
-                .sub_text_color(appearance.theme().background())
-                .into_solid(),
-        )
-        .finish(),
-    )
-    .with_horizontal_padding(6.)
-    .with_vertical_padding(3.)
-    .finish()
+fn subscription_status_text(label: String, app: &AppContext) -> Box<dyn Element> {
+    ActionButton::new(label.clone(), PaneHeaderTheme)
+        .with_size(ButtonSize::Small)
+        .with_max_label_width(SUBSCRIPTION_IDENTITY_LABEL_MAX_WIDTH)
+        .with_tooltip(label)
+        .with_tooltip_alignment(TooltipAlignment::Left)
+        .render(app)
 }
 
 fn subscription_approval_actions(
@@ -2010,41 +2066,58 @@ fn subscription_approval_actions(
     agent: SubscriptionAgent,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let mut actions = Flex::row()
+    let mut actions = Wrap::row()
         .with_main_axis_size(MainAxisSize::Min)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_run_spacing(4.)
         .with_spacing(4.);
-    actions.add_child(subscription_approval_button(
-        crate::t!("ai-footer-subscription-allow"),
+    actions.add_child(subscription_action_layout_element(
         conversation_id,
-        request_id,
-        ApprovalDecision::Allow,
-        app,
-    ));
-    if agent == SubscriptionAgent::Codex {
-        actions.add_child(subscription_approval_button(
-            crate::t!("ai-footer-subscription-allow-for-session"),
+        "allow",
+        subscription_approval_button(
+            crate::t!("ai-footer-subscription-allow"),
             conversation_id,
             request_id,
-            ApprovalDecision::AllowForSession,
+            ApprovalDecision::Allow,
             app,
+        ),
+    ));
+    if agent == SubscriptionAgent::Codex {
+        actions.add_child(subscription_action_layout_element(
+            conversation_id,
+            "allow_for_session",
+            subscription_approval_button(
+                crate::t!("ai-footer-subscription-allow-for-session"),
+                conversation_id,
+                request_id,
+                ApprovalDecision::AllowForSession,
+                app,
+            ),
         ));
     }
-    actions.add_child(subscription_approval_button(
-        crate::t!("common-deny"),
+    actions.add_child(subscription_action_layout_element(
         conversation_id,
-        request_id,
-        ApprovalDecision::Deny,
-        app,
+        "deny",
+        subscription_approval_button(
+            crate::t!("common-deny"),
+            conversation_id,
+            request_id,
+            ApprovalDecision::Deny,
+            app,
+        ),
     ));
-    actions.add_child(subscription_approval_button(
-        crate::t!("common-cancel"),
+    actions.add_child(subscription_action_layout_element(
         conversation_id,
-        request_id,
-        ApprovalDecision::Cancel,
-        app,
+        "cancel",
+        subscription_approval_button(
+            crate::t!("common-cancel"),
+            conversation_id,
+            request_id,
+            ApprovalDecision::Cancel,
+            app,
+        ),
     ));
-    actions.finish()
+    WrapFillEntireRun::new(actions.finish()).finish()
 }
 
 fn subscription_approval_button(
@@ -2077,10 +2150,14 @@ fn subscription_lifecycle_actions(
     for action in presentation.actions {
         match action {
             ConversationAction::OpenAgentSettings => {
-                actions.add_child(subscription_action_button(
-                    crate::t!("ai-footer-subscription-agent-settings"),
-                    AgentInputFooterAction::OpenCodingAgentSettings,
-                    app,
+                actions.add_child(subscription_action_layout_element(
+                    conversation_id,
+                    "settings",
+                    subscription_action_button(
+                        crate::t!("ai-footer-subscription-agent-settings"),
+                        AgentInputFooterAction::OpenCodingAgentSettings,
+                        app,
+                    ),
                 ));
             }
             ConversationAction::ResolveApproval => {
@@ -2096,53 +2173,77 @@ fn subscription_lifecycle_actions(
                 }
             }
             ConversationAction::Retry => {
-                actions.add_child(subscription_action_button(
-                    crate::t!("common-retry"),
-                    AgentInputFooterAction::RetrySubscriptionPreflight {
-                        conversation_id: conversation_id.to_string(),
-                    },
-                    app,
+                actions.add_child(subscription_action_layout_element(
+                    conversation_id,
+                    "retry",
+                    subscription_action_button(
+                        crate::t!("common-retry"),
+                        AgentInputFooterAction::RetrySubscriptionPreflight {
+                            conversation_id: conversation_id.to_string(),
+                        },
+                        app,
+                    ),
                 ));
             }
             ConversationAction::Resume => {
-                actions.add_child(subscription_action_button(
-                    crate::t!("ai-footer-subscription-resume"),
-                    AgentInputFooterAction::ResumeSubscriptionSession {
-                        conversation_id: conversation_id.to_string(),
-                    },
-                    app,
+                actions.add_child(subscription_action_layout_element(
+                    conversation_id,
+                    "resume",
+                    subscription_action_button(
+                        crate::t!("ai-footer-subscription-resume"),
+                        AgentInputFooterAction::ResumeSubscriptionSession {
+                            conversation_id: conversation_id.to_string(),
+                        },
+                        app,
+                    ),
                 ));
             }
             ConversationAction::Restart => {
-                actions.add_child(subscription_action_button(
-                    crate::t!("ai-footer-subscription-restart"),
-                    AgentInputFooterAction::RestartSubscriptionSession {
-                        conversation_id: conversation_id.to_string(),
-                    },
-                    app,
+                actions.add_child(subscription_action_layout_element(
+                    conversation_id,
+                    "restart",
+                    subscription_action_button(
+                        crate::t!("ai-footer-subscription-restart"),
+                        AgentInputFooterAction::RestartSubscriptionSession {
+                            conversation_id: conversation_id.to_string(),
+                        },
+                        app,
+                    ),
                 ));
             }
             ConversationAction::End => {
-                actions.add_child(subscription_action_button(
-                    crate::t!("ai-footer-subscription-end"),
-                    AgentInputFooterAction::EndSubscriptionSession {
-                        conversation_id: conversation_id.to_string(),
-                    },
-                    app,
+                actions.add_child(subscription_action_layout_element(
+                    conversation_id,
+                    "end",
+                    subscription_action_button(
+                        crate::t!("ai-footer-subscription-end"),
+                        AgentInputFooterAction::EndSubscriptionSession {
+                            conversation_id: conversation_id.to_string(),
+                        },
+                        app,
+                    ),
                 ));
             }
             ConversationAction::NewConversation => {
-                actions.add_child(subscription_action_button(
-                    crate::t!("ai-footer-subscription-new-conversation"),
-                    AgentInputFooterAction::StartNewAgentConversation,
-                    app,
+                actions.add_child(subscription_action_layout_element(
+                    conversation_id,
+                    "new_conversation",
+                    subscription_action_button(
+                        crate::t!("ai-footer-subscription-new-conversation"),
+                        AgentInputFooterAction::StartNewAgentConversation,
+                        app,
+                    ),
                 ));
             }
             ConversationAction::BackToShell => {
-                actions.add_child(subscription_action_button(
-                    crate::t!("ai-footer-subscription-back-to-shell"),
-                    AgentInputFooterAction::BackToShell,
-                    app,
+                actions.add_child(subscription_action_layout_element(
+                    conversation_id,
+                    "back_to_shell",
+                    subscription_action_button(
+                        crate::t!("ai-footer-subscription-back-to-shell"),
+                        AgentInputFooterAction::BackToShell,
+                        app,
+                    ),
                 ));
             }
         }
@@ -2155,19 +2256,26 @@ fn subscription_agent_choices(
     agents: &[SubscriptionAgent],
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let mut choices = Flex::row()
+    let mut choices = Wrap::row()
         .with_main_axis_size(MainAxisSize::Min)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_run_spacing(4.)
         .with_spacing(4.);
     for agent in agents {
-        choices.add_child(subscription_action_button(
-            agent.display_name(),
-            AgentInputFooterAction::SelectSubscriptionAgent {
-                conversation_id: conversation_id.to_string(),
-                agent: *agent,
-            },
-            app,
-        ));
+        choices.add_child(
+            WrapFill::new(
+                SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
+                subscription_action_button(
+                    agent.display_name(),
+                    AgentInputFooterAction::SelectSubscriptionAgent {
+                        conversation_id: conversation_id.to_string(),
+                        agent: *agent,
+                    },
+                    app,
+                ),
+            )
+            .finish(),
+        );
     }
     choices.finish()
 }
@@ -2178,27 +2286,45 @@ fn subscription_target_change_actions(conversation_id: &str, app: &AppContext) -
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_run_spacing(4.)
         .with_spacing(4.)
-        .with_child(subscription_action_button(
-            crate::t!("ai-footer-subscription-change-agent"),
-            AgentInputFooterAction::BeginSubscriptionAgentSelection {
-                conversation_id: conversation_id.to_string(),
-            },
-            app,
-        ))
-        .with_child(subscription_action_button(
-            crate::t!("ai-footer-subscription-change-account"),
-            AgentInputFooterAction::BeginSubscriptionAccountSelection {
-                conversation_id: conversation_id.to_string(),
-            },
-            app,
-        ))
-        .with_child(subscription_action_button(
-            crate::t!("ai-footer-subscription-change-model"),
-            AgentInputFooterAction::BeginSubscriptionModelSelection {
-                conversation_id: conversation_id.to_string(),
-            },
-            app,
-        ))
+        .with_child(
+            WrapFill::new(
+                SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
+                subscription_action_button(
+                    crate::t!("ai-footer-subscription-change-agent"),
+                    AgentInputFooterAction::BeginSubscriptionAgentSelection {
+                        conversation_id: conversation_id.to_string(),
+                    },
+                    app,
+                ),
+            )
+            .finish(),
+        )
+        .with_child(
+            WrapFill::new(
+                SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
+                subscription_action_button(
+                    crate::t!("ai-footer-subscription-change-account"),
+                    AgentInputFooterAction::BeginSubscriptionAccountSelection {
+                        conversation_id: conversation_id.to_string(),
+                    },
+                    app,
+                ),
+            )
+            .finish(),
+        )
+        .with_child(
+            WrapFill::new(
+                SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
+                subscription_action_button(
+                    crate::t!("ai-footer-subscription-change-model"),
+                    AgentInputFooterAction::BeginSubscriptionModelSelection {
+                        conversation_id: conversation_id.to_string(),
+                    },
+                    app,
+                ),
+            )
+            .finish(),
+        )
         .finish()
 }
 
@@ -2207,20 +2333,27 @@ fn subscription_account_choices(
     accounts: &[AccountIdentity],
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let mut choices = Flex::row()
+    let mut choices = Wrap::row()
         .with_main_axis_size(MainAxisSize::Min)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_run_spacing(4.)
         .with_spacing(4.);
     for account in accounts {
         let label = account_identity_label(account);
-        choices.add_child(subscription_action_button(
-            &label,
-            AgentInputFooterAction::SelectSubscriptionAccount {
-                conversation_id: conversation_id.to_string(),
-                account: account.clone(),
-            },
-            app,
-        ));
+        choices.add_child(
+            WrapFill::new(
+                SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
+                subscription_action_button(
+                    &label,
+                    AgentInputFooterAction::SelectSubscriptionAccount {
+                        conversation_id: conversation_id.to_string(),
+                        account: account.clone(),
+                    },
+                    app,
+                ),
+            )
+            .finish(),
+        );
     }
     choices.finish()
 }
@@ -2230,20 +2363,27 @@ fn subscription_model_choices(
     models: &[crate::ai::subscription_agent::ModelCapability],
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let mut choices = Flex::row()
+    let mut choices = Wrap::row()
         .with_main_axis_size(MainAxisSize::Min)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_run_spacing(4.)
         .with_spacing(4.);
     for model in models {
         let label = model_identity_label(model);
-        choices.add_child(subscription_action_button(
-            &label,
-            AgentInputFooterAction::SelectSubscriptionModel {
-                conversation_id: conversation_id.to_string(),
-                model_id: model.id.clone(),
-            },
-            app,
-        ));
+        choices.add_child(
+            WrapFill::new(
+                SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
+                subscription_action_button(
+                    &label,
+                    AgentInputFooterAction::SelectSubscriptionModel {
+                        conversation_id: conversation_id.to_string(),
+                        model_id: model.id.clone(),
+                    },
+                    app,
+                ),
+            )
+            .finish(),
+        );
     }
     choices.finish()
 }
@@ -2275,32 +2415,48 @@ fn subscription_location_actions(
             host = host_identity_label(host),
             directory = working_directory.display().to_string()
         );
-        actions.add_child(subscription_action_button(
-            &label,
-            AgentInputFooterAction::SelectSubscriptionHost {
-                conversation_id: conversation_id.to_string(),
-                host_id: host.id.clone(),
-                working_directory,
-            },
-            app,
-        ));
+        actions.add_child(
+            WrapFill::new(
+                SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
+                subscription_action_button(
+                    &label,
+                    AgentInputFooterAction::SelectSubscriptionHost {
+                        conversation_id: conversation_id.to_string(),
+                        host_id: host.id.clone(),
+                        working_directory,
+                    },
+                    app,
+                ),
+            )
+            .finish(),
+        );
     }
     let Some(current) = current else {
         return actions.finish();
     };
     if current.host.id == LOCAL_SUBSCRIPTION_HOST_ID {
-        actions.add_child(subscription_action_button(
-            crate::t!("ai-footer-subscription-choose-directory"),
-            AgentInputFooterAction::OpenSubscriptionDirectoryPicker {
-                conversation_id: conversation_id.to_string(),
-            },
-            app,
-        ));
+        actions.add_child(
+            WrapFill::new(
+                SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
+                subscription_action_button(
+                    crate::t!("ai-footer-subscription-choose-directory"),
+                    AgentInputFooterAction::OpenSubscriptionDirectoryPicker {
+                        conversation_id: conversation_id.to_string(),
+                    },
+                    app,
+                ),
+            )
+            .finish(),
+        );
     } else {
         actions.add_child(
-            ConstrainedBox::new(ChildView::new(directory_editor).finish())
-                .with_width(260.)
-                .finish(),
+            WrapFill::new(
+                260.,
+                ConstrainedBox::new(ChildView::new(directory_editor).finish())
+                    .with_width(260.)
+                    .finish(),
+            )
+            .finish(),
         );
     }
     if current.working_directory.is_absolute() {
@@ -2313,25 +2469,37 @@ fn subscription_location_actions(
                 "ai-footer-subscription-use-directory",
                 directory = parent.display().to_string()
             );
-            actions.add_child(subscription_action_button(
-                &label,
-                AgentInputFooterAction::SelectSubscriptionDirectory {
-                    conversation_id: conversation_id.to_string(),
-                    working_directory: parent.to_path_buf(),
-                },
-                app,
-            ));
+            actions.add_child(
+                WrapFill::new(
+                    SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
+                    subscription_action_button(
+                        &label,
+                        AgentInputFooterAction::SelectSubscriptionDirectory {
+                            conversation_id: conversation_id.to_string(),
+                            working_directory: parent.to_path_buf(),
+                        },
+                        app,
+                    ),
+                )
+                .finish(),
+            );
         }
     }
     if current.working_directory != std::path::Path::new(".") {
-        actions.add_child(subscription_action_button(
-            crate::t!("ai-footer-subscription-use-host-default-directory"),
-            AgentInputFooterAction::SelectSubscriptionDirectory {
-                conversation_id: conversation_id.to_string(),
-                working_directory: PathBuf::from("."),
-            },
-            app,
-        ));
+        actions.add_child(
+            WrapFill::new(
+                SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
+                subscription_action_button(
+                    crate::t!("ai-footer-subscription-use-host-default-directory"),
+                    AgentInputFooterAction::SelectSubscriptionDirectory {
+                        conversation_id: conversation_id.to_string(),
+                        working_directory: PathBuf::from("."),
+                    },
+                    app,
+                ),
+            )
+            .finish(),
+        );
     }
     actions.finish()
 }
@@ -2341,8 +2509,12 @@ fn subscription_action_button(
     action: AgentInputFooterAction,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    ActionButton::new(label.into(), SecondaryTheme)
+    let label = label.into();
+    ActionButton::new(label.clone(), SecondaryTheme)
         .with_size(ButtonSize::Small)
+        .with_max_label_width(SUBSCRIPTION_ACTION_LABEL_MAX_WIDTH)
+        .with_tooltip(label)
+        .with_tooltip_alignment(TooltipAlignment::Left)
         .on_click(move |ctx| ctx.dispatch_typed_action(action.clone()))
         .render(app)
 }
@@ -2381,10 +2553,8 @@ impl View for AgentInputFooter {
             }
         }
 
-        let mut right_buttons = Wrap::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_run_spacing(4.)
+        let mut right_buttons = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(4.);
 
         let active_conversation_id = BlocklistAIHistoryModel::as_ref(app)
@@ -2397,11 +2567,9 @@ impl View for AgentInputFooter {
                     .lifecycle(conversation_id)
                     .unwrap_or(AgentLifecycle::Ready);
                 let session = registry.get(conversation_id).map(|stored| stored.session);
-                left_buttons.add_child(subscription_target_status(
-                    &target,
-                    session.as_ref(),
-                    &lifecycle,
-                    app,
+                left_buttons.add_child(subscription_identity_layout_element(
+                    conversation_id,
+                    subscription_target_status(&target, session.as_ref(), &lifecycle, app),
                 ));
                 right_buttons.add_child(subscription_lifecycle_actions(
                     conversation_id,
@@ -2432,15 +2600,18 @@ impl View for AgentInputFooter {
                 let models = registry.model_choices(conversation_id);
                 let location = registry.location_preference(conversation_id);
                 if let Some(location) = location.as_ref() {
-                    left_buttons.add_child(subscription_status_text(
-                        location_identity_label(location),
-                        Appearance::as_ref(app),
-                    ));
+                    left_buttons.add_child(
+                        WrapFill::new(
+                            SUBSCRIPTION_IDENTITY_MIN_RUN_WIDTH,
+                            subscription_status_text(location_identity_label(location), app),
+                        )
+                        .finish(),
+                    );
                 }
                 if lifecycle.can_change_location() && !models.is_empty() {
                     left_buttons.add_child(subscription_status_text(
                         crate::t!("ai-footer-subscription-choose-model"),
-                        Appearance::as_ref(app),
+                        app,
                     ));
                     right_buttons.add_child(subscription_model_choices(
                         conversation_id,
@@ -2450,7 +2621,7 @@ impl View for AgentInputFooter {
                 } else if lifecycle.can_change_location() && !accounts.is_empty() {
                     left_buttons.add_child(subscription_status_text(
                         crate::t!("ai-footer-subscription-choose-account"),
-                        Appearance::as_ref(app),
+                        app,
                     ));
                     right_buttons.add_child(subscription_account_choices(
                         conversation_id,
@@ -2460,7 +2631,7 @@ impl View for AgentInputFooter {
                 } else if lifecycle.can_change_location() && !choices.is_empty() {
                     left_buttons.add_child(subscription_status_text(
                         crate::t!("ai-footer-subscription-choose-agent"),
-                        Appearance::as_ref(app),
+                        app,
                     ));
                     right_buttons.add_child(subscription_agent_choices(
                         conversation_id,
@@ -2468,7 +2639,10 @@ impl View for AgentInputFooter {
                         app,
                     ));
                 } else {
-                    left_buttons.add_child(subscription_lifecycle_status(&lifecycle, app));
+                    left_buttons.add_child(subscription_identity_layout_element(
+                        conversation_id,
+                        subscription_lifecycle_status(&lifecycle, app),
+                    ));
                 }
                 right_buttons.add_child(subscription_lifecycle_actions(
                     conversation_id,
@@ -2491,18 +2665,23 @@ impl View for AgentInputFooter {
 
         let has_prompt_alert = !self.prompt_alert.as_ref(app).is_no_alert();
         if has_prompt_alert {
-            right_buttons.add_child(
-                Shrinkable::new(
-                    1.,
-                    Clipped::new(ChildView::new(&self.prompt_alert).finish()).finish(),
-                )
-                .finish(),
-            );
+            right_buttons
+                .add_child(Clipped::new(ChildView::new(&self.prompt_alert).finish()).finish());
         } else {
+            let mut toolbar_items = Wrap::row()
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_run_spacing(4.)
+                .with_spacing(4.);
+            let mut has_toolbar_item = false;
             for item in &right_items {
                 if let Some(element) = self.render_toolbar_item(item, shared_status, app) {
-                    right_buttons.add_child(element);
+                    toolbar_items.add_child(element);
+                    has_toolbar_item = true;
                 }
+            }
+            if has_toolbar_item {
+                right_buttons.add_child(toolbar_items.finish());
             }
         }
 
@@ -2511,7 +2690,7 @@ impl View for AgentInputFooter {
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(WrapFill::new(0., left_buttons.finish()).finish())
-            .with_child(WrapFill::new(0., right_buttons.finish()).finish())
+            .with_child(WrapFillEntireRun::new(right_buttons.finish()).finish())
             .with_run_spacing(context_chips::spacing::UDI_ROW_RUN_SPACING)
             .finish();
         let content = EventHandler::new(content)
