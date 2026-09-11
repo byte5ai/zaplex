@@ -6,9 +6,6 @@ use crate::ai::subscription_agent::{
 use std::os::unix::fs::PermissionsExt as _;
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
-#[cfg(target_os = "linux")]
-use warpui::r#async::FutureExt as _;
-
 fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
     SubscriptionTarget {
         installation: InstallationIdentity {
