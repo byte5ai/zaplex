@@ -1,0 +1,1046 @@
+#!/usr/bin/env python3
+
+"""Run immutable codebase-audit finding verification assignments with Codex."""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import copy
+from dataclasses import dataclass
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+from typing import Any
+
+
+SCHEMA_VERSION = 1
+RUNNER_VERSION = 1
+BUCKET_COUNT = 3
+MAX_PARALLEL = 3
+LENSES = ("disprove", "impact", "reproduction-fix")
+REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
+SEVERITIES = ("P0", "P1", "P2", "P3")
+ASSIGNMENT_ROOT_KEYS = {
+    "schema_version",
+    "generator_version",
+    "aggregate_sha256",
+    "issue_snapshot_sha256",
+    "github_repository",
+    "provenance",
+    "issue_snapshot",
+    "finding_count",
+    "lens_count",
+    "bucket_count",
+    "coverage",
+    "buckets",
+    "assignment_sha256",
+}
+ASSIGNMENT_BUCKET_KEYS = {"id", "tuple_count", "entries", "assignment_sha256"}
+ASSIGNMENT_ENTRY_KEYS = {
+    "verification_id",
+    "finding_id",
+    "lens",
+    "aggregate_sha256",
+    "issue_snapshot_sha256",
+    "github_repository",
+    "finding",
+    "provenance",
+    "issue_snapshot",
+}
+COMMON_RESPONSE_KEYS = {
+    "schema_version",
+    "verification_id",
+    "finding_id",
+    "lens",
+    "aggregate_sha256",
+    "issue_snapshot_sha256",
+    "github_repository",
+}
+LENS_RESPONSE_KEYS = {
+    "disprove": {"verdict", "counter_evidence"},
+    "impact": {"severity", "impact"},
+    "reproduction-fix": {
+        "reproducible",
+        "reproduction",
+        "fix_assessment",
+        "test_assessment",
+    },
+}
+
+
+class RunnerError(RuntimeError):
+    """Raised when an immutable verification run cannot be accepted."""
+
+
+@dataclass(frozen=True)
+class GeneratorEvidence:
+    stdout: bytes
+    stderr: bytes
+
+
+@dataclass(frozen=True)
+class TupleResult:
+    bucket_id: str
+    position: int
+    verification_id: str
+    finding_id: str
+    lens: str
+    tuple_sha256: str
+    prompt_sha256: str
+    schema_sha256: str
+    events_sha256: str
+    stderr_sha256: str
+    final_message_sha256: str
+    response_sha256: str
+    response: dict[str, Any]
+
+
+def canonical_json(value: Any) -> bytes:
+    try:
+        encoded = json.dumps(
+            value,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise RunnerError(f"value is not canonical JSON: {error}") from error
+    return (encoded + "\n").encode("utf-8")
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def reject_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def decode_json(raw: bytes, label: str) -> Any:
+    try:
+        return json.loads(
+            raw,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise RunnerError(f"invalid {label} JSON: {error}") from error
+
+
+def load_canonical_json(path: Path, label: str) -> tuple[Any, bytes]:
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        raise RunnerError(f"cannot read {label} {path}: {error}") from error
+    value = decode_json(raw, label)
+    if canonical_json(value) != raw:
+        raise RunnerError(f"{label} is not canonical JSON")
+    return value, raw
+
+
+def require_exact_keys(value: Any, expected: set[str], label: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != expected:
+        raise RunnerError(f"{label} shape is invalid")
+    return value
+
+
+def require_plain_int(value: Any, label: str, minimum: int = 0) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        raise RunnerError(f"{label} must be an integer >= {minimum}")
+    return value
+
+
+def require_hash(value: Any, label: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise RunnerError(f"{label} must be a canonical SHA-256")
+    return value
+
+
+def require_text(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip() or "\0" in value:
+        raise RunnerError(f"{label} must be a non-empty string")
+    return value
+
+
+def require_path(value: Any, label: str) -> str:
+    value = require_text(value, label)
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or str(path) != value
+        or any(part in ("", ".", "..") for part in path.parts)
+        or any(part.casefold() == ".git" for part in path.parts)
+    ):
+        raise RunnerError(f"{label} must be a normalized repository-relative path")
+    return value
+
+
+def document_hash(value: dict[str, Any], hash_key: str) -> str:
+    payload = copy.deepcopy(value)
+    payload.pop(hash_key, None)
+    return sha256_bytes(canonical_json(payload))
+
+
+def git_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    ):
+        environment.pop(name, None)
+    for name in tuple(environment):
+        if name == "GIT_CONFIG_COUNT" or name.startswith("GIT_CONFIG_KEY_"):
+            environment.pop(name, None)
+        if name.startswith("GIT_CONFIG_VALUE_"):
+            environment.pop(name, None)
+    environment["GIT_GRAFT_FILE"] = os.devnull
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+    return environment
+
+
+def run_git(repo: Path, *arguments: str) -> bytes:
+    command = ["git", "--no-replace-objects", "-C", str(repo), *arguments]
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=git_environment(),
+        )
+    except OSError as error:
+        raise RunnerError(f"cannot execute Git: {error}") from error
+    if completed.returncode != 0:
+        message = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RunnerError(f"Git command failed ({' '.join(arguments)}): {message}")
+    return completed.stdout
+
+
+def reject_history_overrides(repo: Path) -> None:
+    replace_refs = run_git(
+        repo, "for-each-ref", "--format=%(refname)", "refs/replace/"
+    ).decode().splitlines()
+    if replace_refs:
+        raise RunnerError(
+            f"Git replace refs are not allowed: {', '.join(sorted(replace_refs))}"
+        )
+    raw_common_directory = run_git(repo, "rev-parse", "--git-common-dir").decode().strip()
+    common_directory = Path(raw_common_directory)
+    if not common_directory.is_absolute():
+        common_directory = repo / common_directory
+    grafts = common_directory.resolve() / "info" / "grafts"
+    if grafts.exists():
+        raise RunnerError(f"Git grafts are not allowed: {grafts}")
+
+
+def validate_repo_and_load_files(
+    repo: Path, assignments: dict[str, Any]
+) -> dict[str, bytes]:
+    reject_history_overrides(repo)
+    object_format = run_git(
+        repo, "rev-parse", "--show-object-format=storage"
+    ).decode().strip()
+    lengths = {"sha1": 40, "sha256": 64}
+    if object_format not in lengths:
+        raise RunnerError(f"unsupported Git object format: {object_format}")
+    oid_length = lengths[object_format]
+    provenance = assignments["provenance"]
+    for name in ("target_sha", "upstream_sha", "merge_base_sha"):
+        object_id = provenance.get(name)
+        if (
+            not isinstance(object_id, str)
+            or re.fullmatch(rf"[0-9a-f]{{{oid_length}}}", object_id) is None
+        ):
+            raise RunnerError(f"assignment provenance {name} is not canonical")
+        resolved = run_git(
+            repo, "rev-parse", "--verify", "--end-of-options", f"{object_id}^{{commit}}"
+        ).decode().strip()
+        if resolved != object_id:
+            raise RunnerError(f"assignment provenance {name} is not immutable")
+    merge_bases = sorted(
+        line
+        for line in run_git(
+            repo,
+            "merge-base",
+            "--all",
+            provenance["target_sha"],
+            provenance["upstream_sha"],
+        ).decode().splitlines()
+        if line
+    )
+    if merge_bases != [provenance["merge_base_sha"]]:
+        raise RunnerError("assignment merge_base_sha does not match Git")
+
+    paths = sorted(
+        {
+            require_path(entry["finding"].get("path"), "finding path")
+            for bucket in assignments["buckets"]
+            for entry in bucket["entries"]
+        }
+    )
+    files = {}
+    for path in paths:
+        raw = run_git(
+            repo,
+            "ls-tree",
+            "-z",
+            provenance["target_sha"],
+            "--",
+            path,
+        )
+        records = [record for record in raw.split(b"\0") if record]
+        if len(records) != 1:
+            raise RunnerError(f"target tree does not contain exactly one entry for {path}")
+        try:
+            metadata, raw_path = records[0].split(b"\t", 1)
+            _, entry_type, object_id = metadata.decode("ascii").split(" ", 2)
+            tree_path = raw_path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise RunnerError(f"cannot decode target tree entry for {path}") from error
+        if tree_path != path or entry_type != "blob":
+            raise RunnerError(f"target tree entry for {path} is not an exact blob")
+        if re.fullmatch(rf"[0-9a-f]{{{oid_length}}}", object_id) is None:
+            raise RunnerError(f"target tree object ID for {path} is not canonical")
+        files[path] = run_git(repo, "cat-file", "blob", object_id)
+    return files
+
+
+def regenerate_assignments(
+    generator: Path,
+    aggregate_path: Path,
+    issue_snapshot_path: Path,
+    assignments_path: Path,
+    expected_aggregate_sha256: str,
+    expected_issue_snapshot_sha256: str,
+    github_repository: str,
+) -> tuple[dict[str, Any], bytes, bytes, bytes, GeneratorEvidence]:
+    require_hash(expected_aggregate_sha256, "expected aggregate SHA-256")
+    require_hash(expected_issue_snapshot_sha256, "expected issue snapshot SHA-256")
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", github_repository) is None:
+        raise RunnerError("github repository must use owner/repository form")
+    try:
+        generator = generator.resolve(strict=True)
+        aggregate_path = aggregate_path.resolve(strict=True)
+        issue_snapshot_path = issue_snapshot_path.resolve(strict=True)
+        assignments_path = assignments_path.resolve(strict=True)
+    except OSError as error:
+        raise RunnerError(f"cannot resolve a pinned verification input: {error}") from error
+    aggregate, aggregate_bytes = load_canonical_json(aggregate_path, "aggregate")
+    issue_snapshot, issue_snapshot_bytes = load_canonical_json(
+        issue_snapshot_path, "issue snapshot"
+    )
+    assignments, assignments_bytes = load_canonical_json(assignments_path, "assignments")
+    if not isinstance(aggregate, dict) or not isinstance(issue_snapshot, list):
+        raise RunnerError("aggregate or issue snapshot root has invalid type")
+    with tempfile.TemporaryDirectory(
+        prefix="zaplex-codebase-audit-verification-bind-"
+    ) as temporary_name:
+        generated_path = Path(temporary_name) / "assignments.json"
+        command = [
+            sys.executable,
+            str(generator),
+            "--aggregate",
+            str(aggregate_path),
+            "--issue-snapshot",
+            str(issue_snapshot_path),
+            "--output",
+            generated_path.name,
+            "--expected-aggregate-sha256",
+            expected_aggregate_sha256,
+            "--expected-issue-snapshot-sha256",
+            expected_issue_snapshot_sha256,
+            "--github-repository",
+            github_repository,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=60,
+                cwd=temporary_name,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RunnerError(f"cannot regenerate verification assignments: {error}") from error
+        if completed.returncode != 0:
+            message = completed.stderr.decode("utf-8", errors="replace").strip()
+            raise RunnerError(f"verification assignment generator failed: {message}")
+        try:
+            generated_bytes = generated_path.read_bytes()
+        except OSError as error:
+            raise RunnerError(f"generator did not publish assignments: {error}") from error
+    if generated_bytes != assignments_bytes:
+        raise RunnerError("assignments are not byte-exact generator output for pinned inputs")
+    validate_assignments_contract(
+        assignments,
+        expected_aggregate_sha256,
+        expected_issue_snapshot_sha256,
+        github_repository,
+    )
+    return (
+        assignments,
+        aggregate_bytes,
+        issue_snapshot_bytes,
+        assignments_bytes,
+        GeneratorEvidence(
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        ),
+    )
+
+
+def validate_assignments_contract(
+    assignments: Any,
+    expected_aggregate_sha256: str,
+    expected_issue_snapshot_sha256: str,
+    github_repository: str,
+) -> None:
+    assignments = require_exact_keys(
+        assignments, ASSIGNMENT_ROOT_KEYS, "verification assignments"
+    )
+    if assignments["schema_version"] != SCHEMA_VERSION:
+        raise RunnerError("verification assignment schema_version mismatch")
+    for key in ("aggregate_sha256", "issue_snapshot_sha256", "assignment_sha256"):
+        require_hash(assignments[key], f"verification assignment {key}")
+    if assignments["aggregate_sha256"] != expected_aggregate_sha256:
+        raise RunnerError("verification assignment aggregate SHA-256 pin mismatch")
+    if assignments["issue_snapshot_sha256"] != expected_issue_snapshot_sha256:
+        raise RunnerError("verification assignment issue snapshot SHA-256 pin mismatch")
+    if assignments["github_repository"] != github_repository:
+        raise RunnerError("verification assignment repository mismatch")
+    if assignments["assignment_sha256"] != document_hash(
+        assignments, "assignment_sha256"
+    ):
+        raise RunnerError("verification assignment document SHA-256 mismatch")
+    if assignments["bucket_count"] != BUCKET_COUNT:
+        raise RunnerError(f"verification assignments require exactly {BUCKET_COUNT} buckets")
+    if assignments["lens_count"] != len(LENSES):
+        raise RunnerError("verification assignment lens_count mismatch")
+    buckets = assignments["buckets"]
+    if not isinstance(buckets, list) or len(buckets) != BUCKET_COUNT:
+        raise RunnerError("verification assignment buckets are incomplete")
+    expected_ids = [f"verification-bucket-{index}" for index in range(1, 4)]
+    if [bucket.get("id") for bucket in buckets if isinstance(bucket, dict)] != expected_ids:
+        raise RunnerError("verification assignment bucket IDs are invalid")
+    entries = []
+    for bucket in buckets:
+        require_exact_keys(bucket, ASSIGNMENT_BUCKET_KEYS, "verification bucket")
+        require_hash(bucket["assignment_sha256"], f"{bucket['id']} assignment SHA-256")
+        if not isinstance(bucket["entries"], list):
+            raise RunnerError(f"{bucket['id']} entries must be an array")
+        if bucket["tuple_count"] != len(bucket["entries"]):
+            raise RunnerError(f"{bucket['id']} tuple_count mismatch")
+        for entry in bucket["entries"]:
+            require_exact_keys(entry, ASSIGNMENT_ENTRY_KEYS, "verification tuple")
+            if entry["lens"] not in LENSES:
+                raise RunnerError("verification tuple lens is invalid")
+            if entry["aggregate_sha256"] != expected_aggregate_sha256:
+                raise RunnerError("verification tuple aggregate provenance mismatch")
+            if entry["issue_snapshot_sha256"] != expected_issue_snapshot_sha256:
+                raise RunnerError("verification tuple issue provenance mismatch")
+            if entry["github_repository"] != github_repository:
+                raise RunnerError("verification tuple repository provenance mismatch")
+            require_text(entry["verification_id"], "verification_id")
+            require_text(entry["finding_id"], "finding_id")
+            if not isinstance(entry["finding"], dict):
+                raise RunnerError("verification tuple finding must be an object")
+            entries.append(entry)
+    identities = [entry["verification_id"] for entry in entries]
+    pairs = [(entry["finding_id"], entry["lens"]) for entry in entries]
+    if len(identities) != len(set(identities)) or len(pairs) != len(set(pairs)):
+        raise RunnerError("verification tuples are duplicated")
+    coverage = assignments["coverage"]
+    if not isinstance(coverage, dict) or coverage.get("complete") is not True:
+        raise RunnerError("verification assignment coverage is incomplete")
+    expected_tuples = require_plain_int(
+        coverage.get("expected_tuples"), "coverage.expected_tuples"
+    )
+    assigned_tuples = require_plain_int(
+        coverage.get("assigned_tuples"), "coverage.assigned_tuples"
+    )
+    if expected_tuples != len(entries) or assigned_tuples != len(entries):
+        raise RunnerError("verification assignment tuple coverage mismatch")
+
+
+def response_schema(lens: str) -> dict[str, Any]:
+    hash_pattern = "^[0-9a-f]{64}$"
+    common = {
+        "schema_version": {"const": SCHEMA_VERSION},
+        "verification_id": {"type": "string", "minLength": 1},
+        "finding_id": {"type": "string", "minLength": 1},
+        "lens": {"const": lens},
+        "aggregate_sha256": {"type": "string", "pattern": hash_pattern},
+        "issue_snapshot_sha256": {"type": "string", "pattern": hash_pattern},
+        "github_repository": {"type": "string", "minLength": 3},
+    }
+    lens_properties = {
+        "disprove": {
+            "verdict": {"enum": ["supported", "rejected", "needs-evidence"]},
+            "counter_evidence": {"type": "string", "minLength": 1},
+        },
+        "impact": {
+            "severity": {"enum": list(SEVERITIES)},
+            "impact": {"type": "string", "minLength": 1},
+        },
+        "reproduction-fix": {
+            "reproducible": {"type": "boolean"},
+            "reproduction": {"type": "string", "minLength": 1},
+            "fix_assessment": {"type": "string", "minLength": 1},
+            "test_assessment": {"type": "string", "minLength": 1},
+        },
+    }[lens]
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": False,
+        "required": sorted(COMMON_RESPONSE_KEYS | LENS_RESPONSE_KEYS[lens]),
+        "properties": common | lens_properties,
+    }
+
+
+def prompt_for_tuple(assignments: dict[str, Any], entry: dict[str, Any]) -> bytes:
+    lens_instructions = {
+        "disprove": (
+            "Try to disprove the finding. Return supported, rejected, or needs-evidence "
+            "and cite concrete counter-evidence or the exact missing evidence."
+        ),
+        "impact": (
+            "Independently assess severity and describe the concrete user, security, "
+            "reliability, or data-loss impact."
+        ),
+        "reproduction-fix": (
+            "Assess reproducibility and whether the proposed fix and regression test "
+            "are sufficient and specific."
+        ),
+    }
+    prompt = {
+        "task": lens_instructions[entry["lens"]],
+        "rules": [
+            "Inspect only the immutable target snapshot in the working directory.",
+            "Do not edit files, use the network, or inspect another checkout or revision.",
+            "Treat the tuple below as immutable and evaluate every included field.",
+            "Return only one JSON object matching the supplied lens schema.",
+            "Echo all common identity and provenance values exactly.",
+        ],
+        "assignment_sha256": assignments["assignment_sha256"],
+        "tuple": copy.deepcopy(entry),
+    }
+    return canonical_json(prompt)
+
+
+def validate_response(
+    response: Any, entry: dict[str, Any], assignments: dict[str, Any]
+) -> dict[str, Any]:
+    lens = entry["lens"]
+    response = require_exact_keys(
+        response,
+        COMMON_RESPONSE_KEYS | LENS_RESPONSE_KEYS[lens],
+        f"{lens} response",
+    )
+    expected = {
+        "schema_version": SCHEMA_VERSION,
+        "verification_id": entry["verification_id"],
+        "finding_id": entry["finding_id"],
+        "lens": lens,
+        "aggregate_sha256": assignments["aggregate_sha256"],
+        "issue_snapshot_sha256": assignments["issue_snapshot_sha256"],
+        "github_repository": assignments["github_repository"],
+    }
+    for key, value in expected.items():
+        if response.get(key) != value:
+            raise RunnerError(f"{lens} response {key} provenance mismatch")
+    if lens == "disprove":
+        if response["verdict"] not in ("supported", "rejected", "needs-evidence"):
+            raise RunnerError("disprove response verdict is invalid")
+        require_text(response["counter_evidence"], "disprove counter_evidence")
+    elif lens == "impact":
+        if response["severity"] not in SEVERITIES:
+            raise RunnerError("impact response severity is invalid")
+        require_text(response["impact"], "impact response impact")
+    elif lens == "reproduction-fix":
+        if not isinstance(response["reproducible"], bool):
+            raise RunnerError("reproduction-fix reproducible must be a boolean")
+        for key in ("reproduction", "fix_assessment", "test_assessment"):
+            require_text(response[key], f"reproduction-fix {key}")
+    return response
+
+
+def atomic_publish(path: Path, contents: bytes) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(contents)
+            output.flush()
+            os.fsync(output.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError as error:
+            raise RunnerError(f"output path already exists: {path}") from error
+        except OSError as error:
+            raise RunnerError(f"cannot publish output {path}: {error}") from error
+        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def create_run_directory(path: Path) -> Path:
+    path = path.parent.resolve() / path.name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError as error:
+        raise RunnerError(
+            f"run directory already exists; resume and import are unsupported: {path}"
+        ) from error
+    except OSError as error:
+        raise RunnerError(f"cannot create run directory {path}: {error}") from error
+    return path
+
+
+def create_snapshot(files: dict[str, bytes], parent: Path) -> Path:
+    snapshot = parent / "target"
+    snapshot.mkdir(mode=0o700)
+    for relative_path, contents in sorted(files.items()):
+        destination = snapshot.joinpath(*PurePosixPath(relative_path).parts)
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(destination, flags, 0o400)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(contents)
+            output.flush()
+            os.fsync(output.fileno())
+    return snapshot
+
+
+def validate_event_stream(raw: bytes, verification_id: str) -> None:
+    events = []
+    for index, line in enumerate(raw.splitlines(), start=1):
+        if not line:
+            continue
+        event = decode_json(line, f"{verification_id} Codex event line {index}")
+        if not isinstance(event, dict):
+            raise RunnerError(f"{verification_id} Codex event line {index} is not an object")
+        events.append(event)
+    if not events:
+        raise RunnerError(f"{verification_id} Codex returned no JSON events")
+    if any(event.get("type") in ("error", "turn.failed") for event in events):
+        raise RunnerError(f"{verification_id} Codex event stream reports a failure")
+    completed = sum(event.get("type") == "turn.completed" for event in events)
+    if completed != 1:
+        raise RunnerError(
+            f"{verification_id} Codex event stream must have exactly one completed turn"
+        )
+
+
+def communicate_with_timeout(
+    command: list[str], prompt: bytes, timeout_seconds: int
+) -> tuple[int, bytes, bytes]:
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except OSError as error:
+        raise RunnerError(f"cannot start Codex CLI: {error}") from error
+    try:
+        stdout, stderr = process.communicate(input=prompt, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        raise RunnerError(
+            f"Codex CLI timed out after {timeout_seconds} seconds", (stdout, stderr)
+        )
+    return process.returncode, stdout, stderr
+
+
+def execute_tuple(
+    codex_cli: str,
+    model: str | None,
+    reasoning_effort: str,
+    snapshot: Path,
+    schema_path: Path,
+    control_directory: Path,
+    logs_directory: Path,
+    assignments: dict[str, Any],
+    bucket_id: str,
+    position: int,
+    entry: dict[str, Any],
+    prompt: bytes,
+    schema_sha256: str,
+    timeout_seconds: int,
+) -> TupleResult:
+    verification_id = entry["verification_id"]
+    final_message_path = control_directory / f"{verification_id}.final.json"
+    command = [
+        codex_cli,
+        "exec",
+        "--ephemeral",
+        "--ignore-user-config",
+        "-c",
+        f'model_reasoning_effort="{reasoning_effort}"',
+        "--json",
+        "--color",
+        "never",
+        "--sandbox",
+        "read-only",
+        "--skip-git-repo-check",
+        "--cd",
+        str(snapshot),
+        "--output-schema",
+        str(schema_path),
+        "--output-last-message",
+        str(final_message_path),
+    ]
+    if model is not None:
+        command.extend(("--model", model))
+    command.append("-")
+    stdout = b""
+    stderr = b""
+    cli_error = None
+    try:
+        returncode, stdout, stderr = communicate_with_timeout(
+            command, prompt, timeout_seconds
+        )
+    except RunnerError as error:
+        cli_error = error
+        if len(error.args) > 1 and isinstance(error.args[1], tuple):
+            stdout, stderr = error.args[1]
+        returncode = -1
+    atomic_publish(logs_directory / f"{verification_id}.events.jsonl", stdout)
+    atomic_publish(logs_directory / f"{verification_id}.stderr.log", stderr)
+    if final_message_path.is_file() and not final_message_path.is_symlink():
+        final_message = final_message_path.read_bytes()
+    else:
+        final_message = b""
+    atomic_publish(logs_directory / f"{verification_id}.final-message.log", final_message)
+    if cli_error is not None:
+        raise RunnerError(f"{verification_id}: {cli_error.args[0]}") from cli_error
+    if returncode != 0:
+        raise RunnerError(f"{verification_id}: Codex CLI exited with status {returncode}")
+    validate_event_stream(stdout, verification_id)
+    if not final_message:
+        raise RunnerError(f"{verification_id}: Codex CLI did not write a final message")
+    response = validate_response(
+        decode_json(final_message, f"{verification_id} response"), entry, assignments
+    )
+    response_bytes = canonical_json(response)
+    return TupleResult(
+        bucket_id=bucket_id,
+        position=position,
+        verification_id=verification_id,
+        finding_id=entry["finding_id"],
+        lens=entry["lens"],
+        tuple_sha256=sha256_bytes(canonical_json(entry)),
+        prompt_sha256=sha256_bytes(prompt),
+        schema_sha256=schema_sha256,
+        events_sha256=sha256_bytes(stdout),
+        stderr_sha256=sha256_bytes(stderr),
+        final_message_sha256=sha256_bytes(final_message),
+        response_sha256=sha256_bytes(response_bytes),
+        response=response,
+    )
+
+
+def result_record(result: TupleResult) -> dict[str, Any]:
+    return {
+        "verification_id": result.verification_id,
+        "finding_id": result.finding_id,
+        "lens": result.lens,
+        "tuple_sha256": result.tuple_sha256,
+        "prompt_sha256": result.prompt_sha256,
+        "schema_sha256": result.schema_sha256,
+        "events_sha256": result.events_sha256,
+        "stderr_sha256": result.stderr_sha256,
+        "final_message_sha256": result.final_message_sha256,
+        "response_sha256": result.response_sha256,
+        "response": copy.deepcopy(result.response),
+    }
+
+
+def build_result_buckets(
+    assignments: dict[str, Any], results: list[TupleResult]
+) -> list[dict[str, Any]]:
+    result_by_id = {result.verification_id: result for result in results}
+    if len(result_by_id) != len(results):
+        raise RunnerError("a verification tuple was executed more than once")
+    documents = []
+    for bucket in assignments["buckets"]:
+        expected_ids = [entry["verification_id"] for entry in bucket["entries"]]
+        if any(verification_id not in result_by_id for verification_id in expected_ids):
+            raise RunnerError(f"{bucket['id']} result coverage is incomplete")
+        bucket_results = [
+            result_record(result_by_id[verification_id])
+            for verification_id in expected_ids
+        ]
+        document = {
+            "schema_version": SCHEMA_VERSION,
+            "runner_version": RUNNER_VERSION,
+            "bucket_id": bucket["id"],
+            "bucket_assignment_sha256": bucket["assignment_sha256"],
+            "assignment_sha256": assignments["assignment_sha256"],
+            "aggregate_sha256": assignments["aggregate_sha256"],
+            "issue_snapshot_sha256": assignments["issue_snapshot_sha256"],
+            "github_repository": assignments["github_repository"],
+            "tuple_count": len(bucket_results),
+            "results": bucket_results,
+        }
+        document["result_sha256"] = document_hash(document, "result_sha256")
+        documents.append(document)
+    expected_all = {
+        entry["verification_id"]
+        for bucket in assignments["buckets"]
+        for entry in bucket["entries"]
+    }
+    if set(result_by_id) != expected_all:
+        raise RunnerError("verification result coverage has missing or unexpected tuples")
+    return documents
+
+
+def build_run_summary(
+    assignments: dict[str, Any],
+    assignment_bytes: bytes,
+    aggregate_bytes: bytes,
+    issue_snapshot_bytes: bytes,
+    generator_evidence: GeneratorEvidence,
+    results: list[TupleResult],
+    result_buckets: list[dict[str, Any]],
+    reasoning_effort: str,
+) -> dict[str, Any]:
+    ordered_results = sorted(results, key=lambda item: (item.bucket_id, item.position))
+    expected_count = assignments["coverage"]["expected_tuples"]
+    if len(ordered_results) != expected_count:
+        raise RunnerError("cannot complete run with incomplete tuple coverage")
+    summary = {
+        "schema_version": SCHEMA_VERSION,
+        "runner_version": RUNNER_VERSION,
+        "assignment_sha256": assignments["assignment_sha256"],
+        "assignments_input_sha256": sha256_bytes(assignment_bytes),
+        "aggregate_sha256": assignments["aggregate_sha256"],
+        "aggregate_input_sha256": sha256_bytes(aggregate_bytes),
+        "issue_snapshot_sha256": assignments["issue_snapshot_sha256"],
+        "issue_snapshot_input_sha256": sha256_bytes(issue_snapshot_bytes),
+        "github_repository": assignments["github_repository"],
+        "provenance": copy.deepcopy(assignments["provenance"]),
+        "generator_stdout_sha256": sha256_bytes(generator_evidence.stdout),
+        "generator_stderr_sha256": sha256_bytes(generator_evidence.stderr),
+        "reasoning_effort": reasoning_effort,
+        "bucket_count": BUCKET_COUNT,
+        "expected_tuples": expected_count,
+        "completed_tuples": len(ordered_results),
+        "executions": [
+            {
+                "bucket_id": result.bucket_id,
+                **{
+                    key: value
+                    for key, value in result_record(result).items()
+                    if key != "response"
+                },
+            }
+            for result in ordered_results
+        ],
+        "buckets": [
+            {
+                "id": bucket["bucket_id"],
+                "tuple_count": bucket["tuple_count"],
+                "result_sha256": bucket["result_sha256"],
+            }
+            for bucket in result_buckets
+        ],
+        "complete": True,
+    }
+    summary["run_sha256"] = document_hash(summary, "run_sha256")
+    return summary
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Resume and import are unsupported; --run-dir must not exist.",
+    )
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--aggregate", type=Path, required=True)
+    parser.add_argument("--issue-snapshot", type=Path, required=True)
+    parser.add_argument("--assignments", type=Path, required=True)
+    parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument("--expected-aggregate-sha256", required=True)
+    parser.add_argument("--expected-issue-snapshot-sha256", required=True)
+    parser.add_argument("--github-repository", required=True)
+    parser.add_argument("--codex-cli", default="codex")
+    parser.add_argument("--model")
+    parser.add_argument(
+        "--reasoning-effort", choices=REASONING_EFFORTS, default="high"
+    )
+    parser.add_argument("--timeout-seconds", type=int, default=1800)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    if args.timeout_seconds <= 0:
+        print("verification runner: timeout-seconds must be greater than zero", file=sys.stderr)
+        return 1
+    try:
+        repo = args.repo.resolve(strict=True)
+        generator = Path(__file__).resolve().parent / (
+            "generate-codebase-audit-verification-assignments"
+        )
+        (
+            assignments,
+            aggregate_bytes,
+            issue_snapshot_bytes,
+            assignment_bytes,
+            generator_evidence,
+        ) = regenerate_assignments(
+            generator,
+            args.aggregate,
+            args.issue_snapshot,
+            args.assignments,
+            args.expected_aggregate_sha256,
+            args.expected_issue_snapshot_sha256,
+            args.github_repository,
+        )
+        snapshot_files = validate_repo_and_load_files(repo, assignments)
+        run_directory = create_run_directory(args.run_dir)
+        inputs_directory = run_directory / "inputs"
+        logs_directory = run_directory / "logs"
+        results_directory = run_directory / "results"
+        for directory in (inputs_directory, logs_directory, results_directory):
+            directory.mkdir(mode=0o700)
+        atomic_publish(inputs_directory / "aggregate.json", aggregate_bytes)
+        atomic_publish(inputs_directory / "issue-snapshot.json", issue_snapshot_bytes)
+        atomic_publish(inputs_directory / "assignments.json", assignment_bytes)
+        atomic_publish(logs_directory / "generator.stdout.log", generator_evidence.stdout)
+        atomic_publish(logs_directory / "generator.stderr.log", generator_evidence.stderr)
+        schemas = {lens: canonical_json(response_schema(lens)) for lens in LENSES}
+        for lens, schema_bytes in schemas.items():
+            atomic_publish(inputs_directory / f"{lens}.response.schema.json", schema_bytes)
+        work = []
+        for bucket in assignments["buckets"]:
+            for position, entry in enumerate(bucket["entries"]):
+                prompt = prompt_for_tuple(assignments, entry)
+                atomic_publish(
+                    inputs_directory / f"{entry['verification_id']}.prompt.json", prompt
+                )
+                work.append((bucket["id"], position, entry, prompt))
+        results = []
+        failures = []
+        with tempfile.TemporaryDirectory(
+            prefix="zaplex-codebase-audit-verification-run-"
+        ) as temporary_name:
+            temporary = Path(temporary_name)
+            snapshot = create_snapshot(snapshot_files, temporary)
+            control_directory = temporary / "control"
+            schema_directory = temporary / "schemas"
+            control_directory.mkdir()
+            schema_directory.mkdir()
+            schema_paths = {}
+            for lens, schema_bytes in schemas.items():
+                schema_path = schema_directory / f"{lens}.json"
+                schema_path.write_bytes(schema_bytes)
+                schema_paths[lens] = schema_path
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=MAX_PARALLEL,
+                thread_name_prefix="codebase-audit-verification",
+            ) as executor:
+                futures = [
+                    executor.submit(
+                        execute_tuple,
+                        args.codex_cli,
+                        args.model,
+                        args.reasoning_effort,
+                        snapshot,
+                        schema_paths[entry["lens"]],
+                        control_directory,
+                        logs_directory,
+                        assignments,
+                        bucket_id,
+                        position,
+                        entry,
+                        prompt,
+                        sha256_bytes(schemas[entry["lens"]]),
+                        args.timeout_seconds,
+                    )
+                    for bucket_id, position, entry, prompt in work
+                ]
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        results.append(future.result())
+                    except Exception as error:
+                        failures.append(str(error))
+        if failures:
+            raise RunnerError("; ".join(sorted(failures)))
+        if len(results) != len(work):
+            raise RunnerError(f"runner completed {len(results)} of {len(work)} tuples")
+        result_buckets = build_result_buckets(assignments, results)
+        run_summary = build_run_summary(
+            assignments,
+            assignment_bytes,
+            aggregate_bytes,
+            issue_snapshot_bytes,
+            generator_evidence,
+            results,
+            result_buckets,
+            args.reasoning_effort,
+        )
+        for result_bucket in result_buckets:
+            atomic_publish(
+                results_directory / f"{result_bucket['bucket_id']}.json",
+                canonical_json(result_bucket),
+            )
+        atomic_publish(run_directory / "run.json", canonical_json(run_summary))
+    except (OSError, RunnerError) as error:
+        print(f"verification runner: {error}", file=sys.stderr)
+        return 1
+    print(
+        f"verification runner: completed {len(work)} tuples in {run_directory}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
