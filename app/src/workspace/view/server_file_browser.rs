@@ -5396,21 +5396,97 @@ impl AtomicDownloadFile {
         destination: &Path,
         expected: &LocalDownloadTargetIdentity,
     ) -> Result<(), String> {
+        self.commit_overwriting_after_revalidation(destination, expected, || {})
+            .await
+    }
+
+    async fn commit_overwriting_after_revalidation(
+        self,
+        destination: &Path,
+        expected: &LocalDownloadTargetIdentity,
+        before_publish: impl FnOnce(),
+    ) -> Result<(), String> {
         let temporary = self.into_temporary().await?;
         let actual = local_download_target_identity(destination)?;
         if actual.as_ref() != Some(expected) {
-            return Err(crate::t!(
-                "server-file-browser-operation-failed",
-                error = format!(
-                    "download destination changed before overwrite: {}",
-                    destination.display()
-                )
+            return Err(download_destination_changed(destination));
+        }
+
+        before_publish();
+
+        let (staged_file, staged_path) = temporary
+            .keep()
+            .map_err(|error| persist_download_error(destination, error.error))?;
+        drop(staged_file);
+        let staged_identity = local_download_target_identity(&staged_path)?.ok_or_else(|| {
+            persist_download_error(
+                destination,
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("download sidecar disappeared: {}", staged_path.display()),
+                ),
+            )
+        })?;
+        let displaced_path = match publish_download_overwriting(&staged_path, destination) {
+            Ok(displaced_path) => displaced_path,
+            Err(error) => {
+                cleanup_failed_download_publish(&staged_path);
+                return Err(persist_download_error(destination, error));
+            }
+        };
+
+        let displaced_identity = local_download_target_identity(&displaced_path);
+        let destination_still_download =
+            local_download_target_identity(destination)?.as_ref() == Some(&staged_identity);
+        if !destination_still_download {
+            return Err(download_publish_indeterminate(
+                destination,
+                &displaced_path,
+                &staged_path,
             ));
         }
-        temporary
-            .persist(destination)
-            .map_err(|error| error.error)
-            .map_err(|error| persist_download_error(destination, error))?;
+
+        match displaced_identity {
+            Ok(Some(actual)) if &actual == expected => {
+                std::fs::remove_file(&displaced_path)
+                    .map_err(|error| persist_download_error(destination, error))?;
+            }
+            Ok(actual) => {
+                restore_displaced_download(&displaced_path, destination, &staged_path).map_err(
+                    |error| {
+                        download_restore_failed(destination, &displaced_path, &staged_path, error)
+                    },
+                )?;
+                if local_download_target_identity(destination)? != actual {
+                    return Err(download_publish_indeterminate(
+                        destination,
+                        &displaced_path,
+                        &staged_path,
+                    ));
+                }
+                cleanup_restored_download(&staged_path, &displaced_path);
+                return Err(download_destination_changed(destination));
+            }
+            Err(error) => {
+                restore_displaced_download(&displaced_path, destination, &staged_path).map_err(
+                    |restore_error| {
+                        download_restore_failed(
+                            destination,
+                            &displaced_path,
+                            &staged_path,
+                            restore_error,
+                        )
+                    },
+                )?;
+                return Err(crate::t!(
+                    "server-file-browser-operation-failed",
+                    error = format!(
+                        "could not verify displaced download destination {}: {error}",
+                        displaced_path.display()
+                    )
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -5428,6 +5504,189 @@ impl AtomicDownloadFile {
         drop(self.output);
         Ok(self.temporary)
     }
+}
+
+fn download_destination_changed(destination: &Path) -> String {
+    crate::t!(
+        "server-file-browser-operation-failed",
+        error = format!(
+            "download destination changed before overwrite: {}",
+            destination.display()
+        )
+    )
+}
+
+fn download_publish_indeterminate(
+    destination: &Path,
+    displaced_path: &Path,
+    staged_path: &Path,
+) -> String {
+    crate::t!(
+        "server-file-browser-operation-failed",
+        error = format!(
+            "download overwrite state changed concurrently; preserved recovery paths: destination={}, displaced={}, staged={}",
+            destination.display(),
+            displaced_path.display(),
+            staged_path.display()
+        )
+    )
+}
+
+fn download_restore_failed(
+    destination: &Path,
+    displaced_path: &Path,
+    staged_path: &Path,
+    error: std::io::Error,
+) -> String {
+    crate::t!(
+        "server-file-browser-operation-failed",
+        error = format!(
+            "download destination rollback failed ({error}); preserved recovery paths: destination={}, displaced={}, staged={}",
+            destination.display(),
+            displaced_path.display(),
+            staged_path.display()
+        )
+    )
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn download_path_cstring(path: &Path) -> std::io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+}
+
+#[cfg(target_os = "linux")]
+fn exchange_download_paths(left: &Path, right: &Path) -> std::io::Result<()> {
+    let left = download_path_cstring(left)?;
+    let right = download_path_cstring(right)?;
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            left.as_ptr(),
+            libc::AT_FDCWD,
+            right.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn exchange_download_paths(left: &Path, right: &Path) -> std::io::Result<()> {
+    let left = download_path_cstring(left)?;
+    let right = download_path_cstring(right)?;
+    let result = unsafe { libc::renamex_np(left.as_ptr(), right.as_ptr(), libc::RENAME_SWAP) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn publish_download_overwriting(
+    staged_path: &Path,
+    destination: &Path,
+) -> std::io::Result<PathBuf> {
+    exchange_download_paths(staged_path, destination)?;
+    Ok(staged_path.to_path_buf())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn restore_displaced_download(
+    displaced_path: &Path,
+    destination: &Path,
+    _staged_path: &Path,
+) -> std::io::Result<()> {
+    exchange_download_paths(displaced_path, destination)
+}
+
+#[cfg(windows)]
+fn publish_download_overwriting(
+    staged_path: &Path,
+    destination: &Path,
+) -> std::io::Result<PathBuf> {
+    use windows::core::HSTRING;
+    use windows::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
+
+    let displaced_path =
+        destination.with_file_name(format!(".zaplex-download-displaced-{}", Uuid::new_v4()));
+    unsafe {
+        ReplaceFileW(
+            HSTRING::from(destination.as_os_str()),
+            HSTRING::from(staged_path.as_os_str()),
+            HSTRING::from(displaced_path.as_os_str()),
+            REPLACEFILE_WRITE_THROUGH,
+            None,
+            None,
+        )
+    }
+    .map_err(std::io::Error::other)?;
+    Ok(displaced_path)
+}
+
+#[cfg(windows)]
+fn restore_displaced_download(
+    displaced_path: &Path,
+    destination: &Path,
+    staged_path: &Path,
+) -> std::io::Result<()> {
+    use windows::core::HSTRING;
+    use windows::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
+
+    unsafe {
+        ReplaceFileW(
+            HSTRING::from(destination.as_os_str()),
+            HSTRING::from(displaced_path.as_os_str()),
+            HSTRING::from(staged_path.as_os_str()),
+            REPLACEFILE_WRITE_THROUGH,
+            None,
+            None,
+        )
+    }
+    .map_err(std::io::Error::other)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn publish_download_overwriting(
+    _staged_path: &Path,
+    _destination: &Path,
+) -> std::io::Result<PathBuf> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn restore_displaced_download(
+    _displaced_path: &Path,
+    _destination: &Path,
+    _staged_path: &Path,
+) -> std::io::Result<()> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+}
+
+#[cfg(windows)]
+fn cleanup_failed_download_publish(_staged_path: &Path) {}
+
+#[cfg(not(windows))]
+fn cleanup_failed_download_publish(staged_path: &Path) {
+    let _ = std::fs::remove_file(staged_path);
+}
+
+#[cfg(windows)]
+fn cleanup_restored_download(staged_path: &Path, _displaced_path: &Path) {
+    let _ = std::fs::remove_file(staged_path);
+}
+
+#[cfg(not(windows))]
+fn cleanup_restored_download(_staged_path: &Path, displaced_path: &Path) {
+    let _ = std::fs::remove_file(displaced_path);
 }
 
 fn persist_download_error(destination: &Path, error: std::io::Error) -> String {

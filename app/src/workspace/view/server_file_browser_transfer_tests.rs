@@ -417,6 +417,33 @@ fn explicit_overwrite_rejects_a_changed_target() {
     });
 }
 
+#[tokio::test]
+async fn explicit_overwrite_rejects_change_after_revalidation_and_restores_newer_target() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("download.bin");
+    fs::write(&destination, b"original").unwrap();
+    let identity = local_download_target_identity(&destination)
+        .unwrap()
+        .unwrap();
+    let mut download = AtomicDownloadFile::new(&destination).unwrap();
+    download.output.write_all(b"downloaded").await.unwrap();
+
+    assert!(download
+        .commit_overwriting_after_revalidation(&destination, &identity, || {
+            fs::remove_file(&destination).unwrap();
+            fs::write(&destination, b"newer target").unwrap();
+        })
+        .await
+        .is_err());
+
+    assert_eq!(fs::read(destination).unwrap(), b"newer target");
+    assert!(directory.path().read_dir().unwrap().all(|entry| !entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with(".zaplex-download-")));
+}
+
 #[cfg(unix)]
 #[test]
 fn completed_download_replaces_destination_symlink_without_touching_referent() {
