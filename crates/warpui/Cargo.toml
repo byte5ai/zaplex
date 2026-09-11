@@ -92,7 +92,6 @@ cosmic-text = { git = "https://github.com/warpdotdev/cosmic-text.git", rev = "15
 derivative.workspace = true
 memmap2 = "0.9.3"
 owned_ttf_parser = "0.25.0"
-resvg.workspace = true
 serde.workspace = true
 version-compare.workspace = true
 winit.workspace = true

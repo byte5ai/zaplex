@@ -1,0 +1,81 @@
+{
+  "description": "Audit every tracked UTF-8 text blob. Known binary assets and Gitlinks are explicitly excluded; any other binary blob fails closed until this file is updated.",
+  "rules": [
+    {
+      "action": "exclude",
+      "entry_types": [
+        "commit"
+      ],
+      "id": "gitlinks",
+      "patterns": [
+        "**"
+      ],
+      "reason": "Gitlinks identify external repositories; their contents are not blobs in the pinned target commit."
+    },
+    {
+      "action": "exclude",
+      "entry_types": [
+        "blob"
+      ],
+      "id": "binary-assets",
+      "patterns": [
+        "*.7z",
+        "*.a",
+        "*.avif",
+        "*.bin",
+        "*.bmp",
+        "*.bz2",
+        "*.car",
+        "*.cur",
+        "*.dmg",
+        "*.dll",
+        "*.dylib",
+        "*.eot",
+        "*.exe",
+        "*.gif",
+        "*.gz",
+        "*.icns",
+        "*.ico",
+        "*.jar",
+        "*.jpeg",
+        "*.jpg",
+        "*.lib",
+        "*.mov",
+        "*.mp3",
+        "*.mp4",
+        "*.o",
+        "*.onnx",
+        "*.otf",
+        "*.p12",
+        "*.pdf",
+        "*.pdb",
+        "*.png",
+        "*.recording",
+        "*.sqlite",
+        "*.so",
+        "*.tar",
+        "*.tga",
+        "*.ttf",
+        "*.wasm",
+        "*.wav",
+        "*.webp",
+        "*.woff",
+        "*.woff2",
+        "*.xz",
+        "*.zip"
+      ],
+      "reason": "Binary assets cannot be reviewed line by line and are tracked as explicit exclusions."
+    },
+    {
+      "action": "include",
+      "entry_types": [
+        "blob"
+      ],
+      "id": "all-tracked-text",
+      "patterns": [
+        "**"
+      ]
+    }
+  ],
+  "schema_version": 1
+}

@@ -211,12 +211,16 @@ for name, prefix in legacy_versions.items():
 pr_workflow = (REPO_ROOT / ".github" / "workflows" / "pr-check.yml").read_text()
 changes = job_block(pr_workflow, "changes")
 cargo_check = job_block(pr_workflow, "cargo_check")
-if "script/check_license_config_sync" not in changes:
-    fail("the always-running changes job must check license configuration sync")
-if "script/check-license-config-sync-tests" not in changes:
-    fail("the always-running changes job must exercise the license policy guard")
-if "script/dependency-security-baseline-tests" not in changes:
-    fail("the always-running changes job must verify this baseline")
+required_policy_checks = {
+    "script/check_license_config_sync": "license configuration sync",
+    "script/check-license-config-sync-tests": "license policy guard",
+    "script/dependency-security-baseline-tests": "dependency security baseline",
+}
+for command, description in required_policy_checks.items():
+    if command in changes:
+        fail(f"the non-required changes job must not own the {description}")
+    if command not in cargo_check:
+        fail(f"the required cargo_check job must enforce the {description}")
 if (
     DENY_ACTION not in cargo_check
     or "arguments: --all-features --locked" not in cargo_check

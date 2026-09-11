@@ -5,6 +5,7 @@ This document records key changes: the Zap/Warp release history inherited before
 ## [1.0.29] — 2026-09-11
 
 - Gehärtete Dependency-Policy: CI prüft den vollständigen Cargo-Deny-Vertrag und erzeugt die auslieferbare Lizenzattribution; aktualisierte Makro-, SVG- und Font-Abhängigkeiten entfernen überholte Pfade, während verbleibende Ausnahmen exakt dokumentiert und statisch abgesichert sind.
+- Der Subscription-Agent-Footer hält Identität, lange Account-, Host-, Modell- und Verzeichnisangaben sowie alle Lifecycle-Aktionen bei normaler und schmaler Fensterbreite sichtbar und ohne Überlagerungen.
 
 ## [1.0.28] — 2026-09-11
 
