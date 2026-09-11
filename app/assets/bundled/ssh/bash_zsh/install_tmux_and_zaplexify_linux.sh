@@ -7,7 +7,7 @@ _on_error() {
 }
 trap "_on_error \"\${LINENO}\" \"\$BASH_COMMAND\"" ERR
 
-mkdir -p $HOME/.warp/tmux
+mkdir -p "$HOME/.warp/tmux"
 pushd "$HOME/.warp/tmux"
 
 ARCH=$(uname -m)
@@ -32,7 +32,7 @@ ACTUAL_SHA256=${ACTUAL_SHA256%% *}
 tar -xf tmux.tar.gz
 
 INSTALL_PATH="$HOME/.warp/tmux/local"
-echo "TERM=tmux-256color LD_LIBRARY_PATH=\"$INSTALL_PATH/lib\" TERMINFO=\"$INSTALL_PATH/share/terminfo/\" \"$INSTALL_PATH/bin/tmux\" \"\$@\";" > ~/.warp/tmux/execute_tmux.sh
-chmod +x ~/.warp/tmux/execute_tmux.sh;'
+echo "TERM=tmux-256color LD_LIBRARY_PATH=\"$INSTALL_PATH/lib\" TERMINFO=\"$INSTALL_PATH/share/terminfo/\" \"$INSTALL_PATH/bin/tmux\" \"\$@\";" > "$HOME/.warp/tmux/execute_tmux.sh"
+chmod +x "$HOME/.warp/tmux/execute_tmux.sh";'
 
-bash <<< "$INSTALL_TMUX" && ~/.warp/tmux/execute_tmux.sh -Lwarp -CC && exit
+bash <<< "$INSTALL_TMUX" && "$HOME/.warp/tmux/execute_tmux.sh" -Lwarp -CC && exit

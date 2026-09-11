@@ -7,7 +7,6 @@ _on_error() {
 }
 trap "_on_error \"\${LINENO}\" \"\$BASH_COMMAND\"" ERR
 
-sudo dnf update -y
 sudo dnf install -y tmux'
 
 bash <<< "$INSTALL_TMUX" && _check_tmux && command tmux -Lwarp -CC && exit
