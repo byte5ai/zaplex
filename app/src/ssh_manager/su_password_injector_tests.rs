@@ -1,11 +1,14 @@
 use super::{
     is_su_to_root, should_spawn_su_password_injector, su_prompt_events, ShellReadyOutcome,
-    SuInjectorEvent, PASSWORD_PROMPT_REGEX, SU_ROOT_CMD_REGEX,
+    SuInjectorEvent, SuRootAttemptGuard, PASSWORD_PROMPT_REGEX, SU_ROOT_ATTEMPT_TIMEOUT,
 };
-use futures_lite::StreamExt as _;
+use futures_lite::{future, StreamExt as _};
+use instant::Instant;
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use warp_core::SessionId;
 use zeroize::Zeroizing;
 
 fn pw_matches(input: &str) -> bool {
@@ -13,7 +16,7 @@ fn pw_matches(input: &str) -> bool {
 }
 
 fn su_matches(input: &str) -> bool {
-    SU_ROOT_CMD_REGEX.is_match(input.as_bytes())
+    is_su_to_root(input)
 }
 
 #[test]
@@ -64,7 +67,7 @@ fn su_root_matches_common_variants() {
     assert!(su_matches("su - root"));
     assert!(su_matches("su -l root"));
     assert!(su_matches("su --login root"));
-    // sudo su (still matches trailing `su`)
+    // Explicitly supported sudo wrapper
     assert!(su_matches("sudo su"));
 }
 
@@ -85,23 +88,154 @@ fn su_in_middle_of_other_command_does_not_match() {
     assert!(!su_matches("issue"));
     // Commands like grep su file; line end is neither su nor su root pattern
     assert!(!su_matches("grep su /etc/passwd"));
+    assert!(!su_matches("echo su"));
+    assert!(!su_matches("printf done; su"));
 }
 
 #[test]
-fn is_su_to_root_detects_in_buffer() {
-    let buf = b"user@host:~$ su root\r\nPassword: ";
-    assert!(is_su_to_root(buf));
+fn absolute_su_path_targets_root() {
+    assert!(su_matches("/bin/su - root"));
+    assert!(su_matches("sudo /usr/bin/su --login root"));
+}
 
-    let buf = b"user@host:~$ su lg\r\nPassword: ";
-    assert!(!is_su_to_root(buf));
+fn shared_guard() -> Arc<Mutex<SuRootAttemptGuard>> {
+    Arc::new(Mutex::new(SuRootAttemptGuard::default()))
+}
+
+fn collect_prompt_events(
+    chunks: Vec<Vec<u8>>,
+    attempt_guard: Arc<Mutex<SuRootAttemptGuard>>,
+) -> Vec<SuInjectorEvent> {
+    future::block_on(async {
+        let (tx, rx) = async_broadcast::broadcast(4);
+        let mut stream = Box::pin(su_prompt_events(
+            rx.deactivate(),
+            Duration::from_secs(1),
+            attempt_guard,
+        ));
+        let collect = async {
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                events.push(event);
+            }
+            events
+        };
+        let send = async move {
+            for chunk in chunks {
+                tx.broadcast(Arc::new(chunk)).await.unwrap();
+            }
+            drop(tx);
+        };
+
+        let (events, ()) = future::zip(collect, send).await;
+        events
+    })
 }
 
 #[test]
-fn full_pipeline_su_root_with_password_prompt() {
-    // Simulate complete PTY sequence: user enters `su -`, echoed back with password prompt
-    let buf = b"alice@kylin:~$ su -\r\n\xe5\xaf\x86\xe7\xa0\x81\xef\xbc\x9a";
-    assert!(PASSWORD_PROMPT_REGEX.is_match(buf));
-    assert!(is_su_to_root(buf));
+fn remote_su_echo_and_password_prompt_do_not_authorize_confirmation() {
+    let events = collect_prompt_events(
+        vec![b"user@host:~$ ".to_vec(), b"su\r\nPassword: ".to_vec()],
+        shared_guard(),
+    );
+
+    assert_eq!(
+        events,
+        vec![SuInjectorEvent::ShellReadyFinished(
+            ShellReadyOutcome::Ready
+        )]
+    );
+}
+
+#[test]
+fn local_root_su_authorizes_exactly_one_confirmation() {
+    let attempt_guard = shared_guard();
+    assert!(attempt_guard
+        .lock()
+        .observe_command("su - root", SessionId::from(7), true, Instant::now(),)
+        .is_some());
+
+    let events = collect_prompt_events(
+        vec![
+            b"user@host:~$ ".to_vec(),
+            b"Password: ".to_vec(),
+            b"Password: ".to_vec(),
+        ],
+        attempt_guard,
+    );
+
+    assert_eq!(
+        events,
+        vec![
+            SuInjectorEvent::ShellReadyFinished(ShellReadyOutcome::Ready),
+            SuInjectorEvent::PasswordPrompt,
+        ]
+    );
+}
+
+#[test]
+fn non_root_remote_and_non_user_commands_do_not_arm_attempt() {
+    let now = Instant::now();
+    let mut guard = SuRootAttemptGuard::default();
+
+    assert!(guard
+        .observe_command("su admin", SessionId::from(1), true, now)
+        .is_none());
+    assert!(!guard.consume(now));
+
+    assert!(guard
+        .observe_command("su - root", SessionId::from(1), false, now)
+        .is_none());
+    assert!(!guard.consume(now));
+}
+
+#[test]
+fn timeout_later_command_and_session_change_clear_attempt() {
+    let now = Instant::now();
+    let session = SessionId::from(1);
+    let mut guard = SuRootAttemptGuard::default();
+
+    assert!(guard.observe_command("su", session, true, now).is_some());
+    assert!(!guard.consume(now + SU_ROOT_ATTEMPT_TIMEOUT + Duration::from_millis(1)));
+
+    let expired_generation = guard.observe_command("su", session, true, now).unwrap();
+    guard.expire(expired_generation);
+    assert!(!guard.consume(now));
+
+    assert!(guard.observe_command("su", session, true, now).is_some());
+    assert!(guard
+        .observe_command("whoami", session, true, now)
+        .is_none());
+    assert!(!guard.consume(now));
+
+    assert!(guard.observe_command("su", session, true, now).is_some());
+    guard.clear_if_session_changed(Some(SessionId::from(2)));
+    assert!(!guard.consume(now));
+}
+
+#[test]
+fn earlier_timeout_does_not_clear_newer_attempt() {
+    let now = Instant::now();
+    let session = SessionId::from(1);
+    let mut guard = SuRootAttemptGuard::default();
+
+    let first_generation = guard.observe_command("su", session, true, now).unwrap();
+    assert!(guard.observe_command("su", session, true, now).is_some());
+    guard.expire(first_generation);
+
+    assert!(guard.consume(now));
+}
+
+#[test]
+fn abort_or_shell_return_clear_attempt() {
+    let now = Instant::now();
+    let mut guard = SuRootAttemptGuard::default();
+
+    assert!(guard
+        .observe_command("su", SessionId::from(1), true, now)
+        .is_some());
+    guard.clear();
+    assert!(!guard.consume(now));
 }
 
 #[test]
@@ -127,7 +261,11 @@ fn timeout_event_under_continuous_output() -> (SuInjectorEvent, Duration) {
         }
     });
     let started = Instant::now();
-    let mut events = Box::pin(su_prompt_events(rx, Duration::from_millis(30)));
+    let mut events = Box::pin(su_prompt_events(
+        rx,
+        Duration::from_millis(30),
+        shared_guard(),
+    ));
     let event = futures_lite::future::block_on(events.next()).unwrap();
     let elapsed = started.elapsed();
     stop.store(true, Ordering::Relaxed);
