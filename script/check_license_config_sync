@@ -5,7 +5,9 @@
 
 set -e
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+# The override lets the focused guard test exercise isolated fixtures without
+# teaching production callers about alternate repository layouts.
+REPO_ROOT="${ZAPLEX_LICENSE_CONFIG_ROOT:-$(git rev-parse --show-toplevel)}"
 
 python3 - "$REPO_ROOT" <<'PY'
 from pathlib import Path

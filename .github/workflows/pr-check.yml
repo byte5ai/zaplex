@@ -69,14 +69,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify license policy configuration
-        run: script/check_license_config_sync
-        shell: bash
-
-      - name: Verify dependency security baseline
-        run: script/dependency-security-baseline-tests
-        shell: bash
-
       - name: Verify Docker supply-chain policy
         run: script/check-docker-supply-chain --self-test
         shell: bash
@@ -147,6 +139,20 @@ jobs:
         run: script/pr-check-clippy-gate-tests
         shell: bash
 
+      # These policy checks must fail the required Linux context. Keeping them
+      # in `changes` would turn this job into a passing skipped check on failure.
+      - name: Verify license policy configuration
+        run: script/check_license_config_sync
+        shell: bash
+
+      - name: Verify license policy guard
+        run: script/check-license-config-sync-tests
+        shell: bash
+
+      - name: Verify dependency security baseline
+        run: script/dependency-security-baseline-tests
+        shell: bash
+
       # Audit contract regressions must fail this required context. Running the
       # suite in `changes` would only turn this job into a passing "skipped" check.
       - name: Verify immutable codebase-audit pipeline
@@ -157,23 +163,32 @@ jobs:
           script/aggregate-codebase-audit-results-tests
           script/codebase-audit-verification-assignments-tests
           script/run-codebase-audit-verification-assignments-tests
+          script/codebase-audit-crosscut-evidence-tests
+          script/aggregate-codebase-audit-verification-results-tests
         shell: bash
 
-      - name: cargo deny check advisories
+      - name: cargo deny check dependency policy
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
-          command: check advisories
+          arguments: --all-features --locked
+          command: check advisories bans licenses sources
 
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
-          # release_deps would install cargo-about, which check does not need;
-          # build_deps already provide protoc / libdbus / pkg-config etc.
-          install_release_deps: false
+          # cargo-about validates the exact third-party attribution that ships
+          # in release bundles, while build deps provide protoc / libdbus etc.
+          install_release_deps: true
 
       - name: Ensure rust target is installed
         run: rustup target add x86_64-unknown-linux-gnu
+        shell: bash
+
+      - name: Generate third-party license attribution
+        run: >
+          cargo about generate --workspace --manifest-path Cargo.toml
+          -c about.toml -o "${RUNNER_TEMP}/THIRD_PARTY_LICENSES.txt" about.hbs
         shell: bash
 
       - name: cargo clippy (default = zaplex bin)
@@ -273,6 +288,7 @@ jobs:
           test_per_platform_off_platform_binding_validated
           test_keystroke_invalid_shift_lowercase
           test_keystroke_invalid_no_shift_uppercase
+          test_svg_text_rasterizes_with_loaded_system_fonts
         shell: bash
 
       - name: cargo test (SSH process-wrapper policy)
