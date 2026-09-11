@@ -790,11 +790,9 @@ last_used_reasoning = { "OpenAi:legacy-model" = "high" }
             parse_error.is_none(),
             "legacy BYOP settings must still parse"
         );
-        app.add_singleton_model(move |_| {
-            crate::settings::PublicPreferences::new(Box::new(preferences))
-        });
+        app.add_singleton_model(move |_| settings::PublicPreferences::new(Box::new(preferences)));
         app.add_singleton_model(|_| {
-            crate::settings::PrivatePreferences::new(Box::<InMemoryPreferences>::default())
+            settings::PrivatePreferences::new(Box::<InMemoryPreferences>::default())
         });
         app.add_singleton_model(|_| SettingsManager::default());
 
