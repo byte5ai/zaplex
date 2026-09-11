@@ -1,0 +1,691 @@
+#!/usr/bin/env python3
+
+"""Focused tests for the immutable codebase-audit assignment runner."""
+
+from __future__ import annotations
+
+import concurrent.futures
+import copy
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest import mock
+
+
+SCRIPT = Path(__file__).resolve().parent / "run-codebase-audit-assignments"
+INVENTORY_GENERATOR = Path(__file__).resolve().parent / "generate-codebase-audit-inventory"
+ASSIGNMENT_GENERATOR = (
+    Path(__file__).resolve().parent / "generate-codebase-audit-assignments"
+)
+LOADER = importlib.machinery.SourceFileLoader("codebase_audit_runner", str(SCRIPT))
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
+assert SPEC is not None
+RUNNER = importlib.util.module_from_spec(SPEC)
+sys.modules[LOADER.name] = RUNNER
+LOADER.exec_module(RUNNER)
+
+
+STUB_SOURCE = r'''#!/usr/bin/env python3
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+
+def argument(name):
+    return sys.argv[sys.argv.index(name) + 1]
+
+
+expected_effort = os.environ.get("AUDIT_STUB_EXPECTED_REASONING", "high")
+config_values = [
+    sys.argv[index + 1]
+    for index, value in enumerate(sys.argv[:-1])
+    if value in ("-c", "--config")
+]
+if config_values != [f'model_reasoning_effort="{expected_effort}"']:
+    print(json.dumps({"type": "turn.failed", "message": "wrong reasoning effort"}))
+    raise SystemExit(13)
+
+prompt = json.loads(sys.stdin.read())
+range_id = prompt["range_id"]
+entry = prompt["assignment_entry"]
+source = prompt["source"]
+snapshot = Path(argument("--cd")).resolve()
+original = os.environ.get("AUDIT_STUB_ORIGINAL_REPO")
+if original and snapshot == Path(original).resolve():
+    print(json.dumps({"type": "turn.failed", "message": "mutable checkout"}))
+    raise SystemExit(9)
+if (snapshot / ".git").exists():
+    print(json.dumps({"type": "turn.failed", "message": "snapshot exposes Git metadata"}))
+    raise SystemExit(10)
+lines = (snapshot / entry["path"]).read_text().splitlines(keepends=True)
+expected_text = "".join(lines[entry["range"]["start"] - 1 : entry["range"]["end"]])
+if source != {
+    "encoding": "utf-8",
+    "sha256": hashlib.sha256(expected_text.encode()).hexdigest(),
+    "text": expected_text,
+}:
+    print(json.dumps({"type": "turn.failed", "message": "wrong in-band source"}))
+    raise SystemExit(12)
+
+invocations = Path(os.environ["AUDIT_STUB_INVOCATIONS_DIR"])
+invocations.mkdir(parents=True, exist_ok=True)
+try:
+    marker = invocations / range_id
+    with marker.open("x", encoding="utf-8") as marker_file:
+        marker_file.write("started\n")
+except FileExistsError:
+    print(json.dumps({"type": "turn.failed", "message": "range invoked twice"}))
+    raise SystemExit(14)
+
+state_path = Path(os.environ["AUDIT_STUB_CONCURRENCY_FILE"])
+with state_path.open("a+", encoding="utf-8") as state_file:
+    fcntl.flock(state_file, fcntl.LOCK_EX)
+    state_file.seek(0)
+    raw_state = state_file.read()
+    state = json.loads(raw_state) if raw_state else {"active": 0, "maximum": 0, "total": 0}
+    state["active"] += 1
+    state["maximum"] = max(state["maximum"], state["active"])
+    state["total"] += 1
+    state_file.seek(0)
+    state_file.truncate()
+    json.dump(state, state_file, sort_keys=True)
+    state_file.flush()
+    fcntl.flock(state_file, fcntl.LOCK_UN)
+
+mode = os.environ.get("AUDIT_STUB_MODE", "success")
+try:
+    if mode == "timeout":
+        time.sleep(10)
+    else:
+        delay = 0.01 * (8 - int(range_id.rsplit("-", 1)[1]))
+        time.sleep(max(delay, 0.01))
+finally:
+    if mode != "timeout":
+        with state_path.open("r+", encoding="utf-8") as state_file:
+            fcntl.flock(state_file, fcntl.LOCK_EX)
+            state = json.load(state_file)
+            state["active"] -= 1
+            state_file.seek(0)
+            state_file.truncate()
+            json.dump(state, state_file, sort_keys=True)
+            state_file.flush()
+            fcntl.flock(state_file, fcntl.LOCK_UN)
+
+if mode == "cli-error":
+    print(json.dumps({"type": "turn.failed", "message": "stub failure"}))
+    raise SystemExit(7)
+
+provenance = prompt["provenance"]
+response = {
+    "schema_version": 1,
+    **provenance,
+    "range_id": range_id,
+    "reviewed_range": entry,
+    "source_sha256": source["sha256"],
+    "source_text": source["text"],
+    "findings": [],
+}
+if mode == "ordered-findings":
+    response["findings"] = [{
+        "path": entry["path"],
+        "range": entry["range"],
+        "category": range_id,
+        "severity": "P2",
+        "evidence": "range evidence",
+        "scenario": "range scenario",
+        "fix": "range fix",
+        "confidence": "high",
+    }]
+if mode == "bad-provenance":
+    response["manifest_sha256"] = "0" * 64
+if mode == "changed-text":
+    response["source_text"] += "changed"
+if mode == "missing-text":
+    response.pop("source_text")
+if mode == "changed-hash":
+    response["source_sha256"] = "0" * 64
+if mode == "changed-range":
+    response["reviewed_range"] = {**entry, "ownership": "fork-owned"}
+
+output = Path(argument("--output-last-message"))
+if mode == "non-json":
+    output.write_text("not JSON\n")
+else:
+    output.write_text(json.dumps(response, sort_keys=True) + "\n")
+if mode == "bad-events":
+    print("not JSON events")
+else:
+    print(json.dumps({"type": "thread.started", "thread_id": range_id}))
+    print(json.dumps({"type": "turn.completed", "usage": {}}))
+'''
+
+
+class CodebaseAuditRunnerTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="zaplex-audit-runner-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        files = {
+            "a.rs": "\n".join(f"a-{line}" for line in range(1, 10)) + "\n",
+            "b.rs": "\n".join(f"β-{line}" for line in range(1, 9)) + "\n",
+            "c.rs": "\n".join(f"c-{line}" for line in range(1, 8)) + "\n",
+        }
+        (
+            self.repo,
+            self.target_sha,
+            self.inventory_directory,
+            self.assignments_path,
+            self.assignments,
+        ) = self.create_contract("main-contract", files)
+        self.stub = self.root / "stub codex"
+        self.stub.write_text(STUB_SOURCE)
+        self.stub.chmod(0o755)
+
+    def git_in(self, repo, *arguments):
+        result = subprocess.run(
+            ["git", "-C", str(repo), *arguments],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def git(self, *arguments):
+        return self.git_in(self.repo, *arguments)
+
+    def create_contract(self, name, files, max_range_lines=4):
+        contract_root = self.root / name
+        repo = contract_root / "repo"
+        repo.mkdir(parents=True)
+        self.git_in(repo, "init", "-q")
+        self.git_in(repo, "config", "user.name", "Audit Runner Test")
+        self.git_in(
+            repo, "config", "user.email", "audit-runner@example.invalid"
+        )
+        for path, contents in files.items():
+            destination = repo / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(contents)
+        self.git_in(repo, "add", ".")
+        self.git_in(repo, "commit", "-q", "-m", "fixture")
+        target_sha = self.git_in(repo, "rev-parse", "HEAD")
+        scope = contract_root / "scope.json"
+        scope.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "rules": [
+                        {
+                            "id": "all-text",
+                            "action": "include",
+                            "entry_types": ["blob"],
+                            "patterns": ["**"],
+                        }
+                    ],
+                }
+            )
+        )
+        inventory_directory = contract_root / "inventory"
+        inventory = subprocess.run(
+            [
+                sys.executable,
+                str(INVENTORY_GENERATOR),
+                "--repo",
+                str(repo),
+                "--target-sha",
+                target_sha,
+                "--upstream-sha",
+                target_sha,
+                "--merge-base-sha",
+                target_sha,
+                "--scope",
+                str(scope),
+                "--output",
+                str(inventory_directory),
+                "--max-range-lines",
+                str(max_range_lines),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(inventory.returncode, 0, inventory.stderr)
+        assignments_path = contract_root / "assignments.json"
+        assignments = subprocess.run(
+            [
+                sys.executable,
+                str(ASSIGNMENT_GENERATOR),
+                "--inventory-dir",
+                str(inventory_directory),
+                "--output",
+                str(assignments_path),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(assignments.returncode, 0, assignments.stderr)
+        assignment_value = json.loads(assignments_path.read_text())
+        return (
+            repo,
+            target_sha,
+            inventory_directory,
+            assignments_path,
+            assignment_value,
+        )
+
+    def refresh_hashes(self, assignments):
+        for bucket in assignments["buckets"]:
+            bucket["assignment_sha256"] = RUNNER.bucket_assignment_hash(
+                bucket, assignments["manifest_sha256"]
+            )
+        assignments["assignment_sha256"] = RUNNER.assignment_document_hash(assignments)
+
+    def run_runner(
+        self,
+        run_dir,
+        *,
+        mode="success",
+        timeout=10,
+        assignments=None,
+        inventory_directory=None,
+        repo=None,
+        reasoning_effort=None,
+    ):
+        assignments_path = self.assignments_path
+        if assignments is not None:
+            assignments_path = self.root / f"assignments-{run_dir.name}.json"
+            assignments_path.write_bytes(RUNNER.canonical_json(assignments))
+        environment = os.environ.copy()
+        selected_repo = repo or self.repo
+        environment["AUDIT_STUB_MODE"] = mode
+        environment["AUDIT_STUB_ORIGINAL_REPO"] = str(selected_repo)
+        environment["AUDIT_STUB_EXPECTED_REASONING"] = reasoning_effort or "high"
+        environment["AUDIT_STUB_INVOCATIONS_DIR"] = str(
+            self.root / f"invocations-{run_dir.name}"
+        )
+        environment["AUDIT_STUB_CONCURRENCY_FILE"] = str(
+            self.root / f"concurrency-{run_dir.name}.json"
+        )
+        command = [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(selected_repo),
+            "--inventory-dir",
+            str(inventory_directory or self.inventory_directory),
+            "--assignments",
+            str(assignments_path),
+            "--run-dir",
+            str(run_dir),
+            "--codex-cli",
+            str(self.stub),
+            "--timeout-seconds",
+            str(timeout),
+        ]
+        if reasoning_effort is not None:
+            command.extend(("--reasoning-effort", reasoning_effort))
+        return subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=environment,
+        )
+
+    def test_reasoning_effort_defaults_to_high_and_accepts_override(self):
+        default_run = self.root / "reasoning-default"
+        default_result = self.run_runner(default_run)
+        self.assertEqual(default_result.returncode, 0, default_result.stderr)
+        default_summary = json.loads((default_run / "run.json").read_text())
+        self.assertEqual(default_summary["reasoning_effort"], "high")
+
+        override_run = self.root / "reasoning-override"
+        override_result = self.run_runner(
+            override_run, reasoning_effort="xhigh"
+        )
+        self.assertEqual(override_result.returncode, 0, override_result.stderr)
+        override_summary = json.loads((override_run / "run.json").read_text())
+        self.assertEqual(override_summary["reasoning_effort"], "xhigh")
+
+    def test_stub_cli_runs_once_per_range_with_three_process_global_limit(self):
+        run_dir = self.root / "parallel-run"
+        result = self.run_runner(run_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary = json.loads((run_dir / "run.json").read_text())
+        self.assertTrue(summary["complete"])
+        self.assertEqual(summary["bucket_count"], 3)
+        self.assertEqual(
+            [bucket["id"] for bucket in summary["buckets"]],
+            ["bucket-1", "bucket-2", "bucket-3"],
+        )
+        range_count = self.assignments["coverage"]["assigned_ranges"]
+        invocations = self.root / "invocations-parallel-run"
+        self.assertEqual(len(list(invocations.iterdir())), range_count)
+        concurrency = json.loads(
+            (self.root / "concurrency-parallel-run.json").read_text()
+        )
+        self.assertEqual(concurrency["total"], range_count)
+        self.assertEqual(concurrency["active"], 0)
+        self.assertEqual(concurrency["maximum"], 3)
+        for bucket in self.assignments["buckets"]:
+            response = json.loads(
+                (run_dir / "results" / f"{bucket['id']}.json").read_text()
+            )
+            self.assertEqual(response["reviewed_ranges"], bucket["entries"])
+            self.assertEqual(
+                response["bucket_assignment_sha256"], bucket["assignment_sha256"]
+            )
+        self.assertEqual(
+            sorted(path.name for path in (run_dir / "results").iterdir()),
+            ["bucket-1.json", "bucket-2.json", "bucket-3.json"],
+        )
+        self.assertEqual(list(run_dir.rglob(".*.tmp")), [])
+
+    def test_prompt_stdin_contains_verified_utf8_range_text_and_hash(self):
+        (self.repo / "a.rs").write_text("changed working tree\n")
+        (self.repo / "b.rs").unlink()
+        run_dir = self.root / "source-run"
+        result = self.run_runner(run_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prompts = sorted((run_dir / "inputs").glob("bucket-*-range-*.prompt.json"))
+        self.assertEqual(
+            len(prompts), self.assignments["coverage"]["assigned_ranges"]
+        )
+        for prompt_path in prompts:
+            prompt = json.loads(prompt_path.read_text())
+            entry = prompt["assignment_entry"]
+            blob = subprocess.run(
+                [
+                    "git",
+                    "--no-replace-objects",
+                    "-C",
+                    str(self.repo),
+                    "cat-file",
+                    "blob",
+                    entry["blob_oid"],
+                ],
+                stdout=subprocess.PIPE,
+                check=True,
+            ).stdout
+            source = RUNNER.range_bytes(
+                blob, entry["range"]["start"], entry["range"]["end"]
+            )
+            self.assertEqual(prompt["source"]["encoding"], "utf-8")
+            self.assertEqual(prompt["source"]["text"], source.decode("utf-8"))
+            self.assertEqual(
+                prompt["source"]["sha256"], hashlib.sha256(source).hexdigest()
+            )
+
+    def test_successful_stub_runs_are_byte_deterministic(self):
+        first = self.root / "deterministic-first"
+        second = self.root / "deterministic-second"
+        for run_dir in (first, second):
+            result = self.run_runner(run_dir)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        first_files = sorted(
+            path.relative_to(first) for path in first.rglob("*") if path.is_file()
+        )
+        second_files = sorted(
+            path.relative_to(second) for path in second.rglob("*") if path.is_file()
+        )
+        self.assertEqual(first_files, second_files)
+        for name in first_files:
+            self.assertEqual((first / name).read_bytes(), (second / name).read_bytes(), name)
+
+    def test_aggregation_order_and_run_summary_hashes_are_deterministic(self):
+        run_dir = self.root / "ordered-run"
+        result = self.run_runner(run_dir, mode="ordered-findings")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary = json.loads((run_dir / "run.json").read_text())
+        self.assertEqual(
+            set(summary),
+            {
+                "schema_version",
+                "runner_version",
+                "target_sha",
+                "upstream_sha",
+                "merge_base_sha",
+                "manifest_sha256",
+                "inventory_sha256",
+                "scope_sha256",
+                "assignment_sha256",
+                "reasoning_effort",
+                "bucket_count",
+                "buckets",
+                "complete",
+            },
+        )
+        summary_by_id = {bucket["id"]: bucket for bucket in summary["buckets"]}
+        for bucket in self.assignments["buckets"]:
+            bucket_id = bucket["id"]
+            response_path = run_dir / "results" / f"{bucket_id}.json"
+            response = json.loads(response_path.read_text())
+            expected_range_ids = [
+                f"{bucket_id}-range-{index:06d}"
+                for index in range(1, len(bucket["entries"]) + 1)
+            ]
+            self.assertEqual(
+                [finding["category"] for finding in response["findings"]],
+                expected_range_ids,
+            )
+            run_bucket = summary_by_id[bucket_id]
+            self.assertEqual(
+                set(run_bucket),
+                {
+                    "id",
+                    "prompt_sha256",
+                    "events_sha256",
+                    "stderr_sha256",
+                    "final_message_sha256",
+                    "response_sha256",
+                    "finding_count",
+                    "reviewed_range_count",
+                },
+            )
+            artifacts = {
+                "prompt_sha256": run_dir
+                / "inputs"
+                / f"{bucket_id}.prompts.json",
+                "events_sha256": run_dir / "logs" / f"{bucket_id}.events.json",
+                "stderr_sha256": run_dir / "logs" / f"{bucket_id}.stderr.json",
+                "final_message_sha256": run_dir
+                / "logs"
+                / f"{bucket_id}.final-messages.json",
+                "response_sha256": response_path,
+            }
+            for field, path in artifacts.items():
+                self.assertEqual(
+                    run_bucket[field], hashlib.sha256(path.read_bytes()).hexdigest()
+                )
+
+    def test_rejects_noncanonical_and_hash_manipulated_assignments(self):
+        noncanonical = self.root / "noncanonical.json"
+        noncanonical.write_text(json.dumps(self.assignments))
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--repo",
+                str(self.repo),
+                "--inventory-dir",
+                str(self.inventory_directory),
+                "--assignments",
+                str(noncanonical),
+                "--run-dir",
+                str(self.root / "noncanonical-run"),
+                "--codex-cli",
+                str(self.stub),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not canonical JSON", result.stderr)
+
+        manipulated = copy.deepcopy(self.assignments)
+        manipulated["assignment_sha256"] = "0" * 64
+        result = self.run_runner(self.root / "hash-run", assignments=manipulated)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("do not byte-match", result.stderr)
+
+    def test_rejects_bucket_count_and_entry_provenance_manipulation(self):
+        wrong_count = copy.deepcopy(self.assignments)
+        wrong_count["bucket_count"] = 2
+        self.refresh_hashes(wrong_count)
+        result = self.run_runner(self.root / "count-run", assignments=wrong_count)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("do not byte-match", result.stderr)
+
+        wrong_provenance = copy.deepcopy(self.assignments)
+        wrong_provenance["buckets"][0]["entries"][0]["target_sha"] = "0" * 40
+        self.refresh_hashes(wrong_provenance)
+        result = self.run_runner(
+            self.root / "provenance-run", assignments=wrong_provenance
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("do not byte-match", result.stderr)
+
+        truncated = copy.deepcopy(self.assignments)
+        entry = truncated["buckets"][0]["entries"][0]
+        entry["range"]["end"] -= 1
+        truncated["buckets"][0]["line_count"] -= 1
+        truncated["coverage"]["assigned_lines"] -= 1
+        self.refresh_hashes(truncated)
+        result = self.run_runner(self.root / "truncated-run", assignments=truncated)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("do not byte-match", result.stderr)
+
+    def test_rejects_assignments_from_a_different_inventory_contract(self):
+        _, _, other_inventory, _, _ = self.create_contract(
+            "other-contract", {"different.rs": "different\n"}
+        )
+        result = self.run_runner(
+            self.root / "other-contract-run",
+            inventory_directory=other_inventory,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("do not byte-match", result.stderr)
+
+    def test_rejects_valid_contract_with_zero_range_coverage(self):
+        empty_repo, _, empty_inventory, _, empty_assignments = self.create_contract(
+            "empty-contract", {"empty.rs": ""}
+        )
+        result = self.run_runner(
+            self.root / "empty-run",
+            assignments=empty_assignments,
+            inventory_directory=empty_inventory,
+            repo=empty_repo,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("coverage must contain non-empty reviewed ranges", result.stderr)
+
+    def test_git_replace_ref_cannot_substitute_the_target(self):
+        (self.repo / "a.rs").write_text("replacement\n")
+        self.git("add", "a.rs")
+        self.git("commit", "-q", "-m", "replacement")
+        replacement_sha = self.git("rev-parse", "HEAD")
+        self.git("replace", self.target_sha, replacement_sha)
+        result = self.run_runner(self.root / "replace-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rejects_non_json_response_and_event_stream(self):
+        for mode, message in (
+            ("non-json", "invalid bucket-1-range-000001 response JSON"),
+            ("bad-events", "invalid bucket-1-range-000001 Codex event line"),
+        ):
+            with self.subTest(mode=mode):
+                result = self.run_runner(self.root / f"{mode}-run", mode=mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertFalse((self.root / f"{mode}-run" / "run.json").exists())
+
+    def test_rejects_changed_or_missing_in_band_source_and_range(self):
+        for mode, message in (
+            ("bad-provenance", "manifest_sha256 provenance mismatch"),
+            ("changed-text", "source text mismatch"),
+            ("missing-text", "range response shape is invalid"),
+            ("changed-hash", "source SHA-256 mismatch"),
+            ("changed-range", "reviewed_range mismatch"),
+        ):
+            with self.subTest(mode=mode):
+                result = self.run_runner(self.root / f"{mode}-run", mode=mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_cli_error_and_timeout_fail_closed(self):
+        failed = self.run_runner(self.root / "cli-error-run", mode="cli-error")
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("exited with status 7", failed.stderr)
+        self.assertFalse((self.root / "cli-error-run" / "run.json").exists())
+
+        timed_out = self.run_runner(
+            self.root / "timeout-run", mode="timeout", timeout=1
+        )
+        self.assertNotEqual(timed_out.returncode, 0)
+        self.assertIn("timed out after 1 seconds", timed_out.stderr)
+        self.assertFalse((self.root / "timeout-run" / "run.json").exists())
+
+    def test_existing_run_directory_and_racing_process_never_overwrite(self):
+        existing = self.root / "existing-run"
+        existing.mkdir()
+        sentinel = existing / "sentinel"
+        sentinel.write_bytes(b"keep me")
+        result = self.run_runner(existing)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("resume and import are unsupported", result.stderr)
+        self.assertEqual(sentinel.read_bytes(), b"keep me")
+
+        race = self.root / "race-run"
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _: self.run_runner(race), range(2)))
+        self.assertEqual(sum(result.returncode == 0 for result in results), 1)
+        self.assertEqual(sum(result.returncode != 0 for result in results), 1)
+        self.assertTrue((race / "run.json").is_file())
+
+    def test_atomic_publication_race_has_one_winner(self):
+        output = self.root / "atomic-output"
+        barrier = threading.Barrier(2)
+        original_link = os.link
+
+        def synchronized_link(source, destination, *args, **kwargs):
+            barrier.wait(timeout=5)
+            return original_link(source, destination, *args, **kwargs)
+
+        def publish(value):
+            try:
+                RUNNER.atomic_publish(output, value)
+                return "written"
+            except RUNNER.RunnerError as error:
+                return str(error)
+
+        with mock.patch.object(RUNNER.os, "link", synchronized_link):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(publish, (b"first", b"second")))
+        self.assertEqual(results.count("written"), 1)
+        self.assertEqual(sum("already exists" in result for result in results), 1)
+        self.assertIn(output.read_bytes(), (b"first", b"second"))
+        self.assertEqual(list(self.root.glob(".atomic-output.*.tmp")), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
