@@ -960,6 +960,9 @@ impl BlocklistAIController {
             return;
         }
         let session_context = SessionContext::from_session(self.active_session.as_ref(ctx), ctx);
+        if let Some(query) = pending_query {
+            registry.remember_pending_prompt(conversation_id_string.clone(), query);
+        }
         let preflight = crate::ai::subscription_agent::subscription_preflight_info(
             conversation_id_string,
             &session_context,
@@ -978,7 +981,10 @@ impl BlocklistAIController {
             move |me, result, ctx| {
                 if let Err(error) = result {
                     log::warn!("subscription agent preflight failed: {error}");
-                } else if let Some(query) = pending_query {
+                } else if let Some(query) =
+                    crate::ai::subscription_agent::SubscriptionSessionRegistry::as_ref(ctx)
+                        .take_pending_prompt(&conversation_id.to_string())
+                {
                     me.send_user_query_in_conversation(query, conversation_id, None, ctx);
                 }
                 ctx.emit(BlocklistAIControllerEvent::SubscriptionPreflightUpdated);

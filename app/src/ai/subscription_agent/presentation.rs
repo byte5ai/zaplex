@@ -1,4 +1,6 @@
-use super::{AgentLifecycle, SessionIdentity, SubscriptionTarget};
+use super::{
+    AccountIdentity, AgentLifecycle, ModelCapability, SessionIdentity, SubscriptionTarget,
+};
 
 const MAX_DIAGNOSTIC_CHARS: usize = 160;
 
@@ -28,6 +30,7 @@ impl ComposerPolicy {
 pub(crate) enum ConversationAction {
     OpenAgentSettings,
     ResolveApproval,
+    Retry,
     Resume,
     Restart,
     End,
@@ -55,18 +58,21 @@ impl ConversationPresentation {
 
         let (status, detail, actions) = match lifecycle {
             AgentLifecycle::NoAgentInstalled => (
-                "No supported agent installed".to_string(),
-                Some("Install Claude Code or Codex, then return to this conversation.".to_string()),
+                crate::t!("ai-footer-subscription-status-no-agent"),
+                Some(crate::t!("ai-footer-subscription-detail-no-agent")),
                 vec![
                     ConversationAction::OpenAgentSettings,
                     ConversationAction::BackToShell,
                 ],
             ),
             AgentLifecycle::NotSignedIn { agent } => (
-                format!("{} is not signed in", agent.display_name()),
-                Some(format!(
-                    "Sign in with {} before sending this prompt.",
-                    agent.display_name()
+                crate::t!(
+                    "ai-footer-subscription-status-not-signed-in",
+                    agent = agent.display_name()
+                ),
+                Some(crate::t!(
+                    "ai-footer-subscription-detail-not-signed-in",
+                    agent = agent.display_name()
                 )),
                 vec![
                     ConversationAction::OpenAgentSettings,
@@ -74,33 +80,45 @@ impl ConversationPresentation {
                 ],
             ),
             AgentLifecycle::Ready => (
-                "Ready".to_string(),
-                Some("The selected agent is ready for your next prompt.".to_string()),
+                crate::t!("ai-footer-subscription-status-ready"),
+                Some(crate::t!("ai-footer-subscription-detail-ready")),
+                vec![],
+            ),
+            AgentLifecycle::SelectionRequired => (
+                crate::t!("ai-footer-subscription-selection-required"),
+                Some(crate::t!(
+                    "ai-footer-subscription-selection-required-detail"
+                )),
                 vec![],
             ),
             AgentLifecycle::Starting => (
-                "Starting".to_string(),
-                Some("The selected agent session is starting.".to_string()),
+                crate::t!("ai-footer-subscription-status-starting"),
+                Some(crate::t!("ai-footer-subscription-detail-starting")),
                 vec![],
             ),
             AgentLifecycle::Responding => (
-                "Responding".to_string(),
-                Some("The selected agent is responding.".to_string()),
+                crate::t!("ai-footer-subscription-status-responding"),
+                Some(crate::t!("ai-footer-subscription-detail-responding")),
                 vec![],
             ),
             AgentLifecycle::RunningTool { name } => (
-                format!("Running {name}"),
-                Some(format!("The selected agent is running {name}.")),
+                crate::t!("ai-footer-subscription-status-running-tool", tool = name),
+                Some(crate::t!(
+                    "ai-footer-subscription-detail-running-tool",
+                    tool = name
+                )),
                 vec![],
             ),
             AgentLifecycle::WaitingForApproval { .. } => (
-                "Waiting for approval".to_string(),
-                Some("Review the requested action before the agent can continue.".to_string()),
+                crate::t!("ai-footer-subscription-status-waiting-for-approval"),
+                Some(crate::t!(
+                    "ai-footer-subscription-detail-waiting-for-approval"
+                )),
                 vec![ConversationAction::ResolveApproval],
             ),
             AgentLifecycle::TurnCompleted { .. } => (
-                "Turn complete".to_string(),
-                Some("Continue the recorded session or start over.".to_string()),
+                crate::t!("ai-footer-subscription-status-turn-complete"),
+                Some(crate::t!("ai-footer-subscription-detail-turn-complete")),
                 vec![
                     ConversationAction::Resume,
                     ConversationAction::Restart,
@@ -108,8 +126,8 @@ impl ConversationPresentation {
                 ],
             ),
             AgentLifecycle::SessionEnded => (
-                "Session ended".to_string(),
-                Some("This session cannot accept more prompts.".to_string()),
+                crate::t!("ai-footer-subscription-status-session-ended"),
+                Some(crate::t!("ai-footer-subscription-detail-session-ended")),
                 vec![
                     ConversationAction::NewConversation,
                     ConversationAction::BackToShell,
@@ -123,12 +141,13 @@ impl ConversationPresentation {
                         ConversationAction::End,
                     ],
                     None => vec![
+                        ConversationAction::Retry,
                         ConversationAction::NewConversation,
                         ConversationAction::BackToShell,
                     ],
                 };
                 (
-                    "Agent needs attention".to_string(),
+                    recoverable_status(message),
                     Some(safe_diagnostic(message)),
                     actions,
                 )
@@ -146,8 +165,62 @@ impl ConversationPresentation {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ConversationIdentityField {
-    pub(crate) label: &'static str,
+    pub(crate) label: String,
     pub(crate) value: String,
+}
+
+/// A model label that keeps the CLI argument and the concrete resolved model
+/// visible. Provider display names are descriptive, but are not stable launch
+/// identities: Claude may report a family alias such as `sonnet` while also
+/// resolving it to a versioned model.
+pub(crate) fn model_identity_label(model: &ModelCapability) -> String {
+    let mut parts = Vec::new();
+    if !model.display_name.is_empty() && model.display_name != model.id {
+        parts.push(model.display_name.clone());
+    }
+    parts.push(crate::t!(
+        "ai-footer-subscription-identity-id",
+        id = model.id.clone()
+    ));
+    if let Some(resolved) = model
+        .resolved_model
+        .as_deref()
+        .filter(|resolved| !resolved.is_empty() && *resolved != model.id.as_str())
+    {
+        parts.push(crate::t!(
+            "ai-footer-subscription-model-resolved",
+            model = resolved
+        ));
+    }
+    parts.join(" · ")
+}
+
+pub(crate) fn account_identity_label(account: &AccountIdentity) -> String {
+    stable_identity_label(&account.display_name, &account.id)
+}
+
+pub(crate) fn host_identity_label(host: &super::HostIdentity) -> String {
+    stable_identity_label(&host.display_name, &host.id)
+}
+
+pub(crate) fn location_identity_label(location: &super::SubscriptionLocationPreference) -> String {
+    crate::t!(
+        "ai-footer-subscription-location",
+        host = host_identity_label(&location.host),
+        directory = location.working_directory.display().to_string()
+    )
+}
+
+fn stable_identity_label(display_name: &str, id: &str) -> String {
+    if display_name.is_empty() || display_name == id {
+        crate::t!("ai-footer-subscription-identity-id", id = id)
+    } else {
+        crate::t!(
+            "ai-footer-subscription-identity-named-id",
+            name = display_name,
+            id = id
+        )
+    }
 }
 
 pub(crate) fn conversation_identity_fields(
@@ -157,63 +230,97 @@ pub(crate) fn conversation_identity_fields(
 ) -> Vec<ConversationIdentityField> {
     let mut fields = vec![
         ConversationIdentityField {
-            label: "Agent",
+            label: crate::t!("ai-footer-subscription-field-agent"),
             value: target.installation.agent.display_name().to_string(),
         },
         ConversationIdentityField {
-            label: "Account",
-            value: target.installation.account.display_name.clone(),
+            label: crate::t!("ai-footer-subscription-field-account"),
+            value: account_identity_label(&target.installation.account),
         },
         ConversationIdentityField {
-            label: "Host",
-            value: target.installation.host.display_name.clone(),
+            label: crate::t!("ai-footer-subscription-field-host"),
+            value: host_identity_label(&target.installation.host),
         },
         ConversationIdentityField {
-            label: "Directory",
+            label: crate::t!("ai-footer-subscription-field-directory"),
             value: target.working_directory.display().to_string(),
         },
         ConversationIdentityField {
-            label: "Model",
-            value: target.model.display_name.clone(),
+            label: crate::t!("ai-footer-subscription-field-model"),
+            value: model_identity_label(&target.model),
         },
     ];
     if let Some(session) = session {
         fields.push(ConversationIdentityField {
-            label: "Session",
+            label: crate::t!("ai-footer-subscription-field-session"),
             value: session_label(session),
         });
     }
     fields.push(ConversationIdentityField {
-        label: "Status",
+        label: crate::t!("ai-footer-subscription-field-status"),
         value: ConversationPresentation::for_lifecycle(lifecycle).status,
     });
     fields
 }
 
+fn recoverable_status(message: &str) -> String {
+    let message = message.to_ascii_lowercase();
+    if message.contains("does not support the required")
+        || message.contains("incompatible cli")
+        || message.contains("unsupported cli")
+    {
+        crate::t!("ai-footer-subscription-status-incompatible-cli")
+    } else if (message.contains("remote host")
+        && (message.contains("not connected")
+            || message.contains("offline")
+            || message.contains("unreachable")))
+        || (message.contains("ssh")
+            && (message.contains("timed out")
+                || message.contains("connection refused")
+                || message.contains("unreachable")
+                || message.contains("could not resolve hostname")))
+    {
+        crate::t!("ai-footer-subscription-status-remote-unavailable")
+    } else if message.contains("model discovery")
+        || message.contains("capability discovery")
+        || message.contains("did not report models")
+        || message.contains("cannot list models")
+    {
+        crate::t!("ai-footer-subscription-status-model-discovery-failed")
+    } else {
+        crate::t!("ai-footer-subscription-status-needs-attention")
+    }
+}
+
 fn composer_disabled_reason(lifecycle: &AgentLifecycle) -> String {
     match lifecycle {
         AgentLifecycle::NoAgentInstalled => {
-            "Install a supported agent before sending a prompt.".to_string()
+            crate::t!("ai-footer-subscription-disabled-no-agent")
         }
         AgentLifecycle::NotSignedIn { agent } => {
-            format!(
-                "Sign in with {} before sending a prompt.",
-                agent.display_name()
+            crate::t!(
+                "ai-footer-subscription-disabled-not-signed-in",
+                agent = agent.display_name()
             )
         }
         AgentLifecycle::Ready => String::new(),
-        AgentLifecycle::Starting => "Wait for the agent session to start.".to_string(),
-        AgentLifecycle::Responding => "Wait for the current response to finish.".to_string(),
-        AgentLifecycle::RunningTool { name } => format!("Wait for {name} to finish."),
+        AgentLifecycle::SelectionRequired => {
+            crate::t!("ai-footer-subscription-selection-required-disabled")
+        }
+        AgentLifecycle::Starting => crate::t!("ai-footer-subscription-disabled-starting"),
+        AgentLifecycle::Responding => crate::t!("ai-footer-subscription-disabled-responding"),
+        AgentLifecycle::RunningTool { name } => {
+            crate::t!("ai-footer-subscription-disabled-running-tool", tool = name)
+        }
         AgentLifecycle::WaitingForApproval { .. } => {
-            "Resolve the approval request before sending another prompt.".to_string()
+            crate::t!("ai-footer-subscription-disabled-waiting-for-approval")
         }
         AgentLifecycle::TurnCompleted { .. } => String::new(),
         AgentLifecycle::SessionEnded => {
-            "Start a new conversation or return to the shell.".to_string()
+            crate::t!("ai-footer-subscription-disabled-session-ended")
         }
         AgentLifecycle::RecoverableError { .. } => {
-            "Recover or restart the agent session before sending another prompt.".to_string()
+            crate::t!("ai-footer-subscription-disabled-recoverable-error")
         }
     }
 }
@@ -221,7 +328,7 @@ fn composer_disabled_reason(lifecycle: &AgentLifecycle) -> String {
 fn safe_diagnostic(message: &str) -> String {
     let normalized = message.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.is_empty() {
-        return "The agent reported a recoverable error.".to_string();
+        return crate::t!("ai-footer-subscription-recoverable-error-fallback");
     }
     if normalized.chars().count() <= MAX_DIAGNOSTIC_CHARS {
         return normalized;
@@ -236,8 +343,12 @@ fn safe_diagnostic(message: &str) -> String {
 
 fn session_label(session: &SessionIdentity) -> String {
     match session {
-        SessionIdentity::ClaudeCode(id) => format!("Claude {id}"),
-        SessionIdentity::Codex(id) => format!("Codex {id}"),
+        SessionIdentity::ClaudeCode(id) => {
+            crate::t!("ai-footer-subscription-session-claude", id = id)
+        }
+        SessionIdentity::Codex(id) => {
+            crate::t!("ai-footer-subscription-session-codex", id = id)
+        }
     }
 }
 

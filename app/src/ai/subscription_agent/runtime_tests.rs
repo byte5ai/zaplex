@@ -1,7 +1,8 @@
 use super::{
     discovery_failure_lifecycle, legacy_ssh_candidates, remote_candidates_for_resolved_ssh,
-    AccountIdentity, AgentLifecycle, HostIdentity, InstallationIdentity, ProcessLocation,
-    SubscriptionAgent, SubscriptionSessionRegistry, SubscriptionTarget,
+    same_resume_target, AccountIdentity, AgentLifecycle, ExplicitRuntimeHost, HostIdentity,
+    InstallationIdentity, ProcessLocation, SubscriptionAgent, SubscriptionLocationPreference,
+    SubscriptionSessionRegistry, SubscriptionTarget,
 };
 use crate::ai::subscription_agent::{ModelCapability, SessionIdentity};
 use crate::remote_server::proto::{AgentAccountInfo, AgentAccountInventory};
@@ -262,5 +263,82 @@ fn non_default_remote_account_is_not_launched_without_a_daemon_route() {
     assert_eq!(
         error.to_string(),
         "the selected Codex subscription account is unavailable on remote host edge"
+    );
+}
+
+#[test]
+fn resume_requires_the_same_installation_directory_model_and_effort() {
+    let original = target(SubscriptionAgent::Codex);
+    assert!(same_resume_target(&original, &original));
+
+    let mut changed = original.clone();
+    changed.installation.agent = SubscriptionAgent::ClaudeCode;
+    assert!(!same_resume_target(&original, &changed));
+
+    let mut changed = original.clone();
+    changed.installation.host.id = "remote".to_string();
+    assert!(!same_resume_target(&original, &changed));
+
+    let mut changed = original.clone();
+    changed.installation.account.id = "other-account".to_string();
+    assert!(!same_resume_target(&original, &changed));
+
+    let mut changed = original.clone();
+    changed.installation.account.provider_account_id = Some("provider-account-2".to_string());
+    assert!(!same_resume_target(&original, &changed));
+
+    let mut changed = original.clone();
+    changed.installation.account.config_dir = Some("/other-config".into());
+    assert!(!same_resume_target(&original, &changed));
+
+    let mut changed = original.clone();
+    changed.installation.executable = "/other/codex".into();
+    assert!(!same_resume_target(&original, &changed));
+
+    let mut changed = original.clone();
+    changed.installation.version = "2.0.0".to_string();
+    assert!(!same_resume_target(&original, &changed));
+
+    let mut changed = original.clone();
+    changed.working_directory = "/other-workspace".into();
+    assert!(!same_resume_target(&original, &changed));
+
+    let mut changed = original.clone();
+    changed.model.id = "other-model".to_string();
+    assert!(!same_resume_target(&original, &changed));
+
+    let mut changed = original.clone();
+    changed.model.resolved_model = Some("concrete-model-version".to_string());
+    assert!(!same_resume_target(&original, &changed));
+
+    let mut changed = original.clone();
+    changed.effort = Some("high".to_string());
+    assert!(!same_resume_target(&original, &changed));
+}
+
+#[test]
+fn explicit_host_route_uses_the_exact_stable_id_without_local_fallback() {
+    let local = SubscriptionLocationPreference {
+        host: HostIdentity {
+            id: "local".to_string(),
+            display_name: "Local machine".to_string(),
+        },
+        working_directory: "/workspace".into(),
+    };
+    let offline_remote = SubscriptionLocationPreference {
+        host: HostIdentity {
+            id: "offline-daemon-42".to_string(),
+            display_name: "devhost".to_string(),
+        },
+        working_directory: ".".into(),
+    };
+
+    assert_eq!(
+        super::explicit_runtime_host(&local),
+        ExplicitRuntimeHost::Local
+    );
+    assert_eq!(
+        super::explicit_runtime_host(&offline_remote),
+        ExplicitRuntimeHost::Remote("offline-daemon-42")
     );
 }

@@ -1,6 +1,7 @@
 use super::*;
 use crate::ai::subscription_agent::{
     AccountIdentity, HostIdentity, InstallationIdentity, ModelCapability, SubscriptionAgent,
+    SubscriptionLocationPreference,
 };
 use std::path::PathBuf;
 
@@ -51,6 +52,21 @@ fn not_signed_in_presentation_requires_authentication() {
 #[test]
 fn ready_presentation_accepts_a_prompt() {
     assert_policy(AgentLifecycle::Ready, "Ready", true, &[]);
+}
+
+#[test]
+fn selection_required_presentation_blocks_a_prompt_without_starting() {
+    assert_policy(
+        AgentLifecycle::SelectionRequired,
+        "Selection required",
+        false,
+        &[],
+    );
+    let presentation = ConversationPresentation::for_lifecycle(&AgentLifecycle::SelectionRequired);
+    assert_eq!(
+        presentation.detail.as_deref(),
+        Some("Choose an agent, account, or model before sending a prompt.")
+    );
 }
 
 #[test]
@@ -140,17 +156,65 @@ fn recoverable_error_presentation_preserves_a_safe_diagnostic() {
 }
 
 #[test]
+fn recoverable_initial_error_offers_retry_without_discarding_the_conversation() {
+    let presentation = ConversationPresentation::for_lifecycle(&AgentLifecycle::RecoverableError {
+        message: "Remote discovery timed out".to_string(),
+        session: None,
+    });
+
+    assert_eq!(
+        presentation.actions,
+        [
+            ConversationAction::Retry,
+            ConversationAction::NewConversation,
+            ConversationAction::BackToShell,
+        ]
+    );
+}
+
+#[test]
 fn identity_fields_are_stable_and_omit_a_missing_session() {
     let target = target_with_directory("/a/very/long/project/directory/that/may/wrap");
     let fields = conversation_identity_fields(&target, None, &AgentLifecycle::Ready);
     assert_eq!(
-        fields.iter().map(|field| field.label).collect::<Vec<_>>(),
+        fields
+            .iter()
+            .map(|field| field.label.as_str())
+            .collect::<Vec<_>>(),
         ["Agent", "Account", "Host", "Directory", "Model", "Status"]
     );
+    assert_eq!(fields[0].value, "Codex");
+    assert_eq!(fields[1].value, "Work account · ID work");
+    assert_eq!(fields[2].value, "Local machine · ID local");
     assert_eq!(
         fields[3].value,
         target.working_directory.display().to_string()
     );
+    assert_eq!(fields[4].value, "GPT-5 · ID gpt-5");
+}
+
+#[test]
+fn model_identity_names_alias_launch_id_and_resolved_version() {
+    let mut target = target_with_directory("/project");
+    target.model.id = "sonnet".to_string();
+    target.model.display_name = "Claude Sonnet".to_string();
+    target.model.resolved_model = Some("claude-sonnet-4-5-20250929".to_string());
+
+    assert_eq!(
+        model_identity_label(&target.model),
+        "Claude Sonnet · ID sonnet · resolved claude-sonnet-4-5-20250929"
+    );
+    let fields = conversation_identity_fields(&target, None, &AgentLifecycle::Ready);
+    assert_eq!(fields[4].value, model_identity_label(&target.model));
+}
+
+#[test]
+fn model_identity_does_not_duplicate_equal_names_or_resolved_ids() {
+    let mut model = target_with_directory("/project").model;
+    model.display_name = model.id.clone();
+    model.resolved_model = Some(model.id.clone());
+
+    assert_eq!(model_identity_label(&model), "ID gpt-5");
 }
 
 #[test]
@@ -182,6 +246,85 @@ fn presentations_do_not_leak_between_conversations() {
             ConversationAction::NewConversation,
             ConversationAction::BackToShell,
         ]
+    );
+}
+
+#[test]
+fn incompatible_cli_and_remote_offline_have_concrete_statuses() {
+    let incompatible = ConversationPresentation::for_lifecycle(&AgentLifecycle::RecoverableError {
+        message: "installed Claude Code does not support the required structured protocol"
+            .to_string(),
+        session: None,
+    });
+    assert_eq!(incompatible.status, "Incompatible agent CLI");
+
+    let offline = ConversationPresentation::for_lifecycle(&AgentLifecycle::RecoverableError {
+        message: "ssh connection refused while opening remote host".to_string(),
+        session: None,
+    });
+    assert_eq!(offline.status, "Remote host unavailable");
+
+    let disconnected = ConversationPresentation::for_lifecycle(&AgentLifecycle::RecoverableError {
+        message: "remote host host-1 is not connected".to_string(),
+        session: None,
+    });
+    assert_eq!(disconnected.status, "Remote host unavailable");
+
+    let discovery = ConversationPresentation::for_lifecycle(&AgentLifecycle::RecoverableError {
+        message: "subscription agent capability discovery timed out".to_string(),
+        session: None,
+    });
+    assert_eq!(discovery.status, "Model discovery failed");
+}
+
+#[test]
+fn location_changes_are_available_only_when_no_turn_is_active() {
+    for lifecycle in [
+        AgentLifecycle::NoAgentInstalled,
+        AgentLifecycle::NotSignedIn {
+            agent: SubscriptionAgent::Codex,
+        },
+        AgentLifecycle::Ready,
+        AgentLifecycle::SelectionRequired,
+        AgentLifecycle::TurnCompleted {
+            session: SessionIdentity::Codex("thread-1".to_string()),
+        },
+        AgentLifecycle::RecoverableError {
+            message: "offline".to_string(),
+            session: None,
+        },
+    ] {
+        assert!(lifecycle.can_change_location());
+    }
+
+    for lifecycle in [
+        AgentLifecycle::Starting,
+        AgentLifecycle::Responding,
+        AgentLifecycle::RunningTool {
+            name: "command".to_string(),
+        },
+        AgentLifecycle::WaitingForApproval {
+            request_id: "approval-1".to_string(),
+        },
+        AgentLifecycle::SessionEnded,
+    ] {
+        assert!(!lifecycle.can_change_location());
+    }
+}
+
+#[test]
+fn selected_location_exposes_stable_host_id_and_exact_directory() {
+    let location = SubscriptionLocationPreference {
+        host: HostIdentity {
+            id: "daemon-42".to_string(),
+            display_name: "devhost".to_string(),
+        },
+        working_directory: PathBuf::from("/srv/project"),
+    };
+
+    assert_eq!(
+        location_identity_label(&location),
+        "Host devhost · ID daemon-42 · Directory /srv/project"
     );
 }
 

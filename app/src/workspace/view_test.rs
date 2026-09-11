@@ -73,6 +73,55 @@ use terminal::view::ActiveSessionState;
 use warpui::AddSingletonModel;
 use warpui::{platform::WindowStyle, App, ViewHandle};
 
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn remote_model_discovery_preserves_exact_dynamic_metadata() {
+    let discovery = WorkspaceView::remote_model_capabilities(
+        remote_server::proto::AgentModelDiscoveryResponse {
+            schema_version: 1,
+            cli_version: "1.2.3".to_string(),
+            models: vec![remote_server::proto::AgentModelCapability {
+                id: "claude-opus-4-1".to_string(),
+                display_name: "Claude Opus 4.1".to_string(),
+                description: Some("Exact provider model".to_string()),
+                resolved_model: Some("claude-opus-4-1-20250805".to_string()),
+                is_default: true,
+                supported_efforts: vec![remote_server::proto::AgentModelEffort {
+                    id: "high".to_string(),
+                    display_name: "High".to_string(),
+                }],
+                default_effort: Some("high".to_string()),
+                context_window: Some(200_000),
+            }],
+        },
+    )
+    .expect("supported remote discovery response");
+
+    assert_eq!(discovery.cli_version, "1.2.3");
+    assert_eq!(discovery.models.len(), 1);
+    assert_eq!(discovery.models[0].id, "claude-opus-4-1");
+    assert_eq!(
+        discovery.models[0].resolved_model.as_deref(),
+        Some("claude-opus-4-1-20250805")
+    );
+    assert_eq!(discovery.models[0].supported_efforts[0].id, "high");
+    assert_eq!(discovery.models[0].context_window, Some(200_000));
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn remote_model_discovery_rejects_unknown_schema() {
+    let error = WorkspaceView::remote_model_capabilities(
+        remote_server::proto::AgentModelDiscoveryResponse {
+            schema_version: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.contains("unsupported model-discovery version"));
+}
+
 fn unavailable_live_session(provider: zaplex_cockpit::Provider) -> zaplex_cockpit::SessionSnapshot {
     zaplex_cockpit::SessionSnapshot {
         session_id: "session-a".to_string(),
@@ -3211,6 +3260,16 @@ fn unresolved_daemon_scope_never_falls_back_to_display_name() {
         host_name, None,
         "a stale daemon association must not preselect a different same-named host"
     );
+    assert!(super::spawn_host_scope_requires_explicit_selection(
+        None,
+        Some("daemon-gone"),
+        None,
+    ));
+    assert!(!super::spawn_host_scope_requires_explicit_selection(
+        Some("registered-node"),
+        None,
+        None,
+    ));
 }
 
 #[cfg(unix)]

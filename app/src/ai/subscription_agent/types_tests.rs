@@ -8,6 +8,7 @@ fn only_ready_and_completed_states_accept_prompts() {
         AgentLifecycle::NotSignedIn {
             agent: SubscriptionAgent::ClaudeCode,
         },
+        AgentLifecycle::SelectionRequired,
         AgentLifecycle::Starting,
         AgentLifecycle::Responding,
         AgentLifecycle::RunningTool {

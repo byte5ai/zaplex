@@ -15,6 +15,15 @@ fn managed_host(id: &str, name: &str) -> HostOption {
     }
 }
 
+#[test]
+fn host_labels_keep_same_named_targets_distinguishable() {
+    assert_eq!(
+        host_identity_label(&host("node-2", "devbox")),
+        "devbox · ID node-2"
+    );
+    assert_eq!(host_identity_label(&host("node-2", "node-2")), "node-2");
+}
+
 /// A stable id must route to the matching node — not the *first* node that
 /// happens to share the display label. This is the regression the Codex
 /// review flagged: clicking `+` on a later same-named host scoped the launch
@@ -57,14 +66,123 @@ fn no_scope_stays_local() {
 
 /// A stale/unknown id does not silently fall back to a name match (which
 /// could route to the wrong host — the very bug we are fixing); it stays
-/// local, the safe default.
+/// unselected until the user makes an explicit choice.
 #[test]
 fn unknown_id_does_not_fall_back_to_name() {
     let hosts = vec![host("id-a", "devbox"), host("id-b", "devbox")];
     assert_eq!(
         resolve_scoped_host(&hosts, Some("id-missing"), Some("devbox")),
-        HostChoice::Local,
+        HostChoice::Unselected,
     );
+}
+
+#[test]
+fn missing_name_scope_requires_an_explicit_host_choice() {
+    let hosts = vec![host("node-a", "alpha")];
+
+    assert_eq!(
+        resolve_scoped_host(&hosts, None, Some("offline-host")),
+        HostChoice::Unselected,
+    );
+}
+
+#[test]
+fn host_change_is_validated_invalidates_models_and_preserves_the_prompt() {
+    let mut card = remote_claude_card(
+        remote_provider(true, "claude"),
+        vec![host("node-7", "devbox")],
+        HostChoice::Local,
+        AccountChoice::Freest,
+    );
+    card.prompt = Some("Inspect the deployment".to_string());
+
+    assert!(card.select_host_for_launch(HostChoice::Remote(99)));
+    assert_eq!(card.host, HostChoice::Unselected);
+    assert!(card.model.is_empty());
+    assert!(card.launch_payload().is_none());
+
+    assert!(card.select_host_for_launch(HostChoice::Remote(0)));
+    assert_eq!(card.host, HostChoice::Remote(0));
+    assert!(card
+        .launch_payload_for_remote_input(Some("/srv/app"))
+        .is_none());
+
+    card.cfg.claude.models = provider(true).models;
+    card.cfg.claude.model_discovery = ModelDiscoveryState::Ready;
+    card.model = "opus".to_string();
+    let SpawnCardEvent::Launch {
+        node_id,
+        cwd,
+        prompt,
+        ..
+    } = card
+        .launch_payload_for_remote_input(Some("/srv/app"))
+        .expect("fresh discovery makes the explicitly selected host launchable")
+    else {
+        panic!("expected a launch payload");
+    };
+    assert_eq!(node_id.as_deref(), Some("node-7"));
+    assert_eq!(cwd, Some(PathBuf::from("/srv/app")));
+    assert_eq!(prompt.as_deref(), Some("Inspect the deployment"));
+}
+
+#[test]
+fn cwd_change_requires_fresh_models_and_reaches_the_launch_payload() {
+    let mut card = remote_claude_card(
+        remote_provider(true, "claude"),
+        vec![host("node-7", "devbox")],
+        HostChoice::Remote(0),
+        AccountChoice::Freest,
+    );
+    card.prompt = Some("Run the checks".to_string());
+    assert!(card
+        .launch_payload_for_remote_input(Some("/srv/old"))
+        .is_some());
+
+    // This is the same state transition used by the remote cwd editor's Edited
+    // event before its explicit "Use directory" action starts discovery.
+    card.invalidate_model_for_target_change();
+    assert!(card.model.is_empty());
+    assert!(card
+        .launch_payload_for_remote_input(Some("/srv/new"))
+        .is_none());
+
+    card.cfg.claude.models = provider(true).models;
+    card.cfg.claude.model_discovery = ModelDiscoveryState::Ready;
+    card.model = "opus".to_string();
+    let SpawnCardEvent::Launch { cwd, prompt, .. } = card
+        .launch_payload_for_remote_input(Some("/srv/new"))
+        .expect("the changed cwd is launchable only after fresh model discovery")
+    else {
+        panic!("expected a launch payload");
+    };
+    assert_eq!(cwd, Some(PathBuf::from("/srv/new")));
+    assert_eq!(prompt.as_deref(), Some("Run the checks"));
+
+    assert!(card
+        .launch_payload_for_remote_input(Some("relative/path"))
+        .is_none());
+}
+
+#[test]
+fn offline_selected_host_blocks_launch_with_a_concrete_state() {
+    let mut options = remote_provider(true, "claude");
+    options.models.clear();
+    options.model_discovery =
+        ModelDiscoveryState::Error(ModelDiscoveryFailure::host_unavailable("devbox"));
+    let card = remote_claude_card(
+        options,
+        vec![host("node-7", "devbox")],
+        HostChoice::Remote(0),
+        AccountChoice::Freest,
+    );
+
+    assert!(matches!(
+        &card.cfg.claude.model_discovery,
+        ModelDiscoveryState::Error(ModelDiscoveryFailure::HostUnavailable { host })
+            if host == "devbox"
+    ));
+    assert!(card.launch_payload().is_none());
 }
 
 /// End-to-end contract at the spawn-card boundary (Codex review regression):
@@ -146,6 +264,7 @@ fn remote_provider_for_node(
                 },
                 label: (*email).to_string(),
                 email: Some((*email).to_string()),
+                provider_account_id: Some(format!("provider-{account_id}")),
                 capacity_5h: *capacity_5h,
                 capacity_week: *capacity_week,
                 capacity_known: true,
@@ -258,6 +377,87 @@ fn installed_agents_lists_both_when_both_installed() {
 }
 
 #[test]
+fn remote_agents_do_not_depend_on_local_subscription_cli_installations() {
+    let cfg = SpawnCardConfig {
+        claude: provider(false),
+        codex: provider(false),
+        ..Default::default()
+    };
+
+    assert_eq!(remote_agents(&cfg), vec![CLIAgent::Claude, CLIAgent::Codex]);
+}
+
+#[test]
+fn remote_subscription_launch_does_not_require_the_cli_on_the_client() {
+    let card = remote_claude_card(
+        remote_provider(false, "claude"),
+        vec![host("node-7", "devbox")],
+        HostChoice::Remote(0),
+        AccountChoice::Freest,
+    );
+
+    assert!(card.selected_agent_is_available());
+    assert!(card
+        .launch_payload_for_remote_input(Some("/srv/app"))
+        .is_some());
+}
+
+#[test]
+fn model_discovery_target_includes_the_discovered_cli_version() {
+    let mut options = remote_provider(false, "claude");
+    options.model_discovery_cli_version = Some("2.7.1".to_string());
+    let card = remote_claude_card(
+        options,
+        vec![host("node-7", "devbox")],
+        HostChoice::Remote(0),
+        AccountChoice::Freest,
+    );
+
+    assert_eq!(
+        card.model_discovery_target()
+            .and_then(|target| target.cli_version),
+        Some("2.7.1".to_string())
+    );
+}
+
+#[test]
+fn explicit_unavailable_agent_is_not_silently_replaced() {
+    let cfg = SpawnCardConfig {
+        claude: provider(false),
+        codex: provider(true),
+        default_agent: Some(CLIAgent::Claude),
+        ..Default::default()
+    };
+
+    assert_eq!(initial_agent(&cfg), CLIAgent::Claude);
+}
+
+#[test]
+fn first_installed_agent_is_used_without_an_explicit_request() {
+    let cfg = SpawnCardConfig {
+        claude: provider(false),
+        codex: provider(true),
+        ..Default::default()
+    };
+
+    assert_eq!(initial_agent(&cfg), CLIAgent::Codex);
+}
+
+#[test]
+fn unavailable_selected_agent_cannot_launch_an_installed_alternative() {
+    let mut card = remote_claude_card(
+        provider(false),
+        Vec::new(),
+        HostChoice::Local,
+        AccountChoice::Freest,
+    );
+    card.cfg.codex = provider(true);
+
+    assert_eq!(card.agent, CLIAgent::Claude);
+    assert!(card.launch_payload().is_none());
+}
+
+#[test]
 fn default_account_identity_never_becomes_an_environment_pin() {
     let mut account = AccountOption {
         label: "default".to_string(),
@@ -274,6 +474,72 @@ fn default_account_identity_never_becomes_an_environment_pin() {
         account_config_pin(&account),
         Some(PathBuf::from("/home/user/.claude"))
     );
+}
+
+#[test]
+fn verified_default_login_is_launchable_without_cockpit_accounts() {
+    let card = remote_claude_card(
+        provider(true),
+        Vec::new(),
+        HostChoice::Local,
+        AccountChoice::Freest,
+    );
+
+    let accounts = card.local_account_targets();
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].config_dir, None);
+    assert_eq!(accounts[0].id.0.as_str(), "claude:local:default");
+    assert!(card.launch_payload().is_some());
+}
+
+#[test]
+fn removed_local_account_never_falls_back_to_default_login() {
+    let card = remote_claude_card(
+        provider(true),
+        Vec::new(),
+        HostChoice::Local,
+        AccountChoice::Specific(7),
+    );
+
+    assert!(card.local_account_targets().is_empty());
+    assert!(card.launch_payload().is_none());
+}
+
+#[test]
+fn model_discovery_errors_distinguish_offline_incompatible_and_failed() {
+    let offline =
+        ModelDiscoveryFailure::classify(CLIAgent::Claude, "devbox", true, "ssh connection refused");
+    assert_eq!(
+        offline,
+        ModelDiscoveryFailure::HostUnavailable {
+            host: "devbox".to_string()
+        }
+    );
+    assert!(offline.label().contains("offline or unreachable"));
+
+    let incompatible = ModelDiscoveryFailure::classify(
+        CLIAgent::Codex,
+        "Local",
+        false,
+        "installed Codex does not support the required app-server protocol",
+    );
+    assert_eq!(
+        incompatible,
+        ModelDiscoveryFailure::IncompatibleCli {
+            agent: CLIAgent::Codex,
+            host: "Local".to_string(),
+        }
+    );
+    assert!(incompatible.label().contains("incompatible"));
+
+    let failed = ModelDiscoveryFailure::classify(
+        CLIAgent::Claude,
+        "Local",
+        false,
+        "model response was malformed",
+    );
+    assert!(matches!(&failed, ModelDiscoveryFailure::Failed { .. }));
+    assert!(failed.label().starts_with("Model discovery failed"));
 }
 
 #[test]
@@ -532,6 +798,144 @@ fn freest_remote_account_is_scoped_to_the_selected_host() {
             .map(|account| account.route.account_id.as_str()),
         Some("node-b-second")
     );
+}
+
+#[test]
+fn freest_remote_account_uses_the_binding_capacity_window() {
+    let card = remote_claude_card(
+        remote_provider_for_node(
+            true,
+            "claude",
+            "node-7",
+            &[
+                ("weekly-exhausted", "weekly@example.com", 0.95, 0.10),
+                ("balanced", "balanced@example.com", 0.70, 0.70),
+            ],
+        ),
+        vec![host("node-7", "devbox")],
+        HostChoice::Remote(0),
+        AccountChoice::Freest,
+    );
+
+    assert_eq!(
+        card.freest_remote_account()
+            .map(|account| account.route.account_id.as_str()),
+        Some("balanced")
+    );
+}
+
+#[test]
+fn remote_model_state_is_bound_to_exact_host_and_account_identity() {
+    let claude = remote_provider_for_node(
+        true,
+        "claude",
+        "node-7",
+        &[
+            ("opaque-first", "first@example.com", 0.9, 0.9),
+            ("opaque-second", "second@example.com", 0.8, 0.8),
+        ],
+    );
+    let mut card = remote_claude_card(
+        claude,
+        vec![host("node-7", "devbox")],
+        HostChoice::Remote(0),
+        AccountChoice::Specific(0),
+    );
+    let discovered_for = card
+        .model_discovery_target()
+        .expect("the selected remote account has an exact discovery identity");
+    assert_eq!(discovered_for.agent, CLIAgent::Claude);
+    assert_eq!(discovered_for.node_id.as_deref(), Some("node-7"));
+    assert_eq!(discovered_for.account_id, "opaque-first");
+    assert_eq!(
+        discovered_for.provider_account_id.as_deref(),
+        Some("provider-opaque-first")
+    );
+    assert_eq!(discovered_for.config_dir, None);
+
+    card.cfg.claude.model_discovery_target = Some(discovered_for);
+    assert!(card.model_is_ready());
+
+    // Even without the normal action-path invalidation, ready state fails
+    // closed as soon as the selected opaque account changes.
+    card.account = AccountChoice::Specific(1);
+    assert!(!card.model_is_ready());
+}
+
+#[test]
+fn account_selection_invalidates_stale_models_before_rediscovery() {
+    let mut card = remote_claude_card(
+        remote_provider_for_node(
+            true,
+            "claude",
+            "node-7",
+            &[
+                ("opaque-first", "first@example.com", 0.9, 0.9),
+                ("opaque-second", "second@example.com", 0.8, 0.8),
+            ],
+        ),
+        vec![host("node-7", "devbox")],
+        HostChoice::Remote(0),
+        AccountChoice::Specific(0),
+    );
+    let generation = card.cfg.claude.model_discovery_generation;
+    assert!(!card.cfg.claude.models.is_empty());
+
+    card.select_account_for_launch(AccountChoice::Specific(1));
+
+    assert_eq!(card.account, AccountChoice::Specific(1));
+    assert!(card.model.is_empty());
+    assert!(card.effort.is_empty());
+    assert!(card.cfg.claude.models.is_empty());
+    assert!(matches!(
+        card.cfg.claude.model_discovery,
+        ModelDiscoveryState::NotRequested
+    ));
+    assert_eq!(card.cfg.claude.model_discovery_generation, generation + 1);
+    assert_eq!(card.cfg.claude.model_discovery_target, None);
+}
+
+#[test]
+fn local_model_state_is_bound_to_the_selected_config_root() {
+    let mut options = provider(true);
+    options.accounts = vec![
+        AccountOption {
+            label: "first".to_string(),
+            config_dir: PathBuf::from("/accounts/first"),
+            is_default: false,
+            heat_label: "10 %".to_string(),
+            heat: 0.1,
+            plan: None,
+            provider: zaplex_cockpit::Provider::Claude,
+        },
+        AccountOption {
+            label: "second".to_string(),
+            config_dir: PathBuf::from("/accounts/second"),
+            is_default: false,
+            heat_label: "20 %".to_string(),
+            heat: 0.2,
+            plan: None,
+            provider: zaplex_cockpit::Provider::Claude,
+        },
+    ];
+    let mut card = remote_claude_card(
+        options,
+        Vec::new(),
+        HostChoice::Local,
+        AccountChoice::Specific(0),
+    );
+    let discovered_for = card
+        .model_discovery_target()
+        .expect("the selected local account has an exact discovery identity");
+    assert_eq!(
+        discovered_for.config_dir,
+        Some(PathBuf::from("/accounts/first"))
+    );
+    card.cfg.claude.model_discovery_target = Some(discovered_for);
+    assert!(card.model_is_ready());
+
+    card.account = AccountChoice::Specific(1);
+    assert!(!card.model_is_ready());
 }
 
 #[cfg(unix)]

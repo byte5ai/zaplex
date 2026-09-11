@@ -44,6 +44,8 @@ use crate::ai::blocklist::suggested_rule_modal::{
 use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
 use crate::ai::llms::LLMPreferences;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::subscription_agent::{ModelCapability, ModelEffort};
 use crate::ai::{
     agent::{api::ServerConversationToken, conversation::AIConversationId, EntrypointType},
     blocklist::{
@@ -1011,6 +1013,14 @@ fn reconcile_spawn_host_scope(
         host_name
     };
     (scoped_host_id, scoped_host_name)
+}
+
+fn spawn_host_scope_requires_explicit_selection(
+    registry_node_id: Option<&str>,
+    daemon_host_id: Option<&str>,
+    translated_node_id: Option<&str>,
+) -> bool {
+    registry_node_id.is_none() && daemon_host_id.is_some() && translated_node_id.is_none()
 }
 
 /// A unique local directory for one classic-SSH remote-edit working copy. The
@@ -21730,6 +21740,44 @@ impl Workspace {
             .and_then(|usage| usage.account.email.clone())
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn remote_model_capabilities(
+        response: remote_server::proto::AgentModelDiscoveryResponse,
+    ) -> Result<spawn_card::DiscoveredModels, String> {
+        if response.schema_version != 1 {
+            return Err(crate::t!(
+                "cockpit-spawn-card-model-discovery-version-unsupported"
+            ));
+        }
+        if response.cli_version.trim().is_empty() {
+            return Err(crate::t!("cockpit-spawn-card-model-cli-version-missing"));
+        }
+        Ok(spawn_card::DiscoveredModels {
+            cli_version: response.cli_version,
+            models: response
+                .models
+                .into_iter()
+                .map(|model| ModelCapability {
+                    id: model.id,
+                    display_name: model.display_name,
+                    description: model.description,
+                    resolved_model: model.resolved_model,
+                    is_default: model.is_default,
+                    supported_efforts: model
+                        .supported_efforts
+                        .into_iter()
+                        .map(|effort| ModelEffort {
+                            id: effort.id,
+                            display_name: effort.display_name,
+                        })
+                        .collect(),
+                    default_effort: model.default_effort,
+                    context_window: model.context_window,
+                })
+                .collect(),
+        })
+    }
+
     fn spawn_card_provider_options(
         &self,
         provider: zaplex_cockpit::Provider,
@@ -21742,11 +21790,7 @@ impl Workspace {
             return opts;
         }
         let snapshot = crate::cockpit::CockpitModel::as_ref(ctx).snapshot();
-        for a in snapshot
-            .accounts
-            .iter()
-            .filter(|a| a.account.provider == provider)
-        {
+        for a in zaplex_cockpit::rank_by_freeness(provider, &snapshot.accounts) {
             opts.accounts.push(Self::spawn_card_account_option(a));
         }
         if let Some(f) = zaplex_cockpit::pick_freest_checked(provider, snapshot) {
@@ -22029,6 +22073,11 @@ impl Workspace {
         // registered host; the real chooser remains open for an explicit choice.
         let is_unscoped = registry_node_id.is_none() && host_id.is_none() && host.is_none();
         let translated_node_id = self.translate_scoped_daemon_host(host_id.as_deref(), &*ctx);
+        let require_explicit_host = spawn_host_scope_requires_explicit_selection(
+            registry_node_id.as_deref(),
+            host_id.as_deref(),
+            translated_node_id.as_deref(),
+        );
         let (scoped_host_id, scoped_host_name) = reconcile_spawn_host_scope(
             registry_node_id,
             host_id.as_deref(),
@@ -22064,6 +22113,7 @@ impl Workspace {
             project,
             prompt,
             default_agent,
+            require_explicit_host,
         };
         self.spawn_card
             .update(ctx, |card, ctx| card.configure(cfg, ctx));
@@ -22158,6 +22208,8 @@ impl Workspace {
                 generation,
                 agent,
                 config_dir,
+                agent_launch_route,
+                expected_provider_account_id,
                 node_id,
                 host_name,
                 working_directory,
@@ -22165,57 +22217,120 @@ impl Workspace {
                 let generation = *generation;
                 let agent = *agent;
                 let config_dir = config_dir.clone();
+                let agent_launch_route = agent_launch_route.clone();
+                let expected_provider_account_id = expected_provider_account_id.clone();
                 let node_id = node_id.clone();
                 let host_name = host_name.clone();
                 let working_directory = working_directory.clone();
-                let account_name = if node_id.is_some() {
-                    format!("{host_name} login")
-                } else {
+                if let Some(node_id) = node_id.as_deref() {
+                    let daemon = RemoteServerManager::as_ref(ctx)
+                        .connected_daemons()
+                        .into_iter()
+                        .find(|daemon| {
+                            daemon.registry_node_id.as_deref() == Some(node_id)
+                                && zaplex_remote_session::types::has_feature(
+                                    &daemon.features,
+                                    zaplex_remote_session::types::FEATURE_AGENT_MODEL_DISCOVERY_V1,
+                                )
+                        });
+                    let (Some(daemon), Some(route)) = (daemon, agent_launch_route) else {
+                        self.spawn_card.update(ctx, |card, ctx| {
+                            card.apply_model_capabilities(
+                                agent,
+                                generation,
+                                Err(spawn_card::ModelDiscoveryFailure::classify(
+                                    agent,
+                                    host_name,
+                                    true,
+                                    crate::t!("cockpit-spawn-card-model-host-update"),
+                                )),
+                                ctx,
+                            );
+                        });
+                        return;
+                    };
+                    let Some(working_directory) = working_directory.to_str().map(str::to_string)
+                    else {
+                        self.spawn_card.update(ctx, |card, ctx| {
+                            card.apply_model_capabilities(
+                                agent,
+                                generation,
+                                Err(spawn_card::ModelDiscoveryFailure::classify(
+                                    agent,
+                                    host_name,
+                                    true,
+                                    crate::t!("cockpit-spawn-card-remote-dir-invalid-utf8"),
+                                )),
+                                ctx,
+                            );
+                        });
+                        return;
+                    };
+                    let client = daemon.client;
+                    let discovery_host = host_name.clone();
+                    let discovery = async move {
+                        client
+                            .discover_agent_models(
+                                route,
+                                working_directory,
+                                expected_provider_account_id,
+                            )
+                            .await
+                            .map_err(|error| {
+                                spawn_card::ModelDiscoveryFailure::classify(
+                                    agent,
+                                    discovery_host,
+                                    true,
+                                    error.to_string(),
+                                )
+                            })
+                            .and_then(|response| {
+                                Self::remote_model_capabilities(response).map_err(|error| {
+                                    spawn_card::ModelDiscoveryFailure::classify(
+                                        agent, host_name, true, error,
+                                    )
+                                })
+                            })
+                    };
+                    ctx.spawn(discovery, move |workspace, result, ctx| {
+                        workspace.spawn_card.update(ctx, |card, ctx| {
+                            card.apply_model_capabilities(agent, generation, result, ctx);
+                        });
+                    });
+                    return;
+                }
+                let account_name =
                     Self::account_email_for_route(agent, config_dir.as_deref(), &*ctx)
                         .unwrap_or_else(|| {
                             config_dir
                                 .as_ref()
                                 .map(|path| path.display().to_string())
-                                .unwrap_or_else(|| "Default subscription".to_string())
-                        })
-                };
-                let location = match node_id.as_deref() {
-                    Some(node_id) => warp_ssh_manager::with_conn(|database| {
-                        let connection =
-                            warp_ssh_manager::SshRepository::get_server_with_resolved_auth(
-                                database, node_id,
-                            )?
-                            .ok_or_else(|| {
-                                warp_ssh_manager::SshRepositoryError::NotFound(node_id.to_string())
-                            })?;
-                        Ok(crate::ai::subscription_agent::ProcessLocation::Remote {
-                            ssh_argv: warp_ssh_manager::ssh_command::build_ssh_args(
-                                &connection.server,
-                            ),
-                        })
-                    })
-                    .map_err(|error| error.to_string()),
-                    None => Ok(crate::ai::subscription_agent::ProcessLocation::Local),
-                };
-                let executable = if node_id.is_some() {
-                    PathBuf::from(agent.command_prefix())
-                } else {
-                    match crate::util::path::resolve_executable(agent.command_prefix()) {
-                        Some(path) => path.into_owned(),
-                        None => {
-                            self.spawn_card.update(ctx, |card, ctx| {
-                                card.apply_model_capabilities(
+                                .unwrap_or_else(|| {
+                                    crate::t!("cockpit-spawn-card-cli-default-login")
+                                })
+                        });
+                let location = crate::ai::subscription_agent::ProcessLocation::Local;
+                let executable = match crate::util::path::resolve_executable(agent.command_prefix())
+                {
+                    Some(path) => path.into_owned(),
+                    None => {
+                        self.spawn_card.update(ctx, |card, ctx| {
+                            card.apply_model_capabilities(
+                                agent,
+                                generation,
+                                Err(spawn_card::ModelDiscoveryFailure::classify(
                                     agent,
-                                    generation,
-                                    Err(format!(
-                                        "{} executable is no longer available",
-                                        agent.display_name()
-                                    )),
-                                    ctx,
-                                );
-                            });
-                            return;
-                        }
+                                    crate::t!("cockpit-spawn-card-host-local"),
+                                    false,
+                                    crate::t!(
+                                        "cockpit-spawn-card-executable-unavailable",
+                                        agent = agent.display_name()
+                                    ),
+                                )),
+                                ctx,
+                            );
+                        });
+                        return;
                     }
                 };
                 let subscription_agent = match agent {
@@ -22252,14 +22367,23 @@ impl Workspace {
                     executable,
                     version: String::new(),
                 };
+                let discovery_host = installation.host.display_name.clone();
+                let timeout_host = discovery_host.clone();
                 let discovery = async move {
-                    let location = location.map_err(anyhow::Error::msg)?;
                     let version = crate::ai::subscription_agent::query_cli_version(
                         &installation,
                         working_directory.clone(),
                         location.clone(),
                     )
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        spawn_card::ModelDiscoveryFailure::classify(
+                            agent,
+                            discovery_host.clone(),
+                            false,
+                            error.to_string(),
+                        )
+                    })?;
                     let installation = crate::ai::subscription_agent::InstallationIdentity {
                         version,
                         ..installation
@@ -22270,7 +22394,18 @@ impl Workspace {
                         location,
                     )
                     .await
-                    .map(|capability| capability.models)
+                    .map(|capability| spawn_card::DiscoveredModels {
+                        cli_version: capability.installation.version,
+                        models: capability.models,
+                    })
+                    .map_err(|error| {
+                        spawn_card::ModelDiscoveryFailure::classify(
+                            agent,
+                            discovery_host,
+                            false,
+                            error.to_string(),
+                        )
+                    })
                 };
                 let discovery_with_timeout = async move {
                     match futures_util::future::select(
@@ -22280,19 +22415,19 @@ impl Workspace {
                     .await
                     {
                         futures_util::future::Either::Left((result, _)) => result,
-                        futures_util::future::Either::Right((_, _)) => Err(anyhow::anyhow!(
-                            "Model discovery timed out after 15 seconds"
-                        )),
+                        futures_util::future::Either::Right((_, _)) => {
+                            Err(spawn_card::ModelDiscoveryFailure::classify(
+                                agent,
+                                timeout_host,
+                                false,
+                                "Model discovery timed out after 15 seconds",
+                            ))
+                        }
                     }
                 };
                 ctx.spawn(discovery_with_timeout, move |workspace, result, ctx| {
                     workspace.spawn_card.update(ctx, |card, ctx| {
-                        card.apply_model_capabilities(
-                            agent,
-                            generation,
-                            result.map_err(|error| error.to_string()),
-                            ctx,
-                        );
+                        card.apply_model_capabilities(agent, generation, result, ctx);
                     });
                 });
             }
@@ -22304,8 +22439,12 @@ impl Workspace {
                     card.apply_model_capabilities(
                         *agent,
                         *generation,
-                        Err("Subscription-agent model discovery requires the native app"
-                            .to_string()),
+                        Err(spawn_card::ModelDiscoveryFailure::classify(
+                            *agent,
+                            crate::t!("cockpit-spawn-card-web-app"),
+                            false,
+                            crate::t!("cockpit-spawn-card-model-native-required"),
+                        )),
                         ctx,
                     );
                 });

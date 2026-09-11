@@ -54,6 +54,14 @@ pub const FEATURE_AGENT_INVENTORY: &str = "agent-inventory";
 /// the daemon host and are never protocol data.
 pub const FEATURE_AGENT_ACCOUNT_ROUTING_V1: &str = "agent-account-routing-v1";
 
+/// Versioned capability for exact daemon-local model discovery under an
+/// opaque account route.
+///
+/// Clients send no provider config path. The daemon refreshes its account
+/// inventory, resolves the opaque route, verifies the provider identity, and
+/// returns path-free model metadata from the native CLI protocol.
+pub const FEATURE_AGENT_MODEL_DISCOVERY_V1: &str = "agent-model-discovery-v1";
+
 /// Versioned capability for bounded, provider-neutral transcript snapshots.
 ///
 /// Clients that negotiate this capability may request one transcript by
@@ -176,6 +184,7 @@ pub fn supported_features() -> Vec<String> {
     let mut features = vec![
         FEATURE_AGENT_INVENTORY.to_string(),
         FEATURE_AGENT_ACCOUNT_ROUTING_V1.to_string(),
+        FEATURE_AGENT_MODEL_DISCOVERY_V1.to_string(),
         FEATURE_AGENT_TRANSCRIPT_READ_V1.to_string(),
         FEATURE_HOST_EXEC.to_string(),
     ];
@@ -216,6 +225,7 @@ pub fn supported_client_features() -> Vec<String> {
         FEATURE_STARTUP_COMMAND_ACK.to_string(),
         FEATURE_AGENT_INVENTORY.to_string(),
         FEATURE_AGENT_ACCOUNT_ROUTING_V1.to_string(),
+        FEATURE_AGENT_MODEL_DISCOVERY_V1.to_string(),
         FEATURE_AGENT_TRANSCRIPT_READ_V1.to_string(),
         FEATURE_AGENT_PROCESS_SIGNAL_V1.to_string(),
         FEATURE_AGENT_PTY_BINDING.to_string(),

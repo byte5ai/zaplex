@@ -4,7 +4,8 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use crate::proto::{
     client_message, read_file_chunk_response, resolve_path_response, run_command_response,
     server_message, write_file_chunk_response, AgentAccountInfo, AgentAccountInventory,
-    AgentLaunchRoute, AgentProcessSignal, AgentProcessSignalRequest, AgentProcessSignalResponse,
+    AgentLaunchRoute, AgentModelCapability, AgentModelDiscoveryResponse, AgentModelEffort,
+    AgentProcessSignal, AgentProcessSignalRequest, AgentProcessSignalResponse,
     AgentProcessSignalStatus, AgentPtyBindingResponse, AgentPtyBindingStatus, AgentSessionIdentity,
     AgentSessionInfo, AgentSessionList, AgentTaskItem, AgentTranscriptResponse,
     AgentTranscriptStatus, AgentTranscriptTool, AgentTranscriptTurn, ClientMessage, ErrorCode,
@@ -22,7 +23,8 @@ use crate::protocol;
 use warp_core::SessionId;
 use warpui::r#async::executor;
 use zaplex_remote_session::types::{
-    FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_TRANSCRIPT_READ_V1,
+    FEATURE_AGENT_MODEL_DISCOVERY_V1, FEATURE_AGENT_PROCESS_SIGNAL_V1,
+    FEATURE_AGENT_TRANSCRIPT_READ_V1,
 };
 
 use super::*;
@@ -111,6 +113,10 @@ async fn initialize_sends_empty_auth_token_when_none() {
                     .features
                     .iter()
                     .any(|feature| feature == FEATURE_AGENT_TRANSCRIPT_READ_V1));
+                assert!(init
+                    .features
+                    .iter()
+                    .any(|feature| feature == FEATURE_AGENT_MODEL_DISCOVERY_V1));
                 #[cfg(unix)]
                 assert!(init
                     .features
@@ -1315,6 +1321,63 @@ async fn list_agent_accounts_round_trip_contains_no_config_path_field() {
 #[test]
 fn old_agent_account_frame_defaults_provider_identity_to_none() {
     assert_eq!(AgentAccountInfo::default().provider_account_id, None);
+}
+
+#[tokio::test]
+async fn discover_agent_models_round_trip_is_account_bound_and_path_free() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        let Some(client_message::Message::DiscoverAgentModels(request)) = &msg.message else {
+            panic!("expected DiscoverAgentModels");
+        };
+        assert_eq!(request.schema_version, 1);
+        assert_eq!(request.working_directory, "/srv/project");
+        assert_eq!(
+            request.expected_provider_account_id.as_deref(),
+            Some("provider-account-42")
+        );
+        assert_eq!(
+            request.route.as_ref(),
+            Some(&AgentLaunchRoute {
+                schema_version: 1,
+                provider: "claude".to_string(),
+                account_id: "opaque-account".to_string(),
+            })
+        );
+        server_message::Message::AgentModelDiscoveryResponse(AgentModelDiscoveryResponse {
+            schema_version: 1,
+            cli_version: "2.1.220".to_string(),
+            models: vec![AgentModelCapability {
+                id: "default".to_string(),
+                display_name: "Default".to_string(),
+                description: Some("Account default".to_string()),
+                resolved_model: Some("claude-current".to_string()),
+                is_default: true,
+                supported_efforts: vec![AgentModelEffort {
+                    id: "high".to_string(),
+                    display_name: "High".to_string(),
+                }],
+                default_effort: Some("high".to_string()),
+                context_window: Some(200_000),
+            }],
+        })
+    });
+
+    let response = client
+        .discover_agent_models(
+            AgentLaunchRoute {
+                schema_version: 1,
+                provider: "claude".to_string(),
+                account_id: "opaque-account".to_string(),
+            },
+            "/srv/project".to_string(),
+            Some("provider-account-42".to_string()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.cli_version, "2.1.220");
+    assert_eq!(response.models[0].context_window, Some(200_000));
+    assert!(!format!("{response:?}").contains("/srv/project"));
 }
 
 #[tokio::test]

@@ -63,6 +63,14 @@ fn one_agent_account_and_reported_default_route_automatically() {
 }
 
 #[test]
+fn zero_agents_has_no_reachable_route() {
+    assert_eq!(
+        route_target([], &RoutePreferences::default(), "/workspace".into()),
+        RouteResult::NoReachableAgent
+    );
+}
+
+#[test]
 fn two_agents_require_choice_without_explicit_default() {
     let result = route_target(
         [
@@ -91,17 +99,38 @@ fn two_agents_require_choice_without_explicit_default() {
 }
 
 #[test]
-fn multiple_accounts_are_not_ranked_by_plan_or_name() {
+fn removed_preferred_agent_never_silently_switches_provider() {
+    let result = route_target(
+        [capability(
+            SubscriptionAgent::Codex,
+            "codex-account",
+            &[("gpt-current", true)],
+        )],
+        &RoutePreferences {
+            agent: Some(SubscriptionAgent::ClaudeCode),
+            ..RoutePreferences::default()
+        },
+        "/workspace".into(),
+    );
+
+    assert_eq!(
+        result,
+        RouteResult::NeedsAgentChoice(vec![SubscriptionAgent::Codex])
+    );
+}
+
+#[test]
+fn account_choices_preserve_policy_order_instead_of_sorting_opaque_ids() {
     let result = route_target(
         [
             capability(
                 SubscriptionAgent::ClaudeCode,
-                "paid-looking-account",
+                "z-freest-account",
                 &[("claude-current", true)],
             ),
             capability(
                 SubscriptionAgent::ClaudeCode,
-                "free-looking-account",
+                "a-busy-account",
                 &[("claude-current", true)],
             ),
         ],
@@ -113,12 +142,157 @@ fn multiple_accounts_are_not_ranked_by_plan_or_name() {
         result,
         RouteResult::NeedsAccountChoice {
             agent: SubscriptionAgent::ClaudeCode,
-            account_ids: vec![
-                "free-looking-account".to_string(),
-                "paid-looking-account".to_string(),
+            accounts: vec![
+                AccountIdentity {
+                    id: "z-freest-account".to_string(),
+                    display_name: "z-freest-account".to_string(),
+                    provider_account_id: None,
+                    config_dir: None,
+                },
+                AccountIdentity {
+                    id: "a-busy-account".to_string(),
+                    display_name: "a-busy-account".to_string(),
+                    provider_account_id: None,
+                    config_dir: None,
+                },
             ],
         }
     );
+}
+
+#[test]
+fn removed_preferred_account_never_falls_back_to_remaining_login() {
+    let result = route_target(
+        [capability(
+            SubscriptionAgent::ClaudeCode,
+            "remaining-account",
+            &[("claude-current", true)],
+        )],
+        &RoutePreferences {
+            agent: Some(SubscriptionAgent::ClaudeCode),
+            account_id: Some("signed-out-account".to_string()),
+            ..RoutePreferences::default()
+        },
+        "/workspace".into(),
+    );
+
+    assert_eq!(
+        result,
+        RouteResult::NeedsAccountChoice {
+            agent: SubscriptionAgent::ClaudeCode,
+            accounts: vec![AccountIdentity {
+                id: "remaining-account".to_string(),
+                display_name: "remaining-account".to_string(),
+                provider_account_id: None,
+                config_dir: None,
+            }],
+        }
+    );
+}
+
+#[test]
+fn account_choices_deduplicate_only_the_complete_account_identity() {
+    let mut first = capability(
+        SubscriptionAgent::ClaudeCode,
+        "shared-routing-id",
+        &[("claude-current", true)],
+    );
+    first.installation.account.provider_account_id = Some("provider-1".to_string());
+    first.installation.account.config_dir = Some("/accounts/one".into());
+    let duplicate = first.clone();
+    let mut second = first.clone();
+    second.installation.account.provider_account_id = Some("provider-2".to_string());
+    second.installation.account.config_dir = Some("/accounts/two".into());
+
+    let result = route_target(
+        [first.clone(), duplicate, second.clone()],
+        &RoutePreferences::default(),
+        "/workspace".into(),
+    );
+
+    assert_eq!(
+        result,
+        RouteResult::NeedsAccountChoice {
+            agent: SubscriptionAgent::ClaudeCode,
+            accounts: vec![first.installation.account, second.installation.account],
+        }
+    );
+}
+
+#[test]
+fn exact_account_identity_disambiguates_shared_routing_ids() {
+    let mut first = capability(
+        SubscriptionAgent::ClaudeCode,
+        "shared-routing-id",
+        &[("claude-current", true)],
+    );
+    first.installation.account.provider_account_id = Some("provider-1".to_string());
+    first.installation.account.config_dir = Some("/accounts/one".into());
+    let mut second = first.clone();
+    second.installation.account.provider_account_id = Some("provider-2".to_string());
+    second.installation.account.config_dir = Some("/accounts/two".into());
+
+    let result = route_target(
+        [first, second.clone()],
+        &RoutePreferences {
+            agent: Some(SubscriptionAgent::ClaudeCode),
+            account_id: Some("shared-routing-id".to_string()),
+            account_identity: Some(second.installation.account.clone()),
+            ..RoutePreferences::default()
+        },
+        "/workspace".into(),
+    );
+
+    let RouteResult::Ready(target) = result else {
+        panic!("expected an exact ready route");
+    };
+    assert_eq!(target.installation.account, second.installation.account);
+}
+
+#[test]
+fn explicit_change_requests_never_auto_select_the_only_choice() {
+    let candidate = capability(
+        SubscriptionAgent::Codex,
+        "account-1",
+        &[("gpt-current", true)],
+    );
+
+    assert!(matches!(
+        route_target(
+            [candidate.clone()],
+            &RoutePreferences {
+                require_agent_choice: true,
+                ..RoutePreferences::default()
+            },
+            "/workspace".into(),
+        ),
+        RouteResult::NeedsAgentChoice(_)
+    ));
+    assert!(matches!(
+        route_target(
+            [candidate.clone()],
+            &RoutePreferences {
+                agent: Some(SubscriptionAgent::Codex),
+                require_account_choice: true,
+                ..RoutePreferences::default()
+            },
+            "/workspace".into(),
+        ),
+        RouteResult::NeedsAccountChoice { .. }
+    ));
+    assert!(matches!(
+        route_target(
+            [candidate.clone()],
+            &RoutePreferences {
+                agent: Some(SubscriptionAgent::Codex),
+                account_identity: Some(candidate.installation.account),
+                require_model_choice: true,
+                ..RoutePreferences::default()
+            },
+            "/workspace".into(),
+        ),
+        RouteResult::NeedsModelChoice { .. }
+    ));
 }
 
 #[test]
@@ -140,7 +314,43 @@ fn invalid_model_preference_does_not_fall_back_to_non_default() {
         result,
         RouteResult::NeedsModelChoice {
             agent: SubscriptionAgent::Codex,
-            account_id: "account-1".to_string(),
+            account: capability(
+                SubscriptionAgent::Codex,
+                "account-1",
+                &[("gpt-current", false)],
+            )
+            .installation
+            .account,
+        }
+    );
+}
+
+#[test]
+fn removed_model_never_falls_back_to_a_different_reported_default() {
+    let result = route_target(
+        [capability(
+            SubscriptionAgent::Codex,
+            "account-1",
+            &[("new-default", true)],
+        )],
+        &RoutePreferences {
+            model_id: Some("removed-model".to_string()),
+            ..RoutePreferences::default()
+        },
+        "/workspace".into(),
+    );
+
+    assert_eq!(
+        result,
+        RouteResult::NeedsModelChoice {
+            agent: SubscriptionAgent::Codex,
+            account: capability(
+                SubscriptionAgent::Codex,
+                "account-1",
+                &[("new-default", true)],
+            )
+            .installation
+            .account,
         }
     );
 }
