@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.19] — 2026-09-11
+
+- **Sicheres Download-Überschreiben:** Bestätigte lokale Ziele werden atomar verdrängt und anhand des tatsächlich ersetzten Dateisystemobjekts geprüft; konkurrierend erneuerte Dateien werden wiederhergestellt statt überschrieben.
+
 ## [1.0.18] — 2026-09-11
 
 - Lokale native Absturzdiagnose startet bei Opt-in idempotent, beendet und reapet den Minidump-Dienst bei Opt-out und wird durch einen echten Linux-Smoke-Test abgesichert.
