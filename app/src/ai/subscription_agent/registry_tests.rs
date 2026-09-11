@@ -364,7 +364,10 @@ fn beginning_agent_selection_invalidates_execution_state_and_keeps_the_prompt() 
 
     assert_eq!(
         registry.preferences("conversation-1"),
-        RoutePreferences::default()
+        RoutePreferences {
+            require_agent_choice: true,
+            ..RoutePreferences::default()
+        }
     );
     assert_eq!(registry.target("conversation-1"), None);
     assert!(registry.get("conversation-1").is_none());

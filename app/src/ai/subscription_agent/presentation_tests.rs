@@ -11,6 +11,7 @@ fn assert_policy(
     accepts_prompt: bool,
     actions: &[ConversationAction],
 ) {
+    crate::i18n::init(Some("en"));
     let presentation = ConversationPresentation::for_lifecycle(&lifecycle);
     assert_eq!(presentation.status, status);
     assert_eq!(presentation.composer.accepts_prompt(), accepts_prompt);
@@ -134,6 +135,7 @@ fn ended_presentation_offers_new_conversation_or_shell() {
 
 #[test]
 fn recoverable_error_presentation_preserves_a_safe_diagnostic() {
+    crate::i18n::init(Some("en"));
     let lifecycle = AgentLifecycle::RecoverableError {
         message: format!("connection\nfailed {}", "x".repeat(200)),
         session: Some(SessionIdentity::ClaudeCode("session-1".to_string())),
@@ -174,6 +176,7 @@ fn recoverable_initial_error_offers_retry_without_discarding_the_conversation() 
 
 #[test]
 fn identity_fields_are_stable_and_omit_a_missing_session() {
+    crate::i18n::init(Some("en"));
     let target = target_with_directory("/a/very/long/project/directory/that/may/wrap");
     let fields = conversation_identity_fields(&target, None, &AgentLifecycle::Ready);
     assert_eq!(
@@ -195,6 +198,7 @@ fn identity_fields_are_stable_and_omit_a_missing_session() {
 
 #[test]
 fn model_identity_names_alias_launch_id_and_resolved_version() {
+    crate::i18n::init(Some("en"));
     let mut target = target_with_directory("/project");
     target.model.id = "sonnet".to_string();
     target.model.display_name = "Claude Sonnet".to_string();
@@ -210,6 +214,7 @@ fn model_identity_names_alias_launch_id_and_resolved_version() {
 
 #[test]
 fn model_identity_does_not_duplicate_equal_names_or_resolved_ids() {
+    crate::i18n::init(Some("en"));
     let mut model = target_with_directory("/project").model;
     model.display_name = model.id.clone();
     model.resolved_model = Some(model.id.clone());
@@ -219,6 +224,7 @@ fn model_identity_does_not_duplicate_equal_names_or_resolved_ids() {
 
 #[test]
 fn identity_fields_include_the_exact_session_for_resume() {
+    crate::i18n::init(Some("en"));
     let target = target_with_directory("/project");
     let session = SessionIdentity::Codex("thread-42".to_string());
     let fields = conversation_identity_fields(
@@ -235,6 +241,7 @@ fn identity_fields_include_the_exact_session_for_resume() {
 
 #[test]
 fn presentations_do_not_leak_between_conversations() {
+    crate::i18n::init(Some("en"));
     let first = ConversationPresentation::for_lifecycle(&AgentLifecycle::Responding);
     let second = ConversationPresentation::for_lifecycle(&AgentLifecycle::SessionEnded);
     assert_eq!(first.status, "Responding");
@@ -251,6 +258,7 @@ fn presentations_do_not_leak_between_conversations() {
 
 #[test]
 fn incompatible_cli_and_remote_offline_have_concrete_statuses() {
+    crate::i18n::init(Some("en"));
     let incompatible = ConversationPresentation::for_lifecycle(&AgentLifecycle::RecoverableError {
         message: "installed Claude Code does not support the required structured protocol"
             .to_string(),
@@ -314,6 +322,7 @@ fn location_changes_are_available_only_when_no_turn_is_active() {
 
 #[test]
 fn selected_location_exposes_stable_host_id_and_exact_directory() {
+    crate::i18n::init(Some("en"));
     let location = SubscriptionLocationPreference {
         host: HostIdentity {
             id: "daemon-42".to_string(),
