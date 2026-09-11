@@ -89,6 +89,7 @@ fn fake_process(script: &str) -> (tempfile::TempDir, JsonLineProcess) {
 
 #[cfg(unix)]
 #[test]
+#[serial_test::serial]
 fn process_exits_gracefully_when_protocol_input_closes() {
     futures_lite::future::block_on(async {
         let (_directory, mut process) = fake_process("cat >/dev/null");
@@ -104,6 +105,7 @@ fn process_exits_gracefully_when_protocol_input_closes() {
 
 #[cfg(unix)]
 #[test]
+#[serial_test::serial]
 fn process_exit_timeout_escalates_and_reaps_the_child() {
     futures_lite::future::block_on(async {
         let (_directory, mut process) = fake_process("while :; do :; done");
@@ -125,6 +127,7 @@ fn process_exit_timeout_escalates_and_reaps_the_child() {
 
 #[cfg(unix)]
 #[test]
+#[serial_test::serial]
 fn local_fake_claude_covers_account_cwd_events_approval_and_completion() {
     futures_lite::future::block_on(async {
         let directory = tempfile::tempdir().unwrap();
@@ -236,6 +239,7 @@ cat >/dev/null
 
 #[cfg(unix)]
 #[test]
+#[serial_test::serial]
 fn local_fake_claude_resumes_real_session_and_cancels_its_process() {
     futures_lite::future::block_on(async {
         let directory = tempfile::tempdir().unwrap();
@@ -297,6 +301,7 @@ cat >/dev/null
 
 #[cfg(unix)]
 #[test]
+#[serial_test::serial]
 fn fake_claude_crash_reports_a_recoverable_error_with_real_session_id() {
     futures_lite::future::block_on(async {
         let directory = tempfile::tempdir().unwrap();
@@ -347,6 +352,7 @@ exit 17
 
 #[cfg(unix)]
 #[test]
+#[serial_test::serial]
 fn remote_fake_claude_uses_remote_host_cwd_account_and_scrubbed_environment() {
     futures_lite::future::block_on(async {
         let directory = tempfile::tempdir().unwrap();
@@ -449,6 +455,7 @@ exec /bin/sh -c "$last"
 
 #[cfg(unix)]
 #[test]
+#[serial_test::serial]
 fn remote_fake_codex_resumes_approves_and_cancels_the_addressed_turn() {
     futures_lite::future::block_on(async {
         let directory = tempfile::tempdir().unwrap();
@@ -596,6 +603,7 @@ exec /bin/sh -c "$last"
 
 #[cfg(unix)]
 #[test]
+#[serial_test::serial]
 fn local_fake_codex_uses_local_cwd_account_and_scrubbed_environment() {
     futures_lite::future::block_on(async {
         let directory = tempfile::tempdir().unwrap();
@@ -693,6 +701,7 @@ cat >/dev/null
 
 #[cfg(unix)]
 #[test]
+#[serial_test::serial]
 fn fake_codex_account_mismatch_fails_closed_before_thread_start() {
     futures_lite::future::block_on(async {
         let directory = tempfile::tempdir().unwrap();
@@ -737,6 +746,7 @@ cat >/dev/null
 
 #[cfg(unix)]
 #[test]
+#[serial_test::serial]
 fn fake_old_codex_app_server_requires_an_upgrade_without_fallback() {
     futures_lite::future::block_on(async {
         let directory = tempfile::tempdir().unwrap();
