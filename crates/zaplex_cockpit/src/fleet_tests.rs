@@ -672,6 +672,7 @@ fn account(provider: Provider, email: Option<&str>, config_dir: &str) -> Account
         key: format!("{}:{}", provider.as_str(), config_dir),
         config_dir: config_dir.into(),
         label: "acct".into(),
+        provider_account_id: None,
         email: email.map(str::to_string),
         org: None,
         role: None,

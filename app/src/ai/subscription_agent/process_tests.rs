@@ -20,6 +20,7 @@ fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
             account: AccountIdentity {
                 id: "account-1".to_string(),
                 display_name: "developer@example.com".to_string(),
+                provider_account_id: None,
                 config_dir: Some("/accounts/with space".into()),
             },
             executable: match agent {

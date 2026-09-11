@@ -36,6 +36,10 @@ impl CodexProtocol {
         request(id, "account/read", json!({"refreshToken": false}))
     }
 
+    pub(crate) fn account_rate_limits_request(id: u64) -> Value {
+        request(id, "account/rateLimits/read", Value::Null)
+    }
+
     pub(crate) fn model_list_request(id: u64, cursor: Option<&str>) -> Value {
         request(
             id,
@@ -170,6 +174,7 @@ impl CodexProtocol {
 
     pub(crate) fn parse_capability(
         account_frame: &Value,
+        account_rate_limits_frame: &Value,
         model_frame: &Value,
         mut installation: InstallationIdentity,
     ) -> Result<AgentCapability> {
@@ -180,6 +185,11 @@ impl CodexProtocol {
         if account.get("type").and_then(Value::as_str) != Some("chatgpt") {
             return Err(anyhow!("Codex is not using a ChatGPT subscription account"));
         }
+        let reported_account_id = result(account_rate_limits_frame)?
+            .get("accountId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty());
+        verify_provider_account("Codex", &installation.account, reported_account_id)?;
         if let Some(email) = account.get("email").and_then(Value::as_str) {
             installation.account.display_name = email.to_string();
         } else {
@@ -280,6 +290,35 @@ impl CodexProtocol {
             unknown => Err(anyhow!("unsupported Codex app-server method: {unknown}")),
         }
     }
+}
+
+fn verify_provider_account(
+    agent: &str,
+    selected: &super::AccountIdentity,
+    reported_account_id: Option<&str>,
+) -> Result<()> {
+    let Some(expected) = selected.provider_account_id.as_deref() else {
+        return Ok(());
+    };
+    let Some(reported) = reported_account_id else {
+        return Err(super::SubscriptionAuthenticationError {
+            message: format!(
+                "{agent} did not report an account ID for selected account {}; refresh that CLI login and retry",
+                selected.display_name
+            ),
+        }
+        .into());
+    };
+    if reported.trim() != expected.trim() {
+        return Err(super::SubscriptionAuthenticationError {
+            message: format!(
+                "{agent} authenticated account does not match selected account {}; sign in to that account in the selected CLI profile and retry",
+                selected.display_name
+            ),
+        }
+        .into());
+    }
+    Ok(())
 }
 
 fn request(id: u64, method: &str, params: Value) -> Value {

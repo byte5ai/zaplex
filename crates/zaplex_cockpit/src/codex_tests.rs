@@ -20,7 +20,7 @@ fn discovers_account_and_reads_email_from_id_token_without_storing_tokens() {
     write(
         &codex_home.join("auth.json"),
         &format!(
-            r#"{{"auth_mode":"chatgpt","tokens":{{"account_id":"acc_1","id_token":"{jwt}","access_token":"SECRET","refresh_token":"SECRET"}}}}"#
+            r#"{{"auth_mode":"chatgpt","tokens":{{"account_id":" acc_1 ","id_token":"{jwt}","access_token":"SECRET","refresh_token":"SECRET"}}}}"#
         ),
     );
 
@@ -29,6 +29,7 @@ fn discovers_account_and_reads_email_from_id_token_without_storing_tokens() {
     let a = &accounts[0];
     assert_eq!(a.provider, Provider::Codex);
     assert_eq!(a.key, "codex:default");
+    assert_eq!(a.provider_account_id.as_deref(), Some("acc_1"));
     assert_eq!(a.email.as_deref(), Some("c@example.com"));
     assert_eq!(a.label, "c@example.com");
     // Provider ≠ plan (WS4 S2): auth_mode is not a plan tier; Codex exposes no plan.

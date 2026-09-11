@@ -92,8 +92,13 @@ impl ClaudeProtocol {
             .and_then(Value::as_object)
             .context("Claude Code is not signed in")?;
 
+        verify_provider_account(
+            &installation.account,
+            claude_provider_account_id(account).as_deref(),
+        )?;
+
         if let Some(display_name) = claude_account_display_name(account) {
-            installation.account.display_name = display_name.clone();
+            installation.account.display_name = display_name;
         }
 
         let models = models.iter().map(parse_model).collect::<Result<Vec<_>>>()?;
@@ -122,6 +127,62 @@ impl ClaudeProtocol {
             unknown => Err(anyhow!("unsupported Claude protocol frame type: {unknown}")),
         }
     }
+}
+
+fn verify_provider_account(
+    selected: &super::AccountIdentity,
+    reported_account_id: Option<&str>,
+) -> Result<()> {
+    let Some(expected) = selected.provider_account_id.as_deref() else {
+        return Ok(());
+    };
+    let Some(reported) = reported_account_id else {
+        return Err(super::SubscriptionAuthenticationError {
+            message: format!(
+                "Claude Code did not report an account ID for selected account {}; refresh that CLI login and retry",
+                selected.display_name
+            ),
+        }
+        .into());
+    };
+    if reported.trim() != expected.trim() {
+        return Err(super::SubscriptionAuthenticationError {
+            message: format!(
+                "Claude Code authenticated account does not match selected account {}; sign in to that account in the selected CLI profile and retry",
+                selected.display_name
+            ),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+fn claude_provider_account_id(account: &Map<String, Value>) -> Option<String> {
+    account
+        .get("accountUuid")
+        .or_else(|| account.get("accountUUID"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(|id| id.trim().to_ascii_lowercase())
+        .or_else(|| {
+            let email = account
+                .get("email")
+                .or_else(|| account.get("emailAddress"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|email| !email.is_empty())?;
+            let organization = account
+                .get("organizationUuid")
+                .or_else(|| account.get("organizationId"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|organization| !organization.is_empty())?;
+            Some(format!(
+                "{}:{}",
+                email.to_ascii_lowercase(),
+                organization.to_ascii_lowercase()
+            ))
+        })
 }
 
 fn claude_account_display_name(account: &Map<String, Value>) -> Option<String> {

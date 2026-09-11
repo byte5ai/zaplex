@@ -181,6 +181,25 @@ fn duplicate_stable_claude_identity_is_emitted_once() {
     assert!(discovery.issues.is_empty());
     assert_eq!(discovery.accounts.len(), 1);
     assert_eq!(discovery.accounts[0].key, "claude:a");
+    assert_eq!(
+        discovery.accounts[0].provider_account_id.as_deref(),
+        Some("account-1")
+    );
+}
+
+#[test]
+fn retains_normalized_provider_identity_separately_from_the_route_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    write(
+        &home.join(".claude-work/.claude.json"),
+        r#"{"oauthAccount":{"accountUuid":" ACCOUNT-42 ","emailAddress":"same@example.com"}}"#,
+    );
+
+    let account = accounts_without_process(home, None).pop().unwrap();
+
+    assert_eq!(account.key, "claude:work");
+    assert_eq!(account.provider_account_id.as_deref(), Some("account-42"));
 }
 
 #[test]

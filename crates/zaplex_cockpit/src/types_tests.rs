@@ -56,3 +56,22 @@ fn unpriced_model_marks_the_window_unpriced() {
     let decoded: WindowTotals = serde_json::from_str(&encoded).unwrap();
     assert_eq!(decoded, totals, "unpriced totals survive a JSON round trip");
 }
+
+#[test]
+fn account_without_provider_identity_remains_readable() {
+    let account: Account = serde_json::from_value(serde_json::json!({
+        "provider": "Codex",
+        "key": "codex:default",
+        "config_dir": "/accounts/codex",
+        "label": "developer@example.com",
+        "email": "developer@example.com",
+        "org": null,
+        "role": null,
+        "plan_tier": null,
+        "is_default": true
+    }))
+    .unwrap();
+
+    assert_eq!(account.key, "codex:default");
+    assert_eq!(account.provider_account_id, None);
+}

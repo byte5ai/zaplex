@@ -9,7 +9,8 @@ use std::path::PathBuf;
 const CLAUDE_INITIALIZE_ID: &str = "zaplex-initialize";
 const CODEX_INITIALIZE_ID: u64 = 1;
 const CODEX_ACCOUNT_ID: u64 = 2;
-const CODEX_MODELS_ID: u64 = 3;
+const CODEX_ACCOUNT_RATE_LIMITS_ID: u64 = 3;
+const CODEX_MODELS_ID: u64 = 4;
 
 pub(crate) async fn discover_capabilities(
     installation: InstallationIdentity,
@@ -46,9 +47,19 @@ async fn discover_claude(
                 .and_then(Value::as_str)
                 == Some(CLAUDE_INITIALIZE_ID)
         {
-            return ClaudeProtocol::parse_capability(&frame, installation).context(
-                "installed Claude Code does not support the required structured protocol",
-            );
+            let capability = ClaudeProtocol::parse_capability(&frame, installation);
+            return match capability {
+                Err(error)
+                    if error
+                        .downcast_ref::<super::SubscriptionAuthenticationError>()
+                        .is_some() =>
+                {
+                    Err(error)
+                }
+                result => result.context(
+                    "installed Claude Code does not support the required structured protocol",
+                ),
+            };
         }
     }
 }
@@ -81,6 +92,22 @@ async fn discover_codex(
         .send(&CodexProtocol::account_request(CODEX_ACCOUNT_ID))
         .await?;
     let account = receive_response(process, CODEX_ACCOUNT_ID).await?;
+    process
+        .send(&CodexProtocol::account_rate_limits_request(
+            CODEX_ACCOUNT_RATE_LIMITS_ID,
+        ))
+        .await?;
+    let account_rate_limits = receive_response(process, CODEX_ACCOUNT_RATE_LIMITS_ID).await?;
+    if let Some(error) = account_rate_limits.get("error") {
+        return Err(anyhow!(
+            "installed Codex {} cannot verify the selected subscription account; upgrade Codex: {}",
+            installation.version,
+            error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("account/rateLimits/read failed")
+        ));
+    }
 
     let mut cursor = None;
     let mut models = Vec::new();
@@ -128,7 +155,12 @@ async fn discover_codex(
             "nextCursor": null
         }
     });
-    CodexProtocol::parse_capability(&account, &model_response, installation)
+    CodexProtocol::parse_capability(
+        &account,
+        &account_rate_limits,
+        &model_response,
+        installation,
+    )
 }
 
 async fn receive_response(process: &mut JsonLineProcess, id: u64) -> Result<Value> {

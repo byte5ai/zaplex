@@ -154,6 +154,7 @@ fn remote_account_projection_preserves_only_path_free_inventory_fields() {
             capacity_known: true,
             health: "loaded".to_string(),
             usage_provenance: "estimate".to_string(),
+            provider_account_id: None,
         }],
         health: "loaded".to_string(),
         health_message: "must not cross the export boundary".to_string(),

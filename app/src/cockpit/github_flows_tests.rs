@@ -406,6 +406,7 @@ fn analysis_usage(
             key: key.to_string(),
             config_dir: format!("/tmp/{key}").into(),
             label: key.to_string(),
+            provider_account_id: None,
             email: None,
             org: None,
             role: None,

@@ -15,6 +15,7 @@ fn target() -> SubscriptionTarget {
             account: AccountIdentity {
                 id: "account-1".to_string(),
                 display_name: "Account".to_string(),
+                provider_account_id: None,
                 config_dir: None,
             },
             executable: "codex".into(),

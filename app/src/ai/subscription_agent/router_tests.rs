@@ -18,6 +18,7 @@ fn capability(
             account: AccountIdentity {
                 id: account_id.to_string(),
                 display_name: account_id.to_string(),
+                provider_account_id: None,
                 config_dir: None,
             },
             executable: agent.display_name().into(),

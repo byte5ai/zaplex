@@ -64,6 +64,7 @@ fn account_at(config_dir: &str, sessions: Vec<SessionSnapshot>) -> AccountUsage 
             key: "claude:duplicate-basename".to_string(),
             config_dir: config_dir.into(),
             label: "Claude account".to_string(),
+            provider_account_id: None,
             email: Some("owner@example.test".to_string()),
             org: None,
             role: None,

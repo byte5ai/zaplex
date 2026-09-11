@@ -196,6 +196,7 @@ fn target_with_directory(directory: &str) -> SubscriptionTarget {
             account: AccountIdentity {
                 id: "work".to_string(),
                 display_name: "Work account".to_string(),
+                provider_account_id: None,
                 config_dir: None,
             },
             executable: PathBuf::from("codex"),

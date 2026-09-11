@@ -1293,16 +1293,28 @@ async fn list_agent_accounts_round_trip_contains_no_config_path_field() {
                 capacity_known: true,
                 health: "loaded".to_string(),
                 usage_provenance: "estimate".to_string(),
+                provider_account_id: Some("provider-account-42".to_string()),
             }],
             health: "loaded".to_string(),
             health_message: String::new(),
         })
     });
 
+    assert_eq!(client.cached_agent_accounts(), None);
     let response = client.list_agent_accounts().await.unwrap();
     assert_eq!(response.schema_version, 1);
     assert_eq!(response.accounts[0].account_id, "opaque-id");
     assert_eq!(response.accounts[0].capacity_5h, 0.75);
+    assert_eq!(
+        response.accounts[0].provider_account_id.as_deref(),
+        Some("provider-account-42")
+    );
+    assert_eq!(client.cached_agent_accounts(), Some(response));
+}
+
+#[test]
+fn old_agent_account_frame_defaults_provider_identity_to_none() {
+    assert_eq!(AgentAccountInfo::default().provider_account_id, None);
 }
 
 #[tokio::test]

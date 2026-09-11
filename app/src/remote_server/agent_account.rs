@@ -336,6 +336,7 @@ fn inventory_from_snapshot(snapshot: CockpitSnapshot) -> AccountInventoryScan {
                 UsageProvenance::Estimate => "estimate",
             }
             .to_string(),
+            provider_account_id: usage.account.provider_account_id.clone(),
         };
         candidates.push((
             key,

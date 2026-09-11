@@ -24,9 +24,17 @@ impl SubscriptionSession {
         resume: Option<SessionIdentity>,
         location: ProcessLocation,
     ) -> Result<Self> {
-        validate_resume_agent(target.installation.agent, resume.as_ref())?;
         let resume_id = resume.as_ref().map(session_id);
         let launch = ProcessLaunch::for_session(&target, resume_id, location);
+        Self::open_with_launch(target, resume, launch).await
+    }
+
+    pub(super) async fn open_with_launch(
+        target: SubscriptionTarget,
+        resume: Option<SessionIdentity>,
+        launch: ProcessLaunch,
+    ) -> Result<Self> {
+        validate_resume_agent(target.installation.agent, resume.as_ref())?;
         let process = JsonLineProcess::spawn(&launch)?;
         let mut session = Self {
             process,
@@ -248,6 +256,18 @@ impl SubscriptionSession {
             .send(&CodexProtocol::account_request(account_id))
             .await?;
         let account = receive_response(&mut self.process, account_id).await?;
+        let account_rate_limits_id = self.request_id();
+        self.process
+            .send(&CodexProtocol::account_rate_limits_request(
+                account_rate_limits_id,
+            ))
+            .await?;
+        let account_rate_limits =
+            receive_response(&mut self.process, account_rate_limits_id).await?;
+        ensure_success(
+            account_rate_limits.clone(),
+            "Codex account verification (upgrade Codex if unavailable)",
+        )?;
         let mut cursor = None;
         let mut model_data = Vec::new();
         loop {
@@ -285,8 +305,12 @@ impl SubscriptionSession {
                 "nextCursor": null,
             }
         });
-        let capability =
-            CodexProtocol::parse_capability(&account, &models, self.target.installation.clone())?;
+        let capability = CodexProtocol::parse_capability(
+            &account,
+            &account_rate_limits,
+            &models,
+            self.target.installation.clone(),
+        )?;
         if !capability
             .models
             .iter()
