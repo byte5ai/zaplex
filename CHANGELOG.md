@@ -2,6 +2,14 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.28] — 2026-09-11
+
+- Der Subscription-Agent wendet erkannte Modelle nur noch auf das exakt ausgewählte Konto an, überspringt Auth-Fehler anderer Konten und erlaubt frei eingegebene Remote-Verzeichnisse im laufenden Agent-Footer.
+
+## [1.0.27] — 2026-09-11
+
+- Der Agent-Einstieg routet Claude Code und Codex jetzt konto-, host-, verzeichnis-, modell- und CLI-versionsgenau; dynamische Modelldiscovery, sichere Wechselzustände und explizite Session-Aktionen ersetzen statische oder stille Fallbacks.
+
 ## [1.0.26] — 2026-09-11
 
 - Subscription-Agenten prüfen lokale und entfernte Claude-/Codex-Konten jetzt anhand stabiler Provider-IDs und decken den vollständigen Prozesslebenszyklus mit realen Testprozessen ab.

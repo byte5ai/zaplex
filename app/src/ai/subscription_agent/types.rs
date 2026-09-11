@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
+pub(crate) const LOCAL_SUBSCRIPTION_HOST_ID: &str = "local";
+
 /// An installed subscription agent supported by the in-app conversation surface.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,6 +32,15 @@ impl SubscriptionAgent {
 pub(crate) struct HostIdentity {
     pub(crate) id: String,
     pub(crate) display_name: String,
+}
+
+/// An explicit per-conversation execution location selected in the Agent UI.
+/// `host.id` is either the reserved local id or the daemon's stable host id;
+/// display names never participate in routing.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct SubscriptionLocationPreference {
+    pub(crate) host: HostIdentity,
+    pub(crate) working_directory: PathBuf,
 }
 
 /// Account identity reported by the CLI, coupled to its isolated config directory.
@@ -152,6 +163,7 @@ pub(crate) enum AgentLifecycle {
     NotSignedIn {
         agent: SubscriptionAgent,
     },
+    SelectionRequired,
     Ready,
     Starting,
     Responding,
@@ -187,6 +199,18 @@ impl AgentLifecycle {
                     session: Some(_),
                     ..
                 }
+        )
+    }
+
+    pub(crate) fn can_change_location(&self) -> bool {
+        matches!(
+            self,
+            AgentLifecycle::NoAgentInstalled
+                | AgentLifecycle::NotSignedIn { .. }
+                | AgentLifecycle::SelectionRequired
+                | AgentLifecycle::Ready
+                | AgentLifecycle::TurnCompleted { .. }
+                | AgentLifecycle::RecoverableError { .. }
         )
     }
 }

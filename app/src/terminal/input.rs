@@ -2197,6 +2197,20 @@ impl Input {
                 | AgentInputFooterEvent::InsertIntoCLIRichInput(_)
                 | AgentInputFooterEvent::ToggleCodeReviewPane(_)
                 | AgentInputFooterEvent::ToggleFileExplorer(_) => {}
+                AgentInputFooterEvent::RetrySubscriptionPreflight { conversation_id } =>
+                {
+                    #[cfg(not(target_family = "wasm"))]
+                    if let Some(conversation_id) = me
+                        .ai_context_model
+                        .as_ref(ctx)
+                        .selected_conversation_id(ctx)
+                        .filter(|selected| selected.to_string() == conversation_id.as_str())
+                    {
+                        me.ai_controller.update(ctx, |controller, ctx| {
+                            controller.preflight_subscription_agent(conversation_id, None, ctx);
+                        });
+                    }
+                }
                 AgentInputFooterEvent::ToggledChipMenu { open } => {
                     me.handle_prompt_event(&PromptDisplayEvent::ToggleMenu { open: *open }, ctx);
                 }

@@ -133,6 +133,7 @@ fn selected_account_is_resolved_to_the_daemon_canonical_path() {
         },
         AccountRouteTarget {
             provider: "claude".to_string(),
+            provider_account_id: None,
             config_dir: Some(canonical.clone()),
         },
     );
@@ -167,6 +168,7 @@ fn stored_account_route_identity_rejects_a_replaced_config_directory() {
         key.clone(),
         AccountRouteTarget {
             provider: "claude".to_string(),
+            provider_account_id: None,
             config_dir: Some(canonical.clone()),
         },
     )]);
@@ -178,6 +180,7 @@ fn stored_account_route_identity_rejects_a_replaced_config_directory() {
         key,
         AccountRouteTarget {
             provider: "claude".to_string(),
+            provider_account_id: None,
             config_dir: Some(std::fs::canonicalize(&config_dir).unwrap()),
         },
     )]);
@@ -199,6 +202,7 @@ fn default_account_clears_all_client_supplied_provider_paths() {
         },
         AccountRouteTarget {
             provider: "codex".to_string(),
+            provider_account_id: None,
             config_dir: None,
         },
     );
@@ -226,6 +230,7 @@ fn selected_subscription_accounts_scrub_provider_auth_environment() {
             },
             AccountRouteTarget {
                 provider: "claude".to_string(),
+                provider_account_id: None,
                 config_dir: None,
             },
         ),
@@ -236,6 +241,7 @@ fn selected_subscription_accounts_scrub_provider_auth_environment() {
             },
             AccountRouteTarget {
                 provider: "codex".to_string(),
+                provider_account_id: None,
                 config_dir: None,
             },
         ),
@@ -313,6 +319,7 @@ fn stale_non_default_route_fails_closed() {
         },
         AccountRouteTarget {
             provider: "claude".to_string(),
+            provider_account_id: None,
             config_dir: Some(missing),
         },
     )]);
@@ -350,6 +357,7 @@ fn expired_inventory_cache_fails_closed() {
         },
         AccountRouteTarget {
             provider: "claude".to_string(),
+            provider_account_id: None,
             config_dir: None,
         },
     )]);
@@ -374,6 +382,7 @@ fn provider_mismatch_fails_closed() {
         },
         AccountRouteTarget {
             provider: "claude".to_string(),
+            provider_account_id: None,
             config_dir: None,
         },
     )]);
@@ -387,6 +396,56 @@ fn provider_mismatch_fails_closed() {
 }
 
 #[test]
+fn model_discovery_route_binds_opaque_account_to_provider_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_dir = temp.path().join("account");
+    std::fs::create_dir(&config_dir).unwrap();
+    let canonical = std::fs::canonicalize(config_dir).unwrap();
+    let mut account_cache = AccountRouteCache::default();
+    account_cache.replace_with_identity_for_test(
+        "claude",
+        "opaque-account",
+        Some("provider-account-42".to_string()),
+        Some(canonical.clone()),
+    );
+
+    let resolved = resolve_agent_model_route(
+        &account_cache,
+        &route("claude", "opaque-account"),
+        Some("provider-account-42"),
+    )
+    .unwrap();
+
+    assert_eq!(resolved.provider, "claude");
+    assert_eq!(resolved.account_id, "opaque-account");
+    assert_eq!(
+        resolved.provider_account_id.as_deref(),
+        Some("provider-account-42")
+    );
+    assert_eq!(resolved.config_dir.as_deref(), Some(canonical.as_path()));
+}
+
+#[test]
+fn model_discovery_route_rejects_changed_or_blank_provider_identity() {
+    let mut account_cache = AccountRouteCache::default();
+    account_cache.replace_with_identity_for_test(
+        "codex",
+        "opaque-account",
+        Some("provider-account-42".to_string()),
+        None,
+    );
+    let selected = route("codex", "opaque-account");
+
+    assert!(resolve_agent_model_route(
+        &account_cache,
+        &selected,
+        Some("provider-account-elsewhere")
+    )
+    .is_err());
+    assert!(resolve_agent_model_route(&account_cache, &selected, Some("   ")).is_err());
+}
+
+#[test]
 fn pinned_session_maps_to_the_same_opaque_route_as_inventory() {
     let pinned = PathBuf::from("/daemon/.claude-work");
     let routes = HashMap::from([(
@@ -396,6 +455,7 @@ fn pinned_session_maps_to_the_same_opaque_route_as_inventory() {
         },
         AccountRouteTarget {
             provider: "claude".to_string(),
+            provider_account_id: None,
             config_dir: Some(pinned),
         },
     )]);
@@ -414,6 +474,7 @@ fn pinned_session_maps_to_the_same_opaque_route_as_inventory() {
 fn ambiguous_session_route_has_no_opaque_identity() {
     let target = AccountRouteTarget {
         provider: "codex".to_string(),
+        provider_account_id: None,
         config_dir: Some(PathBuf::from("/daemon/.codex-work")),
     };
     let routes = HashMap::from([

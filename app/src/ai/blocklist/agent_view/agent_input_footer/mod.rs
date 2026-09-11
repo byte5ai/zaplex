@@ -13,9 +13,10 @@ use crate::{
         },
         execution_profiles::profiles::AIExecutionProfilesModel,
         subscription_agent::{
-            conversation_identity_fields, AgentLifecycle, ApprovalDecision, ConversationAction,
-            ConversationPresentation, SubscriptionAgent, SubscriptionSessionRegistry,
-            SubscriptionTarget,
+            account_identity_label, conversation_identity_fields, location_identity_label,
+            model_identity_label, AccountIdentity, AgentLifecycle, ApprovalDecision,
+            ConversationAction, ConversationPresentation, SubscriptionAgent,
+            SubscriptionSessionRegistry, SubscriptionTarget,
         },
         AIRequestUsageModel,
     },
@@ -52,7 +53,7 @@ use crate::{
     view_components::{
         action_button::{
             ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, NakedTheme,
-            TooltipAlignment,
+            SecondaryTheme, TooltipAlignment,
         },
         DismissibleToast,
     },
@@ -63,6 +64,11 @@ use toolbar_item::AgentToolbarItemKind;
 // Zaplex Wave 7-3:`warp_cli::agent::Harness` import was removed with the hosted-mode footer.
 
 use std::sync::Arc;
+
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::subscription_agent::{
+    host_identity_label, HostIdentity, SubscriptionLocationPreference, LOCAL_SUBSCRIPTION_HOST_ID,
+};
 
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::local_shell::LocalShellState;
@@ -122,6 +128,8 @@ use crate::terminal::cli_agent_sessions::plugin_manager::{
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::view_components::ToastLink;
+#[cfg(not(target_family = "wasm"))]
+use crate::view_components::{SubmittableTextInput, SubmittableTextInputEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
 
@@ -228,6 +236,8 @@ pub struct AgentInputFooter {
     cli_voice_input_state: CLIVoiceInputState,
     #[cfg(feature = "voice_input")]
     cli_transcription_handle: Option<SpawnedFutureHandle>,
+    #[cfg(not(target_family = "wasm"))]
+    subscription_directory_editor: ViewHandle<SubmittableTextInput>,
     v2_model_selector: Option<ViewHandle<ModelSelector>>,
 }
 
@@ -671,6 +681,23 @@ impl AgentInputFooter {
             None
         };
 
+        #[cfg(not(target_family = "wasm"))]
+        let subscription_directory_editor = ctx.add_typed_action_view(|ctx| {
+            let mut editor = SubmittableTextInput::new(ctx)
+                .validate_on_submit(subscription_directory_input_is_valid);
+            editor.set_placeholder_text(
+                crate::t!("ai-footer-subscription-enter-remote-directory"),
+                ctx,
+            );
+            editor.set_outer_margins(0., 0., ctx);
+            editor
+        });
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(
+            &subscription_directory_editor,
+            Self::handle_subscription_directory_input,
+        );
+
         let mut me = Self {
             terminal_view_id,
             ambient_agent_view_model,
@@ -703,6 +730,8 @@ impl AgentInputFooter {
             cli_voice_input_state: CLIVoiceInputState::default(),
             #[cfg(feature = "voice_input")]
             cli_transcription_handle: None,
+            #[cfg(not(target_family = "wasm"))]
+            subscription_directory_editor,
             ftu_callout_close_button: ctx.add_typed_action_view(|_ctx| {
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::X)
@@ -804,6 +833,83 @@ impl AgentInputFooter {
             },
             file_picker_config,
         );
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn select_subscription_directory(
+        &mut self,
+        conversation_id: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let window_id = ctx.window_id();
+        let view_id = ctx.view_id();
+        let conversation_id = conversation_id.to_string();
+        ctx.open_file_picker(
+            move |result, ctx| match result {
+                Ok(paths) => {
+                    if let Some(path) = paths.first() {
+                        ctx.dispatch_typed_action_for_view(
+                            window_id,
+                            view_id,
+                            &AgentInputFooterAction::SelectSubscriptionDirectory {
+                                conversation_id: conversation_id.clone(),
+                                working_directory: PathBuf::from(path.as_str()),
+                            },
+                        );
+                    }
+                }
+                Err(err) => {
+                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!("{err}")),
+                            window_id,
+                            ctx,
+                        );
+                    });
+                }
+            },
+            warpui::platform::FilePickerConfiguration::new().folders_only(),
+        );
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_subscription_directory_input(
+        &mut self,
+        _handle: ViewHandle<SubmittableTextInput>,
+        event: &SubmittableTextInputEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            SubmittableTextInputEvent::Submit(input) => {
+                let Some(working_directory) = subscription_directory_from_input(input) else {
+                    return;
+                };
+                let conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
+                    .active_conversation(self.terminal_view_id)
+                    .map(|conversation| conversation.id().to_string());
+                if let Some(conversation_id) = conversation_id {
+                    self.apply_subscription_directory(&conversation_id, working_directory, ctx);
+                }
+            }
+            SubmittableTextInputEvent::Escape => {}
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn apply_subscription_directory(
+        &mut self,
+        conversation_id: &str,
+        working_directory: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if SubscriptionSessionRegistry::as_ref(ctx)
+            .select_working_directory(conversation_id, working_directory)
+        {
+            ctx.emit(AgentInputFooterEvent::RetrySubscriptionPreflight {
+                conversation_id: conversation_id.to_string(),
+            });
+        }
+        ctx.notify();
     }
 
     /// Which plugin chip to show, if any.
@@ -1909,7 +2015,7 @@ fn subscription_approval_actions(
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(4.);
     actions.add_child(subscription_approval_button(
-        "Allow",
+        crate::t!("ai-footer-subscription-allow"),
         conversation_id,
         request_id,
         ApprovalDecision::Allow,
@@ -1917,7 +2023,7 @@ fn subscription_approval_actions(
     ));
     if agent == SubscriptionAgent::Codex {
         actions.add_child(subscription_approval_button(
-            "Allow for session",
+            crate::t!("ai-footer-subscription-allow-for-session"),
             conversation_id,
             request_id,
             ApprovalDecision::AllowForSession,
@@ -1925,14 +2031,14 @@ fn subscription_approval_actions(
         ));
     }
     actions.add_child(subscription_approval_button(
-        "Deny",
+        crate::t!("common-deny"),
         conversation_id,
         request_id,
         ApprovalDecision::Deny,
         app,
     ));
     actions.add_child(subscription_approval_button(
-        "Cancel",
+        crate::t!("common-cancel"),
         conversation_id,
         request_id,
         ApprovalDecision::Cancel,
@@ -1942,7 +2048,7 @@ fn subscription_approval_actions(
 }
 
 fn subscription_approval_button(
-    label: &str,
+    label: impl Into<String>,
     conversation_id: &str,
     request_id: &str,
     decision: ApprovalDecision,
@@ -1972,7 +2078,7 @@ fn subscription_lifecycle_actions(
         match action {
             ConversationAction::OpenAgentSettings => {
                 actions.add_child(subscription_action_button(
-                    "Agent settings",
+                    crate::t!("ai-footer-subscription-agent-settings"),
                     AgentInputFooterAction::OpenCodingAgentSettings,
                     app,
                 ));
@@ -1989,9 +2095,18 @@ fn subscription_lifecycle_actions(
                     }
                 }
             }
+            ConversationAction::Retry => {
+                actions.add_child(subscription_action_button(
+                    crate::t!("common-retry"),
+                    AgentInputFooterAction::RetrySubscriptionPreflight {
+                        conversation_id: conversation_id.to_string(),
+                    },
+                    app,
+                ));
+            }
             ConversationAction::Resume => {
                 actions.add_child(subscription_action_button(
-                    "Resume",
+                    crate::t!("ai-footer-subscription-resume"),
                     AgentInputFooterAction::ResumeSubscriptionSession {
                         conversation_id: conversation_id.to_string(),
                     },
@@ -2000,7 +2115,7 @@ fn subscription_lifecycle_actions(
             }
             ConversationAction::Restart => {
                 actions.add_child(subscription_action_button(
-                    "Restart",
+                    crate::t!("ai-footer-subscription-restart"),
                     AgentInputFooterAction::RestartSubscriptionSession {
                         conversation_id: conversation_id.to_string(),
                     },
@@ -2009,7 +2124,7 @@ fn subscription_lifecycle_actions(
             }
             ConversationAction::End => {
                 actions.add_child(subscription_action_button(
-                    "End",
+                    crate::t!("ai-footer-subscription-end"),
                     AgentInputFooterAction::EndSubscriptionSession {
                         conversation_id: conversation_id.to_string(),
                     },
@@ -2018,14 +2133,14 @@ fn subscription_lifecycle_actions(
             }
             ConversationAction::NewConversation => {
                 actions.add_child(subscription_action_button(
-                    "New conversation",
+                    crate::t!("ai-footer-subscription-new-conversation"),
                     AgentInputFooterAction::StartNewAgentConversation,
                     app,
                 ));
             }
             ConversationAction::BackToShell => {
                 actions.add_child(subscription_action_button(
-                    "Back to shell",
+                    crate::t!("ai-footer-subscription-back-to-shell"),
                     AgentInputFooterAction::BackToShell,
                     app,
                 ));
@@ -2057,6 +2172,59 @@ fn subscription_agent_choices(
     choices.finish()
 }
 
+fn subscription_target_change_actions(conversation_id: &str, app: &AppContext) -> Box<dyn Element> {
+    Wrap::row()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_run_spacing(4.)
+        .with_spacing(4.)
+        .with_child(subscription_action_button(
+            crate::t!("ai-footer-subscription-change-agent"),
+            AgentInputFooterAction::BeginSubscriptionAgentSelection {
+                conversation_id: conversation_id.to_string(),
+            },
+            app,
+        ))
+        .with_child(subscription_action_button(
+            crate::t!("ai-footer-subscription-change-account"),
+            AgentInputFooterAction::BeginSubscriptionAccountSelection {
+                conversation_id: conversation_id.to_string(),
+            },
+            app,
+        ))
+        .with_child(subscription_action_button(
+            crate::t!("ai-footer-subscription-change-model"),
+            AgentInputFooterAction::BeginSubscriptionModelSelection {
+                conversation_id: conversation_id.to_string(),
+            },
+            app,
+        ))
+        .finish()
+}
+
+fn subscription_account_choices(
+    conversation_id: &str,
+    accounts: &[AccountIdentity],
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let mut choices = Flex::row()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(4.);
+    for account in accounts {
+        let label = account_identity_label(account);
+        choices.add_child(subscription_action_button(
+            &label,
+            AgentInputFooterAction::SelectSubscriptionAccount {
+                conversation_id: conversation_id.to_string(),
+                account: account.clone(),
+            },
+            app,
+        ));
+    }
+    choices.finish()
+}
+
 fn subscription_model_choices(
     conversation_id: &str,
     models: &[crate::ai::subscription_agent::ModelCapability],
@@ -2067,8 +2235,9 @@ fn subscription_model_choices(
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(4.);
     for model in models {
+        let label = model_identity_label(model);
         choices.add_child(subscription_action_button(
-            &model.display_name,
+            &label,
             AgentInputFooterAction::SelectSubscriptionModel {
                 conversation_id: conversation_id.to_string(),
                 model_id: model.id.clone(),
@@ -2079,38 +2248,103 @@ fn subscription_model_choices(
     choices.finish()
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn subscription_location_actions(
+    conversation_id: &str,
+    current: Option<&SubscriptionLocationPreference>,
+    hosts: &[HostIdentity],
+    directory_editor: &ViewHandle<SubmittableTextInput>,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let mut actions = Wrap::row()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_run_spacing(4.)
+        .with_spacing(4.);
+    for host in hosts
+        .iter()
+        .filter(|host| current.is_none_or(|current| host.id != current.host.id))
+    {
+        let working_directory = if host.id == LOCAL_SUBSCRIPTION_HOST_ID {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        } else {
+            PathBuf::from(".")
+        };
+        let label = crate::t!(
+            "ai-footer-subscription-switch-location",
+            host = host_identity_label(host),
+            directory = working_directory.display().to_string()
+        );
+        actions.add_child(subscription_action_button(
+            &label,
+            AgentInputFooterAction::SelectSubscriptionHost {
+                conversation_id: conversation_id.to_string(),
+                host_id: host.id.clone(),
+                working_directory,
+            },
+            app,
+        ));
+    }
+    let Some(current) = current else {
+        return actions.finish();
+    };
+    if current.host.id == LOCAL_SUBSCRIPTION_HOST_ID {
+        actions.add_child(subscription_action_button(
+            crate::t!("ai-footer-subscription-choose-directory"),
+            AgentInputFooterAction::OpenSubscriptionDirectoryPicker {
+                conversation_id: conversation_id.to_string(),
+            },
+            app,
+        ));
+    } else {
+        actions.add_child(
+            ConstrainedBox::new(ChildView::new(directory_editor).finish())
+                .with_width(260.)
+                .finish(),
+        );
+    }
+    if current.working_directory.is_absolute() {
+        if let Some(parent) = current
+            .working_directory
+            .parent()
+            .filter(|parent| *parent != current.working_directory)
+        {
+            let label = crate::t!(
+                "ai-footer-subscription-use-directory",
+                directory = parent.display().to_string()
+            );
+            actions.add_child(subscription_action_button(
+                &label,
+                AgentInputFooterAction::SelectSubscriptionDirectory {
+                    conversation_id: conversation_id.to_string(),
+                    working_directory: parent.to_path_buf(),
+                },
+                app,
+            ));
+        }
+    }
+    if current.working_directory != std::path::Path::new(".") {
+        actions.add_child(subscription_action_button(
+            crate::t!("ai-footer-subscription-use-host-default-directory"),
+            AgentInputFooterAction::SelectSubscriptionDirectory {
+                conversation_id: conversation_id.to_string(),
+                working_directory: PathBuf::from("."),
+            },
+            app,
+        ));
+    }
+    actions.finish()
+}
+
 fn subscription_action_button(
-    label: &str,
+    label: impl Into<String>,
     action: AgentInputFooterAction,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let appearance = Appearance::as_ref(app);
-    EventHandler::new(
-        Container::new(
-            Text::new_inline(
-                label.to_string(),
-                appearance.ui_font_family(),
-                appearance.monospace_font_size() - 2.,
-            )
-            .with_color(
-                appearance
-                    .theme()
-                    .main_text_color(appearance.theme().background())
-                    .into_solid(),
-            )
-            .finish(),
-        )
-        .with_horizontal_padding(7.)
-        .with_vertical_padding(3.)
-        .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-        .finish(),
-    )
-    .on_left_mouse_down(move |ctx, _, _| {
-        ctx.dispatch_typed_action(action.clone());
-        DispatchEventResult::StopPropagation
-    })
-    .finish()
+    ActionButton::new(label.into(), SecondaryTheme)
+        .with_size(ButtonSize::Small)
+        .on_click(move |ctx| ctx.dispatch_typed_action(action.clone()))
+        .render(app)
 }
 
 impl View for AgentInputFooter {
@@ -2175,12 +2409,37 @@ impl View for AgentInputFooter {
                     Some(target.installation.agent),
                     app,
                 ));
+                if lifecycle.can_change_location() {
+                    right_buttons
+                        .add_child(subscription_target_change_actions(conversation_id, app));
+                }
+                #[cfg(not(target_family = "wasm"))]
+                if lifecycle.can_change_location() {
+                    right_buttons.add_child(subscription_location_actions(
+                        conversation_id,
+                        Some(&SubscriptionLocationPreference {
+                            host: target.installation.host,
+                            working_directory: target.working_directory,
+                        }),
+                        &registry.host_choices(conversation_id),
+                        &self.subscription_directory_editor,
+                        app,
+                    ));
+                }
             } else if let Some(lifecycle) = registry.lifecycle(conversation_id) {
                 let choices = registry.agent_choices(conversation_id);
+                let accounts = registry.account_choices(conversation_id);
                 let models = registry.model_choices(conversation_id);
-                if !models.is_empty() {
+                let location = registry.location_preference(conversation_id);
+                if let Some(location) = location.as_ref() {
                     left_buttons.add_child(subscription_status_text(
-                        "Choose model".to_string(),
+                        location_identity_label(location),
+                        Appearance::as_ref(app),
+                    ));
+                }
+                if lifecycle.can_change_location() && !models.is_empty() {
+                    left_buttons.add_child(subscription_status_text(
+                        crate::t!("ai-footer-subscription-choose-model"),
                         Appearance::as_ref(app),
                     ));
                     right_buttons.add_child(subscription_model_choices(
@@ -2188,9 +2447,19 @@ impl View for AgentInputFooter {
                         &models,
                         app,
                     ));
-                } else if !choices.is_empty() {
+                } else if lifecycle.can_change_location() && !accounts.is_empty() {
                     left_buttons.add_child(subscription_status_text(
-                        "Choose agent".to_string(),
+                        crate::t!("ai-footer-subscription-choose-account"),
+                        Appearance::as_ref(app),
+                    ));
+                    right_buttons.add_child(subscription_account_choices(
+                        conversation_id,
+                        &accounts,
+                        app,
+                    ));
+                } else if lifecycle.can_change_location() && !choices.is_empty() {
+                    left_buttons.add_child(subscription_status_text(
+                        crate::t!("ai-footer-subscription-choose-agent"),
                         Appearance::as_ref(app),
                     ));
                     right_buttons.add_child(subscription_agent_choices(
@@ -2207,6 +2476,16 @@ impl View for AgentInputFooter {
                     None,
                     app,
                 ));
+                #[cfg(not(target_family = "wasm"))]
+                if lifecycle.can_change_location() {
+                    right_buttons.add_child(subscription_location_actions(
+                        conversation_id,
+                        location.as_ref(),
+                        &registry.host_choices(conversation_id),
+                        &self.subscription_directory_editor,
+                        app,
+                    ));
+                }
             }
         }
 
@@ -2396,13 +2675,44 @@ pub enum AgentInputFooterAction {
     },
     StartNewAgentConversation,
     BackToShell,
+    RetrySubscriptionPreflight {
+        conversation_id: String,
+    },
     SelectSubscriptionAgent {
         conversation_id: String,
         agent: SubscriptionAgent,
     },
+    SelectSubscriptionAccount {
+        conversation_id: String,
+        account: AccountIdentity,
+    },
     SelectSubscriptionModel {
         conversation_id: String,
         model_id: String,
+    },
+    BeginSubscriptionAgentSelection {
+        conversation_id: String,
+    },
+    BeginSubscriptionAccountSelection {
+        conversation_id: String,
+    },
+    BeginSubscriptionModelSelection {
+        conversation_id: String,
+    },
+    #[cfg(not(target_family = "wasm"))]
+    SelectSubscriptionHost {
+        conversation_id: String,
+        host_id: String,
+        working_directory: PathBuf,
+    },
+    #[cfg(not(target_family = "wasm"))]
+    OpenSubscriptionDirectoryPicker {
+        conversation_id: String,
+    },
+    #[cfg(not(target_family = "wasm"))]
+    SelectSubscriptionDirectory {
+        conversation_id: String,
+        working_directory: PathBuf,
     },
     ShowContextMenu {
         position: Vector2F,
@@ -2624,19 +2934,99 @@ impl TypedActionView for AgentInputFooter {
             AgentInputFooterAction::BackToShell => {
                 ctx.dispatch_typed_action(&TerminalAction::ExitAgentView);
             }
+            AgentInputFooterAction::RetrySubscriptionPreflight { conversation_id } => {
+                ctx.emit(AgentInputFooterEvent::RetrySubscriptionPreflight {
+                    conversation_id: conversation_id.clone(),
+                });
+                ctx.notify();
+            }
             AgentInputFooterAction::SelectSubscriptionAgent {
                 conversation_id,
                 agent,
             } => {
-                SubscriptionSessionRegistry::as_ref(ctx).select_agent(conversation_id, *agent);
+                if SubscriptionSessionRegistry::as_ref(ctx).select_agent(conversation_id, *agent) {
+                    ctx.emit(AgentInputFooterEvent::RetrySubscriptionPreflight {
+                        conversation_id: conversation_id.clone(),
+                    });
+                }
+                ctx.notify();
+            }
+            AgentInputFooterAction::SelectSubscriptionAccount {
+                conversation_id,
+                account,
+            } => {
+                if SubscriptionSessionRegistry::as_ref(ctx).select_account(conversation_id, account)
+                {
+                    ctx.emit(AgentInputFooterEvent::RetrySubscriptionPreflight {
+                        conversation_id: conversation_id.clone(),
+                    });
+                }
                 ctx.notify();
             }
             AgentInputFooterAction::SelectSubscriptionModel {
                 conversation_id,
                 model_id,
             } => {
-                SubscriptionSessionRegistry::as_ref(ctx).select_model(conversation_id, model_id);
+                if SubscriptionSessionRegistry::as_ref(ctx).select_model(conversation_id, model_id)
+                {
+                    ctx.emit(AgentInputFooterEvent::RetrySubscriptionPreflight {
+                        conversation_id: conversation_id.clone(),
+                    });
+                }
                 ctx.notify();
+            }
+            AgentInputFooterAction::BeginSubscriptionAgentSelection { conversation_id } => {
+                if SubscriptionSessionRegistry::as_ref(ctx).begin_agent_selection(conversation_id) {
+                    ctx.emit(AgentInputFooterEvent::RetrySubscriptionPreflight {
+                        conversation_id: conversation_id.clone(),
+                    });
+                }
+                ctx.notify();
+            }
+            AgentInputFooterAction::BeginSubscriptionAccountSelection { conversation_id } => {
+                if SubscriptionSessionRegistry::as_ref(ctx).begin_account_selection(conversation_id)
+                {
+                    ctx.emit(AgentInputFooterEvent::RetrySubscriptionPreflight {
+                        conversation_id: conversation_id.clone(),
+                    });
+                }
+                ctx.notify();
+            }
+            AgentInputFooterAction::BeginSubscriptionModelSelection { conversation_id } => {
+                if SubscriptionSessionRegistry::as_ref(ctx).begin_model_selection(conversation_id) {
+                    ctx.emit(AgentInputFooterEvent::RetrySubscriptionPreflight {
+                        conversation_id: conversation_id.clone(),
+                    });
+                }
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AgentInputFooterAction::SelectSubscriptionHost {
+                conversation_id,
+                host_id,
+                working_directory,
+            } => {
+                if SubscriptionSessionRegistry::as_ref(ctx).select_host_location(
+                    conversation_id,
+                    host_id,
+                    working_directory.clone(),
+                ) {
+                    ctx.emit(AgentInputFooterEvent::RetrySubscriptionPreflight {
+                        conversation_id: conversation_id.clone(),
+                    });
+                }
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AgentInputFooterAction::OpenSubscriptionDirectoryPicker { conversation_id } => {
+                self.select_subscription_directory(conversation_id, ctx);
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AgentInputFooterAction::SelectSubscriptionDirectory {
+                conversation_id,
+                working_directory,
+            } => {
+                self.apply_subscription_directory(conversation_id, working_directory.clone(), ctx);
             }
             AgentInputFooterAction::ShowContextMenu { position } => {
                 ctx.emit(AgentInputFooterEvent::ShowContextMenu {
@@ -2647,6 +3037,18 @@ impl TypedActionView for AgentInputFooter {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn subscription_directory_from_input(input: &str) -> Option<PathBuf> {
+    let input = input.trim();
+    subscription_directory_input_is_valid(input).then(|| PathBuf::from(input))
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn subscription_directory_input_is_valid(input: &str) -> bool {
+    let input = input.trim();
+    input == "." || input.starts_with('/')
+}
+
 pub enum AgentInputFooterEvent {
     #[cfg(feature = "voice_input")]
     ToggleVoiceInput(voice_input::VoiceInputToggledFrom),
@@ -2655,6 +3057,9 @@ pub enum AgentInputFooterEvent {
     /// Insert text into the CLI agent rich input.
     InsertIntoCLIRichInput(String),
     ToggleCodeReviewPane(CLIAgent),
+    RetrySubscriptionPreflight {
+        conversation_id: String,
+    },
     ToggleFileExplorer(CLIAgent),
     OpenRichInput,
     HideRichInput,
@@ -2887,3 +3292,7 @@ impl ActionButtonTheme for NLDButtonTheme {
         true
     }
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "mod_tests.rs"]
+mod tests;

@@ -2,7 +2,8 @@ use super::{
     discover_capabilities, query_cli_version, route_target, AccountIdentity, AgentCapability,
     AgentLifecycle, HostIdentity, InstallationIdentity, ProcessLocation, ResponseEventAdapter,
     RoutePreferences, RouteResult, SubscriptionAgent, SubscriptionAuthenticationError,
-    SubscriptionSession, SubscriptionSessionRegistry, SubscriptionTarget,
+    SubscriptionLocationPreference, SubscriptionSession, SubscriptionSessionRegistry,
+    SubscriptionTarget, LOCAL_SUBSCRIPTION_HOST_ID,
 };
 use crate::ai::agent::{api, AIAgentInput, AIIdentifiers};
 use crate::ai::api_error::AIApiError;
@@ -19,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use warpui::{AppContext, SingletonEntity};
-use zaplex_cockpit::{AccountUsage, Provider};
+use zaplex_cockpit::Provider;
 use zaplex_remote_session::types::{has_feature, FEATURE_AGENT_ACCOUNT_ROUTING_V1};
 
 #[derive(Clone)]
@@ -38,6 +39,20 @@ enum RuntimeCandidates {
         ssh_argv: Vec<String>,
         use_cached_inventory: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExplicitRuntimeHost<'a> {
+    Local,
+    Remote(&'a str),
+}
+
+fn explicit_runtime_host(location: &SubscriptionLocationPreference) -> ExplicitRuntimeHost<'_> {
+    if location.host.id == LOCAL_SUBSCRIPTION_HOST_ID {
+        ExplicitRuntimeHost::Local
+    } else {
+        ExplicitRuntimeHost::Remote(location.host.id.as_str())
+    }
 }
 
 impl RuntimeCandidates {
@@ -103,37 +118,107 @@ pub(crate) struct SubscriptionPreflight {
 }
 
 fn runtime_candidates(
+    conversation_id: &str,
     session_context: &SessionContext,
     registry: &SubscriptionSessionRegistry,
     use_cached_remote_inventory: bool,
     ctx: &AppContext,
 ) -> Result<(RuntimeCandidates, RoutePreferences, PathBuf)> {
-    let working_directory = if session_context.is_legacy_ssh() {
-        // A legacy SSH session has no remote shell hook, so its reported cwd
-        // belongs to the local client. Start the remote CLI in its login cwd.
-        PathBuf::from(".")
-    } else {
-        session_context
-            .current_working_directory()
-            .as_ref()
-            .map(PathBuf::from)
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."))
-    };
-    let mut preferences = registry.preferences();
-    let candidates = match session_context.host_id() {
-        Some(host_id) => remote_candidates(host_id.as_str(), use_cached_remote_inventory, ctx)?,
-        None if session_context.is_legacy_ssh() => RuntimeCandidates::Ready(legacy_ssh_candidates(
-            session_context
-                .ssh_connection_info()
-                .context("the active SSH session has no reusable connection details")?,
-        )?),
-        None if session_context.is_remote() => {
-            bail!("the active remote host is not connected; reconnect it and try again")
+    let hosts = available_subscription_hosts(ctx);
+    registry.set_host_choices(conversation_id.to_string(), hosts.clone());
+    let existing_location = registry.location_preference(conversation_id);
+    let working_directory = existing_location
+        .as_ref()
+        .map(|location| location.working_directory.clone())
+        .unwrap_or_else(|| {
+            if session_context.is_legacy_ssh() {
+                // A legacy SSH session has no remote shell hook, so its reported cwd
+                // belongs to the local client. Start the remote CLI in its login cwd.
+                PathBuf::from(".")
+            } else {
+                session_context
+                    .current_working_directory()
+                    .as_ref()
+                    .map(PathBuf::from)
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_else(|| PathBuf::from("."))
+            }
+        });
+    if existing_location.is_none() {
+        let inferred_host = match session_context.host_id() {
+            Some(host_id) if host_id.as_str() == LOCAL_SUBSCRIPTION_HOST_ID => {
+                bail!("remote host returned the reserved local subscription-host identity")
+            }
+            Some(host_id) => Some(
+                hosts
+                    .iter()
+                    .find(|host| host.id == host_id.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| HostIdentity {
+                        id: host_id.to_string(),
+                        display_name: host_id.to_string(),
+                    }),
+            ),
+            None if !session_context.is_remote() && !session_context.is_legacy_ssh() => hosts
+                .iter()
+                .find(|host| host.id == LOCAL_SUBSCRIPTION_HOST_ID)
+                .cloned(),
+            None => None,
+        };
+        if let Some(host) = inferred_host {
+            registry.remember_initial_location(
+                conversation_id.to_string(),
+                super::SubscriptionLocationPreference {
+                    host,
+                    working_directory: working_directory.clone(),
+                },
+            );
         }
-        None => RuntimeCandidates::Ready(local_candidates(&mut preferences, ctx)),
+    }
+    let selected_location = registry.location_preference(conversation_id);
+    let mut preferences = registry.preferences(conversation_id);
+    let candidates = match selected_location.as_ref().map(explicit_runtime_host) {
+        Some(ExplicitRuntimeHost::Local) => {
+            RuntimeCandidates::Ready(local_candidates(&mut preferences, ctx))
+        }
+        Some(ExplicitRuntimeHost::Remote(host_id)) => {
+            remote_candidates(host_id, use_cached_remote_inventory, ctx)?
+        }
+        None => match session_context.host_id() {
+            Some(host_id) => remote_candidates(host_id.as_str(), use_cached_remote_inventory, ctx)?,
+            None if session_context.is_legacy_ssh() => {
+                RuntimeCandidates::Ready(legacy_ssh_candidates(
+                    session_context
+                        .ssh_connection_info()
+                        .context("the active SSH session has no reusable connection details")?,
+                )?)
+            }
+            None if session_context.is_remote() => {
+                bail!("the active remote host is not connected; reconnect it and try again")
+            }
+            None => RuntimeCandidates::Ready(local_candidates(&mut preferences, ctx)),
+        },
     };
     Ok((candidates, preferences, working_directory))
+}
+
+fn available_subscription_hosts(ctx: &AppContext) -> Vec<HostIdentity> {
+    let mut hosts = vec![HostIdentity {
+        id: LOCAL_SUBSCRIPTION_HOST_ID.to_string(),
+        display_name: crate::t!("ai-footer-subscription-local-machine"),
+    }];
+    hosts.extend(
+        RemoteServerManager::as_ref(ctx)
+            .connected_daemons()
+            .into_iter()
+            .map(|daemon| HostIdentity {
+                id: daemon.host_id,
+                display_name: daemon.host_label,
+            }),
+    );
+    hosts.sort_by(|left, right| left.id.cmp(&right.id));
+    hosts.dedup_by(|left, right| left.id == right.id);
+    hosts
 }
 
 pub(crate) fn subscription_preflight_info(
@@ -144,7 +229,7 @@ pub(crate) fn subscription_preflight_info(
     let registry = SubscriptionSessionRegistry::as_ref(ctx).clone();
     registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Starting);
     let (candidates, preferences, working_directory) =
-        match runtime_candidates(session_context, &registry, false, ctx) {
+        match runtime_candidates(&conversation_id, session_context, &registry, false, ctx) {
             Ok(runtime) => runtime,
             Err(error) => {
                 registry.set_lifecycle(
@@ -186,8 +271,22 @@ pub(crate) fn subscription_dispatch_info(
     let needs_create_task = conversation.compute_active_tasks().is_empty();
     let prompt = prompt_from_inputs(&params.input)?;
     let registry = SubscriptionSessionRegistry::as_ref(ctx).clone();
-    let (candidates, preferences, working_directory) =
-        runtime_candidates(&params.session_context, &registry, true, ctx)?;
+    let (candidates, preferences, working_directory) = match runtime_candidates(
+        &conversation_id_string,
+        &params.session_context,
+        &registry,
+        true,
+        ctx,
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            registry.set_lifecycle(
+                conversation_id_string.clone(),
+                recoverable_lifecycle(&registry, &conversation_id_string, error.to_string()),
+            );
+            return Err(error);
+        }
+    };
     if candidates.is_known_empty() {
         registry.set_lifecycle(
             conversation_id_string.clone(),
@@ -215,6 +314,27 @@ fn is_authentication_failure(message: &str) -> bool {
         || message.contains("not using a chatgpt subscription account")
         || message.contains("authenticated account does not match selected account")
         || message.contains("did not report an account id for selected account")
+}
+
+fn selected_authentication_error<'a>(
+    discovery_errors: &'a [(SubscriptionAgent, AccountIdentity, String)],
+    preferences: &RoutePreferences,
+) -> Option<&'a str> {
+    let preferred_agent = preferences.agent?;
+    discovery_errors
+        .iter()
+        .find(|(agent, account, error)| {
+            *agent == preferred_agent
+                && match preferences.account_identity.as_ref() {
+                    Some(selected) => selected == account,
+                    None => preferences
+                        .account_id
+                        .as_ref()
+                        .is_some_and(|selected| selected == &account.id),
+                }
+                && is_authentication_failure(error)
+        })
+        .map(|(_, _, error)| error.as_str())
 }
 
 fn discovery_failure_lifecycle(
@@ -309,26 +429,17 @@ async fn discover_routed_target(
     let mut discovery_errors = Vec::new();
     for candidate in candidates {
         let agent = candidate.installation.agent;
-        let account_id = candidate.installation.account.id.clone();
+        let account = candidate.installation.account.clone();
         match discover_candidate(candidate.clone(), working_directory).await {
             Ok(capability) => capabilities.push(capability),
-            Err(error) => discovery_errors.push((agent, account_id, error.to_string())),
+            Err(error) => discovery_errors.push((agent, account, error.to_string())),
         }
     }
     if let Some(preferred_agent) = preferences.agent {
-        let selected_authentication_error =
-            discovery_errors.iter().find(|(agent, account, error)| {
-                *agent == preferred_agent
-                    && preferences
-                        .account_id
-                        .as_ref()
-                        .is_none_or(|selected| selected == account)
-                    && is_authentication_failure(error)
-            });
-        if let Some((_, _, error)) = selected_authentication_error {
+        if let Some(error) = selected_authentication_error(&discovery_errors, preferences) {
             let lifecycle = discovery_failure_lifecycle(
                 &[preferred_agent],
-                error.clone(),
+                error.to_string(),
                 registry,
                 conversation_id,
             );
@@ -379,7 +490,10 @@ async fn discover_routed_target(
         }
         RouteResult::NeedsAgentChoice(agents) => {
             registry.set_agent_choices(conversation_id.to_string(), agents.clone());
-            registry.set_lifecycle(conversation_id.to_string(), AgentLifecycle::Ready);
+            registry.set_lifecycle(
+                conversation_id.to_string(),
+                AgentLifecycle::SelectionRequired,
+            );
             bail!(
                 "Choose the in-app agent first: {}",
                 agents
@@ -389,24 +503,31 @@ async fn discover_routed_target(
                     .join(" or ")
             )
         }
-        RouteResult::NeedsAccountChoice { agent, .. } => {
-            registry.set_lifecycle(conversation_id.to_string(), AgentLifecycle::Ready);
+        RouteResult::NeedsAccountChoice { agent, accounts } => {
+            registry.set_account_choices(conversation_id.to_string(), accounts);
+            registry.set_lifecycle(
+                conversation_id.to_string(),
+                AgentLifecycle::SelectionRequired,
+            );
             bail!(
                 "Choose a {} subscription account first",
                 agent.display_name()
             )
         }
-        RouteResult::NeedsModelChoice { agent, account_id } => {
+        RouteResult::NeedsModelChoice { agent, account } => {
             let models = capabilities
                 .iter()
                 .find(|capability| {
                     capability.installation.agent == agent
-                        && capability.installation.account.id == account_id
+                        && capability.installation.account == account
                 })
                 .map(|capability| capability.models.clone())
                 .unwrap_or_default();
             registry.set_model_choices(conversation_id.to_string(), models);
-            registry.set_lifecycle(conversation_id.to_string(), AgentLifecycle::Ready);
+            registry.set_lifecycle(
+                conversation_id.to_string(),
+                AgentLifecycle::SelectionRequired,
+            );
             bail!(
                 "{} did not report one unambiguous default model; choose one of its reported models",
                 agent.display_name()
@@ -433,7 +554,7 @@ pub(crate) async fn preflight_subscription_target(preflight: SubscriptionPreflig
         &working_directory,
     )
     .await?;
-    registry.remember_target(&target);
+    registry.remember_target(&conversation_id, &target);
     registry.set_target(conversation_id.clone(), target);
     registry.set_lifecycle(conversation_id, AgentLifecycle::Ready);
     Ok(())
@@ -474,7 +595,7 @@ pub(crate) async fn generate_subscription_output(
         .await
         .map_err(api::ConvertToAPITypeError::Other)?,
     };
-    registry.remember_target(&target);
+    registry.remember_target(&conversation_id, &target);
     registry.set_target(conversation_id.clone(), target.clone());
     let resume = registry
         .get(&conversation_id)
@@ -811,14 +932,21 @@ fn prompt_from_inputs(inputs: &[AIAgentInput]) -> Result<String> {
 
 fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec<RuntimeCandidate> {
     let snapshot = CockpitModel::as_ref(ctx).snapshot();
-    if let Some(selected) = CockpitModel::as_ref(ctx).selected_account() {
-        if let Some(account) = snapshot
-            .accounts
-            .iter()
-            .find(|usage| usage.account.key == selected)
-        {
-            preferences.agent = provider_agent(account.account.provider);
-            preferences.account_id = Some(account.account.key.clone());
+    if preferences.agent.is_none()
+        && preferences.account_id.is_none()
+        && !preferences.require_agent_choice
+        && !preferences.require_account_choice
+    {
+        if let Some(selected) = CockpitModel::as_ref(ctx).selected_account() {
+            if let Some(account) = snapshot
+                .accounts
+                .iter()
+                .find(|usage| usage.account.key == selected)
+            {
+                preferences.agent = provider_agent(account.account.provider);
+                preferences.account_id = Some(account.account.key.clone());
+                preferences.account_identity = None;
+            }
         }
     }
     let mut candidates = Vec::new();
@@ -826,14 +954,14 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
         let Some(executable) = crate::terminal::cli_agent::resolve_cli_executable(command) else {
             continue;
         };
-        let accounts: Vec<&AccountUsage> = snapshot
-            .accounts
-            .iter()
-            .filter(|usage| usage.account.provider == provider)
-            .collect();
-        if preferences.agent == Some(agent) && preferences.account_id.is_none() {
+        let accounts = zaplex_cockpit::rank_by_freeness(provider, &snapshot.accounts);
+        if preferences.agent == Some(agent)
+            && preferences.account_id.is_none()
+            && !preferences.require_account_choice
+        {
             preferences.account_id = zaplex_cockpit::pick_freest(provider, &snapshot.accounts)
                 .map(|usage| usage.account.key.clone());
+            preferences.account_identity = None;
         }
         if accounts.is_empty() {
             candidates.push(RuntimeCandidate {
@@ -888,6 +1016,7 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
     {
         preferences.agent = None;
         preferences.account_id = None;
+        preferences.account_identity = None;
         preferences.model_id = None;
         preferences.effort = None;
     }
@@ -895,22 +1024,36 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
         preferences.agent = Some(available_agents[0]);
     }
     if let Some(agent) = preferences.agent {
-        let account_is_valid = preferences.account_id.as_deref().is_some_and(|account_id| {
-            candidates.iter().any(|candidate| {
-                candidate.installation.agent == agent
-                    && candidate.installation.account.id == account_id
+        let account_is_valid = preferences
+            .account_identity
+            .as_ref()
+            .is_some_and(|identity| {
+                candidates.iter().any(|candidate| {
+                    candidate.installation.agent == agent
+                        && candidate.installation.account == *identity
+                })
             })
-        });
+            || (preferences.account_identity.is_none()
+                && preferences.account_id.as_deref().is_some_and(|account_id| {
+                    candidates.iter().any(|candidate| {
+                        candidate.installation.agent == agent
+                            && candidate.installation.account.id == account_id
+                    })
+                }));
         if !account_is_valid {
-            preferences.account_id =
-                zaplex_cockpit::pick_freest(agent_provider(agent), &snapshot.accounts)
-                    .map(|usage| usage.account.key.clone())
-                    .or_else(|| {
-                        candidates
-                            .iter()
-                            .find(|candidate| candidate.installation.agent == agent)
-                            .map(|candidate| candidate.installation.account.id.clone())
-                    });
+            preferences.account_identity = None;
+            preferences.account_id = (!preferences.require_account_choice)
+                .then(|| {
+                    zaplex_cockpit::pick_freest(agent_provider(agent), &snapshot.accounts)
+                        .map(|usage| usage.account.key.clone())
+                        .or_else(|| {
+                            candidates
+                                .iter()
+                                .find(|candidate| candidate.installation.agent == agent)
+                                .map(|candidate| candidate.installation.account.id.clone())
+                        })
+                })
+                .flatten();
         }
     }
     candidates
@@ -1109,6 +1252,15 @@ fn same_resume_target(previous: &SubscriptionTarget, current: &SubscriptionTarge
     previous.installation.agent == current.installation.agent
         && previous.installation.host.id == current.installation.host.id
         && previous.installation.account.id == current.installation.account.id
+        && previous.installation.account.provider_account_id
+            == current.installation.account.provider_account_id
+        && previous.installation.account.config_dir == current.installation.account.config_dir
+        && previous.installation.executable == current.installation.executable
+        && previous.installation.version == current.installation.version
+        && previous.working_directory == current.working_directory
+        && previous.model.id == current.model.id
+        && previous.model.resolved_model == current.model.resolved_model
+        && previous.effort == current.effort
 }
 
 fn location_for_target(
@@ -1121,6 +1273,11 @@ fn location_for_target(
             candidate.installation.agent == target.installation.agent
                 && candidate.installation.host.id == target.installation.host.id
                 && candidate.installation.account.id == target.installation.account.id
+                && candidate.installation.account.provider_account_id
+                    == target.installation.account.provider_account_id
+                && candidate.installation.account.config_dir
+                    == target.installation.account.config_dir
+                && candidate.installation.executable == target.installation.executable
         })
         .map(|candidate| candidate.location.clone())
 }

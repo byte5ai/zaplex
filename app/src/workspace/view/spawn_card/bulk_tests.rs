@@ -6,6 +6,7 @@ fn account(id: &str) -> LaunchAccountTarget {
         label: id.to_uppercase(),
         config_dir: Some(PathBuf::from(format!("/accounts/{id}"))),
         account_email: Some(format!("{id}@example.com")),
+        provider_account_id: None,
         remote_route: None,
     }
 }

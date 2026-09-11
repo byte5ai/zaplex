@@ -27,10 +27,11 @@ use warp_util::file::FileId;
 
 use super::proto::{
     client_message, delete_file_response, run_command_response, server_message,
-    write_file_response, Abort, AgentProcessSignal, AgentProcessSignalRequest,
-    AgentProcessSignalResponse, AgentProcessSignalStatus, AgentPtyBindingResponse,
-    AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo, AgentSessionList, Authenticate,
-    ClientMessage, DeleteFile, DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse,
+    write_file_response, Abort, AgentModelCapability, AgentModelDiscoveryResponse,
+    AgentModelEffort, AgentProcessSignal, AgentProcessSignalRequest, AgentProcessSignalResponse,
+    AgentProcessSignalStatus, AgentPtyBindingResponse, AgentPtyBindingStatus, AgentSessionIdentity,
+    AgentSessionInfo, AgentSessionList, Authenticate, ClientMessage, DeleteFile,
+    DeleteFileResponse, DeleteFileSuccess, DiscoverAgentModelsRequest, ErrorCode, ErrorResponse,
     FailedFileRead, FileContextProto, FileOperationError, HostExec, HostExecResult, Initialize,
     InitializeResponse, ManagedSessionLifecycleResponse, ManagedSessionLifecycleStatus,
     NavigatedToDirectory, NavigatedToDirectoryResponse, ReadAgentTranscript,
@@ -56,8 +57,9 @@ use zaplex_remote_session::agent_binding::{
 #[cfg(unix)]
 use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
-    supported_features, FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PROCESS_SIGNAL_V1,
-    FEATURE_AGENT_PTY_BINDING_V2, FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
+    supported_features, FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_MODEL_DISCOVERY_V1,
+    FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_PTY_BINDING_V2,
+    FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
     FEATURE_SAFE_FILE_IDENTITY_BATCH_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
     FEATURE_SAFE_FILE_TRANSACTIONS_V2,
 };
@@ -1684,6 +1686,9 @@ impl ServerModel {
             Some(client_message::Message::ListAgentAccounts(_)) => {
                 self.handle_list_agent_accounts(&request_id, conn_id, ctx)
             }
+            Some(client_message::Message::DiscoverAgentModels(request)) => {
+                self.handle_discover_agent_models(&request_id, conn_id, request, ctx)
+            }
             Some(client_message::Message::ReadAgentTranscript(request)) => {
                 self.handle_read_agent_transcript(&request_id, conn_id, request, ctx)
             }
@@ -1981,6 +1986,12 @@ impl ServerModel {
         self.connection_features
             .get(&conn_id)
             .is_some_and(|features| features.contains(FEATURE_AGENT_ACCOUNT_ROUTING_V1))
+    }
+
+    fn client_supports_agent_model_discovery(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_AGENT_MODEL_DISCOVERY_V1))
     }
 
     fn client_supports_agent_transcript_read(&self, conn_id: ConnectionId) -> bool {
@@ -3428,6 +3439,231 @@ fn collect_agent_sessions(
     collect_agent_sessions_for_peer(inventory_cache, requested_at, false).sessions
 }
 
+const AGENT_MODEL_DISCOVERY_SCHEMA_VERSION: u32 = 1;
+const AGENT_MODEL_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const MAX_CONCURRENT_AGENT_MODEL_DISCOVERIES: usize = 2;
+static AGENT_MODEL_DISCOVERY_LIMITER: AgentModelDiscoveryLimiter = AgentModelDiscoveryLimiter {
+    active: AtomicUsize::new(0),
+};
+
+struct AgentModelDiscoveryLimiter {
+    active: AtomicUsize,
+}
+
+struct AgentModelDiscoveryPermit<'a> {
+    active: &'a AtomicUsize,
+}
+
+impl AgentModelDiscoveryLimiter {
+    fn try_acquire(&self) -> anyhow::Result<AgentModelDiscoveryPermit<'_>> {
+        self.active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < MAX_CONCURRENT_AGENT_MODEL_DISCOVERIES).then_some(active + 1)
+            })
+            .map_err(|_| anyhow::anyhow!("remote agent model discovery is busy"))?;
+        Ok(AgentModelDiscoveryPermit {
+            active: &self.active,
+        })
+    }
+}
+
+impl Drop for AgentModelDiscoveryPermit<'_> {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[derive(Debug)]
+enum AgentModelDiscoveryPreparationError {
+    InvalidRequest(String),
+    Internal(String),
+}
+
+fn prepare_agent_model_discovery(
+    request: DiscoverAgentModelsRequest,
+    routes: super::agent_account::AccountRoutes,
+) -> Result<
+    (
+        super::agent_account::AccountRoutes,
+        super::agent_account::ResolvedAgentModelRoute,
+        PathBuf,
+    ),
+    AgentModelDiscoveryPreparationError,
+> {
+    if request.schema_version != AGENT_MODEL_DISCOVERY_SCHEMA_VERSION {
+        return Err(AgentModelDiscoveryPreparationError::InvalidRequest(
+            "unsupported agent model discovery version".to_string(),
+        ));
+    }
+    let route = request.route.as_ref().ok_or_else(|| {
+        AgentModelDiscoveryPreparationError::InvalidRequest(
+            "agent model discovery requires an account route".to_string(),
+        )
+    })?;
+    let mut route_cache = super::agent_account::AccountRouteCache::default();
+    route_cache.replace(routes.clone());
+    let resolved = super::agent_account::resolve_agent_model_route(
+        &route_cache,
+        route,
+        request.expected_provider_account_id.as_deref(),
+    )
+    .map_err(AgentModelDiscoveryPreparationError::InvalidRequest)?;
+
+    if request.working_directory.is_empty() || request.working_directory.len() > 4096 {
+        return Err(AgentModelDiscoveryPreparationError::InvalidRequest(
+            "invalid remote working directory".to_string(),
+        ));
+    }
+    let requested_directory = PathBuf::from(request.working_directory);
+    let requested_directory = if requested_directory == Path::new(".") {
+        dirs::home_dir().ok_or_else(|| {
+            AgentModelDiscoveryPreparationError::Internal(
+                "daemon home directory is unavailable".to_string(),
+            )
+        })?
+    } else if requested_directory.is_absolute() {
+        requested_directory
+    } else {
+        return Err(AgentModelDiscoveryPreparationError::InvalidRequest(
+            "remote working directory must be absolute".to_string(),
+        ));
+    };
+    let working_directory = std::fs::canonicalize(requested_directory).map_err(|_| {
+        AgentModelDiscoveryPreparationError::InvalidRequest(
+            "remote working directory is unavailable".to_string(),
+        )
+    })?;
+    if !working_directory.is_dir() {
+        return Err(AgentModelDiscoveryPreparationError::InvalidRequest(
+            "remote working directory is unavailable".to_string(),
+        ));
+    }
+    Ok((routes, resolved, working_directory))
+}
+
+fn agent_model_discovery_response(
+    capability: crate::ai::subscription_agent::AgentCapability,
+) -> AgentModelDiscoveryResponse {
+    AgentModelDiscoveryResponse {
+        schema_version: AGENT_MODEL_DISCOVERY_SCHEMA_VERSION,
+        cli_version: capability.installation.version,
+        models: capability
+            .models
+            .into_iter()
+            .map(|model| AgentModelCapability {
+                id: model.id,
+                display_name: model.display_name,
+                description: model.description,
+                resolved_model: model.resolved_model,
+                is_default: model.is_default,
+                supported_efforts: model
+                    .supported_efforts
+                    .into_iter()
+                    .map(|effort| AgentModelEffort {
+                        id: effort.id,
+                        display_name: effort.display_name,
+                    })
+                    .collect(),
+                default_effort: model.default_effort,
+                context_window: model.context_window,
+            })
+            .collect(),
+    }
+}
+
+async fn discover_agent_models_on_daemon(
+    resolved: super::agent_account::ResolvedAgentModelRoute,
+    host_id: String,
+    working_directory: PathBuf,
+) -> anyhow::Result<AgentModelDiscoveryResponse> {
+    use crate::ai::subscription_agent::{
+        discover_capabilities, query_cli_version, AccountIdentity, HostIdentity,
+        InstallationIdentity, ProcessLocation, SubscriptionAgent,
+    };
+
+    let _permit = AGENT_MODEL_DISCOVERY_LIMITER.try_acquire()?;
+    let (agent, executable) = match resolved.provider.as_str() {
+        "claude" => (SubscriptionAgent::ClaudeCode, PathBuf::from("claude")),
+        "codex" => (SubscriptionAgent::Codex, PathBuf::from("codex")),
+        unknown => anyhow::bail!("unsupported daemon agent provider {unknown}"),
+    };
+    let config_dir = match resolved.config_dir {
+        Some(config_dir) => config_dir,
+        None => {
+            let home = dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("daemon home directory is unavailable"))?;
+            match agent {
+                SubscriptionAgent::ClaudeCode => home.join(".claude"),
+                SubscriptionAgent::Codex => home.join(".codex"),
+            }
+        }
+    };
+    let mut installation = InstallationIdentity {
+        agent,
+        host: HostIdentity {
+            id: host_id,
+            display_name: "Remote daemon".to_string(),
+        },
+        account: AccountIdentity {
+            id: resolved.account_id,
+            display_name: "Remote subscription account".to_string(),
+            provider_account_id: resolved.provider_account_id,
+            // Set even for the provider's default account so the child cannot
+            // inherit an unrelated daemon-level config-root override.
+            config_dir: Some(config_dir),
+        },
+        executable,
+        version: String::new(),
+    };
+    tokio::time::timeout(AGENT_MODEL_DISCOVERY_TIMEOUT, async move {
+        installation.version = query_cli_version(
+            &installation,
+            working_directory.clone(),
+            ProcessLocation::Local,
+        )
+        .await?;
+        let capability =
+            discover_capabilities(installation, working_directory, ProcessLocation::Local).await?;
+        Ok(agent_model_discovery_response(capability))
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("remote agent model discovery timed out"))?
+}
+
+fn public_agent_model_discovery_error(provider: &str, error: &anyhow::Error) -> String {
+    let agent = match provider {
+        "claude" => "Claude Code",
+        "codex" => "Codex",
+        _ => "Subscription agent",
+    };
+    let normalized = format!("{error:#}").to_ascii_lowercase();
+    if normalized.contains("timed out") {
+        format!("{agent} model discovery timed out on the remote host; retry")
+    } else if normalized.contains("busy") {
+        format!("{agent} model discovery is busy on the remote host; retry")
+    } else if normalized.contains("not signed in")
+        || normalized.contains("authenticated account does not match")
+        || normalized.contains("did not report an account id")
+        || normalized.contains("not using a chatgpt subscription")
+    {
+        format!(
+            "{agent} is not signed in to the selected subscription account on the remote host; sign in and retry"
+        )
+    } else if normalized.contains("failed to query")
+        || normalized.contains("--version exited")
+        || normalized.contains("--version returned no version")
+    {
+        format!("{agent} CLI is missing or unavailable on the remote host; install or update it")
+    } else if normalized.contains("missing")
+        || normalized.contains("unsupported")
+        || normalized.contains("reported no available models")
+    {
+        format!("{agent} has an incompatible CLI on the remote host; update the CLI and retry")
+    } else {
+        format!("{agent} model discovery failed on the remote host; retry")
+    }
+}
+
 /// Daemon-side agent-session inventory handler (Agent-Cockpit). Cross-platform:
 /// filesystem/transcript discovery, no PTY ownership required.
 impl ServerModel {
@@ -3470,6 +3706,82 @@ impl ServerModel {
                     Some(&request_id_for_response),
                     server_message::Message::AgentAccountInventory(scan.inventory),
                 );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Refreshes daemon-local account routes, resolves the requested opaque
+    /// account, and asks that account's native CLI for its exact model set.
+    /// Only path-free model metadata is returned to the client.
+    fn handle_discover_agent_models(
+        &mut self,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        request: DiscoverAgentModelsRequest,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        if !self.client_supports_agent_model_discovery(conn_id) {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "agent-model-discovery-v1 capability was not negotiated".to_string(),
+            }));
+        }
+
+        let request_id_for_response = request_id.clone();
+        let host_id = self.host_id.clone();
+        #[cfg(test)]
+        let fresh_routes_for_test = self.fresh_agent_account_routes_for_test.clone();
+        let future = async move {
+            let routes = tokio::task::spawn_blocking(move || {
+                #[cfg(test)]
+                if let Some(routes) = fresh_routes_for_test {
+                    return routes;
+                }
+                super::agent_account::scan_agent_accounts().routes
+            })
+            .await
+            .map_err(|error| AgentModelDiscoveryPreparationError::Internal(error.to_string()))?;
+            let (routes, resolved, working_directory) =
+                prepare_agent_model_discovery(request, routes)?;
+            let provider = resolved.provider.clone();
+            let response =
+                discover_agent_models_on_daemon(resolved, host_id, working_directory).await;
+            Ok((routes, provider, response))
+        };
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            future,
+            move |me, result, _ctx| {
+                let message = match result {
+                    Ok((routes, _, Ok(response))) => {
+                        me.agent_account_routes.replace(routes);
+                        server_message::Message::AgentModelDiscoveryResponse(response)
+                    }
+                    Ok((routes, provider, Err(error))) => {
+                        me.agent_account_routes.replace(routes);
+                        log::warn!("Daemon-local agent model discovery failed: {error:#}");
+                        server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::Internal.into(),
+                            message: public_agent_model_discovery_error(&provider, &error),
+                        })
+                    }
+                    Err(AgentModelDiscoveryPreparationError::InvalidRequest(message)) => {
+                        server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::InvalidRequest.into(),
+                            message,
+                        })
+                    }
+                    Err(AgentModelDiscoveryPreparationError::Internal(error)) => {
+                        log::error!("Agent model discovery setup failed: {error}");
+                        server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::Internal.into(),
+                            message: "remote agent model discovery is unavailable".to_string(),
+                        })
+                    }
+                };
+                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
             },
             ctx,
         );

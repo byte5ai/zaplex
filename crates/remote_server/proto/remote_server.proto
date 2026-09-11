@@ -76,6 +76,10 @@ message ClientMessage {
     // Generation-checked managed-agent lifecycle. Clients must negotiate
     // "managed-agent-fleet-v1"; no HostExec fallback is permitted.
     ManagedSessionLifecycleRequest managed_session_lifecycle = 40;
+    // Exact daemon-local model discovery under an opaque account route.
+    // Clients must negotiate "agent-model-discovery-v1". Provider config
+    // paths are resolved by the daemon and never cross this boundary.
+    DiscoverAgentModelsRequest discover_agent_models = 41;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -130,6 +134,7 @@ message ServerMessage {
     AgentAccountInventory agent_account_inventory = 36;
     AgentTranscriptResponse agent_transcript_response = 37;
     ManagedSessionLifecycleResponse managed_session_lifecycle_response = 38;
+    AgentModelDiscoveryResponse agent_model_discovery_response = 39;
   }
 }
 
@@ -1335,6 +1340,45 @@ message AgentLaunchRoute {
   uint32 schema_version = 1;
   string provider = 2;
   string account_id = 3;
+}
+
+// ── Agent Model Discovery ──
+//
+// Capability: "agent-model-discovery-v1". The client supplies only an
+// opaque account route and a working directory on the daemon host. The daemon
+// resolves the provider config root and invokes the native structured CLI
+// protocol. Responses deliberately contain no account or filesystem paths.
+
+message DiscoverAgentModelsRequest {
+  uint32 schema_version = 1;
+  AgentLaunchRoute route = 2;
+  string working_directory = 3;
+  // Optional second binding to the stable provider identity returned by the
+  // account inventory. When present it must match the freshly scanned route.
+  optional string expected_provider_account_id = 4;
+}
+
+message AgentModelEffort {
+  string id = 1;
+  string display_name = 2;
+}
+
+message AgentModelCapability {
+  string id = 1;
+  string display_name = 2;
+  optional string description = 3;
+  optional string resolved_model = 4;
+  bool is_default = 5;
+  repeated AgentModelEffort supported_efforts = 6;
+  optional string default_effort = 7;
+  optional uint64 context_window = 8;
+}
+
+message AgentModelDiscoveryResponse {
+  uint32 schema_version = 1;
+  // Empty only when decoded from an older additive response.
+  string cli_version = 2;
+  repeated AgentModelCapability models = 3;
 }
 
 // ── Bounded Agent Transcript Read ────────────────────────────────────────

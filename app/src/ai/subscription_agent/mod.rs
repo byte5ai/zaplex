@@ -64,7 +64,9 @@ pub(crate) use codex::CodexProtocol;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use discovery::discover_capabilities;
 pub(crate) use presentation::{
-    conversation_identity_fields, ComposerPolicy, ConversationAction, ConversationPresentation,
+    account_identity_label, conversation_identity_fields, host_identity_label,
+    location_identity_label, model_identity_label, ComposerPolicy, ConversationAction,
+    ConversationPresentation,
 };
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use process::{query_cli_version, JsonLineProcess, ProcessLaunch, ProcessLocation};
@@ -82,5 +84,6 @@ pub(crate) use session::SubscriptionSession;
 pub(crate) use types::{
     AccountIdentity, AgentCapability, AgentLifecycle, ApprovalDecision, HostIdentity,
     InstallationIdentity, ModelCapability, ModelEffort, SessionIdentity, SubscriptionAgent,
-    SubscriptionAuthenticationError, SubscriptionEvent, SubscriptionTarget, Usage,
+    SubscriptionAuthenticationError, SubscriptionEvent, SubscriptionLocationPreference,
+    SubscriptionTarget, Usage, LOCAL_SUBSCRIPTION_HOST_ID,
 };

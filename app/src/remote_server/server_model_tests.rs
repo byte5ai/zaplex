@@ -12,9 +12,9 @@ use super::super::proto::{
     server_message, write_file_chunk_response, Abort, AgentProcessSignal,
     AgentProcessSignalRequest, AgentProcessSignalStatus, AgentPtyBindingStatus,
     AgentSessionIdentity, AgentSessionInfo, Authenticate, BindAgentPty, ClientMessage,
-    CreateDirectory, ErrorCode, Initialize, ListDirectory, ReadFileChunk, ReadFileChunkSuccess,
-    ResolvePath, ServerMessage, SessionBootstrapped, UnbindAgentPty, WriteFileChunk,
-    WriteFileChunkSuccess,
+    CreateDirectory, DiscoverAgentModelsRequest, ErrorCode, Initialize, ListDirectory,
+    ReadFileChunk, ReadFileChunkSuccess, ResolvePath, ServerMessage, SessionBootstrapped,
+    UnbindAgentPty, WriteFileChunk, WriteFileChunkSuccess,
 };
 use super::super::protocol::RequestId;
 #[cfg(feature = "local_fs")]
@@ -22,9 +22,12 @@ use super::super::server_buffer_tracker::ServerBufferTracker;
 #[cfg(feature = "local_fs")]
 use super::collect_directory_entries;
 use super::{
-    execute_agent_process_signal_with, server_features_with_runtime_support,
-    AgentInventoryScanCache, AgentTranscriptReadPermit, ConnectionOutbox, PendingFileOps,
-    ServerModel, MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
+    agent_model_discovery_response, execute_agent_process_signal_with,
+    prepare_agent_model_discovery, public_agent_model_discovery_error,
+    server_features_with_runtime_support, AgentInventoryScanCache, AgentModelDiscoveryLimiter,
+    AgentModelDiscoveryPreparationError, AgentTranscriptReadPermit, ConnectionOutbox,
+    PendingFileOps, ServerModel, MAX_CONCURRENT_AGENT_MODEL_DISCOVERIES,
+    MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
 };
 #[cfg(unix)]
 use super::{
@@ -40,10 +43,10 @@ use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
 #[cfg(unix)]
 use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
-    FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PROCESS_SIGNAL_V1,
-    FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
-    FEATURE_SAFE_FILE_IDENTITY_BATCH_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
-    FEATURE_SAFE_FILE_TRANSACTIONS_V2,
+    FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_MODEL_DISCOVERY_V1,
+    FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_TRANSCRIPT_READ_V1,
+    FEATURE_MANAGED_AGENT_FLEET_V1, FEATURE_SAFE_FILE_IDENTITY_BATCH_V1,
+    FEATURE_SAFE_FILE_TRANSACTIONS_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V2,
 };
 
 fn test_model() -> ServerModel {
@@ -886,6 +889,187 @@ fn agent_account_routing_requires_client_capability_negotiation() {
         HashSet::from([FEATURE_AGENT_ACCOUNT_ROUTING_V1.to_string()]),
     );
     assert!(model.client_supports_agent_account_routing(conn));
+}
+
+#[test]
+fn agent_model_discovery_requires_client_capability_negotiation() {
+    let mut model = test_model();
+    let conn = uuid::Uuid::new_v4();
+
+    assert!(!model.client_supports_agent_model_discovery(conn));
+    model.connection_features.insert(
+        conn,
+        HashSet::from([FEATURE_AGENT_MODEL_DISCOVERY_V1.to_string()]),
+    );
+    assert!(model.client_supports_agent_model_discovery(conn));
+}
+
+#[test]
+fn agent_model_discovery_preparation_uses_only_a_fresh_opaque_route() {
+    let working_directory = tempfile::tempdir().unwrap();
+    let canonical_working_directory = std::fs::canonicalize(working_directory.path()).unwrap();
+    let mut cache = super::super::agent_account::AccountRouteCache::default();
+    cache.replace_with_identity_for_test(
+        "codex",
+        "opaque-account",
+        Some("provider-account-42".to_string()),
+        None,
+    );
+    let request = DiscoverAgentModelsRequest {
+        schema_version: 1,
+        route: Some(super::super::proto::AgentLaunchRoute {
+            schema_version: 1,
+            provider: "codex".to_string(),
+            account_id: "opaque-account".to_string(),
+        }),
+        working_directory: canonical_working_directory.to_string_lossy().into_owned(),
+        expected_provider_account_id: Some("provider-account-42".to_string()),
+    };
+
+    let (_, resolved, resolved_working_directory) =
+        prepare_agent_model_discovery(request, cache.routes_for_test().clone()).unwrap();
+
+    assert_eq!(resolved.provider, "codex");
+    assert_eq!(resolved.account_id, "opaque-account");
+    assert_eq!(resolved.config_dir, None);
+    assert_eq!(resolved_working_directory, canonical_working_directory);
+}
+
+#[test]
+fn agent_model_discovery_maps_the_default_directory_to_the_daemon_home() {
+    let Some(home_directory) = dirs::home_dir() else {
+        return;
+    };
+    let canonical_home_directory = std::fs::canonicalize(home_directory).unwrap();
+    let mut cache = super::super::agent_account::AccountRouteCache::default();
+    cache.replace_for_test("codex", "opaque-account", None);
+    let request = DiscoverAgentModelsRequest {
+        schema_version: 1,
+        route: Some(super::super::proto::AgentLaunchRoute {
+            schema_version: 1,
+            provider: "codex".to_string(),
+            account_id: "opaque-account".to_string(),
+        }),
+        working_directory: ".".to_string(),
+        expected_provider_account_id: None,
+    };
+
+    let (_, _, resolved_working_directory) =
+        prepare_agent_model_discovery(request, cache.routes_for_test().clone()).unwrap();
+
+    assert_eq!(resolved_working_directory, canonical_home_directory);
+}
+
+#[test]
+fn agent_model_discovery_limits_concurrent_cli_processes() {
+    let limiter = AgentModelDiscoveryLimiter {
+        active: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let permits = (0..MAX_CONCURRENT_AGENT_MODEL_DISCOVERIES)
+        .map(|_| limiter.try_acquire().unwrap())
+        .collect::<Vec<_>>();
+
+    assert!(limiter.try_acquire().is_err());
+    drop(permits);
+    assert!(limiter.try_acquire().is_ok());
+}
+
+#[test]
+fn agent_model_discovery_exposes_actionable_path_free_errors() {
+    let incompatible = public_agent_model_discovery_error(
+        "codex",
+        &anyhow::anyhow!("Codex model/list response is missing data at /private/account"),
+    );
+    assert!(incompatible.contains("incompatible"));
+    assert!(incompatible.contains("update"));
+    assert!(!incompatible.contains("/private/account"));
+
+    let signed_out = public_agent_model_discovery_error(
+        "claude",
+        &anyhow::anyhow!("Claude Code is not signed in at /private/account"),
+    );
+    assert!(signed_out.contains("sign in"));
+    assert!(!signed_out.contains("/private/account"));
+}
+
+#[test]
+fn agent_model_discovery_preparation_errors_do_not_echo_working_directories() {
+    let requested_path = "/private/secret/missing-project";
+    let mut cache = super::super::agent_account::AccountRouteCache::default();
+    cache.replace_for_test("claude", "opaque-account", None);
+    let error = prepare_agent_model_discovery(
+        DiscoverAgentModelsRequest {
+            schema_version: 1,
+            route: Some(super::super::proto::AgentLaunchRoute {
+                schema_version: 1,
+                provider: "claude".to_string(),
+                account_id: "opaque-account".to_string(),
+            }),
+            working_directory: requested_path.to_string(),
+            expected_provider_account_id: None,
+        },
+        cache.routes_for_test().clone(),
+    )
+    .unwrap_err();
+
+    let message = match error {
+        AgentModelDiscoveryPreparationError::InvalidRequest(message) => message,
+        AgentModelDiscoveryPreparationError::Internal(message) => message,
+    };
+    assert!(!message.contains(requested_path));
+}
+
+#[test]
+fn agent_model_discovery_response_preserves_capabilities_without_host_paths() {
+    use crate::ai::subscription_agent::{
+        AccountIdentity, AgentCapability, HostIdentity, InstallationIdentity, ModelCapability,
+        ModelEffort, SubscriptionAgent,
+    };
+
+    let response = agent_model_discovery_response(AgentCapability {
+        installation: InstallationIdentity {
+            agent: SubscriptionAgent::ClaudeCode,
+            host: HostIdentity {
+                id: "daemon-host".to_string(),
+                display_name: "Remote".to_string(),
+            },
+            account: AccountIdentity {
+                id: "opaque-account".to_string(),
+                display_name: "Remote account".to_string(),
+                provider_account_id: Some("provider-account-42".to_string()),
+                config_dir: Some("/secret/daemon/account".into()),
+            },
+            executable: "/secret/bin/claude".into(),
+            version: "2.1.220".to_string(),
+        },
+        models: vec![ModelCapability {
+            id: "default".to_string(),
+            display_name: "Default".to_string(),
+            description: Some("Account default".to_string()),
+            resolved_model: Some("claude-current".to_string()),
+            is_default: true,
+            supported_efforts: vec![ModelEffort {
+                id: "high".to_string(),
+                display_name: "High".to_string(),
+            }],
+            default_effort: Some("high".to_string()),
+            context_window: Some(200_000),
+        }],
+    });
+
+    assert_eq!(response.cli_version, "2.1.220");
+    assert_eq!(
+        response.models[0].description.as_deref(),
+        Some("Account default")
+    );
+    assert_eq!(
+        response.models[0].resolved_model.as_deref(),
+        Some("claude-current")
+    );
+    assert_eq!(response.models[0].supported_efforts[0].id, "high");
+    assert_eq!(response.models[0].default_effort.as_deref(), Some("high"));
+    assert_eq!(response.models[0].context_window, Some(200_000));
+    assert!(!format!("{response:?}").contains("/secret/"));
 }
 
 #[test]

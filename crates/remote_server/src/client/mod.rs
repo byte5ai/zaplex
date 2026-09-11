@@ -11,12 +11,13 @@ use warpui::r#async::{executor, FutureExt as _};
 
 use crate::proto::{
     client_message, read_file_chunk_response, safe_file_request, server_message, Abort,
-    AgentAccountInventory, AgentLaunchRoute, AgentProcessSignal, AgentProcessSignalRequest,
-    AgentProcessSignalResponse, AgentProcessSignalStatus, AgentPtyBindingResponse,
-    AgentSessionIdentity, AgentSessionList, AgentTranscriptResponse, AttachSession, Authenticate,
-    BindAgentPty, BufferEdit, ClientMessage, CloseBuffer, CreateDirectory, CreateDirectoryResponse,
-    DeleteFile, DetachSession, ErrorCode, HostExec, HostExecResult, Initialize, InitializeResponse,
-    ListAgentAccounts, ListAgentSessions, ListDirectory, ListDirectoryResponse,
+    AgentAccountInventory, AgentLaunchRoute, AgentModelDiscoveryResponse, AgentProcessSignal,
+    AgentProcessSignalRequest, AgentProcessSignalResponse, AgentProcessSignalStatus,
+    AgentPtyBindingResponse, AgentSessionIdentity, AgentSessionList, AgentTranscriptResponse,
+    AttachSession, Authenticate, BindAgentPty, BufferEdit, ClientMessage, CloseBuffer,
+    CreateDirectory, CreateDirectoryResponse, DeleteFile, DetachSession,
+    DiscoverAgentModelsRequest, ErrorCode, HostExec, HostExecResult, Initialize,
+    InitializeResponse, ListAgentAccounts, ListAgentSessions, ListDirectory, ListDirectoryResponse,
     ListMultiplexerSessions, ListSessions, LoadRepoMetadataDirectoryResponse, ManagedLaunch,
     ManagedSessionLifecycleRequest, ManagedSessionLifecycleResponse, MultiplexerSessionList,
     NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, OpenSession, ReadAgentTranscript,
@@ -1088,6 +1089,38 @@ impl RemoteServerClient {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// Discovers the exact models reported by a daemon-local CLI under one
+    /// opaque account route. Callers must require
+    /// `agent-model-discovery-v1`; neither the request nor the response exposes
+    /// the provider config root resolved by the daemon.
+    pub async fn discover_agent_models(
+        &self,
+        route: AgentLaunchRoute,
+        working_directory: String,
+        expected_provider_account_id: Option<String>,
+    ) -> Result<AgentModelDiscoveryResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::DiscoverAgentModels(
+                DiscoverAgentModelsRequest {
+                    schema_version: 1,
+                    route: Some(route),
+                    working_directory,
+                    expected_provider_account_id,
+                },
+            )),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::AgentModelDiscoveryResponse(response)) => Ok(response),
+            other => {
+                log::error!("Unexpected response variant for DiscoverAgentModels: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
     }
 
     /// Reads a bounded transcript snapshot from the daemon that owns the
