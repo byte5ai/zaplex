@@ -1298,6 +1298,7 @@ def validate_evidence(
     definitions_contract: dict[str, Any],
 ) -> None:
     definitions = definitions_contract["definitions"]
+    compiled = definitions_contract["compiled"]
     expected_root_keys = {
         "coverage",
         "crosscut_coverage",
@@ -1438,6 +1439,19 @@ def validate_evidence(
                 source_text = source_by_hash[entry["source_sha256"]]["text"]
                 if match_end <= match_start or match_end > len(source_text):
                     raise EvidenceError(f"target evidence match span is invalid for {path}")
+                matcher_id = entry.get("matcher_id")
+                crosscut_matchers = compiled[entry["crosscut_id"]]
+                if matcher_id not in crosscut_matchers:
+                    raise EvidenceError(
+                        f"target evidence references an unknown matcher for {path}"
+                    )
+                if not any(
+                    match.start() == match_start and match.end() == match_end
+                    for match in crosscut_matchers[matcher_id].finditer(source_text)
+                ):
+                    raise EvidenceError(
+                        f"target evidence match span does not match its declared matcher for {path}"
+                    )
                 match_range = entry.get("match_range")
                 if (
                     not isinstance(match_range, dict)
