@@ -1851,7 +1851,7 @@ impl SshManagerPanel {
             appearance.ui_font_family(),
             appearance.ui_font_subheading(),
         )
-        .with_color(accent.into())
+        .with_color(accent)
         .finish();
         let cancel_label = Text::new_inline(
             crate::t!("workspace-left-panel-ssh-manager-add-cancel"),

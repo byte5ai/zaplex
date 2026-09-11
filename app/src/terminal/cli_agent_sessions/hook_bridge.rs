@@ -661,6 +661,7 @@ fn hook_paths_for_current_user(agent: warp_cli::CliAgentHookAgent) -> Result<Vec
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn hook_paths(
     agent: warp_cli::CliAgentHookAgent,
     home: &Path,

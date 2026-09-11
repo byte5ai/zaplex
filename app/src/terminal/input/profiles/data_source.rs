@@ -68,7 +68,7 @@ impl SyncDataSource for ProfileSelectorDataSource {
                 Some((profile_id, profile_name))
             })
             .collect();
-        profiles.sort_by(|(_, a), (_, b)| a.to_lowercase().cmp(&b.to_lowercase()));
+        profiles.sort_by_key(|(_, name)| name.to_lowercase());
 
         for (profile_id, profile_name) in profiles {
             if query_text.is_empty() {

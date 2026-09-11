@@ -298,20 +298,18 @@ impl BlocklistAIInputModel {
                 AgentViewControllerEvent::ExitedAgentView {
                     is_exit_before_new_entrance,
                     ..
-                } => {
-                    if !is_exit_before_new_entrance {
-                        // When truly exiting agent view, use the terminal-specific NLD setting
-                        // since the user is returning to terminal mode.
-                        let is_nld_in_terminal_enabled =
-                            AISettings::as_ref(ctx).is_nld_in_terminal_enabled(ctx);
-                        me.set_input_config_internal(
-                            InputConfig {
-                                input_type: InputType::Shell,
-                                is_locked: !is_nld_in_terminal_enabled,
-                            },
-                            ctx,
-                        );
-                    }
+                } if !is_exit_before_new_entrance => {
+                    // When truly exiting agent view, use the terminal-specific NLD setting
+                    // since the user is returning to terminal mode.
+                    let is_nld_in_terminal_enabled =
+                        AISettings::as_ref(ctx).is_nld_in_terminal_enabled(ctx);
+                    me.set_input_config_internal(
+                        InputConfig {
+                            input_type: InputType::Shell,
+                            is_locked: !is_nld_in_terminal_enabled,
+                        },
+                        ctx,
+                    );
                 }
                 _ => (),
             });

@@ -240,16 +240,15 @@ fn format_transcript_markdown(
         if !heading_complete {
             return (output, true);
         }
-        if !turn.thinking.is_empty() {
-            if !push_bounded(
+        if !turn.thinking.is_empty()
+            && (!push_bounded(
                 &mut output,
                 "<details><summary>thinking</summary>\n\n",
                 max_bytes,
             ) || !push_bounded(&mut output, turn.thinking.trim(), max_bytes)
-                || !push_bounded(&mut output, "\n\n</details>\n\n", max_bytes)
-            {
-                return (output, true);
-            }
+                || !push_bounded(&mut output, "\n\n</details>\n\n", max_bytes))
+        {
+            return (output, true);
         }
         if !turn.tools.is_empty() {
             if !push_bounded(&mut output, "`⚙ ", max_bytes) {
@@ -266,12 +265,11 @@ fn format_transcript_markdown(
                 return (output, true);
             }
         }
-        if !turn.text.is_empty() {
-            if !push_bounded(&mut output, turn.text.trim(), max_bytes)
-                || !push_bounded(&mut output, "\n\n", max_bytes)
-            {
-                return (output, true);
-            }
+        if !turn.text.is_empty()
+            && (!push_bounded(&mut output, turn.text.trim(), max_bytes)
+                || !push_bounded(&mut output, "\n\n", max_bytes))
+        {
+            return (output, true);
         }
         if !push_bounded(&mut output, "---\n\n", max_bytes) {
             return (output, true);
@@ -411,9 +409,9 @@ pub(crate) enum RemoteTranscriptProjection {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RemoteTranscriptProjectionError {
-    InvalidEnvelope,
-    InvalidStatus,
-    InvalidPayload,
+    Envelope,
+    Status,
+    Payload,
 }
 
 fn valid_revision(value: &str) -> bool {
@@ -435,19 +433,19 @@ fn remote_wire_turn(
             .iter()
             .any(|tool| tool.name.trim().is_empty() || tool.name.len() > MAX_TOOL_NAME_BYTES)
     {
-        return Err(RemoteTranscriptProjectionError::InvalidPayload);
+        return Err(RemoteTranscriptProjectionError::Payload);
     }
     let role = match turn.role.as_str() {
         "user" => zaplex_cockpit::TurnRole::User,
         "assistant" => zaplex_cockpit::TurnRole::Assistant,
-        _ => return Err(RemoteTranscriptProjectionError::InvalidPayload),
+        _ => return Err(RemoteTranscriptProjectionError::Payload),
     };
     let timestamp = if turn.timestamp.is_empty() {
         None
     } else {
         Some(
             chrono::DateTime::parse_from_rfc3339(&turn.timestamp)
-                .map_err(|_| RemoteTranscriptProjectionError::InvalidPayload)?
+                .map_err(|_| RemoteTranscriptProjectionError::Payload)?
                 .with_timezone(&chrono::Utc),
         )
     };
@@ -520,13 +518,13 @@ pub(crate) fn project_remote_transcript(
         || response.message.len() > MAX_REMOTE_STATUS_MESSAGE_BYTES
         || remote_payload_size(&response).is_none_or(|size| size > MAX_TRANSCRIPT_MARKDOWN_BYTES)
     {
-        return Err(RemoteTranscriptProjectionError::InvalidEnvelope);
+        return Err(RemoteTranscriptProjectionError::Envelope);
     }
     if known_revision.is_some_and(|revision| !valid_revision(revision)) {
-        return Err(RemoteTranscriptProjectionError::InvalidPayload);
+        return Err(RemoteTranscriptProjectionError::Payload);
     }
     let status = AgentTranscriptStatus::try_from(response.status)
-        .map_err(|_| RemoteTranscriptProjectionError::InvalidStatus)?;
+        .map_err(|_| RemoteTranscriptProjectionError::Status)?;
     match status {
         AgentTranscriptStatus::Loaded => {
             if response.turns.is_empty()
@@ -535,7 +533,7 @@ pub(crate) fn project_remote_transcript(
                 || !response.message.is_empty()
                 || known_revision == Some(response.source_revision.as_str())
             {
-                return Err(RemoteTranscriptProjectionError::InvalidPayload);
+                return Err(RemoteTranscriptProjectionError::Payload);
             }
             let mut turns = Vec::with_capacity(response.turns.len());
             for turn in response.turns {
@@ -557,7 +555,7 @@ pub(crate) fn project_remote_transcript(
                 || response.truncated
                 || !response.message.is_empty()
             {
-                return Err(RemoteTranscriptProjectionError::InvalidPayload);
+                return Err(RemoteTranscriptProjectionError::Payload);
             }
             Ok(RemoteTranscriptProjection::NotModified)
         }
@@ -622,11 +620,9 @@ pub(crate) fn project_remote_transcript(
         | AgentTranscriptStatus::Unsupported
         | AgentTranscriptStatus::Malformed
         | AgentTranscriptStatus::TooLarge
-        | AgentTranscriptStatus::Unavailable => {
-            Err(RemoteTranscriptProjectionError::InvalidPayload)
-        }
+        | AgentTranscriptStatus::Unavailable => Err(RemoteTranscriptProjectionError::Payload),
         AgentTranscriptStatus::InvalidRequest | AgentTranscriptStatus::Unspecified => {
-            Err(RemoteTranscriptProjectionError::InvalidStatus)
+            Err(RemoteTranscriptProjectionError::Status)
         }
     }
 }
