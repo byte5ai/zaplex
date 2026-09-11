@@ -54,6 +54,12 @@ pub struct GistClient {
     client: Client,
 }
 
+impl Default for GistClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GistClient {
     /// Create new GistClient instance.
     /// Build failure is an unrecoverable runtime error (TLS backend initialization failure, etc.);

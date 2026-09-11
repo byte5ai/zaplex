@@ -4,7 +4,7 @@
 //! author: logic
 //! date: 2026-05-26
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
@@ -179,6 +179,7 @@ fn render_cancel_button(
 /// Render descriptive confirmation dialog (title + description + confirm/cancel buttons).
 ///
 /// Applicable to scenarios such as delete confirmation, move confirmation, and overwrite confirmation.
+#[allow(clippy::too_many_arguments)]
 fn render_confirm_dialog(
     title: &str,
     description: &str,
@@ -882,8 +883,8 @@ fn render_file_details(
 
 /// Render move dialog.
 fn render_move_dialog(
-    source: &PathBuf,
-    target_dir: &PathBuf,
+    source: &Path,
+    target_dir: &Path,
     appearance: &Appearance,
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
@@ -913,9 +914,10 @@ fn render_move_dialog(
 }
 
 /// Render overwrite confirmation dialog.
+#[allow(clippy::too_many_arguments)]
 fn render_overwrite_confirm(
     _source: &PathBuf,
-    target: &PathBuf,
+    target: &Path,
     _file_size: u64,
     direction: TransferDirection,
     appearance: &Appearance,
@@ -949,6 +951,7 @@ fn render_overwrite_confirm(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_unknown_host_key_confirm(
     host: &str,
     port: u16,
@@ -977,6 +980,7 @@ fn render_unknown_host_key_confirm(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_changed_host_key_confirm(
     host: &str,
     port: u16,

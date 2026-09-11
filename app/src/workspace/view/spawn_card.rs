@@ -732,7 +732,7 @@ impl SpawnCard {
         }
         let ledger = self.bulk_launch.as_ref()?;
         let targets = ledger.targets_for_attempt();
-        (!targets.is_empty()).then(|| SpawnCardEvent::LaunchBatch {
+        (!targets.is_empty()).then_some(SpawnCardEvent::LaunchBatch {
             plan_id: ledger.plan.id,
             targets,
         })
@@ -1570,7 +1570,7 @@ impl SpawnCard {
         self.chip_states
             .borrow_mut()
             .entry(id.to_string())
-            .or_insert_with(MouseStateHandle::default)
+            .or_default()
             .clone()
     }
 

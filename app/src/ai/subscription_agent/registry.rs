@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use warpui::{Entity, SingletonEntity};
 
+type PendingApprovals = HashMap<(String, String), oneshot::Sender<super::ApprovalDecision>>;
+
 #[derive(Clone)]
 pub(crate) struct StoredSubscriptionSession {
     pub(crate) target: SubscriptionTarget,
@@ -24,7 +26,7 @@ pub(crate) struct SubscriptionSessionRegistry {
     targets: Arc<Mutex<HashMap<String, SubscriptionTarget>>>,
     preferences: Arc<Mutex<RoutePreferences>>,
     lifecycle: Arc<Mutex<HashMap<String, AgentLifecycle>>>,
-    approvals: Arc<Mutex<HashMap<(String, String), oneshot::Sender<super::ApprovalDecision>>>>,
+    approvals: Arc<Mutex<PendingApprovals>>,
     agent_choices: Arc<Mutex<HashMap<String, Vec<SubscriptionAgent>>>>,
     model_choices: Arc<Mutex<HashMap<String, Vec<ModelCapability>>>>,
 }
