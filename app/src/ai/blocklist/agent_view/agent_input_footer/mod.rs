@@ -2379,7 +2379,7 @@ fn render_ftu_callout(
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum AgentInputFooterAction {
+pub enum AgentInputFooterAction {
     #[cfg(feature = "voice_input")]
     ToggleVoiceInput,
     SelectFile,
