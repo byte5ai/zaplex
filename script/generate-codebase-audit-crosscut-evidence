@@ -1067,6 +1067,9 @@ def build_evidence(
         text, lines = split_text_lines(data, path)
         if len(lines) != entry["line_count"]:
             raise EvidenceError(f"immutable blob line count mismatch for {path}")
+        line_offsets = [0]
+        for line in lines:
+            line_offsets.append(line_offsets[-1] + len(line))
         applicable = []
         for definition in definitions:
             crosscut_id = definition["id"]
@@ -1086,6 +1089,7 @@ def build_evidence(
                     source_end = min(len(lines), match_end + context["after"])
                     source_text = extract_range(lines, source_start, source_end)
                     source_sha256 = add_source(sources, source_text)
+                    source_offset = line_offsets[source_start - 1]
                     add_evidence(
                         evidence,
                         {
@@ -1094,6 +1098,10 @@ def build_evidence(
                             "kind": "matcher",
                             "mandatory_patterns": [],
                             "match_range": {"end": match_end, "start": match_start},
+                            "match_span": {
+                                "end": match.end() - source_offset,
+                                "start": match.start() - source_offset,
+                            },
                             "matcher_id": matcher_id,
                             "mode": entry["mode"],
                             "object_id": entry["object_id"],
@@ -1126,6 +1134,7 @@ def build_evidence(
                             "kind": "mandatory-range",
                             "mandatory_patterns": matched_patterns,
                             "match_range": None,
+                            "match_span": None,
                             "matcher_id": None,
                             "mode": entry["mode"],
                             "object_id": entry["object_id"],
@@ -1213,6 +1222,8 @@ def build_evidence(
             (entry.get("range") or {}).get("end", 0),
             entry.get("matcher_id") or "",
             (entry.get("match_range") or {}).get("start", 0),
+            (entry.get("match_span") or {}).get("start", 0),
+            (entry.get("match_span") or {}).get("end", 0),
             entry.get("commit_index", -1),
         )
     )
@@ -1414,6 +1425,31 @@ def validate_evidence(
                 or line_range["end"] > inventory_entry["line_count"]
             ):
                 raise EvidenceError(f"target evidence range is invalid for {path}")
+            if entry["kind"] == "matcher":
+                match_span = entry.get("match_span")
+                if not isinstance(match_span, dict) or set(match_span) != {"end", "start"}:
+                    raise EvidenceError(f"target evidence match span is invalid for {path}")
+                match_start = require_plain_int(
+                    match_span["start"], "target evidence match span start", minimum=0
+                )
+                match_end = require_plain_int(
+                    match_span["end"], "target evidence match span end", minimum=1
+                )
+                source_text = source_by_hash[entry["source_sha256"]]["text"]
+                if match_end <= match_start or match_end > len(source_text):
+                    raise EvidenceError(f"target evidence match span is invalid for {path}")
+                match_range = entry.get("match_range")
+                if (
+                    not isinstance(match_range, dict)
+                    or set(match_range) != {"end", "start"}
+                    or require_plain_int(match_range["start"], "match range start", minimum=1)
+                    != line_range["start"] + source_text.count("\n", 0, match_start)
+                    or require_plain_int(match_range["end"], "match range end", minimum=1)
+                    != line_range["start"] + source_text.count("\n", 0, match_end - 1)
+                ):
+                    raise EvidenceError(f"target evidence match range is invalid for {path}")
+            elif entry.get("match_span") is not None:
+                raise EvidenceError(f"mandatory evidence carries a match span for {path}")
         elif entry["kind"] != "upstream-commit":
             raise EvidenceError(f"invalid evidence kind: {entry['kind']}")
 

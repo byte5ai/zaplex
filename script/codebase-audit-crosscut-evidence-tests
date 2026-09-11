@@ -66,7 +66,7 @@ class CodebaseAuditCrosscutEvidenceTest(unittest.TestCase):
             "src/shared.rs",
             b"unsafe fn target() {}\nCommand::new(\"tool\");\nlet _ = result;\n",
         )
-        self.write("src/target.rs", b"unsafe fn target_only() {}\n")
+        self.write("src/target.rs", b"unsafe fn target_only() { unsafe {} }\n")
         self.git("add", ".")
         self.git("commit", "-q", "-m", "target")
         self.target_sha = self.rev_parse("HEAD")
@@ -496,7 +496,18 @@ class CodebaseAuditCrosscutEvidenceTest(unittest.TestCase):
             for entry in document["evidence"]
             if entry["kind"] == "matcher" and entry["path"] == "src/target.rs"
         ]
-        self.assertEqual(len(matcher_evidence), 12)
+        self.assertEqual(len(matcher_evidence), 24)
+        self.assertEqual(len({entry["evidence_id"] for entry in matcher_evidence}), 24)
+        for crosscut_id in {
+            entry["crosscut_id"] for entry in matcher_evidence
+        }:
+            spans = [
+                entry["match_span"]
+                for entry in matcher_evidence
+                if entry["crosscut_id"] == crosscut_id
+            ]
+            self.assertEqual(len(spans), 2)
+            self.assertEqual(len({(span["start"], span["end"]) for span in spans}), 2)
         self.assertEqual(len({entry["source_sha256"] for entry in matcher_evidence}), 1)
         self.assertLess(document["coverage"]["source_records"], len(document["evidence"]))
 
@@ -840,6 +851,25 @@ class CodebaseAuditCrosscutEvidenceTest(unittest.TestCase):
         source_drift["sources"][0]["text"] += "tampered"
         with self.assertRaisesRegex(EVIDENCE.EvidenceError, "source SHA-256 mismatch"):
             EVIDENCE.validate_evidence(source_drift, contract, definitions)
+
+        span_drift = copy.deepcopy(document)
+        matcher = next(
+            entry for entry in span_drift["evidence"] if entry["kind"] == "matcher"
+        )
+        matcher["match_span"]["end"] = len(
+            next(
+                source["text"]
+                for source in span_drift["sources"]
+                if source["sha256"] == matcher["source_sha256"]
+            )
+        ) + 1
+        payload = dict(matcher)
+        payload.pop("evidence_id")
+        matcher["evidence_id"] = hashlib.sha256(
+            EVIDENCE.canonical_json(payload)
+        ).hexdigest()
+        with self.assertRaisesRegex(EVIDENCE.EvidenceError, "match span is invalid"):
+            EVIDENCE.validate_evidence(span_drift, contract, definitions)
 
         series_drift = copy.deepcopy(document)
         series_drift["upstream_commit_series"].pop()
