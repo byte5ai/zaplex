@@ -28,6 +28,7 @@ use warpui::{
 use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusState};
 use crate::pane_group::pane::PaneId;
 use crate::pane_group::BackingView;
+use crate::remote_server::manager::RemoteServerManager;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 
@@ -78,6 +79,7 @@ fn initialize_app(app: &mut warpui::App) {
     app.add_singleton_model(|_| ToastStack);
     app.add_singleton_model(|_| super::fm_registry::FileManagerRegistry::new());
     app.add_singleton_model(|_| super::transfer_queue::TransferQueue::new());
+    app.add_singleton_model(RemoteServerManager::new);
 
     let temp_db = std::env::temp_dir().join("warp_sftp_integration_test.sqlite");
     let _ = warp_ssh_manager::set_database_path(temp_db);
@@ -1564,53 +1566,75 @@ fn global_transfer_history_prioritizes_recovery_then_active_jobs() {
     );
 }
 
-/// Verifies that clicking a breadcrumb navigates to the corresponding path segment
 #[test]
-fn test_breadcrumb_click_navigates_to_segment() {
+fn absolute_breadcrumb_click_lists_exact_ancestor() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) =
-            create_connected_view(&mut app, &[("level1/level2/file.txt", b"deep")]);
-
-        // Enter level1/level2
-        let l1_idx = view.read(&app, |v, _| {
-            v.entries.iter().position(|e| e.name == "level1").unwrap()
-        });
-        view.update(&mut app, |v, ctx| {
-            let action = entry_action(v, l1_idx, SftpBrowserAction::OpenEntry);
-            v.handle_action(&action, ctx);
-        });
-        let l2_idx = view.read(&app, |v, _| {
-            v.entries.iter().position(|e| e.name == "level2").unwrap()
-        });
-        view.update(&mut app, |v, ctx| {
-            let action = entry_action(v, l2_idx, SftpBrowserAction::OpenEntry);
-            v.handle_action(&action, ctx);
-        });
-
-        // Verify the current path is level1/level2
-        let current = view.read(&app, |v, _| v.current_path.clone());
-        assert!(
-            current.to_string_lossy().contains("level1"),
-            "should navigate into level1"
-        );
-
-        // Navigate back toward the root (via NavigateTo)
-        view.update(&mut app, |v, ctx| {
-            // Find the breadcrumb path corresponding to level1
-            let l1_path = v
-                .current_path
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("/"));
-            v.handle_action(&SftpBrowserAction::NavigateTo(l1_path), ctx);
-        });
-
-        view.read(&app, |v, _| {
-            assert!(
-                v.current_path.to_string_lossy().contains("level1"),
-                "breadcrumb navigation should place us at level1"
+        let temp_dir = create_temp_dir_with_files(&[("srv/app/file.txt", b"deep")]);
+        let backend = Arc::new(TracingBackend::new(temp_dir.path().to_path_buf()));
+        let (window_id, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(
+                backend.clone() as Arc<dyn SftpBackend>,
+                PathBuf::from("/srv/app"),
+                ctx,
             );
+        });
+        backend.listed_paths.lock().unwrap().clear();
+
+        let (presenter, invalidation) = presenter_for_window(&app, window_id);
+        let click_position = render_position(
+            &mut app,
+            presenter.clone(),
+            invalidation,
+            "sftp_breadcrumb:/srv",
+        );
+        mouse_down(&mut app, window_id, presenter.clone(), click_position);
+        mouse_up(&mut app, window_id, presenter, click_position);
+
+        assert_eq!(
+            *backend.listed_paths.lock().unwrap(),
+            vec![PathBuf::from("/srv")],
+            "the clickable ancestor must retain the absolute-path root"
+        );
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/srv"));
+        });
+    });
+}
+
+#[test]
+fn absolute_root_breadcrumb_click_lists_root() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp_dir = create_temp_dir_with_files(&[("srv/app/file.txt", b"deep")]);
+        let backend = Arc::new(TracingBackend::new(temp_dir.path().to_path_buf()));
+        let (window_id, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(
+                backend.clone() as Arc<dyn SftpBackend>,
+                PathBuf::from("/srv/app"),
+                ctx,
+            );
+        });
+        backend.listed_paths.lock().unwrap().clear();
+
+        let (presenter, invalidation) = presenter_for_window(&app, window_id);
+        let click_position = render_position(
+            &mut app,
+            presenter.clone(),
+            invalidation,
+            "sftp_breadcrumb:/",
+        );
+        mouse_down(&mut app, window_id, presenter.clone(), click_position);
+        mouse_up(&mut app, window_id, presenter, click_position);
+
+        assert_eq!(
+            *backend.listed_paths.lock().unwrap(),
+            vec![PathBuf::from("/")]
+        );
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/"));
         });
     });
 }

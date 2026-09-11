@@ -18,10 +18,49 @@ use warpui::Element;
 use crate::sftp_manager::browser::SftpBrowserAction;
 use crate::ui_components::icons::Icon;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BreadcrumbSegment {
+    pub(crate) label: String,
+    pub(crate) target: PathBuf,
+}
+
+/// Split a path into display labels and exact navigation targets.
+///
+/// The accumulated target starts at the path's own root component, so absolute
+/// paths remain absolute while relative paths remain relative.
+pub(crate) fn breadcrumb_segments(path: &Path) -> Vec<BreadcrumbSegment> {
+    let mut accumulated = PathBuf::new();
+    let mut segments = Vec::new();
+
+    for component in path.components() {
+        accumulated.push(component.as_os_str());
+        let label = match component {
+            Component::Prefix(prefix) => prefix.as_os_str().to_string_lossy().into_owned(),
+            Component::RootDir => "/".to_string(),
+            Component::CurDir => ".".to_string(),
+            Component::ParentDir => "..".to_string(),
+            Component::Normal(part) => part.to_string_lossy().into_owned(),
+        };
+        segments.push(BreadcrumbSegment {
+            label,
+            target: accumulated.clone(),
+        });
+    }
+
+    if segments.is_empty() {
+        segments.push(BreadcrumbSegment {
+            label: ".".to_string(),
+            target: PathBuf::new(),
+        });
+    }
+
+    segments
+}
+
 /// Render the path breadcrumb navigation
 ///
 /// Traverse each component of the path; each segment is clickable and triggers a NavigateTo action.
-/// Segments are separated by ChevronRight icons; empty paths display "/".
+/// Segments are separated by ChevronRight icons; empty paths display ".".
 pub fn render_breadcrumb(
     current_path: &Path,
     mouse_handles: &HashMap<PathBuf, MouseStateHandle>,
@@ -33,25 +72,11 @@ pub fn render_breadcrumb(
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    let components: Vec<_> = current_path
-        .components()
-        .filter(|c| !matches!(c, Component::RootDir))
-        .collect();
-
-    // When path is empty or only has root, display only "/"
-    if components.is_empty() {
-        let root_el = Text::new_inline(String::from("/"), ui_font, ui_font_size)
-            .with_color(text_color.into())
-            .finish();
-        return vec![Container::new(root_el).finish()];
-    }
-
+    let segments = breadcrumb_segments(current_path);
     let mut elements: Vec<Box<dyn Element>> = Vec::new();
-    let mut accumulated = PathBuf::new();
 
-    for (i, comp) in components.iter().enumerate() {
-        accumulated.push(comp);
-        let is_last = i == components.len() - 1;
+    for (i, segment) in segments.iter().enumerate() {
+        let is_last = i == segments.len() - 1;
 
         // Separator (added after the first segment)
         if i > 0 {
@@ -68,8 +93,8 @@ pub fn render_breadcrumb(
             );
         }
 
-        let segment_label = comp.as_os_str().to_string_lossy().to_string();
-        let target_path = accumulated.clone();
+        let segment_label = segment.label.clone();
+        let target_path = segment.target.clone();
 
         if is_last {
             // Last segment uses highlight color, not clickable
@@ -80,9 +105,9 @@ pub fn render_breadcrumb(
         } else {
             // Non-last segments are clickable for navigation
             let label_for_closure = segment_label.clone();
-            let path = accumulated.display();
+            let path = segment.target.display();
             let position_id = format!("sftp_breadcrumb:{path}");
-            let Some(mouse_handle) = mouse_handles.get(&accumulated).cloned() else {
+            let Some(mouse_handle) = mouse_handles.get(&segment.target).cloned() else {
                 continue;
             };
             let hoverable = Hoverable::new(mouse_handle, move |_| {
@@ -108,145 +133,5 @@ pub fn render_breadcrumb(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use std::cell::RefCell;
-    use std::collections::HashSet;
-    use std::rc::Rc;
-
-    use pathfinder_geometry::vector::vec2f;
-    use warpui::elements::{CrossAxisAlignment, Flex, ParentElement, Stack};
-    use warpui::platform::WindowStyle;
-    use warpui::{
-        App, AppContext, Entity, Event, Presenter, SingletonEntity, TypedActionView, View,
-        ViewContext, WindowInvalidation,
-    };
-
-    struct BreadcrumbTestView {
-        path: PathBuf,
-        mouse_handles: HashMap<PathBuf, MouseStateHandle>,
-        navigations: Vec<PathBuf>,
-    }
-
-    impl Entity for BreadcrumbTestView {
-        type Event = ();
-    }
-
-    impl TypedActionView for BreadcrumbTestView {
-        type Action = SftpBrowserAction;
-
-        fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
-            if let SftpBrowserAction::NavigateTo(path) = action {
-                self.navigations.push(path.clone());
-                ctx.notify();
-            }
-        }
-    }
-
-    impl View for BreadcrumbTestView {
-        fn ui_name() -> &'static str {
-            "BreadcrumbTestView"
-        }
-
-        fn render(&self, app: &AppContext) -> Box<dyn Element> {
-            let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-            for element in
-                render_breadcrumb(&self.path, &self.mouse_handles, Appearance::as_ref(app))
-            {
-                row.add_child(element);
-            }
-            Stack::new().with_child(row.finish()).finish()
-        }
-    }
-
-    #[test]
-    fn breadcrumb_click_survives_rerender_between_mouse_down_and_up() {
-        App::test((), |mut app| async move {
-            app.add_singleton_model(|_| Appearance::mock());
-            let (window_id, view) =
-                app.add_window(WindowStyle::NotStealFocus, |_| BreadcrumbTestView {
-                    path: PathBuf::from("/alpha/beta"),
-                    mouse_handles: HashMap::from([(
-                        PathBuf::from("alpha"),
-                        MouseStateHandle::default(),
-                    )]),
-                    navigations: Vec::new(),
-                });
-            let root_view_id = app
-                .root_view_id(window_id)
-                .expect("test window should contain root view");
-            let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
-            let invalidation = WindowInvalidation {
-                updated: HashSet::from([root_view_id]),
-                ..Default::default()
-            };
-
-            let click_position = app.update({
-                let presenter = presenter.clone();
-                let invalidation = invalidation.clone();
-                move |ctx| {
-                    presenter.borrow_mut().invalidate(invalidation, ctx);
-                    presenter
-                        .borrow_mut()
-                        .build_scene(vec2f(320., 60.), 1., None, ctx);
-                    presenter
-                        .borrow()
-                        .position_cache()
-                        .get_position("sftp_breadcrumb:alpha")
-                        .expect("clickable breadcrumb segment should be positioned")
-                        .center()
-                }
-            });
-
-            app.update({
-                let presenter = presenter.clone();
-                move |ctx| {
-                    ctx.simulate_window_event(
-                        Event::LeftMouseDown {
-                            position: click_position,
-                            modifiers: Default::default(),
-                            click_count: 1,
-                            is_first_mouse: false,
-                        },
-                        window_id,
-                        presenter,
-                    );
-                }
-            });
-
-            app.update({
-                let presenter = presenter.clone();
-                let invalidation = invalidation.clone();
-                move |ctx| {
-                    presenter.borrow_mut().invalidate(invalidation, ctx);
-                    presenter
-                        .borrow_mut()
-                        .build_scene(vec2f(320., 60.), 1., None, ctx);
-                }
-            });
-
-            app.update({
-                let presenter = presenter.clone();
-                move |ctx| {
-                    ctx.simulate_window_event(
-                        Event::LeftMouseUp {
-                            position: click_position,
-                            modifiers: Default::default(),
-                        },
-                        window_id,
-                        presenter,
-                    );
-                }
-            });
-
-            view.read(&app, |view, _| {
-                assert_eq!(
-                    view.navigations.len(),
-                    1,
-                    "breadcrumb navigation should fire exactly once across a rerender"
-                );
-            });
-        });
-    }
-}
+#[path = "breadcrumb_tests.rs"]
+mod tests;

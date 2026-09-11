@@ -759,9 +759,7 @@ pub struct SftpBrowserView {
     upload_btn: MouseStateHandle,
     /// New folder button
     new_folder_btn: MouseStateHandle,
-    /// Root breadcrumb button
-    root_breadcrumb_btn: MouseStateHandle,
-    /// Persistent click state for each non-root breadcrumb segment.
+    /// Persistent click state for each breadcrumb segment.
     breadcrumb_mouse_handles: HashMap<PathBuf, MouseStateHandle>,
     /// Dialog confirm button
     dialog_confirm_btn: MouseStateHandle,
@@ -938,17 +936,13 @@ impl SftpBrowserView {
     /// handles across renders preserves a mouse-down until the matching
     /// mouse-up arrives.
     fn sync_breadcrumb_mouse_handles(&mut self) {
-        let mut accumulated = PathBuf::new();
-        let mut visible = HashSet::new();
-        for component in self
-            .current_path
-            .components()
-            .filter(|component| !matches!(component, Component::RootDir))
-        {
-            accumulated.push(component);
-            visible.insert(accumulated.clone());
+        let visible: HashSet<_> = super::breadcrumb::breadcrumb_segments(&self.current_path)
+            .into_iter()
+            .map(|segment| segment.target)
+            .collect();
+        for target in &visible {
             self.breadcrumb_mouse_handles
-                .entry(accumulated.clone())
+                .entry(target.clone())
                 .or_default();
         }
         self.breadcrumb_mouse_handles
@@ -1002,7 +996,6 @@ impl SftpBrowserView {
             forward_btn: MouseStateHandle::default(),
             upload_btn: MouseStateHandle::default(),
             new_folder_btn: MouseStateHandle::default(),
-            root_breadcrumb_btn: MouseStateHandle::default(),
             breadcrumb_mouse_handles: HashMap::new(),
             dialog_confirm_btn: MouseStateHandle::default(),
             dialog_cancel_btn: MouseStateHandle::default(),
@@ -4166,8 +4159,6 @@ impl SftpBrowserView {
     /// Render the breadcrumb navigation
     fn render_breadcrumb(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let text_color = theme.sub_text_color(theme.background());
-
         let parts: Vec<Box<dyn Element>> = super::breadcrumb::render_breadcrumb(
             &self.current_path,
             &self.breadcrumb_mouse_handles,
@@ -4177,26 +4168,6 @@ impl SftpBrowserView {
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(2.0);
-
-        // Add the root directory "/" as a clickable entry point
-        let root_text_color = text_color;
-        let root_hoverable = Hoverable::new(self.root_breadcrumb_btn.clone(), move |_| {
-            let t = Text::new_inline(
-                "/".to_string(),
-                appearance.ui_font_family(),
-                appearance.ui_font_size(),
-            )
-            .with_color(root_text_color.into())
-            .finish();
-            Container::new(t).finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(SftpBrowserAction::NavigateTo(PathBuf::from("/")));
-        })
-        .finish();
-        let root_el = SavePosition::new(root_hoverable, "sftp_breadcrumb:/").finish();
-        row.add_child(root_el);
 
         for part in parts {
             row.add_child(part);
