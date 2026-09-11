@@ -3515,7 +3515,7 @@ fn prepare_agent_model_discovery(
         ));
     }
     let requested_directory = PathBuf::from(request.working_directory);
-    let requested_directory = if requested_directory == PathBuf::from(".") {
+    let requested_directory = if requested_directory == Path::new(".") {
         dirs::home_dir().ok_or_else(|| {
             AgentModelDiscoveryPreparationError::Internal(
                 "daemon home directory is unavailable".to_string(),
