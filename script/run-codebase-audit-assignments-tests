@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+
+"""Focused tests for the immutable codebase-audit assignment runner."""
+
+from __future__ import annotations
+
+import concurrent.futures
+import copy
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest import mock
+
+
+SCRIPT = Path(__file__).resolve().parent / "run-codebase-audit-assignments"
+LOADER = importlib.machinery.SourceFileLoader("codebase_audit_runner", str(SCRIPT))
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
+assert SPEC is not None
+RUNNER = importlib.util.module_from_spec(SPEC)
+sys.modules[LOADER.name] = RUNNER
+LOADER.exec_module(RUNNER)
+
+
+STUB_SOURCE = r'''#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+
+def argument(name):
+    return sys.argv[sys.argv.index(name) + 1]
+
+
+prompt = json.loads(sys.stdin.read())
+bucket_id = prompt["provenance"]["bucket_id"]
+snapshot = Path(argument("--cd")).resolve()
+original = os.environ.get("AUDIT_STUB_ORIGINAL_REPO")
+if original and snapshot == Path(original).resolve():
+    print(json.dumps({"type": "turn.failed", "message": "mutable checkout"}))
+    raise SystemExit(9)
+if (snapshot / ".git").exists():
+    print(json.dumps({"type": "turn.failed", "message": "snapshot exposes Git metadata"}))
+    raise SystemExit(10)
+for entry in prompt["assignment"]["entries"]:
+    object_id = subprocess.run(
+        ["git", "hash-object", str(snapshot / entry["path"])],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    if object_id != entry["blob_oid"]:
+        print(json.dumps({"type": "turn.failed", "message": "wrong target blob"}))
+        raise SystemExit(12)
+
+sync = os.environ.get("AUDIT_STUB_SYNC_DIR")
+if sync:
+    sync_path = Path(sync)
+    sync_path.mkdir(parents=True, exist_ok=True)
+    (sync_path / bucket_id).write_text("started\n")
+    deadline = time.monotonic() + 5
+    while len(list(sync_path.glob("bucket-*"))) != 3:
+        if time.monotonic() >= deadline:
+            print(json.dumps({"type": "turn.failed", "message": "not parallel"}))
+            raise SystemExit(11)
+        time.sleep(0.01)
+
+mode = os.environ.get("AUDIT_STUB_MODE", "success")
+if mode == "timeout":
+    time.sleep(10)
+if mode == "cli-error":
+    print(json.dumps({"type": "turn.failed", "message": "stub failure"}))
+    raise SystemExit(7)
+
+provenance = prompt["provenance"]
+response = {
+    "schema_version": 1,
+    "bucket_id": provenance["bucket_id"],
+    "manifest_sha256": provenance["manifest_sha256"],
+    "assignment_sha256": provenance["assignment_sha256"],
+    "bucket_assignment_sha256": provenance["bucket_assignment_sha256"],
+    "target_sha": provenance["target_sha"],
+    "upstream_sha": provenance["upstream_sha"],
+    "merge_base_sha": provenance["merge_base_sha"],
+    "reviewed_ranges": prompt["required_reviewed_ranges"],
+    "findings": [],
+}
+if mode == "bad-provenance":
+    response["manifest_sha256"] = "0" * 64
+if mode == "partial":
+    response["reviewed_ranges"] = response["reviewed_ranges"][:-1]
+if mode == "extra":
+    response["reviewed_ranges"].append(response["reviewed_ranges"][0])
+
+output = Path(argument("--output-last-message"))
+if mode == "non-json":
+    output.write_text("not JSON\n")
+else:
+    output.write_text(json.dumps(response, sort_keys=True) + "\n")
+if mode == "bad-events":
+    print("not JSON events")
+else:
+    print(json.dumps({"type": "thread.started", "thread_id": bucket_id}))
+    print(json.dumps({"type": "turn.completed", "usage": {}}))
+'''
+
+
+class CodebaseAuditRunnerTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="zaplex-audit-runner-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q")
+        self.git("config", "user.name", "Audit Runner Test")
+        self.git("config", "user.email", "audit-runner@example.invalid")
+        files = {
+            "a.rs": "\n".join(f"a-{line}" for line in range(1, 10)) + "\n",
+            "b.rs": "\n".join(f"b-{line}" for line in range(1, 9)) + "\n",
+            "c.rs": "\n".join(f"c-{line}" for line in range(1, 8)) + "\n",
+        }
+        for path, contents in files.items():
+            (self.repo / path).write_text(contents)
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "fixture")
+        self.target_sha = self.git("rev-parse", "HEAD")
+        self.assignments = self.build_assignments(files)
+        self.assignments_path = self.root / "assignments.json"
+        self.assignments_path.write_bytes(RUNNER.canonical_json(self.assignments))
+        self.stub = self.root / "stub codex"
+        self.stub.write_text(STUB_SOURCE)
+        self.stub.chmod(0o755)
+
+    def git(self, *arguments):
+        result = subprocess.run(
+            ["git", "-C", str(self.repo), *arguments],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def tree_entry(self, path):
+        record = subprocess.run(
+            ["git", "-C", str(self.repo), "ls-tree", self.target_sha, "--", path],
+            text=True,
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout.strip()
+        metadata, actual_path = record.split("\t", 1)
+        mode, entry_type, object_id = metadata.split(" ", 2)
+        self.assertEqual(actual_path, path)
+        return mode, entry_type, object_id
+
+    def build_assignments(self, files):
+        manifest_sha256 = "a" * 64
+        entries = []
+        for path, contents in sorted(files.items()):
+            mode, entry_type, object_id = self.tree_entry(path)
+            line_count = len(contents.splitlines())
+            entries.append(
+                {
+                    "manifest_sha256": manifest_sha256,
+                    "target_sha": self.target_sha,
+                    "upstream_sha": self.target_sha,
+                    "merge_base_sha": self.target_sha,
+                    "path": path,
+                    "mode": mode,
+                    "type": entry_type,
+                    "object_id": object_id,
+                    "blob_oid": object_id,
+                    "range": {"start": 1, "end": line_count},
+                    "ownership": "fork-owned",
+                }
+            )
+        distributed = RUNNER.distribute_entries(entries)
+        buckets = []
+        for index, bucket_entries in enumerate(distributed):
+            bucket = {
+                "id": f"bucket-{index + 1}",
+                "range_count": len(bucket_entries),
+                "line_count": sum(
+                    entry["range"]["end"] - entry["range"]["start"] + 1
+                    for entry in bucket_entries
+                ),
+                "entries": bucket_entries,
+            }
+            bucket["assignment_sha256"] = RUNNER.bucket_assignment_hash(
+                bucket, manifest_sha256
+            )
+            buckets.append(bucket)
+        assignments = {
+            "schema_version": 1,
+            "generator_version": 1,
+            "manifest_sha256": manifest_sha256,
+            "inventory_sha256": "b" * 64,
+            "scope_sha256": "c" * 64,
+            "target_sha": self.target_sha,
+            "upstream_sha": self.target_sha,
+            "merge_base_sha": self.target_sha,
+            "bucket_count": 3,
+            "coverage": {
+                "inventory_ranges": len(entries),
+                "assigned_ranges": len(entries),
+                "assigned_lines": sum(len(contents.splitlines()) for contents in files.values()),
+                "included_paths": len(files),
+                "excluded_paths": 0,
+                "complete": True,
+            },
+            "buckets": buckets,
+        }
+        assignments["assignment_sha256"] = RUNNER.assignment_document_hash(assignments)
+        return assignments
+
+    def refresh_hashes(self, assignments):
+        for bucket in assignments["buckets"]:
+            bucket["assignment_sha256"] = RUNNER.bucket_assignment_hash(
+                bucket, assignments["manifest_sha256"]
+            )
+        assignments["assignment_sha256"] = RUNNER.assignment_document_hash(assignments)
+
+    def run_runner(self, run_dir, *, mode="success", timeout=10, sync=False, assignments=None):
+        assignments_path = self.assignments_path
+        if assignments is not None:
+            assignments_path = self.root / f"assignments-{run_dir.name}.json"
+            assignments_path.write_bytes(RUNNER.canonical_json(assignments))
+        environment = os.environ.copy()
+        environment["AUDIT_STUB_MODE"] = mode
+        environment["AUDIT_STUB_ORIGINAL_REPO"] = str(self.repo)
+        if sync:
+            environment["AUDIT_STUB_SYNC_DIR"] = str(self.root / f"sync-{run_dir.name}")
+        else:
+            environment.pop("AUDIT_STUB_SYNC_DIR", None)
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--repo",
+                str(self.repo),
+                "--assignments",
+                str(assignments_path),
+                "--run-dir",
+                str(run_dir),
+                "--codex-cli",
+                str(self.stub),
+                "--timeout-seconds",
+                str(timeout),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=environment,
+        )
+
+    def test_stub_cli_runs_exactly_three_buckets_in_parallel_on_target_snapshot(self):
+        run_dir = self.root / "parallel-run"
+        result = self.run_runner(run_dir, sync=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary = json.loads((run_dir / "run.json").read_text())
+        self.assertTrue(summary["complete"])
+        self.assertEqual(summary["bucket_count"], 3)
+        self.assertEqual([bucket["id"] for bucket in summary["buckets"]], [
+            "bucket-1",
+            "bucket-2",
+            "bucket-3",
+        ])
+        for bucket in self.assignments["buckets"]:
+            response = json.loads(
+                (run_dir / "results" / f"{bucket['id']}.json").read_text()
+            )
+            self.assertEqual(response["reviewed_ranges"], bucket["entries"])
+            self.assertEqual(response["bucket_assignment_sha256"], bucket["assignment_sha256"])
+        self.assertEqual(
+            sorted(path.name for path in (run_dir / "results").iterdir()),
+            ["bucket-1.json", "bucket-2.json", "bucket-3.json"],
+        )
+        self.assertEqual(list(run_dir.rglob(".*.tmp")), [])
+
+    def test_successful_stub_runs_are_byte_deterministic(self):
+        first = self.root / "deterministic-first"
+        second = self.root / "deterministic-second"
+        for run_dir in (first, second):
+            result = self.run_runner(run_dir)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        first_files = sorted(
+            path.relative_to(first) for path in first.rglob("*") if path.is_file()
+        )
+        second_files = sorted(
+            path.relative_to(second) for path in second.rglob("*") if path.is_file()
+        )
+        self.assertEqual(first_files, second_files)
+        for name in first_files:
+            self.assertEqual((first / name).read_bytes(), (second / name).read_bytes(), name)
+
+    def test_rejects_noncanonical_and_hash_manipulated_assignments(self):
+        noncanonical = self.root / "noncanonical.json"
+        noncanonical.write_text(json.dumps(self.assignments))
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--repo",
+                str(self.repo),
+                "--assignments",
+                str(noncanonical),
+                "--run-dir",
+                str(self.root / "noncanonical-run"),
+                "--codex-cli",
+                str(self.stub),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not canonical JSON", result.stderr)
+
+        manipulated = copy.deepcopy(self.assignments)
+        manipulated["assignment_sha256"] = "0" * 64
+        result = self.run_runner(self.root / "hash-run", assignments=manipulated)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("assignments document SHA-256 mismatch", result.stderr)
+
+    def test_rejects_bucket_count_and_entry_provenance_manipulation(self):
+        wrong_count = copy.deepcopy(self.assignments)
+        wrong_count["bucket_count"] = 2
+        self.refresh_hashes(wrong_count)
+        result = self.run_runner(self.root / "count-run", assignments=wrong_count)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exactly 3 buckets", result.stderr)
+
+        wrong_provenance = copy.deepcopy(self.assignments)
+        wrong_provenance["buckets"][0]["entries"][0]["target_sha"] = "0" * 40
+        self.refresh_hashes(wrong_provenance)
+        result = self.run_runner(
+            self.root / "provenance-run", assignments=wrong_provenance
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("target_sha provenance mismatch", result.stderr)
+
+        truncated = copy.deepcopy(self.assignments)
+        entry = truncated["buckets"][0]["entries"][0]
+        entry["range"]["end"] -= 1
+        truncated["buckets"][0]["line_count"] -= 1
+        truncated["coverage"]["assigned_lines"] -= 1
+        self.refresh_hashes(truncated)
+        result = self.run_runner(self.root / "truncated-run", assignments=truncated)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("expected 9", result.stderr)
+
+    def test_git_replace_ref_cannot_substitute_the_target(self):
+        (self.repo / "a.rs").write_text("replacement\n")
+        self.git("add", "a.rs")
+        self.git("commit", "-q", "-m", "replacement")
+        replacement_sha = self.git("rev-parse", "HEAD")
+        self.git("replace", self.target_sha, replacement_sha)
+        result = self.run_runner(self.root / "replace-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rejects_non_json_response_and_event_stream(self):
+        for mode, message in (
+            ("non-json", "invalid bucket-1 response JSON"),
+            ("bad-events", "invalid bucket-1 Codex event line"),
+        ):
+            with self.subTest(mode=mode):
+                result = self.run_runner(self.root / f"{mode}-run", mode=mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertFalse((self.root / f"{mode}-run" / "run.json").exists())
+
+    def test_rejects_response_provenance_and_incomplete_or_extra_coverage(self):
+        for mode, message in (
+            ("bad-provenance", "manifest_sha256 provenance mismatch"),
+            ("partial", "missing, additional, reordered, or changed reviewed ranges"),
+            ("extra", "missing, additional, reordered, or changed reviewed ranges"),
+        ):
+            with self.subTest(mode=mode):
+                result = self.run_runner(self.root / f"{mode}-run", mode=mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_cli_error_and_timeout_fail_closed(self):
+        failed = self.run_runner(self.root / "cli-error-run", mode="cli-error")
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("exited with status 7", failed.stderr)
+        self.assertFalse((self.root / "cli-error-run" / "run.json").exists())
+
+        timed_out = self.run_runner(
+            self.root / "timeout-run", mode="timeout", timeout=1
+        )
+        self.assertNotEqual(timed_out.returncode, 0)
+        self.assertIn("timed out after 1 seconds", timed_out.stderr)
+        self.assertFalse((self.root / "timeout-run" / "run.json").exists())
+
+    def test_existing_run_directory_and_racing_process_never_overwrite(self):
+        existing = self.root / "existing-run"
+        existing.mkdir()
+        sentinel = existing / "sentinel"
+        sentinel.write_bytes(b"keep me")
+        result = self.run_runner(existing)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("resume and import are unsupported", result.stderr)
+        self.assertEqual(sentinel.read_bytes(), b"keep me")
+
+        race = self.root / "race-run"
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _: self.run_runner(race), range(2)))
+        self.assertEqual(sum(result.returncode == 0 for result in results), 1)
+        self.assertEqual(sum(result.returncode != 0 for result in results), 1)
+        self.assertTrue((race / "run.json").is_file())
+
+    def test_atomic_publication_race_has_one_winner(self):
+        output = self.root / "atomic-output"
+        barrier = threading.Barrier(2)
+        original_link = os.link
+
+        def synchronized_link(source, destination, *args, **kwargs):
+            barrier.wait(timeout=5)
+            return original_link(source, destination, *args, **kwargs)
+
+        def publish(value):
+            try:
+                RUNNER.atomic_publish(output, value)
+                return "written"
+            except RUNNER.RunnerError as error:
+                return str(error)
+
+        with mock.patch.object(RUNNER.os, "link", synchronized_link):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(publish, (b"first", b"second")))
+        self.assertEqual(results.count("written"), 1)
+        self.assertEqual(sum("already exists" in result for result in results), 1)
+        self.assertIn(output.read_bytes(), (b"first", b"second"))
+        self.assertEqual(list(self.root.glob(".atomic-output.*.tmp")), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
