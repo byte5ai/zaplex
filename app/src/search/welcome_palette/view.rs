@@ -66,6 +66,7 @@ const MAX_PROJECTS_IN_ZERO_STATE: usize = 4;
 const MAX_ITEMS_IN_ZERO_STATE: usize = 5;
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Action {
     ResultClicked { action: CommandPaletteItemAction },
     ParentAction { action: WelcomeViewAction },

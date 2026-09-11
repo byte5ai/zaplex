@@ -235,9 +235,7 @@ impl TransferActivityHandle {
         if is_current {
             if let Some(recovery_id) = error.recovery_id() {
                 data.recovery_ids.insert(self.id, recovery_id);
-                data.retry_handles
-                    .entry(self.id)
-                    .or_insert_with(MouseStateHandle::default);
+                data.retry_handles.entry(self.id).or_default();
             }
             remove_requested_terminal(&mut data, self.id);
             prune_terminal_history(&mut data, MAX_TERMINAL_HISTORY);

@@ -1792,9 +1792,7 @@ impl AgentInputFooter {
                     .filter(|chip| chip.as_ref(app).should_render(app))
                     .map(|chip| ChildView::new(chip).finish())
             }
-            AgentToolbarItemKind::ModelSelector => {
-                None
-            }
+            AgentToolbarItemKind::ModelSelector => None,
             AgentToolbarItemKind::NLDToggle => Some(ChildView::new(&self.nld_button).finish()),
             AgentToolbarItemKind::VoiceInput => {
                 #[cfg(feature = "voice_input")]
@@ -2381,7 +2379,7 @@ fn render_ftu_callout(
 }
 
 #[derive(Debug, Clone)]
-pub enum AgentInputFooterAction {
+pub(crate) enum AgentInputFooterAction {
     #[cfg(feature = "voice_input")]
     ToggleVoiceInput,
     SelectFile,
@@ -2652,8 +2650,7 @@ impl TypedActionView for AgentInputFooter {
                 conversation_id,
                 model_id,
             } => {
-                SubscriptionSessionRegistry::as_ref(ctx)
-                    .select_model(conversation_id, model_id);
+                SubscriptionSessionRegistry::as_ref(ctx).select_model(conversation_id, model_id);
                 ctx.notify();
             }
             AgentInputFooterAction::ShowContextMenu { position } => {

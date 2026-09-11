@@ -17,8 +17,6 @@ pub mod state;
 pub mod token;
 
 pub use config::CompactionConfig;
-pub use overflow::{is_overflow, usable};
-
 /// Byte-level alignment with opencode `compaction.ts` top constants (lines 33-39, overflow.ts:6, util/token.ts:1).
 pub mod consts {
     pub const PRUNE_MINIMUM: usize = 20_000;

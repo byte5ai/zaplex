@@ -40,6 +40,7 @@ mod zero_state_block;
 
 use warpui::clipboard_utils::get_image_filepaths_from_paths;
 
+use std::cmp::Reverse;
 use std::ops::Deref as _;
 
 use crate::ai::blocklist::agent_view::fork_from_last_known_good_state_exchange_id;
@@ -3282,10 +3283,10 @@ impl TerminalView {
                     );
                     ctx.notify();
                 }
-                TerminalSettingsChangedEvent::AltScreenPadding { .. } => {
-                    if me.model.lock().is_alt_screen_active() {
-                        me.refresh_size(ctx);
-                    }
+                TerminalSettingsChangedEvent::AltScreenPadding { .. }
+                    if me.model.lock().is_alt_screen_active() =>
+                {
+                    me.refresh_size(ctx);
                 }
                 _ => {}
             },
@@ -11249,25 +11250,25 @@ impl TerminalView {
         match event {
             CLIAgentSessionsModelEvent::Started {
                 terminal_view_id, ..
-            } if *terminal_view_id == self.view_id => {
-                if FeatureFlag::TrimTrailingBlankLines.is_enabled() {
-                    self.model
-                        .lock()
-                        .block_list_mut()
-                        .active_block_mut()
-                        .set_trim_trailing_blank_rows(true);
-                }
+            } if *terminal_view_id == self.view_id
+                && FeatureFlag::TrimTrailingBlankLines.is_enabled() =>
+            {
+                self.model
+                    .lock()
+                    .block_list_mut()
+                    .active_block_mut()
+                    .set_trim_trailing_blank_rows(true);
             }
             CLIAgentSessionsModelEvent::Ended {
                 terminal_view_id, ..
-            } if *terminal_view_id == self.view_id => {
-                if FeatureFlag::TrimTrailingBlankLines.is_enabled() {
-                    self.model
-                        .lock()
-                        .block_list_mut()
-                        .active_block_mut()
-                        .set_trim_trailing_blank_rows(false);
-                }
+            } if *terminal_view_id == self.view_id
+                && FeatureFlag::TrimTrailingBlankLines.is_enabled() =>
+            {
+                self.model
+                    .lock()
+                    .block_list_mut()
+                    .active_block_mut()
+                    .set_trim_trailing_blank_rows(false);
             }
             _ => {}
         }
@@ -12523,7 +12524,7 @@ impl TerminalView {
             correct_command(
                 command,
                 &session_metadata,
-                DEFAULT_IGNORED_RULES_FOR_COMMAND_CORRECTIONS.into_iter(),
+                *DEFAULT_IGNORED_RULES_FOR_COMMAND_CORRECTIONS,
             )
         }
     }
@@ -20788,12 +20789,12 @@ impl TerminalView {
                 // determines if we need git status updates.
                 self.update_git_status_subscription(ctx);
             }
-            SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. } => {
+            SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. }
+                if !is_rich_input_chip_in_cli_toolbar(ctx) =>
+            {
                 // Force-close rich input when the Rich Input chip is removed so
                 // it doesn't linger open with no toolbar button to manage it.
-                if !is_rich_input_chip_in_cli_toolbar(ctx) {
-                    self.close_cli_agent_rich_input(CLIAgentRichInputCloseReason::Other, ctx);
-                }
+                self.close_cli_agent_rich_input(CLIAgentRichInputCloseReason::Other, ctx);
             }
             _ => {}
         }
@@ -25846,7 +25847,7 @@ where
         })
         .collect();
     // Higher score comes first; ties keep the original order (stable sort).
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|item| Reverse(item.0));
     if scored.is_empty() {
         OnekeyMenuRows::NoMatches
     } else {
