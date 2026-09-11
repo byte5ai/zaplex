@@ -34,7 +34,8 @@ use super::block::{
 };
 use super::blockgrid::BlockGrid;
 use super::grid::grid_handler::{
-    ContainsPoint, FragmentBoundary, GridHandler, Link, PossiblePath, TermMode,
+    normalize_hard_wrapped_http_url, ContainsPoint, FragmentBoundary, GridHandler, Link,
+    PossiblePath, TermMode,
 };
 use super::image_map::StoredImageMetadata;
 use super::index::Point;
@@ -2031,12 +2032,27 @@ impl TerminalModel {
         inverted_blocklist: bool,
         app: &AppContext,
     ) -> Option<String> {
-        if self.alt_screen_active {
-            self.alt_screen.selection_to_string(semantic_selection)
+        let (selected_text, selection_is_exact_url) = if self.alt_screen_active {
+            (
+                self.alt_screen.selection_to_string(semantic_selection),
+                self.alt_screen.selection_is_exact_url(semantic_selection),
+            )
         } else {
-            self.block_list
-                .selection_to_string(semantic_selection, inverted_blocklist, app)
-        }
+            (
+                self.block_list
+                    .selection_to_string(semantic_selection, inverted_blocklist, app),
+                self.block_list
+                    .selection_is_exact_url(semantic_selection, inverted_blocklist),
+            )
+        };
+
+        selected_text.map(|text| {
+            if selection_is_exact_url {
+                normalize_hard_wrapped_http_url(&text).unwrap_or(text)
+            } else {
+                text
+            }
+        })
     }
 
     /// Returns the underlying text string for the given range in the model.
@@ -2068,6 +2084,7 @@ impl TerminalModel {
         respect_obfuscated_secrets: RespectObfuscatedSecrets,
     ) -> String {
         let text = self.string_at_range(item, respect_obfuscated_secrets);
+        let text = normalize_hard_wrapped_http_url(&text).unwrap_or(text);
         text.trim_matches(['\u{200B}', ' ', '\n', '\r', '\t'])
             .to_owned()
     }

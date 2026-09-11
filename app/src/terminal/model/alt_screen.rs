@@ -276,6 +276,17 @@ impl AltScreen {
         })
     }
 
+    pub fn selection_is_exact_url(&self, semantic_selection: &SemanticSelection) -> bool {
+        let Some(ExpandedSelectionRange::Regular { start, end, .. }) =
+            self.selection_range(semantic_selection)
+        else {
+            return false;
+        };
+
+        self.url_at_point(&start)
+            .is_some_and(|url| url.range == (start..=end))
+    }
+
     pub fn possible_file_paths_at_point(&self, point: Point) -> impl Iterator<Item = PossiblePath> {
         self.grid_handler
             .possible_file_paths_at_point(point)

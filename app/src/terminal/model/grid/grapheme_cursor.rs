@@ -11,7 +11,7 @@ use crate::terminal::model::index::Point;
 use super::{grid_handler::GridHandler, CursorDirection, CursorState, Dimensions as _};
 
 /// The set of possible grapheme cursor wrapping behaviors.
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Wrap {
     /// Does not wrap at all (stops at the start and end of a row).
     None,
