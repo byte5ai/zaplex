@@ -2,7 +2,7 @@
 
 > **Status:** Konzept, festgelegt 2026-06-22 mit dem User. Umsetzung in eigener Session ab 2026-06-23 im Fork-Repo [iret77/zaplex](https://github.com/iret77/zaplex).
 >
-> **Erweitert 2026-06-23:** Multi-Provider. Neben **Claude** wird **Codex** als gleichwertiger Agent-Provider unterstützt — beide primär über **Subscription-Auth** (Claude Max bzw. ChatGPT-Subscription). **Subscription-Support ist Must-Have.** Zaps bestehende API-Key-/BYOP-Pfade bleiben verfügbar, wo schon vorhanden — sie werden nicht entfernt, sind aber nicht der Fokus. Die Account-/Usage-/Routing-Schicht ist provider-symmetrisch und subscription-zentriert.
+> **Erweitert 2026-06-23:** Multi-Agent. Neben **Claude Code** wird **Codex** als gleichwertiger Agent unterstützt — beide über ihre offiziellen Prozesse und erkannten Subscriptions (Claude Max bzw. ChatGPT-Subscription). Die frühere Annahme, zusätzlich einen API-Key-/Custom-Provider-Pfad zu erhalten, wurde mit [#152](https://github.com/byte5ai/zaplex/issues/152) verworfen; sie ist nur noch Teil der Entscheidungshistorie.
 >
 > **Was hier steht:** Mission, Designprinzipien, Architektur, UX, erste Schritte. Genug, dass eine kalt gestartete Claude-Code-Session loslegen kann, ohne die Diskussionshistorie zu kennen.
 >
@@ -31,7 +31,7 @@ Es ersetzt das standalone claudeplex-TUI und die Electron-App `iret77/claudeplex
 
 **Provider-Gleichwertigkeit:** Claude (Claude Max) und Codex (ChatGPT-Subscription) sind keine Sonderfälle voneinander, sondern zwei Instanzen derselben Abstraktion. Discovery, Budget-/Heat-Tracking, „launch on freest" und das Session-Inventar funktionieren für beide identisch. Wo die zugrundeliegende CLI eine Fähigkeit nicht bietet (siehe Capability-Matrix §3.4), degradiert das Feature ehrlich — wir täuschen keine Parität vor, die das CLI nicht hergibt.
 
-**Subscription zuerst (Must-Have):** Zaplex' Orchestrierung ist um **Subscription-Accounts** herum gebaut — genau deren rollende Rate-Fenster (5h + Woche) machen Heat-Tracking und „launch on freest" überhaupt sinnvoll. Subscription-Support ist nicht verhandelbar. API-Key-/BYOP-Nutzung wird pro Token abgerechnet und hat diese Fenster-Semantik nicht; sie ist deshalb nicht der Dreh- und Angelpunkt — aber Zap bringt sie bereits mit, und wir reißen sie **nicht** heraus. API-Key-Accounts dürfen koexistieren (z. B. im Account-Dock sichtbar, nur ohne Heat-Fenster); sie zu unterstützen kostet uns nichts, weil der Pfad schon da ist. Fokus von Discovery, Heat und Routing bleibt die Subscription-Seite.
+**Subscription-only (Must-Have):** Zaplex' Orchestrierung ist um **Subscription-Accounts** herum gebaut — genau deren rollende Rate-Fenster (5h + Woche) machen Heat-Tracking und „launch on freest" überhaupt sinnvoll. Der In-App-Agent läuft ausschließlich über die offiziellen Claude-Code- und Codex-Prozesse mit erkannter Subscription. API-Key- und Custom-Provider-Accounts sind kein paralleler Produktpfad.
 
 **Zielgruppe:** **anspruchsvolle Devs, die mit Claude Code und Codex auf Remote-Hosts entwickeln oder vibecoden** — **nicht** auf den User oder sein Team beschränkt (auch wenn wir das Tool zunächst für uns selbst bauen). Das heißt: kompromisslos auf Erlebnis und Politur statt auf vorzeitige Breite optimiert — jedes Feature muss den Workflow spürbar verbessern, sonst fliegt es raus. **Erfolgskriterium:** schon die bisherigen claudeplex-/Desktop-User wechseln **freiwillig und gern** (vermissen nichts, gewinnen viel dazu) — und darüber hinaus jede:r anspruchsvolle Remote-Dev mit Claude/Codex (siehe §12).
 
@@ -82,7 +82,7 @@ Quelle: [zerx-lab/zap](https://github.com/zerx-lab/zap), Stand 2026-06-21.
 - **Terminal-Engine** (GPU-rendered, Block-basiert, Historie)
 - **`warp_ssh_manager`** — SSH-Hosts, tmux-Integration, Sessions
 - **`warp_files`** — Terminal-File-Handling (Drag-Drop, Inline-Preview, File-URLs)
-- **AI-Provider-Routing** (BYOP) — Anthropic, OpenAI, Gemini, DeepSeek, Ollama nativ + beliebige OpenAI-kompatible Endpoints. *(Zaps API-Key-Pfad — bleibt bestehen und nutzbar; unser Fokus liegt auf der Subscription-Orchestrierung, siehe §1. Beides schließt sich nicht aus.)*
+- **Historisch in Zap vorhandenes API-Provider-Routing** — dieser geerbte Pfad gehört nicht zum Zaplex-Produkt und wurde mit #152 zugunsten der Claude-Code-/Codex-Subscription-Routen entfernt.
 - **CLI-Agent-Adapter** — **Claude Code, Codex, agy bereits als Blocks verdrahtet**, OSC9/777-Routing in Notification-Center. *(Wichtig: Beide von uns orchestrierten Provider sind als spawn-bare Blocks bereits vorhanden — wir bauen die Account-/Routing-Schicht darüber, nicht den Block-Unterbau.)*
 - **MCP-Client**
 - **`settings`/`warpui`/`warpui_core`** — UI-Framework (UI-Crates sind MIT-lizenziert, der Rest AGPL-3.0)
@@ -571,7 +571,7 @@ Für Kontext, damit die neue Session nicht in dieselbe Diskussion zurückfällt:
 - **Standalone claudeplex weiterführen:** **Nein.** Den claudeplex-Fork (`iret77/claudeplex`) führen wir **nicht** als Fork weiter — er bleibt **reine Referenzquelle** (Ideen-/Code-Vorbild), wird aber nicht aktiv gepflegt. Ob das **Team** die **Original-Repos** (claudeplex / claudeplex-desktop) fortführt, hängt davon ab, **wie überzeugend zaplex wird** — das ist die Entscheidung des Teams, nicht Teil dieses Konzepts. Das Cockpit-UI lebt zukünftig **allein** im Zap-Fork (zaplex).
 - **Warp (upstream) forken statt Zap:** Zap gewinnt wegen Local-first + bereits verdrahteter CLI-Agent-Integration (Claude **und** Codex) + Maintainer-Zugänglichkeit.
 - **Eigene Bun-Implementierung für Codex:** verworfen — keine getestete Vorlage vorhanden, Symmetrie-um-der-Symmetrie-willen wäre eine Krücke. Codex wird direkt nativ in Rust gebaut (§3.3).
-- **API-Key statt Subscription als Fokus:** Subscription-Support ist Must-Have und das Zentrum der Orchestrierung (§1). Zaps bestehender API-Key-/BYOP-Pfad (§3.1) wird aber **nicht** entfernt — er bleibt verfügbar, wo schon vorhanden; nur Heat/Routing sind subscription-zentriert.
+- **API-Key-/Custom-Provider neben Subscriptions:** Die ursprüngliche Koexistenz-Idee wurde verworfen. Seit #152 ist der In-App-Agent subscription-only; alte Provider-Einstellungen werden nur noch upgrade-sicher ignoriert und bereinigt.
 
 ### 10.5 Vorarbeit-Memory (lokal beim Maintainer)
 

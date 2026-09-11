@@ -81,7 +81,7 @@ pub fn render_breadcrumb(
         // Separator (added after the first segment)
         if i > 0 {
             let sep_icon =
-                ConstrainedBox::new(Icon::ChevronRight.to_warpui_icon(sub_color.into()).finish())
+                ConstrainedBox::new(Icon::ChevronRight.to_warpui_icon(sub_color).finish())
                     .with_width(12.0)
                     .with_height(12.0)
                     .finish();

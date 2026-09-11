@@ -56,11 +56,6 @@ pub struct PendingFile {
 /// that is a byte limit; this is a token-friendly limit for inlining into LLM prompts.
 const MAX_INLINE_TEXT_FILE_BYTES: usize = 256 * 1024;
 
-/// Hard cap on inlining a single binary PendingFile (PDF, audio, etc.) into the
-/// BYOP `Binary` ContentPart. Uses the same 10 MB limit as binary attachments to
-/// avoid bloating the HTTP body after base64 encoding.
-const MAX_INLINE_BINARY_FILE_BYTES: usize = 10 * 1024 * 1024;
-
 /// Determine if a PendingFile "looks like text" to decide whether to inline.
 /// Use both MIME type and filename as safeguards: `mime_guess` returns
 /// `application/octet-stream` for extensionless files like Dockerfile/Makefile,
@@ -190,28 +185,17 @@ fn is_text_like_by_filename(file_name: &str) -> bool {
     )
 }
 
-/// Read a PendingFile's content and convert it to `FileContext`, consumable by
-/// both BYOP and warp-own protocols.
+/// Read a pending text file into `FileContext` or retain a path-only placeholder for binaries.
 ///
-/// Three paths:
+/// Two paths:
 /// 1. **text-like match + UTF-8 ok + within text cap** → `StringContent`, inlined
 ///    into `<file>` XML.
-/// 2. **Multimodal MIME (image/pdf/audio) + within binary cap** → `BinaryContent(bytes)`,
-///    BYOP upgrades to `ContentPart::Binary` sent to the model.
-/// 3. **Other binary (.exe, .zip, oversized files)** → `BinaryContent(empty Vec)`.
-///    Avoids memory waste but still creates FileContext so AI can see path/MIME/size
-///    in prefix XML and call read_files or shell tools for further processing.
+/// 2. **binary, non-UTF-8, or oversized file** → `BinaryContent(empty Vec)`.
+///    This avoids loading unused binary payloads while retaining the path for file and shell tools.
 ///
 /// Key fix: `file_name` field holds the **full absolute path**, not basename.
 /// `FileContext.file_name` is already used as `file_path` in `convert.rs:750`,
-/// and user_context renders by `path`, so the full path here lets AI use
-/// read_files/shell tools to locate files directly.
-///
-/// Design tradeoff: on the warp-own path, `BinaryContent` is discarded by
-/// `Vec<api::FileContent>::from` in `convert.rs:759` (returns empty vec), so
-/// putting all binaries in context here doesn't pollute warp-own; only BYOP's
-/// `user_context::render_user_attachments` actually consumes BinaryContent
-/// and upgrades to `ContentPart::Binary`.
+/// so the full path here lets the agent use file or shell tools to locate files directly.
 fn read_pending_file_for_context(file: &PendingFile) -> Option<FileContext> {
     let full_path = file.file_path.to_string_lossy().into_owned();
     let metadata_size = std::fs::metadata(&file.file_path).ok().map(|m| m.len());
@@ -230,7 +214,7 @@ fn read_pending_file_for_context(file: &PendingFile) -> Option<FileContext> {
                                 None,
                             ));
                         }
-                        // text-like but content not UTF-8 → fall through to binary path
+                        // Text-like but non-UTF-8 content falls through to the path-only placeholder.
                     }
                     Err(e) => {
                         log::warn!(
@@ -244,52 +228,7 @@ fn read_pending_file_for_context(file: &PendingFile) -> Option<FileContext> {
         }
     }
 
-    // 2) Multimodal binary (image/pdf/audio): read bytes to send to model as BinaryContent
-    let mime = file.mime_type.to_ascii_lowercase();
-    let is_multimodal_mime =
-        mime.starts_with("image/") || mime == "application/pdf" || mime.starts_with("audio/");
-    if is_multimodal_mime {
-        if let Some(size) = metadata_size {
-            if size as usize <= MAX_INLINE_BINARY_FILE_BYTES {
-                match std::fs::read(&file.file_path) {
-                    Ok(bytes) => {
-                        return Some(FileContext::new(
-                            full_path,
-                            AnyFileContent::BinaryContent(bytes),
-                            None,
-                            None,
-                        ));
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to read attached file {} for inline context: {e}",
-                            file.file_path.display()
-                        );
-                        return None;
-                    }
-                }
-            } else {
-                log::warn!(
-                    "Attached file {} ({} bytes) exceeds {} byte multimodal cap; \
-                     sending placeholder only (path/mime/size) — AI can use read_files instead",
-                    file.file_path.display(),
-                    size,
-                    MAX_INLINE_BINARY_FILE_BYTES
-                );
-                // Oversized multimodal file: use empty BinaryContent, but placeholder still carries size (from metadata)
-                return Some(FileContext::new(
-                    full_path,
-                    AnyFileContent::BinaryContent(Vec::new()),
-                    None,
-                    None,
-                ));
-            }
-        }
-    }
-
-    // 3) Other binary (.exe, .zip, unknown type, metadata unavailable): empty BinaryContent.
-    // Don't read bytes to avoid 100 MB exe hogging memory; AI can see path/MIME/size in
-    // prefix XML and decide whether to call read_files or shell tools for further processing.
+    // Keep only a path placeholder for binary, non-UTF-8, oversized, or unavailable content.
     Some(FileContext::new(
         full_path,
         AnyFileContent::BinaryContent(Vec::new()),
@@ -772,11 +711,8 @@ impl BlocklistAIContextModel {
                 }
             }
 
-            // Zaplex P0/P1: sync-read PendingFile and push as AIAgentContext::File to context.
-            // - text-like (UTF-8 parse success) → StringContent → rendered as <file> XML block via
-            //   user_context.rs::render_file (BYOP) / api::input_context::File (warp-own).
-            // - binary (PDF, audio, etc.) → BinaryContent → upgrade path via BYOP user_context Binary
-            //   ContentPart (warp-own discards in convert.rs:759, no side effects).
+            // Read text attachments inline and preserve other files as path-only context so the
+            // selected subscription agent can inspect them with its file or shell tools.
             for attachment in &self.pending_attachments {
                 if let PendingAttachment::File(file) = attachment {
                     if let Some(file_context) = read_pending_file_for_context(file) {

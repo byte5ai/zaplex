@@ -1,7 +1,7 @@
 //! Notification center (mailbox + toast).
 //!
 //! Rebuilt after accidental deletion by 002ce467 cloud-removal; preserves only local paths unrelated to cloud:
-//! - Software native BYOP agent (Oz) completion/error notifications
+//! - Software-native subscription-agent completion/error notifications
 //! - Third-party CLI agent (Claude Code / Codex / DeepSeek, etc.) status notifications
 //!
 //! Module layout:

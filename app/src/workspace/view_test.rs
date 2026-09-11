@@ -208,11 +208,6 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(AgentConversationsModel::new);
-    // Must precede `LLMPreferences::new` (which subscribes to it) and
-    // `workspace::init` (which materializes command-palette binding descriptions
-    // that read it). Without it the whole workspace-view test class — and the
-    // boot/open smoke gate below — panic headless.
-    app.add_singleton_model(crate::ai::agent_providers::AgentProviderSecrets::new);
     app.add_singleton_model(LLMPreferences::new);
     app.add_singleton_model(|_| SettingsPaneManager::new());
     app.add_singleton_model(|_| AIFactManager::new());
@@ -419,8 +414,8 @@ fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
 /// registered binding (mac and linux/windows) parses and that a window opens.
 ///
 /// No longer `#[ignore]`d (#104): `initialize_app` now registers the full
-/// singleton graph the construction path reads (`AgentProviderSecrets`,
-/// `LanguageSettings`, `CockpitSettings`, `NetworkSettings`, `CloudSyncSettings`,
+/// singleton graph the construction path reads (`LanguageSettings`, `CockpitSettings`,
+/// `NetworkSettings`, `CloudSyncSettings`,
 /// the cockpit + code/file singletons, …), so building a workspace headless no
 /// longer panics. This is now a real boot/open smoke gate: it runs the binding
 /// registration path *and* constructs a window, catching both the keymap-crash

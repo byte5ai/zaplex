@@ -1,19 +1,18 @@
 use super::{
     team::{MembershipRole, Team},
     workspace::{
-        AdminEnablementSetting, CustomerType, EnterpriseSecretRegex, HostEnablementSetting,
+        AdminEnablementSetting, CustomerType, EnterpriseSecretRegex,
         UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
     },
 };
 use crate::{
-    ai::llms::LLMModelHost,
     auth::{UserUid, TEST_USER_UID},
     channel::ChannelState,
     cloud_object::{
         model::persistence::ObjectStoreModel, ObjectType, Owner, Space, StoredObjectEventEntrypoint,
     },
     server::ids::ServerId,
-    settings::{AISettings, PrivacySettings},
+    settings::PrivacySettings,
     workspaces::workspace::{AiAutonomySettings, SandboxedAgentSettings},
 };
 use regex::Regex;
@@ -342,59 +341,6 @@ impl UserWorkspaces {
                         .warp_ai_policy
                         .is_some_and(|policy| policy.is_voice_enabled)
                 })
-    }
-
-    /// Whether BYO API key is enabled for the current user, based on the active policies.
-    /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
-    /// For solo users (no workspace), this is controlled by the `SoloUserByok` feature flag.
-    pub fn is_byo_api_key_enabled(&self) -> bool {
-        true
-    }
-
-    pub fn aws_bedrock_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
-        self.current_workspace().and_then(|workspace| {
-            workspace
-                .settings
-                .llm_settings
-                .host_configs
-                .get(&LLMModelHost::AwsBedrock)
-        })
-    }
-
-    /// Did the admin enable AWS Bedrock for the current workspace?
-    pub fn is_aws_bedrock_available_from_workspace(&self) -> bool {
-        self.current_workspace().is_some_and(|workspace| {
-            workspace.settings.llm_settings.enabled
-                && self
-                    .aws_bedrock_host_settings()
-                    .is_some_and(|settings| settings.enabled)
-        })
-    }
-    pub fn aws_bedrock_host_enablement_setting(&self) -> HostEnablementSetting {
-        self.aws_bedrock_host_settings()
-            .map(|settings| settings.enablement_setting.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn is_aws_bedrock_credentials_toggleable(&self) -> bool {
-        matches!(
-            self.aws_bedrock_host_enablement_setting(),
-            HostEnablementSetting::RespectUserSetting
-        )
-    }
-
-    pub fn is_aws_bedrock_credentials_enabled(&self, app: &AppContext) -> bool {
-        // i.e. did the admin go and toggle on aws bedrock in the admin panel?
-        if !self.is_aws_bedrock_available_from_workspace() {
-            return false;
-        }
-
-        match self.aws_bedrock_host_enablement_setting() {
-            HostEnablementSetting::Enforce => true,
-            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
-                .aws_bedrock_credentials_enabled
-                .value(),
-        }
     }
 
     /// Returns the AI autonomy settings that are enforced by the workspace for all its members.

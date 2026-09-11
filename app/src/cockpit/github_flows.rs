@@ -7,9 +7,9 @@
 //! 1. pick the **freest** agent instance to run the background analysis on, so
 //!    it never steals capacity from a foreground session ([`pick_analysis_instance`],
 //!    reusing the C4 routing engine);
-//! 2. parse the instance's **fault-tolerant fenced JSON** into a typed verdict
-//!    (reusing the active-AI [`strip_code_fence`] parser — models fence and
-//!    over-explain, so strict parsing would drop good output); and
+//! 2. parse the instance's **fault-tolerant fenced JSON** into a typed verdict —
+//!    models fence and over-explain, so strict parsing would drop good output;
+//!    and
 //! 3. turn the verdict into an exact, **shell-free `gh` invocation** — every
 //!    interpolated value remains one argument or stdin payload, so hostile
 //!    titles and bodies cannot become shell syntax.
@@ -18,7 +18,6 @@
 //! builds also expose the bounded executor used by the workspace entry points;
 //! UI presentation stays outside this module.
 
-use crate::ai::agent_providers::active_ai::parsing::strip_code_fence;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use zaplex_cockpit::{AccountStatus, AccountUsage, CockpitSnapshot, Provider, UsageProvenance};
@@ -29,6 +28,21 @@ const MAX_GITHUB_OUTPUT_BYTES: usize = 1024 * 1024;
 const GITHUB_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 const ANALYSIS_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+fn strip_code_fence(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    if let Some(rest) = trimmed.strip_prefix("```") {
+        let after_language = match rest.find('\n') {
+            Some(index) => &rest[index + 1..],
+            None => rest,
+        };
+        if let Some(inner) = after_language.strip_suffix("```") {
+            return inner.trim();
+        }
+        return after_language.trim_end_matches('`').trim();
+    }
+    trimmed
+}
 
 /// Frozen repository identity used for the whole lifetime of a GitHub flow.
 /// `worktree` is the exact checkout the agent and `gh` operate in; `slug` is

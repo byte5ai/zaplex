@@ -368,18 +368,16 @@ impl Input {
 
         // Handle the slash command action based on its kind
         match command.name {
-            add_mcp if command.name == commands::ADD_MCP.name => {
+            name if name == commands::ADD_MCP.name => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenAddMCPPane);
             }
-            add_prompt if command.name == commands::ADD_PROMPT.name => {
+            name if name == commands::ADD_PROMPT.name => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenAddPromptPane);
             }
-            add_rule if command.name == commands::ADD_RULE.name => {
+            name if name == commands::ADD_RULE.name => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenAddRulePane);
             }
-            agent_or_new
-                if command.name == commands::NEW.name || command.name == commands::AGENT.name =>
-            {
+            name if name == commands::NEW.name || name == commands::AGENT.name => {
                 if !self
                     .ai_context_model
                     .as_ref(ctx)
@@ -432,17 +430,17 @@ impl Input {
                     origin: AgentViewEntryOrigin::SlashCommand { trigger },
                 });
             }
-            create_docker_sandbox if command.name == commands::CREATE_DOCKER_SANDBOX.name => {
+            name if name == commands::CREATE_DOCKER_SANDBOX.name => {
                 ctx.emit(Event::CreateDockerSandbox);
             }
-            conversations if command.name == commands::CONVERSATIONS.name => {
+            name if name == commands::CONVERSATIONS.name => {
                 if FeatureFlag::AgentView.is_enabled() {
                     self.open_conversation_menu(ctx);
                 } else {
                     ctx.dispatch_typed_action(&TerminalAction::OpenConversationsPalette);
                 }
             }
-            rename_tab if command.name == commands::RENAME_TAB.name => {
+            name if name == commands::RENAME_TAB.name => {
                 let Some(name) = argument
                     .map(|name| name.trim())
                     .filter(|name| !name.is_empty())
@@ -456,7 +454,7 @@ impl Input {
 
                 ctx.dispatch_typed_action(&WorkspaceAction::SetActiveTabName(name.to_owned()));
             }
-            create_project if command.name == commands::CREATE_NEW_PROJECT.name => {
+            name if name == commands::CREATE_NEW_PROJECT.name => {
                 if argument.is_none_or(|args| args.is_empty()) {
                     show_error_toast(
                         "Please describe the project you want to create after /create-new-project"
@@ -469,7 +467,7 @@ impl Input {
                 let args = argument.expect("args are Some()");
                 self.initiate_create_new_project(args.to_owned(), ctx);
             }
-            edit if command.name == commands::EDIT.name => {
+            name if name == commands::EDIT.name => {
                 #[cfg(feature = "local_fs")]
                 match argument {
                     Some(args) if !args.is_empty() => {
@@ -553,7 +551,7 @@ impl Input {
                     return true;
                 }
             }
-            export_to_clipboard if command.name == commands::EXPORT_TO_CLIPBOARD.name => {
+            name if name == commands::EXPORT_TO_CLIPBOARD.name => {
                 let history = BlocklistAIHistoryModel::handle(ctx);
                 let Some(conversation) = history
                     .as_ref(ctx)
@@ -578,7 +576,7 @@ impl Input {
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }
-            export_to_file if command.name == commands::EXPORT_TO_FILE.name => {
+            name if name == commands::EXPORT_TO_FILE.name => {
                 #[cfg(not(target_family = "wasm"))]
                 {
                     self.export_conversation_to_file(
@@ -595,47 +593,47 @@ impl Input {
                     return true;
                 }
             }
-            changelog if command.name == commands::CHANGELOG.name => {
+            name if name == commands::CHANGELOG.name => {
                 if !FeatureFlag::Changelog.is_enabled() {
                     return false;
                 }
                 ctx.dispatch_typed_action(&WorkspaceAction::ViewLatestChangelog);
             }
-            open_code_review if command.name == commands::OPEN_CODE_REVIEW.name => {
+            name if name == commands::OPEN_CODE_REVIEW.name => {
                 ctx.dispatch_typed_action(&TerminalAction::ToggleCodeReviewPane {
                     entrypoint: CodeReviewPaneEntrypoint::SlashCommand,
                 });
             }
-            open_mcp_servers if command.name == commands::OPEN_MCP_SERVERS.name => {
+            name if name == commands::OPEN_MCP_SERVERS.name => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenViewMCPPane);
             }
-            open_settings_file if command.name == commands::OPEN_SETTINGS_FILE.name => {
+            name if name == commands::OPEN_SETTINGS_FILE.name => {
                 if !FeatureFlag::SettingsFile.is_enabled() || !cfg!(feature = "local_fs") {
                     return false;
                 }
                 ctx.dispatch_typed_action(&WorkspaceAction::OpenSettingsFile);
             }
-            open_project_rules if command.name == commands::OPEN_PROJECT_RULES.name => {
+            name if name == commands::OPEN_PROJECT_RULES.name => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenProjectRulesPane);
             }
-            open_rules if command.name == commands::OPEN_RULES.name => {
+            name if name == commands::OPEN_RULES.name => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenRulesPane);
             }
-            edit_skill if command.name == commands::EDIT_SKILL.name => {
+            name if name == commands::EDIT_SKILL.name => {
                 if !FeatureFlag::ListSkills.is_enabled() {
                     return false;
                 }
                 // Open the skill selector menu - user will select a skill from the inline menu
                 self.open_skill_selector(ctx);
             }
-            invoke_skill if command.name == commands::INVOKE_SKILL.name => {
+            name if name == commands::INVOKE_SKILL.name => {
                 if !FeatureFlag::ListSkills.is_enabled() {
                     return false;
                 }
                 // Open the skill selector menu for invocation - skill command will be inserted into buffer
                 self.open_invoke_skill_selector(ctx);
             }
-            models if command.name == commands::MODEL.name => {
+            name if name == commands::MODEL.name => {
                 if self.is_subscription_agent_view_active(ctx) {
                     show_error_toast(
                         "Model selection for this conversation is controlled by the selected agent"
@@ -646,24 +644,24 @@ impl Input {
                     self.open_model_selector(ctx);
                 }
             }
-            profiles if command.name == commands::PROFILE.name => {
+            name if name == commands::PROFILE.name => {
                 if !FeatureFlag::InlineProfileSelector.is_enabled() {
                     return false;
                 }
 
                 self.open_profile_selector(ctx);
             }
-            prompts if command.name == commands::PROMPTS.name => {
+            name if name == commands::PROMPTS.name => {
                 if FeatureFlag::AgentView.is_enabled() {
                     self.open_prompts_menu(ctx);
                 } else {
                     return false;
                 }
             }
-            rewind if command.name == commands::REWIND.name => {
+            name if name == commands::REWIND.name => {
                 self.open_rewind_menu(ctx);
             }
-            pr_comments if command.name == commands::PR_COMMENTS.name => {
+            name if name == commands::PR_COMMENTS.name => {
                 if !FeatureFlag::PRCommentsSlashCommand.is_enabled() {
                     return false;
                 }
@@ -684,7 +682,7 @@ impl Input {
                     )
                 });
             }
-            fork if command.name == commands::FORK.name => {
+            name if name == commands::FORK.name => {
                 let Some(conversation_id) = self
                     .ai_context_model
                     .as_ref(ctx)
@@ -709,11 +707,11 @@ impl Input {
                     destination,
                 });
             }
-            fork_from if command.name == commands::FORK_FROM.name => {
+            name if name == commands::FORK_FROM.name => {
                 self.open_user_query_menu(UserQueryMenuAction::ForkFrom, ctx);
                 return true;
             }
-            fork_and_compact if command.name == commands::FORK_AND_COMPACT.name => {
+            name if name == commands::FORK_AND_COMPACT.name => {
                 let Some(conversation_id) = self
                     .ai_context_model
                     .as_ref(ctx)
@@ -741,7 +739,7 @@ impl Input {
                     destination,
                 });
             }
-            compact_and if command.name == commands::COMPACT_AND.name => {
+            name if name == commands::COMPACT_AND.name => {
                 if self
                     .ai_context_model
                     .as_ref(ctx)
@@ -763,7 +761,7 @@ impl Input {
                     initial_prompt,
                 });
             }
-            queue if command.name == commands::QUEUE.name => {
+            name if name == commands::QUEUE.name => {
                 let Some(conversation_id) = self
                     .ai_context_model
                     .as_ref(ctx)
@@ -792,22 +790,17 @@ impl Input {
                     self.submit_queued_prompt(prompt, ctx);
                 }
             }
-            open_repo if command.name == commands::OPEN_REPO.name => {
+            name if name == commands::OPEN_REPO.name => {
                 if !FeatureFlag::InlineRepoMenu.is_enabled() {
                     return false;
                 }
                 self.open_repos_menu(ctx);
             }
-            compact if command.name == commands::COMPACT.name => {
-                // Zaplex: `/compact` and `/compact-and` share the local session compression path --
-                // dispatch `WorkspaceAction::SummarizeAIConversation`, initial_prompt: None
-                // means "compress but don't send follow-up prompt", only summarize silently into conversation.
-                // Custom instructions (`/compact <instruction>`) go into the prompt field; in BYOP build_chat_request
-                // path they get concatenated after SUMMARY_TEMPLATE as plugin_context.
-                //
-                // In non-BYOP paths, `SummarizeConversation { prompt }` still goes through server protobuf
-                // (`api::request::input::SummarizeConversation`), server-side summarization --
-                // the previously prefix-injected semantics are completely replaced by SummarizeConversation.
+            name if name == commands::COMPACT.name => {
+                // `/compact` and `/compact-and` dispatch
+                // `WorkspaceAction::SummarizeAIConversation`. An absent initial prompt means
+                // "summarize without sending a follow-up prompt"; custom instructions are carried
+                // by `SummarizeConversation { prompt }` to the active agent transport.
                 if self
                     .ai_context_model
                     .as_ref(ctx)
@@ -825,9 +818,7 @@ impl Input {
                     initial_prompt: None,
                 });
             }
-            command_that_just_sends_ai_request_with_prefix
-                if command.name == commands::INIT.name || command.name == commands::PLAN.name =>
-            {
+            name if name == commands::INIT.name || name == commands::PLAN.name => {
                 // These slash commands just send AI requests with the slash command text as a
                 // prefix, and special handling is done downstream as an implementation detail
                 // of handling user queries with specific slash command prefixes.

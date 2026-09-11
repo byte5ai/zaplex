@@ -188,7 +188,6 @@ pub fn init(app: &mut AppContext) {
 
 #[derive(Default)]
 struct StateHandles {
-    invalid_api_key_button_handle: MouseStateHandle,
     debug_copy_button_handle: MouseStateHandle,
     submit_issue_button_handle: MouseStateHandle,
     query_selection_handle: SelectionHandle,
@@ -434,7 +433,7 @@ impl CLISubagentView {
                 c.get_task(&task_id)
                     .and_then(|t| t.last_exchange().map(|e| e.id))
                     .or_else(|| {
-                        // Zaplex BYOP fallback: when agent initiates LRC,
+                        // When a local subscription agent initiates an LRC,
                         // `cli_controller::FinishedAction` goes through
                         // `create_silent_cli_subagent_task_for_conversation` to create
                         // a real subtask but hasn't yet appended exchange (no new query triggered
@@ -446,7 +445,7 @@ impl CLISubagentView {
                         let fallback = c.root_task_exchanges().last().map(|e| e.id);
                         if fallback.is_some() {
                             log::warn!(
-                                "[byop] CLISubagentView::new task={task_id:?} no exchange yet, \
+                                "[subscription-agent] CLISubagentView::new task={task_id:?} no exchange yet, \
                                  fallback to root_task last_exchange; \
                                  waiting for AppendedExchange to trigger replacement."
                             );
@@ -656,25 +655,25 @@ impl CLISubagentView {
             }
             AIAgentActionType::ReadFiles(_)
             | AIAgentActionType::Grep { .. }
-            | AIAgentActionType::FileGlobV2 { .. } => {
-                if should_show_read_files_speedbump(ctx) {
-                    AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                        let _ = settings
-                            .should_show_agent_mode_autoread_files_speedbump
-                            .set_value(false, ctx);
-                    });
+            | AIAgentActionType::FileGlobV2 { .. }
+                if should_show_read_files_speedbump(ctx) =>
+            {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let _ = settings
+                        .should_show_agent_mode_autoread_files_speedbump
+                        .set_value(false, ctx);
+                });
 
-                    BlocklistAIPermissions::handle(ctx).update(ctx, |permissions, ctx| {
-                        if let Err(e) = permissions.set_always_allow_read_files(
-                            self.always_allow_read_files_checked,
-                            self.terminal_view_id,
-                            ctx,
-                        ) {
-                            report_error!(e);
-                        }
-                    });
-                    ctx.notify();
-                }
+                BlocklistAIPermissions::handle(ctx).update(ctx, |permissions, ctx| {
+                    if let Err(e) = permissions.set_always_allow_read_files(
+                        self.always_allow_read_files_checked,
+                        self.terminal_view_id,
+                        ctx,
+                    ) {
+                        report_error!(e);
+                    }
+                });
+                ctx.notify();
             }
             _ => {}
         }
@@ -1185,31 +1184,27 @@ impl View for CLISubagentView {
                             }
                         }
                     }
-                    AIAgentOutputMessageType::WebSearch(WebSearchStatus::Searching { query }) => {
-                        if !should_hide_responses {
-                            result.add_child(
-                                render_scrollable_container(
-                                    ScrollableContainerProps {
-                                        scroll_state: self
-                                            .state_handles
-                                            .action_scroll_state
-                                            .clone(),
-                                        child: render_web_search(query.clone(), app),
-                                        background_color: internal_colors::neutral_2(
-                                            appearance.theme(),
-                                        ),
-                                        border: Some(
-                                            Border::all(1.).with_border_fill(
-                                                internal_colors::neutral_3(theme),
-                                            ),
-                                        ),
-                                    },
-                                    app,
-                                )
-                                .with_margin_bottom(8.)
-                                .finish(),
-                            );
-                        }
+                    AIAgentOutputMessageType::WebSearch(WebSearchStatus::Searching { query })
+                        if !should_hide_responses =>
+                    {
+                        result.add_child(
+                            render_scrollable_container(
+                                ScrollableContainerProps {
+                                    scroll_state: self.state_handles.action_scroll_state.clone(),
+                                    child: render_web_search(query.clone(), app),
+                                    background_color: internal_colors::neutral_2(
+                                        appearance.theme(),
+                                    ),
+                                    border: Some(
+                                        Border::all(1.)
+                                            .with_border_fill(internal_colors::neutral_3(theme)),
+                                    ),
+                                },
+                                app,
+                            )
+                            .with_margin_bottom(8.)
+                            .finish(),
+                        );
                     }
                     _ => (),
                 }
@@ -1223,10 +1218,6 @@ impl View for CLISubagentView {
                 FailedOutputProps {
                     error,
                     is_ai_input_enabled: false,
-                    invalid_api_key_button_handle: &self
-                        .state_handles
-                        .invalid_api_key_button_handle,
-                    aws_bedrock_credentials_error_view: None,
                     icon_right_margin: AVATAR_RIGHT_MARGIN,
                 },
                 app,

@@ -1,8 +1,8 @@
 //! Zaplex (Phase 3c subtask A1): Localized as a permanent "unlimited" stub.
 //!
 //! Historical responsibility: warp.dev server-side RPC-driven "monthly AI request quota" model.
-//! Zaplex uses BYOP (Bring Your Own Provider), where users pay directly to LLM providers
-//! and should never be constrained by cloud concepts like "remaining request count / upgrade CTA / buy extra credits".
+//! Zaplex uses the user's Claude Code or Codex subscription through the official CLI processes
+//! and should not be constrained by Zaplex cloud concepts such as request counts or credit purchases.
 //!
 //! Write constraints:
 //! * 30+ UI subscription points (`subscribe_to_model(&AIRequestUsageModel::handle(ctx), ...)`)
@@ -167,14 +167,14 @@ impl AIRequestUsageModel {
     /// Zaplex: No cloud backend, no-op.
     pub fn refresh_request_usage_async(&mut self, _ctx: &mut ModelContext<Self>) {}
 
-    /// Zaplex (localized): Always returns true; BYOP local runs are not constrained by cloud limits.
+    /// Zaplex: Always returns true; subscription-agent runs are not constrained by Zaplex cloud limits.
     pub fn has_requests_remaining(&self) -> bool {
         true
     }
 
     /// Zaplex (localized): Always returns true.
-    /// AI availability depends only on whether the user has configured an API key (managed independently by `ApiKeyManager`),
-    /// not on cloud-side metering components like `request_limit_info`.
+    /// AI availability depends on the selected subscription agent, not on cloud-side metering
+    /// components such as `request_limit_info`.
     pub fn has_any_ai_remaining(&self, _ctx: &AppContext) -> bool {
         true
     }

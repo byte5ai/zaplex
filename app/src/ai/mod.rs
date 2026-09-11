@@ -5,7 +5,6 @@
 pub(crate) mod agent;
 pub(crate) mod agent_conversations_model;
 pub(crate) mod agent_events;
-pub(crate) mod agent_providers;
 pub(crate) mod agent_tips;
 pub(crate) mod ai_document_view;
 pub mod ambient_agents;
@@ -14,17 +13,15 @@ pub(crate) mod artifact_download;
 pub mod artifacts;
 pub(crate) mod attachment_utils;
 #[cfg(not(target_family = "wasm"))]
-pub mod aws_credentials;
 pub(crate) mod block_context;
 pub(crate) mod blocklist;
-pub(crate) mod byop_compaction;
-pub(crate) mod byop_readiness;
 pub mod control_code_parser;
 pub(crate) mod conversation_navigation;
 pub(crate) mod conversation_status_ui;
 pub(crate) mod conversation_utils;
 pub(crate) mod document;
 pub(crate) mod harness_display;
+pub(crate) mod legacy_secret_cleanup;
 pub(crate) mod llms;
 pub mod onboarding;
 pub(crate) mod predict;

@@ -313,7 +313,7 @@ async fn discover_routed_target(
                     && preferences
                         .account_id
                         .as_ref()
-                        .map_or(true, |selected| selected == account)
+                        .is_none_or(|selected| selected == account)
                     && is_authentication_failure(error)
             });
         if let Some((_, _, error)) = selected_authentication_error {

@@ -123,45 +123,6 @@ impl View for ExecutionProfileView {
             .map(|info| info.display_name.clone())
             .unwrap_or_else(|| crate::t!("settings-exec-profile-auto"));
 
-        // The title model falls back to the base model's display name; matching base indicates "not configured separately".
-        let title_model = profile
-            .title_model
-            .as_ref()
-            .and_then(|id| llm_preferences.get_llm_info(id))
-            .map(|info| info.display_name.clone())
-            .unwrap_or_else(|| {
-                llm_preferences
-                    .get_default_base_model()
-                    .display_name
-                    .clone()
-            });
-
-        // The active AI model (used for prompt suggestions / NLD / relevant files), falls back to base.
-        let active_ai_model = profile
-            .active_ai_model
-            .as_ref()
-            .and_then(|id| llm_preferences.get_llm_info(id))
-            .map(|info| info.display_name.clone())
-            .unwrap_or_else(|| {
-                llm_preferences
-                    .get_default_base_model()
-                    .display_name
-                    .clone()
-            });
-
-        // The Next Command model (greyed-out completions / zero-state suggestions), falls back to base.
-        let next_command_model = profile
-            .next_command_model
-            .as_ref()
-            .and_then(|id| llm_preferences.get_llm_info(id))
-            .map(|info| info.display_name.clone())
-            .unwrap_or_else(|| {
-                llm_preferences
-                    .get_default_base_model()
-                    .display_name
-                    .clone()
-            });
-
         let computer_use_model = profile
             .computer_use_model
             .as_ref()
@@ -222,33 +183,6 @@ impl View for ExecutionProfileView {
                             Icon::Terminal,
                             crate::t!("settings-exec-profile-full-terminal-use"),
                             cli_agent_model,
-                            appearance,
-                            is_any_ai_enabled,
-                        ),
-                    ));
-                    model_flex.add_child(with_standard_vertical_margin(
-                        render_model_line_with_icon(
-                            Icon::Pencil,
-                            crate::t!("settings-exec-profile-title-model"),
-                            title_model,
-                            appearance,
-                            is_any_ai_enabled,
-                        ),
-                    ));
-                    model_flex.add_child(with_standard_vertical_margin(
-                        render_model_line_with_icon(
-                            Icon::Lightbulb,
-                            crate::t!("settings-exec-profile-active-ai-model"),
-                            active_ai_model,
-                            appearance,
-                            is_any_ai_enabled,
-                        ),
-                    ));
-                    model_flex.add_child(with_standard_vertical_margin(
-                        render_model_line_with_icon(
-                            Icon::Lightning,
-                            crate::t!("settings-exec-profile-next-command-model"),
-                            next_command_model,
                             appearance,
                             is_any_ai_enabled,
                         ),

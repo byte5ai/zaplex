@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use super::{
-    ClassicSshConnectAttempts, SshConnectRegistry, resolved_ssh_secret_owner,
-    ssh_connect_terminal_event_finishes_attempt,
+    resolved_ssh_secret_owner, ssh_connect_terminal_event_finishes_attempt,
+    ClassicSshConnectAttempts, SshConnectRegistry,
 };
 use warp_ssh_manager::{
     AuthType, ResolvedSshConnection, SecretKind, SessionResilience, SshServerInfo,
@@ -114,9 +114,7 @@ fn closing_an_old_classic_tab_cannot_release_a_new_retry() {
         .unwrap();
     classic_attempts.bind(EntityId::new(), retry.clone());
 
-    assert!(classic_attempts
-        .take_for_tab(old_pane_group_id)
-        .is_none());
+    assert!(classic_attempts.take_for_tab(old_pane_group_id).is_none());
     assert!(registry.contains(&retry));
 }
 

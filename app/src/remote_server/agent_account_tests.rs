@@ -215,6 +215,77 @@ fn default_account_clears_all_client_supplied_provider_paths() {
 }
 
 #[test]
+fn selected_subscription_accounts_scrub_provider_auth_environment() {
+    let claude_account_id = "claude-default";
+    let codex_account_id = "codex-default";
+    let routes = HashMap::from([
+        (
+            AccountRouteKey {
+                provider: "claude".to_string(),
+                account_id: claude_account_id.to_string(),
+            },
+            AccountRouteTarget {
+                provider: "claude".to_string(),
+                config_dir: None,
+            },
+        ),
+        (
+            AccountRouteKey {
+                provider: "codex".to_string(),
+                account_id: codex_account_id.to_string(),
+            },
+            AccountRouteTarget {
+                provider: "codex".to_string(),
+                config_dir: None,
+            },
+        ),
+    ]);
+    let cache = cache(routes);
+    let mut claude_env = HashMap::from([("TERM".to_string(), "xterm-256color".to_string())]);
+    for env_name in CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES {
+        claude_env.insert(env_name.to_string(), "provider-override".to_string());
+    }
+
+    prepare_launch_environment(
+        &cache,
+        Some(&route("claude", claude_account_id)),
+        &mut claude_env,
+    )
+    .unwrap();
+
+    for env_name in CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES {
+        assert!(!claude_env.contains_key(env_name));
+    }
+    assert_eq!(
+        claude_env
+            .get(CLAUDE_PROVIDER_MANAGED_BY_HOST.0)
+            .map(String::as_str),
+        Some(CLAUDE_PROVIDER_MANAGED_BY_HOST.1)
+    );
+    assert_eq!(
+        claude_env.get("TERM").map(String::as_str),
+        Some("xterm-256color")
+    );
+
+    let mut codex_env = HashMap::from([
+        ("OPENAI_API_KEY".to_string(), "pay-per-token".to_string()),
+        ("TERM".to_string(), "xterm-256color".to_string()),
+    ]);
+    prepare_launch_environment(
+        &cache,
+        Some(&route("codex", codex_account_id)),
+        &mut codex_env,
+    )
+    .unwrap();
+
+    assert!(!codex_env.contains_key("OPENAI_API_KEY"));
+    assert_eq!(
+        codex_env.get("TERM").map(String::as_str),
+        Some("xterm-256color")
+    );
+}
+
+#[test]
 fn direct_provider_paths_and_unknown_ids_fail_closed() {
     let mut direct_env =
         HashMap::from([(CODEX_HOME.to_string(), "/local/client/path".to_string())]);

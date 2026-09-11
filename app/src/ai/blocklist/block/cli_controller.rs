@@ -180,10 +180,10 @@ impl CLISubagentController {
                     .and_then(|result| snapshot_block_id_for_action_result(&result.result))
                     .cloned();
 
-                // Zaplex BYOP fallback: after the agent self-starts LRC, the upstream server path
+                // After a local subscription agent self-starts an LRC, the upstream server path
                 // emits `BlocklistAIHistoryEvent::CreatedSubtask` which triggers
-                // `handle_history_model_event` to upgrade the block to monitored state. BYOP has no
-                // this server event source, so without compensation, active_block stays frozen at
+                // `handle_history_model_event` to upgrade the block to monitored state. The local
+                // transport has no server event source, so without compensation, active_block stays frozen at
                 // `Agent { long_running_control_state: None }` — `is_agent_in_control()` /
                 // `is_agent_monitoring()` / `is_agent_tagged_in()` all false, hitting the fallthrough
                 // false path in `view.rs:6841-6853` `is_input_box_visible` long-command branch,
@@ -229,7 +229,7 @@ impl CLISubagentController {
                         }) {
                             Ok(task_id) => {
                                 log::info!(
-                                    "[byop] BYOP LRC monitor fallback: silent subtask created \
+                                    "[subscription-agent] LRC monitor: silent subtask created \
                                  block={block_id:?} task={task_id:?} \
                                  conversation={conversation_id:?}"
                                 );
@@ -237,7 +237,7 @@ impl CLISubagentController {
                             }
                             Err(e) => {
                                 log::error!(
-                                    "[byop] BYOP LRC monitor fallback create_silent_subagent_task \
+                                    "[subscription-agent] LRC monitor create_silent_subagent_task \
                                  failed: {e:?}"
                                 );
                                 None
@@ -274,7 +274,7 @@ impl CLISubagentController {
                             }
                             Err(e) => {
                                 log::error!(
-                                    "[byop] BYOP LRC monitor fallback: \
+                                    "[subscription-agent] LRC monitor: \
                                      set_agent_interaction_mode_for_agent_monitored_command \
                                      failed: {e:?}"
                                 );
@@ -305,7 +305,7 @@ impl CLISubagentController {
                     ctx.emit(CLISubagentEvent::UpdatedLastSnapshot);
                 }
 
-                // Zaplex BYOP: silent_create_for_byop doesn't emit CreatedSubtask, so we manually
+                // Silent task creation doesn't emit CreatedSubtask, so we manually
                 // trigger SpawnedSubagent here to let terminal_view create the CLISubagentView overlay.
                 // active_subagents_by_block.task_id is synced to ensure the BlockCompleted hook
                 // cleans up correctly when LRC ends.
@@ -321,7 +321,7 @@ impl CLISubagentController {
                         .or_default()
                         .task_id = Some(task_id.clone());
                     log::info!(
-                        "[byop] BYOP LRC monitor fallback: emit SpawnedSubagent \
+                        "[subscription-agent] LRC monitor: emit SpawnedSubagent \
                          block={block_id:?} task={task_id:?}"
                     );
                     ctx.emit(CLISubagentEvent::SpawnedSubagent {

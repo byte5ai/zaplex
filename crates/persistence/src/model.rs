@@ -1004,12 +1004,11 @@ pub struct AgentConversationData {
     /// delivery without re-delivering already-processed events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_event_sequence: Option<i64>,
-    /// Serialized `CompactionState` JSON for BYOP local compaction (head trimming).
-    /// `None` means no compaction has occurred.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Retired local compaction sidecar retained only to consume legacy rows.
+    #[serde(default, skip_serializing)]
     pub compaction_state_json: Option<String>,
-    /// Opaque serialized BYOP repair sidecar. The app layer owns validation semantics.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Retired request-repair sidecar retained only to consume legacy rows.
+    #[serde(default, skip_serializing)]
     pub byop_repair_state_json: Option<String>,
 }
 
@@ -1042,11 +1041,7 @@ pub struct ModelTokenUsage {
     #[serde(default, alias = "total_tokens")]
     pub warp_tokens: u32,
     #[serde(default)]
-    pub byok_tokens: u32,
-    #[serde(default)]
     pub warp_token_usage_by_category: HashMap<TokenUsageCategory, u32>,
-    #[serde(default)]
-    pub byok_token_usage_by_category: HashMap<TokenUsageCategory, u32>,
 }
 
 impl ModelTokenUsage {
@@ -1076,23 +1071,12 @@ impl ModelTokenUsage {
         self.to_proto_usage(self.warp_tokens, &self.warp_token_usage_by_category)
     }
 
-    pub fn to_proto_byok_usage(&self) -> Option<(String, stream_finished::ModelTokenUsage)> {
-        self.to_proto_usage(self.byok_tokens, &self.byok_token_usage_by_category)
-    }
-
     #[allow(deprecated)]
     pub fn to_proto_combined(&self) -> stream_finished::ModelTokenUsage {
         stream_finished::ModelTokenUsage {
             model_id: self.model_id.clone(),
-            total_tokens: self.warp_tokens + self.byok_tokens,
-            token_usage_by_category: self
-                .warp_token_usage_by_category
-                .iter()
-                .chain(self.byok_token_usage_by_category.iter())
-                .fold(HashMap::new(), |mut acc, (cat, tokens)| {
-                    *acc.entry(cat.clone()).or_insert(0) += tokens;
-                    acc
-                }),
+            total_tokens: self.warp_tokens,
+            token_usage_by_category: self.warp_token_usage_by_category.clone(),
         }
     }
 }
@@ -1300,7 +1284,7 @@ pub struct NewMCPServerInstallation {
 
 #[cfg(test)]
 mod tests {
-    use super::AgentConversationData;
+    use super::{AgentConversationData, ModelTokenUsage};
 
     #[test]
     fn agent_conversation_data_roundtrips_last_event_sequence() {
@@ -1360,30 +1344,38 @@ mod tests {
     }
 
     #[test]
-    fn agent_conversation_data_roundtrips_byop_repair_sidecar() {
-        let data = AgentConversationData {
-            server_conversation_token: None,
-            conversation_usage_metadata: None,
-            reverted_action_ids: None,
-            forked_from_server_conversation_token: None,
-            artifacts_json: None,
-            parent_agent_id: None,
-            agent_name: None,
-            parent_conversation_id: None,
-            run_id: None,
-            autoexecute_override: None,
-            last_event_sequence: None,
-            compaction_state_json: None,
-            byop_repair_state_json: Some(r#"{"version":1,"records":[]}"#.to_string()),
-        };
-
+    fn agent_conversation_data_does_not_reserialize_retired_sidecars() {
+        let data: AgentConversationData = serde_json::from_str(
+            r#"{
+                "server_conversation_token": null,
+                "compaction_state_json": "{\"version\":1}",
+                "byop_repair_state_json": "{\"version\":1,\"records\":[]}"
+            }"#,
+        )
+        .expect("legacy sidecars must deserialize");
         let json = serde_json::to_string(&data).expect("serialize");
-        let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
 
-        assert_eq!(
-            roundtripped.byop_repair_state_json.as_deref(),
-            Some(r#"{"version":1,"records":[]}"#)
-        );
+        assert!(!json.contains("compaction_state_json"));
+        assert!(!json.contains("byop_repair_state_json"));
+    }
+
+    #[test]
+    fn model_token_usage_does_not_reserialize_retired_byok_fields() {
+        let usage: ModelTokenUsage = serde_json::from_str(
+            r#"{
+                "model_id": "legacy-model",
+                "warp_tokens": 4,
+                "byok_tokens": 12,
+                "warp_token_usage_by_category": {"primary_agent": 4},
+                "byok_token_usage_by_category": {"primary_agent": 12}
+            }"#,
+        )
+        .expect("legacy BYOK usage must deserialize");
+        let json = serde_json::to_string(&usage).expect("serialize");
+
+        assert_eq!(usage.warp_tokens, 4);
+        assert!(!json.contains("byok_tokens"));
+        assert!(!json.contains("byok_token_usage_by_category"));
     }
 }
 

@@ -1,8 +1,7 @@
 //! `ProxyCredentials`: store proxy Basic Auth password in OS keychain (see Issue #72).
 //!
 //! Only stores password; non-sensitive fields like username, URL remain in `NetworkSettings`'s settings.toml.
-//! Design mirrors `crate::ai::agent_providers::AgentProviderSecrets`: based on
-//! `warpui_extras::secure_storage` (macOS Keychain / Windows DPAPI / Linux Keyring).
+//! Storage uses `warpui_extras::secure_storage` (macOS Keychain / Windows DPAPI / Linux Keyring).
 //!
 //! Note: proxy has only one global password, so storage has one key and value is the raw password
 //! string (no longer uses JSON map).

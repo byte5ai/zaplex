@@ -24,9 +24,9 @@ use warpui::{
     assets::asset_cache::{AssetCache, AssetSource, AssetState},
     elements::{
         new_scrollable::{ScrollableAppearance, SingleAxisConfig},
-        Align, Axis, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle,
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty,
-        EventHandler, Expanded, Fill, Flex, FormattedTextElement, Hoverable, Image as WarpImage,
+        Align, Axis, Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ConstrainedBox,
+        Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler,
+        Expanded, Fill, Flex, FormattedTextElement, Hoverable, Image as WarpImage,
         MainAxisAlignment, MainAxisSize, MouseStateHandle, NewScrollable, OffsetPositioning,
         ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollTarget,
         ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Table, TableColumnWidth,
@@ -81,7 +81,6 @@ use crate::{
                 CodeSnippetButtonHandles,
             },
             inline_action::{
-                aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView,
                 inline_action_header::{
                     INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
                 },
@@ -96,7 +95,6 @@ use crate::{
     },
     code::{editor::view::CodeEditorView, editor_management::CodeSource},
     notebooks::editor::{rich_text_styles, MarkdownTableAppearance},
-    settings_view::SettingsSection,
     terminal::{
         find::TerminalFindModel, safe_mode_settings::get_secret_obfuscation_mode,
         view::TerminalAction, ShellLaunchData,
@@ -2952,8 +2950,6 @@ pub(crate) fn resolve_absolute_file_path(
 
 pub struct FailedOutputProps<'a> {
     pub error: &'a RenderableAIError,
-    pub invalid_api_key_button_handle: &'a MouseStateHandle,
-    pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
 }
@@ -2996,16 +2992,9 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
                 format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
             }
         }
-        RenderableAIError::InvalidApiKey {
-            provider,
-            model_name,
-        } => {
-            return render_invalid_api_key_error(
-                provider,
-                model_name,
-                props.invalid_api_key_button_handle,
-                app,
-            );
+        RenderableAIError::InvalidApiKey { .. }
+        | RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { .. } => {
+            format!("{ERROR_APOLOGY_TEXT}\n\nThe selected model could not be authenticated.")
         }
         RenderableAIError::ContextWindowExceeded(error) => {
             // This is rendered in a different way, like a failed action.
@@ -3013,17 +3002,6 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
                 .with_icon(inline_action_icons::cancelled_icon(appearance).finish())
                 .render(app)
                 .finish();
-        }
-        RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { model_name } => {
-            // Use the rich stateful view if it exists, otherwise show a simple error message
-            if let Some(view) = props.aws_bedrock_credentials_error_view {
-                return ChildView::new(view).finish();
-            }
-            // Fallback for contexts that don't have the stateful view (e.g. CLI subagent)
-            format!(
-                "{ERROR_APOLOGY_TEXT}\n\nAWS credentials expired or missing for {model_name}. \
-                 Please refresh your AWS credentials."
-            )
         }
     };
 
@@ -3067,100 +3045,6 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
                 .finish(),
             )
             .finish(),
-        )
-        .finish()
-}
-
-fn render_invalid_api_key_error(
-    provider: &str,
-    model_name: &str,
-    state_handle: &MouseStateHandle,
-    app: &AppContext,
-) -> Box<dyn Element> {
-    let appearance = Appearance::as_ref(app);
-    let theme = appearance.theme();
-
-    let alert_icon = ConstrainedBox::new(
-        Icon::AlertTriangle
-            .to_warpui_icon(error_color(appearance.theme()).into())
-            .finish(),
-    )
-    .with_width(icon_size(app))
-    .with_height(icon_size(app))
-    .finish();
-
-    let alert_text = Text::new(
-        "Provided API key is not valid",
-        appearance.ui_font_family(),
-        14.,
-    )
-    .with_color(error_color(appearance.theme()))
-    .with_selectable(false)
-    .finish();
-
-    let detail_text = Text::new(
-        format!(
-            "Failed to authenticate with {provider} when using {model_name}. \
-                     Double-check that your API key is correct."
-        ),
-        appearance.ui_font_family(),
-        14.,
-    )
-    .with_color(blended_colors::text_sub(
-        appearance.theme(),
-        appearance.theme().surface_1(),
-    ))
-    .with_selectable(false)
-    .finish();
-
-    let settings_button = appearance
-        .ui_builder()
-        .button(
-            warpui::ui_components::button::ButtonVariant::Outlined,
-            state_handle.clone(),
-        )
-        .with_style(UiComponentStyles {
-            border_color: Some(internal_colors::neutral_4(theme).into()),
-            ..Default::default()
-        })
-        .with_hovered_styles(UiComponentStyles {
-            background: Some(internal_colors::fg_overlay_2(theme).into()),
-            ..Default::default()
-        })
-        .with_clicked_styles(UiComponentStyles {
-            background: Some(internal_colors::fg_overlay_3(theme).into()),
-            ..Default::default()
-        })
-        .with_text_label(crate::t!("ai-edit-api-keys"))
-        .with_cursor(Some(Cursor::PointingHand))
-        .build()
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
-                search_query: "api keys".to_string(),
-                section: Some(SettingsSection::WarpAgent),
-            });
-        })
-        .finish();
-
-    Flex::column()
-        .with_spacing(16.)
-        .with_child(
-            Flex::row()
-                .with_spacing(8.)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(alert_icon)
-                .with_child(alert_text)
-                .finish(),
-        )
-        .with_child(
-            Flex::row()
-                .with_spacing(8.)
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(Shrinkable::new(1., detail_text).finish())
-                .with_child(settings_button)
-                .finish(),
         )
         .finish()
 }
@@ -3356,8 +3240,8 @@ pub(crate) fn render_debug_footer<V: View>(
     );
     debug_row.add_child(copy_button_with_tooltip);
 
-    // Zaplex: no longer use `Expanded` — in alt-screen / long-command take-over scenarios, parent container
-    // has infinite constraint along main axis (BYOP error block render path), and `Flex + Expanded`
+    // Zaplex: no longer use `Expanded` — in alt-screen / long-command take-over scenarios, the parent container
+    // has an infinite constraint along the main axis, and `Flex + Expanded`
     // directly panics with `flex contains flexible children but has an infinite constraint`.
     // debug_row's width is controlled by its internal Shrinkable; no need to actively fill parent.
     if let Some(submit_button) = stacked_submit_button {

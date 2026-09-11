@@ -1294,13 +1294,9 @@ fn forget_daemon_node_session(
 }
 
 #[cfg(unix)]
-fn resolved_daemon_connection(
-    node_id: &str,
-) -> Option<warp_ssh_manager::ResolvedSshConnection> {
+fn resolved_daemon_connection(node_id: &str) -> Option<warp_ssh_manager::ResolvedSshConnection> {
     warp_ssh_manager::with_conn(|database| {
-        Ok(warp_ssh_manager::SshRepository::get_server_with_resolved_auth(
-            database, node_id,
-        )?)
+        Ok(warp_ssh_manager::SshRepository::get_server_with_resolved_auth(database, node_id)?)
     })
     .ok()
     .flatten()
@@ -5113,7 +5109,9 @@ impl Workspace {
                 let Some(fork_cmd) = agent.fork_command_pinned(session_id, None) else {
                     return;
                 };
-                let legacy_fork_cmd = agent.fork_command_pinned(session_id, config_dir);
+                let legacy_fork_cmd = agent
+                    .fork_routed(session_id, config_dir)
+                    .map(|launch| launch.shell_command(ShellType::Bash));
                 self.run_agent_command_on_remote_host(
                     host,
                     host_id,
@@ -5161,6 +5159,7 @@ impl Workspace {
     /// returns `false`, so the caller never silently falls back to the wrong
     /// local path.
     #[cfg(all(unix, feature = "local_tty"))]
+    #[allow(clippy::too_many_arguments)]
     fn run_agent_command_on_remote_host(
         &mut self,
         host: &str,
@@ -5343,6 +5342,7 @@ impl Workspace {
 
     /// Resolves one fleet session with the inventory's explicit local marker or
     /// a remote daemon's stable id. Display labels never route remote actions.
+    #[allow(clippy::too_many_arguments)]
     fn inventory_agent_session(
         host_id: Option<&str>,
         session_id: &str,
@@ -5982,7 +5982,8 @@ impl Workspace {
                 let Some(resume_cmd) = agent.resume_command_pinned(session_id, None) else {
                     return;
                 };
-                let legacy_resume_cmd = agent.resume_command_pinned(session_id, config_dir);
+                let legacy_resume_cmd =
+                    agent.resume_command_routed_with(session_id, config_dir, None, None);
                 if self.run_agent_command_on_remote_host(
                     host,
                     host_id,
@@ -6067,6 +6068,7 @@ impl Workspace {
     /// Resolves a CLI conversation to the terminal on the exact fleet host.
     /// Provider/session ids alone are insufficient: copied sessions may retain
     /// the same id on local and multiple remote hosts.
+    #[allow(clippy::too_many_arguments)]
     fn terminal_view_id_for_agent_session(
         agent: CLIAgent,
         session_id: &str,
@@ -6194,6 +6196,7 @@ impl Workspace {
     /// is local or remote. Only a dormant (`Idle`) session starts a resume
     /// command. A live session without a reliable pane/PTY locator is reported
     /// as unavailable rather than duplicated.
+    #[allow(clippy::too_many_arguments)]
     fn attach_fleet_session(
         &mut self,
         host: &str,
@@ -6293,7 +6296,7 @@ impl Workspace {
                 return;
             };
             let legacy_resume_cmd =
-                agent.resume_command_pinned(session_id, config_dir.map(Path::new));
+                agent.resume_command_routed_with(session_id, config_dir.map(Path::new), None, None);
             #[cfg(all(unix, feature = "local_tty"))]
             {
                 self.run_agent_command_on_remote_host(
@@ -7626,43 +7629,36 @@ impl Workspace {
                     self.prefill_active_tab_input(prompt, ctx);
                 }
             }
-            if target.managed_mode != spawn_card::ManagedLaunchMode::Ordinary {
-                if result.is_ok() {
-                    if let Some(launch_id) = target
-                        .managed_launch_id
-                        .as_deref()
-                        .filter(|launch_id| !launch_id.is_empty())
-                    {
-                        let expected_token = format!("managed:{launch_id}");
-                        if result.as_deref() != Ok(expected_token.as_str()) {
-                            result = Err(
-                                "The managed launch identity changed before acknowledgement."
-                                    .to_string(),
-                            );
-                            self.spawn_card.update(ctx, |card, ctx| {
-                                card.apply_launch_result(plan_id, &target_id, result, ctx);
-                            });
-                            continue;
-                        }
-                        let marked = self.spawn_card.update(ctx, |card, ctx| {
-                            card.mark_launch_in_flight(
-                                plan_id,
-                                &target_id,
-                                launch_id.to_string(),
-                                ctx,
-                            )
+            if target.managed_mode != spawn_card::ManagedLaunchMode::Ordinary && result.is_ok() {
+                if let Some(launch_id) = target
+                    .managed_launch_id
+                    .as_deref()
+                    .filter(|launch_id| !launch_id.is_empty())
+                {
+                    let expected_token = format!("managed:{launch_id}");
+                    if result.as_deref() != Ok(expected_token.as_str()) {
+                        result = Err(
+                            "The managed launch identity changed before acknowledgement."
+                                .to_string(),
+                        );
+                        self.spawn_card.update(ctx, |card, ctx| {
+                            card.apply_launch_result(plan_id, &target_id, result, ctx);
                         });
-                        if marked {
-                            self.pending_managed_spawns.insert(
-                                launch_id.to_string(),
-                                PendingManagedSpawn::Batch { plan_id, target_id },
-                            );
-                            continue;
-                        }
-                        result = Err("The managed launch could not be tracked safely.".to_string());
-                    } else {
-                        result = Err("The managed launch identity is missing.".to_string());
+                        continue;
                     }
+                    let marked = self.spawn_card.update(ctx, |card, ctx| {
+                        card.mark_launch_in_flight(plan_id, &target_id, launch_id.to_string(), ctx)
+                    });
+                    if marked {
+                        self.pending_managed_spawns.insert(
+                            launch_id.to_string(),
+                            PendingManagedSpawn::Batch { plan_id, target_id },
+                        );
+                        continue;
+                    }
+                    result = Err("The managed launch could not be tracked safely.".to_string());
+                } else {
+                    result = Err("The managed launch identity is missing.".to_string());
                 }
             }
             self.spawn_card.update(ctx, |card, ctx| {
@@ -10257,6 +10253,7 @@ impl Workspace {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn open_ssh_terminal_command(
         &mut self,
         node_id: String,
@@ -10298,6 +10295,7 @@ impl Workspace {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn open_resolved_ssh_terminal_command(
         &mut self,
         node_id: String,
@@ -10320,17 +10318,17 @@ impl Workspace {
         // instead of a local PTY running `ssh`. Falls through to the normal path
         // if the host isn't resilient or the auth isn't headless-capable.
         #[cfg(unix)]
-        if !force_classic {
-            if self.try_open_daemon_ssh_terminal(
+        if !force_classic
+            && self.try_open_daemon_ssh_terminal(
                 &node_id,
                 &connection,
                 agent_launch_route.clone(),
                 managed_launch.clone(),
                 attempt.clone(),
                 ctx,
-            ) {
-                return;
-            }
+            )
+        {
+            return;
         }
         if agent_launch_route.is_some() || managed_launch.is_some() {
             self.toast_stack.update(ctx, |view, ctx| {
@@ -10834,7 +10832,7 @@ impl Workspace {
                             vec![
                                 ModalButton::for_view(
                                     crate::t!("common-confirm"),
-                                    move |workspace: &mut Workspace, ctx| {
+                                    move |_: &mut Workspace, ctx| {
                                         let server = confirm_server.clone();
                                         let host_key = confirm_host_key.clone();
                                         let server_for_retry = confirm_server.clone();
@@ -11216,12 +11214,7 @@ impl Workspace {
             "connect-fallback-handshake-failed",
             host = connection.server.host.clone()
         );
-        self.fall_back_to_classic_ssh(
-            connection.server.node_id.clone(),
-            connection,
-            warning,
-            ctx,
-        );
+        self.fall_back_to_classic_ssh(connection.server.node_id.clone(), connection, warning, ctx);
         self.finish_daemon_ssh_connect(session_id, ctx);
     }
 
@@ -13763,7 +13756,7 @@ impl Workspace {
         self.vertical_tabs_panel.show_settings_popup = false;
     }
 
-    /// Stub: agent management view removed (BYOP).
+    /// Stub: the legacy agent-management view has been removed.
     fn set_is_agent_management_view_open(&mut self, _is_open: bool, _ctx: &mut ViewContext<Self>) {}
 
     fn toggle_left_panel(&mut self, ctx: &mut ViewContext<Self>) {
@@ -15203,25 +15196,12 @@ impl Workspace {
                 self.current_workspace_state.is_workflow_modal_open = false;
                 ctx.notify();
             }
-            WorkflowModalEvent::AiAssistError(message) => {
-                self.toast_stack.update(ctx, |view, ctx| {
-                    let new_toast = DismissibleToast::error(message.clone());
-                    view.add_ephemeral_toast(new_toast, ctx);
-                });
-            }
             WorkflowModalEvent::UpdatedWorkflow(workflow_id) => {
                 // If saved workflow id matches the one that is currently displayed, then refresh workflow info box + input
                 self.maybe_refresh_workflow_info_box_and_input(workflow_id, ctx);
             }
             WorkflowModalEvent::ViewInWarpDrive(id) => {
                 self.view_in_and_focus_warp_drive(*id, ctx);
-            }
-            WorkflowModalEvent::AiAssistUpgradeError(_, _) => {
-                self.toast_stack.update(ctx, |view, ctx| {
-                    let new_toast =
-                        DismissibleToast::error(crate::t!("workspace-toast-out-of-ai-credits"));
-                    view.add_ephemeral_toast(new_toast, ctx);
-                });
             }
         }
     }
@@ -15472,6 +15452,7 @@ impl Workspace {
     /// the outcome as a toast — an
     /// unknown/dead pid, a failed local kill, and an unreachable remote host
     /// all surface rather than silently no-op'ing.
+    #[allow(clippy::too_many_arguments)]
     fn send_guardrail_signal(
         &mut self,
         host: &str,
@@ -15605,6 +15586,7 @@ impl Workspace {
         // Each target carries its host's stable `host_id` (None for local) so the
         // remote path below resolves the exact daemon by id, never by the
         // collidable label.
+        #[allow(clippy::type_complexity)]
         let targets: Vec<(String, Option<String>, bool, String, u32, Option<String>)> =
             crate::cockpit::CockpitModel::as_ref(ctx)
                 .inventory()
@@ -21975,6 +21957,7 @@ impl Workspace {
     /// Open the Spawn-Karte, optionally pre-scoped to a Conductor host/project.
     /// Gathers fresh account/host options, configures the card with smart
     /// defaults, then shows + focuses it.
+    #[allow(clippy::too_many_arguments)]
     fn open_spawn_card(
         &mut self,
         registry_node_id: Option<String>,
@@ -22204,13 +22187,13 @@ impl Workspace {
                 };
                 let location = match node_id.as_deref() {
                     Some(node_id) => warp_ssh_manager::with_conn(|database| {
-                        let connection = warp_ssh_manager::SshRepository::get_server_with_resolved_auth(
-                            database,
-                            node_id,
-                        )?
-                        .ok_or_else(|| {
-                            warp_ssh_manager::SshRepositoryError::NotFound(node_id.to_string())
-                        })?;
+                        let connection =
+                            warp_ssh_manager::SshRepository::get_server_with_resolved_auth(
+                                database, node_id,
+                            )?
+                            .ok_or_else(|| {
+                                warp_ssh_manager::SshRepositoryError::NotFound(node_id.to_string())
+                            })?;
                         Ok(crate::ai::subscription_agent::ProcessLocation::Remote {
                             ssh_argv: warp_ssh_manager::ssh_command::build_ssh_args(
                                 &connection.server,
@@ -26019,7 +26002,7 @@ impl Workspace {
             });
         }
 
-        // Agent conversation history (local, BYOP).
+        // Local agent conversation history.
         if FeatureFlag::AgentViewConversationListView.is_enabled()
             && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
             && *AISettings::as_ref(ctx).show_conversation_history
@@ -27929,21 +27912,6 @@ impl TypedActionView for Workspace {
                 self.close_tabs_with_file_path(path, ctx);
             }
             #[cfg(debug_assertions)]
-            DebugResetAwsBedrockLoginBannerDismissed => {
-                // Reset the AWS Bedrock login banner dismissed state for debugging
-                AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
-                    if let Err(e) = ai_settings
-                        .aws_bedrock_login_banner_dismissed
-                        .set_value(false, ctx)
-                    {
-                        log::warn!(
-                            "Failed to reset AWS Bedrock login banner dismissed setting: {e}"
-                        );
-                    }
-                });
-                log::info!("AWS Bedrock login banner dismissed state has been reset");
-            }
-            #[cfg(debug_assertions)]
             OpenZapLaunchModal => {
                 // Force open the Zaplex launch modal for debugging
                 OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
@@ -28833,7 +28801,7 @@ impl View for Workspace {
 
         // Render the new session dropdown menu. This is outside the tab bar visibility
         // gate because it can also be opened from the vertical tabs panel.
-        if self.show_new_session_dropdown_menu.is_some() {
+        if let Some(new_session_menu_position) = self.show_new_session_dropdown_menu {
             let is_vertical = FeatureFlag::VerticalTabs.is_enabled()
                 && *TabSettings::as_ref(app).use_vertical_tabs
                 && self.vertical_tabs_panel_open;
@@ -28854,7 +28822,6 @@ impl View for Workspace {
                 // TODO(CORE-2300): In the new version of the shell selector, this is not a
                 // context menu but a dropdown. Since it is quite wide, we need to reposition
                 // it so it does not render outside the bounds of the window.
-                let new_session_menu_position = self.show_new_session_dropdown_menu.unwrap();
                 let bounds = if FeatureFlag::ShellSelector.is_enabled() {
                     ParentOffsetBounds::WindowByPosition
                 } else {

@@ -122,7 +122,7 @@ fn active_flags_for_channel(
     runtime_flags: impl IntoIterator<Item = FeatureFlag>,
 ) -> HashSet<FeatureFlag> {
     // Keep feature-gated schema entries aligned with the features compiled into the app.
-    let mut flags = runtime_flags.into_iter().collect();
+    let mut flags: HashSet<FeatureFlag> = runtime_flags.into_iter().collect();
 
     let flag_lists: &[&[FeatureFlag]] = match channel {
         SchemaChannel::Stable | SchemaChannel::Oss => &[RELEASE_FLAGS],

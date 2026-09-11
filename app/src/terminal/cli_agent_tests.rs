@@ -15,6 +15,9 @@ use super::{
 #[cfg(unix)]
 use super::{cli_agent_search_dirs, resolve_executable_in_dirs};
 use crate::ai::agent::{AgentReviewCommentBatch, DiffSetHunk};
+use crate::ai::subscription_agent::{
+    CLAUDE_PROVIDER_MANAGED_BY_HOST, CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES,
+};
 use crate::code::editor::line::EditorLineLocation;
 use crate::code_review::comments::{
     AttachedReviewComment, AttachedReviewCommentTarget, CommentOrigin, LineDiffContent,
@@ -30,6 +33,22 @@ fn aliases(pairs: &[(&str, &str)]) -> HashMap<SmolStr, String> {
         .iter()
         .map(|(k, v)| (SmolStr::new(k), v.to_string()))
         .collect()
+}
+
+fn claude_subscription_shell_argv() -> Vec<String> {
+    let mut args = vec!["env".to_string()];
+    for name in CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES {
+        args.extend(["-u".to_string(), name.to_string()]);
+    }
+    args.push(format!(
+        "{}={}",
+        CLAUDE_PROVIDER_MANAGED_BY_HOST.0, CLAUDE_PROVIDER_MANAGED_BY_HOST.1
+    ));
+    args
+}
+
+fn claude_subscription_shell_prefix() -> String {
+    claude_subscription_shell_argv().join(" ")
 }
 
 // ---------------------------------------------------------------------------
@@ -644,20 +663,17 @@ fn routed_fork_scrubs_keys_and_preserves_dynamic_arguments() {
     let launch = CLIAgent::Claude
         .fork_routed("session 'one", Some(Path::new("/home/u/Claude's work")))
         .unwrap();
+    let mut expected = claude_subscription_shell_argv();
+    expected.extend([
+        "CLAUDE_CONFIG_DIR=/home/u/Claude's work".to_string(),
+        "claude".to_string(),
+        "--resume".to_string(),
+        "session 'one".to_string(),
+        "--fork-session".to_string(),
+    ]);
     assert_eq!(
         shell_words::split(&launch.shell_command(ShellType::Fish)).unwrap(),
-        vec![
-            "env",
-            "-u",
-            "ANTHROPIC_API_KEY",
-            "-u",
-            "ANTHROPIC_AUTH_TOKEN",
-            "CLAUDE_CONFIG_DIR=/home/u/Claude's work",
-            "claude",
-            "--resume",
-            "session 'one",
-            "--fork-session",
-        ]
+        expected
     );
 }
 
@@ -728,12 +744,10 @@ fn routed_resume_preserves_account_model_effort_and_scrubs_api_keys() {
             Some("opus"),
             Some("high"),
         ),
-        Some(
-            "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
-             CLAUDE_CONFIG_DIR='/home/u/claude work' claude --model opus \
-             --resume claude-session"
-                .to_string()
-        )
+        Some(format!(
+            "{} CLAUDE_CONFIG_DIR='/home/u/claude work' claude --model opus --resume claude-session",
+            claude_subscription_shell_prefix()
+        ))
     );
     assert_eq!(
         CLIAgent::Codex.resume_command_routed_with(
@@ -760,11 +774,10 @@ fn routed_resume_quotes_session_id_and_rejects_unsupported_providers() {
             None,
             None,
         ),
-        Some(
-            "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
-             claude --resume 'id with spaces;$(touch /tmp/nope)'"
-                .to_string()
-        )
+        Some(format!(
+            "{} claude --resume 'id with spaces;$(touch /tmp/nope)'",
+            claude_subscription_shell_prefix()
+        ))
     );
     assert_eq!(
         CLIAgent::Claude.resume_command_routed_with("   ", None, None, None),
@@ -786,25 +799,21 @@ fn routed_launch_uses_child_scoped_unix_environment_for_bash_zsh_and_fish() {
     for shell_type in [ShellType::Bash, ShellType::Zsh, ShellType::Fish] {
         let command = launch.shell_command(shell_type);
         assert!(!command.split_whitespace().any(|word| word == "unset"));
-        assert_eq!(
-            shell_words::split(&command).unwrap(),
-            vec![
-                "env",
-                "-u",
-                "ANTHROPIC_API_KEY",
-                "-u",
-                "ANTHROPIC_AUTH_TOKEN",
-                "CLAUDE_CONFIG_DIR=/home/u/Claude's work",
-                "claude",
-                "--model",
-                "opus' preview",
-            ]
-        );
+        let mut expected = claude_subscription_shell_argv();
+        expected.extend([
+            "CLAUDE_CONFIG_DIR=/home/u/Claude's work".to_string(),
+            "claude".to_string(),
+            "--model".to_string(),
+            "opus' preview".to_string(),
+        ]);
+        assert_eq!(shell_words::split(&command).unwrap(), expected);
     }
 
     let powershell = launch.shell_command(ShellType::PowerShell);
-    assert!(powershell.contains("Remove-Item Env:ANTHROPIC_API_KEY"));
-    assert!(powershell.contains("Remove-Item Env:ANTHROPIC_AUTH_TOKEN"));
+    for name in CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES {
+        assert!(powershell.contains(&format!("Remove-Item Env:{name}")));
+    }
+    assert!(powershell.contains("$env:CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = 'zaplex'"));
     assert!(powershell.contains("$env:CLAUDE_CONFIG_DIR = '/home/u/Claude''s work'"));
     assert!(powershell.contains("& 'claude' '--model' 'opus'' preview'"));
     assert!(!powershell.contains("CLAUDE_CONFIG_DIR="));
@@ -878,12 +887,15 @@ fn launch_command_routed_scrubs_and_pins_claude() {
     // Default account: scrub the API key env, no config-dir pin, bare `claude`.
     assert_eq!(
         CLIAgent::Claude.launch_command_routed(None),
-        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude"
+        format!("{} claude", claude_subscription_shell_prefix())
     );
     // Pinned account: scrub + CLAUDE_CONFIG_DIR before the command.
     assert_eq!(
         CLIAgent::Claude.launch_command_routed(Some(Path::new("/home/u/.claude-work"))),
-        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN CLAUDE_CONFIG_DIR=/home/u/.claude-work claude"
+        format!(
+            "{} CLAUDE_CONFIG_DIR=/home/u/.claude-work claude",
+            claude_subscription_shell_prefix()
+        )
     );
 }
 
@@ -912,7 +924,7 @@ fn launch_command_routed_with_model_claude() {
     // never appear on the command line even when supplied.
     assert_eq!(
         CLIAgent::Claude.launch_command_routed_with(None, Some("opus"), None),
-        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude --model opus"
+        format!("{} claude --model opus", claude_subscription_shell_prefix())
     );
     assert_eq!(
         CLIAgent::Claude.launch_command_routed_with(
@@ -920,8 +932,10 @@ fn launch_command_routed_with_model_claude() {
             Some("haiku"),
             Some("low"),
         ),
-        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
-         CLAUDE_CONFIG_DIR=/home/u/.claude-work claude --model haiku"
+        format!(
+            "{} CLAUDE_CONFIG_DIR=/home/u/.claude-work claude --model haiku",
+            claude_subscription_shell_prefix()
+        )
     );
 }
 

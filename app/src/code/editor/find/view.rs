@@ -317,11 +317,9 @@ impl CodeEditorFind {
             EditorEvent::Escape => {
                 self.close_find_bar(ctx);
             }
-            EditorEvent::Navigate(NavigationKey::Tab) => {
+            EditorEvent::Navigate(NavigationKey::Tab) if self.is_replace_open => {
                 // If replace editor is currently open and the user presses 'tab', focus on the find editor
-                if self.is_replace_open {
-                    ctx.focus(&self.replace_editor);
-                }
+                ctx.focus(&self.replace_editor);
             }
             _ => {}
         }

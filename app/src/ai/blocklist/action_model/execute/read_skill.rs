@@ -64,10 +64,8 @@ impl ReadSkillExecutor {
             return success_execution(skill);
         }
 
-        // BYOP `read_skill` tool argument is a skill **name**, placed into
-        // `SkillReference::SkillPath(name)` slot by `from_args` (avoids proto schema change).
-        // On cache miss, reverse-lookup the real SKILL.md path by name, covering all skills
-        // visible to the Skill manager (file skills + bundled skills).
+        // Some structured agent transports provide a skill name in the path slot. On a cache
+        // miss, reverse-lookup the real SKILL.md path by name across file and bundled skills.
         if let SkillReference::Path(p) = skill_ref {
             if let Some(candidate_name) = name_candidate(p) {
                 if let Some(skill) = manager.find_skill_by_name(candidate_name) {
@@ -170,8 +168,8 @@ fn success_execution(
 
 /// Determine whether the value in `SkillReference::Path` should be treated as a skill **name** for reverse-lookup.
 ///
-/// Real SKILL.md paths contain path separators (`/` or `\`) or are absolute paths, while BYOP
-/// tool names (like `"build-feature"`) are pure strings. Distinguish these two cases
+/// Real SKILL.md paths contain path separators (`/` or `\`) or are absolute paths, while skill
+/// names (like `"build-feature"`) are pure strings. Distinguish these two cases
 /// to avoid misinterpreting `/home/.../SKILL.md` as a name and missing the filesystem fallback.
 fn name_candidate(p: &Path) -> Option<&str> {
     if p.is_absolute() {

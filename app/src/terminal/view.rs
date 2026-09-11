@@ -40,6 +40,7 @@ mod zero_state_block;
 
 use warpui::clipboard_utils::get_image_filepaths_from_paths;
 
+use std::cmp::Reverse;
 use std::ops::Deref as _;
 
 use crate::ai::blocklist::agent_view::fork_from_last_known_good_state_exchange_id;
@@ -148,11 +149,9 @@ use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 
 pub use self::link_detection::GridHighlightedLink;
 pub use self::link_detection::{RichContentLink, RichContentLinkTooltipInfo};
-use crate::ai::llms::{LLMId, LLMModelHost, LLMPreferences};
 use crate::settings::CodeSettings;
 
 pub use action::{AgentOnboardingVersion, OnboardingIntention, OnboardingVersion, TerminalAction};
-use ai::api_keys::{ApiKeyManager, AwsCredentialsState};
 
 use crate::terminal::shared_session::protocol::{SessionEndedReason, SessionSourceType};
 pub use block_banner::{WithinBlockBanner, BLOCK_BANNER_HEIGHT};
@@ -235,11 +234,11 @@ use crate::server::ids::{ObjectUid, SyncId};
 use crate::settings::import::model::ImportedConfigModel;
 use crate::settings::import::view::{SettingsImportEvent, SettingsImportView};
 use crate::settings::{
-    AISettings, AISettingsChangedEvent, AliasExpansionSettings, AppEditorSettings,
-    BlockVisibilitySettings, BlockVisibilitySettingsChangedEvent, DebugSettings,
-    DebugSettingsChangedEvent, EmacsBindingsSettings, FontSettings, FontSettingsChangedEvent,
-    InputModeSettings, InputModeSettingsChangedEvent, InputSettings, PaneSettings,
-    PaneSettingsChangedEvent, PrivacySettings, SelectionSettings, VimBannerSettings,
+    AISettings, AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings,
+    BlockVisibilitySettingsChangedEvent, DebugSettings, DebugSettingsChangedEvent,
+    EmacsBindingsSettings, FontSettings, FontSettingsChangedEvent, InputModeSettings,
+    InputModeSettingsChangedEvent, InputSettings, PaneSettings, PaneSettingsChangedEvent,
+    PrivacySettings, SelectionSettings, VimBannerSettings,
 };
 use crate::settings_view::flags;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
@@ -548,15 +547,12 @@ use bookmarks::render_floating_block_snapshot;
 use command_corrections::rules::generic::history::History as CommandCorrectionsHistoryRule;
 use init::{INPUT_BOX_VISIBLE_KEY, TOGGLE_BLOCK_FILTER_KEYBINDING};
 use inline_banner::{
-    render_alias_expansion_banner, render_aws_bedrock_login_banner,
-    render_aws_cli_not_installed_banner, render_inline_notifications_discovery_banner,
+    render_alias_expansion_banner, render_inline_notifications_discovery_banner,
     render_inline_notifications_error_banner, render_inline_shared_session_ended_banner,
     render_inline_shared_session_started_banner, render_inline_ssh_wrapper_banner,
     render_open_in_warp_banner, render_shell_process_terminated_banner, render_vim_mode_banner,
-    AliasExpansionBanner, AliasExpansionBannerAction, AwsBedrockLoginBannerAction,
-    AwsBedrockLoginBannerState, AwsCliNotInstalledBannerAction, AwsCliNotInstalledBannerState,
-    ByoLlmAuthBannerSessionState, OpenInWarpBannerState, SSHBannerAction, SSHBannerState,
-    VimModeBannerAction,
+    AliasExpansionBanner, AliasExpansionBannerAction, OpenInWarpBannerState, SSHBannerAction,
+    SSHBannerState, VimModeBannerAction,
 };
 use warp_core::command::ExitCode;
 
@@ -1023,8 +1019,6 @@ pub enum InlineBannerType {
     OpenInWarp,
     VimMode,
     AgentModeSetup,
-    AwsBedrockLogin,
-    AwsCliNotInstalled,
     CLIAgentRestore,
 }
 
@@ -1034,11 +1028,7 @@ impl InlineBannerType {
     pub fn is_visible_in_agent_view(&self) -> bool {
         match self {
             // Agent-related banners: visible in agent view
-            Self::PromptSuggestions
-            | Self::AgentModeSetup
-            | Self::AwsBedrockLogin
-            | Self::AwsCliNotInstalled
-            | Self::CLIAgentRestore => true,
+            Self::PromptSuggestions | Self::AgentModeSetup | Self::CLIAgentRestore => true,
             // Terminal-context banners: hidden in agent view
             Self::NotificationsDiscovery
             | Self::NotificationsError
@@ -1098,10 +1088,6 @@ struct InlineBannersState {
     vim_banner_state: Option<VimModeBannerState>,
 
     agent_setup_speedbump_banner: Option<AgentModeSetupSpeedbumpBannerState>,
-
-    aws_bedrock_login_banner: Option<AwsBedrockLoginBannerState>,
-
-    aws_cli_not_installed_banner: Option<AwsCliNotInstalledBannerState>,
 
     cli_agent_restore_banner: Option<CLIAgentRestoreBannerState>,
 }
@@ -2690,12 +2676,6 @@ pub struct TerminalView {
     /// This is used to ensure rich content inserted for ambient-agent content is scoped to the top-level
     /// terminal view (not a specific agent view conversation).
 
-    /// Whether we're waiting for the result of an AWS CLI login command.
-    /// Used to detect "command not found" errors when AWS CLI isn't installed.
-    /// TODO: In the future, when we support GCP/Azure cloud CLIs, this should be
-    /// converted to `pending_cloud_cli_login: Option<CloudProvider>` where CloudProvider
-    /// is an enum with variants like Aws, Gcp, Azure.
-    is_pending_aws_login: bool,
     /// `true` if this view explicitly requested a PTY shutdown.
     ///
     /// Once set, this remains true for the rest of the view's lifecycle and
@@ -3282,10 +3262,10 @@ impl TerminalView {
                     );
                     ctx.notify();
                 }
-                TerminalSettingsChangedEvent::AltScreenPadding { .. } => {
-                    if me.model.lock().is_alt_screen_active() {
-                        me.refresh_size(ctx);
-                    }
+                TerminalSettingsChangedEvent::AltScreenPadding { .. }
+                    if me.model.lock().is_alt_screen_active() =>
+                {
+                    me.refresh_size(ctx);
                 }
                 _ => {}
             },
@@ -3511,7 +3491,7 @@ impl TerminalView {
             &ai_action_model.as_ref(ctx).shell_command_executor(ctx),
             Self::handle_shell_command_executor_event,
         );
-        // Zaplex BYOP: subscribe to the suggest_prompt tool's chip event, rendering the prompt actively
+        // Subscribe to the suggest_prompt tool's chip event, rendering the prompt actively
         // suggested by the model as a chip above the input. The original emit is gated by the PromptSuggestionsViaMAA cargo feature
         // (`action_model/execute/suggest_prompt.rs:56`); in OSS nobody subscribes by default → the chip
         // is never shown → the oneshot channel hangs forever → the conversation deadlocks. We removed the emit gate
@@ -3789,14 +3769,6 @@ impl TerminalView {
             }
         });
 
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, ai_settings_event, ctx| {
-            if let AISettingsChangedEvent::AwsBedrockCredentialsEnabled { .. } = ai_settings_event {
-                if !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx) {
-                    me.remove_aws_bedrock_login_banner(ctx);
-                }
-            }
-        });
-
         let agent_todos_popup = Self::build_agent_todos_popup(ai_context_model.clone(), ctx);
 
         let terminal_view_id = ctx.view_id();
@@ -3979,7 +3951,6 @@ impl TerminalView {
             ambient_agent_cancel_mouse_state: Default::default(),
             open_file_manager_mouse_state: Default::default(),
 
-            is_pending_aws_login: false,
             manual_pty_shutdown_requested: false,
             pane_stack: None,
             ephemeral_message_model,
@@ -4452,9 +4423,6 @@ impl TerminalView {
             BlocklistAIControllerEvent::SubscriptionPreflightUpdated
         ) {
             ctx.notify();
-        }
-        if let BlocklistAIControllerEvent::SentRequest { model_id, .. } = event {
-            self.maybe_insert_aws_bedrock_login_banner(model_id, ctx);
         }
         if let BlocklistAIControllerEvent::FinishedReceivingOutput {
             conversation_id, ..
@@ -5188,7 +5156,7 @@ impl TerminalView {
                 initial_requested_command_action_id,
             } => {
                 log::info!(
-                    "[byop-diag] CLISubagentEvent::SpawnedSubagent received: \
+                    "[subscription-agent] CLISubagentEvent::SpawnedSubagent received: \
                      block_id={block_id:?} task_id={task_id:?} conv={conversation_id:?} \
                      → Creating CLISubagentView and adding to cli_subagent_views map"
                 );
@@ -5208,7 +5176,7 @@ impl TerminalView {
                 self.cli_subagent_views
                     .insert(block_id.clone(), subagent_view.clone());
                 log::info!(
-                    "[byop-diag] cli_subagent_views.len()={} after insert",
+                    "[subscription-agent] cli_subagent_views.len()={} after insert",
                     self.cli_subagent_views.len()
                 );
 
@@ -8547,13 +8515,6 @@ impl TerminalView {
         let should_start_new_conversation = suggestion.should_start_new_conversation;
         let conversation_id = banner_state.conversation_id;
         let trigger_block_id = trigger.as_ref().and_then(|t| t.block_id());
-        // Zaplex BYOP: clone byop_action_id + prompt, used at the end of accept to notify the executor
-        // (`complete_suggest_prompt_action(Accepted { query })` closes the oneshot channel).
-        let byop_banner_for_completion = banner_state
-            .byop_action_id
-            .is_some()
-            .then(|| banner_state.clone());
-        let prompt_for_byop_completion = prompt.clone();
         log::debug!(
             "[passive-suggestions] accepting prompt suggestion: trigger={}, trigger_block_id={}",
             if trigger.is_some() { "Some" } else { "None" },
@@ -8644,24 +8605,6 @@ impl TerminalView {
                 },
                 ctx
             );
-        }
-
-        // Zaplex BYOP: the chip actively suggested by the model was accepted by the user → notify the executor to close
-        // the oneshot channel, so the BYOP loop gets the `Accepted{query}` result, and on its next turn the model
-        // can see the tool_result of "the user has adopted and submitted that prompt".
-        if let Some(banner) = byop_banner_for_completion.as_ref() {
-            self.complete_byop_suggest_prompt_if_needed(
-                banner,
-                Some(prompt_for_byop_completion),
-                ctx,
-            );
-            // Clear the banner to prevent a repeat trigger on the next click (the reject path already clears it; the accept
-            // path did not explicitly clear it before, so we clear it uniformly here).
-            self.inline_banners_state.prompt_suggestions_banner = None;
-            self.input.update(ctx, |input, ctx| {
-                input.set_prompt_suggestions_banner_state(None, ctx);
-                input.notify_and_notify_children(ctx);
-            });
         }
 
         true
@@ -8890,206 +8833,6 @@ impl TerminalView {
     #[cfg(not(feature = "local_fs"))]
     fn remove_agent_setup_speedbump_banner(&mut self, _ctx: &mut ViewContext<Self>) {
         // No-op when local filesystem is unavailable.
-    }
-
-    fn remove_aws_bedrock_login_banner(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(banner_state) = self.inline_banners_state.aws_bedrock_login_banner.take() {
-            self.model
-                .lock()
-                .block_list_mut()
-                .remove_inline_banner(banner_state.id);
-        }
-        ctx.notify();
-    }
-
-    fn handle_aws_bedrock_login_banner_action(
-        &mut self,
-        action: AwsBedrockLoginBannerAction,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match action {
-            AwsBedrockLoginBannerAction::Login => {
-                self.run_aws_login_command(ctx);
-            }
-            AwsBedrockLoginBannerAction::DontShowAgain => {
-                AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
-                    report_if_error!(ai_settings
-                        .aws_bedrock_login_banner_dismissed
-                        .set_value(true, ctx));
-                });
-            }
-            AwsBedrockLoginBannerAction::Dismiss => {
-                // Mark as dismissed for this session (won't reappear until app restart)
-                ByoLlmAuthBannerSessionState::handle(ctx).update(ctx, |state, ctx| {
-                    state.dismiss(ctx);
-                });
-            }
-        }
-        self.remove_aws_bedrock_login_banner(ctx);
-    }
-
-    /// Runs the AWS login command configured in settings to refresh Bedrock credentials.
-    /// Doing this in PTY vs just a subprocess allows the user to see any output/errors
-    /// from the command directly in the terminal. Also, `aws login` commands may require
-    /// user interaction (e.g. "do you want to override X profile? y/n" is common)
-    fn run_aws_login_command(&mut self, ctx: &mut ViewContext<Self>) {
-        let login_command = AISettings::as_ref(ctx)
-            .aws_bedrock_auth_refresh_command
-            .value()
-            .clone();
-
-        if login_command.is_empty() {
-            log::warn!("AWS login command is not configured");
-            return;
-        }
-
-        // Track that we're running an AWS login command so we can detect
-        // "command not found" if AWS CLI isn't installed
-        self.is_pending_aws_login = true;
-
-        // Write the command to the PTY and execute it
-        let command_bytes = login_command.into_bytes();
-        self.clear_line_editor_and_write_to_pty(command_bytes, ctx);
-        self.write_to_pty(vec![escape_sequences::C0::CR], ctx);
-    }
-
-    /// Checks if the current model request could be served via AWS Bedrock and the user
-    /// isn't already using it. If so, inserts a banner prompting the user to log in.
-    ///
-    /// The banner is shown when the user could be using AWS Bedrock to save on warp AI spend, but isn't.
-    fn maybe_insert_aws_bedrock_login_banner(
-        &mut self,
-        model_id: &LLMId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        // Don't show if already displayed
-        if self.inline_banners_state.aws_bedrock_login_banner.is_some() {
-            return;
-        }
-
-        // Check if dismissed (either permanently via "Don't show again" or for this session via "X")
-        if ByoLlmAuthBannerSessionState::as_ref(ctx).is_dismissed() {
-            return;
-        }
-
-        // Check if AWS Bedrock is available in the workspace
-        if !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx) {
-            return;
-        }
-
-        // Check if the model supports AWS Bedrock routing
-        let llm_prefs = LLMPreferences::as_ref(ctx);
-        let Some(llm_info) = llm_prefs.get_llm_info(model_id) else {
-            return;
-        };
-
-        let supports_aws_bedrock = llm_info
-            .host_configs
-            .get(&LLMModelHost::AwsBedrock)
-            .is_some_and(|config| config.enabled);
-        if !supports_aws_bedrock {
-            return;
-        }
-
-        if matches!(
-            ApiKeyManager::as_ref(ctx).aws_credentials_state(),
-            AwsCredentialsState::Loaded { .. }
-        ) {
-            return;
-        }
-
-        // User doesn't have AWS credentials - show the banner
-        let banner_id = self.inline_banners_state.next_banner_id();
-        self.inline_banners_state.aws_bedrock_login_banner = Some(AwsBedrockLoginBannerState {
-            id: banner_id,
-            login_button_mouse_state: Default::default(),
-            dismiss_button_mouse_state: Default::default(),
-            dont_show_again_button_mouse_state: Default::default(),
-        });
-
-        self.model
-            .lock()
-            .block_list_mut()
-            .append_inline_banner_with_custom_height(
-                InlineBannerItem::new(banner_id, InlineBannerType::AwsBedrockLogin),
-                3.5,
-            );
-
-        ctx.notify();
-    }
-
-    fn remove_aws_cli_not_installed_banner(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(banner_state) = self
-            .inline_banners_state
-            .aws_cli_not_installed_banner
-            .take()
-        {
-            self.model
-                .lock()
-                .block_list_mut()
-                .remove_inline_banner(banner_state.id);
-        }
-        ctx.notify();
-    }
-
-    fn handle_aws_cli_not_installed_banner_action(
-        &mut self,
-        action: AwsCliNotInstalledBannerAction,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match action {
-            AwsCliNotInstalledBannerAction::LearnMore => {
-                ctx.open_url(AwsCliNotInstalledBannerAction::docs_url());
-            }
-            AwsCliNotInstalledBannerAction::Dismiss => {}
-        }
-        self.remove_aws_cli_not_installed_banner(ctx);
-    }
-
-    /// Checks if the user tried to run an AWS login command and the AWS CLI wasn't installed.
-    /// If so, shows a helpful banner explaining the issue.
-    fn maybe_show_aws_cli_not_installed_suggestion(
-        &mut self,
-        exit_code: ExitCode,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        // Check if we were waiting for an AWS login command result
-        let was_pending = self.is_pending_aws_login;
-        // Always reset the flag
-        self.is_pending_aws_login = false;
-
-        if !was_pending {
-            return;
-        }
-
-        // Check if the command failed with "command not found"
-        if !exit_code.was_command_not_found() {
-            return;
-        }
-
-        // Don't show if already displayed
-        if self
-            .inline_banners_state
-            .aws_cli_not_installed_banner
-            .is_some()
-        {
-            return;
-        }
-
-        // Show the banner
-        let banner_id = self.inline_banners_state.next_banner_id();
-        self.inline_banners_state.aws_cli_not_installed_banner =
-            Some(AwsCliNotInstalledBannerState::new(banner_id));
-
-        self.model
-            .lock()
-            .block_list_mut()
-            .append_inline_banner_with_custom_height(
-                InlineBannerItem::new(banner_id, InlineBannerType::AwsCliNotInstalled),
-                3.5,
-            );
-
-        ctx.notify();
     }
 
     /// Inserts a banner notifying the user that the shell process has terminated.
@@ -10145,13 +9888,6 @@ impl TerminalView {
 
                         self.maybe_suggest_open_in_warp(block_completed, ctx);
                     }
-
-                    // Check if the user tried to run an AWS login command but AWS CLI wasn't installed.
-                    // This runs after other suggestion checks and may add its own banner alongside them.
-                    self.maybe_show_aws_cli_not_installed_suggestion(
-                        block_completed.serialized_block.exit_code,
-                        ctx,
-                    );
 
                     let terminal_view_state = {
                         let model = self.model.lock();
@@ -11249,25 +10985,25 @@ impl TerminalView {
         match event {
             CLIAgentSessionsModelEvent::Started {
                 terminal_view_id, ..
-            } if *terminal_view_id == self.view_id => {
-                if FeatureFlag::TrimTrailingBlankLines.is_enabled() {
-                    self.model
-                        .lock()
-                        .block_list_mut()
-                        .active_block_mut()
-                        .set_trim_trailing_blank_rows(true);
-                }
+            } if *terminal_view_id == self.view_id
+                && FeatureFlag::TrimTrailingBlankLines.is_enabled() =>
+            {
+                self.model
+                    .lock()
+                    .block_list_mut()
+                    .active_block_mut()
+                    .set_trim_trailing_blank_rows(true);
             }
             CLIAgentSessionsModelEvent::Ended {
                 terminal_view_id, ..
-            } if *terminal_view_id == self.view_id => {
-                if FeatureFlag::TrimTrailingBlankLines.is_enabled() {
-                    self.model
-                        .lock()
-                        .block_list_mut()
-                        .active_block_mut()
-                        .set_trim_trailing_blank_rows(false);
-                }
+            } if *terminal_view_id == self.view_id
+                && FeatureFlag::TrimTrailingBlankLines.is_enabled() =>
+            {
+                self.model
+                    .lock()
+                    .block_list_mut()
+                    .active_block_mut()
+                    .set_trim_trailing_blank_rows(false);
             }
             _ => {}
         }
@@ -11875,13 +11611,8 @@ impl TerminalView {
 
     fn summarize_conversation(&mut self, ctx: &mut ViewContext<Self>) {
         self.ai_controller.update(ctx, |controller, ctx| {
-            controller.send_slash_command_request(
-                SlashCommandRequest::Summarize {
-                    prompt: None,
-                    overflow: false,
-                },
-                ctx,
-            );
+            controller
+                .send_slash_command_request(SlashCommandRequest::Summarize { prompt: None }, ctx);
         });
     }
 
@@ -12523,7 +12254,7 @@ impl TerminalView {
             correct_command(
                 command,
                 &session_metadata,
-                DEFAULT_IGNORED_RULES_FOR_COMMAND_CORRECTIONS.into_iter(),
+                *DEFAULT_IGNORED_RULES_FOR_COMMAND_CORRECTIONS,
             )
         }
     }
@@ -12593,10 +12324,12 @@ impl TerminalView {
     }
 
     fn clear_prompt_suggestions(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(banner) = self.inline_banners_state.prompt_suggestions_banner.take() {
-            // Zaplex BYOP: if this chip came from the suggest_prompt tool, we need to cancel
-            // the corresponding oneshot channel, otherwise the BYOP loop hangs forever waiting for the result.
-            self.complete_byop_suggest_prompt_if_needed(&banner, None, ctx);
+        if self
+            .inline_banners_state
+            .prompt_suggestions_banner
+            .take()
+            .is_some()
+        {
             self.input.update(ctx, |input, ctx| {
                 input.set_prompt_suggestions_banner_state(None, ctx);
                 input.notify_and_notify_children(ctx);
@@ -12607,30 +12340,6 @@ impl TerminalView {
                 ai_block.ignore_passive_actions(ctx);
             });
         };
-    }
-
-    /// If the banner carries a BYOP `byop_action_id`, calls `complete_suggest_prompt_action`
-    /// to close the oneshot channel. Returns Accepted when `accepted_query=Some`, otherwise Cancelled.
-    fn complete_byop_suggest_prompt_if_needed(
-        &self,
-        banner: &PromptSuggestionBannerState,
-        accepted_query: Option<String>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let Some(_action_id) = banner.byop_action_id.as_ref() else {
-            return;
-        };
-        let result = match accepted_query {
-            Some(query) => crate::ai::agent::SuggestPromptResult::Accepted { query },
-            None => crate::ai::agent::SuggestPromptResult::Cancelled,
-        };
-        let executor = self
-            .ai_action_model
-            .as_ref(ctx)
-            .suggest_prompt_executor(ctx);
-        executor.update(ctx, |executor, _ctx| {
-            executor.complete_suggest_prompt_action(result);
-        });
     }
 
     fn update_input_prompt_suggestions_banner_state(&mut self, ctx: &mut ViewContext<Self>) {
@@ -12764,18 +12473,16 @@ impl TerminalView {
         self.update_scroll_position_locking(ScrollPositionUpdate::AfterEnd, ctx);
     }
 
-    /// Zaplex BYOP: when the model actively calls the `suggest_prompt` tool, the executor emits this event carrying
-    /// prompt + label + action_id.
+    /// Handles prompt suggestions emitted by the agent's `suggest_prompt` tool.
     ///
-    /// **Design semantics**: `suggest_prompt` is fire-and-forget (aligned with opencode agentic tool behavior)
-    /// — as soon as the chip is shown, the oneshot is completed **immediately** (feeding Accepted{query: prompt} back to the model),
+    /// `suggest_prompt` is fire-and-forget: as soon as the chip is shown, the executor is completed
     /// without waiting for a user click. This way:
     /// 1. The "Warping..." indicator in the conversation status bar disappears immediately, and the model naturally ends its turn on the next round
     /// 2. The chip stays mounted in the UI; when the user clicks it → goes through `resolve_prompt_suggestion` →
     ///    `enter_agent_view(Some(prompt))`, submitting the prompt as a **new round of user input**,
     ///    equivalent to the user manually typing that prompt (independent of the oneshot channel)
     ///
-    /// Previously "the user clicks the chip" was mistakenly treated as the oneshot completion signal, so if the user did not click → the conversation hung forever.
+    /// The executor is completed immediately so the agent turn does not wait for a user click.
     fn handle_suggest_prompt_executor_event(
         &mut self,
         _: ModelHandle<PromptSuggestionExecutor>,
@@ -12792,15 +12499,15 @@ impl TerminalView {
                 self.on_maa_prompt_suggestion_generated(
                     prompt,
                     label,
-                    0, // request_duration_ms — BYOP is a local tool, no server round-trip latency
+                    0, // request_duration_ms — this is a local tool, with no server round-trip latency
                     None, // trigger — not from a passive trigger such as a shell command
                     Some(*conversation_id),
                     None, // server_request_token — not server-triggered
                     ctx,
                 );
                 // Immediately complete the oneshot to close the channel, but **must use Cancelled** — otherwise
-                // the controller (`controller.rs:472` `should_trigger_request_upon_completion`)
-                // detects an Accepted/non-Cancelled result and forces a new round of BYOP LLM call;
+                // the controller's `should_trigger_request_upon_completion` path
+                // detects an Accepted/non-Cancelled result and forces another agent round;
                 // the model sees "the user accepted the chip" + no new user message, returns an empty response,
                 // and the UX gets stuck at "Warping..." once again. Cancelled makes the controller not trigger a follow-up
                 // request, so the current round ends naturally.
@@ -12907,7 +12614,6 @@ impl TerminalView {
             trigger,
             conversation_id,
             server_request_token: server_request_token.clone(),
-            byop_action_id: None,
         };
 
         self.inline_banners_state.prompt_suggestions_banner = Some(banner_state.clone());
@@ -13189,7 +12895,6 @@ impl TerminalView {
                     trigger: Some(trigger),
                     conversation_id: None,
                     server_request_token: None,
-                    byop_action_id: None,
                 };
 
                 self.inline_banners_state.prompt_suggestions_banner = Some(banner_state.clone());
@@ -18676,9 +18381,6 @@ impl TerminalView {
             AIBlockEvent::OpenThemeChooser => {
                 ctx.emit(Event::OpenThemeChooser);
             }
-            AIBlockEvent::RunAwsLoginCommand => {
-                self.run_aws_login_command(ctx);
-            }
         }
         ctx.notify();
     }
@@ -20788,12 +20490,12 @@ impl TerminalView {
                 // determines if we need git status updates.
                 self.update_git_status_subscription(ctx);
             }
-            SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. } => {
+            SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. }
+                if !is_rich_input_chip_in_cli_toolbar(ctx) =>
+            {
                 // Force-close rich input when the Rich Input chip is removed so
                 // it doesn't linger open with no toolbar button to manage it.
-                if !is_rich_input_chip_in_cli_toolbar(ctx) {
-                    self.close_cli_agent_rich_input(CLIAgentRichInputCloseReason::Other, ctx);
-                }
+                self.close_cli_agent_rich_input(CLIAgentRichInputCloseReason::Other, ctx);
             }
             _ => {}
         }
@@ -21412,20 +21114,6 @@ impl TerminalView {
             );
         }
 
-        if let Some(banner_state) = &self.inline_banners_state.aws_bedrock_login_banner {
-            inline_banners.insert(
-                banner_state.id,
-                render_aws_bedrock_login_banner(banner_state, appearance),
-            );
-        }
-
-        if let Some(banner_state) = &self.inline_banners_state.aws_cli_not_installed_banner {
-            inline_banners.insert(
-                banner_state.id,
-                render_aws_cli_not_installed_banner(banner_state, appearance),
-            );
-        }
-
         if let Some(banner_state) = &self.inline_banners_state.cli_agent_restore_banner {
             inline_banners.insert(
                 banner_state.banner_id,
@@ -21472,9 +21160,8 @@ impl TerminalView {
         // Zaplex: the condition for alt-screen to render the cli subagent overlay is relaxed from the original
         // `is_agent_in_control()` to `is_agent_in_control_or_tagged_in()`. The original condition only considered the handoff path
         // (the agent takes over LRC control), missing the user-initiated tag-in path (`SetInputModeAgent` →
-        // `tag_in_agent_for_user_long_running_command`). The latter is the main entry point for the overlay under the Zaplex BYOP
-        // pipeline (controller `send_request_input` detects tagged-in → injects
-        // `lrc_command_id` → chat_stream synthesizes a virtual subagent → spawns CLISubagentView);
+        // `tag_in_agent_for_user_long_running_command`). The latter is the main entry point for the overlay:
+        // the controller detects tagged-in input, injects `lrc_command_id`, and spawns CLISubagentView;
         // without relaxing it, even if the view is created, alt-screen still does not mount it, and the model's reply is never seen.
         let active_cli_subagent_view = model
             .block_list()
@@ -23854,8 +23541,6 @@ impl TypedActionView for TerminalView {
             | OpenInlineHistoryMenu
             | OpenModelSelector
             | ResolvePromptSuggestion(..)
-            | AwsBedrockLoginBanner(_)
-            | AwsCliNotInstalledBanner(_)
             | ExecuteRewindFromInlineMenu { .. }
             | ToggleUsageFooter
             | RevealChildAgent { .. }
@@ -24794,12 +24479,6 @@ impl TypedActionView for TerminalView {
             }
             ResolvePromptSuggestion(resolution) => {
                 self.resolve_passive_suggestion(*resolution, ctx);
-            }
-            AwsBedrockLoginBanner(action) => {
-                self.handle_aws_bedrock_login_banner_action(*action, ctx);
-            }
-            AwsCliNotInstalledBanner(action) => {
-                self.handle_aws_cli_not_installed_banner_action(*action, ctx);
             }
             CancelAmbientAgentTask => {
                 self.ambient_agent_view_model.update(ctx, |model, ctx| {
@@ -25846,7 +25525,7 @@ where
         })
         .collect();
     // Higher score comes first; ties keep the original order (stable sort).
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|item| Reverse(item.0));
     if scored.is_empty() {
         OnekeyMenuRows::NoMatches
     } else {

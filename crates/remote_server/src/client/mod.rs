@@ -32,7 +32,6 @@ use crate::protocol::{self, ProtocolError, RequestId};
 
 use warp_core::SessionId;
 use warpui::r#async::TransportStream;
-use zaplex_remote_session::types::FEATURE_AGENT_TRANSCRIPT_READ_V1;
 
 /// Default request timeout (2 minutes).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -754,6 +753,8 @@ impl RemoteServerClient {
     /// [`AgentAccountInventory`]. Callers must first negotiate
     /// `agent-account-routing-v1`; never derive the route from a local config
     /// path.
+    // The arguments map one-to-one to OpenSession protocol fields at this transport boundary.
+    #[allow(clippy::too_many_arguments)]
     pub async fn open_session_for_agent_account(
         &self,
         cwd: Option<String>,
@@ -780,6 +781,8 @@ impl RemoteServerClient {
 
     /// Opens a daemon-owned managed agent after the daemon has validated the
     /// opaque account route and its configured memory-headroom floor.
+    // The arguments map one-to-one to OpenSession protocol fields at this transport boundary.
+    #[allow(clippy::too_many_arguments)]
     pub async fn open_managed_agent_session(
         &self,
         cwd: String,
@@ -806,6 +809,8 @@ impl RemoteServerClient {
         .await
     }
 
+    // The arguments map one-to-one to OpenSession protocol fields at this transport boundary.
+    #[allow(clippy::too_many_arguments)]
     async fn open_session_with_account_route(
         &self,
         cwd: Option<String>,
@@ -1088,7 +1093,7 @@ impl RemoteServerClient {
     /// Reads a bounded transcript snapshot from the daemon that owns the
     /// provider account and session. The request carries no filesystem path;
     /// callers must pass an opaque account id from [`Self::list_agent_accounts`]
-    /// and require [`FEATURE_AGENT_TRANSCRIPT_READ_V1`] on the peer.
+    /// and require `FEATURE_AGENT_TRANSCRIPT_READ_V1` on the peer.
     pub async fn read_agent_transcript(
         &self,
         provider: String,

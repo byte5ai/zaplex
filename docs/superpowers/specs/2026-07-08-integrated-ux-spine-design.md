@@ -3,6 +3,10 @@
 Status: **authoritative source of truth** · 2026-07-08 · consolidates and *enforces* the
 already-approved concepts that the shipped build did not honour.
 
+**Subscription-agent amendment (2026-09-10):** #152 supersedes any Custom-Provider/BYOP claim in
+this dated ledger. Zaplex now routes in-app agent turns only through official Claude Code and Codex
+processes with detected subscriptions; older references below are historical.
+
 **Live-tree amendment (2026-08-17):** `specs/cockpit-live-host-tree/{PRODUCT,TECH}.md` is
 authoritative for the sidebar tree. The Connections panel is the registry/favorites surface; the
 tab menu shows favorite hosts; the Cockpit is the live `Host ▸ Project ▸ Session ▸ Agent` view.

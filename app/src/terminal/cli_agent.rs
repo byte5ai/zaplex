@@ -23,6 +23,9 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::ai::agent::{AgentReviewCommentBatch, DiffSetHunk};
 use crate::ai::blocklist::CLAUDE_ORANGE;
+use crate::ai::subscription_agent::{
+    CLAUDE_PROVIDER_MANAGED_BY_HOST, CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES,
+};
 use crate::code::editor::line::EditorLineLocation;
 use crate::code_review::comments::AttachedReviewCommentTarget;
 use crate::server::telemetry::CLIAgentType;
@@ -510,7 +513,11 @@ impl CLIAgent {
             CLIAgent::Claude => {
                 launch
                     .unset_environment
-                    .extend(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
+                    .extend(CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES);
+                launch.environment.push((
+                    CLAUDE_PROVIDER_MANAGED_BY_HOST.0,
+                    CLAUDE_PROVIDER_MANAGED_BY_HOST.1.to_string(),
+                ));
                 if let Some(dir) = config_dir {
                     launch
                         .environment

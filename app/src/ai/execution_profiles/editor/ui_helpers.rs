@@ -227,13 +227,6 @@ pub fn render_models_section(
     let base_desc = crate::t!("settings-exec-profile-editor-base-model-desc");
     let full_term_label = crate::t!("settings-exec-profile-editor-full-terminal-use-model");
     let full_term_desc = crate::t!("settings-exec-profile-editor-full-terminal-use-model-desc");
-    let title_label = crate::t!("settings-exec-profile-editor-title-model");
-    let title_desc = crate::t!("settings-exec-profile-editor-title-model-desc");
-    let active_label = crate::t!("settings-exec-profile-editor-active-ai-model");
-    let active_desc = crate::t!("settings-exec-profile-editor-active-ai-model-desc");
-    let next_label = crate::t!("settings-exec-profile-editor-next-command-model");
-    let next_desc = crate::t!("settings-exec-profile-editor-next-command-model-desc");
-
     let mut column = Flex::column()
         .with_child(render_separator(appearance))
         .with_child(render_section_label(&section_label, appearance))
@@ -248,24 +241,6 @@ pub fn render_models_section(
             &full_term_label,
             &full_term_desc,
             &view.full_terminal_use_model_dropdown,
-        ))
-        .with_child(render_filterable_dropdown_row(
-            appearance,
-            &title_label,
-            &title_desc,
-            &view.title_model_dropdown,
-        ))
-        .with_child(render_filterable_dropdown_row(
-            appearance,
-            &active_label,
-            &active_desc,
-            &view.active_ai_model_dropdown,
-        ))
-        .with_child(render_filterable_dropdown_row(
-            appearance,
-            &next_label,
-            &next_desc,
-            &view.next_command_model_dropdown,
         ));
 
     if FeatureFlag::LocalComputerUse.is_enabled() {

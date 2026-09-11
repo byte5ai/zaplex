@@ -551,7 +551,7 @@ fn best_supported_provider_falls_back_when_no_match() {
 }
 
 // ============================================================================
-// Tests for find_skill_by_name (BYOP read_skill tool looks up ParsedSkill by name)
+// Tests for find_skill_by_name (structured read_skill calls look up ParsedSkill by name)
 // ============================================================================
 
 #[test]

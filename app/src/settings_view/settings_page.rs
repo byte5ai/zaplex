@@ -101,7 +101,7 @@ pub enum SettingsPageViewHandle {
     About(ViewHandle<AboutPageView>),
     Code(ViewHandle<CodeSettingsPageView>),
     // Zaplex Wave 3-1: `OzCloudAPIKeys` variant removed together with `platform_page`.
-    // Cloud API key management UI fully represents Zaplex Inc cloud account; unrelated to BYOP.
+    // Cloud API key management is handled by the Zaplex Inc account surface.
     // Zaplex Wave 6-8: `SharedBlocks` / `Referrals` variant removed together with `ShowBlocksView` /
     // `ReferralsPageView` and the corresponding ServerApi client trait.
     // Zaplex Wave 7-3: `CloudEnvironments` variant removed together with ambient-agent UI subsystem.

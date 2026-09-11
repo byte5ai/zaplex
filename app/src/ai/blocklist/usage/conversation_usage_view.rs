@@ -9,7 +9,6 @@ use crate::ui_components::blended_colors;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
 use warpui::elements::ConstrainedBox;
 use warpui::{
     elements::{
@@ -78,10 +77,10 @@ impl ConversationUsageView {
         }
     }
     /// Helper to collect models grouped by category.
-    /// Returns a HashMap mapping category name to list of (model_id, is_byok) tuples.
-    /// Handles both category-based fields and legacy warp_tokens/byok_tokens fields.
-    fn collect_models_by_category(&self) -> HashMap<String, Vec<(String, bool)>> {
-        let mut entries_by_category: HashMap<String, Vec<(String, bool)>> = HashMap::new();
+    /// Returns a map from usage category to the model IDs recorded for that category.
+    /// Handles both category-based fields and the legacy aggregate warp token field.
+    fn collect_models_by_category(&self) -> HashMap<String, Vec<String>> {
+        let mut entries_by_category: HashMap<String, Vec<String>> = HashMap::new();
 
         // Collect from category-based fields
         for model in &self.usage_info.models {
@@ -90,15 +89,7 @@ impl ConversationUsageView {
                     entries_by_category
                         .entry(category.clone())
                         .or_default()
-                        .push((model.model_id.clone(), false));
-                }
-            }
-            for (category, &tokens) in &model.byok_token_usage_by_category {
-                if tokens > 0 {
-                    entries_by_category
-                        .entry(category.clone())
-                        .or_default()
-                        .push((model.model_id.clone(), true));
+                        .push(model.model_id.clone());
                 }
             }
         }
@@ -110,13 +101,7 @@ impl ConversationUsageView {
                     entries_by_category
                         .entry(PRIMARY_AGENT_CATEGORY.to_string())
                         .or_default()
-                        .push((model.model_id.clone(), false));
-                }
-                if model.byok_tokens > 0 {
-                    entries_by_category
-                        .entry(PRIMARY_AGENT_CATEGORY.to_string())
-                        .or_default()
-                        .push((model.model_id.clone(), true));
+                        .push(model.model_id.clone());
                 }
             }
         }
@@ -139,10 +124,10 @@ impl ConversationUsageView {
         ));
         values.push(render_section_header("".to_string(), appearance));
 
-        if self.display_mode == DisplayMode::Footer
-            && self.usage_info.credits_spent_for_last_block.is_some()
-        {
-            let last_block_credits = self.usage_info.credits_spent_for_last_block.unwrap();
+        if let (DisplayMode::Footer, Some(last_block_credits)) = (
+            self.display_mode,
+            self.usage_info.credits_spent_for_last_block,
+        ) {
             labels.push(render_label_text(
                 "Credits spent (last response)",
                 appearance,
@@ -216,12 +201,13 @@ impl ConversationUsageView {
                 labels.push(render_label_text(&label_text, appearance));
             }
 
-            // Build comma-separated list of models, with BYOK indicator using Icon::Key
+            // Build a comma-separated list of models.
             let mut model_elements: Vec<Box<dyn Element>> = vec![];
             let mut sorted_models: Vec<_> = models.iter().collect();
-            sorted_models.sort_by(|a, b| a.0.cmp(&b.0));
+            sorted_models.sort();
+            sorted_models.dedup();
 
-            for (i, (model_id, is_byok)) in sorted_models.iter().enumerate() {
+            for (i, model_id) in sorted_models.iter().enumerate() {
                 if i > 0 {
                     model_elements.push(
                         Text::new(", ".to_string(), appearance.ui_font_family(), font_size)
@@ -230,29 +216,11 @@ impl ConversationUsageView {
                     );
                 }
 
-                if *is_byok {
-                    model_elements.push(
-                        ConstrainedBox::new(Icon::Key.to_warpui_icon(text_color.into()).finish())
-                            .with_width(font_size)
-                            .with_height(font_size)
-                            .finish(),
-                    );
-                    model_elements.push(
-                        Container::new(
-                            Text::new((*model_id).clone(), appearance.ui_font_family(), font_size)
-                                .with_color(text_color)
-                                .finish(),
-                        )
-                        .with_margin_left(4.)
+                model_elements.push(
+                    Text::new((*model_id).clone(), appearance.ui_font_family(), font_size)
+                        .with_color(text_color)
                         .finish(),
-                    );
-                } else {
-                    model_elements.push(
-                        Text::new((*model_id).clone(), appearance.ui_font_family(), font_size)
-                            .with_color(text_color)
-                            .finish(),
-                    );
-                }
+                );
             }
 
             values.push(

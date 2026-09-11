@@ -67,8 +67,8 @@ pub(super) fn input_context_for_request(
     }
 
     if FeatureFlag::ListSkills.is_enabled() {
-        // After moving to the cloud, the system prompt is fully re-rendered on the client each round
-        // (BYOP is stateless). Skills must be sent in full each round, no longer as a delta.
+        // The system prompt is fully re-rendered on the client each round. Skills must be sent in
+        // full each round rather than as a delta.
         // When empty, don't push to keep context compact (template guard `{% if skills %}` can normally omit the section).
         let skills = list_skills(
             active_session.current_working_directory().map(Path::new),
