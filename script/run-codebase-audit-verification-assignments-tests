@@ -385,7 +385,10 @@ class CodebaseAuditVerificationRunnerTest(unittest.TestCase):
             self.assertIn("--ignore-user-config", arguments)
             self.assertIn("--skip-git-repo-check", arguments)
             self.assertEqual(arguments[arguments.index("--sandbox") + 1], "read-only")
-            self.assertIn('model_reasoning_effort="high"', arguments)
+            self.assertIn('model_reasoning_effort="xhigh"', arguments)
+            self.assertEqual(
+                arguments[arguments.index("--model") + 1], "gpt-5.6-sol"
+            )
 
         result_names = sorted(path.name for path in (run_directory / "results").iterdir())
         self.assertEqual(
@@ -398,6 +401,9 @@ class CodebaseAuditVerificationRunnerTest(unittest.TestCase):
         self.assertEqual(run["completed_tuples"], len(entries))
         self.assertEqual(run["github_repository"], self.github_repository)
         self.assertEqual(run["provenance"], self.assignments["provenance"])
+        self.assertEqual(run["runner_version"], 2)
+        self.assertEqual(run["model"], "gpt-5.6-sol")
+        self.assertEqual(run["reasoning_effort"], "xhigh")
         self.assertEqual(run["run_sha256"], RUNNER.document_hash(run, "run_sha256"))
         self.assertEqual(
             run["assignments_input_sha256"],
@@ -486,6 +492,30 @@ class CodebaseAuditVerificationRunnerTest(unittest.TestCase):
                 result = self.run_runner(self.root / f"missing-{index}", **arguments)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(option, result.stderr)
+        self.assertEqual(self.read_state()["calls"], [])
+
+    def test_rejects_noncontract_model_and_reasoning_effort(self):
+        cases = (
+            ("--model", "gpt-5.6-luna"),
+            ("--reasoning-effort", "high"),
+        )
+        environment = os.environ.copy()
+        environment["STUB_STATE_DIRECTORY"] = str(self.stub_state)
+        environment["STUB_BEHAVIOR"] = "success"
+        for index, (option, value) in enumerate(cases):
+            with self.subTest(option=option, value=value):
+                command = self.runner_command(self.root / f"invalid-contract-{index}")
+                command.extend((option, value))
+                result = subprocess.run(
+                    command,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    env=environment,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("invalid choice", result.stderr)
         self.assertEqual(self.read_state()["calls"], [])
 
     def test_rejects_changed_assignments_aggregate_and_issue_snapshot(self):

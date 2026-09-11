@@ -310,6 +310,154 @@ class CodebaseAuditCrosscutEvidenceTest(unittest.TestCase):
                     )
                 )
 
+    def test_production_recursive_patterns_cover_root_and_nested_files(self):
+        raw = PRODUCTION_DEFINITIONS.read_bytes()
+        contract = EVIDENCE.load_definitions(
+            PRODUCTION_DEFINITIONS, hashlib.sha256(raw).hexdigest()
+        )
+        recursive_patterns = []
+        for definition in contract["definitions"]:
+            recursive_patterns.extend(
+                (definition["id"], selector["pattern"])
+                for selector in definition["mandatory_paths"]
+                if "/**/" in selector["pattern"]
+            )
+            recursive_patterns.extend(
+                (definition["id"], pattern)
+                for rule in definition["path_rules"]
+                for pattern in rule["patterns"]
+                if "/**/" in pattern
+            )
+        self.assertEqual(recursive_patterns, [])
+
+        definition = next(
+            definition
+            for definition in contract["definitions"]
+            if definition["id"] == "feature-flags-i18n-dead-code"
+        )
+        for root_path, nested_path in (
+            ("app/src/root.rs", "app/src/nested/module.rs"),
+            ("crates/root.rs", "crates/nested/src/lib.rs"),
+        ):
+            self.assertEqual(
+                EVIDENCE.classify_definition_path(definition, root_path), "include"
+            )
+            self.assertEqual(
+                EVIDENCE.classify_definition_path(definition, nested_path), "include"
+            )
+
+        mandatory_patterns = [
+            selector["pattern"] for selector in definition["mandatory_paths"]
+        ]
+        for root_path, nested_path in (
+            ("app/channels/stable.desktop", "app/channels/nested/stable.desktop"),
+            ("app/channels/stable.json", "app/channels/nested/stable.json"),
+            ("app/i18n/en-US.ftl", "app/i18n/nested/en-US.ftl"),
+        ):
+            self.assertTrue(
+                any(
+                    EVIDENCE.fnmatch.fnmatchcase(root_path, pattern)
+                    for pattern in mandatory_patterns
+                )
+            )
+            self.assertTrue(
+                any(
+                    EVIDENCE.fnmatch.fnmatchcase(nested_path, pattern)
+                    for pattern in mandatory_patterns
+                )
+            )
+
+    def test_production_i18n_crosscut_detects_hardcoded_ui_text(self):
+        raw = PRODUCTION_DEFINITIONS.read_bytes()
+        contract = EVIDENCE.load_definitions(
+            PRODUCTION_DEFINITIONS, hashlib.sha256(raw).hexdigest()
+        )
+        matcher = contract["compiled"]["feature-flags-i18n-dead-code"].get(
+            "hardcoded-ui-text"
+        )
+        self.assertIsNotNone(matcher)
+        for source in (
+            'Text::new("New", appearance.ui_font_family(), 12.)',
+            'Text::new_inline("Inline text", font, 12.)',
+            'FormattedTextElement::from_str("Formatted text", font, 12.)',
+            'Span::new("Span text", styles)',
+            'ui_builder.label("New window").build().finish()',
+            'Text::new(\n    r#"Hard-coded UI text"#,\n    font,\n    12.,\n)',
+        ):
+            self.assertIsNotNone(matcher.search(source))
+        for source in (
+            'Text::new(crate::t!("common-new"), appearance.ui_font_family(), 12.)',
+            'Text::new_inline(crate::t!("common-new"), font, 12.)',
+            'FormattedTextElement::from_str(crate::t!("common-new"), font, 12.)',
+            'Span::new(crate::t!("common-new"), styles)',
+            'ui_builder.label(crate::t!("common-new")).build().finish()',
+            "Text::new(localized_label, appearance.ui_font_family(), 12.)",
+        ):
+            self.assertIsNone(matcher.search(source))
+
+    def test_production_confirmed_crosscut_paths_are_covered(self):
+        raw = PRODUCTION_DEFINITIONS.read_bytes()
+        contract = EVIDENCE.load_definitions(
+            PRODUCTION_DEFINITIONS, hashlib.sha256(raw).hexdigest()
+        )
+        definitions = {
+            definition["id"]: definition for definition in contract["definitions"]
+        }
+
+        terminal_lock = definitions["terminal-model-lock"]
+        for path in (
+            "app/src/code_review/code_review_view.rs",
+            "app/src/editor/view/mod.rs",
+            "app/src/search/ai_context_menu/blocks/data_source.rs",
+            "app/src/system/info.rs",
+        ):
+            self.assertEqual(
+                EVIDENCE.classify_definition_path(terminal_lock, path), "include"
+            )
+
+        expected_mandatory_paths = {
+            "path-and-transfer-safety": {
+                "app/src/terminal/view/ssh_file_upload.rs",
+                "app/src/workspace/view.rs",
+            },
+            "secrets-and-logging": {
+                ".github/workflows/*.yml",
+                "crates/warpui_extras/**",
+                "crates/warp_cli/**",
+                "crates/zap_sync/**",
+                "script/macos/bundle",
+            },
+            "ssh-bootstrap-injection": {
+                "app/src/ai/subscription_agent/**",
+                "app/src/ssh_manager/**",
+                "app/src/terminal/view/ssh_file_upload.rs",
+                "app/src/workspace/view.rs",
+            },
+        }
+        for crosscut_id, expected_paths in expected_mandatory_paths.items():
+            definition = definitions[crosscut_id]
+            mandatory_paths = {
+                selector["pattern"] for selector in definition["mandatory_paths"]
+            }
+            self.assertTrue(expected_paths <= mandatory_paths)
+            for path in expected_paths:
+                representative = path.replace("**", "representative.rs").replace(
+                    "*", "representative"
+                )
+                self.assertEqual(
+                    EVIDENCE.classify_definition_path(definition, representative),
+                    "include",
+                )
+        secrets = definitions["secrets-and-logging"]
+        for path in (
+            "script/macos/bootstrap",
+            "script/macos/install_build_deps",
+            "script/macos/run",
+        ):
+            self.assertEqual(
+                EVIDENCE.classify_definition_path(secrets, path), "include"
+            )
+
     def test_output_is_deterministic_immutable_complete_and_source_deduplicated(self):
         self.write("src/shared.rs", b"dirty worktree data must never be read\n")
         first = self.root / "evidence-first"
