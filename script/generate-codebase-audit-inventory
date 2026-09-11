@@ -1,0 +1,518 @@
+#!/usr/bin/env python3
+
+"""Generate a deterministic code-audit inventory from immutable Git objects."""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+from typing import Any
+
+
+SCHEMA_VERSION = 1
+GENERATOR_VERSION = 1
+OBJECT_FORMAT_LENGTHS = {"sha1": 40, "sha256": 64}
+
+
+class InventoryError(RuntimeError):
+    """Raised when immutable inputs or coverage invariants are invalid."""
+
+
+def canonical_json(value: Any) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode(
+        "utf-8"
+    )
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def run_git(repo: Path, *args: str) -> bytes:
+    environment = os.environ.copy()
+    for name in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_WORK_TREE",
+    ):
+        environment.pop(name, None)
+    environment["GIT_GRAFT_FILE"] = os.devnull
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise InventoryError(f"git {' '.join(args)} failed: {detail}")
+    return result.stdout
+
+
+def repository_object_format(repo: Path) -> tuple[str, int]:
+    value = run_git(repo, "rev-parse", "--show-object-format=storage").decode("ascii").strip()
+    if value not in OBJECT_FORMAT_LENGTHS:
+        raise InventoryError(f"unsupported Git object format: {value or 'empty'}")
+    return value, OBJECT_FORMAT_LENGTHS[value]
+
+
+def require_object_id(value: str, label: str, length: int) -> str:
+    if re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is None:
+        raise InventoryError(
+            f"{label} must be the full canonical {length}-character lowercase object ID"
+        )
+    return value
+
+
+def require_commit(repo: Path, value: str, label: str, oid_length: int) -> str:
+    object_id = require_object_id(value, label, oid_length)
+    canonical = (
+        run_git(repo, "rev-parse", "--verify", f"{object_id}^{{commit}}")
+        .decode("ascii")
+        .strip()
+    )
+    if canonical != object_id:
+        raise InventoryError(f"{label} is not the exact canonical commit object ID")
+    object_type = run_git(repo, "cat-file", "-t", object_id).decode("ascii").strip()
+    if object_type != "commit":
+        raise InventoryError(f"{label} {object_id} is a {object_type}, not a commit")
+    return object_id
+
+
+def git_common_directory(repo: Path) -> Path:
+    raw = run_git(repo, "rev-parse", "--git-common-dir").decode("utf-8").strip()
+    path = Path(raw)
+    return path.resolve() if path.is_absolute() else (repo / path).resolve()
+
+
+def reject_history_overrides(repo: Path) -> None:
+    replace_refs = (
+        run_git(repo, "for-each-ref", "--format=%(refname)", "refs/replace/")
+        .decode("utf-8")
+        .splitlines()
+    )
+    if replace_refs:
+        raise InventoryError(
+            f"Git replace refs are not allowed: {', '.join(sorted(replace_refs))}"
+        )
+    grafts = git_common_directory(repo) / "info" / "grafts"
+    if grafts.exists():
+        raise InventoryError(f"Git grafts are not allowed: {grafts}")
+
+
+def verify_merge_base(
+    repo: Path, target: str, upstream: str, expected: str, oid_length: int
+) -> None:
+    merge_bases = sorted(
+        require_object_id(line, "computed merge-base", oid_length)
+        for line in run_git(repo, "merge-base", "--all", target, upstream)
+        .decode("ascii")
+        .splitlines()
+        if line
+    )
+    if merge_bases != [expected]:
+        actual = ", ".join(merge_bases) if merge_bases else "none"
+        raise InventoryError(
+            f"merge-base mismatch: expected exactly {expected}, Git reports {actual}"
+        )
+
+
+def load_tree(repo: Path, commit: str, oid_length: int) -> list[dict[str, str]]:
+    raw = run_git(repo, "ls-tree", "-r", "-z", "--full-tree", commit)
+    entries = []
+    seen = set()
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, raw_path = record.split(b"\t", 1)
+            mode, entry_type, object_id = metadata.decode("ascii").split(" ", 2)
+            path = raw_path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise InventoryError(f"cannot decode ls-tree record: {record!r}") from error
+        if path in seen:
+            raise InventoryError(f"duplicate path in Git tree: {path}")
+        require_object_id(object_id, f"object ID for {path}", oid_length)
+        seen.add(path)
+        entries.append(
+            {
+                "path": path,
+                "mode": mode,
+                "type": entry_type,
+                "object_id": object_id,
+            }
+        )
+    return sorted(entries, key=lambda entry: entry["path"])
+
+
+def load_scope(path: Path) -> tuple[dict[str, Any], bytes]:
+    try:
+        scope = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise InventoryError(f"cannot read scope file {path}: {error}") from error
+    if scope.get("schema_version") != SCHEMA_VERSION:
+        raise InventoryError(f"scope.schema_version must be {SCHEMA_VERSION}")
+    rules = scope.get("rules")
+    if not isinstance(rules, list) or not rules:
+        raise InventoryError("scope.rules must be a non-empty array")
+
+    rule_ids = set()
+    for index, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            raise InventoryError(f"scope rule {index} must be an object")
+        rule_id = rule.get("id")
+        if not isinstance(rule_id, str) or not rule_id:
+            raise InventoryError(f"scope rule {index} needs a non-empty id")
+        if rule_id in rule_ids:
+            raise InventoryError(f"duplicate scope rule id: {rule_id}")
+        rule_ids.add(rule_id)
+        if rule.get("action") not in ("include", "exclude"):
+            raise InventoryError(f"scope rule {rule_id} has an invalid action")
+        patterns = rule.get("patterns")
+        if not isinstance(patterns, list) or not patterns or not all(
+            isinstance(pattern, str) and pattern for pattern in patterns
+        ):
+            raise InventoryError(f"scope rule {rule_id} needs non-empty patterns")
+        entry_types = rule.get("entry_types")
+        if not isinstance(entry_types, list) or not entry_types or not all(
+            entry_type in ("blob", "commit") for entry_type in entry_types
+        ):
+            raise InventoryError(
+                f"scope rule {rule_id} entry_types must contain blob and/or commit"
+            )
+        if rule["action"] == "exclude" and not rule.get("reason"):
+            raise InventoryError(f"excluded scope rule {rule_id} needs a reason")
+    normalized = canonical_json(scope)
+    return scope, normalized
+
+
+def classify_entry(entry: dict[str, str], rules: list[dict[str, Any]]) -> dict[str, Any]:
+    for rule in rules:
+        if entry["type"] not in rule["entry_types"]:
+            continue
+        if any(fnmatch.fnmatchcase(entry["path"], pattern) for pattern in rule["patterns"]):
+            return rule
+    raise InventoryError(f"tracked entry is not classified by scope rules: {entry['path']}")
+
+
+def line_count(data: bytes) -> int:
+    if not data:
+        return 0
+    return data.count(b"\n") + (0 if data.endswith(b"\n") else 1)
+
+
+def line_ranges(lines: int, maximum: int) -> list[dict[str, int]]:
+    if maximum <= 0:
+        raise InventoryError("max-range-lines must be greater than zero")
+    if lines == 0:
+        return []
+    return [
+        {"start": start, "end": min(start + maximum - 1, lines)}
+        for start in range(1, lines + 1, maximum)
+    ]
+
+
+def validate_ranges(path: str, lines: int, ranges: list[dict[str, int]]) -> None:
+    if lines == 0:
+        if ranges:
+            raise InventoryError(f"empty file has ranges: {path}")
+        return
+    expected_start = 1
+    for line_range in ranges:
+        start = line_range.get("start")
+        end = line_range.get("end")
+        if start != expected_start:
+            raise InventoryError(
+                f"range gap or overlap for {path}: expected {expected_start}, got {start}"
+            )
+        if not isinstance(end, int) or end < start:
+            raise InventoryError(f"invalid range for {path}: {line_range}")
+        expected_start = end + 1
+    if expected_start != lines + 1:
+        raise InventoryError(
+            f"range coverage for {path} ends at {expected_start - 1}, expected {lines}"
+        )
+
+
+def ownership(
+    target: dict[str, str],
+    upstream: dict[str, str] | None,
+    merge_base: dict[str, str] | None,
+) -> str:
+    def identity(entry: dict[str, str]) -> tuple[str, str, str]:
+        return entry["type"], entry["mode"], entry["object_id"]
+
+    if merge_base is not None:
+        if identity(target) == identity(merge_base):
+            return "upstream-unmodified"
+        return "upstream-modified-by-fork"
+    if upstream is not None and identity(target) == identity(upstream):
+        return "upstream-unmodified"
+    return "fork-owned"
+
+
+def build_inventory(
+    repo: Path,
+    target_sha: str,
+    upstream_sha: str,
+    merge_base_sha: str,
+    scope: dict[str, Any],
+    scope_sha256: str,
+    max_range_lines: int,
+    object_format: str,
+    oid_length: int,
+) -> dict[str, Any]:
+    target_tree = load_tree(repo, target_sha, oid_length)
+    upstream_tree = {
+        entry["path"]: entry for entry in load_tree(repo, upstream_sha, oid_length)
+    }
+    merge_base_tree = {
+        entry["path"]: entry for entry in load_tree(repo, merge_base_sha, oid_length)
+    }
+    included = []
+    excluded = []
+
+    for entry in target_tree:
+        rule = classify_entry(entry, scope["rules"])
+        common = {
+            **entry,
+            "scope_rule": rule["id"],
+        }
+        if rule["action"] == "exclude":
+            excluded.append({**common, "reason": rule["reason"]})
+            continue
+        if entry["type"] != "blob":
+            raise InventoryError(f"included entry is not a blob: {entry['path']}")
+
+        data = run_git(repo, "cat-file", "blob", entry["object_id"])
+        if b"\0" in data:
+            raise InventoryError(
+                f"included blob contains NUL bytes; add an explicit exclusion if binary: {entry['path']}"
+            )
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise InventoryError(
+                f"included blob is not UTF-8; add an explicit exclusion if binary: {entry['path']}"
+            ) from error
+        lines = line_count(data)
+        ranges = line_ranges(lines, max_range_lines)
+        validate_ranges(entry["path"], lines, ranges)
+        base_entry = merge_base_tree.get(entry["path"])
+        upstream_entry = upstream_tree.get(entry["path"])
+        included.append(
+            {
+                **common,
+                "blob_oid": entry["object_id"],
+                "line_count": lines,
+                "ranges": ranges,
+                "ownership": ownership(entry, upstream_entry, base_entry),
+                "merge_base_entry": (
+                    {
+                        key: base_entry[key]
+                        for key in ("mode", "type", "object_id")
+                    }
+                    if base_entry is not None
+                    else None
+                ),
+                "merge_base_blob_oid": (
+                    base_entry["object_id"]
+                    if base_entry is not None and base_entry["type"] == "blob"
+                    else None
+                ),
+                "upstream_entry": (
+                    {
+                        key: upstream_entry[key]
+                        for key in ("mode", "type", "object_id")
+                    }
+                    if upstream_entry is not None
+                    else None
+                ),
+                "upstream_blob_oid": (
+                    upstream_entry["object_id"]
+                    if upstream_entry is not None and upstream_entry["type"] == "blob"
+                    else None
+                ),
+            }
+        )
+
+    inventory = {
+        "schema_version": SCHEMA_VERSION,
+        "generator_version": GENERATOR_VERSION,
+        "object_format": object_format,
+        "target_sha": target_sha,
+        "upstream_sha": upstream_sha,
+        "merge_base_sha": merge_base_sha,
+        "scope_sha256": scope_sha256,
+        "max_range_lines": max_range_lines,
+        "included": included,
+        "excluded": excluded,
+    }
+    validate_inventory(inventory, target_tree)
+    return inventory
+
+
+def validate_inventory(
+    inventory: dict[str, Any], target_tree: list[dict[str, str]]
+) -> None:
+    expected = {entry["path"]: entry for entry in target_tree}
+    decisions = inventory.get("included", []) + inventory.get("excluded", [])
+    actual_paths = [entry.get("path") for entry in decisions]
+    if len(actual_paths) != len(set(actual_paths)):
+        raise InventoryError("inventory assigns at least one tracked path more than once")
+    if set(actual_paths) != set(expected):
+        missing = sorted(set(expected) - set(actual_paths))
+        unexpected = sorted(set(actual_paths) - set(expected))
+        raise InventoryError(
+            f"inventory path coverage mismatch; missing={missing}, unexpected={unexpected}"
+        )
+    for entry in decisions:
+        tree_entry = expected[entry["path"]]
+        for key in ("mode", "type", "object_id"):
+            if entry.get(key) != tree_entry[key]:
+                raise InventoryError(f"inventory {key} mismatch for {entry['path']}")
+    for entry in inventory.get("included", []):
+        if entry.get("blob_oid") != entry["object_id"]:
+            raise InventoryError(f"blob OID mismatch for {entry['path']}")
+        lines = entry.get("line_count")
+        if not isinstance(lines, int) or lines < 0:
+            raise InventoryError(f"invalid line count for {entry['path']}")
+        validate_ranges(entry["path"], lines, entry.get("ranges", []))
+
+
+def build_manifest(
+    inventory: dict[str, Any], inventory_sha256: str, scope_sha256: str
+) -> dict[str, Any]:
+    included = inventory["included"]
+    excluded = inventory["excluded"]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generator_version": GENERATOR_VERSION,
+        "object_format": inventory["object_format"],
+        "target_sha": inventory["target_sha"],
+        "upstream_sha": inventory["upstream_sha"],
+        "merge_base_sha": inventory["merge_base_sha"],
+        "scope_sha256": scope_sha256,
+        "inventory_sha256": inventory_sha256,
+        "coverage": {
+            "tracked_entries": len(included) + len(excluded),
+            "included_paths": len(included),
+            "excluded_paths": len(excluded),
+            "included_lines": sum(entry["line_count"] for entry in included),
+            "ranges": sum(len(entry["ranges"]) for entry in included),
+            "complete": True,
+        },
+        "artifacts": {
+            "completion": "COMPLETE",
+            "inventory": "inventory.json",
+            "scope": "scope.resolved.json",
+        },
+    }
+
+
+def reserve_output(output: Path) -> None:
+    try:
+        output.mkdir()
+    except FileExistsError as error:
+        raise InventoryError(f"output path already exists: {output}") from error
+
+
+def write_output(output: Path, inventory: dict[str, Any], normalized_scope: bytes) -> None:
+    output = output.parent.resolve() / output.name
+    output.parent.mkdir(parents=True, exist_ok=True)
+    inventory_bytes = canonical_json(inventory)
+    inventory_sha256 = sha256_bytes(inventory_bytes)
+    scope_sha256 = sha256_bytes(normalized_scope)
+    manifest = build_manifest(inventory, inventory_sha256, scope_sha256)
+    manifest_bytes = canonical_json(manifest)
+    manifest_sha256 = sha256_bytes(manifest_bytes)
+
+    artifacts = {
+        "inventory.json": inventory_bytes,
+        "inventory.sha256": f"{inventory_sha256}  inventory.json\n".encode("ascii"),
+        "scope.resolved.json": normalized_scope,
+        "manifest.json": manifest_bytes,
+        "manifest.sha256": f"{manifest_sha256}  manifest.json\n".encode("ascii"),
+    }
+    reserve_output(output)
+    try:
+        for name, contents in artifacts.items():
+            with (output / name).open("xb") as artifact:
+                artifact.write(contents)
+                artifact.flush()
+                os.fsync(artifact.fileno())
+        completion_temporary = output / ".COMPLETE.tmp"
+        with completion_temporary.open("xb") as completion:
+            completion.write(f"{manifest_sha256}  manifest.json\n".encode("ascii"))
+            completion.flush()
+            os.fsync(completion.fileno())
+        os.link(completion_temporary, output / "COMPLETE")
+        completion_temporary.unlink()
+    except BaseException as error:
+        raise InventoryError(
+            f"output reservation is incomplete and was left in place: {output}"
+        ) from error
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--target-sha", required=True)
+    parser.add_argument("--upstream-sha", required=True)
+    parser.add_argument("--merge-base-sha", required=True)
+    parser.add_argument("--scope", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--max-range-lines", type=int, default=4000)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        repo = args.repo.resolve()
+        reject_history_overrides(repo)
+        object_format, oid_length = repository_object_format(repo)
+        target_sha = require_commit(repo, args.target_sha, "target-sha", oid_length)
+        upstream_sha = require_commit(repo, args.upstream_sha, "upstream-sha", oid_length)
+        merge_base_sha = require_commit(
+            repo, args.merge_base_sha, "merge-base-sha", oid_length
+        )
+        verify_merge_base(repo, target_sha, upstream_sha, merge_base_sha, oid_length)
+        scope, normalized_scope = load_scope(args.scope)
+        scope_sha256 = sha256_bytes(normalized_scope)
+        inventory = build_inventory(
+            repo,
+            target_sha,
+            upstream_sha,
+            merge_base_sha,
+            scope,
+            scope_sha256,
+            args.max_range_lines,
+            object_format,
+            oid_length,
+        )
+        write_output(args.output, inventory, normalized_scope)
+    except InventoryError as error:
+        print(f"codebase audit inventory: {error}", file=sys.stderr)
+        return 1
+    print(f"codebase audit inventory: wrote {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
