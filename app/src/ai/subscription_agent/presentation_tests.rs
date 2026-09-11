@@ -203,7 +203,7 @@ fn identity_fields_are_stable_and_omit_a_missing_session() {
         fields[3].value,
         target.working_directory.display().to_string()
     );
-    assert_eq!(fields[4].value, "GPT-5 · ID gpt-5");
+    assert_eq!(fields[4].value, format!("GPT-5 · ID {}", isolated("gpt-5")));
 }
 
 #[test]
