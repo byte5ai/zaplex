@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+
+"""Focused tests for the immutable codebase-audit inventory generator."""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+SCRIPT = Path(__file__).resolve().parent / "generate-codebase-audit-inventory"
+LOADER = importlib.machinery.SourceFileLoader("codebase_audit_inventory", str(SCRIPT))
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
+assert SPEC is not None
+INVENTORY = importlib.util.module_from_spec(SPEC)
+LOADER.exec_module(INVENTORY)
+
+
+class CodebaseAuditInventoryTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="zaplex-audit-inventory-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q")
+        self.git("config", "user.name", "Inventory Test")
+        self.git("config", "user.email", "inventory@example.invalid")
+
+        self.write("src/code.rs", b"base\n")
+        self.write("README.md", b"stable\n")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "base")
+        self.merge_base_sha = self.rev_parse("HEAD")
+
+        self.git("checkout", "-q", "-b", "upstream")
+        self.write("upstream-only.rs", b"upstream\n")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "upstream")
+        self.upstream_sha = self.rev_parse("HEAD")
+
+        self.git("checkout", "-q", "-b", "target", self.merge_base_sha)
+        self.write("src/code.rs", b"one\ntwo\nthree")
+        self.write("src/target-only.rs", b"")
+        self.write("assets/image.png", b"\x89PNG\x00binary")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "target")
+        self.target_sha = self.rev_parse("HEAD")
+
+        self.scope = self.root / "scope.json"
+        self.write_scope(
+            [
+                {
+                    "id": "binary",
+                    "action": "exclude",
+                    "entry_types": ["blob"],
+                    "patterns": ["*.png"],
+                    "reason": "test binary",
+                },
+                {
+                    "id": "text",
+                    "action": "include",
+                    "entry_types": ["blob"],
+                    "patterns": ["**"],
+                },
+            ]
+        )
+
+    def git(self, *args):
+        result = subprocess.run(
+            ["git", "-C", str(self.repo), *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def rev_parse(self, revision):
+        return self.git("rev-parse", revision)
+
+    def write(self, relative, data):
+        path = self.repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def write_scope(self, rules):
+        self.scope.write_text(
+            json.dumps({"schema_version": 1, "rules": rules}), encoding="utf-8"
+        )
+
+    def run_generator(self, output, *extra):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--repo",
+                str(self.repo),
+                "--target-sha",
+                self.target_sha,
+                "--upstream-sha",
+                self.upstream_sha,
+                "--merge-base-sha",
+                self.merge_base_sha,
+                "--scope",
+                str(self.scope),
+                "--output",
+                str(output),
+                "--max-range-lines",
+                "2",
+                *extra,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
+    def test_reads_commit_blobs_and_records_complete_ranges_and_ownership(self):
+        self.write("src/code.rs", b"dirty worktree content with more lines\nthan target\n")
+        output = self.root / "inventory"
+        result = self.run_generator(output)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        inventory = json.loads((output / "inventory.json").read_text())
+        by_path = {entry["path"]: entry for entry in inventory["included"]}
+        code = by_path["src/code.rs"]
+        self.assertEqual(code["blob_oid"], self.rev_parse(f"{self.target_sha}:src/code.rs"))
+        self.assertEqual(code["line_count"], 3)
+        self.assertEqual(code["ranges"], [{"start": 1, "end": 2}, {"start": 3, "end": 3}])
+        self.assertEqual(code["ownership"], "upstream-modified-by-fork")
+        self.assertEqual(by_path["README.md"]["ownership"], "upstream-unmodified")
+        self.assertEqual(by_path["src/target-only.rs"]["ownership"], "fork-owned")
+        self.assertEqual(by_path["src/target-only.rs"]["ranges"], [])
+        self.assertEqual(
+            [entry["path"] for entry in inventory["excluded"]], ["assets/image.png"]
+        )
+        self.assertNotIn("upstream-only.rs", by_path)
+
+    def test_outputs_are_byte_deterministic_and_hash_bound(self):
+        first = self.root / "first"
+        second = self.root / "second"
+        for output in (first, second):
+            result = self.run_generator(output)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        for name in (
+            "inventory.json",
+            "inventory.sha256",
+            "manifest.json",
+            "manifest.sha256",
+            "scope.resolved.json",
+        ):
+            self.assertEqual((first / name).read_bytes(), (second / name).read_bytes(), name)
+
+        manifest = json.loads((first / "manifest.json").read_text())
+        inventory_bytes = (first / "inventory.json").read_bytes()
+        self.assertEqual(manifest["target_sha"], self.target_sha)
+        self.assertEqual(manifest["upstream_sha"], self.upstream_sha)
+        self.assertEqual(manifest["merge_base_sha"], self.merge_base_sha)
+        self.assertEqual(manifest["inventory_sha256"], hashlib.sha256(inventory_bytes).hexdigest())
+        self.assertTrue(manifest["coverage"]["complete"])
+        self.assertEqual(manifest["coverage"]["tracked_entries"], 4)
+        repeated = self.run_generator(first)
+        self.assertNotEqual(repeated.returncode, 0)
+        self.assertIn("output path already exists", repeated.stderr)
+
+    def test_rejects_non_immutable_revision_and_wrong_merge_base(self):
+        output = self.root / "symbolic"
+        command = [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(self.repo),
+            "--target-sha",
+            "target",
+            "--upstream-sha",
+            self.upstream_sha,
+            "--merge-base-sha",
+            self.merge_base_sha,
+            "--scope",
+            str(self.scope),
+            "--output",
+            str(output),
+        ]
+        symbolic = subprocess.run(command, text=True, capture_output=True, check=False)
+        self.assertNotEqual(symbolic.returncode, 0)
+        self.assertIn("full immutable Git object ID", symbolic.stderr)
+
+        wrong = self.run_generator(self.root / "wrong-base", "--merge-base-sha", self.target_sha)
+        self.assertNotEqual(wrong.returncode, 0)
+        self.assertIn("merge-base mismatch", wrong.stderr)
+
+    def test_scope_is_fail_closed_for_unclassified_and_binary_blobs(self):
+        self.write_scope(
+            [
+                {
+                    "id": "rust-only",
+                    "action": "include",
+                    "entry_types": ["blob"],
+                    "patterns": ["*.rs"],
+                }
+            ]
+        )
+        unclassified = self.run_generator(self.root / "unclassified")
+        self.assertNotEqual(unclassified.returncode, 0)
+        self.assertIn("not classified by scope rules", unclassified.stderr)
+
+        self.write_scope(
+            [
+                {
+                    "id": "everything",
+                    "action": "include",
+                    "entry_types": ["blob"],
+                    "patterns": ["**"],
+                }
+            ]
+        )
+        binary = self.run_generator(self.root / "binary")
+        self.assertNotEqual(binary.returncode, 0)
+        self.assertIn("contains NUL bytes", binary.stderr)
+
+    def test_range_validator_rejects_gaps_overlaps_and_truncation(self):
+        cases = (
+            ([{"start": 1, "end": 2}, {"start": 4, "end": 4}], "gap or overlap"),
+            ([{"start": 1, "end": 3}, {"start": 3, "end": 4}], "gap or overlap"),
+            ([{"start": 1, "end": 3}], "ends at 3"),
+        )
+        for ranges, message in cases:
+            with self.subTest(ranges=ranges):
+                with self.assertRaisesRegex(INVENTORY.InventoryError, message):
+                    INVENTORY.validate_ranges("file.rs", 4, ranges)
+
+    def test_inventory_validator_rejects_missing_and_duplicate_paths(self):
+        scope, normalized = INVENTORY.load_scope(self.scope)
+        inventory = INVENTORY.build_inventory(
+            self.repo,
+            self.target_sha,
+            self.upstream_sha,
+            self.merge_base_sha,
+            scope,
+            INVENTORY.sha256_bytes(normalized),
+            2,
+        )
+        target_tree = INVENTORY.load_tree(self.repo, self.target_sha)
+
+        missing = json.loads(json.dumps(inventory))
+        missing["included"].pop()
+        with self.assertRaisesRegex(INVENTORY.InventoryError, "coverage mismatch"):
+            INVENTORY.validate_inventory(missing, target_tree)
+
+        duplicate = json.loads(json.dumps(inventory))
+        duplicate["excluded"].append(dict(duplicate["included"][0]))
+        with self.assertRaisesRegex(INVENTORY.InventoryError, "more than once"):
+            INVENTORY.validate_inventory(duplicate, target_tree)
+
+
+if __name__ == "__main__":
+    unittest.main()
