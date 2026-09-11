@@ -1,80 +1,75 @@
-FROM debian:sid
+FROM debian:sid-20260824@sha256:c1acdb109bacb5adf0f2078892ac177ee2e2ce6f88e96c5b743998b5489d36a9
 
-# Install utilities and libraries needed for development.
-RUN apt-get update \
-    && apt-get install \
-            sudo \
-            openssh-server \
-            locales \
-            zsh \
-            curl \
-            # Install some editors - nano is nice for simple edits; vim is
-            # needed for some of our tests.
-            nano vim \
-            # Install various core packages for development work on Linux.
-            build-essential cmake pkg-config \
-            # Make it so that running `python` runs `python3`.
-            python-is-python3 \
-            # Development headers for various libraries, needed when compiling
-            # certain Rust crate dependencies.
-            libssl-dev libfreetype-dev libexpat1-dev \
-            # Runtime libraries for X11.
-            xserver-xorg libxcursor1 \
-            # Open-source Vulkan drivers and OpenGL-related utilities from the
-            # mesa project.
-            mesa-vulkan-drivers mesa-utils \
-            # protoc, in order to compile warp-proto-apis crates like the MAA API.
-            protobuf-compiler \
-            # Don't ask for confirmation.
-            -y
+ARG RUSTUP_VERSION=1.28.2
 
-# Install the GitHub CLI.
-RUN mkdir -p -m 755 /etc/apt/keyrings \
-    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg > /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-    && apt-get update -y \
-    && apt-get install gh -y
+# Install utilities and libraries needed for development. APT verifies packages and repository
+# metadata with Debian's archive signatures.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        sudo \
+        locales \
+        zsh \
+        curl \
+        git openssh-client \
+        nano vim \
+        build-essential cmake pkg-config \
+        python-is-python3 \
+        libssl-dev libfreetype-dev libexpat1-dev \
+        xserver-xorg libxcursor1 \
+        mesa-vulkan-drivers mesa-utils \
+        protobuf-compiler \
+        ca-certificates; \
+    rm -rf /var/lib/apt/lists/*
 
-# Install the gcloud CLI.
-RUN mkdir -p -m 755 /etc/apt/keyrings \
-    && curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg > /etc/apt/keyrings/cloud.google.gpg \
-    && chmod go+r /etc/apt/keyrings/cloud.google.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/cloud.google.gpg] http://packages.cloud.google.com/apt cloud-sdk main" | tee /etc/apt/sources.list.d/google-cloud-sdk.list > /dev/null \
-    && apt-get update -y \
-    && apt-get install google-cloud-cli -y
+# The container is entered with docker exec, so the development account has no login password.
+RUN set -eux; \
+    useradd --create-home --user-group --shell /usr/bin/zsh --groups sudo --uid 1000 dev; \
+    passwd --lock dev; \
+    echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev; \
+    chmod 0440 /etc/sudoers.d/dev; \
+    install -d -o dev -g dev -m 0700 /run/user/dev; \
+    install -d -o dev -g dev /home/dev/cargo-output /home/dev/setup
 
-# Set up the dev user (password is "password").
-RUN useradd -rm -d /home/dev -s /usr/bin/zsh -g root -G sudo -u 1000 dev && echo 'dev:password' | chpasswd
+# Install the pinned rustup-init binary only after checking its official SHA-256 checksum.
+RUN set -eux; \
+    dpkg_arch="$(dpkg --print-architecture)"; \
+    case "$dpkg_arch" in \
+      amd64) rust_target="x86_64-unknown-linux-gnu"; rustup_sha256="20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c" ;; \
+      arm64) rust_target="aarch64-unknown-linux-gnu"; rustup_sha256="e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c" ;; \
+      *) echo "Unsupported architecture for rustup: $dpkg_arch" >&2; exit 1 ;; \
+    esac; \
+    rustup_init=/tmp/rustup-init; \
+    curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+      "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${rust_target}/rustup-init" \
+      --output "$rustup_init"; \
+    echo "$rustup_sha256  $rustup_init" | sha256sum --check -; \
+    chmod 0755 "$rustup_init"; \
+    su - dev -c "$rustup_init -y --no-modify-path --profile minimal --default-toolchain none"; \
+    rm "$rustup_init"
 
-# Install rustup as the dev user.
-RUN su - dev -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+ENV CARGO_TARGET_DIR=/home/dev/cargo-output
+ENV DISPLAY=host.docker.internal:0
+ENV XDG_RUNTIME_DIR=/run/user/dev
+ENV PATH=/home/dev/.cargo/bin:$PATH
 
-# Set some useful environment variables for the dev user.
-RUN su - dev -c "echo 'export CARGO_TARGET_DIR=/home/dev/cargo-output\nexport DISPLAY=host.docker.internal:0\nexport XDG_RUNTIME_DIR=/run/user/dev' >> /home/dev/.zshenv"
-
-# Generate the basic english, UTF-8 locale.
+# Generate the basic English UTF-8 locale.
 RUN locale-gen en_US.UTF-8
 
-# Create the necessary runfiles directory for sshd to work.
-RUN mkdir -p /run/sshd
-
-# Enable the sshd service, exposing port 22 to the host.
-RUN systemctl enable ssh
-EXPOSE 22
-
-# Install the Rust toolchain used to build Warp.
+# Install the exact Rust toolchain used to build Warp.
 COPY rust-toolchain.toml /home/dev/setup/rust-toolchain.toml
 RUN su - dev -c "cd /home/dev/setup && rustup toolchain install"
 
-# Install Warp-on-Linux dependencies.
-COPY script/linux/install_test_deps /home/dev/setup/linux/install_test_deps
-COPY script/linux/install_runtime_deps /home/dev/setup/linux/install_runtime_deps
-COPY script/linux/install_build_deps /home/dev/setup/linux/install_build_deps
+# Keep the dependency installers available for interactive development.
+COPY script/linux/install_test_deps /home/dev/setup/script/linux/install_test_deps
+COPY script/linux/install_runtime_deps /home/dev/setup/script/linux/install_runtime_deps
+COPY script/linux/install_build_deps /home/dev/setup/script/linux/install_build_deps
 COPY script/install_cargo_test_deps /home/dev/setup/script/install_cargo_test_deps
 COPY script/install_cargo_build_deps /home/dev/setup/script/install_cargo_build_deps
 COPY script/install_rust /home/dev/setup/script/install_rust
 
+USER dev
+WORKDIR /src
 
-# Run sshd.
-CMD ["/usr/sbin/sshd", "-D"]
+# Keep the detached development container running for docker exec sessions.
+CMD ["sleep", "infinity"]

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Installs cargo-binstall if not present, or updates it if already installed.
+# Installs the repository-pinned cargo-binstall version if it is not already active.
 
 # This script should be platform-agnostic (eg. no unix-only references like /dev/null).
 
-# Install cargo-binstall, then/or use it to update itself.
-if ! command -v cargo-binstall; then
-    cargo install cargo-binstall@1.14.3 --locked
+# Cargo verifies the exact crates.io archive against the registry checksum.
+CARGO_BINSTALL_VERSION="1.14.3"
+if ! command -v cargo-binstall >/dev/null \
+    || ! cargo-binstall --version | grep -Fq "cargo-binstall $CARGO_BINSTALL_VERSION"; then
+    cargo install "cargo-binstall@$CARGO_BINSTALL_VERSION" --locked --force
 fi
-
-cargo binstall cargo-binstall

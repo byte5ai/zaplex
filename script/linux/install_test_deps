@@ -25,11 +25,18 @@ if [[ "$(source /etc/os-release; echo $ID $ID_LIKE)" = *"debian"* ]]; then
   )
   sudo apt-get install -y "${PACKAGES[@]}"
 
-  # If gcloud is not already installed, install it so that we can run SSH integration tests.
-  if [[ ! -x "$(command -v gcloud)" ]]; then
+  # If requested and not already installed, install gcloud for live SSH integration tests.
+  if [[ "${INSTALL_GCLOUD_CLI:-true}" == "true" && ! -x "$(command -v gcloud)" ]]; then
     echo "⬇️  Installing the gcloud CLI..."
-    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.cloud.google.com/apt cloud-sdk main" | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
-    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
+    GCLOUD_APT_KEY_SHA256="3ecc63922b7795eb23fdc449ff9396f9114cb3cf186d6f5b53ad4cc3ebfbb11f"
+    GCLOUD_APT_KEY="$(mktemp)"
+    trap 'rm -f "$GCLOUD_APT_KEY"' EXIT
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg --output "$GCLOUD_APT_KEY"
+    echo "$GCLOUD_APT_KEY_SHA256  $GCLOUD_APT_KEY" | sha256sum --check -
+    sudo gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg "$GCLOUD_APT_KEY"
+    rm "$GCLOUD_APT_KEY"
+    trap - EXIT
     sudo apt-get update -y
     sudo apt-get install google-cloud-cli -y
   fi

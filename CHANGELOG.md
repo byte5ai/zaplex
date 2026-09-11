@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.20] — 2026-09-11
+
+- **Gehärtete Entwicklungscontainer:** Linux-Container verwenden keinen SSH-Dienst oder Shared Login mehr; Toolchain-Downloads, Images und Hilfsquellen sind unveränderlich gepinnt und vor Ausführung kryptografisch geprüft.
+
 ## [1.0.19] — 2026-09-11
 
 - **Sicheres Download-Überschreiben:** Bestätigte lokale Ziele werden atomar verdrängt und anhand des tatsächlich ersetzten Dateisystemobjekts geprüft; konkurrierend erneuerte Dateien werden wiederhergestellt statt überschrieben.
