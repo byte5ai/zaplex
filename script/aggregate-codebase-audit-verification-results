@@ -22,10 +22,11 @@ from typing import Any
 SCHEMA_VERSION = 1
 AGGREGATOR_VERSION = 1
 GENERATOR_VERSION = 1
-RUNNER_VERSION = 1
+RUNNER_VERSION = 2
 BUCKET_COUNT = 3
 LENSES = ("disprove", "impact", "reproduction-fix")
-REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max", "ultra"}
+REQUIRED_MODEL = "gpt-5.6-sol"
+REQUIRED_REASONING_EFFORT = "xhigh"
 SEVERITIES = {"P0", "P1", "P2", "P3"}
 CONFIDENCES = {"low", "medium", "high"}
 AGGREGATE_KEYS = {
@@ -142,6 +143,7 @@ RUN_ROOT_KEYS = {
     "provenance",
     "generator_stdout_sha256",
     "generator_stderr_sha256",
+    "model",
     "reasoning_effort",
     "bucket_count",
     "expected_tuples",
@@ -861,6 +863,7 @@ def validate_run_summary(
     assignments_raw: bytes,
     aggregate_raw: bytes,
     snapshot_raw: bytes,
+    expected_run_sha256: str,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     run = require_exact_keys(value, RUN_ROOT_KEYS, "verification run summary")
     schema_version = require_plain_int(run["schema_version"], "run schema_version", 1)
@@ -882,8 +885,16 @@ def validate_run_summary(
             raise AggregationError(f"verification run {key} provenance mismatch")
     for key in ("generator_stdout_sha256", "generator_stderr_sha256", "run_sha256"):
         require_hash(run[key], f"verification run {key}")
-    if run["reasoning_effort"] not in REASONING_EFFORTS:
-        raise AggregationError("verification run reasoning_effort is invalid")
+    if run["run_sha256"] != require_hash(
+        expected_run_sha256, "expected verification run SHA-256"
+    ):
+        raise AggregationError("verification run expected SHA-256 mismatch")
+    if run["model"] != REQUIRED_MODEL:
+        raise AggregationError(f"verification run model must be {REQUIRED_MODEL}")
+    if run["reasoning_effort"] != REQUIRED_REASONING_EFFORT:
+        raise AggregationError(
+            f"verification run reasoning_effort must be {REQUIRED_REASONING_EFFORT}"
+        )
     if require_plain_int(run["bucket_count"], "run bucket_count", 1) != BUCKET_COUNT:
         raise AggregationError("verification run bucket_count mismatch")
     expected_count = assignments["coverage"]["expected_tuples"]
@@ -1203,7 +1214,7 @@ def decision_for(lenses: dict[str, dict[str, Any]]) -> str:
     disprove = lenses["disprove"]["response"]
     reproduction = lenses["reproduction-fix"]["response"]
     if disprove["verdict"] == "rejected":
-        return "rejected"
+        return "needs-evidence" if reproduction["reproducible"] else "rejected"
     if disprove["verdict"] == "needs-evidence" or not reproduction["reproducible"]:
         return "needs-evidence"
     return "verified"
@@ -1269,6 +1280,8 @@ def build_output(
         "verification_assignments_input_sha256": sha256_bytes(assignments_raw),
         "verification_run_sha256": run["run_sha256"],
         "verification_run_input_sha256": sha256_bytes(run_raw),
+        "verification_model": run["model"],
+        "verification_reasoning_effort": run["reasoning_effort"],
         "verification_bucket_results": copy.deepcopy(result_summaries),
         "github_repository": assignments["github_repository"],
         "provenance": copy.deepcopy(assignments["provenance"]),
@@ -1329,6 +1342,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--results-dir", type=Path, required=True)
     parser.add_argument("--expected-aggregate-sha256", required=True)
     parser.add_argument("--expected-issue-snapshot-sha256", required=True)
+    parser.add_argument("--expected-run-sha256", required=True)
     parser.add_argument("--github-repository", required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args(argv)
@@ -1360,6 +1374,7 @@ def main(argv: list[str] | None = None) -> int:
             assignments_raw,
             aggregate_raw,
             snapshot_raw,
+            args.expected_run_sha256,
         )
         records, result_summaries = collect_verified_records(
             assignments,

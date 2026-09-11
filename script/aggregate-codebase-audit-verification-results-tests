@@ -214,7 +214,7 @@ def make_finding(index: int) -> dict:
 
 
 def build_aggregate() -> dict:
-    findings = sorted([make_finding(index) for index in range(4)], key=finding_sort_key)
+    findings = sorted([make_finding(index) for index in range(5)], key=finding_sort_key)
     bucket_results = []
     for index in range(1, BUCKET_COUNT + 1):
         bucket_id = f"bucket-{index}"
@@ -242,10 +242,10 @@ def build_aggregate() -> dict:
         "bucket_results": bucket_results,
         "findings": findings,
         "coverage": {
-            "assigned_ranges": 4,
-            "reviewed_ranges": 4,
-            "assigned_lines": 4,
-            "reviewed_lines": 4,
+            "assigned_ranges": 5,
+            "reviewed_ranges": 5,
+            "assigned_lines": 5,
+            "reviewed_lines": 5,
             "bucket_count": 3,
             "complete": True,
         },
@@ -370,17 +370,17 @@ def build_response(
     if lens == "disprove":
         response["verdict"] = (
             "rejected"
-            if finding_index == 0
+            if finding_index in (0, 1)
             else "needs-evidence"
-            if finding_index == 1
+            if finding_index == 2
             else "supported"
         )
         response["counter_evidence"] = "independent counter-evidence"
     elif lens == "impact":
-        response["severity"] = ("P0", "P1", "P2", "P3")[finding_index]
+        response["severity"] = ("P0", "P1", "P2", "P3", "P1")[finding_index]
         response["impact"] = "independent impact assessment"
     elif lens == "reproduction-fix":
-        response["reproducible"] = finding_index not in (0, 2)
+        response["reproducible"] = finding_index not in (0, 3)
         response["reproduction"] = "reproduction assessment"
         response["fix_assessment"] = "fix assessment"
         response["test_assessment"] = "test assessment"
@@ -426,7 +426,7 @@ def build_run_and_results(assignments: dict, raw_inputs: dict[str, bytes]) -> tu
             )
         document = {
             "schema_version": 1,
-            "runner_version": 1,
+            "runner_version": 2,
             "bucket_id": bucket["id"],
             "bucket_assignment_sha256": bucket["assignment_sha256"],
             "assignment_sha256": assignments["assignment_sha256"],
@@ -440,7 +440,7 @@ def build_run_and_results(assignments: dict, raw_inputs: dict[str, bytes]) -> tu
         result_documents.append(document)
     run = {
         "schema_version": 1,
-        "runner_version": 1,
+        "runner_version": 2,
         "assignment_sha256": assignments["assignment_sha256"],
         "assignments_input_sha256": sha256_bytes(raw_inputs["assignments"]),
         "aggregate_sha256": assignments["aggregate_sha256"],
@@ -451,7 +451,8 @@ def build_run_and_results(assignments: dict, raw_inputs: dict[str, bytes]) -> tu
         "provenance": copy.deepcopy(assignments["provenance"]),
         "generator_stdout_sha256": sha256_bytes(b""),
         "generator_stderr_sha256": sha256_bytes(b""),
-        "reasoning_effort": "high",
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "xhigh",
         "bucket_count": BUCKET_COUNT,
         "expected_tuples": len(executions),
         "completed_tuples": len(executions),
@@ -563,6 +564,8 @@ class VerificationAggregatorTests(unittest.TestCase):
             fixture["aggregate"]["aggregate_sha256"],
             "--expected-issue-snapshot-sha256",
             sha256_bytes(canonical_json(fixture["snapshot"])),
+            "--expected-run-sha256",
+            fixture["run"]["run_sha256"],
             "--github-repository",
             fixture["repository"],
             "--output",
@@ -606,20 +609,28 @@ class VerificationAggregatorTests(unittest.TestCase):
         output = json.loads(first_output.read_bytes())
         self.assertEqual(
             [finding["decision"] for finding in output["findings"]],
-            ["rejected", "needs-evidence", "needs-evidence", "verified"],
+            [
+                "rejected",
+                "needs-evidence",
+                "needs-evidence",
+                "needs-evidence",
+                "verified",
+            ],
         )
         self.assertEqual(
             [finding["final_severity"] for finding in output["findings"]],
-            ["P0", "P1", "P2", "P3"],
+            ["P0", "P1", "P2", "P3", "P1"],
         )
         self.assertEqual(output["counts"], {
             "verified": 1,
             "rejected": 1,
-            "needs-evidence": 2,
+            "needs-evidence": 3,
         })
         self.assertEqual(output["remaining_tuples"], [])
         self.assertTrue(output["coverage"]["complete"])
         self.assertEqual(len(output["verification_bucket_results"]), 3)
+        self.assertEqual(output["verification_model"], "gpt-5.6-sol")
+        self.assertEqual(output["verification_reasoning_effort"], "xhigh")
         for index, finding in enumerate(output["findings"]):
             self.assertEqual(finding["original_finding"], fixture["aggregate"]["findings"][index])
             self.assertEqual(set(finding["lenses"]), set(LENSES))
@@ -670,6 +681,61 @@ class VerificationAggregatorTests(unittest.TestCase):
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertFalse(paths["output"].exists())
 
+    def test_external_run_pin_rejects_coherently_rehashed_evidence(self):
+        fixture = self.make_fixture("coherent-rehash")
+        paths = fixture["paths"]
+        result_path = paths["results"] / "verification-bucket-2.json"
+        result = json.loads(result_path.read_bytes())
+        record = result["results"][0]
+        record["response"]["impact"] = "coherently rewritten impact"
+        response_hash = sha256_bytes(canonical_json(record["response"]))
+        record["response_sha256"] = response_hash
+        record["final_message_sha256"] = response_hash
+        result["result_sha256"] = document_hash(result, "result_sha256")
+        self.rewrite(result_path, result)
+
+        run = json.loads(paths["run"].read_bytes())
+        for execution in run["executions"]:
+            if execution["verification_id"] == record["verification_id"]:
+                execution["response_sha256"] = response_hash
+                execution["final_message_sha256"] = response_hash
+        run["buckets"][1]["result_sha256"] = result["result_sha256"]
+        run["run_sha256"] = document_hash(run, "run_sha256")
+        self.assertNotEqual(run["run_sha256"], fixture["run"]["run_sha256"])
+        self.rewrite(paths["run"], run)
+
+        completed = self.run_tool(fixture)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("expected SHA-256 mismatch", completed.stderr.decode())
+
+    def test_requires_pinned_model_and_xhigh_reasoning_effort(self):
+        for key, value, expected_error in (
+            ("model", "other-model", "model must be gpt-5.6-sol"),
+            ("reasoning_effort", "high", "reasoning_effort must be xhigh"),
+        ):
+            with self.subTest(key=key):
+                fixture = self.make_fixture(f"runner-provenance-{key}")
+                run = json.loads(fixture["paths"]["run"].read_bytes())
+                run[key] = value
+                run["run_sha256"] = document_hash(run, "run_sha256")
+                self.rewrite(fixture["paths"]["run"], run)
+                command = self.command(fixture)
+                expected_index = command.index("--expected-run-sha256") + 1
+                command[expected_index] = run["run_sha256"]
+                environment = os.environ.copy()
+                environment["TEST_ASSIGNMENTS"] = str(
+                    fixture["paths"]["assignments"]
+                )
+                completed = subprocess.run(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    env=environment,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn(expected_error, completed.stderr.decode())
+
     def test_rejects_missing_duplicate_and_extra_tuples(self):
         for mode in ("missing", "duplicate", "extra"):
             with self.subTest(mode=mode):
@@ -696,7 +762,17 @@ class VerificationAggregatorTests(unittest.TestCase):
         run["expected_tuples"] = True
         run["run_sha256"] = document_hash(run, "run_sha256")
         self.rewrite(fixture["paths"]["run"], run)
-        completed = self.run_tool(fixture)
+        command = self.command(fixture)
+        command[command.index("--expected-run-sha256") + 1] = run["run_sha256"]
+        environment = os.environ.copy()
+        environment["TEST_ASSIGNMENTS"] = str(fixture["paths"]["assignments"])
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=environment,
+        )
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("integer", completed.stderr.decode())
 
@@ -765,6 +841,7 @@ class VerificationAggregatorTests(unittest.TestCase):
         for flag, replacement in (
             ("--expected-aggregate-sha256", label_hash("wrong aggregate")),
             ("--expected-issue-snapshot-sha256", label_hash("wrong snapshot")),
+            ("--expected-run-sha256", label_hash("wrong run")),
             ("--github-repository", "wrong/project"),
         ):
             with self.subTest(flag=flag):
