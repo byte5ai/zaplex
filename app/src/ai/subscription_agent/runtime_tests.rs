@@ -1,8 +1,9 @@
 use super::{
     discovery_failure_lifecycle, legacy_ssh_candidates, remote_candidates_for_resolved_ssh,
-    remote_candidates_for_ssh, same_resume_target, AccountIdentity, AgentLifecycle,
-    ExplicitRuntimeHost, HostIdentity, InstallationIdentity, ProcessLocation, SubscriptionAgent,
-    SubscriptionLocationPreference, SubscriptionSessionRegistry, SubscriptionTarget,
+    remote_candidates_for_ssh, same_resume_target, selected_authentication_error, AccountIdentity,
+    AgentLifecycle, ExplicitRuntimeHost, HostIdentity, InstallationIdentity, ProcessLocation,
+    RoutePreferences, SubscriptionAgent, SubscriptionLocationPreference,
+    SubscriptionSessionRegistry, SubscriptionTarget,
 };
 use crate::ai::subscription_agent::{ModelCapability, SessionIdentity};
 use crate::remote_server::proto::{AgentAccountInfo, AgentAccountInventory};
@@ -67,6 +68,55 @@ fn remote_account(
         provider_account_id: provider_account_id.map(str::to_string),
         ..Default::default()
     }
+}
+
+fn account_identity(id: &str, provider_account_id: &str) -> AccountIdentity {
+    AccountIdentity {
+        id: id.to_string(),
+        display_name: id.to_string(),
+        provider_account_id: Some(provider_account_id.to_string()),
+        config_dir: None,
+    }
+}
+
+#[test]
+fn authentication_error_blocks_only_the_exact_selected_account() {
+    let signed_out = account_identity("shared-route", "provider-signed-out");
+    let healthy = account_identity("shared-route", "provider-healthy");
+    let errors = vec![(
+        SubscriptionAgent::ClaudeCode,
+        signed_out.clone(),
+        "Not logged in · Please run /login".to_string(),
+    )];
+
+    let no_account_selected = RoutePreferences {
+        agent: Some(SubscriptionAgent::ClaudeCode),
+        ..Default::default()
+    };
+    assert_eq!(
+        selected_authentication_error(&errors, &no_account_selected),
+        None
+    );
+
+    let healthy_selected = RoutePreferences {
+        agent: Some(SubscriptionAgent::ClaudeCode),
+        account_identity: Some(healthy),
+        ..Default::default()
+    };
+    assert_eq!(
+        selected_authentication_error(&errors, &healthy_selected),
+        None
+    );
+
+    let signed_out_selected = RoutePreferences {
+        agent: Some(SubscriptionAgent::ClaudeCode),
+        account_identity: Some(signed_out),
+        ..Default::default()
+    };
+    assert_eq!(
+        selected_authentication_error(&errors, &signed_out_selected),
+        Some("Not logged in · Please run /login")
+    );
 }
 
 #[test]

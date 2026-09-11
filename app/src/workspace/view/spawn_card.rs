@@ -109,6 +109,8 @@ pub struct ProviderOptions {
     model_discovery_generation: u64,
     model_discovery_target: Option<ModelDiscoveryTarget>,
     model_discovery_cli_version: Option<String>,
+    model_catalogs: BTreeMap<LaunchAccountId, AccountModelCatalog>,
+    model_discovery_pending: BTreeSet<LaunchAccountId>,
     remote_accounts: Vec<RemoteAccountOption>,
     remote_account_discovery: RemoteAccountDiscoveryState,
     remote_account_generation: u64,
@@ -119,7 +121,7 @@ pub struct ProviderOptions {
 /// displayed. The generation rejects late responses; this identity also makes
 /// ready state fail closed if a future UI transition forgets to invalidate it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ModelDiscoveryTarget {
+pub struct ModelDiscoveryTarget {
     agent: CLIAgent,
     node_id: Option<String>,
     account_id: String,
@@ -128,9 +130,16 @@ struct ModelDiscoveryTarget {
     cli_version: Option<String>,
 }
 
+#[derive(Clone, Debug)]
 pub(crate) struct DiscoveredModels {
     pub(crate) cli_version: String,
     pub(crate) models: Vec<ModelCapability>,
+}
+
+#[derive(Clone, Debug)]
+struct AccountModelCatalog {
+    target: ModelDiscoveryTarget,
+    models: Vec<ModelCapability>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -466,6 +475,55 @@ fn unique_default(models: &[ModelCapability]) -> Option<&ModelCapability> {
     defaults.next().is_none().then_some(default)
 }
 
+fn same_model_target_scope(left: &ModelDiscoveryTarget, right: &ModelDiscoveryTarget) -> bool {
+    left.agent == right.agent
+        && left.node_id == right.node_id
+        && left.account_id == right.account_id
+        && left.provider_account_id == right.provider_account_id
+        && left.config_dir == right.config_dir
+}
+
+fn common_model_capabilities<'a>(
+    catalogs: impl IntoIterator<Item = &'a AccountModelCatalog>,
+) -> Vec<ModelCapability> {
+    let mut catalogs = catalogs.into_iter();
+    let Some(first) = catalogs.next() else {
+        return Vec::new();
+    };
+    let mut common = first.models.clone();
+    for catalog in catalogs {
+        common.retain_mut(|candidate| {
+            let Some(other) = catalog.models.iter().find(|model| model.id == candidate.id) else {
+                return false;
+            };
+            candidate.is_default &= other.is_default;
+            candidate.supported_efforts.retain(|effort| {
+                other
+                    .supported_efforts
+                    .iter()
+                    .any(|other_effort| other_effort.id == effort.id)
+            });
+            if candidate.default_effort.as_ref().is_some_and(|default| {
+                !candidate
+                    .supported_efforts
+                    .iter()
+                    .any(|effort| &effort.id == default)
+            }) {
+                candidate.default_effort = None;
+            }
+            if candidate.resolved_model != other.resolved_model {
+                return false;
+            }
+            candidate.context_window = match (candidate.context_window, other.context_window) {
+                (Some(left), Some(right)) => Some(left.min(right)),
+                (Some(_), None) | (None, Some(_)) | (None, None) => None,
+            };
+            true
+        });
+    }
+    common
+}
+
 /// Map the remote-dir text input to a launch cwd. Only remote hosts use the
 /// typed field (a native folder picker can't browse a remote filesystem); a
 /// blank field means "the host's home directory" (`None`). Local hosts never
@@ -759,6 +817,7 @@ impl SpawnCard {
                 label: account.label.clone(),
                 config_dir: account_config_pin(account),
                 account_email: None,
+                provider_account_id: None,
                 remote_route: None,
             })
             .collect::<Vec<_>>();
@@ -775,6 +834,7 @@ impl SpawnCard {
                     label: account.label.clone(),
                     config_dir: account_config_pin(account),
                     account_email: None,
+                    provider_account_id: None,
                     remote_route: None,
                 })
                 .map(|account| vec![account])
@@ -790,6 +850,7 @@ impl SpawnCard {
                             label: crate::t!("cockpit-spawn-card-cli-default-login").to_string(),
                             config_dir: None,
                             account_email: None,
+                            provider_account_id: None,
                             remote_route: None,
                         })
                         .into_iter()
@@ -811,6 +872,7 @@ impl SpawnCard {
                 label: account.label.clone(),
                 config_dir: None,
                 account_email: account.email.clone(),
+                provider_account_id: account.provider_account_id.clone(),
                 remote_route: Some(account.route.clone()),
             })
             .collect::<Vec<_>>();
@@ -824,6 +886,7 @@ impl SpawnCard {
                 label: account.label.clone(),
                 config_dir: None,
                 account_email: account.email.clone(),
+                provider_account_id: account.provider_account_id.clone(),
                 remote_route: Some(account.route.clone()),
             })
             .into_iter()
@@ -842,6 +905,7 @@ impl SpawnCard {
                 label: crate::t!("cockpit-spawn-card-cli-default-login").to_string(),
                 config_dir: None,
                 account_email: None,
+                provider_account_id: None,
                 remote_route: None,
             }],
             CLIAgent::Gemini
@@ -1605,6 +1669,42 @@ impl SpawnCard {
         }
     }
 
+    fn model_catalogs_cover_launch_accounts(&self) -> bool {
+        let accounts = self.launch_accounts();
+        if accounts.is_empty() {
+            return false;
+        }
+        let Some(options) = self.provider_options() else {
+            return false;
+        };
+        if options.model_catalogs.is_empty() {
+            return accounts.len() == 1
+                && options
+                    .model_discovery_target
+                    .as_ref()
+                    .is_none_or(|target| self.model_discovery_target().as_ref() == Some(target));
+        }
+        accounts.iter().all(|account| {
+            let Some(target) = self.model_discovery_target_for_account(account) else {
+                return false;
+            };
+            options
+                .model_catalogs
+                .get(&account.id)
+                .is_some_and(|catalog| {
+                    same_model_target_scope(&catalog.target, &target)
+                        && catalog.models.iter().any(|model| {
+                            model.id == self.model
+                                && (self.effort.is_empty()
+                                    || model
+                                        .supported_efforts
+                                        .iter()
+                                        .any(|effort| effort.id == self.effort))
+                        })
+                })
+        })
+    }
+
     fn model_is_ready(&self) -> bool {
         if self.managed_mode != ManagedLaunchMode::Ordinary {
             return self.managed_mode_is_valid();
@@ -1612,10 +1712,7 @@ impl SpawnCard {
         match self.agent {
             CLIAgent::Claude | CLIAgent::Codex => self.provider_options().is_some_and(|options| {
                 matches!(options.model_discovery, ModelDiscoveryState::Ready)
-                    && options
-                        .model_discovery_target
-                        .as_ref()
-                        .is_none_or(|target| self.model_discovery_target().as_ref() == Some(target))
+                    && self.model_catalogs_cover_launch_accounts()
                     && self.selected_model_capability().is_some()
             }),
             CLIAgent::Antigravity | CLIAgent::Grok => true,
@@ -1642,6 +1739,8 @@ impl SpawnCard {
             options.model_discovery_generation += 1;
             options.model_discovery_target = None;
             options.model_discovery_cli_version = None;
+            options.model_catalogs.clear();
+            options.model_discovery_pending.clear();
         }
     }
 
@@ -1663,27 +1762,35 @@ impl SpawnCard {
             ctx.notify();
             return;
         };
-        let Some(mut discovery_target) = self.model_discovery_target() else {
+        let accounts = self.launch_accounts();
+        let account_count = accounts.len();
+        let requests = accounts
+            .into_iter()
+            .filter_map(|account| {
+                self.model_discovery_target_for_account(&account)
+                    .map(|target| (account, target))
+            })
+            .collect::<Vec<_>>();
+        if requests.is_empty() || requests.len() != account_count {
             self.invalidate_model_for_target_change();
             ctx.notify();
             return;
-        };
-        discovery_target.cli_version = None;
-        let config_dir = discovery_target.config_dir.clone();
+        }
         let node_id = self.resolved_node_id();
-        let agent_launch_route = self
-            .selected_remote_account()
-            .map(|account| account.route.clone());
-        let expected_provider_account_id = discovery_target.provider_account_id.clone();
-        let host_name = self.remote_host_name().unwrap_or("Local").to_string();
+        let host_name = self
+            .remote_host_name()
+            .map(str::to_string)
+            .unwrap_or_else(|| crate::t!("cockpit-spawn-card-host-local"));
         let working_directory = if matches!(self.host, HostChoice::Remote(_)) {
-            self.remote_dir_editor
-                .as_ref()
-                .and_then(|editor| {
-                    let raw = editor.as_ref(ctx).buffer_text(ctx);
-                    remote_cwd_from_input(self.host, &raw).ok().flatten()
-                })
-                .unwrap_or_else(|| PathBuf::from("."))
+            match self.selected_remote_cwd(ctx) {
+                Ok(Some(path)) => path,
+                Ok(None) => PathBuf::from("."),
+                Err(RemoteCwdError::RelativePath) => {
+                    self.invalidate_model_for_target_change();
+                    ctx.notify();
+                    return;
+                }
+            }
         } else {
             self.project
                 .clone()
@@ -1700,18 +1807,29 @@ impl SpawnCard {
         options.model_discovery_cli_version = None;
         options.model_discovery = ModelDiscoveryState::Loading;
         options.model_discovery_generation += 1;
-        options.model_discovery_target = Some(discovery_target);
+        options.model_discovery_target = (requests.len() == 1)
+            .then(|| requests.first().map(|(_, target)| target.clone()))
+            .flatten();
+        options.model_catalogs.clear();
+        options.model_discovery_pending = requests
+            .iter()
+            .map(|(account, _)| account.id.clone())
+            .collect();
         let generation = options.model_discovery_generation;
-        ctx.emit(SpawnCardEvent::DiscoverModels {
-            generation,
-            agent,
-            config_dir,
-            agent_launch_route,
-            expected_provider_account_id,
-            node_id,
-            host_name,
-            working_directory,
-        });
+        for (account, discovery_target) in requests {
+            ctx.emit(SpawnCardEvent::DiscoverModels {
+                generation,
+                agent,
+                account_id: account.id,
+                discovery_target,
+                config_dir: account.config_dir,
+                agent_launch_route: account.remote_route,
+                expected_provider_account_id: account.provider_account_id,
+                node_id: node_id.clone(),
+                host_name: host_name.clone(),
+                working_directory: working_directory.clone(),
+            });
+        }
         ctx.notify();
     }
 
@@ -1719,69 +1837,136 @@ impl SpawnCard {
         &mut self,
         agent: CLIAgent,
         generation: u64,
+        account_id: &LaunchAccountId,
+        discovery_target: &ModelDiscoveryTarget,
         result: Result<DiscoveredModels, ModelDiscoveryFailure>,
         ctx: &mut ViewContext<Self>,
     ) {
         if self.agent != agent {
             return;
         }
-        let current_target = self.model_discovery_target();
-        let host_name = self.remote_host_name().unwrap_or("Local").to_string();
-        let options = match agent {
-            CLIAgent::Claude => &mut self.cfg.claude,
-            CLIAgent::Codex => &mut self.cfg.codex,
-            CLIAgent::Gemini
-            | CLIAgent::Amp
-            | CLIAgent::Droid
-            | CLIAgent::OpenCode
-            | CLIAgent::Copilot
-            | CLIAgent::Pi
-            | CLIAgent::Auggie
-            | CLIAgent::CursorCli
-            | CLIAgent::Goose
-            | CLIAgent::DeepSeek
-            | CLIAgent::Antigravity
-            | CLIAgent::Grok
-            | CLIAgent::Unknown => return,
-        };
-        if options.model_discovery_generation != generation
-            || options.model_discovery_target.as_ref() != current_target.as_ref()
-        {
+        let target_is_current = self
+            .launch_accounts()
+            .into_iter()
+            .find(|account| &account.id == account_id)
+            .and_then(|account| self.model_discovery_target_for_account(&account))
+            .is_some_and(|current| same_model_target_scope(&current, discovery_target));
+        if !target_is_current {
             return;
         }
-        match result {
-            Ok(discovery) if discovery.models.is_empty() => {
-                options.models.clear();
-                options.model_discovery_cli_version = None;
-                options.model_discovery =
-                    ModelDiscoveryState::Error(ModelDiscoveryFailure::Failed {
-                        agent,
-                        host: host_name,
-                        detail: crate::t!("cockpit-spawn-card-no-models"),
-                    });
-                self.model.clear();
-                self.effort.clear();
+        let host_name = self
+            .remote_host_name()
+            .map(str::to_string)
+            .unwrap_or_else(|| crate::t!("cockpit-spawn-card-host-local"));
+        let mut completed_selection = None;
+        let mut failed = false;
+        {
+            let options = match agent {
+                CLIAgent::Claude => &mut self.cfg.claude,
+                CLIAgent::Codex => &mut self.cfg.codex,
+                CLIAgent::Gemini
+                | CLIAgent::Amp
+                | CLIAgent::Droid
+                | CLIAgent::OpenCode
+                | CLIAgent::Copilot
+                | CLIAgent::Pi
+                | CLIAgent::Auggie
+                | CLIAgent::CursorCli
+                | CLIAgent::Goose
+                | CLIAgent::DeepSeek
+                | CLIAgent::Antigravity
+                | CLIAgent::Grok
+                | CLIAgent::Unknown => return,
+            };
+            if options.model_discovery_generation != generation
+                || !options.model_discovery_pending.remove(account_id)
+            {
+                return;
             }
-            Ok(discovery) => {
-                let default_id = unique_default(&discovery.models).map(|model| model.id.clone());
-                let default_effort = unique_default(&discovery.models)
-                    .and_then(|model| model.default_effort.clone());
-                options.models = discovery.models;
-                options.model_discovery_cli_version = Some(discovery.cli_version.clone());
-                if let Some(target) = options.model_discovery_target.as_mut() {
-                    target.cli_version = Some(discovery.cli_version);
+            match result {
+                Ok(discovery) if discovery.models.is_empty() => {
+                    options.models.clear();
+                    options.model_catalogs.clear();
+                    options.model_discovery_pending.clear();
+                    options.model_discovery_cli_version = None;
+                    options.model_discovery =
+                        ModelDiscoveryState::Error(ModelDiscoveryFailure::Failed {
+                            agent,
+                            host: host_name,
+                            detail: crate::t!("cockpit-spawn-card-no-models"),
+                        });
+                    failed = true;
                 }
-                options.model_discovery = ModelDiscoveryState::Ready;
-                self.model = default_id.unwrap_or_default();
-                self.effort = default_effort.unwrap_or_default();
+                Ok(discovery) => {
+                    let mut catalog_target = discovery_target.clone();
+                    catalog_target.cli_version = Some(discovery.cli_version);
+                    options.model_catalogs.insert(
+                        account_id.clone(),
+                        AccountModelCatalog {
+                            target: catalog_target,
+                            models: discovery.models,
+                        },
+                    );
+                    if options.model_discovery_pending.is_empty() {
+                        let models = common_model_capabilities(options.model_catalogs.values());
+                        if models.is_empty() {
+                            options.models.clear();
+                            options.model_discovery_cli_version = None;
+                            options.model_discovery =
+                                ModelDiscoveryState::Error(ModelDiscoveryFailure::Failed {
+                                    agent,
+                                    host: host_name,
+                                    detail: crate::t!("cockpit-spawn-card-no-common-models"),
+                                });
+                            failed = true;
+                        } else {
+                            let default_id = unique_default(&models).map(|model| model.id.clone());
+                            let default_effort = unique_default(&models)
+                                .and_then(|model| model.default_effort.clone());
+                            let first_version = options
+                                .model_catalogs
+                                .values()
+                                .next()
+                                .and_then(|catalog| catalog.target.cli_version.clone());
+                            options.model_discovery_cli_version = first_version.filter(|version| {
+                                options.model_catalogs.values().all(|catalog| {
+                                    catalog.target.cli_version.as_ref() == Some(version)
+                                })
+                            });
+                            options.model_discovery_target = (options.model_catalogs.len() == 1)
+                                .then(|| {
+                                    options
+                                        .model_catalogs
+                                        .values()
+                                        .next()
+                                        .map(|catalog| catalog.target.clone())
+                                })
+                                .flatten();
+                            options.models = models;
+                            options.model_discovery = ModelDiscoveryState::Ready;
+                            completed_selection = Some((
+                                default_id.unwrap_or_default(),
+                                default_effort.unwrap_or_default(),
+                            ));
+                        }
+                    }
+                }
+                Err(error) => {
+                    options.models.clear();
+                    options.model_catalogs.clear();
+                    options.model_discovery_pending.clear();
+                    options.model_discovery_cli_version = None;
+                    options.model_discovery = ModelDiscoveryState::Error(error);
+                    failed = true;
+                }
             }
-            Err(error) => {
-                options.models.clear();
-                options.model_discovery_cli_version = None;
-                options.model_discovery = ModelDiscoveryState::Error(error);
-                self.model.clear();
-                self.effort.clear();
-            }
+        }
+        if failed {
+            self.model.clear();
+            self.effort.clear();
+        } else if let Some((model, effort)) = completed_selection {
+            self.model = model;
+            self.effort = effort;
         }
         ctx.notify();
     }
@@ -1825,46 +2010,45 @@ impl SpawnCard {
         }
     }
 
-    fn model_discovery_target(&self) -> Option<ModelDiscoveryTarget> {
-        let options = self.provider_options()?;
-        let (account_id, provider_account_id, config_dir) = match self.host {
-            HostChoice::Unselected => return None,
-            HostChoice::Local => match self.account {
-                AccountChoice::Freest => match options.freest.as_ref() {
-                    Some(account) => {
-                        let config_dir = account_config_pin(account);
-                        let account_id = config_dir
-                            .as_ref()
-                            .map(|path| path.display().to_string())
-                            .unwrap_or_else(|| "default".to_string());
-                        (account_id, None, config_dir)
-                    }
-                    None if options.accounts.is_empty() => ("default".to_string(), None, None),
-                    None => return None,
-                },
-                AccountChoice::Specific(index) => {
-                    let account = options.accounts.get(index)?;
-                    let config_dir = account_config_pin(account);
-                    (account.config_dir.display().to_string(), None, config_dir)
-                }
-            },
-            HostChoice::Remote(_) => {
-                let account = self.selected_remote_account()?;
-                (
-                    account.route.account_id.clone(),
-                    account.provider_account_id.clone(),
-                    None,
-                )
-            }
-        };
+    fn model_discovery_target_for_account(
+        &self,
+        account: &LaunchAccountTarget,
+    ) -> Option<ModelDiscoveryTarget> {
+        if !self.host_is_ready() {
+            return None;
+        }
+        let account_id = account
+            .remote_route
+            .as_ref()
+            .map(|route| route.account_id.clone())
+            .or_else(|| {
+                account
+                    .config_dir
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+            })
+            .unwrap_or_else(|| "default".to_string());
         Some(ModelDiscoveryTarget {
             agent: self.agent,
             node_id: self.resolved_node_id(),
             account_id,
-            provider_account_id,
-            config_dir,
-            cli_version: options.model_discovery_cli_version.clone(),
+            provider_account_id: account.provider_account_id.clone(),
+            config_dir: account.config_dir.clone(),
+            cli_version: None,
         })
+    }
+
+    fn model_discovery_target(&self) -> Option<ModelDiscoveryTarget> {
+        let accounts = self.launch_accounts();
+        if accounts.len() != 1 {
+            return None;
+        }
+        let account = accounts.first()?;
+        let mut target = self.model_discovery_target_for_account(account)?;
+        target.cli_version = self
+            .provider_options()
+            .and_then(|options| options.model_discovery_cli_version.clone());
+        Some(target)
     }
 
     fn resolved_node_id(&self) -> Option<String> {
@@ -2034,17 +2218,15 @@ impl SpawnCard {
 
     fn context_label(context_window: u64) -> String {
         if context_window >= 1_000_000 {
-            format!("{}M ctx", context_window / 1_000_000)
+            crate::t!(
+                "cockpit-spawn-card-sum-context-million",
+                count = context_window / 1_000_000
+            )
         } else {
-            format!("{}k ctx", context_window / 1_000)
-        }
-    }
-
-    fn cap(s: &str) -> String {
-        let mut c = s.chars();
-        match c.next() {
-            Some(first) => first.to_uppercase().chain(c).collect(),
-            None => String::new(),
+            crate::t!(
+                "cockpit-spawn-card-sum-context-thousand",
+                count = context_window / 1_000
+            )
         }
     }
 
@@ -2057,11 +2239,13 @@ impl SpawnCard {
     /// `self.project` (the folder-picker result), unchanged.
     fn summary(&self, app: &AppContext) -> String {
         let account = match self.host {
-            HostChoice::Unselected => "account pending host selection".to_string(),
+            HostChoice::Unselected => {
+                crate::t!("cockpit-spawn-card-sum-account-pending-host")
+            }
             HostChoice::Remote(_) => self
                 .selected_remote_account()
                 .map(|account| account.label.clone())
-                .unwrap_or_else(|| "account not selected".to_string()),
+                .unwrap_or_else(|| crate::t!("cockpit-spawn-card-sum-account-not-selected")),
             HostChoice::Local => match (self.provider_options(), self.account) {
                 (Some(_), AccountChoice::Freest) => {
                     crate::t!("cockpit-spawn-card-sum-freest")
@@ -2070,12 +2254,12 @@ impl SpawnCard {
                     .accounts
                     .get(i)
                     .map(|a| a.label.clone())
-                    .unwrap_or_else(|| "account no longer available".to_string()),
+                    .unwrap_or_else(|| crate::t!("cockpit-spawn-card-sum-account-unavailable")),
                 (None, _) => crate::t!("cockpit-spawn-card-cli-default-login"),
             },
         };
         let host = match self.host {
-            HostChoice::Unselected => "choose host".to_string(),
+            HostChoice::Unselected => crate::t!("cockpit-spawn-card-sum-choose-host"),
             HostChoice::Local => crate::t!("cockpit-spawn-card-sum-local"),
             HostChoice::Remote(i) => self
                 .cfg
@@ -2091,13 +2275,16 @@ impl SpawnCard {
         // the preview matches what Confirm will launch); local uses the
         // folder-picker result in `self.project`.
         let dir = if self.host == HostChoice::Unselected {
-            "directory pending host selection".to_string()
+            crate::t!("cockpit-spawn-card-sum-directory-pending-host")
         } else if matches!(self.host, HostChoice::Remote(_)) {
             match self.selected_remote_cwd(app) {
                 Ok(Some(path)) => path.display().to_string(),
                 Ok(None) => crate::t!(
                     "cockpit-spawn-card-sum-host-home",
-                    host = self.remote_host_name().unwrap_or("host")
+                    host = self
+                        .remote_host_name()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| crate::t!("cockpit-spawn-card-sum-host"))
                 ),
                 Err(RemoteCwdError::RelativePath) => {
                     crate::t!("fm-toast-invalid-target-path")
@@ -2123,10 +2310,23 @@ impl SpawnCard {
                 .and_then(|model| model.resolved_model.as_deref())
                 .filter(|resolved| !resolved.is_empty() && *resolved != self.model.as_str())
             {
-                parts.push(format!("resolved {resolved}"));
+                parts.push(crate::t!(
+                    "ai-footer-subscription-model-resolved",
+                    model = resolved
+                ));
             }
             if !self.effort.is_empty() {
-                parts.push(Self::cap(&self.effort));
+                parts.push(
+                    self.selected_model_capability()
+                        .and_then(|model| {
+                            model
+                                .supported_efforts
+                                .iter()
+                                .find(|effort| effort.id == self.effort)
+                        })
+                        .map(|effort| effort.display_name.clone())
+                        .unwrap_or_else(|| self.effort.clone()),
+                );
             }
             if let Some(context_window) = self
                 .selected_model_capability()
@@ -2928,7 +3128,11 @@ impl TypedActionView for SpawnCard {
                 self.managed_mode = *mode;
                 self.normalize_managed_mode();
                 self.invalidate_bulk_plan();
-                ctx.notify();
+                if self.managed_mode == ManagedLaunchMode::Ordinary {
+                    self.request_model_discovery(ctx);
+                } else {
+                    ctx.notify();
+                }
             }
             SpawnCardAction::ToggleAccountList => {
                 self.show_accounts = !self.show_accounts;
@@ -2949,7 +3153,11 @@ impl TypedActionView for SpawnCard {
                 self.batch_accounts.clear();
                 self.invalidate_bulk_plan();
                 self.show_accounts = false;
-                ctx.notify();
+                if self.managed_mode == ManagedLaunchMode::Ordinary {
+                    self.request_model_discovery(ctx);
+                } else {
+                    ctx.notify();
+                }
             }
             SpawnCardAction::ToggleBatchAccount(index) => {
                 let id = match self.host {
@@ -2976,7 +3184,11 @@ impl TypedActionView for SpawnCard {
                     // A one-account batch is a valid explicit selection; keep
                     // the list open so a second account remains one click away.
                     self.invalidate_bulk_plan();
-                    ctx.notify();
+                    if self.managed_mode == ManagedLaunchMode::Ordinary {
+                        self.request_model_discovery(ctx);
+                    } else {
+                        ctx.notify();
+                    }
                 }
             }
             SpawnCardAction::SetHostLocal => {
@@ -3098,6 +3310,8 @@ pub enum SpawnCardEvent {
     DiscoverModels {
         generation: u64,
         agent: CLIAgent,
+        account_id: LaunchAccountId,
+        discovery_target: ModelDiscoveryTarget,
         config_dir: Option<PathBuf>,
         agent_launch_route: Option<remote_server::proto::AgentLaunchRoute>,
         expected_provider_account_id: Option<String>,

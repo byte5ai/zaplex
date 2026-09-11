@@ -129,6 +129,8 @@ use crate::terminal::cli_agent_sessions::plugin_manager::{
 #[cfg(not(target_family = "wasm"))]
 use crate::view_components::ToastLink;
 #[cfg(not(target_family = "wasm"))]
+use crate::view_components::{SubmittableTextInput, SubmittableTextInputEvent};
+#[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
 
 // Zaplex Wave 7-3: removed the hosted-mode footer gap constant with the old footer.
@@ -234,6 +236,8 @@ pub struct AgentInputFooter {
     cli_voice_input_state: CLIVoiceInputState,
     #[cfg(feature = "voice_input")]
     cli_transcription_handle: Option<SpawnedFutureHandle>,
+    #[cfg(not(target_family = "wasm"))]
+    subscription_directory_editor: ViewHandle<SubmittableTextInput>,
     v2_model_selector: Option<ViewHandle<ModelSelector>>,
 }
 
@@ -677,6 +681,23 @@ impl AgentInputFooter {
             None
         };
 
+        #[cfg(not(target_family = "wasm"))]
+        let subscription_directory_editor = ctx.add_typed_action_view(|ctx| {
+            let mut editor = SubmittableTextInput::new(ctx)
+                .validate_on_submit(subscription_directory_input_is_valid);
+            editor.set_placeholder_text(
+                crate::t!("ai-footer-subscription-enter-remote-directory"),
+                ctx,
+            );
+            editor.set_outer_margins(0., 0., ctx);
+            editor
+        });
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(
+            &subscription_directory_editor,
+            Self::handle_subscription_directory_input,
+        );
+
         let mut me = Self {
             terminal_view_id,
             ambient_agent_view_model,
@@ -709,6 +730,8 @@ impl AgentInputFooter {
             cli_voice_input_state: CLIVoiceInputState::default(),
             #[cfg(feature = "voice_input")]
             cli_transcription_handle: None,
+            #[cfg(not(target_family = "wasm"))]
+            subscription_directory_editor,
             ftu_callout_close_button: ctx.add_typed_action_view(|_ctx| {
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::X)
@@ -847,6 +870,46 @@ impl AgentInputFooter {
             },
             warpui::platform::FilePickerConfiguration::new().folders_only(),
         );
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_subscription_directory_input(
+        &mut self,
+        _handle: ViewHandle<SubmittableTextInput>,
+        event: &SubmittableTextInputEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            SubmittableTextInputEvent::Submit(input) => {
+                let Some(working_directory) = subscription_directory_from_input(input) else {
+                    return;
+                };
+                let conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
+                    .active_conversation(self.terminal_view_id)
+                    .map(|conversation| conversation.id().to_string());
+                if let Some(conversation_id) = conversation_id {
+                    self.apply_subscription_directory(&conversation_id, working_directory, ctx);
+                }
+            }
+            SubmittableTextInputEvent::Escape => {}
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn apply_subscription_directory(
+        &mut self,
+        conversation_id: &str,
+        working_directory: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if SubscriptionSessionRegistry::as_ref(ctx)
+            .select_working_directory(conversation_id, working_directory)
+        {
+            ctx.emit(AgentInputFooterEvent::RetrySubscriptionPreflight {
+                conversation_id: conversation_id.to_string(),
+            });
+        }
+        ctx.notify();
     }
 
     /// Which plugin chip to show, if any.
@@ -2190,6 +2253,7 @@ fn subscription_location_actions(
     conversation_id: &str,
     current: Option<&SubscriptionLocationPreference>,
     hosts: &[HostIdentity],
+    directory_editor: &ViewHandle<SubmittableTextInput>,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let mut actions = Wrap::row()
@@ -2232,6 +2296,12 @@ fn subscription_location_actions(
             },
             app,
         ));
+    } else {
+        actions.add_child(
+            ConstrainedBox::new(ChildView::new(directory_editor).finish())
+                .with_width(260.)
+                .finish(),
+        );
     }
     if current.working_directory.is_absolute() {
         if let Some(parent) = current
@@ -2352,6 +2422,7 @@ impl View for AgentInputFooter {
                             working_directory: target.working_directory,
                         }),
                         &registry.host_choices(conversation_id),
+                        &self.subscription_directory_editor,
                         app,
                     ));
                 }
@@ -2411,6 +2482,7 @@ impl View for AgentInputFooter {
                         conversation_id,
                         location.as_ref(),
                         &registry.host_choices(conversation_id),
+                        &self.subscription_directory_editor,
                         app,
                     ));
                 }
@@ -2954,14 +3026,7 @@ impl TypedActionView for AgentInputFooter {
                 conversation_id,
                 working_directory,
             } => {
-                if SubscriptionSessionRegistry::as_ref(ctx)
-                    .select_working_directory(conversation_id, working_directory.clone())
-                {
-                    ctx.emit(AgentInputFooterEvent::RetrySubscriptionPreflight {
-                        conversation_id: conversation_id.clone(),
-                    });
-                }
-                ctx.notify();
+                self.apply_subscription_directory(conversation_id, working_directory.clone(), ctx);
             }
             AgentInputFooterAction::ShowContextMenu { position } => {
                 ctx.emit(AgentInputFooterEvent::ShowContextMenu {
@@ -2970,6 +3035,18 @@ impl TypedActionView for AgentInputFooter {
             }
         }
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn subscription_directory_from_input(input: &str) -> Option<PathBuf> {
+    let input = input.trim();
+    subscription_directory_input_is_valid(input).then(|| PathBuf::from(input))
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn subscription_directory_input_is_valid(input: &str) -> bool {
+    let input = input.trim();
+    input == "." || input.starts_with('/')
 }
 
 pub enum AgentInputFooterEvent {
@@ -3215,3 +3292,7 @@ impl ActionButtonTheme for NLDButtonTheme {
         true
     }
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "mod_tests.rs"]
+mod tests;

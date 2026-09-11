@@ -205,7 +205,7 @@ fn runtime_candidates(
 fn available_subscription_hosts(ctx: &AppContext) -> Vec<HostIdentity> {
     let mut hosts = vec![HostIdentity {
         id: LOCAL_SUBSCRIPTION_HOST_ID.to_string(),
-        display_name: "Local machine".to_string(),
+        display_name: crate::t!("ai-footer-subscription-local-machine"),
     }];
     hosts.extend(
         RemoteServerManager::as_ref(ctx)
@@ -316,6 +316,27 @@ fn is_authentication_failure(message: &str) -> bool {
         || message.contains("did not report an account id for selected account")
 }
 
+fn selected_authentication_error<'a>(
+    discovery_errors: &'a [(SubscriptionAgent, AccountIdentity, String)],
+    preferences: &RoutePreferences,
+) -> Option<&'a str> {
+    let preferred_agent = preferences.agent?;
+    discovery_errors
+        .iter()
+        .find(|(agent, account, error)| {
+            *agent == preferred_agent
+                && match preferences.account_identity.as_ref() {
+                    Some(selected) => selected == account,
+                    None => preferences
+                        .account_id
+                        .as_ref()
+                        .is_some_and(|selected| selected == &account.id),
+                }
+                && is_authentication_failure(error)
+        })
+        .map(|(_, _, error)| error.as_str())
+}
+
 fn discovery_failure_lifecycle(
     attempted_agents: &[SubscriptionAgent],
     message: String,
@@ -408,26 +429,17 @@ async fn discover_routed_target(
     let mut discovery_errors = Vec::new();
     for candidate in candidates {
         let agent = candidate.installation.agent;
-        let account_id = candidate.installation.account.id.clone();
+        let account = candidate.installation.account.clone();
         match discover_candidate(candidate.clone(), working_directory).await {
             Ok(capability) => capabilities.push(capability),
-            Err(error) => discovery_errors.push((agent, account_id, error.to_string())),
+            Err(error) => discovery_errors.push((agent, account, error.to_string())),
         }
     }
     if let Some(preferred_agent) = preferences.agent {
-        let selected_authentication_error =
-            discovery_errors.iter().find(|(agent, account, error)| {
-                *agent == preferred_agent
-                    && preferences
-                        .account_id
-                        .as_ref()
-                        .is_none_or(|selected| selected == account)
-                    && is_authentication_failure(error)
-            });
-        if let Some((_, _, error)) = selected_authentication_error {
+        if let Some(error) = selected_authentication_error(&discovery_errors, preferences) {
             let lifecycle = discovery_failure_lifecycle(
                 &[preferred_agent],
-                error.clone(),
+                error.to_string(),
                 registry,
                 conversation_id,
             );

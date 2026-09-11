@@ -1157,6 +1157,79 @@ fn model_and_effort_options_come_from_discovered_capability() {
 }
 
 #[test]
+fn ordinary_multi_account_launch_requires_an_account_bound_common_model() {
+    let mut card = remote_claude_card(
+        remote_provider_for_node(
+            true,
+            "claude",
+            "node-7",
+            &[
+                ("claude:work", "work@example.com", 0.8, 0.7),
+                ("claude:personal", "personal@example.com", 0.6, 0.5),
+            ],
+        ),
+        vec![managed_host("node-7", "devbox")],
+        HostChoice::Remote(0),
+        AccountChoice::Specific(0),
+    );
+    card.select_all_accounts = true;
+    let accounts = card.launch_accounts();
+    let first_account = accounts[0].clone();
+    let second_account = accounts[1].clone();
+    let first_target = card
+        .model_discovery_target_for_account(&first_account)
+        .unwrap();
+    let second_target = card
+        .model_discovery_target_for_account(&second_account)
+        .unwrap();
+    let mut first_models = card.cfg.claude.models.clone();
+    let mut account_alias = first_models[0].clone();
+    account_alias.id = "default".to_string();
+    account_alias.display_name = "Account default".to_string();
+    account_alias.resolved_model = Some("sonnet".to_string());
+    first_models.push(account_alias);
+    let mut second_models = first_models
+        .iter()
+        .filter(|model| model.id != "sonnet")
+        .cloned()
+        .collect::<Vec<_>>();
+    second_models
+        .iter_mut()
+        .find(|model| model.id == "default")
+        .unwrap()
+        .resolved_model = Some("opus".to_string());
+    let first_catalog = AccountModelCatalog {
+        target: first_target,
+        models: first_models,
+    };
+    let second_catalog = AccountModelCatalog {
+        target: second_target,
+        models: second_models,
+    };
+    let common = common_model_capabilities([&first_catalog, &second_catalog]);
+    assert!(common.iter().any(|model| model.id == "opus"));
+    assert!(!common.iter().any(|model| model.id == "sonnet"));
+    assert!(!common.iter().any(|model| model.id == "default"));
+
+    card.cfg
+        .claude
+        .model_catalogs
+        .insert(first_account.id.clone(), first_catalog);
+    card.cfg.claude.models = common;
+    card.model = "opus".to_string();
+    assert!(!card.model_is_ready());
+
+    card.cfg
+        .claude
+        .model_catalogs
+        .insert(second_account.id, second_catalog);
+    assert!(card.model_is_ready());
+
+    card.model = "sonnet".to_string();
+    assert!(!card.model_is_ready());
+}
+
+#[test]
 fn effort_payload_matches_cli_capability() {
     let mut card = SpawnCard {
         cfg: SpawnCardConfig {

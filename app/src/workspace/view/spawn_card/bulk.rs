@@ -11,7 +11,7 @@ use super::ManagedLaunchMode;
 use crate::terminal::CLIAgent;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct LaunchAccountId(pub(crate) String);
+pub struct LaunchAccountId(pub(crate) String);
 
 impl LaunchAccountId {
     pub(super) fn local(agent: CLIAgent, config_dir: &std::path::Path) -> Self {
@@ -36,6 +36,7 @@ pub(crate) struct LaunchAccountTarget {
     pub(crate) label: String,
     pub(crate) config_dir: Option<PathBuf>,
     pub(crate) account_email: Option<String>,
+    pub(crate) provider_account_id: Option<String>,
     pub(crate) remote_route: Option<remote_server::proto::AgentLaunchRoute>,
 }
 

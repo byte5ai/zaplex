@@ -22207,6 +22207,8 @@ impl Workspace {
             SpawnCardEvent::DiscoverModels {
                 generation,
                 agent,
+                account_id,
+                discovery_target,
                 config_dir,
                 agent_launch_route,
                 expected_provider_account_id,
@@ -22216,6 +22218,8 @@ impl Workspace {
             } => {
                 let generation = *generation;
                 let agent = *agent;
+                let account_id = account_id.clone();
+                let discovery_target = discovery_target.clone();
                 let config_dir = config_dir.clone();
                 let agent_launch_route = agent_launch_route.clone();
                 let expected_provider_account_id = expected_provider_account_id.clone();
@@ -22238,6 +22242,8 @@ impl Workspace {
                             card.apply_model_capabilities(
                                 agent,
                                 generation,
+                                &account_id,
+                                &discovery_target,
                                 Err(spawn_card::ModelDiscoveryFailure::classify(
                                     agent,
                                     host_name,
@@ -22255,6 +22261,8 @@ impl Workspace {
                             card.apply_model_capabilities(
                                 agent,
                                 generation,
+                                &account_id,
+                                &discovery_target,
                                 Err(spawn_card::ModelDiscoveryFailure::classify(
                                     agent,
                                     host_name,
@@ -22294,7 +22302,14 @@ impl Workspace {
                     };
                     ctx.spawn(discovery, move |workspace, result, ctx| {
                         workspace.spawn_card.update(ctx, |card, ctx| {
-                            card.apply_model_capabilities(agent, generation, result, ctx);
+                            card.apply_model_capabilities(
+                                agent,
+                                generation,
+                                &account_id,
+                                &discovery_target,
+                                result,
+                                ctx,
+                            );
                         });
                     });
                     return;
@@ -22318,6 +22333,8 @@ impl Workspace {
                             card.apply_model_capabilities(
                                 agent,
                                 generation,
+                                &account_id,
+                                &discovery_target,
                                 Err(spawn_card::ModelDiscoveryFailure::classify(
                                     agent,
                                     crate::t!("cockpit-spawn-card-host-local"),
@@ -22427,18 +22444,31 @@ impl Workspace {
                 };
                 ctx.spawn(discovery_with_timeout, move |workspace, result, ctx| {
                     workspace.spawn_card.update(ctx, |card, ctx| {
-                        card.apply_model_capabilities(agent, generation, result, ctx);
+                        card.apply_model_capabilities(
+                            agent,
+                            generation,
+                            &account_id,
+                            &discovery_target,
+                            result,
+                            ctx,
+                        );
                     });
                 });
             }
             #[cfg(target_family = "wasm")]
             SpawnCardEvent::DiscoverModels {
-                generation, agent, ..
+                generation,
+                agent,
+                account_id,
+                discovery_target,
+                ..
             } => {
                 self.spawn_card.update(ctx, |card, ctx| {
                     card.apply_model_capabilities(
                         *agent,
                         *generation,
+                        account_id,
+                        discovery_target,
                         Err(spawn_card::ModelDiscoveryFailure::classify(
                             *agent,
                             crate::t!("cockpit-spawn-card-web-app"),
@@ -22547,10 +22577,7 @@ impl Workspace {
                     self.execute_spawn_batch(
                         plan_id,
                         targets,
-                        Some(
-                            "The selected launch route changed. Review the preview and retry."
-                                .to_string(),
-                        ),
+                        Some(crate::t!("cockpit-spawn-card-batch-route-changed")),
                         ctx,
                     );
                     return;
@@ -22562,7 +22589,10 @@ impl Workspace {
                         let validation_error = (!std::fs::metadata(&path)
                             .is_ok_and(|metadata| metadata.is_dir()))
                         .then(|| {
-                            format!("The launch directory '{}' is unavailable.", path.display())
+                            crate::t!(
+                                "cockpit-spawn-card-batch-local-directory-unavailable",
+                                path = path.display().to_string()
+                            )
                         });
                         self.execute_spawn_batch(plan_id, targets, validation_error, ctx);
                     }
@@ -22582,10 +22612,7 @@ impl Workspace {
                                 self.execute_spawn_batch(
                                     plan_id,
                                     targets,
-                                    Some(
-                                        "Connect this host before launching into its directory."
-                                            .to_string(),
-                                    ),
+                                    Some(crate::t!("cockpit-spawn-card-batch-connect-host")),
                                     ctx,
                                 );
                                 return;
@@ -22607,16 +22634,12 @@ impl Workspace {
                                         )
                                     });
                                     let error = (!valid).then(|| {
-                                        format!(
-                                            "The remote launch directory '{path_label}' is unavailable."
+                                        crate::t!(
+                                            "cockpit-spawn-card-batch-remote-directory-unavailable",
+                                            path = path_label
                                         )
                                     });
-                                    workspace.execute_spawn_batch(
-                                        plan_id,
-                                        targets,
-                                        error,
-                                        ctx,
-                                    );
+                                    workspace.execute_spawn_batch(plan_id, targets, error, ctx);
                                 },
                             );
                         }
@@ -22624,7 +22647,7 @@ impl Workspace {
                         self.execute_spawn_batch(
                             plan_id,
                             targets,
-                            Some("Remote launches require the native app.".to_string()),
+                            Some(crate::t!("cockpit-spawn-card-batch-native-required")),
                             ctx,
                         );
                     }
