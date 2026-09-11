@@ -236,10 +236,10 @@ impl TomlBackedUserPreferences {
         };
 
         if remaining.is_empty() {
-            table.remove(*segment);
-        } else if let Some(child) = table.get_mut(*segment).and_then(Item::as_table_mut) {
+            table.remove(segment);
+        } else if let Some(child) = table.get_mut(segment).and_then(Item::as_table_mut) {
             if Self::remove_path_and_prune_empty_tables(child, remaining) {
-                table.remove(*segment);
+                table.remove(segment);
             }
         }
 
