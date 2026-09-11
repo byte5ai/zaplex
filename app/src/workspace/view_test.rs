@@ -110,12 +110,15 @@ fn remote_model_discovery_preserves_exact_dynamic_metadata() {
 #[cfg(not(target_family = "wasm"))]
 #[test]
 fn remote_model_discovery_rejects_unknown_schema() {
-    let error =
-        Workspace::remote_model_capabilities(remote_server::proto::AgentModelDiscoveryResponse {
+    let error = match Workspace::remote_model_capabilities(
+        remote_server::proto::AgentModelDiscoveryResponse {
             schema_version: 2,
             ..Default::default()
-        })
-        .unwrap_err();
+        },
+    ) {
+        Ok(_) => panic!("unknown discovery schema must be rejected"),
+        Err(error) => error,
+    };
 
     assert!(error.contains("unsupported model-discovery version"));
 }
