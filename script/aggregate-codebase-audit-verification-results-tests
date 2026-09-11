@@ -1,0 +1,842 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+
+SCRIPT = Path(__file__).with_name("aggregate-codebase-audit-verification-results")
+SCHEMA_VERSION = 1
+BUCKET_COUNT = 3
+LENSES = ("disprove", "impact", "reproduction-fix")
+COMMON_RESPONSE_KEYS = {
+    "schema_version",
+    "verification_id",
+    "finding_id",
+    "lens",
+    "aggregate_sha256",
+    "issue_snapshot_sha256",
+    "github_repository",
+    "source_sha256",
+    "source_text",
+}
+LENS_RESPONSE_KEYS = {
+    "disprove": {"verdict", "counter_evidence"},
+    "impact": {"severity", "impact"},
+    "reproduction-fix": {
+        "reproducible",
+        "reproduction",
+        "fix_assessment",
+        "test_assessment",
+    },
+}
+GENERATOR_STUB = r'''#!/usr/bin/env python3
+import argparse
+import os
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--aggregate", required=True)
+parser.add_argument("--issue-snapshot", required=True)
+parser.add_argument("--output", required=True)
+parser.add_argument("--expected-aggregate-sha256", required=True)
+parser.add_argument("--expected-issue-snapshot-sha256", required=True)
+parser.add_argument("--github-repository", required=True)
+args = parser.parse_args()
+Path(args.output).write_bytes(Path(os.environ["TEST_ASSIGNMENTS"]).read_bytes())
+'''
+
+
+def canonical_json(value) -> bytes:
+    return (
+        json.dumps(
+            value,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def label_hash(label: str) -> str:
+    return sha256_bytes(label.encode("utf-8"))
+
+
+def document_hash(value: dict, hash_key: str) -> str:
+    payload = copy.deepcopy(value)
+    payload.pop(hash_key, None)
+    return sha256_bytes(canonical_json(payload))
+
+
+def stable_finding_id(aggregate: dict, index: int, finding: dict) -> str:
+    payload = {
+        "aggregate_sha256": aggregate["aggregate_sha256"],
+        "run_summary_sha256": aggregate["run_summary_sha256"],
+        "finding_index": index,
+        "finding": finding,
+    }
+    return f"finding-{sha256_bytes(canonical_json(payload))}"
+
+
+def verification_id(
+    finding_id: str,
+    lens: str,
+    aggregate_sha256: str,
+    snapshot_sha256: str,
+    repository: str,
+    run_summary_sha256: str,
+) -> str:
+    payload = {
+        "finding_id": finding_id,
+        "lens": lens,
+        "aggregate_sha256": aggregate_sha256,
+        "issue_snapshot_sha256": snapshot_sha256,
+        "github_repository": repository,
+        "run_summary_sha256": run_summary_sha256,
+    }
+    return f"verification-{sha256_bytes(canonical_json(payload))}"
+
+
+def response_schema(lens: str) -> dict:
+    hash_pattern = "^[0-9a-f]{64}$"
+    common = {
+        "schema_version": {"const": SCHEMA_VERSION},
+        "verification_id": {"type": "string", "minLength": 1},
+        "finding_id": {"type": "string", "minLength": 1},
+        "lens": {"const": lens},
+        "aggregate_sha256": {"type": "string", "pattern": hash_pattern},
+        "issue_snapshot_sha256": {"type": "string", "pattern": hash_pattern},
+        "github_repository": {"type": "string", "minLength": 3},
+        "source_sha256": {"type": "string", "pattern": hash_pattern},
+        "source_text": {"type": "string"},
+    }
+    lens_properties = {
+        "disprove": {
+            "verdict": {"enum": ["supported", "rejected", "needs-evidence"]},
+            "counter_evidence": {"type": "string", "minLength": 1},
+        },
+        "impact": {
+            "severity": {"enum": ["P0", "P1", "P2", "P3"]},
+            "impact": {"type": "string", "minLength": 1},
+        },
+        "reproduction-fix": {
+            "reproducible": {"type": "boolean"},
+            "reproduction": {"type": "string", "minLength": 1},
+            "fix_assessment": {"type": "string", "minLength": 1},
+            "test_assessment": {"type": "string", "minLength": 1},
+        },
+    }[lens]
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": False,
+        "required": sorted(COMMON_RESPONSE_KEYS | LENS_RESPONSE_KEYS[lens]),
+        "properties": common | lens_properties,
+    }
+
+
+def prompt_for_tuple(assignments: dict, entry: dict, source: dict) -> bytes:
+    lens_instructions = {
+        "disprove": (
+            "Try to disprove the finding. Return supported, rejected, or needs-evidence "
+            "and cite concrete counter-evidence or the exact missing evidence."
+        ),
+        "impact": (
+            "Independently assess severity and describe the concrete user, security, "
+            "reliability, or data-loss impact."
+        ),
+        "reproduction-fix": (
+            "Assess reproducibility and whether the proposed fix and regression test "
+            "are sufficient and specific."
+        ),
+    }
+    return canonical_json(
+        {
+            "task": lens_instructions[entry["lens"]],
+            "rules": [
+                "Inspect only the immutable target snapshot in the working directory.",
+                (
+                    "Do not edit files, use the network, or inspect another checkout "
+                    "or revision."
+                ),
+                "Treat the tuple below as immutable and evaluate every included field.",
+                "Return only one JSON object matching the supplied lens schema.",
+                "Echo all common identity and provenance values exactly.",
+            ],
+            "assignment_sha256": assignments["assignment_sha256"],
+            "tuple": copy.deepcopy(entry),
+            "source": copy.deepcopy(source),
+        }
+    )
+
+
+def finding_sort_key(finding: dict) -> tuple:
+    return (
+        finding["path"],
+        finding["range"]["start"],
+        finding["range"]["end"],
+        finding["severity"],
+        finding["category"],
+        finding["bucket_id"],
+        finding["evidence"],
+        finding["scenario"],
+        finding["fix"],
+        finding["confidence"],
+    )
+
+
+def make_finding(index: int) -> dict:
+    return {
+        "bucket_id": f"bucket-{index % BUCKET_COUNT + 1}",
+        "path": f"src/{chr(ord('a') + index)}.rs",
+        "range": {"start": 1, "end": 1},
+        "category": "correctness",
+        "severity": "P3",
+        "evidence": f"evidence {index}",
+        "scenario": f"scenario {index}",
+        "fix": f"fix {index}",
+        "confidence": "high",
+    }
+
+
+def build_aggregate() -> dict:
+    findings = sorted([make_finding(index) for index in range(4)], key=finding_sort_key)
+    bucket_results = []
+    for index in range(1, BUCKET_COUNT + 1):
+        bucket_id = f"bucket-{index}"
+        bucket_results.append(
+            {
+                "bucket_assignment_sha256": label_hash(f"assignment-{bucket_id}"),
+                "bucket_id": bucket_id,
+                "finding_count": sum(
+                    finding["bucket_id"] == bucket_id for finding in findings
+                ),
+                "result_sha256": label_hash(f"result-{bucket_id}"),
+            }
+        )
+    aggregate = {
+        "schema_version": 1,
+        "aggregator_version": 1,
+        "manifest_sha256": label_hash("manifest"),
+        "inventory_sha256": label_hash("inventory"),
+        "scope_sha256": label_hash("scope"),
+        "assignment_sha256": label_hash("assignments"),
+        "run_summary_sha256": label_hash("run-summary"),
+        "target_sha": "1" * 40,
+        "upstream_sha": "2" * 40,
+        "merge_base_sha": "3" * 40,
+        "bucket_results": bucket_results,
+        "findings": findings,
+        "coverage": {
+            "assigned_ranges": 4,
+            "reviewed_ranges": 4,
+            "assigned_lines": 4,
+            "reviewed_lines": 4,
+            "bucket_count": 3,
+            "complete": True,
+        },
+        "remaining_ranges": [],
+    }
+    aggregate["aggregate_sha256"] = document_hash(aggregate, "aggregate_sha256")
+    return aggregate
+
+
+def aggregate_provenance(aggregate: dict) -> dict:
+    keys = (
+        "schema_version",
+        "aggregator_version",
+        "manifest_sha256",
+        "inventory_sha256",
+        "scope_sha256",
+        "assignment_sha256",
+        "run_summary_sha256",
+        "aggregate_sha256",
+        "target_sha",
+        "upstream_sha",
+        "merge_base_sha",
+        "bucket_results",
+        "coverage",
+        "remaining_ranges",
+    )
+    return {key: copy.deepcopy(aggregate[key]) for key in keys}
+
+
+def build_assignments(
+    aggregate: dict, snapshot: list[dict], snapshot_sha256: str, repository: str
+) -> dict:
+    provenance = aggregate_provenance(aggregate)
+    entries = []
+    for index, finding in enumerate(aggregate["findings"]):
+        finding_id = stable_finding_id(aggregate, index, finding)
+        for lens in LENSES:
+            entry = {
+                "verification_id": verification_id(
+                    finding_id,
+                    lens,
+                    aggregate["aggregate_sha256"],
+                    snapshot_sha256,
+                    repository,
+                    aggregate["run_summary_sha256"],
+                ),
+                "finding_id": finding_id,
+                "lens": lens,
+                "aggregate_sha256": aggregate["aggregate_sha256"],
+                "issue_snapshot_sha256": snapshot_sha256,
+                "github_repository": repository,
+                "finding": copy.deepcopy(finding),
+                "provenance": copy.deepcopy(provenance),
+                "issue_snapshot": copy.deepcopy(snapshot),
+            }
+            entries.append(entry)
+    buckets = []
+    for index in range(BUCKET_COUNT):
+        bucket_entries = entries[index::BUCKET_COUNT]
+        bucket = {
+            "id": f"verification-bucket-{index + 1}",
+            "tuple_count": len(bucket_entries),
+            "entries": bucket_entries,
+        }
+        hash_payload = {
+            "id": bucket["id"],
+            "aggregate_sha256": aggregate["aggregate_sha256"],
+            "issue_snapshot_sha256": snapshot_sha256,
+            "github_repository": repository,
+            "entries": bucket_entries,
+        }
+        bucket["assignment_sha256"] = sha256_bytes(canonical_json(hash_payload))
+        buckets.append(bucket)
+    assignments = {
+        "schema_version": 1,
+        "generator_version": 1,
+        "aggregate_sha256": aggregate["aggregate_sha256"],
+        "issue_snapshot_sha256": snapshot_sha256,
+        "github_repository": repository,
+        "provenance": provenance,
+        "issue_snapshot": copy.deepcopy(snapshot),
+        "finding_count": len(aggregate["findings"]),
+        "lens_count": len(LENSES),
+        "bucket_count": BUCKET_COUNT,
+        "coverage": {
+            "findings": len(aggregate["findings"]),
+            "lenses_per_finding": len(LENSES),
+            "expected_tuples": len(entries),
+            "assigned_tuples": len(entries),
+            "complete": True,
+        },
+        "buckets": buckets,
+    }
+    assignments["assignment_sha256"] = document_hash(
+        assignments, "assignment_sha256"
+    )
+    return assignments
+
+
+def build_response(
+    assignments: dict, entry: dict, finding_index: int
+) -> tuple[dict, dict]:
+    source_text = f"source for {entry['finding_id']}\n"
+    source = {
+        "path": entry["finding"]["path"],
+        "range": copy.deepcopy(entry["finding"]["range"]),
+        "sha256": sha256_bytes(source_text.encode("utf-8")),
+        "text": source_text,
+    }
+    response = {
+        "schema_version": 1,
+        "verification_id": entry["verification_id"],
+        "finding_id": entry["finding_id"],
+        "lens": entry["lens"],
+        "aggregate_sha256": assignments["aggregate_sha256"],
+        "issue_snapshot_sha256": assignments["issue_snapshot_sha256"],
+        "github_repository": assignments["github_repository"],
+        "source_sha256": source["sha256"],
+        "source_text": source["text"],
+    }
+    lens = entry["lens"]
+    if lens == "disprove":
+        response["verdict"] = (
+            "rejected"
+            if finding_index == 0
+            else "needs-evidence"
+            if finding_index == 1
+            else "supported"
+        )
+        response["counter_evidence"] = "independent counter-evidence"
+    elif lens == "impact":
+        response["severity"] = ("P0", "P1", "P2", "P3")[finding_index]
+        response["impact"] = "independent impact assessment"
+    elif lens == "reproduction-fix":
+        response["reproducible"] = finding_index not in (0, 2)
+        response["reproduction"] = "reproduction assessment"
+        response["fix_assessment"] = "fix assessment"
+        response["test_assessment"] = "test assessment"
+    return response, source
+
+
+def build_run_and_results(assignments: dict, raw_inputs: dict[str, bytes]) -> tuple[dict, list]:
+    finding_indexes = {
+        stable_finding_id(
+            raw_inputs["aggregate_value"], index, finding
+        ): index
+        for index, finding in enumerate(raw_inputs["aggregate_value"]["findings"])
+    }
+    result_documents = []
+    executions = []
+    for bucket in assignments["buckets"]:
+        records = []
+        for entry in bucket["entries"]:
+            response, source = build_response(
+                assignments, entry, finding_indexes[entry["finding_id"]]
+            )
+            record = {
+                "verification_id": entry["verification_id"],
+                "finding_id": entry["finding_id"],
+                "lens": entry["lens"],
+                "tuple_sha256": sha256_bytes(canonical_json(entry)),
+                "prompt_sha256": sha256_bytes(
+                    prompt_for_tuple(assignments, entry, source)
+                ),
+                "schema_sha256": sha256_bytes(
+                    canonical_json(response_schema(entry["lens"]))
+                ),
+                "source_sha256": source["sha256"],
+                "events_sha256": label_hash(f"events-{entry['verification_id']}"),
+                "stderr_sha256": label_hash(f"stderr-{entry['verification_id']}"),
+                "final_message_sha256": sha256_bytes(canonical_json(response)),
+                "response_sha256": sha256_bytes(canonical_json(response)),
+                "response": response,
+            }
+            records.append(record)
+            executions.append(
+                {"bucket_id": bucket["id"], **{k: v for k, v in record.items() if k != "response"}}
+            )
+        document = {
+            "schema_version": 1,
+            "runner_version": 1,
+            "bucket_id": bucket["id"],
+            "bucket_assignment_sha256": bucket["assignment_sha256"],
+            "assignment_sha256": assignments["assignment_sha256"],
+            "aggregate_sha256": assignments["aggregate_sha256"],
+            "issue_snapshot_sha256": assignments["issue_snapshot_sha256"],
+            "github_repository": assignments["github_repository"],
+            "tuple_count": len(records),
+            "results": records,
+        }
+        document["result_sha256"] = document_hash(document, "result_sha256")
+        result_documents.append(document)
+    run = {
+        "schema_version": 1,
+        "runner_version": 1,
+        "assignment_sha256": assignments["assignment_sha256"],
+        "assignments_input_sha256": sha256_bytes(raw_inputs["assignments"]),
+        "aggregate_sha256": assignments["aggregate_sha256"],
+        "aggregate_input_sha256": sha256_bytes(raw_inputs["aggregate"]),
+        "issue_snapshot_sha256": assignments["issue_snapshot_sha256"],
+        "issue_snapshot_input_sha256": sha256_bytes(raw_inputs["snapshot"]),
+        "github_repository": assignments["github_repository"],
+        "provenance": copy.deepcopy(assignments["provenance"]),
+        "generator_stdout_sha256": sha256_bytes(b""),
+        "generator_stderr_sha256": sha256_bytes(b""),
+        "reasoning_effort": "high",
+        "bucket_count": BUCKET_COUNT,
+        "expected_tuples": len(executions),
+        "completed_tuples": len(executions),
+        "executions": executions,
+        "buckets": [
+            {
+                "id": document["bucket_id"],
+                "tuple_count": document["tuple_count"],
+                "result_sha256": document["result_sha256"],
+            }
+            for document in result_documents
+        ],
+        "complete": True,
+    }
+    run["run_sha256"] = document_hash(run, "run_sha256")
+    return run, result_documents
+
+
+class VerificationAggregatorTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix="verification-aggregator-tests-"
+        )
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def make_fixture(self, name: str) -> dict:
+        root = self.root / name
+        tool_directory = root / "tool"
+        results_directory = root / "results"
+        tool_directory.mkdir(parents=True)
+        results_directory.mkdir()
+        tool = tool_directory / SCRIPT.name
+        shutil.copy2(SCRIPT, tool)
+        generator = tool_directory / "generate-codebase-audit-verification-assignments"
+        generator.write_text(GENERATOR_STUB)
+        generator.chmod(0o755)
+        repository = "example/project"
+        aggregate = build_aggregate()
+        snapshot = [
+            {
+                "number": 245,
+                "title": "Verify the audit",
+                "body": "Pinned issue body",
+                "state": "OPEN",
+                "url": f"https://github.com/{repository}/issues/245",
+                "updated_at": "2026-09-11T12:00:00Z",
+                "labels": ["audit", "security"],
+            }
+        ]
+        aggregate_raw = canonical_json(aggregate)
+        snapshot_raw = canonical_json(snapshot)
+        snapshot_sha256 = sha256_bytes(snapshot_raw)
+        assignments = build_assignments(
+            aggregate, snapshot, snapshot_sha256, repository
+        )
+        assignments_raw = canonical_json(assignments)
+        raw_inputs = {
+            "aggregate": aggregate_raw,
+            "snapshot": snapshot_raw,
+            "assignments": assignments_raw,
+            "aggregate_value": aggregate,
+        }
+        run, result_documents = build_run_and_results(assignments, raw_inputs)
+        paths = {
+            "aggregate": root / "aggregate.json",
+            "snapshot": root / "issues.json",
+            "assignments": root / "assignments.json",
+            "run": root / "run.json",
+            "results": results_directory,
+            "output": root / "verification-aggregate.json",
+            "tool": tool,
+        }
+        paths["aggregate"].write_bytes(aggregate_raw)
+        paths["snapshot"].write_bytes(snapshot_raw)
+        paths["assignments"].write_bytes(assignments_raw)
+        paths["run"].write_bytes(canonical_json(run))
+        for document in result_documents:
+            result_path = results_directory / f"{document['bucket_id']}.json"
+            result_path.write_bytes(canonical_json(document))
+        return {
+            "root": root,
+            "paths": paths,
+            "repository": repository,
+            "aggregate": aggregate,
+            "snapshot": snapshot,
+            "assignments": assignments,
+            "run": run,
+            "result_documents": result_documents,
+        }
+
+    def command(self, fixture: dict, output: Path | None = None) -> list[str]:
+        paths = fixture["paths"]
+        return [
+            str(paths["tool"]),
+            "--aggregate",
+            str(paths["aggregate"]),
+            "--issue-snapshot",
+            str(paths["snapshot"]),
+            "--assignments",
+            str(paths["assignments"]),
+            "--run-summary",
+            str(paths["run"]),
+            "--results-dir",
+            str(paths["results"]),
+            "--expected-aggregate-sha256",
+            fixture["aggregate"]["aggregate_sha256"],
+            "--expected-issue-snapshot-sha256",
+            sha256_bytes(canonical_json(fixture["snapshot"])),
+            "--github-repository",
+            fixture["repository"],
+            "--output",
+            str(output or paths["output"]),
+        ]
+
+    def run_tool(self, fixture: dict, output: Path | None = None):
+        environment = os.environ.copy()
+        environment["TEST_ASSIGNMENTS"] = str(fixture["paths"]["assignments"])
+        return subprocess.run(
+            self.command(fixture, output),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=environment,
+        )
+
+    def rewrite(self, path: Path, value: dict | list) -> None:
+        path.write_bytes(canonical_json(value))
+
+    def update_result_and_run(self, fixture: dict, bucket_index: int) -> None:
+        paths = fixture["paths"]
+        result_path = paths["results"] / f"verification-bucket-{bucket_index + 1}.json"
+        result = json.loads(result_path.read_bytes())
+        result["result_sha256"] = document_hash(result, "result_sha256")
+        self.rewrite(result_path, result)
+        run = json.loads(paths["run"].read_bytes())
+        run["buckets"][bucket_index]["result_sha256"] = result["result_sha256"]
+        run["run_sha256"] = document_hash(run, "run_sha256")
+        self.rewrite(paths["run"], run)
+
+    def test_decision_matrix_severity_provenance_and_determinism(self):
+        fixture = self.make_fixture("decision")
+        first_output = fixture["paths"]["output"]
+        second_output = fixture["root"] / "second.json"
+        first = self.run_tool(fixture, first_output)
+        second = self.run_tool(fixture, second_output)
+        self.assertEqual(first.returncode, 0, first.stderr.decode())
+        self.assertEqual(second.returncode, 0, second.stderr.decode())
+        self.assertEqual(first_output.read_bytes(), second_output.read_bytes())
+        output = json.loads(first_output.read_bytes())
+        self.assertEqual(
+            [finding["decision"] for finding in output["findings"]],
+            ["rejected", "needs-evidence", "needs-evidence", "verified"],
+        )
+        self.assertEqual(
+            [finding["final_severity"] for finding in output["findings"]],
+            ["P0", "P1", "P2", "P3"],
+        )
+        self.assertEqual(output["counts"], {
+            "verified": 1,
+            "rejected": 1,
+            "needs-evidence": 2,
+        })
+        self.assertEqual(output["remaining_tuples"], [])
+        self.assertTrue(output["coverage"]["complete"])
+        self.assertEqual(len(output["verification_bucket_results"]), 3)
+        for index, finding in enumerate(output["findings"]):
+            self.assertEqual(finding["original_finding"], fixture["aggregate"]["findings"][index])
+            self.assertEqual(set(finding["lenses"]), set(LENSES))
+            for lens in LENSES:
+                evidence = finding["lenses"][lens]
+                self.assertEqual(evidence["response"]["lens"], lens)
+                self.assertEqual(
+                    evidence["response_sha256"],
+                    sha256_bytes(canonical_json(evidence["response"])),
+                )
+        self.assertEqual(
+            output["verification_aggregate_sha256"],
+            document_hash(output, "verification_aggregate_sha256"),
+        )
+
+    def test_rejects_tampering_at_every_input_layer(self):
+        cases = ("aggregate", "snapshot", "assignments", "run", "result", "response")
+        for case in cases:
+            with self.subTest(case=case):
+                fixture = self.make_fixture(f"tamper-{case}")
+                paths = fixture["paths"]
+                if case == "aggregate":
+                    value = json.loads(paths["aggregate"].read_bytes())
+                    value["findings"][0]["evidence"] = "tampered"
+                    self.rewrite(paths["aggregate"], value)
+                elif case == "snapshot":
+                    value = json.loads(paths["snapshot"].read_bytes())
+                    value[0]["title"] = "Tampered"
+                    self.rewrite(paths["snapshot"], value)
+                elif case == "assignments":
+                    value = json.loads(paths["assignments"].read_bytes())
+                    value["coverage"]["complete"] = False
+                    self.rewrite(paths["assignments"], value)
+                elif case == "run":
+                    value = json.loads(paths["run"].read_bytes())
+                    value["reasoning_effort"] = "invalid"
+                    value["run_sha256"] = document_hash(value, "run_sha256")
+                    self.rewrite(paths["run"], value)
+                else:
+                    result_path = paths["results"] / "verification-bucket-1.json"
+                    value = json.loads(result_path.read_bytes())
+                    if case == "result":
+                        value["github_repository"] = "wrong/project"
+                    else:
+                        value["results"][0]["response"]["counter_evidence"] = "tampered"
+                    self.rewrite(result_path, value)
+                completed = self.run_tool(fixture)
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertFalse(paths["output"].exists())
+
+    def test_rejects_missing_duplicate_and_extra_tuples(self):
+        for mode in ("missing", "duplicate", "extra"):
+            with self.subTest(mode=mode):
+                fixture = self.make_fixture(f"tuples-{mode}")
+                result_path = (
+                    fixture["paths"]["results"] / "verification-bucket-1.json"
+                )
+                result = json.loads(result_path.read_bytes())
+                if mode == "missing":
+                    result["results"].pop()
+                elif mode == "duplicate":
+                    result["results"][-1] = copy.deepcopy(result["results"][0])
+                else:
+                    result["results"].append(copy.deepcopy(result["results"][0]))
+                result["tuple_count"] = len(result["results"])
+                self.rewrite(result_path, result)
+                self.update_result_and_run(fixture, 0)
+                completed = self.run_tool(fixture)
+                self.assertNotEqual(completed.returncode, 0)
+
+    def test_rejects_bool_where_integer_is_required(self):
+        fixture = self.make_fixture("bool-int")
+        run = json.loads(fixture["paths"]["run"].read_bytes())
+        run["expected_tuples"] = True
+        run["run_sha256"] = document_hash(run, "run_sha256")
+        self.rewrite(fixture["paths"]["run"], run)
+        completed = self.run_tool(fixture)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("integer", completed.stderr.decode())
+
+    def test_rejects_every_tampered_execution_hash(self):
+        hash_keys = (
+            "tuple_sha256",
+            "prompt_sha256",
+            "schema_sha256",
+            "source_sha256",
+            "events_sha256",
+            "stderr_sha256",
+            "final_message_sha256",
+            "response_sha256",
+        )
+        for key in hash_keys:
+            with self.subTest(key=key):
+                fixture = self.make_fixture(f"execution-{key}")
+                run = json.loads(fixture["paths"]["run"].read_bytes())
+                run["executions"][0][key] = label_hash(f"tampered-{key}")
+                run["run_sha256"] = document_hash(run, "run_sha256")
+                self.rewrite(fixture["paths"]["run"], run)
+                completed = self.run_tool(fixture)
+                self.assertNotEqual(completed.returncode, 0)
+
+    def test_rejects_response_schema_extras_and_non_boolean_reproduction(self):
+        for mode in ("extra", "non-bool"):
+            with self.subTest(mode=mode):
+                fixture = self.make_fixture(f"response-{mode}")
+                result_path = (
+                    fixture["paths"]["results"] / "verification-bucket-3.json"
+                )
+                result = json.loads(result_path.read_bytes())
+                response = result["results"][0]["response"]
+                if mode == "extra":
+                    response["extra"] = "forbidden"
+                else:
+                    response["reproducible"] = 1
+                result["results"][0]["response_sha256"] = sha256_bytes(
+                    canonical_json(response)
+                )
+                self.rewrite(result_path, result)
+                self.update_result_and_run(fixture, 2)
+                run = json.loads(fixture["paths"]["run"].read_bytes())
+                verification_id_value = result["results"][0]["verification_id"]
+                for execution in run["executions"]:
+                    if execution["verification_id"] == verification_id_value:
+                        execution["response_sha256"] = result["results"][0][
+                            "response_sha256"
+                        ]
+                run["run_sha256"] = document_hash(run, "run_sha256")
+                self.rewrite(fixture["paths"]["run"], run)
+                completed = self.run_tool(fixture)
+                self.assertNotEqual(completed.returncode, 0)
+
+    def test_rejects_missing_and_extra_result_files(self):
+        missing = self.make_fixture("files-missing")
+        (missing["paths"]["results"] / "verification-bucket-3.json").unlink()
+        self.assertNotEqual(self.run_tool(missing).returncode, 0)
+        extra = self.make_fixture("files-extra")
+        (extra["paths"]["results"] / "extra.json").write_bytes(canonical_json({}))
+        self.assertNotEqual(self.run_tool(extra).returncode, 0)
+
+    def test_rejects_external_pin_and_repository_mismatches(self):
+        fixture = self.make_fixture("pins")
+        command = self.command(fixture)
+        for flag, replacement in (
+            ("--expected-aggregate-sha256", label_hash("wrong aggregate")),
+            ("--expected-issue-snapshot-sha256", label_hash("wrong snapshot")),
+            ("--github-repository", "wrong/project"),
+        ):
+            with self.subTest(flag=flag):
+                changed = list(command)
+                changed[changed.index(flag) + 1] = replacement
+                environment = os.environ.copy()
+                environment["TEST_ASSIGNMENTS"] = str(
+                    fixture["paths"]["assignments"]
+                )
+                completed = subprocess.run(
+                    changed,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    env=environment,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+
+    def test_rejects_noncanonical_and_generator_mismatched_assignments(self):
+        fixture = self.make_fixture("assignment-contract")
+        assignment_path = fixture["paths"]["assignments"]
+        assignment = json.loads(assignment_path.read_bytes())
+        assignment_path.write_text(json.dumps(assignment))
+        completed = self.run_tool(fixture)
+        self.assertNotEqual(completed.returncode, 0)
+        fixture = self.make_fixture("assignment-byte-mismatch")
+        generated = fixture["root"] / "generated.json"
+        generated.write_bytes(fixture["paths"]["assignments"].read_bytes())
+        assignment = json.loads(fixture["paths"]["assignments"].read_bytes())
+        assignment["coverage"]["complete"] = False
+        self.rewrite(fixture["paths"]["assignments"], assignment)
+        environment = os.environ.copy()
+        environment["TEST_ASSIGNMENTS"] = str(generated)
+        completed = subprocess.run(
+            self.command(fixture),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=environment,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("byte-exact", completed.stderr.decode())
+
+    def test_output_is_no_overwrite_and_atomic_under_race(self):
+        fixture = self.make_fixture("no-overwrite")
+        first = self.run_tool(fixture)
+        original = fixture["paths"]["output"].read_bytes()
+        second = self.run_tool(fixture)
+        self.assertEqual(first.returncode, 0, first.stderr.decode())
+        self.assertNotEqual(second.returncode, 0)
+        self.assertEqual(fixture["paths"]["output"].read_bytes(), original)
+
+        race = self.make_fixture("race")
+        environment = os.environ.copy()
+        environment["TEST_ASSIGNMENTS"] = str(race["paths"]["assignments"])
+        processes = [
+            subprocess.Popen(
+                self.command(race),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+            )
+            for _ in range(2)
+        ]
+        completed = [process.communicate() + (process.returncode,) for process in processes]
+        self.assertEqual(sorted(item[2] for item in completed), [0, 1])
+        output = json.loads(race["paths"]["output"].read_bytes())
+        self.assertEqual(
+            output["verification_aggregate_sha256"],
+            document_hash(output, "verification_aggregate_sha256"),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

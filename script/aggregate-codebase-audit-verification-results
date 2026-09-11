@@ -1,0 +1,1392 @@
+#!/usr/bin/env python3
+
+"""Validate and aggregate immutable codebase-audit verification results."""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+from typing import Any
+
+
+SCHEMA_VERSION = 1
+AGGREGATOR_VERSION = 1
+GENERATOR_VERSION = 1
+RUNNER_VERSION = 1
+BUCKET_COUNT = 3
+LENSES = ("disprove", "impact", "reproduction-fix")
+REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max", "ultra"}
+SEVERITIES = {"P0", "P1", "P2", "P3"}
+CONFIDENCES = {"low", "medium", "high"}
+AGGREGATE_KEYS = {
+    "schema_version",
+    "aggregator_version",
+    "manifest_sha256",
+    "inventory_sha256",
+    "scope_sha256",
+    "assignment_sha256",
+    "run_summary_sha256",
+    "target_sha",
+    "upstream_sha",
+    "merge_base_sha",
+    "bucket_results",
+    "findings",
+    "coverage",
+    "remaining_ranges",
+    "aggregate_sha256",
+}
+AGGREGATE_COVERAGE_KEYS = {
+    "assigned_ranges",
+    "reviewed_ranges",
+    "assigned_lines",
+    "reviewed_lines",
+    "bucket_count",
+    "complete",
+}
+ORIGINAL_BUCKET_KEYS = {
+    "bucket_assignment_sha256",
+    "bucket_id",
+    "finding_count",
+    "result_sha256",
+}
+FINDING_KEYS = {
+    "bucket_id",
+    "path",
+    "range",
+    "category",
+    "severity",
+    "evidence",
+    "scenario",
+    "fix",
+    "confidence",
+}
+ISSUE_KEYS = {
+    "number",
+    "title",
+    "body",
+    "state",
+    "url",
+    "updated_at",
+    "labels",
+}
+PROVENANCE_KEYS = {
+    "schema_version",
+    "aggregator_version",
+    "manifest_sha256",
+    "inventory_sha256",
+    "scope_sha256",
+    "assignment_sha256",
+    "run_summary_sha256",
+    "aggregate_sha256",
+    "target_sha",
+    "upstream_sha",
+    "merge_base_sha",
+    "bucket_results",
+    "coverage",
+    "remaining_ranges",
+}
+ASSIGNMENT_ROOT_KEYS = {
+    "schema_version",
+    "generator_version",
+    "aggregate_sha256",
+    "issue_snapshot_sha256",
+    "github_repository",
+    "provenance",
+    "issue_snapshot",
+    "finding_count",
+    "lens_count",
+    "bucket_count",
+    "coverage",
+    "buckets",
+    "assignment_sha256",
+}
+ASSIGNMENT_COVERAGE_KEYS = {
+    "findings",
+    "lenses_per_finding",
+    "expected_tuples",
+    "assigned_tuples",
+    "complete",
+}
+ASSIGNMENT_BUCKET_KEYS = {"id", "tuple_count", "entries", "assignment_sha256"}
+ASSIGNMENT_ENTRY_KEYS = {
+    "verification_id",
+    "finding_id",
+    "lens",
+    "aggregate_sha256",
+    "issue_snapshot_sha256",
+    "github_repository",
+    "finding",
+    "provenance",
+    "issue_snapshot",
+}
+RUN_ROOT_KEYS = {
+    "schema_version",
+    "runner_version",
+    "assignment_sha256",
+    "assignments_input_sha256",
+    "aggregate_sha256",
+    "aggregate_input_sha256",
+    "issue_snapshot_sha256",
+    "issue_snapshot_input_sha256",
+    "github_repository",
+    "provenance",
+    "generator_stdout_sha256",
+    "generator_stderr_sha256",
+    "reasoning_effort",
+    "bucket_count",
+    "expected_tuples",
+    "completed_tuples",
+    "executions",
+    "buckets",
+    "complete",
+    "run_sha256",
+}
+EXECUTION_KEYS = {
+    "bucket_id",
+    "verification_id",
+    "finding_id",
+    "lens",
+    "tuple_sha256",
+    "prompt_sha256",
+    "schema_sha256",
+    "source_sha256",
+    "events_sha256",
+    "stderr_sha256",
+    "final_message_sha256",
+    "response_sha256",
+}
+RUN_BUCKET_KEYS = {"id", "tuple_count", "result_sha256"}
+RESULT_ROOT_KEYS = {
+    "schema_version",
+    "runner_version",
+    "bucket_id",
+    "bucket_assignment_sha256",
+    "assignment_sha256",
+    "aggregate_sha256",
+    "issue_snapshot_sha256",
+    "github_repository",
+    "tuple_count",
+    "results",
+    "result_sha256",
+}
+RESULT_RECORD_KEYS = EXECUTION_KEYS - {"bucket_id"} | {"response"}
+COMMON_RESPONSE_KEYS = {
+    "schema_version",
+    "verification_id",
+    "finding_id",
+    "lens",
+    "aggregate_sha256",
+    "issue_snapshot_sha256",
+    "github_repository",
+    "source_sha256",
+    "source_text",
+}
+LENS_RESPONSE_KEYS = {
+    "disprove": {"verdict", "counter_evidence"},
+    "impact": {"severity", "impact"},
+    "reproduction-fix": {
+        "reproducible",
+        "reproduction",
+        "fix_assessment",
+        "test_assessment",
+    },
+}
+
+
+class AggregationError(RuntimeError):
+    """Raised when verification evidence cannot be accepted."""
+
+
+def canonical_json(value: Any) -> bytes:
+    try:
+        encoded = json.dumps(
+            value,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise AggregationError(f"value is not canonical JSON: {error}") from error
+    return (encoded + "\n").encode("utf-8")
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def reject_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def decode_json(raw: bytes, label: str) -> Any:
+    try:
+        return json.loads(
+            raw,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise AggregationError(f"invalid {label} JSON: {error}") from error
+
+
+def load_canonical_json(path: Path, label: str) -> tuple[Any, bytes]:
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        raise AggregationError(f"cannot read {label} {path}: {error}") from error
+    value = decode_json(raw, label)
+    if canonical_json(value) != raw:
+        raise AggregationError(f"{label} is not canonical JSON")
+    return value, raw
+
+
+def require_exact_keys(value: Any, keys: set[str], label: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise AggregationError(f"{label} shape is invalid")
+    return value
+
+
+def require_plain_int(value: Any, label: str, minimum: int = 0) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        raise AggregationError(f"{label} must be an integer >= {minimum}")
+    return value
+
+
+def require_hash(value: Any, label: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise AggregationError(f"{label} must be a canonical SHA-256")
+    return value
+
+
+def require_text(value: Any, label: str, allow_empty: bool = False) -> str:
+    if not isinstance(value, str) or "\0" in value:
+        raise AggregationError(f"{label} must be a string without NUL")
+    if not allow_empty and not value.strip():
+        raise AggregationError(f"{label} must be non-empty")
+    return value
+
+
+def require_path(value: Any, label: str) -> str:
+    value = require_text(value, label)
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or str(path) != value
+        or any(part in ("", ".", "..") for part in path.parts)
+    ):
+        raise AggregationError(f"{label} must be a normalized repository path")
+    return value
+
+
+def require_range(value: Any, label: str) -> tuple[int, int]:
+    value = require_exact_keys(value, {"start", "end"}, label)
+    start = require_plain_int(value["start"], f"{label}.start", 1)
+    end = require_plain_int(value["end"], f"{label}.end", start)
+    return start, end
+
+
+def require_repository(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value) is None
+    ):
+        raise AggregationError("github repository must use owner/repository form")
+    return value
+
+
+def document_hash(value: dict[str, Any], hash_key: str) -> str:
+    payload = copy.deepcopy(value)
+    payload.pop(hash_key, None)
+    return sha256_bytes(canonical_json(payload))
+
+
+def finding_sort_key(finding: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        finding["path"],
+        finding["range"]["start"],
+        finding["range"]["end"],
+        finding["severity"],
+        finding["category"],
+        finding["bucket_id"],
+        finding["evidence"],
+        finding["scenario"],
+        finding["fix"],
+        finding["confidence"],
+    )
+
+
+def validate_finding(value: Any, label: str) -> dict[str, Any]:
+    finding = require_exact_keys(value, FINDING_KEYS, label)
+    if finding["bucket_id"] not in {
+        f"bucket-{index}" for index in range(1, BUCKET_COUNT + 1)
+    }:
+        raise AggregationError(f"{label}.bucket_id is invalid")
+    path = require_path(finding["path"], f"{label}.path")
+    require_range(finding["range"], f"{label}.range for {path}")
+    if finding["severity"] not in SEVERITIES:
+        raise AggregationError(f"{label}.severity is invalid")
+    if finding["confidence"] not in CONFIDENCES:
+        raise AggregationError(f"{label}.confidence is invalid")
+    for key in ("category", "evidence", "scenario", "fix"):
+        require_text(finding[key], f"{label}.{key}")
+    return finding
+
+
+def validate_aggregate(value: Any, expected_sha256: str) -> dict[str, Any]:
+    aggregate = require_exact_keys(value, AGGREGATE_KEYS, "aggregate")
+    schema_version = require_plain_int(
+        aggregate["schema_version"], "aggregate schema_version", 1
+    )
+    if schema_version != SCHEMA_VERSION:
+        raise AggregationError("aggregate schema_version mismatch")
+    aggregator_version = require_plain_int(
+        aggregate["aggregator_version"], "aggregate aggregator_version", 1
+    )
+    if aggregator_version != AGGREGATOR_VERSION:
+        raise AggregationError("aggregate aggregator_version mismatch")
+    for key in (
+        "manifest_sha256",
+        "inventory_sha256",
+        "scope_sha256",
+        "assignment_sha256",
+        "run_summary_sha256",
+        "aggregate_sha256",
+    ):
+        require_hash(aggregate[key], f"aggregate.{key}")
+    if aggregate["aggregate_sha256"] != document_hash(
+        aggregate, "aggregate_sha256"
+    ):
+        raise AggregationError("aggregate document SHA-256 mismatch")
+    if aggregate["aggregate_sha256"] != require_hash(
+        expected_sha256, "expected aggregate SHA-256"
+    ):
+        raise AggregationError("aggregate expected SHA-256 mismatch")
+    target = aggregate["target_sha"]
+    if not isinstance(target, str) or len(target) not in (40, 64):
+        raise AggregationError("aggregate target_sha has unsupported length")
+    pattern = rf"[0-9a-f]{{{len(target)}}}"
+    for key in ("target_sha", "upstream_sha", "merge_base_sha"):
+        if not isinstance(aggregate[key], str) or re.fullmatch(pattern, aggregate[key]) is None:
+            raise AggregationError(f"aggregate.{key} is not a canonical object ID")
+    coverage = require_exact_keys(
+        aggregate["coverage"], AGGREGATE_COVERAGE_KEYS, "aggregate coverage"
+    )
+    assigned_ranges = require_plain_int(
+        coverage["assigned_ranges"], "aggregate coverage.assigned_ranges"
+    )
+    reviewed_ranges = require_plain_int(
+        coverage["reviewed_ranges"], "aggregate coverage.reviewed_ranges"
+    )
+    assigned_lines = require_plain_int(
+        coverage["assigned_lines"], "aggregate coverage.assigned_lines"
+    )
+    reviewed_lines = require_plain_int(
+        coverage["reviewed_lines"], "aggregate coverage.reviewed_lines"
+    )
+    if assigned_ranges != reviewed_ranges or assigned_lines != reviewed_lines:
+        raise AggregationError("aggregate coverage is incomplete")
+    if require_plain_int(coverage["bucket_count"], "aggregate bucket_count", 1) != 3:
+        raise AggregationError("aggregate bucket_count mismatch")
+    if coverage["complete"] is not True or aggregate["remaining_ranges"] != []:
+        raise AggregationError("aggregate is not complete")
+    findings = aggregate["findings"]
+    if not isinstance(findings, list):
+        raise AggregationError("aggregate findings must be an array")
+    for index, finding in enumerate(findings):
+        validate_finding(finding, f"aggregate finding {index}")
+    if findings != sorted(findings, key=finding_sort_key):
+        raise AggregationError("aggregate findings are not in canonical order")
+    validate_original_buckets(aggregate)
+    return aggregate
+
+
+def validate_original_buckets(aggregate: dict[str, Any]) -> None:
+    buckets = aggregate["bucket_results"]
+    if not isinstance(buckets, list) or len(buckets) != BUCKET_COUNT:
+        raise AggregationError("aggregate bucket results are incomplete")
+    expected_ids = [f"bucket-{index}" for index in range(1, BUCKET_COUNT + 1)]
+    if [bucket.get("bucket_id") for bucket in buckets if isinstance(bucket, dict)] != expected_ids:
+        raise AggregationError("aggregate bucket result IDs are invalid")
+    assignment_hashes = set()
+    result_hashes = set()
+    total_findings = 0
+    for bucket in buckets:
+        require_exact_keys(bucket, ORIGINAL_BUCKET_KEYS, "aggregate bucket result")
+        assignment_hashes.add(
+            require_hash(
+                bucket["bucket_assignment_sha256"], "bucket assignment SHA-256"
+            )
+        )
+        result_hashes.add(require_hash(bucket["result_sha256"], "bucket result SHA-256"))
+        count = require_plain_int(bucket["finding_count"], "bucket finding_count")
+        total_findings += count
+        actual = sum(
+            finding.get("bucket_id") == bucket["bucket_id"]
+            for finding in aggregate["findings"]
+            if isinstance(finding, dict)
+        )
+        if count != actual:
+            raise AggregationError(f"{bucket['bucket_id']} finding_count mismatch")
+    if len(assignment_hashes) != BUCKET_COUNT or len(result_hashes) != BUCKET_COUNT:
+        raise AggregationError("aggregate bucket hashes are not unique")
+    if total_findings != len(aggregate["findings"]):
+        raise AggregationError("aggregate finding counts are incomplete")
+
+
+def validate_issue_snapshot(value: Any, repository: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise AggregationError("issue snapshot must be an array")
+    numbers = []
+    for index, issue in enumerate(value):
+        issue = require_exact_keys(issue, ISSUE_KEYS, f"issue snapshot {index}")
+        number = require_plain_int(issue["number"], f"issue {index}.number", 1)
+        numbers.append(number)
+        require_text(issue["title"], f"issue {number}.title")
+        require_text(issue["body"], f"issue {number}.body", allow_empty=True)
+        if issue["state"] not in ("OPEN", "CLOSED"):
+            raise AggregationError(f"issue {number}.state is invalid")
+        expected_url = f"https://github.com/{repository}/issues/{number}"
+        if issue["url"] != expected_url:
+            raise AggregationError(f"issue {number}.url mismatch")
+        updated_at = require_text(issue["updated_at"], f"issue {number}.updated_at")
+        try:
+            parsed = datetime.datetime.strptime(updated_at, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError as error:
+            raise AggregationError(f"issue {number}.updated_at is invalid") from error
+        if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != updated_at:
+            raise AggregationError(f"issue {number}.updated_at is not canonical")
+        labels = issue["labels"]
+        if not isinstance(labels, list):
+            raise AggregationError(f"issue {number}.labels must be an array")
+        for label_index, label in enumerate(labels):
+            require_text(label, f"issue {number}.labels[{label_index}]")
+        if labels != sorted(set(labels)):
+            raise AggregationError(f"issue {number}.labels are not sorted unique")
+    if numbers != sorted(set(numbers)):
+        raise AggregationError("issue numbers are not unique and ascending")
+    return value
+
+
+def aggregate_provenance(aggregate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: copy.deepcopy(aggregate[key])
+        for key in (
+            "schema_version",
+            "aggregator_version",
+            "manifest_sha256",
+            "inventory_sha256",
+            "scope_sha256",
+            "assignment_sha256",
+            "run_summary_sha256",
+            "aggregate_sha256",
+            "target_sha",
+            "upstream_sha",
+            "merge_base_sha",
+            "bucket_results",
+            "coverage",
+            "remaining_ranges",
+        )
+    }
+
+
+def stable_finding_id(
+    aggregate_sha256: str,
+    run_summary_sha256: str,
+    index: int,
+    finding: dict[str, Any],
+) -> str:
+    payload = {
+        "aggregate_sha256": aggregate_sha256,
+        "run_summary_sha256": run_summary_sha256,
+        "finding_index": index,
+        "finding": finding,
+    }
+    return f"finding-{sha256_bytes(canonical_json(payload))}"
+
+
+def verification_id(
+    finding_id: str,
+    lens: str,
+    aggregate_sha256: str,
+    issue_snapshot_sha256: str,
+    repository: str,
+    run_summary_sha256: str,
+) -> str:
+    payload = {
+        "finding_id": finding_id,
+        "lens": lens,
+        "aggregate_sha256": aggregate_sha256,
+        "issue_snapshot_sha256": issue_snapshot_sha256,
+        "github_repository": repository,
+        "run_summary_sha256": run_summary_sha256,
+    }
+    return f"verification-{sha256_bytes(canonical_json(payload))}"
+
+
+def expected_entries(
+    aggregate: dict[str, Any],
+    snapshot: list[dict[str, Any]],
+    snapshot_sha256: str,
+    repository: str,
+) -> list[dict[str, Any]]:
+    provenance = aggregate_provenance(aggregate)
+    entries = []
+    for index, finding in enumerate(aggregate["findings"]):
+        finding_id = stable_finding_id(
+            aggregate["aggregate_sha256"],
+            aggregate["run_summary_sha256"],
+            index,
+            finding,
+        )
+        for lens in LENSES:
+            entries.append(
+                {
+                    "verification_id": verification_id(
+                        finding_id,
+                        lens,
+                        aggregate["aggregate_sha256"],
+                        snapshot_sha256,
+                        repository,
+                        aggregate["run_summary_sha256"],
+                    ),
+                    "finding_id": finding_id,
+                    "lens": lens,
+                    "aggregate_sha256": aggregate["aggregate_sha256"],
+                    "issue_snapshot_sha256": snapshot_sha256,
+                    "github_repository": repository,
+                    "finding": copy.deepcopy(finding),
+                    "provenance": copy.deepcopy(provenance),
+                    "issue_snapshot": copy.deepcopy(snapshot),
+                }
+            )
+    return entries
+
+
+def assignment_bucket_hash(
+    bucket: dict[str, Any], aggregate_sha256: str, snapshot_sha256: str, repository: str
+) -> str:
+    payload = {
+        "id": bucket.get("id"),
+        "aggregate_sha256": aggregate_sha256,
+        "issue_snapshot_sha256": snapshot_sha256,
+        "github_repository": repository,
+        "entries": bucket.get("entries"),
+    }
+    return sha256_bytes(canonical_json(payload))
+
+
+def validate_assignments(
+    value: Any,
+    aggregate: dict[str, Any],
+    snapshot: list[dict[str, Any]],
+    snapshot_sha256: str,
+    repository: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    assignments = require_exact_keys(value, ASSIGNMENT_ROOT_KEYS, "assignments")
+    schema_version = require_plain_int(
+        assignments["schema_version"], "assignment schema_version", 1
+    )
+    if schema_version != SCHEMA_VERSION:
+        raise AggregationError("assignment schema_version mismatch")
+    generator_version = require_plain_int(
+        assignments["generator_version"], "assignment generator_version", 1
+    )
+    if generator_version != GENERATOR_VERSION:
+        raise AggregationError("assignment generator_version mismatch")
+    finding_count = require_plain_int(
+        assignments["finding_count"], "assignment finding_count"
+    )
+    lens_count = require_plain_int(assignments["lens_count"], "assignment lens_count")
+    bucket_count = require_plain_int(
+        assignments["bucket_count"], "assignment bucket_count", 1
+    )
+    if (
+        finding_count != len(aggregate["findings"])
+        or lens_count != len(LENSES)
+        or bucket_count != BUCKET_COUNT
+    ):
+        raise AggregationError("assignment root counts mismatch")
+    expected_root = {
+        "aggregate_sha256": aggregate["aggregate_sha256"],
+        "issue_snapshot_sha256": snapshot_sha256,
+        "github_repository": repository,
+        "provenance": aggregate_provenance(aggregate),
+        "issue_snapshot": snapshot,
+        "finding_count": len(aggregate["findings"]),
+        "lens_count": len(LENSES),
+        "bucket_count": BUCKET_COUNT,
+    }
+    for key, expected in expected_root.items():
+        if assignments[key] != expected:
+            raise AggregationError(f"assignment {key} provenance mismatch")
+    require_hash(assignments["assignment_sha256"], "assignment SHA-256")
+    if assignments["assignment_sha256"] != document_hash(
+        assignments, "assignment_sha256"
+    ):
+        raise AggregationError("assignment document SHA-256 mismatch")
+    expected = expected_entries(aggregate, snapshot, snapshot_sha256, repository)
+    validate_assignment_buckets(assignments, expected)
+    expected_coverage = {
+        "findings": len(aggregate["findings"]),
+        "lenses_per_finding": len(LENSES),
+        "expected_tuples": len(expected),
+        "assigned_tuples": len(expected),
+        "complete": True,
+    }
+    coverage = require_exact_keys(
+        assignments["coverage"], ASSIGNMENT_COVERAGE_KEYS, "assignment coverage"
+    )
+    for key in ASSIGNMENT_COVERAGE_KEYS - {"complete"}:
+        require_plain_int(coverage[key], f"assignment coverage.{key}")
+    if coverage["complete"] is not True:
+        raise AggregationError("assignment coverage is not complete")
+    if coverage != expected_coverage:
+        raise AggregationError("assignment coverage mismatch")
+    return assignments, expected
+
+
+def validate_assignment_buckets(
+    assignments: dict[str, Any], expected: list[dict[str, Any]]
+) -> None:
+    buckets = assignments["buckets"]
+    if not isinstance(buckets, list) or len(buckets) != BUCKET_COUNT:
+        raise AggregationError("assignment buckets are incomplete")
+    expected_ids = [f"verification-bucket-{index}" for index in range(1, 4)]
+    if [bucket.get("id") for bucket in buckets if isinstance(bucket, dict)] != expected_ids:
+        raise AggregationError("assignment bucket IDs are invalid")
+    distributed = [expected[index::BUCKET_COUNT] for index in range(BUCKET_COUNT)]
+    for bucket, expected_bucket in zip(buckets, distributed):
+        require_exact_keys(bucket, ASSIGNMENT_BUCKET_KEYS, "assignment bucket")
+        count = require_plain_int(bucket["tuple_count"], "assignment tuple_count")
+        if count != len(expected_bucket) or bucket["entries"] != expected_bucket:
+            raise AggregationError(f"{bucket['id']} tuple coverage mismatch")
+        require_hash(bucket["assignment_sha256"], "bucket assignment SHA-256")
+        expected_hash = assignment_bucket_hash(
+            bucket,
+            assignments["aggregate_sha256"],
+            assignments["issue_snapshot_sha256"],
+            assignments["github_repository"],
+        )
+        if bucket["assignment_sha256"] != expected_hash:
+            raise AggregationError(f"{bucket['id']} assignment SHA-256 mismatch")
+
+
+def regenerate_assignments(
+    aggregate_path: Path,
+    snapshot_path: Path,
+    assignments_path: Path,
+    expected_aggregate_sha256: str,
+    expected_snapshot_sha256: str,
+    repository: str,
+) -> tuple[
+    dict[str, Any],
+    bytes,
+    list[dict[str, Any]],
+    bytes,
+    dict[str, Any],
+    bytes,
+    list[dict[str, Any]],
+]:
+    repository = require_repository(repository)
+    aggregate, aggregate_raw = load_canonical_json(aggregate_path, "aggregate")
+    aggregate = validate_aggregate(aggregate, expected_aggregate_sha256)
+    snapshot, snapshot_raw = load_canonical_json(snapshot_path, "issue snapshot")
+    snapshot = validate_issue_snapshot(snapshot, repository)
+    actual_snapshot_sha256 = sha256_bytes(snapshot_raw)
+    if actual_snapshot_sha256 != require_hash(
+        expected_snapshot_sha256, "expected issue snapshot SHA-256"
+    ):
+        raise AggregationError("issue snapshot expected SHA-256 mismatch")
+    assignments, assignments_raw = load_canonical_json(assignments_path, "assignments")
+    generator = Path(__file__).resolve().parent / (
+        "generate-codebase-audit-verification-assignments"
+    )
+    if not generator.is_file():
+        raise AggregationError(f"verification assignment generator is missing: {generator}")
+    with tempfile.TemporaryDirectory(
+        prefix="zaplex-codebase-audit-verification-aggregate-"
+    ) as temporary_name:
+        output = Path(temporary_name) / "assignments.json"
+        command = [
+            sys.executable,
+            str(generator),
+            "--aggregate",
+            str(aggregate_path.resolve(strict=True)),
+            "--issue-snapshot",
+            str(snapshot_path.resolve(strict=True)),
+            "--output",
+            str(output),
+            "--expected-aggregate-sha256",
+            expected_aggregate_sha256,
+            "--expected-issue-snapshot-sha256",
+            expected_snapshot_sha256,
+            "--github-repository",
+            repository,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise AggregationError(f"cannot regenerate assignments: {error}") from error
+        if completed.returncode != 0:
+            message = completed.stderr.decode("utf-8", errors="replace").strip()
+            raise AggregationError(f"verification assignment generator failed: {message}")
+        try:
+            regenerated_raw = output.read_bytes()
+        except OSError as error:
+            raise AggregationError(f"generator did not publish assignments: {error}") from error
+    if regenerated_raw != assignments_raw:
+        raise AggregationError("assignments are not byte-exact generator output")
+    assignments, expected_entries_value = validate_assignments(
+        assignments,
+        aggregate,
+        snapshot,
+        actual_snapshot_sha256,
+        repository,
+    )
+    return (
+        aggregate,
+        aggregate_raw,
+        snapshot,
+        snapshot_raw,
+        assignments,
+        assignments_raw,
+        expected_entries_value,
+    )
+
+
+def response_schema(lens: str) -> dict[str, Any]:
+    hash_pattern = "^[0-9a-f]{64}$"
+    common = {
+        "schema_version": {"const": SCHEMA_VERSION},
+        "verification_id": {"type": "string", "minLength": 1},
+        "finding_id": {"type": "string", "minLength": 1},
+        "lens": {"const": lens},
+        "aggregate_sha256": {"type": "string", "pattern": hash_pattern},
+        "issue_snapshot_sha256": {"type": "string", "pattern": hash_pattern},
+        "github_repository": {"type": "string", "minLength": 3},
+        "source_sha256": {"type": "string", "pattern": hash_pattern},
+        "source_text": {"type": "string"},
+    }
+    lens_properties = {
+        "disprove": {
+            "verdict": {"enum": ["supported", "rejected", "needs-evidence"]},
+            "counter_evidence": {"type": "string", "minLength": 1},
+        },
+        "impact": {
+            "severity": {"enum": ["P0", "P1", "P2", "P3"]},
+            "impact": {"type": "string", "minLength": 1},
+        },
+        "reproduction-fix": {
+            "reproducible": {"type": "boolean"},
+            "reproduction": {"type": "string", "minLength": 1},
+            "fix_assessment": {"type": "string", "minLength": 1},
+            "test_assessment": {"type": "string", "minLength": 1},
+        },
+    }[lens]
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": False,
+        "required": sorted(COMMON_RESPONSE_KEYS | LENS_RESPONSE_KEYS[lens]),
+        "properties": common | lens_properties,
+    }
+
+
+def prompt_for_tuple(
+    assignments: dict[str, Any], entry: dict[str, Any], source: dict[str, Any]
+) -> bytes:
+    lens_instructions = {
+        "disprove": (
+            "Try to disprove the finding. Return supported, rejected, or needs-evidence "
+            "and cite concrete counter-evidence or the exact missing evidence."
+        ),
+        "impact": (
+            "Independently assess severity and describe the concrete user, security, "
+            "reliability, or data-loss impact."
+        ),
+        "reproduction-fix": (
+            "Assess reproducibility and whether the proposed fix and regression test "
+            "are sufficient and specific."
+        ),
+    }
+    return canonical_json(
+        {
+            "task": lens_instructions[entry["lens"]],
+            "rules": [
+                "Inspect only the immutable target snapshot in the working directory.",
+                (
+                    "Do not edit files, use the network, or inspect another checkout "
+                    "or revision."
+                ),
+                "Treat the tuple below as immutable and evaluate every included field.",
+                "Return only one JSON object matching the supplied lens schema.",
+                "Echo all common identity and provenance values exactly.",
+            ],
+            "assignment_sha256": assignments["assignment_sha256"],
+            "tuple": copy.deepcopy(entry),
+            "source": copy.deepcopy(source),
+        }
+    )
+
+
+def validate_run_summary(
+    value: Any,
+    assignments: dict[str, Any],
+    assignments_raw: bytes,
+    aggregate_raw: bytes,
+    snapshot_raw: bytes,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    run = require_exact_keys(value, RUN_ROOT_KEYS, "verification run summary")
+    schema_version = require_plain_int(run["schema_version"], "run schema_version", 1)
+    runner_version = require_plain_int(run["runner_version"], "run runner_version", 1)
+    if schema_version != SCHEMA_VERSION or runner_version != RUNNER_VERSION:
+        raise AggregationError("verification run version mismatch")
+    expected_pins = {
+        "assignment_sha256": assignments["assignment_sha256"],
+        "assignments_input_sha256": sha256_bytes(assignments_raw),
+        "aggregate_sha256": assignments["aggregate_sha256"],
+        "aggregate_input_sha256": sha256_bytes(aggregate_raw),
+        "issue_snapshot_sha256": assignments["issue_snapshot_sha256"],
+        "issue_snapshot_input_sha256": sha256_bytes(snapshot_raw),
+        "github_repository": assignments["github_repository"],
+        "provenance": assignments["provenance"],
+    }
+    for key, expected in expected_pins.items():
+        if run[key] != expected:
+            raise AggregationError(f"verification run {key} provenance mismatch")
+    for key in ("generator_stdout_sha256", "generator_stderr_sha256", "run_sha256"):
+        require_hash(run[key], f"verification run {key}")
+    if run["reasoning_effort"] not in REASONING_EFFORTS:
+        raise AggregationError("verification run reasoning_effort is invalid")
+    if require_plain_int(run["bucket_count"], "run bucket_count", 1) != BUCKET_COUNT:
+        raise AggregationError("verification run bucket_count mismatch")
+    expected_count = assignments["coverage"]["expected_tuples"]
+    if require_plain_int(run["expected_tuples"], "run expected_tuples") != expected_count:
+        raise AggregationError("verification run expected_tuples mismatch")
+    if require_plain_int(run["completed_tuples"], "run completed_tuples") != expected_count:
+        raise AggregationError("verification run completed_tuples mismatch")
+    if run["complete"] is not True:
+        raise AggregationError("verification run is not complete")
+    if run["run_sha256"] != document_hash(run, "run_sha256"):
+        raise AggregationError("verification run document SHA-256 mismatch")
+    executions = validate_run_executions(run, assignments)
+    buckets = validate_run_buckets(run, assignments)
+    return run, executions, buckets
+
+
+def validate_run_executions(
+    run: dict[str, Any], assignments: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
+    executions = run["executions"]
+    if not isinstance(executions, list):
+        raise AggregationError("verification run executions must be an array")
+    expected = [
+        (bucket["id"], entry)
+        for bucket in assignments["buckets"]
+        for entry in bucket["entries"]
+    ]
+    if len(executions) != len(expected):
+        raise AggregationError("verification run execution coverage mismatch")
+    by_id = {}
+    for index, (execution, (bucket_id, entry)) in enumerate(zip(executions, expected)):
+        execution = require_exact_keys(execution, EXECUTION_KEYS, f"execution {index}")
+        expected_identity = {
+            "bucket_id": bucket_id,
+            "verification_id": entry["verification_id"],
+            "finding_id": entry["finding_id"],
+            "lens": entry["lens"],
+        }
+        for key, value in expected_identity.items():
+            if execution[key] != value:
+                raise AggregationError(f"execution {index} {key} mismatch")
+        for key in EXECUTION_KEYS - set(expected_identity):
+            require_hash(execution[key], f"execution {index} {key}")
+        expected_tuple_sha256 = sha256_bytes(canonical_json(entry))
+        if execution["tuple_sha256"] != expected_tuple_sha256:
+            raise AggregationError(f"execution {index} tuple SHA-256 mismatch")
+        expected_schema_sha256 = sha256_bytes(canonical_json(response_schema(entry["lens"])))
+        if execution["schema_sha256"] != expected_schema_sha256:
+            raise AggregationError(f"execution {index} schema SHA-256 mismatch")
+        if execution["verification_id"] in by_id:
+            raise AggregationError("verification run contains duplicate executions")
+        by_id[execution["verification_id"]] = execution
+    return by_id
+
+
+def validate_run_buckets(
+    run: dict[str, Any], assignments: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
+    buckets = run["buckets"]
+    if not isinstance(buckets, list) or len(buckets) != BUCKET_COUNT:
+        raise AggregationError("verification run bucket summaries are incomplete")
+    by_id = {}
+    for index, (bucket, assignment_bucket) in enumerate(
+        zip(buckets, assignments["buckets"]), start=1
+    ):
+        bucket = require_exact_keys(bucket, RUN_BUCKET_KEYS, f"run bucket {index}")
+        expected_id = assignment_bucket["id"]
+        if bucket["id"] != expected_id:
+            raise AggregationError(f"run bucket {index} ID mismatch")
+        count = require_plain_int(bucket["tuple_count"], f"run bucket {index} count")
+        if count != len(assignment_bucket["entries"]):
+            raise AggregationError(f"run bucket {index} tuple_count mismatch")
+        require_hash(bucket["result_sha256"], f"run bucket {index} result SHA-256")
+        by_id[expected_id] = bucket
+    return by_id
+
+
+def load_results(directory: Path) -> dict[str, tuple[dict[str, Any], bytes]]:
+    expected = {
+        f"verification-bucket-{index}.json" for index in range(1, BUCKET_COUNT + 1)
+    }
+    try:
+        entries = list(directory.iterdir())
+    except OSError as error:
+        raise AggregationError(f"cannot read results directory {directory}: {error}") from error
+    actual = {entry.name for entry in entries}
+    if actual != expected:
+        raise AggregationError(
+            f"results directory must contain exactly three result files; "
+            f"missing={sorted(expected - actual)}, extra={sorted(actual - expected)}"
+        )
+    loaded = {}
+    for name in sorted(expected):
+        path = directory / name
+        try:
+            mode = path.lstat().st_mode
+        except OSError as error:
+            raise AggregationError(f"cannot inspect result {path}: {error}") from error
+        if not stat.S_ISREG(mode):
+            raise AggregationError(f"result must be a regular file: {path}")
+        bucket_id = name.removesuffix(".json")
+        value, raw = load_canonical_json(path, name)
+        loaded[bucket_id] = (value, raw)
+    return loaded
+
+
+def validate_response(
+    value: Any, entry: dict[str, Any], assignments: dict[str, Any]
+) -> dict[str, Any]:
+    lens = entry["lens"]
+    response = require_exact_keys(
+        value, COMMON_RESPONSE_KEYS | LENS_RESPONSE_KEYS[lens], f"{lens} response"
+    )
+    schema_version = require_plain_int(
+        response["schema_version"], f"{lens} response schema_version", 1
+    )
+    if schema_version != SCHEMA_VERSION:
+        raise AggregationError(f"{lens} response schema_version mismatch")
+    expected = {
+        "schema_version": SCHEMA_VERSION,
+        "verification_id": entry["verification_id"],
+        "finding_id": entry["finding_id"],
+        "lens": lens,
+        "aggregate_sha256": assignments["aggregate_sha256"],
+        "issue_snapshot_sha256": assignments["issue_snapshot_sha256"],
+        "github_repository": assignments["github_repository"],
+    }
+    for key, expected_value in expected.items():
+        if response[key] != expected_value:
+            raise AggregationError(f"{lens} response {key} mismatch")
+    source_text = require_text(response["source_text"], "response source_text", True)
+    require_hash(response["source_sha256"], "response source SHA-256")
+    if sha256_bytes(source_text.encode("utf-8")) != response["source_sha256"]:
+        raise AggregationError(f"{lens} response source SHA-256 mismatch")
+    if lens == "disprove":
+        if response["verdict"] not in ("supported", "rejected", "needs-evidence"):
+            raise AggregationError("disprove verdict is invalid")
+        require_text(response["counter_evidence"], "disprove counter_evidence")
+    elif lens == "impact":
+        if response["severity"] not in SEVERITIES:
+            raise AggregationError("impact severity is invalid")
+        require_text(response["impact"], "impact assessment")
+    elif lens == "reproduction-fix":
+        if not isinstance(response["reproducible"], bool):
+            raise AggregationError("reproduction reproducible must be a boolean")
+        for key in ("reproduction", "fix_assessment", "test_assessment"):
+            require_text(response[key], f"reproduction {key}")
+    return response
+
+
+def source_from_response(entry: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
+    finding = entry["finding"]
+    return {
+        "path": finding["path"],
+        "range": copy.deepcopy(finding["range"]),
+        "sha256": response["source_sha256"],
+        "text": response["source_text"],
+    }
+
+
+def validate_result_record(
+    value: Any,
+    entry: dict[str, Any],
+    assignments: dict[str, Any],
+    execution: dict[str, Any],
+    label: str,
+) -> dict[str, Any]:
+    record = require_exact_keys(value, RESULT_RECORD_KEYS, label)
+    expected_identity = {
+        "verification_id": entry["verification_id"],
+        "finding_id": entry["finding_id"],
+        "lens": entry["lens"],
+    }
+    for key, expected in expected_identity.items():
+        if record[key] != expected:
+            raise AggregationError(f"{label} {key} mismatch")
+    for key in RESULT_RECORD_KEYS - set(expected_identity) - {"response"}:
+        require_hash(record[key], f"{label} {key}")
+        if record[key] != execution[key]:
+            raise AggregationError(f"{label} {key} does not match execution")
+    response = validate_response(record["response"], entry, assignments)
+    response_sha256 = sha256_bytes(canonical_json(response))
+    if record["response_sha256"] != response_sha256:
+        raise AggregationError(f"{label} response SHA-256 mismatch")
+    source = source_from_response(entry, response)
+    expected_prompt_sha256 = sha256_bytes(prompt_for_tuple(assignments, entry, source))
+    if record["prompt_sha256"] != expected_prompt_sha256:
+        raise AggregationError(f"{label} prompt SHA-256 mismatch")
+    if record["source_sha256"] != response["source_sha256"]:
+        raise AggregationError(f"{label} source SHA-256 mismatch")
+    return record
+
+
+def validate_result_bucket(
+    value: Any,
+    assignment_bucket: dict[str, Any],
+    assignments: dict[str, Any],
+    executions: dict[str, dict[str, Any]],
+    run_bucket: dict[str, Any],
+) -> list[dict[str, Any]]:
+    bucket_id = assignment_bucket["id"]
+    result = require_exact_keys(value, RESULT_ROOT_KEYS, f"{bucket_id} result")
+    schema_version = require_plain_int(
+        result["schema_version"], f"{bucket_id} schema_version", 1
+    )
+    runner_version = require_plain_int(
+        result["runner_version"], f"{bucket_id} runner_version", 1
+    )
+    if schema_version != SCHEMA_VERSION or runner_version != RUNNER_VERSION:
+        raise AggregationError(f"{bucket_id} result version mismatch")
+    expected_metadata = {
+        "schema_version": SCHEMA_VERSION,
+        "runner_version": RUNNER_VERSION,
+        "bucket_id": bucket_id,
+        "bucket_assignment_sha256": assignment_bucket["assignment_sha256"],
+        "assignment_sha256": assignments["assignment_sha256"],
+        "aggregate_sha256": assignments["aggregate_sha256"],
+        "issue_snapshot_sha256": assignments["issue_snapshot_sha256"],
+        "github_repository": assignments["github_repository"],
+    }
+    for key, expected in expected_metadata.items():
+        if result[key] != expected:
+            raise AggregationError(f"{bucket_id} result {key} mismatch")
+    records = result["results"]
+    if not isinstance(records, list):
+        raise AggregationError(f"{bucket_id} results must be an array")
+    count = require_plain_int(result["tuple_count"], f"{bucket_id} tuple_count")
+    if count != len(assignment_bucket["entries"]) or count != len(records):
+        raise AggregationError(f"{bucket_id} tuple coverage mismatch")
+    require_hash(result["result_sha256"], f"{bucket_id} result SHA-256")
+    if result["result_sha256"] != document_hash(result, "result_sha256"):
+        raise AggregationError(f"{bucket_id} document SHA-256 mismatch")
+    if result["result_sha256"] != run_bucket["result_sha256"]:
+        raise AggregationError(f"{bucket_id} run result SHA-256 mismatch")
+    validated = []
+    for index, (record, entry) in enumerate(
+        zip(records, assignment_bucket["entries"])
+    ):
+        execution = executions.get(entry["verification_id"])
+        if execution is None:
+            raise AggregationError(f"{bucket_id} execution is missing")
+        validated.append(
+            validate_result_record(
+                record,
+                entry,
+                assignments,
+                execution,
+                f"{bucket_id} result {index}",
+            )
+        )
+    return validated
+
+
+def collect_verified_records(
+    assignments: dict[str, Any],
+    run: dict[str, Any],
+    executions: dict[str, dict[str, Any]],
+    run_buckets: dict[str, dict[str, Any]],
+    results_directory: Path,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    loaded = load_results(results_directory)
+    records = {}
+    result_summaries = []
+    for assignment_bucket in assignments["buckets"]:
+        bucket_id = assignment_bucket["id"]
+        result, raw = loaded[bucket_id]
+        bucket_records = validate_result_bucket(
+            result,
+            assignment_bucket,
+            assignments,
+            executions,
+            run_buckets[bucket_id],
+        )
+        result_summaries.append(
+            {
+                "bucket_id": bucket_id,
+                "tuple_count": len(bucket_records),
+                "result_sha256": result["result_sha256"],
+                "result_input_sha256": sha256_bytes(raw),
+            }
+        )
+        for record in bucket_records:
+            verification_id_value = record["verification_id"]
+            if verification_id_value in records:
+                raise AggregationError("a verification tuple appears more than once")
+            records[verification_id_value] = record
+    expected_ids = set(executions)
+    if set(records) != expected_ids:
+        raise AggregationError("verification tuple coverage is incomplete or unexpected")
+    if len(run["executions"]) != len(records):
+        raise AggregationError("verification run/result tuple count mismatch")
+    return records, result_summaries
+
+
+def lens_evidence(record: dict[str, Any], bucket_id: str) -> dict[str, Any]:
+    return {
+        "bucket_id": bucket_id,
+        **{
+            key: copy.deepcopy(record[key])
+            for key in (
+                "verification_id",
+                "tuple_sha256",
+                "prompt_sha256",
+                "schema_sha256",
+                "source_sha256",
+                "events_sha256",
+                "stderr_sha256",
+                "final_message_sha256",
+                "response_sha256",
+                "response",
+            )
+        },
+    }
+
+
+def decision_for(lenses: dict[str, dict[str, Any]]) -> str:
+    disprove = lenses["disprove"]["response"]
+    reproduction = lenses["reproduction-fix"]["response"]
+    if disprove["verdict"] == "rejected":
+        return "rejected"
+    if disprove["verdict"] == "needs-evidence" or not reproduction["reproducible"]:
+        return "needs-evidence"
+    return "verified"
+
+
+def build_output(
+    aggregate: dict[str, Any],
+    aggregate_raw: bytes,
+    snapshot_sha256: str,
+    snapshot_raw: bytes,
+    assignments: dict[str, Any],
+    assignments_raw: bytes,
+    run: dict[str, Any],
+    run_raw: bytes,
+    records: dict[str, dict[str, Any]],
+    result_summaries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    entries_by_finding = {}
+    bucket_by_verification = {}
+    for bucket in assignments["buckets"]:
+        for entry in bucket["entries"]:
+            entries_by_finding.setdefault(entry["finding_id"], {})[entry["lens"]] = entry
+            bucket_by_verification[entry["verification_id"]] = bucket["id"]
+    findings = []
+    counts = {"verified": 0, "rejected": 0, "needs-evidence": 0}
+    for index, original_finding in enumerate(aggregate["findings"]):
+        finding_id = stable_finding_id(
+            aggregate["aggregate_sha256"],
+            aggregate["run_summary_sha256"],
+            index,
+            original_finding,
+        )
+        finding_entries = entries_by_finding.get(finding_id, {})
+        if set(finding_entries) != set(LENSES):
+            raise AggregationError(f"{finding_id} does not have exactly three lenses")
+        lenses = {}
+        for lens in LENSES:
+            entry = finding_entries[lens]
+            record = records[entry["verification_id"]]
+            lenses[lens] = lens_evidence(
+                record, bucket_by_verification[entry["verification_id"]]
+            )
+        decision = decision_for(lenses)
+        counts[decision] += 1
+        findings.append(
+            {
+                "finding_id": finding_id,
+                "original_finding": copy.deepcopy(original_finding),
+                "decision": decision,
+                "final_severity": lenses["impact"]["response"]["severity"],
+                "lenses": lenses,
+            }
+        )
+    tuple_count = assignments["coverage"]["expected_tuples"]
+    output = {
+        "schema_version": SCHEMA_VERSION,
+        "aggregator_version": AGGREGATOR_VERSION,
+        "aggregate_sha256": aggregate["aggregate_sha256"],
+        "aggregate_input_sha256": sha256_bytes(aggregate_raw),
+        "issue_snapshot_sha256": snapshot_sha256,
+        "issue_snapshot_input_sha256": sha256_bytes(snapshot_raw),
+        "verification_assignment_sha256": assignments["assignment_sha256"],
+        "verification_assignments_input_sha256": sha256_bytes(assignments_raw),
+        "verification_run_sha256": run["run_sha256"],
+        "verification_run_input_sha256": sha256_bytes(run_raw),
+        "verification_bucket_results": copy.deepcopy(result_summaries),
+        "github_repository": assignments["github_repository"],
+        "provenance": copy.deepcopy(assignments["provenance"]),
+        "counts": counts,
+        "coverage": {
+            "findings": len(findings),
+            "completed_findings": len(findings),
+            "lenses_per_finding": len(LENSES),
+            "expected_tuples": tuple_count,
+            "completed_tuples": len(records),
+            "complete": True,
+        },
+        "findings": findings,
+        "remaining_tuples": [],
+    }
+    output["verification_aggregate_sha256"] = document_hash(
+        output, "verification_aggregate_sha256"
+    )
+    return output
+
+
+def atomic_publish(path: Path, contents: bytes) -> None:
+    path = path.parent.resolve() / path.name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(contents)
+            output.flush()
+            os.fsync(output.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError as error:
+            raise AggregationError(f"output path already exists: {path}") from error
+        except OSError as error:
+            raise AggregationError(f"cannot publish output {path}: {error}") from error
+        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--aggregate", type=Path, required=True)
+    parser.add_argument("--issue-snapshot", type=Path, required=True)
+    parser.add_argument("--assignments", type=Path, required=True)
+    parser.add_argument("--run-summary", type=Path, required=True)
+    parser.add_argument("--results-dir", type=Path, required=True)
+    parser.add_argument("--expected-aggregate-sha256", required=True)
+    parser.add_argument("--expected-issue-snapshot-sha256", required=True)
+    parser.add_argument("--github-repository", required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        (
+            aggregate,
+            aggregate_raw,
+            _,
+            snapshot_raw,
+            assignments,
+            assignments_raw,
+            _,
+        ) = regenerate_assignments(
+            args.aggregate,
+            args.issue_snapshot,
+            args.assignments,
+            args.expected_aggregate_sha256,
+            args.expected_issue_snapshot_sha256,
+            args.github_repository,
+        )
+        run, run_raw = load_canonical_json(args.run_summary, "verification run summary")
+        run, executions, run_buckets = validate_run_summary(
+            run,
+            assignments,
+            assignments_raw,
+            aggregate_raw,
+            snapshot_raw,
+        )
+        records, result_summaries = collect_verified_records(
+            assignments,
+            run,
+            executions,
+            run_buckets,
+            args.results_dir,
+        )
+        output = build_output(
+            aggregate,
+            aggregate_raw,
+            assignments["issue_snapshot_sha256"],
+            snapshot_raw,
+            assignments,
+            assignments_raw,
+            run,
+            run_raw,
+            records,
+            result_summaries,
+        )
+        atomic_publish(args.output, canonical_json(output))
+    except (AggregationError, OSError) as error:
+        print(f"verification result aggregator: {error}", file=sys.stderr)
+        return 1
+    print(f"verification result aggregator: wrote {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
