@@ -1,7 +1,7 @@
 use super::str_index_map::StrIndexMap;
 use crate::fonts::FontId;
 use crate::text_layout::{Glyph, Run, TextStyle};
-use cosmic_text::LayoutGlyph;
+use cosmic_text::{fontdb, LayoutGlyph};
 use pathfinder_geometry::vector::vec2f;
 
 /// Helper struct to construct [`Run`]s from a series of shaped glyphs.
