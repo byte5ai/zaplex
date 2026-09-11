@@ -109,6 +109,14 @@ jobs:
         run: python3 script/test-macos-bundle
         shell: bash
 
+      - name: Verify immutable codebase-audit pipeline
+        run: |
+          script/codebase-audit-inventory-tests
+          script/codebase-audit-assignments-tests
+          script/run-codebase-audit-assignments-tests
+          script/aggregate-codebase-audit-results-tests
+        shell: bash
+
       - name: Detect build-relevant changes
         id: detect
         env:
