@@ -1092,6 +1092,29 @@ impl BlockList {
         }
     }
 
+    pub fn selection_is_exact_url(
+        &self,
+        semantic_selection: &SemanticSelection,
+        inverted_blocklist: bool,
+    ) -> bool {
+        let Some(ExpandedSelectionRange::Regular { start, end, .. }) =
+            self.expand_selection(semantic_selection, inverted_blocklist)
+        else {
+            return false;
+        };
+        let start = start.within_grid_point;
+        let end = end.within_grid_point;
+        if !start.in_same_block_and_grid(&end) {
+            return false;
+        }
+
+        self.url_at_point(&start).is_some_and(|url| {
+            url.block_index == start.block_index
+                && url.grid == start.grid
+                && url.inner.range == (*start.get()..=*end.get())
+        })
+    }
+
     /// Whether there is a renderable selection with the current blocklist config.
     pub fn has_renderable_selection(
         &self,

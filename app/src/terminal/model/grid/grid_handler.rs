@@ -70,6 +70,85 @@ const LINK_NUM_CHARACTER_SCAN: usize = 50;
 /// Max number of characters to scan for a URL.
 const URL_SCAN_CHARACTER_MAX_COUNT: usize = 1000;
 
+pub(crate) fn normalize_hard_wrapped_http_url(text: &str) -> Option<String> {
+    if !text.contains(['\r', '\n']) {
+        return None;
+    }
+
+    let normalized_breaks = text.replace("\r\n", "\n").replace('\r', "\n");
+    let lines = normalized_breaks.split('\n').collect::<Vec<_>>();
+    if lines.len() < 2
+        || lines
+            .iter()
+            .any(|line| line.is_empty() || line.chars().any(char::is_whitespace))
+    {
+        return None;
+    }
+
+    let candidate = lines.concat();
+    let candidate_without_scheme = strip_http_scheme(&candidate)?;
+    let lower_candidate_without_scheme = candidate_without_scheme.to_ascii_lowercase();
+    if lower_candidate_without_scheme.contains("http://")
+        || lower_candidate_without_scheme.contains("https://")
+    {
+        return None;
+    }
+    let parsed = url::Url::parse(&candidate).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return None;
+    }
+
+    let mut prefix = String::new();
+    let mut found_continuation_signal = false;
+    for (index, line) in lines.iter().enumerate().take(lines.len() - 1) {
+        prefix.push_str(line);
+        let suffix = lines[index + 1..].concat();
+        found_continuation_signal |= is_unambiguous_hard_url_continuation(&prefix, &suffix);
+    }
+    if !found_continuation_signal {
+        return None;
+    }
+
+    Some(candidate)
+}
+
+fn is_unambiguous_hard_url_continuation(prefix: &str, suffix: &str) -> bool {
+    let Some(after_scheme) = strip_http_scheme(prefix) else {
+        return false;
+    };
+    let authority_end = after_scheme
+        .find(['/', '?', '#'])
+        .unwrap_or(after_scheme.len());
+    let authority = &after_scheme[..authority_end];
+    let url_tail = &after_scheme[authority_end..];
+    let suffix_authority = suffix.split(['/', '?', '#']).next().unwrap_or_default();
+
+    let completes_hostname =
+        url_tail.is_empty() && !authority.contains('.') && suffix_authority.contains('.');
+    let is_query_or_fragment = url_tail.contains(['?', '#']);
+    let touches_url_syntax = is_query_or_fragment
+        && (prefix.ends_with(['?', '#', '&', '=', '%'])
+            || suffix.starts_with(['?', '#', '&', '=', '%']));
+
+    completes_hostname || touches_url_syntax
+}
+
+fn strip_http_scheme(value: &str) -> Option<&str> {
+    if value
+        .get(..7)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
+    {
+        value.get(7..)
+    } else if value
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+    {
+        value.get(8..)
+    } else {
+        None
+    }
+}
+
 /// Max depth for the kitty keyboard mode stack.
 /// Per the kitty keyboard protocol, this should be
 /// bounded to prevent denial of service attacks.
@@ -597,6 +676,39 @@ impl GridHandler {
 
     pub fn url_at_point(&self, displayed_point: Point) -> Option<Link> {
         let original_point = self.maybe_translate_point_from_displayed_to_original(displayed_point);
+
+        // Some TUIs redraw a visually wrapped URL as separate hard lines. Prefer the complete
+        // URL only when every hard boundary is indistinguishable from a width-based wrap.
+        let mut url = self
+            .url_at_original_point(original_point, grapheme_cursor::Wrap::All)
+            .filter(|url| {
+                self.has_hard_wrapped_url_boundary(url)
+                    && self.url_rows_are_contiguously_displayed(url)
+            })
+            .or_else(|| self.url_at_original_point(original_point, grapheme_cursor::Wrap::Soft))?;
+
+        if self.has_displayed_output() {
+            let displayed_start =
+                self.maybe_translate_point_from_original_to_displayed(*url.range.start());
+            let displayed_end =
+                self.maybe_translate_point_from_original_to_displayed(*url.range.end());
+            if displayed_start > displayed_end {
+                log::error!(
+                    "URL translation to displayed points failed. Displayed range start {displayed_start:?} is greater than displayed range end {displayed_end:?}"
+                );
+            } else {
+                url.range = displayed_start..=displayed_end;
+            }
+        }
+
+        Some(url)
+    }
+
+    fn url_at_original_point(
+        &self,
+        original_point: Point,
+        wrap: grapheme_cursor::Wrap,
+    ) -> Option<Link> {
         let row = original_point.row;
         let col = original_point.col;
 
@@ -624,7 +736,7 @@ impl GridHandler {
         }
 
         // Scan backward until fragment boundary.
-        let mut cursor = self.grapheme_cursor_from(original_point, grapheme_cursor::Wrap::Soft);
+        let mut cursor = self.grapheme_cursor_from(original_point, wrap);
         cursor.move_backward();
 
         let mut starting_point = original_point;
@@ -650,7 +762,7 @@ impl GridHandler {
             cursor.move_backward();
         }
 
-        let mut cursor = self.grapheme_cursor_from(starting_point, grapheme_cursor::Wrap::Soft);
+        let mut cursor = self.grapheme_cursor_from(starting_point, wrap);
         let mut locator = UrlLocator::new();
         let mut state = UrlLocation::Reset;
         let mut scheme_buffer = Vec::new();
@@ -741,24 +853,66 @@ impl GridHandler {
             total_characters_scanned += 1;
         }
 
-        if url.is_empty || !url.range.contains(&original_point) {
-            None
-        } else {
-            if self.has_displayed_output() {
-                let displayed_start =
-                    self.maybe_translate_point_from_original_to_displayed(*url.range.start());
-                let displayed_end =
-                    self.maybe_translate_point_from_original_to_displayed(*url.range.end());
-                if displayed_start > displayed_end {
-                    log::error!(
-                        "URL translation to displayed points failed. Displayed range start {displayed_start:?} is greater than displayed range end {displayed_end:?}"
-                    );
-                } else {
-                    url.range = displayed_start..=displayed_end;
-                }
+        (!url.is_empty && url.range.contains(&original_point)).then_some(url)
+    }
+
+    fn has_hard_wrapped_url_boundary(&self, url: &Link) -> bool {
+        let start = *url.range.start();
+        let end = *url.range.end();
+        let mut found_hard_boundary = false;
+
+        for row in start.row..end.row {
+            let Some(line) = self.row(row) else {
+                return false;
+            };
+            let Some(last_cell) = line.get(self.columns().saturating_sub(1)) else {
+                return false;
+            };
+
+            if last_cell.flags.contains(Flags::WRAPLINE) {
+                continue;
             }
-            Some(url)
+            // A shorter hard line is ordinary multiline output, not a visual wrap.
+            if line.line_length() != self.columns() {
+                return false;
+            }
+
+            found_hard_boundary = true;
         }
+
+        if !found_hard_boundary {
+            return false;
+        }
+
+        let url_text = self.bounds_to_string(
+            start,
+            end,
+            false,
+            RespectObfuscatedSecrets::No,
+            false,
+            RespectDisplayedOutput::No,
+        );
+        normalize_hard_wrapped_http_url(&url_text).is_some()
+    }
+
+    fn url_rows_are_contiguously_displayed(&self, url: &Link) -> bool {
+        if !self.has_displayed_output() {
+            return true;
+        }
+
+        let start_row = url.range.start().row;
+        let end_row = url.range.end().row;
+        let displayed_start = self
+            .maybe_translate_point_from_original_to_displayed(Point::new(start_row, 0))
+            .row;
+
+        (start_row..=end_row).enumerate().all(|(offset, row)| {
+            self.is_displayed_row(row)
+                && self
+                    .maybe_translate_point_from_original_to_displayed(Point::new(row, 0))
+                    .row
+                    == displayed_start + offset
+        })
     }
 
     /// Converts a cell to a string, with ansi escape sequences
