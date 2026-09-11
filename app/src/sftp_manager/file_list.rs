@@ -95,6 +95,7 @@ fn mark_cell(
 /// accent colour: NC/MC's colour-marking made theme-native (RC acceptance
 /// 2026-07-21: marks are colour, not a checkmark), so a marked set reads at a
 /// glance without replacing the file-type icon.
+#[allow(clippy::too_many_arguments)]
 pub fn render_file_row(
     entry: &FileEntry,
     index: usize,
@@ -133,12 +134,12 @@ pub fn render_file_row(
     let modified = entry.modified.clone();
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
-    let accent_fill: Fill = theme.accent().into();
+    let accent_fill: Fill = theme.accent();
     let row_position_prefix = position_prefix.to_string();
     let panel_position_id = panel_position_id.to_string();
     // The mark-affordance hover colour stays genuinely muted — `sub_color`
     // turns accent on marked rows and must not bleed into it.
-    let muted_fill: Fill = muted.into();
+    let muted_fill: Fill = muted;
     let icon_fill: Fill = icon_color.into();
 
     Hoverable::new(mouse_handle, move |mouse| {
@@ -288,7 +289,7 @@ pub fn render_parent_row(
             None
         };
 
-        let icon_el = ConstrainedBox::new(Icon::ArrowUp.to_warpui_icon(accent.into()).finish())
+        let icon_el = ConstrainedBox::new(Icon::ArrowUp.to_warpui_icon(accent).finish())
             .with_width(ICON_CELL)
             .with_height(ICON_CELL)
             .finish();
@@ -492,6 +493,7 @@ pub fn render_selection_status(
 /// `cursor_row` indexes the *row* space: the `..` row (present when
 /// `has_parent_row`) followed by the visible entries — the same space the
 /// keyboard cursor moves in, so the highlight and the keys never disagree.
+#[allow(clippy::too_many_arguments)]
 pub fn render_file_rows(
     entries: &[FileEntry],
     filtered_indices: &[usize],

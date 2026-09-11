@@ -611,11 +611,9 @@ pub fn chips_to_string(chips: impl Iterator<Item = ChipResult>) -> String {
         match (chip_kind, next_chip_kind) {
             // Omit the space between adjacent Svn chips.
             (ContextChipKind::SvnBranch, Some(ContextChipKind::SvnDirtyItems)) => (),
-            (_, Some(_)) => {
+            (_, Some(_)) if !chip_display_value.is_empty() => {
                 // Add padding after non-empty chips.
-                if !chip_display_value.is_empty() {
-                    prompt.push(' ');
-                }
+                prompt.push(' ');
             }
             _ => (),
         }

@@ -195,7 +195,7 @@ impl NetworkPageView {
         );
 
         let mut me = Self {
-            page: PageType::new_monolith(NetworkPageWidget::default(), None, false),
+            page: PageType::new_monolith(NetworkPageWidget, None, false),
             mode_dropdown,
             url_editor,
             username_editor,

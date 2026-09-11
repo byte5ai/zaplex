@@ -15,6 +15,7 @@ use zeroize::Zeroizing;
 const ENVELOPE_PREFIX: &str = "zaplex-sync:v2:";
 const ENVELOPE_VERSION: u8 = 2;
 const KEY_LEN: usize = 32;
+const NONCE_LEN: usize = 12;
 const SALT_LEN: usize = 16;
 const ARGON2_VERSION: u32 = 0x13;
 const ARGON2_MEMORY_KIB: u32 = 19_456;
@@ -202,12 +203,10 @@ pub fn decrypt(sync_secret: &str, encoded: &str) -> Result<Zeroizing<String>, Cr
     let key_wrap_nonce = BASE64
         .decode(&envelope.key_wrap_nonce)
         .map_err(|_| CryptoError::InvalidSyncSecret)?;
-    let key_wrap_nonce = Nonce::from_slice(
-        key_wrap_nonce
-            .as_slice()
-            .try_into()
-            .map_err(|_| CryptoError::InvalidSyncSecret)?,
-    );
+    if key_wrap_nonce.len() != NONCE_LEN {
+        return Err(CryptoError::InvalidSyncSecret);
+    }
+    let key_wrap_nonce = Nonce::from_slice(&key_wrap_nonce);
     let wrapped_dek = BASE64
         .decode(&envelope.wrapped_dek)
         .map_err(|_| CryptoError::InvalidSyncSecret)?;
@@ -231,12 +230,10 @@ pub fn decrypt(sync_secret: &str, encoded: &str) -> Result<Zeroizing<String>, Cr
     let payload_nonce = BASE64
         .decode(&envelope.payload_nonce)
         .map_err(|_| CryptoError::InvalidSyncSecret)?;
-    let payload_nonce = Nonce::from_slice(
-        payload_nonce
-            .as_slice()
-            .try_into()
-            .map_err(|_| CryptoError::InvalidSyncSecret)?,
-    );
+    if payload_nonce.len() != NONCE_LEN {
+        return Err(CryptoError::InvalidSyncSecret);
+    }
+    let payload_nonce = Nonce::from_slice(&payload_nonce);
     let ciphertext = BASE64
         .decode(&envelope.ciphertext)
         .map_err(|_| CryptoError::InvalidSyncSecret)?;

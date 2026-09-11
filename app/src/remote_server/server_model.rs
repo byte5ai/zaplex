@@ -1,5 +1,6 @@
 use crate::terminal::bootstrap::{daemon_bootstrap_delivery, DaemonBootstrapDelivery};
 use crate::terminal::shell::ShellType;
+use instant::Instant;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 #[cfg(any(unix, feature = "local_fs"))]
@@ -9,7 +10,6 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use warp_core::channel::ChannelState;
 use warp_core::SessionId;
 #[cfg(unix)]
@@ -287,6 +287,7 @@ use crate::terminal::model::session::command_executor::{
 /// Notifications (fire-and-forget messages like `SessionBootstrapped` and
 /// `Abort`) do not produce a `HandlerOutcome`; they are dispatched inline in
 /// `handle_message` and return early.
+#[allow(clippy::large_enum_variant)]
 enum HandlerOutcome {
     /// The response is ready synchronously — the caller sends it immediately.
     Sync(server_message::Message),
@@ -3812,7 +3813,7 @@ fn managed_launch_plan(
             ManagedLaunchPlan::claude_remote_control(&launch.launch_id, key, spec)
                 .map_err(|error| error.protocol_code())
         }
-        "interactive-agent" | "claude-remote-control" => Err("invalid-managed-options"),
+        "interactive-agent" => Err("invalid-managed-options"),
         _ => Err("unsupported-managed-kind"),
     }?;
     Ok(plan.with_project_identity(project_identity))
@@ -5058,10 +5059,10 @@ impl ServerModel {
             bytes,
             startup_command_id,
         } = msg;
-        if !self
+        if self
             .sessions
             .get(&session_id)
-            .is_some_and(|session| session.attached == conn_id)
+            .is_none_or(|session| session.attached != conn_id)
         {
             log::warn!(
                 "Daemon: rejecting input for session {session_id} from non-owning connection \

@@ -1206,7 +1206,7 @@ struct OpenHow {
 }
 
 #[cfg(unix)]
-fn confined_relative_path<'a>(path: &'a Path) -> Result<&'a Path, SftpOpsError> {
+fn confined_relative_path(path: &Path) -> Result<&Path, SftpOpsError> {
     let relative = path.strip_prefix("/").unwrap_or(path);
     if relative.as_os_str().is_empty()
         || relative
@@ -2967,6 +2967,7 @@ pub struct InMemorySftpBackend {
     root: PathBuf,
     directory_reservation_registry: Option<DirectoryReservationRegistry>,
     safe_mutation_capabilities: Mutex<HashMap<(u64, bool), Result<(), String>>>,
+    #[allow(clippy::type_complexity)]
     cleanup_recovery_identities:
         Mutex<HashMap<PathBuf, (StableEntryIdentity, Arc<dyn BackendOwnershipAnchor>)>>,
     directory_reservation_namespaces: Mutex<HashMap<PathBuf, DirectoryReservationNamespace>>,
@@ -3794,7 +3795,7 @@ fn same_persistent_exchange_record(
 }
 
 fn decode_hex(value: &str) -> Result<Vec<u8>, SftpOpsError> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err(SftpOpsError::Operation(
             "Trusted transfer registry contains invalid hex".to_string(),
         ));
@@ -4872,6 +4873,7 @@ impl DirectoryReservationRegistry {
         })
     }
 
+    #[allow(clippy::type_complexity)]
     fn artifact_records(
         &self,
     ) -> Result<Vec<(PathBuf, Result<PersistentArtifactRecord, SftpOpsError>)>, SftpOpsError> {
@@ -4895,6 +4897,7 @@ impl DirectoryReservationRegistry {
         Ok(records)
     }
 
+    #[allow(clippy::type_complexity)]
     fn exchange_records(
         &self,
     ) -> Result<Vec<(PathBuf, Result<PersistentExchangeRecord, SftpOpsError>)>, SftpOpsError> {
@@ -6094,7 +6097,7 @@ impl InMemorySftpBackend {
         physical_path: &Path,
         identity: Option<StableEntryIdentity>,
         association: Option<(StableEntryIdentity, Arc<dyn BackendOwnershipAnchor>)>,
-        failed_directory_candidate: Option<bool>,
+        #[cfg_attr(not(test), allow(unused_variables))] failed_directory_candidate: Option<bool>,
     ) -> Result<PathBuf, SftpOpsError> {
         if let Some((expected, anchor)) = association.as_ref() {
             let actual = anchor.identity()?;
@@ -6327,16 +6330,13 @@ impl InMemorySftpBackend {
                 .lock()
                 .expect("persistent transfer artifact lock poisoned")
                 .iter()
-                .filter_map(|(path, artifact)| {
-                    artifact
-                        .physical_path
-                        .as_ref()
-                        .is_some_and(|physical| {
-                            physical == &record.first.physical_path
-                                || physical == &record.second.physical_path
-                        })
-                        .then(|| path.clone())
+                .filter(|(_, artifact)| {
+                    artifact.physical_path.as_ref().is_some_and(|physical| {
+                        physical == &record.first.physical_path
+                            || physical == &record.second.physical_path
+                    })
                 })
+                .map(|(path, _)| path.clone())
                 .collect::<Vec<_>>();
             for path in artifact_paths {
                 self.release_cleanup_recovery_path(&path)?;
@@ -6396,10 +6396,10 @@ impl InMemorySftpBackend {
                 });
                 let stale_paths = artifacts
                     .iter()
-                    .filter_map(|(path, artifact)| {
-                        (artifact.physical_path.as_ref() == Some(&record.first.physical_path))
-                            .then(|| path.clone())
+                    .filter(|(_, artifact)| {
+                        artifact.physical_path.as_ref() == Some(&record.first.physical_path)
                     })
+                    .map(|(path, _)| path.clone())
                     .collect::<Vec<_>>();
                 (recovery_path, stale_paths)
             };
@@ -7868,7 +7868,7 @@ impl InMemorySftpBackend {
             if anchor.matches_path(&path).unwrap_or(false)
                 && anchor
                     .identity()
-                    .is_ok_and(|actual| same_immutable_object(&expected, &actual))
+                    .is_ok_and(|actual| same_immutable_object(expected, &actual))
             {
                 self.cleanup_recovery_identities
                     .lock()
@@ -10437,13 +10437,12 @@ impl SftpBackend for InMemorySftpBackend {
         let candidate = if physical.starts_with(&self.root) {
             self.to_remote(&physical)
         } else {
-            let logical = self.persist_unresolved_physical_candidate_with_anchor(
+            self.persist_unresolved_physical_candidate_with_anchor(
                 "anchor-sibling-resolved",
                 &physical,
                 expected.clone(),
                 anchor.clone(),
-            )?;
-            logical
+            )?
         };
         if physical.starts_with(&self.root) {
             let _lifecycle = self

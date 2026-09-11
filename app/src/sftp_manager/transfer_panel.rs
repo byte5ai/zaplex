@@ -449,7 +449,7 @@ fn render_transfer_row(
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
-        .with_color(appearance.theme().ui_error_color().into())
+        .with_color(appearance.theme().ui_error_color())
         .finish();
         col.add_child(recovery_text);
     }
@@ -463,6 +463,7 @@ fn render_transfer_row(
 /// Render file transfer panel (main entry point)
 ///
 /// Always display the transfer task list, with close button on the right of the title bar.
+#[allow(clippy::too_many_arguments)]
 pub fn render_transfer_panel(
     transfers: &[TransferTask],
     cancel_btn_states: &std::collections::HashMap<usize, MouseStateHandle>,
@@ -584,6 +585,7 @@ pub fn render_workspace_transfer_panel(app: &AppContext) -> Option<Box<dyn Eleme
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_transfer_panel_at_height(
     transfers: &[TransferTask],
     cancel_btn_states: &std::collections::HashMap<usize, MouseStateHandle>,

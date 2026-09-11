@@ -167,7 +167,7 @@ pub fn render_referenced_attachments(
     }
 
     let mut refs = referenced_attachments.iter().collect::<Vec<_>>();
-    refs.sort_by(|(left, _), (right, _)| left.cmp(right));
+    refs.sort_by_key(|(left, _)| *left);
 
     let mut out = String::with_capacity(256);
     out.push_str("<attached_context>\n");
@@ -186,7 +186,7 @@ pub fn render_api_referenced_attachments(
     }
 
     let mut refs = referenced_attachments.iter().collect::<Vec<_>>();
-    refs.sort_by(|(left, _), (right, _)| left.cmp(right));
+    refs.sort_by_key(|(left, _)| *left);
 
     let mut out = String::with_capacity(256);
     out.push_str("<attached_context>\n");
