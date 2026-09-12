@@ -171,7 +171,7 @@ impl MCPServersSettingsPageView {
                     if let Some(hash) = installation.hash() {
                         TemplatableMCPServerManager::handle(ctx).update(ctx, |manager, ctx| {
                             manager.shutdown_server(uuid, ctx);
-                            manager.purge_file_based_server_credentials(&vec![hash], ctx);
+                            manager.purge_file_based_server_credentials(&[hash], ctx);
                         });
                     }
                 }

@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+
+"""Keep user-facing security, contribution, and release links on this fork."""
+
+from pathlib import Path
+import sys
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+FORK_ROOT = "https://github.com/byte5ai/zaplex"
+TARGETS = ("SECURITY.md", "CONTRIBUTING.md", "cliff.toml")
+
+
+def fail(message: str) -> None:
+    print(f"fork link contract: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+contents = {
+    name: (REPO_ROOT / name).read_text(encoding="utf-8") for name in TARGETS
+}
+
+for name, content in contents.items():
+    if "https://github.com/zerx-lab/warp" in content:
+        fail(f"{name} still contains a user-facing upstream repository link")
+
+if f"{FORK_ROOT}/security/advisories/new" not in contents["SECURITY.md"]:
+    fail("SECURITY.md must point private vulnerability reports at this fork")
+
+if contents["CONTRIBUTING.md"].count(f"{FORK_ROOT}/issues") < 2:
+    fail("CONTRIBUTING.md must use this fork for issue links")
+
+for suffix in ("/compare/{{ prev }}...{{ curr }}", "/commit/{{ sha }}"):
+    if f"{FORK_ROOT}{suffix}" not in contents["cliff.toml"]:
+        fail(f"cliff.toml is missing the fork release-note URL {suffix}")
+
+print("fork link contract: ok")
