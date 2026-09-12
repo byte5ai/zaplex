@@ -11,6 +11,7 @@ void warp_on_request_notification_permissions_completed(NSUInteger outcome_type,
 // Sends a desktop notification.
 void sendNotification(id, id, id, void*, BOOL);
 
-// This method, implemented in Rust, invokes the callback to allow the App to
-// take action when a notification fails to send.
-void warp_on_notification_send_error(NSUInteger error_type, id error_msg, void* callback);
+// This method, implemented in Rust, releases the callback after every send attempt and invokes it
+// when a notification fails to send.
+void warp_on_notification_send_completed(BOOL sent, NSUInteger error_type, id error_msg,
+                                         void* callback);
