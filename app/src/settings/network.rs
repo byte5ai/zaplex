@@ -5,7 +5,7 @@
 //! MCP OAuth, cloud workflow fetch, and other outbound HTTP/WS requests.
 //!
 //! Three fields:
-//! - `proxy_mode`: `system` / `custom` / `off` (defaults to `system`, equivalent to reqwest's existing behavior).
+//! - `proxy_mode`: `system` / `custom` / `off` (defaults to `off`, including environment proxies).
 //! - `proxy_url`: used in `Custom` mode, e.g., `http://proxy.corp:8080`.
 //! - `proxy_no_proxy`: comma-separated list of host exceptions, e.g., `localhost,127.0.0.1,.internal`.
 //!
