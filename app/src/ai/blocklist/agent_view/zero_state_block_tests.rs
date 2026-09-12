@@ -1,4 +1,6 @@
-use super::{display_working_directory, format_session_location};
+use super::{
+    display_working_directory, format_recent_conversation_activity, format_session_location,
+};
 use crate::ai::blocklist::agent_view::zero_state_block::current_working_directory_for_zero_state;
 use crate::terminal::model::ansi::{Handler, InitShellValue, PrecmdValue, SSHValue};
 use crate::terminal::model::test_utils::block_size;
@@ -22,6 +24,14 @@ fn terminal_with_startup_path(startup_path: Option<&str>) -> TerminalModel {
         false,
         startup_path.map(PathBuf::from),
     )
+}
+
+#[test]
+fn uninitialized_recent_activity_uses_localized_never_label() {
+    let epoch = chrono::DateTime::from_timestamp(0, 0)
+        .unwrap()
+        .with_timezone(&chrono::Local);
+    assert_eq!(format_recent_conversation_activity(epoch, "Nie"), "Nie");
 }
 
 fn prebootstrap_terminal_with_startup_path(startup_path: &str) -> TerminalModel {
