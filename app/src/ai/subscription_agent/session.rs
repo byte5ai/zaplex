@@ -103,6 +103,9 @@ impl SubscriptionSession {
             };
             if self.target.installation.agent == SubscriptionAgent::Codex {
                 if self.capture_codex_response(&frame) {
+                    if let Some(event) = self.queued_events.pop_front() {
+                        return Ok(Some(event));
+                    }
                     continue;
                 }
                 if self.reject_unsupported_codex_request(&frame).await? {
