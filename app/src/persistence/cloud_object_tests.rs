@@ -1,9 +1,42 @@
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
+use diesel::{Connection, SqliteConnection};
+
 use crate::{
     auth::UserUid,
-    cloud_object::{ServerObjectContainer, StoredObjectGuest},
+    cloud_object::{
+        ObjectType, ServerObjectContainer, StoredObjectGuest, StoredObjectMetadata,
+        StoredObjectPermissions,
+    },
     drive::sharing::{LinkSharingSubjectType, SharingAccessLevel, Subject, TeamKind, UserKind},
-    server::ids::ServerId,
+    server::ids::{ClientId, ServerId, SyncId},
 };
+
+#[test]
+fn metadata_probe_errors_do_not_fall_through_to_insert() {
+    let mut conn = SqliteConnection::establish(":memory:").expect("connection should open");
+    let create_called = Arc::new(AtomicBool::new(false));
+    let create_called_by_callback = Arc::clone(&create_called);
+
+    let result = super::upsert_stored_object(
+        &mut conn,
+        ObjectType::Workflow,
+        SyncId::ClientId(ClientId::new()),
+        StoredObjectMetadata::mock(),
+        StoredObjectPermissions::mock_personal(),
+        Box::new(move |_| {
+            create_called_by_callback.store(true, Ordering::SeqCst);
+            Ok(1)
+        }),
+        Box::new(|_, _| Ok(())),
+    );
+
+    assert!(result.is_err(), "a missing metadata table must be reported");
+    assert!(!create_called.load(Ordering::SeqCst));
+}
 
 #[test]
 fn test_roundtrip_guests() {

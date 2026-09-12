@@ -38,6 +38,12 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Validate dispatch inputs
+        shell: bash
+        env:
+          DMG_TAG: ${{ inputs.dmg_tag }}
+        run: script/validate-release-tag "$DMG_TAG"
+
       - name: Free up disk space
         shell: bash
         run: |
@@ -55,15 +61,8 @@ jobs:
         run: |
           set -euo pipefail
           rustup target add x86_64-unknown-linux-musl
-          ZIG_VERSION="0.13.0"
-          ZIG_DIR="$HOME/.local/zig-${ZIG_VERSION}"
-          if [ ! -x "${ZIG_DIR}/zig" ]; then
-            mkdir -p "${ZIG_DIR}"
-            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
-              | tar -xJ -C "${ZIG_DIR}" --strip-components=1
-          fi
-          echo "${ZIG_DIR}" >> "$GITHUB_PATH"
-          cargo install --locked cargo-zigbuild --version ^0.19
+          script/install_zig
+          cargo install --locked cargo-zigbuild --version '=0.19.8'
         shell: bash
 
       - name: Build remote-server CLI (static musl via zigbuild)
@@ -78,17 +77,16 @@ jobs:
           USE_ZIGBUILD: "true"
           PKG_CONFIG_ALLOW_CROSS: 1
 
-      - name: Stage binary under the name the client expects
-        # The client looks for ~/.zaplex/remote-server/zaplex-<GIT_RELEASE_TAG>
-        # (remote_server_binary(): binary_name()=`zaplex` + `-<tag>` suffix), so
-        # stage the artifact under exactly that name for drop-in placement.
-        run: cp "${{ steps.bundle_cli.outputs.executable_path }}" "zaplex-${{ inputs.dmg_tag }}"
+      - name: Stage binary for artifact upload
+        env:
+          EXECUTABLE_PATH: ${{ steps.bundle_cli.outputs.executable_path }}
+        run: cp "$EXECUTABLE_PATH" zaplex-remote-server
         shell: bash
 
       - name: Upload remote-server binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: zaplex-remote-server-linux-x86_64
-          path: zaplex-${{ inputs.dmg_tag }}
+          path: zaplex-remote-server
           if-no-files-found: error
           retention-days: 7

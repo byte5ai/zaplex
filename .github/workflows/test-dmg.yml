@@ -44,21 +44,39 @@ jobs:
     name: Verify Phase A release readiness
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      source_sha: ${{ steps.resolve-source-sha.outputs.sha }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           # Phase A verifies ancestry from the recorded V1 base commit.
           fetch-depth: 0
 
+      - name: Resolve immutable source commit
+        id: resolve-source-sha
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unable to resolve an immutable source commit" >&2
+            exit 1
+          fi
+          echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
       - name: Verify macOS packaging split
         run: python3 script/test-macos-bundle
         shell: bash
 
       - name: Verify release version and Phase A readiness
+        env:
+          DMG_TAG: ${{ inputs.dmg_tag }}
         run: |
+          set -euo pipefail
+          script/validate-release-tag "$DMG_TAG"
           EXPECTED_TAG="v$(tr -d '[:space:]' < VERSION)"
-          if [[ "${{ inputs.dmg_tag }}" != "$EXPECTED_TAG" ]]; then
-            echo "DMG tag '${{ inputs.dmg_tag }}' does not match VERSION ('$EXPECTED_TAG')." >&2
+          if [[ "$DMG_TAG" != "$EXPECTED_TAG" ]]; then
+            echo "DMG tag '$DMG_TAG' does not match VERSION ('$EXPECTED_TAG')." >&2
             exit 1
           fi
           script/check-v1-release-readiness --phase-a
@@ -72,6 +90,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.readiness.outputs.source_sha }}
 
       - name: Validate Developer ID signing inputs
         run: |
@@ -98,9 +118,11 @@ jobs:
     # here; the large Blacksmith runner is used precisely to speed up heavy builds.
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 180
-    needs: signing_preflight
+    needs: [readiness, signing_preflight]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.readiness.outputs.source_sha }}
 
       # Build the daemon ONCE and reuse it. The CLI target belongs to the `warp`
       # package, so both app/** and crates/** are compilation inputs. Resources
@@ -109,7 +131,7 @@ jobs:
       # relevant change therefore rebuilds the daemon instead of serving stale code.
       - name: Restore cached remote-server tarball
         id: daemon_cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: zap-remote-server-linux-x86_64.tar.gz
           key: remote-server-musl-x86_64-${{ inputs.fast && 'debug' || 'release-cli' }}-${{ inputs.dmg_tag }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources') }}
@@ -135,26 +157,23 @@ jobs:
         run: |
           set -euo pipefail
           rustup target add x86_64-unknown-linux-musl
-          ZIG_VERSION="0.13.0"
-          ZIG_DIR="$HOME/.local/zig-${ZIG_VERSION}"
-          if [ ! -x "${ZIG_DIR}/zig" ]; then
-            mkdir -p "${ZIG_DIR}"
-            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
-              | tar -xJ -C "${ZIG_DIR}" --strip-components=1
-          fi
-          echo "${ZIG_DIR}" >> "$GITHUB_PATH"
-          cargo install --locked cargo-zigbuild --version ^0.19
+          script/install_zig
+          cargo install --locked cargo-zigbuild --version '=0.19.8'
         shell: bash
 
       - name: Build remote-server CLI (static musl via zigbuild)
         if: steps.daemon_cache.outputs.cache-hit != 'true'
         id: bundle_cli
         run: |
+          extra_args=()
+          if [[ -n "$BUILD_FLAG" ]]; then
+            extra_args+=("$BUILD_FLAG")
+          fi
           script/bundle --channel "$CHANNEL" --arch x86_64 --artifact cli --packages none \
-            --target x86_64-unknown-linux-musl \
-            ${{ inputs.fast && '--debug' || '' }}
+            --target x86_64-unknown-linux-musl "${extra_args[@]}"
         shell: bash
         env:
+          BUILD_FLAG: ${{ inputs.fast && '--debug' || '' }}
           GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}
           APPIMAGE_EXTRACT_AND_RUN: 1
           USE_ZIGBUILD: "true"
@@ -191,9 +210,11 @@ jobs:
     # GitHub's pinned macOS 26 image provisions Xcode's optional Metal toolchain.
     runs-on: macos-26
     timeout-minutes: 360
-    needs: signing_preflight
+    needs: [readiness, signing_preflight]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.readiness.outputs.source_sha }}
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -219,12 +240,16 @@ jobs:
       - name: Build and prepare unsigned aarch64 app
         id: bundle_app
         run: |
+          extra_args=()
+          if [[ -n "$BUILD_FLAG" ]]; then
+            extra_args+=("$BUILD_FLAG")
+          fi
           script/bundle --channel "$CHANNEL" --arch aarch64 \
             --prepare-only \
-            --read-passwords-from-env \
-            ${{ inputs.fast && '--debug' || '' }}
+            --read-passwords-from-env "${extra_args[@]}"
         shell: bash
         env:
+          BUILD_FLAG: ${{ inputs.fast && '--debug' || '' }}
           GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -253,11 +278,13 @@ jobs:
     name: Sign and package Test DMG (macOS Apple Silicon)
     runs-on: macos-26
     timeout-minutes: 60
-    needs: [build_app, build_remote_server]
+    needs: [readiness, build_app, build_remote_server]
     env:
       APP_PATH: target/aarch64-apple-darwin/${{ inputs.fast && 'debug' || 'release-lto' }}/bundle/osx/Zaplex.app
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.readiness.outputs.source_sha }}
 
       - name: Fetch prepared app
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -294,12 +321,16 @@ jobs:
       - name: Sign and notarize prepared aarch64 bundle
         id: bundle_app
         run: |
+          extra_args=()
+          if [[ -n "$BUILD_FLAG" ]]; then
+            extra_args+=("$BUILD_FLAG")
+          fi
           script/bundle --channel "$CHANNEL" --arch aarch64 \
             --package-only --dmg-name-suffix arm64 \
-            --read-passwords-from-env \
-            ${{ inputs.fast && '--debug' || '' }}
+            --read-passwords-from-env "${extra_args[@]}"
         shell: bash
         env:
+          BUILD_FLAG: ${{ inputs.fast && '--debug' || '' }}
           GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use ::http_client::{current_proxy_config, ProxyConfig};
 use reqwest::header::HeaderMap;
 
 type ReqwestHttpTransport = rmcp::transport::StreamableHttpClientTransport<reqwest::Client>;
@@ -16,9 +17,18 @@ fn build_header_map(headers: &HashMap<String, String>) -> HeaderMap {
 pub fn build_client_with_headers(
     headers: &HashMap<String, String>,
 ) -> Result<reqwest::Client, rmcp::RmcpError> {
+    build_client_with_headers_and_proxy(headers, current_proxy_config())
+}
+
+#[allow(clippy::result_large_err)]
+fn build_client_with_headers_and_proxy(
+    headers: &HashMap<String, String>,
+    proxy_config: ProxyConfig,
+) -> Result<reqwest::Client, rmcp::RmcpError> {
     let header_map = build_header_map(headers);
 
-    reqwest::Client::builder()
+    proxy_config
+        .apply(reqwest::Client::builder())
         .default_headers(header_map)
         .build()
         .map_err(|e| {
@@ -27,3 +37,7 @@ pub fn build_client_with_headers(
             ))
         })
 }
+
+#[cfg(test)]
+#[path = "http_client_tests.rs"]
+mod tests;

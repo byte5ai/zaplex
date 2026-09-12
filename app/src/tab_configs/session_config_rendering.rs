@@ -120,13 +120,9 @@ where
         .with_height(14.)
         .finish();
 
-        let name = Text::new_inline(
-            session_type.pill_label().to_string(),
-            appearance.ui_font_family(),
-            14.,
-        )
-        .with_color(item_color)
-        .finish();
+        let name = Text::new_inline(session_type.pill_label(), appearance.ui_font_family(), 14.)
+            .with_color(item_color)
+            .finish();
 
         let pill_content = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
@@ -231,7 +227,7 @@ where
     let on_accent_bg = bg.is_some();
 
     let label = Text::new_inline(
-        "Select directory".to_string(),
+        crate::t!("tab-config-select-directory"),
         appearance.ui_font_family(),
         12.,
     )
@@ -363,7 +359,7 @@ where
             if state.is_hovered() {
                 let tooltip = Container::new(
                     Text::new_inline(
-                        "Select a git repository to enable worktree support".to_string(),
+                        crate::t!("tab-config-worktree-requires-git"),
                         font_family,
                         12.,
                     )
@@ -407,7 +403,7 @@ where
         blended_colors::text_sub(theme, theme.background())
     };
     let label = Text::new(
-        "Automatically create a worktree when opening a new tab",
+        crate::t!("tab-config-create-worktree"),
         appearance.ui_font_family(),
         12.,
     )
@@ -494,9 +490,7 @@ where
             if state.is_hovered() {
                 let tooltip = Container::new(
                     Text::new_inline(
-                        "You must select that you want to automatically create a \
-                         worktree in order to select this"
-                            .to_string(),
+                        crate::t!("tab-config-branch-name-requires-worktree"),
                         font_family,
                         12.,
                     )
@@ -541,7 +535,7 @@ where
     };
 
     let label = Text::new(
-        "Auto-generate worktree branch name",
+        crate::t!("tab-config-autogenerate-branch-name"),
         appearance.ui_font_family(),
         12.,
     )

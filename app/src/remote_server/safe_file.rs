@@ -344,6 +344,8 @@ pub struct SafeFileServer {
     before_delete_isolation: Option<Box<dyn Fn(&Path) + Send + Sync>>,
     #[cfg(test)]
     before_private_delete_unlink: Option<Box<dyn Fn(&Path) + Send + Sync>>,
+    #[cfg(test)]
+    before_handle: Option<Box<dyn Fn(&SafeFileRequest) + Send + Sync>>,
 }
 
 impl SafeFileServer {
@@ -363,6 +365,8 @@ impl SafeFileServer {
                     before_delete_isolation: None,
                     #[cfg(test)]
                     before_private_delete_unlink: None,
+                    #[cfg(test)]
+                    before_handle: None,
                 };
                 server.recover_abandoned_records();
                 server
@@ -380,26 +384,14 @@ impl SafeFileServer {
                 before_delete_isolation: None,
                 #[cfg(test)]
                 before_private_delete_unlink: None,
+                #[cfg(test)]
+                before_handle: None,
             },
         }
     }
 
     pub fn is_available(&self) -> bool {
         self.journal.is_some()
-    }
-
-    #[cfg(test)]
-    pub fn unavailable_for_test() -> Self {
-        Self {
-            journal: None,
-            initialization_error: Some("disabled in unrelated unit test".to_string()),
-            handles: HashMap::new(),
-            upload_batches: HashMap::new(),
-            before_rename_mutation: None,
-            after_rename_mutation: None,
-            before_delete_isolation: None,
-            before_private_delete_unlink: None,
-        }
     }
 
     #[cfg(test)]
@@ -414,9 +406,18 @@ impl SafeFileServer {
             after_rename_mutation: None,
             before_delete_isolation: None,
             before_private_delete_unlink: None,
+            before_handle: None,
         };
         server.recover_abandoned_records();
         server
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_before_handle_for_test(
+        &mut self,
+        hook: impl Fn(&SafeFileRequest) + Send + Sync + 'static,
+    ) {
+        self.before_handle = Some(Box::new(hook));
     }
 
     pub fn close_connection(&mut self, connection_id: ConnectionId) {
@@ -451,6 +452,10 @@ impl SafeFileServer {
         connection_id: ConnectionId,
         request: SafeFileRequest,
     ) -> SafeFileResponse {
+        #[cfg(test)]
+        if let Some(hook) = &self.before_handle {
+            hook(&request);
+        }
         let result = match request.operation {
             Some(safe_file_request::Operation::OpenExisting(open)) => self
                 .open_existing(connection_id, open)
