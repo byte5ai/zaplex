@@ -3439,7 +3439,6 @@ fn cleanup_conversation_search_temp_dir(
         return;
     };
 
-    let base_dir = super::conversation_yaml::base_dir();
     for msg in subtask.messages() {
         if let Some(api::message::Message::ToolCallResult(tcr)) = &msg.message {
             if let Some(api::message::tool_call_result::Result::FetchConversation(result)) =
@@ -3449,16 +3448,16 @@ fn cleanup_conversation_search_temp_dir(
                     &result.result
                 {
                     let dir = std::path::Path::new(&success.directory_path);
-                    if dir.starts_with(&base_dir) {
-                        if let Err(e) = std::fs::remove_dir_all(dir) {
+                    if let Some(owned_dir) = super::conversation_yaml::take_materialized_dir(dir) {
+                        if let Err(e) = std::fs::remove_dir_all(&owned_dir) {
                             log::warn!(
                                 "Failed to clean up conversation search temp dir {}: {e}",
-                                dir.display(),
+                                owned_dir.display(),
                             );
                         } else {
                             log::info!(
                                 "Cleaned up conversation search temp dir: {}",
-                                dir.display(),
+                                owned_dir.display(),
                             );
                         }
                     }
