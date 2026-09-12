@@ -93,6 +93,9 @@ ChangesEnvironment=true
 SignTool=codesign
 SignedUninstaller=yes
 #endif
+; Clear RedirectionGuard inherited from update contexts so child processes can traverse trusted NTFS junctions.
+; This directive requires Inno Setup 6.7.0 or newer; GitHub's windows-latest image provides it.
+RedirectionGuard=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

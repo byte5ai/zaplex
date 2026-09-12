@@ -447,27 +447,60 @@ pub unsafe extern "C-unwind" fn warp_on_request_notification_permissions_complet
     result_msg: id,
     callback: *mut c_void,
 ) {
+    if callback.is_null() {
+        log::error!("notification permission completion received a null callback");
+        return;
+    }
+    let callback = *Box::from_raw(callback as *mut RequestNotificationPermissionsCallback);
     let outcome =
         super::notification::request_permissions_outcome_from_native(result_type, result_msg);
-    if let Ok(outcome) = outcome {
-        let callback = Box::from_raw(callback as *mut RequestNotificationPermissionsCallback);
-        callback(outcome);
-    }
+    complete_request_notification_permissions(callback, outcome);
 }
 
 #[no_mangle]
 /// # Safety
 /// This function is marked unsafe because it retrieves the pointer to the callback
 /// function that we sent down to the Objective-C code.
-pub unsafe extern "C-unwind" fn warp_on_notification_send_error(
+pub unsafe extern "C-unwind" fn warp_on_notification_send_completed(
+    sent: BOOL,
     error_type: NSUInteger,
     error_msg: id,
     callback: *mut c_void,
 ) {
-    let notification_error = super::notification::send_error_from_native(error_type, error_msg);
-    if let Ok(notification_error) = notification_error {
-        let callback = Box::from_raw(callback as *mut NotificationSendErrorCallback);
-        callback(notification_error);
+    if callback.is_null() {
+        log::error!("notification send completion received a null callback");
+        return;
+    }
+    let callback = *Box::from_raw(callback as *mut NotificationSendErrorCallback);
+    let error = if sent == YES {
+        None
+    } else {
+        Some(super::notification::send_error_from_native(
+            error_type, error_msg,
+        ))
+    };
+    complete_notification_send(callback, error);
+}
+
+fn complete_request_notification_permissions(
+    callback: RequestNotificationPermissionsCallback,
+    outcome: Result<RequestPermissionsOutcome>,
+) {
+    callback(
+        outcome.unwrap_or_else(|error| RequestPermissionsOutcome::OtherError {
+            error_message: format!("Failed to decode native notification outcome: {error}"),
+        }),
+    );
+}
+
+fn complete_notification_send(
+    callback: NotificationSendErrorCallback,
+    error: Option<Result<NotificationSendError>>,
+) {
+    if let Some(error) = error {
+        callback(error.unwrap_or_else(|error| NotificationSendError::Other {
+            error_message: format!("Failed to decode native notification error: {error}"),
+        }));
     }
 }
 
@@ -483,3 +516,7 @@ impl platform::DispatchDelegate for DispatchDelegate {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "delegate_tests.rs"]
+mod tests;

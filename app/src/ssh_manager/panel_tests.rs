@@ -13,7 +13,11 @@ use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warp_ssh_manager::{NodeKind, OneKeyCredentialKind, SshNode};
 use warpui::platform::WindowStyle;
+use warpui::units::IntoPixels;
 use warpui::{App, Event, Presenter, WindowInvalidation};
+
+use crate::cockpit::favorites::FavoritesStore;
+use crate::test_util::settings::initialize_settings_for_tests;
 
 #[test]
 fn connection_rows_reserve_leading_icons_for_folders_only() {
@@ -194,6 +198,57 @@ fn compact_connection_secondary_action_survives_rerender_without_triggering_prim
             assert_eq!(view.favorite_clicks, 1);
             assert_eq!(view.primary_clicks, 0);
         });
+    });
+}
+
+#[test]
+fn panel_content_can_scroll_when_ssh_list_is_taller_than_panel() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        app.add_singleton_model(FavoritesStore::new_for_test);
+        app.add_singleton_model(RemoteServerManager::new);
+
+        let nodes = (0..60)
+            .map(|i| {
+                let name = if i == 0 {
+                    "server-with-a-name-that-is-much-wider-than-the-sidebar".to_owned()
+                } else {
+                    format!("server-{i}")
+                };
+                server(&format!("s{i}"), None, &name, i)
+            })
+            .collect::<Vec<_>>();
+        let (window_id, panel) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut panel = SshManagerPanel::new(ctx);
+            panel.set_nodes_for_test(nodes, ctx);
+            panel
+        });
+        let mut presenter = Presenter::new(window_id);
+        let mut updated = std::collections::HashSet::new();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+
+        app.update(|ctx| {
+            presenter.invalidate(invalidation.clone(), ctx);
+            presenter.build_scene(vec2f(240.0, 120.0), 1.0, None, ctx);
+        });
+        let scroll_state = panel.read(&app, |panel, _| panel.content_scroll_state.clone());
+
+        scroll_state.scroll_by(10_000_f32.into_pixels());
+        app.update(|ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(240.0, 120.0), 1.0, None, ctx);
+        });
+
+        let scroll_start = scroll_state.scroll_start().as_f32();
+        assert!(scroll_start > 0.0);
+        assert!(scroll_start < 10_000.0);
     });
 }
 
