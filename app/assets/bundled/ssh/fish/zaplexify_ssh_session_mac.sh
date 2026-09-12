@@ -31,7 +31,7 @@ function _check_tmux
         _l SshTmuxInstaller "\"user\""
     end
 
-    if test -n "$TMUX"
+    if _is $TMUX
         $TMUX -V | awk '{print $2}' | read V;
         if test -z "$V"
             _e "\"TmuxFailed\""

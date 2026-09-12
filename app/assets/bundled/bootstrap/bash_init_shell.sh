@@ -6,16 +6,16 @@
 # this PTY is echoed straight back at the user: the ~1500-line dump at
 # session start (RC acceptance 2026-07-19). `stty sane` in the wrapper
 # restores echo before the user ever types.
-command -p stty raw -echo
-HISTCONTROL=ignorespace
-HISTIGNORE=" *"
-ZAPLEX_SESSION_ID="$(command -p date +%s)$RANDOM"
-_hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n)
-_user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER)
-if [[ "$OS" == Windows_NT ]]; then ZAPLEX_IN_MSYS2=true; else ZAPLEX_IN_MSYS2=false; fi
+ command -p stty raw -echo
+ HISTCONTROL=ignorespace
+ HISTIGNORE=" *"
+ ZAPLEX_SESSION_ID="$(command -p date +%s)$RANDOM"
+ _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n)
+ _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER)
+ if [[ "$OS" == Windows_NT ]]; then ZAPLEX_IN_MSYS2=true; else ZAPLEX_IN_MSYS2=false; fi
 # If we're in MSYS2, we want to send the hook via key-value pairs.
-if [ "$ZAPLEX_IN_MSYS2" = true ]; then _msg="\e]9278;k;A;InitShell\a\e]9278;k;B;session_id;$ZAPLEX_SESSION_ID\a\e]9278;k;B;shell;bash\a\e]9278;k;B;user;$_user\a\e]9278;k;B;hostname;$_hostname\a\e]9278;k;C\a"; else _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $ZAPLEX_SESSION_ID, \"shell\": \"bash\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n"); fi
-ZAPLEX_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@
+ if [ "$ZAPLEX_IN_MSYS2" = true ]; then _msg="\e]9278;k;A;InitShell\a\e]9278;k;B;session_id;$ZAPLEX_SESSION_ID\a\e]9278;k;B;shell;bash\a\e]9278;k;B;user;$_user\a\e]9278;k;B;hostname;$_hostname\a\e]9278;k;C\a"; else _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $ZAPLEX_SESSION_ID, \"shell\": \"bash\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n"); fi
+ ZAPLEX_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@
 # We send the InitShell hook via OSCs when on Windows and via DCSs otherwise.
-if [ "$ZAPLEX_USING_WINDOWS_CON_PTY" = true ]; then if [ "$ZAPLEX_IN_MSYS2" = true ]; then printf "$_msg"; else printf '\e]9278;d;%s\x07' "$_msg"; fi; else printf '\e\x50\x24\x64%s\x9c' "$_msg"; fi
-unset _hostname _user _msg
+ if [ "$ZAPLEX_USING_WINDOWS_CON_PTY" = true ]; then if [ "$ZAPLEX_IN_MSYS2" = true ]; then printf "$_msg"; else printf '\e]9278;d;%s\x07' "$_msg"; fi; else printf '\e\x50\x24\x64%s\x9c' "$_msg"; fi
+ unset _hostname _user _msg
