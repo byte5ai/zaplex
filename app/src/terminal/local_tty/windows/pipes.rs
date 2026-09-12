@@ -5,6 +5,7 @@
 //!
 //! Adapted under the MIT License, Copyright (c) Microsoft Corporation.  See app/assets/windows/LICENSE-WINDOWS-TERMINAL.
 
+use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::sync::LazyLock;
 
 use windows::{
@@ -76,9 +77,9 @@ pub enum CreatePipeError {
 /// A bidirectional pipe.
 pub struct DuplexPipe {
     /// The client-side (e.g.: OpenConsole) end of the pipe.
-    pub client: HANDLE,
+    pub client: OwnedHandle,
     /// The server-side (e.g.: Zaplex) end of the pipe.
-    pub server: HANDLE,
+    pub server: OwnedHandle,
 }
 
 /// Creates a bidirectional, asynchronous anonymous pipe.
@@ -124,9 +125,10 @@ pub fn create_async_anonymous_pipe() -> Result<DuplexPipe, CreatePipeError> {
         ))
         .ok()
         .map_err(CreatePipeError::CreatePipe)?;
+        let server = OwnedHandle::from_raw_handle(server.0);
 
         let mut client = HANDLE::default();
-        object_attributes.RootDirectory = server;
+        object_attributes.RootDirectory = HANDLE(server.as_raw_handle());
         windows::core::HRESULT::from(NtCreateFile(
             &mut client,
             desired_access,
@@ -142,6 +144,7 @@ pub fn create_async_anonymous_pipe() -> Result<DuplexPipe, CreatePipeError> {
         ))
         .ok()
         .map_err(CreatePipeError::ClientHandleCreation)?;
+        let client = OwnedHandle::from_raw_handle(client.0);
 
         Ok(DuplexPipe { client, server })
     }
