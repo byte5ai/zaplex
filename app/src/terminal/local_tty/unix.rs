@@ -530,13 +530,15 @@ fn spawn_command_in_pty(
             #[allow(clippy::cast_lossless)]
             cvt(libc::ioctl(follower_fd, TIOCSCTTY as _, 0))?;
 
-            // Close all other FDs to avoid leaking any other non-pty FDs
-            // into the shell process.  Don't propagate up errors, as most
-            // of these won't be active file descriptors, and attempting to
-            // close() them produces EINVAL.
+            // Mark every additional descriptor close-on-exec instead of closing it here.
+            // Rust's Command implementation owns an internal error pipe that must remain open
+            // until exec succeeds or fails; closing it in pre_exec makes the parent mistake a
+            // failed exec for a successful spawn. Invalid descriptor errors are expected and
+            // ignored. dup2 above leaves stdin/stdout/stderr without FD_CLOEXEC, while the
+            // original follower descriptor is closed by a successful exec.
             if close_fds {
                 for fd in 3..fdlimit {
-                    libc::close(fd);
+                    libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
                 }
             }
 

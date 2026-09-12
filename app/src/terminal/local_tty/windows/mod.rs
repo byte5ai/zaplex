@@ -11,22 +11,22 @@ use super::{mio_channel, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
 use crate::terminal::local_tty::spawner::{PtySpawnInfo, PtySpawner};
 use crate::terminal::writeable_pty;
 use child::ChildExitWatcher;
-use conpty_api::ConptyApiError;
+use conpty_api::{ConptyApiError, OwnedPseudoConsole};
 use environment::get_shell_environment_variables;
 pub use environment::get_user_and_system_env_variable;
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::FromRawHandle as _;
+use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, IntoRawHandle as _, OwnedHandle};
 use std::path::PathBuf;
 use thiserror::Error;
 use warpui::{AppContext, SingletonEntity};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
-use windows::Win32::System::Console::{COORD, HPCON};
+use windows::Win32::System::Console::COORD;
 use windows::Win32::System::Threading::{
-    CreateProcessW, WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB, CREATE_UNICODE_ENVIRONMENT,
-    EXTENDED_STARTUPINFO_PRESENT, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTUPINFOEXW,
-    STARTUPINFOW,
+    CreateProcessW, TerminateProcess, WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB,
+    CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, PROCESS_CREATION_FLAGS,
+    PROCESS_INFORMATION, STARTUPINFOEXW, STARTUPINFOW,
 };
 
 use crate::terminal::local_tty::windows::proc_thread_attribute_list::ProcThreadAttributeList;
@@ -57,30 +57,77 @@ unsafe impl Send for ShareableHandle {}
 unsafe impl Sync for ShareableHandle {}
 
 pub(super) struct PtySpawnResult {
-    pub pty_handle: HPCON,
+    pub pty_handle: OwnedPseudoConsole,
     pub pipe: mio::windows::NamedPipe,
     pub conpty_api: ConptyApi,
     child_exit_watcher: ChildExitWatcher,
 }
 
 pub struct PseudoConsoleChild {
-    process_info: PROCESS_INFORMATION,
+    process_handle: OwnedHandle,
+    process_id: u32,
 }
 
-// Mark `ChildExitWatcher` as being safe to share between threads,
-// even though `PROCESS_INFORMATION` holds `HANDLE`s, which each hold
-// a `*mut c_void`, which isn't inherently safe to share.
+// The process handle is only used through thread-safe Win32 APIs.
 unsafe impl Send for PseudoConsoleChild {}
 unsafe impl Sync for PseudoConsoleChild {}
 
 impl PseudoConsoleChild {
     pub fn id(&self) -> u32 {
-        self.process_info.dwProcessId
+        self.process_id
     }
 
     pub fn is_terminated(&self) -> bool {
-        let wait_event = unsafe { WaitForSingleObject(self.process_info.hProcess, 0) };
+        let wait_event = unsafe { WaitForSingleObject(self.raw_process_handle(), 0) };
         wait_event == WAIT_OBJECT_0
+    }
+
+    fn raw_process_handle(&self) -> HANDLE {
+        HANDLE(self.process_handle.as_raw_handle())
+    }
+}
+
+/// Owns every handle returned by CreateProcessW until the child-exit watcher is
+/// installed. Dropping an incomplete spawn terminates the child before closing
+/// the process and thread handles.
+struct PendingProcess {
+    child: Option<PseudoConsoleChild>,
+    thread_handle: Option<OwnedHandle>,
+}
+
+impl PendingProcess {
+    unsafe fn from_raw(process_info: PROCESS_INFORMATION) -> Self {
+        Self {
+            child: Some(PseudoConsoleChild {
+                process_handle: OwnedHandle::from_raw_handle(process_info.hProcess.0),
+                process_id: process_info.dwProcessId,
+            }),
+            thread_handle: Some(OwnedHandle::from_raw_handle(process_info.hThread.0)),
+        }
+    }
+
+    fn process_handle(&self) -> HANDLE {
+        self.child
+            .as_ref()
+            .expect("pending process must own its child")
+            .raw_process_handle()
+    }
+
+    fn into_child(mut self) -> PseudoConsoleChild {
+        drop(self.thread_handle.take());
+        self.child
+            .take()
+            .expect("pending process must own its child")
+    }
+}
+
+impl Drop for PendingProcess {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_ref() {
+            unsafe {
+                let _ = TerminateProcess(child.raw_process_handle(), 1);
+            }
+        }
     }
 }
 
@@ -131,13 +178,15 @@ pub(super) fn spawn(
         pipes::create_async_anonymous_pipe().map_err(PtySpawnError::CreatePipeFailed)?;
 
     // Create the pseudoconsole, giving it the handle to the client side of the pipe.
-    let pty_handle = match unsafe { conpty_api.create(size.to_coord(), client, 0) } {
-        Ok(pty_handle) => pty_handle,
-        Err(err) => return Err(PtySpawnError::CreatePseudoConsoleFailed(err)),
-    };
+    let pty_handle =
+        match unsafe { conpty_api.create(size.to_coord(), HANDLE(client.as_raw_handle()), 0) } {
+            Ok(pty_handle) => pty_handle,
+            Err(err) => return Err(PtySpawnError::CreatePseudoConsoleFailed(err)),
+        };
+    drop(client);
 
     // Tell the pseudoconsole that it is already visible.
-    let _ = unsafe { conpty_api.show_hide(pty_handle, true) };
+    let _ = unsafe { conpty_api.show_hide(&pty_handle, true) };
 
     // Spawn the child process, and tell it to communicate via the pseudoconsole.
     // The default zeros the memory.
@@ -149,7 +198,7 @@ pub(super) fn spawn(
             .map_err(PtySpawnError::InitializeThreadAttributeListFailed)?
     };
     attrs
-        .set_pty_connection(pty_handle)
+        .set_pty_connection(pty_handle.as_raw())
         .map_err(PtySpawnError::SetThreadAttributeListFailed)?;
     startup_info.lpAttributeList = attrs.as_mut_ptr();
 
@@ -207,14 +256,13 @@ pub(super) fn spawn(
         })?;
     }
 
-    let _ = unsafe { conpty_api.release(pty_handle) };
+    let pending_process = unsafe { PendingProcess::from_raw(process_information) };
+    let _ = unsafe { conpty_api.release(&pty_handle) };
 
-    let pipe = unsafe { mio::windows::NamedPipe::from_raw_handle(server.0 as *mut _) };
-    let child_exit_watcher = ChildExitWatcher::new(process_information.hProcess, event_loop_tx)
+    let pipe = unsafe { mio::windows::NamedPipe::from_raw_handle(server.into_raw_handle()) };
+    let child_exit_watcher = ChildExitWatcher::new(pending_process.process_handle(), event_loop_tx)
         .map_err(PtySpawnError::ChildExitWatcherFailed)?;
-    let child = PseudoConsoleChild {
-        process_info: process_information,
-    };
+    let child = pending_process.into_child();
     let result = PtySpawnResult {
         pty_handle,
         pipe,
@@ -324,13 +372,15 @@ fn append_quoted(arg: &OsStr, cmdline: &mut Vec<u16>) {
 }
 
 pub struct Pty {
+    // Drop the watcher before the child process handle so its callback can never
+    // observe a closed handle.
+    child_exit_watcher: ChildExitWatcher,
     handle: Box<dyn PtyHandle>,
     /// An arbitrary type on Windows used to interact with the psuedoconsole.
-    pty_handle: HPCON,
+    pty_handle: Option<OwnedPseudoConsole>,
     pipe: mio::windows::NamedPipe,
     token: mio::Token,
     conpty_api: ConptyApi,
-    child_exit_watcher: ChildExitWatcher,
 }
 
 impl Pty {
@@ -356,12 +406,12 @@ impl Pty {
                     handle,
                 )| {
                     let mut pty = Self {
+                        child_exit_watcher,
                         handle,
-                        pty_handle,
+                        pty_handle: Some(pty_handle),
                         pipe,
                         token: PTY_TOKEN,
                         conpty_api,
-                        child_exit_watcher,
                     };
                     pty.on_resize(&size);
                     pty
@@ -430,8 +480,10 @@ impl EventedPty for Pty {
     }
 
     fn on_resize(&mut self, size: &crate::terminal::SizeInfo) {
-        if let Err(err) = unsafe { self.conpty_api.resize(self.pty_handle, size.to_coord()) } {
-            log::error!("Failed to resize pseudoconsole: {err:?}");
+        if let Some(pty_handle) = self.pty_handle.as_ref() {
+            if let Err(err) = unsafe { self.conpty_api.resize(pty_handle, size.to_coord()) } {
+                log::error!("Failed to resize pseudoconsole: {err:?}");
+            }
         }
     }
 
@@ -444,10 +496,8 @@ impl Drop for Pty {
     fn drop(&mut self) {
         use std::io::Read as _;
 
-        // Ask the pseudoconsole to close.
-        unsafe {
-            self.conpty_api.close(self.pty_handle);
-        }
+        // Ask the pseudoconsole to close before draining its final output.
+        drop(self.pty_handle.take());
 
         // Drain all data in the pipe.
         let mut buffer = [0; 1000];

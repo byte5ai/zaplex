@@ -20,6 +20,32 @@ type ClosePseudoConsoleFn = unsafe extern "system" fn(HPCON);
 type ShowHidePseudoConsoleFn = unsafe extern "system" fn(HPCON, bool) -> HRESULT;
 type ReleasePseudoConsoleFn = unsafe extern "system" fn(HPCON) -> HRESULT;
 
+pub(in crate::terminal::local_tty) struct OwnedPseudoConsole {
+    handle: HPCON,
+    close: ClosePseudoConsoleFn,
+}
+
+impl OwnedPseudoConsole {
+    fn new(handle: HPCON, close: ClosePseudoConsoleFn) -> Self {
+        Self { handle, close }
+    }
+
+    pub(super) fn as_raw(&self) -> HPCON {
+        self.handle
+    }
+}
+
+impl Drop for OwnedPseudoConsole {
+    fn drop(&mut self) {
+        unsafe { (self.close)(self.handle) }
+    }
+}
+
+// HPCON is an opaque OS handle; ownership is unique and all access goes through
+// thread-safe ConPTY entry points.
+unsafe impl Send for OwnedPseudoConsole {}
+unsafe impl Sync for OwnedPseudoConsole {}
+
 pub struct ConptyApi {
     /// Function pointer for CreatePseudoConsole.
     create: CreatePseudoConsoleFn,
@@ -113,40 +139,39 @@ impl ConptyApi {
     pub(super) unsafe fn create(
         &self,
         size: COORD,
-        mut pipe: HANDLE,
+        pipe: HANDLE,
         flags: u32,
-    ) -> Result<HPCON, windows::core::Error> {
+    ) -> Result<OwnedPseudoConsole, windows::core::Error> {
         let mut pty_handle = HPCON::default();
-        let result = (self.create)(size, pipe, pipe, flags, &mut pty_handle)
+        (self.create)(size, pipe, pipe, flags, &mut pty_handle)
             .ok()
-            .map(|_| pty_handle);
-        // Explicitly free our end of the pipe, giving the pseudoconsole sole
-        // ownership of it.
-        windows::core::Free::free(&mut pipe);
-        result
+            .map(|_| OwnedPseudoConsole::new(pty_handle, self.close))
     }
 
     pub(super) unsafe fn resize(
         &self,
-        pty_handle: HPCON,
+        pty_handle: &OwnedPseudoConsole,
         size: COORD,
     ) -> Result<(), windows::core::Error> {
-        (self.resize)(pty_handle, size).ok()
-    }
-
-    pub(super) unsafe fn close(&self, pty_handle: HPCON) {
-        (self.close)(pty_handle)
+        (self.resize)(pty_handle.as_raw(), size).ok()
     }
 
     pub(super) unsafe fn show_hide(
         &self,
-        pty_handle: HPCON,
+        pty_handle: &OwnedPseudoConsole,
         visible: bool,
     ) -> windows::core::Result<()> {
-        (self.show_hide)(pty_handle, visible).ok()
+        (self.show_hide)(pty_handle.as_raw(), visible).ok()
     }
 
-    pub(super) unsafe fn release(&self, pty_handle: HPCON) -> windows::core::Result<()> {
-        (self.release)(pty_handle).ok()
+    pub(super) unsafe fn release(
+        &self,
+        pty_handle: &OwnedPseudoConsole,
+    ) -> windows::core::Result<()> {
+        (self.release)(pty_handle.as_raw()).ok()
     }
 }
+
+#[cfg(test)]
+#[path = "conpty_api_tests.rs"]
+mod tests;
