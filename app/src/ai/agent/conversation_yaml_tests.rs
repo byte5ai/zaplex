@@ -7,7 +7,7 @@ use crate::test_util::ai_agent_tasks::{
     create_api_subtask, create_api_task, create_message, create_subagent_tool_call_message,
 };
 
-use super::{base_dir, materialize_tasks_to_yaml};
+use super::{materialize_tasks_to_yaml, take_materialized_dir};
 
 /// Lists filenames (not full paths) in a directory, sorted.
 fn list_dir_sorted(dir: &Path) -> Vec<String> {
@@ -82,6 +82,8 @@ fn make_tool_call_result_message(
 }
 
 fn cleanup_dir(path: &str) {
+    let path = Path::new(path);
+    assert_eq!(take_materialized_dir(path).as_deref(), Some(path));
     let _ = fs::remove_dir_all(path);
 }
 
@@ -107,10 +109,7 @@ fn mixed_message_types_produce_sequentially_indexed_files() {
     )];
 
     let dir = materialize_tasks_to_yaml(&tasks).unwrap();
-    assert!(
-        Path::new(&dir).starts_with(base_dir().unwrap()),
-        "returned path should be under temp_dir(), got: {dir}",
-    );
+    assert!(Path::new(&dir).starts_with(std::env::temp_dir()));
     // Verify no mixed separators: on Windows the path should use only '\',
     // on Unix only '/'. This catches the original bug where tempdir_in
     // joined a forward-slash parent with a native backslash separator.
@@ -131,6 +130,18 @@ fn mixed_message_types_produce_sequentially_indexed_files() {
     assert!(content.contains("hello"));
 
     cleanup_dir(&dir);
+}
+
+#[test]
+fn cleanup_registry_rejects_traversal_paths() {
+    let tasks = vec![create_api_task("root", vec![])];
+    let dir = materialize_tasks_to_yaml(&tasks).unwrap();
+    let path = Path::new(&dir);
+    let traversal = path.join("..").join("victim");
+
+    assert!(take_materialized_dir(&traversal).is_none());
+    assert_eq!(take_materialized_dir(path).as_deref(), Some(path));
+    fs::remove_dir_all(path).unwrap();
 }
 
 #[test]

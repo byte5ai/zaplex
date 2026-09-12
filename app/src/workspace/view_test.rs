@@ -3305,8 +3305,10 @@ fn remote_edit_working_directories_are_unique_and_private() {
 
 #[test]
 fn review_temp_files_are_private_unique_and_owned() {
-    let (first_dir, first_path) = super::write_review_temp_file("repo", "first").unwrap();
-    let (second_dir, second_path) = super::write_review_temp_file("repo", "second").unwrap();
+    let first_dir = super::create_review_temp_dir("repo").unwrap();
+    let second_dir = super::create_review_temp_dir("repo").unwrap();
+    let first_path = super::write_review_temp_file(&first_dir, "first").unwrap();
+    let second_path = super::write_review_temp_file(&second_dir, "second").unwrap();
 
     assert_ne!(first_path, second_path);
     assert_eq!(std::fs::read_to_string(&first_path).unwrap(), "first");

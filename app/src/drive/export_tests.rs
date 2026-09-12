@@ -424,7 +424,9 @@ fn test_safe_filename() {
         ("...", "_"),
         ("filename. ", "filename"),
         ("CON", "_CON"),
+        ("CONOUT$", "_CONOUT$"),
         ("com1.txt", "_com1.txt"),
+        ("LPT².log", "_LPT².log"),
     ] {
         assert_eq!(safe_filename(expected_in), expected_out);
     }
@@ -440,6 +442,18 @@ fn test_bulk_export_path_stays_below_selected_directory() {
         assert_eq!(path.parent(), Some(root));
         assert_ne!(path, root);
     }
+}
+
+#[test]
+fn test_final_export_file_path_stays_below_parent() {
+    let root = Path::new("/chosen/export/root");
+
+    assert_eq!(
+        super::confined_export_file_path(root, "report", "md").unwrap(),
+        root.join("report.md")
+    );
+    assert!(super::confined_export_file_path(root, "../escape", "md").is_err());
+    assert!(super::confined_export_file_path(root, "/escape", "md").is_err());
 }
 
 #[test]

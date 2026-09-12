@@ -949,7 +949,8 @@ pub struct TransferredTab {
 /// One remote file being edited over *classic* SSH (no daemon) via a local
 /// working copy: the editor edits the copy, and each save uploads it back to
 /// the host over SFTP. Held in [`Workspace::remote_sftp_edits`], keyed by the
-/// working copy's canonical local path.
+/// working copy's canonical local path. Entries and their private directories live until the
+/// workspace is dropped; closing a tab stops save events but does not prune the registry yet.
 #[cfg(all(unix, feature = "local_tty"))]
 struct RemoteSftpEdit {
     /// Owns and removes the private local working directory with this registry entry.
@@ -1026,7 +1027,7 @@ fn spawn_host_scope_requires_explicit_selection(
 }
 
 /// Creates a private local directory for one classic-SSH remote-edit working copy.
-/// The owning registry entry keeps it alive while save-back is active and removes it on drop.
+/// The owning registry entry keeps it alive until the workspace is dropped and then removes it.
 #[cfg(all(unix, feature = "local_tty"))]
 fn remote_sftp_edit_working_dir() -> std::io::Result<tempfile::TempDir> {
     tempfile::Builder::new()
@@ -1034,20 +1035,23 @@ fn remote_sftp_edit_working_dir() -> std::io::Result<tempfile::TempDir> {
         .tempdir()
 }
 
-fn write_review_temp_file(
-    project_name: &str,
-    markdown: &str,
-) -> std::io::Result<(tempfile::TempDir, PathBuf)> {
+fn create_review_temp_dir(project_name: &str) -> std::io::Result<tempfile::TempDir> {
     let slug: String = project_name
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect();
-    let directory = tempfile::Builder::new()
+    tempfile::Builder::new()
         .prefix(&format!("zaplex-review-{slug}-"))
-        .tempdir()?;
+        .tempdir()
+}
+
+fn write_review_temp_file(
+    directory: &tempfile::TempDir,
+    markdown: &str,
+) -> std::io::Result<PathBuf> {
     let path = directory.path().join("review.md");
     std::fs::write(&path, markdown)?;
-    Ok((directory, path))
+    Ok(path)
 }
 
 /// The result of attempting one guardrail signal send (local or remote) —
@@ -1543,8 +1547,8 @@ pub struct Workspace {
     /// closed) are harmless: a closed buffer emits no further save event.
     #[cfg(all(unix, feature = "local_tty"))]
     remote_sftp_edits: std::collections::HashMap<PathBuf, RemoteSftpEdit>,
-    /// Owns private review-file directories until this workspace is dropped.
-    review_temp_dirs: Vec<tempfile::TempDir>,
+    /// Owns one reusable private review-file directory per project until this workspace is dropped.
+    review_temp_dirs: HashMap<PathBuf, tempfile::TempDir>,
     /// Hosts already warned about multiplexer nesting this app run — one
     /// warning per host, not one per session/tab.
     #[cfg(unix)]
@@ -3894,7 +3898,7 @@ impl Workspace {
             sftp_file_service_sessions: std::collections::HashMap::new(),
             #[cfg(all(unix, feature = "local_tty"))]
             remote_sftp_edits: std::collections::HashMap::new(),
-            review_temp_dirs: Vec::new(),
+            review_temp_dirs: HashMap::new(),
             #[cfg(unix)]
             multiplexer_warned_hosts: std::collections::HashSet::new(),
             hovered_tab_index: None,
@@ -6836,8 +6840,31 @@ impl Workspace {
                     &changes,
                     &preview,
                 );
-                let (review_dir, tmp) = match write_review_temp_file(&name, &markdown) {
-                    Ok(review_file) => review_file,
+                let project_root = PathBuf::from(&root_str);
+                if !me.review_temp_dirs.contains_key(&project_root) {
+                    let review_dir = match create_review_temp_dir(&name) {
+                        Ok(directory) => directory,
+                        Err(error) => {
+                            me.toast_stack.update(ctx, |toast_stack, ctx| {
+                                toast_stack.add_ephemeral_toast(
+                                    DismissibleToast::error(format!(
+                                        "Could not open review: {error}"
+                                    )),
+                                    ctx,
+                                );
+                            });
+                            return;
+                        }
+                    };
+                    me.review_temp_dirs.insert(project_root.clone(), review_dir);
+                }
+                let tmp = match write_review_temp_file(
+                    me.review_temp_dirs
+                        .get(&project_root)
+                        .expect("review temp dir should exist"),
+                    &markdown,
+                ) {
+                    Ok(path) => path,
                     Err(error) => {
                         me.toast_stack.update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
@@ -6848,7 +6875,6 @@ impl Workspace {
                         return;
                     }
                 };
-                me.review_temp_dirs.push(review_dir);
                 me.add_tab_for_code_file(tmp, None, ctx);
             },
         );
