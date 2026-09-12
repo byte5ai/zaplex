@@ -1,5 +1,12 @@
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-use super::wsl_url_handler_command;
+use super::{spawn_file_opener, wsl_url_handler_command};
+
+#[test]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn detached_file_opener_uses_reaping_child_handle() {
+    spawn_file_opener("true", std::path::Path::new("ignored"))
+        .expect("test file opener should start");
+}
 
 #[test]
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]

@@ -5,11 +5,7 @@ use std::{
     future::Future,
     io::{self, Write},
     path::PathBuf,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
-    thread,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -56,6 +52,7 @@ use futures::{
     future::{self, Either},
     FutureExt as _,
 };
+use futures_util::future::AbortHandle;
 use oneshot::{Canceled, Receiver, Sender};
 use uuid::Uuid;
 use warp_cli::agent::{Harness, OutputFormat};
@@ -63,7 +60,7 @@ use warp_cli::mcp::MCPSpec;
 use warp_core::{features::FeatureFlag, report_if_error, safe_debug, safe_info};
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{
-    r#async::{FutureExt, TimeoutError},
+    r#async::{executor::Background, FutureExt, TimeoutError, Timer},
     Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity,
 };
 
@@ -103,31 +100,24 @@ const LEGACY_OZ_PARENT_STATE_ROOT_ENV: &str = "OZ_PARENT_STATE_ROOT";
 /// IdleTimeoutSender is wrapper around a sender that signals when a run is done after
 /// an idle timeout. Used for both Oz runs and third-party harnesses.
 ///
-/// We use a generation-based approach to cancel timers instead of storing timer handles:
-///
-/// - `tx_cell` holds the completion sender; taking it ensures we only complete once.
-/// - `timer_generation` starts at 0 and is incremented each time we want to cancel
-///   existing timers and potentially start a new one. When a timer fires, it checks
-///   if its generation still matches the current generation. If not, the timer was
-///   "cancelled" by a newer timer and should not complete the conversation.
-///
-/// This approach avoids the complexity of storing and cancelling timer handles,
-/// while allowing multiple events to safely race without double-completion.
 struct IdleTimeoutSender<T: Send + 'static> {
     tx_cell: Arc<Mutex<Option<oneshot::Sender<T>>>>,
-    generation: Arc<AtomicUsize>,
+    executor: Arc<Background>,
+    timer_abort_handle: Mutex<Option<AbortHandle>>,
 }
 
 impl<T: Send + 'static> IdleTimeoutSender<T> {
-    fn new(tx: oneshot::Sender<T>) -> Self {
+    fn new(tx: oneshot::Sender<T>, executor: Arc<Background>) -> Self {
         Self {
             tx_cell: Arc::new(Mutex::new(Some(tx))),
-            generation: Arc::new(AtomicUsize::new(0)),
+            executor,
+            timer_abort_handle: Mutex::new(None),
         }
     }
 
     /// End the run by sending `value` immediately.
     fn end_run_now(&self, value: T) {
+        self.cancel_idle_timeout();
         if let Ok(mut guard) = self.tx_cell.lock() {
             if let Some(sender) = guard.take() {
                 let _ = sender.send(value);
@@ -137,35 +127,43 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
 
     /// End the run after `timeout` by sending `value`, unless cancelled before then.
     fn end_run_after(&self, timeout: Duration, value: T) {
-        // Increment the generation counter to invalidate any existing timers,
-        // then capture the new generation for our timer to check against.
-        let current_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let tx_cell = Arc::clone(&self.tx_cell);
-        let generation = Arc::clone(&self.generation);
-
-        // Spawn a background thread that will complete the oneshot after the idle timeout,
-        // unless a follow-up query resets the timer (by bumping the generation counter).
-        thread::spawn(move || {
-            thread::sleep(timeout);
-
-            // Check if our timer generation is still current. If not, a follow-up
-            // query or other activity has "cancelled" this timer by bumping the generation.
-            if generation.load(Ordering::SeqCst) != current_gen {
-                return;
-            }
+        let Ok(mut timer_abort_handle) = self.timer_abort_handle.lock() else {
+            log::error!("Idle timeout lock was poisoned");
+            return;
+        };
+        if let Some(previous_timer) = timer_abort_handle.take() {
+            previous_timer.abort();
+        }
+        let (timer, abort_handle) = self.executor.spawn_abortable(async move {
+            Timer::after(timeout).await;
             if let Ok(mut guard) = tx_cell.lock() {
                 if let Some(sender) = guard.take() {
-                    // Send the value after the idle timeout expires.
                     let _ = sender.send(value);
                 }
             }
         });
+        *timer_abort_handle = Some(abort_handle);
+        drop(timer_abort_handle);
+        timer.detach();
     }
 
     /// Cancel any pending idle timers.
     fn cancel_idle_timeout(&self) {
-        if self.generation.load(Ordering::SeqCst) > 0 {
-            self.generation.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut timer_abort_handle) = self.timer_abort_handle.lock() {
+            if let Some(timer) = timer_abort_handle.take() {
+                timer.abort();
+            }
+        }
+    }
+}
+
+impl<T: Send + 'static> Drop for IdleTimeoutSender<T> {
+    fn drop(&mut self) {
+        if let Ok(timer_abort_handle) = self.timer_abort_handle.get_mut() {
+            if let Some(timer) = timer_abort_handle.take() {
+                timer.abort();
+            }
         }
     }
 }
@@ -982,12 +980,14 @@ impl AgentDriver {
         foreground: &ModelSpawner<Self>,
     ) -> Result<oneshot::Receiver<()>, AgentDriverError> {
         let (exit_tx, exit_rx) = oneshot::channel();
-        let harness_exit = IdleTimeoutSender::new(exit_tx);
 
         // Subscribe to CLI agent session events so we can update the task
         // state as the harness emits stop/blocked notifications.
         foreground
-            .spawn(move |me, ctx| me.subscribe_to_cli_agent_session_events(harness_exit, ctx))
+            .spawn(move |me, ctx| {
+                let harness_exit = IdleTimeoutSender::new(exit_tx, ctx.background_executor());
+                me.subscribe_to_cli_agent_session_events(harness_exit, ctx);
+            })
             .await?;
 
         // Install plugins before running the harness command.
@@ -1168,7 +1168,7 @@ impl AgentDriver {
     ) -> Receiver<SDKConversationOutputStatus> {
         // Create a oneshot channel to signal task completion.
         let (tx, rx) = oneshot::channel();
-        let run_exit = IdleTimeoutSender::new(tx);
+        let run_exit = IdleTimeoutSender::new(tx, ctx.background_executor());
 
         // Subscribe before the conversation starts.
         let history_model_handle = BlocklistAIHistoryModel::handle(ctx);

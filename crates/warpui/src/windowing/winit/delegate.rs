@@ -302,9 +302,9 @@ impl platform::Delegate for AppDelegate {
     fn open_file_path(&self, path: &Path) {
         cfg_if::cfg_if! {
             if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-                let _ = command::blocking::Command::new("xdg-open")
-                    .arg(path)
-                    .spawn();
+                if let Err(error) = spawn_file_opener("xdg-open", path) {
+                    log::warn!("Unable to open path with xdg-open: {error}");
+                }
             } else if #[cfg(target_family = "wasm")] {
                 if let Some(window) = web_sys::window() {
                     if let Some(path) = path.to_str() {
@@ -563,6 +563,18 @@ impl platform::Delegate for AppDelegate {
         // TODO
     }
 }
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn spawn_file_opener(program: &str, path: &Path) -> std::io::Result<()> {
+    let mut command = command::r#async::Command::new(program);
+    command.arg(path).reap_on_drop(true);
+    drop(command.spawn()?);
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "delegate_tests.rs"]
+mod tests;
 
 pub struct IntegrationTestDelegate {
     app_delegate: AppDelegate,
