@@ -89,7 +89,7 @@ pub fn upsert_stored_object(
     let metadata_filter = object_metadata
         .filter(client_id.eq(Some(hashed_sync_id.as_str())))
         .or_filter(server_id.eq(Some(hashed_sync_id.as_str())));
-    let metadata: Option<ObjectMetadata> = metadata_filter.first(conn).ok();
+    let metadata: Option<ObjectMetadata> = metadata_filter.first(conn).optional()?;
 
     match metadata {
         Some(metadata) => {

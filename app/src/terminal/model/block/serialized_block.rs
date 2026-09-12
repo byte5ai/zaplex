@@ -90,6 +90,11 @@ fn default_as_true() -> bool {
     true
 }
 
+/// Omit the default hidden state while preserving an explicit visible state.
+fn skip_hide_when_true(value: &bool) -> bool {
+    *value
+}
+
 /// Blocklist AI metadata associated with this block.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerializedAIMetadata {
@@ -111,7 +116,10 @@ pub struct SerializedAIMetadata {
 
     /// `true` if this block should be hidden from the user (as is the case with AI-requested
     /// commands, for example).
-    #[serde(default = "default_as_true", skip)]
+    #[serde(
+        default = "default_as_true",
+        skip_serializing_if = "skip_hide_when_true"
+    )]
     should_hide_block: bool,
 }
 

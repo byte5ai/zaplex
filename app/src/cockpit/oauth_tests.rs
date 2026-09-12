@@ -66,6 +66,16 @@ fn concurrent_refreshes_send_one_request_per_account_within_ttl() {
     };
     second_invoked_rx.recv().unwrap();
 
+    let snapshot_cache = cache.clone();
+    let (snapshot_tx, snapshot_rx) = mpsc::channel();
+    let snapshot = thread::spawn(move || {
+        let snapshot = futures::executor::block_on(snapshot_cache.snapshot());
+        snapshot_tx.send(snapshot).unwrap();
+    });
+    let cache_was_responsive = snapshot_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .is_ok();
+
     {
         let (lock, wake) = &*gate;
         *lock.lock().unwrap() = true;
@@ -74,6 +84,11 @@ fn concurrent_refreshes_send_one_request_per_account_within_ttl() {
 
     let first_cache = first.join().unwrap();
     let second_cache = second.join().unwrap();
+    snapshot.join().unwrap();
+    assert!(
+        cache_was_responsive,
+        "refresh must not hold the cache mutex"
+    );
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     assert_eq!(first_cache.len(), 1);
     assert_eq!(second_cache.len(), 1);

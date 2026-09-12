@@ -455,7 +455,7 @@ def release_workflows_bundle_version_matched_remote_server(root: Path) -> None:
         "name: zap-remote-server-linux-x86_64",
         "path: resources/bundled/remote-server/",
         "GIT_RELEASE_TAG: ${{ needs.prepare_metadata.outputs.release_tag }}",
-        'git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main',
+        'git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main',
         'elif [[ "$GITHUB_REF" != "refs/heads/main" ]]',
         'tar -czf zap-remote-server-linux-x86_64.tar.gz -C "$staging" zaplex resources',
         "zap-remote-server-linux-x86_64.tar.gz.sha256",

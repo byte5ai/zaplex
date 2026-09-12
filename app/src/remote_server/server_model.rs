@@ -1,5 +1,9 @@
 use crate::terminal::bootstrap::{daemon_bootstrap_delivery, DaemonBootstrapDelivery};
 use crate::terminal::shell::ShellType;
+#[cfg(unix)]
+use futures::future::{BoxFuture, Shared};
+#[cfg(unix)]
+use futures::FutureExt as _;
 use instant::Instant;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
@@ -8,6 +12,8 @@ use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use warp_core::channel::ChannelState;
@@ -305,6 +311,233 @@ enum HandlerOutcome {
     /// are tracked by `FileId` in `pending_file_ops` rather than by
     /// `RequestId` in `in_progress`).
     Async(Option<SpawnedFutureHandle>),
+}
+
+#[cfg(unix)]
+const SAFE_FILE_WORKER_PENDING: u8 = 0;
+#[cfg(unix)]
+const SAFE_FILE_WORKER_AVAILABLE: u8 = 1;
+#[cfg(unix)]
+const SAFE_FILE_WORKER_UNAVAILABLE: u8 = 2;
+#[cfg(unix)]
+const MAX_SAFE_FILE_PENDING_BYTES: usize = 64 * 1024 * 1024;
+#[cfg(unix)]
+const MIN_SAFE_FILE_JOB_BYTES: usize = 64 * 1024;
+
+#[cfg(unix)]
+enum SafeFileWorkerJob {
+    Request {
+        connection_id: ConnectionId,
+        request: super::proto::SafeFileRequest,
+        response: Option<futures::channel::oneshot::Sender<super::proto::SafeFileResponse>>,
+        cancelled: Option<Arc<AtomicBool>>,
+        queued_bytes: usize,
+    },
+    CloseConnection(ConnectionId),
+}
+
+/// Serial blocking worker for the descriptor-bound safe-file protocol.
+///
+/// Enqueueing happens synchronously on the model thread, so the channel keeps
+/// exact receive order across requests, fire-and-forget closes, and connection
+/// teardown. The worker owns the mutable server and performs all journal and
+/// file I/O off the model and async executor threads.
+#[cfg(unix)]
+struct SafeFileWorker {
+    sender: std::sync::mpsc::Sender<SafeFileWorkerJob>,
+    availability: Arc<AtomicU8>,
+    readiness: Shared<BoxFuture<'static, bool>>,
+    pending_bytes: Arc<AtomicUsize>,
+}
+
+#[cfg(unix)]
+struct SafeFileWorkerAvailabilityGuard(Arc<AtomicU8>);
+
+#[cfg(unix)]
+impl Drop for SafeFileWorkerAvailabilityGuard {
+    fn drop(&mut self) {
+        self.0
+            .store(SAFE_FILE_WORKER_UNAVAILABLE, Ordering::Release);
+    }
+}
+
+#[cfg(unix)]
+impl SafeFileWorker {
+    fn new() -> Self {
+        Self::spawn(super::safe_file::SafeFileServer::new)
+    }
+
+    fn spawn(factory: impl FnOnce() -> super::safe_file::SafeFileServer + Send + 'static) -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let availability = Arc::new(AtomicU8::new(SAFE_FILE_WORKER_PENDING));
+        let worker_availability = Arc::clone(&availability);
+        let pending_bytes = Arc::new(AtomicUsize::new(0));
+        let worker_pending_bytes = Arc::clone(&pending_bytes);
+        let (ready_sender, ready_receiver) = futures::channel::oneshot::channel();
+        let readiness = async move { ready_receiver.await.unwrap_or(false) }
+            .boxed()
+            .shared();
+        let worker = std::thread::Builder::new()
+            .name("safe-file-worker".to_string())
+            .spawn(move || {
+                let _availability_guard =
+                    SafeFileWorkerAvailabilityGuard(Arc::clone(&worker_availability));
+                let mut server = factory();
+                let available = server.is_available();
+                worker_availability.store(
+                    if available {
+                        SAFE_FILE_WORKER_AVAILABLE
+                    } else {
+                        SAFE_FILE_WORKER_UNAVAILABLE
+                    },
+                    Ordering::Release,
+                );
+                let _ = ready_sender.send(available);
+                while let Ok(job) = receiver.recv() {
+                    match job {
+                        SafeFileWorkerJob::Request {
+                            connection_id,
+                            request,
+                            response,
+                            cancelled,
+                            queued_bytes,
+                        } => {
+                            worker_pending_bytes.fetch_sub(queued_bytes, Ordering::AcqRel);
+                            if cancelled
+                                .as_ref()
+                                .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
+                            {
+                                continue;
+                            }
+                            let response_message = server.handle(connection_id, request);
+                            if let Some(response) = response {
+                                let _ = response.send(response_message);
+                            } else if let Some(super::proto::safe_file_response::Result::Error(
+                                error,
+                            )) = response_message.result
+                            {
+                                log::warn!(
+                                    "Safe-file close notification failed: {}",
+                                    error.message
+                                );
+                            }
+                        }
+                        SafeFileWorkerJob::CloseConnection(connection_id) => {
+                            server.close_connection(connection_id);
+                        }
+                    }
+                }
+            });
+        if let Err(error) = worker {
+            availability.store(SAFE_FILE_WORKER_UNAVAILABLE, Ordering::Release);
+            log::error!("Failed to start safe-file worker: {error}");
+        }
+        Self {
+            sender,
+            availability,
+            readiness,
+            pending_bytes,
+        }
+    }
+
+    fn is_accepting_requests(&self) -> bool {
+        self.availability.load(Ordering::Acquire) != SAFE_FILE_WORKER_UNAVAILABLE
+    }
+
+    fn readiness(&self) -> BoxFuture<'static, bool> {
+        let initial_readiness = self.readiness.clone();
+        let availability = Arc::clone(&self.availability);
+        async move {
+            initial_readiness.await
+                && availability.load(Ordering::Acquire) == SAFE_FILE_WORKER_AVAILABLE
+        }
+        .boxed()
+    }
+
+    fn request(
+        &self,
+        connection_id: ConnectionId,
+        request: super::proto::SafeFileRequest,
+    ) -> Result<
+        (
+            futures::channel::oneshot::Receiver<super::proto::SafeFileResponse>,
+            Arc<AtomicBool>,
+        ),
+        &'static str,
+    > {
+        let queued_bytes = request.encoded_len().max(MIN_SAFE_FILE_JOB_BYTES);
+        if self
+            .pending_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
+                pending
+                    .checked_add(queued_bytes)
+                    .filter(|total| *total <= MAX_SAFE_FILE_PENDING_BYTES)
+            })
+            .is_err()
+        {
+            return Err("Safe-file worker queue is full");
+        }
+        let (response, receiver) = futures::channel::oneshot::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        if self
+            .sender
+            .send(SafeFileWorkerJob::Request {
+                connection_id,
+                request,
+                response: Some(response),
+                cancelled: Some(Arc::clone(&cancelled)),
+                queued_bytes,
+            })
+            .is_err()
+        {
+            self.pending_bytes.fetch_sub(queued_bytes, Ordering::AcqRel);
+            return Err("Safe-file worker is unavailable");
+        }
+        Ok((receiver, cancelled))
+    }
+
+    fn notify(&self, connection_id: ConnectionId, request: super::proto::SafeFileRequest) {
+        if self
+            .sender
+            .send(SafeFileWorkerJob::Request {
+                connection_id,
+                request,
+                response: None,
+                cancelled: None,
+                queued_bytes: 0,
+            })
+            .is_err()
+        {
+            log::warn!("Safe-file close notification could not reach its worker");
+        }
+    }
+
+    fn close_connection(&self, connection_id: ConnectionId) {
+        if self
+            .sender
+            .send(SafeFileWorkerJob::CloseConnection(connection_id))
+            .is_err()
+        {
+            log::warn!("Safe-file connection cleanup could not reach its worker");
+        }
+    }
+
+    #[cfg(test)]
+    fn unavailable_for_test() -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        drop(receiver);
+        Self {
+            sender,
+            availability: Arc::new(AtomicU8::new(SAFE_FILE_WORKER_UNAVAILABLE)),
+            readiness: futures::future::ready(false).boxed().shared(),
+            pending_bytes: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    #[cfg(test)]
+    fn from_server_for_test(server: super::safe_file::SafeFileServer) -> Self {
+        Self::spawn(move || server)
+    }
 }
 
 struct AgentTranscriptReadPermit {
@@ -996,7 +1229,7 @@ pub struct ServerModel {
     /// Descriptor-bound file handles and durable mutation journal used by the
     /// safe file-manager transfer protocol.
     #[cfg(unix)]
-    safe_files: super::safe_file::SafeFileServer,
+    safe_files: SafeFileWorker,
     /// Single-flight inventory cache shared by all agent-inventory requests.
     /// The mutex and every filesystem operation guarded by it run only on the
     /// blocking pool. Requests that overlap reuse the scan that completed
@@ -1062,7 +1295,7 @@ impl ServerModel {
             #[cfg(unix)]
             next_pty_generation: 1,
             #[cfg(unix)]
-            safe_files: super::safe_file::SafeFileServer::new(),
+            safe_files: SafeFileWorker::new(),
             agent_inventory_scan_cache: Arc::new(Mutex::new(AgentInventoryScanCache::default())),
             agent_account_routes: Default::default(),
             #[cfg(test)]
@@ -1470,7 +1703,7 @@ impl ServerModel {
 
         let outcome = match msg.message {
             Some(client_message::Message::Initialize(msg)) => {
-                self.handle_initialize(conn_id, msg, &request_id)
+                self.handle_initialize(conn_id, msg, &request_id, ctx)
             }
             Some(client_message::Message::Authenticate(msg)) => {
                 self.handle_authenticate(msg);
@@ -1623,18 +1856,65 @@ impl ServerModel {
                     && (!is_identity_batch
                         || self.client_supports_safe_file_identity_batch(conn_id))
                     && (!is_v2_delete || self.client_supports_safe_file_transactions_v2(conn_id))
-                    && self.safe_files.is_available()
+                    && self.safe_files.is_accepting_requests()
                 {
-                    let response = self.safe_files.handle(conn_id, request);
                     if is_close_notification {
-                        if let Some(super::proto::safe_file_response::Result::Error(error)) =
-                            response.result
-                        {
-                            log::warn!("Safe-file close notification failed: {}", error.message);
-                        }
+                        self.safe_files.notify(conn_id, request);
                         return;
                     }
-                    HandlerOutcome::Sync(server_message::Message::SafeFileResponse(response))
+                    let (receiver, cancelled) = match self.safe_files.request(conn_id, request) {
+                        Ok(request) => request,
+                        Err(message) => {
+                            return self.send_server_message(
+                                Some(conn_id),
+                                Some(&request_id),
+                                server_message::Message::SafeFileResponse(
+                                    super::proto::SafeFileResponse {
+                                        result: Some(
+                                            super::proto::safe_file_response::Result::Error(
+                                                FileOperationError {
+                                                    message: message.to_string(),
+                                                },
+                                            ),
+                                        ),
+                                    },
+                                ),
+                            );
+                        }
+                    };
+                    let response_request_id = request_id.clone();
+                    let cancelled_on_abort = Arc::clone(&cancelled);
+                    // Cancellation can discard a job that has not started. Once the worker begins
+                    // a journaled mutation it runs to completion, preserving its idempotent result.
+                    let handle = self.spawn_request_handler_with_abort(
+                        request_id.clone(),
+                        receiver,
+                        move |model, result, _ctx| match result {
+                            Ok(response) => model.send_server_message(
+                                Some(conn_id),
+                                Some(&response_request_id),
+                                server_message::Message::SafeFileResponse(response),
+                            ),
+                            Err(error) => {
+                                log::error!(
+                                    "Safe-file request handler failed (request_id={response_request_id}): {error}"
+                                );
+                                model.send_server_message(
+                                    Some(conn_id),
+                                    Some(&response_request_id),
+                                    server_message::Message::Error(ErrorResponse {
+                                        code: ErrorCode::Internal.into(),
+                                        message: "Internal blocking operation failed".to_string(),
+                                    }),
+                                );
+                            }
+                        },
+                        move |_model, _ctx| {
+                            cancelled_on_abort.store(true, Ordering::Release);
+                        },
+                        ctx,
+                    );
+                    HandlerOutcome::Async(Some(handle))
                 } else {
                     if is_close_notification {
                         log::debug!(
@@ -1948,32 +2228,67 @@ impl ServerModel {
         conn_id: ConnectionId,
         msg: Initialize,
         request_id: &RequestId,
+        ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
         log::info!("Handling Initialize (request_id={request_id})");
+        self.apply_initialize(conn_id, msg);
+        let server_version = ChannelState::app_version().unwrap_or("").to_string();
+        let host_id = self.host_id.clone();
+        #[cfg(unix)]
+        {
+            let readiness = self.safe_files.readiness();
+            let response_request_id = request_id.clone();
+            let handle = self.spawn_request_handler(
+                request_id.clone(),
+                readiness,
+                move |model, safe_file_transactions_supported, _ctx| {
+                    let features = server_features_with_runtime_support(
+                        zaplex_cockpit::local_process_signalling_supported(),
+                        safe_file_transactions_supported,
+                    );
+                    model.send_server_message(
+                        Some(conn_id),
+                        Some(&response_request_id),
+                        server_message::Message::InitializeResponse(InitializeResponse {
+                            server_version,
+                            host_id,
+                            // Capabilities this daemon advertises. Stage 0 is empty (the
+                            // native session host is not implemented yet); Stage 1 adds
+                            // FEATURE_SESSION_HOST via supported_features().
+                            features,
+                        }),
+                    );
+                },
+                ctx,
+            );
+            HandlerOutcome::Async(Some(handle))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = ctx;
+            let features = server_features_with_runtime_support(
+                zaplex_cockpit::local_process_signalling_supported(),
+                false,
+            );
+            HandlerOutcome::Sync(server_message::Message::InitializeResponse(
+                InitializeResponse {
+                    server_version,
+                    host_id,
+                    // Capabilities this daemon advertises. Stage 0 is empty (the
+                    // native session host is not implemented yet); Stage 1 adds
+                    // FEATURE_SESSION_HOST via supported_features().
+                    features,
+                },
+            ))
+        }
+    }
+
+    fn apply_initialize(&mut self, conn_id: ConnectionId, msg: Initialize) {
         self.connection_features
             .insert(conn_id, msg.features.into_iter().collect());
         if !msg.auth_token.is_empty() {
             self.auth_token = Some(msg.auth_token);
         }
-        let server_version = ChannelState::app_version().unwrap_or("").to_string();
-        #[cfg(unix)]
-        let safe_file_transactions_supported = self.safe_files.is_available();
-        #[cfg(not(unix))]
-        let safe_file_transactions_supported = false;
-        let features = server_features_with_runtime_support(
-            zaplex_cockpit::local_process_signalling_supported(),
-            safe_file_transactions_supported,
-        );
-        HandlerOutcome::Sync(server_message::Message::InitializeResponse(
-            InitializeResponse {
-                server_version,
-                host_id: self.host_id.clone(),
-                // Capabilities this daemon advertises. Stage 0 is empty (the
-                // native session host is not implemented yet); Stage 1 adds
-                // FEATURE_SESSION_HOST via supported_features().
-                features,
-            },
-        ))
     }
 
     fn client_supports_agent_pty_binding(&self, conn_id: ConnectionId) -> bool {

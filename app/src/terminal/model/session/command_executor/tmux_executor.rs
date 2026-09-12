@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_channel::{self, Receiver, Sender};
 use async_trait::async_trait;
 use chrono::DateTime;
@@ -61,18 +61,22 @@ impl TmuxCommandExecutor {
             environment_variables,
         };
 
-        if let Err(e) = self
+        if let Err(error) = self
             .executor_command_tx
             .try_send(ExecutorCommandEvent::ExecuteTmuxCommand(tmux_command))
         {
-            log::warn!("Failed to send TmuxCommand to pty_controller: {e}");
+            self.in_flight_commands.lock().remove(command_id);
+            return Err(anyhow!(
+                "Failed to send TmuxCommand to pty_controller: {error}"
+            ));
         }
 
         Ok(output_channel_rx)
     }
 
     pub fn handle_executed_command_event(&self, event: ExecutedExecutorCommandEvent) {
-        if let Some(output_tx) = self.in_flight_commands.lock().get(&event.command_id) {
+        let output_tx = self.in_flight_commands.lock().remove(&event.command_id);
+        if let Some(output_tx) = output_tx {
             if !output_tx.is_closed() {
                 // We shouldn't be receiving exit codes that aren't 32 bit signed integers.
                 let exit_code = Some(ExitCode::from(event.exit_code as i32));

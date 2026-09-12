@@ -1512,7 +1512,7 @@ fn save_pane_state(
                 .execute(conn)?;
         }
         LeafContents::ExecutionProfileEditor => {
-            // TODO: Implement execution profile editor pane saving.
+            // Stateless
         }
         LeafContents::GetStarted => {
             // Stateless
@@ -1994,6 +1994,14 @@ fn save_workspaces(
     conn: &mut SqliteConnection,
     workspaces_to_insert: Vec<WorkspaceMetadata>,
 ) -> Result<()> {
+    conn.transaction::<(), Error, _>(|conn| replace_workspaces(conn, workspaces_to_insert))?;
+    Ok(())
+}
+
+fn replace_workspaces(
+    conn: &mut SqliteConnection,
+    workspaces_to_insert: Vec<WorkspaceMetadata>,
+) -> Result<(), Error> {
     use schema::team_settings::dsl::*;
     use schema::teams::dsl::*;
     use schema::workspace_teams::dsl::*;
@@ -2194,7 +2202,9 @@ fn delete_cloud_object(
         .filter(client_id.eq(Some(hashed_sync_id.as_str())))
         .or_filter(server_id.eq(Some(hashed_sync_id.as_str())));
 
-    let metadata: ObjectMetadata = metadata_filter.first(conn)?;
+    let Some(metadata) = metadata_filter.first::<ObjectMetadata>(conn).optional()? else {
+        return Ok(());
+    };
     let object_id = metadata.shareable_object_id;
     diesel::delete(object_metadata.filter(id.eq(metadata.id))).execute(conn)?;
     diesel::delete(
@@ -2656,6 +2666,7 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                         }
                     }
                 }
+                EXECUTION_PROFILE_EDITOR_PANE_KIND => LeafContents::ExecutionProfileEditor,
                 GET_STARTED_PANE_KIND => LeafContents::GetStarted,
                 WELCOME_PANE_KIND => {
                     let welcome_pane = schema::welcome_panes::dsl::welcome_panes

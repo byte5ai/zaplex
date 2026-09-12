@@ -65,6 +65,7 @@ fn test_emits_successful_command_output() {
                 exit_code: 0,
                 output: "foo".as_bytes().to_vec(),
             });
+            assert!(executor.in_flight_commands.lock().is_empty());
         });
 
         task_executor
@@ -74,4 +75,46 @@ fn test_emits_successful_command_output() {
             })
             .await;
     });
+}
+
+#[test]
+fn dispatch_failure_returns_error_and_removes_in_flight_command() {
+    App::test((), |_app| async move {
+        let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
+        drop(executor_command_rx);
+        let executor = TmuxCommandExecutor::new(executor_command_tx);
+        let shell = Shell::new(ShellType::Zsh, None, None, Default::default(), None);
+
+        let result = executor
+            .execute_command(
+                "echo foo",
+                &shell,
+                None,
+                None,
+                ExecuteCommandOptions::default(),
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(executor.in_flight_commands.lock().is_empty());
+    });
+}
+
+#[test]
+fn dropped_output_receiver_is_removed_on_completion() {
+    let (executor_command_tx, _executor_command_rx) = async_channel::unbounded();
+    let executor = TmuxCommandExecutor::new(executor_command_tx);
+    let shell = Shell::new(ShellType::Zsh, None, None, Default::default(), None);
+    let output_rx = executor
+        .execute_command_internal("command-id", None, "echo foo", &shell, None)
+        .expect("command should be dispatched");
+    drop(output_rx);
+
+    executor.handle_executed_command_event(ExecutedExecutorCommandEvent {
+        command_id: "command-id".to_string(),
+        exit_code: 0,
+        output: b"foo".to_vec(),
+    });
+
+    assert!(executor.in_flight_commands.lock().is_empty());
 }

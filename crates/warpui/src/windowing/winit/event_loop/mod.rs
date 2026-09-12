@@ -1561,6 +1561,8 @@ impl EventLoop {
                 {
                     return;
                 }
+                let preedit_text_changed =
+                    did_preedit_text_change(self.last_preedit.as_ref(), &preedit_text);
                 self.last_preedit = Some((preedit_text.clone(), cursor_position));
 
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
@@ -1582,11 +1584,11 @@ impl EventLoop {
                 });
                 drop(window_callbacks);
 
-                // During composition, the cursor moves as preedit text is inserted and
-                // newlines are added. The latest rectangle must be continuously pushed to IMM;
-                // otherwise the candidate window stops at the composition start position (on some
-                // IMEs this manifests as the candidate window misaligned with the current input position).
-                self.update_ime_position();
+                // Cursor-only echoes can be caused by set_ime_cursor_area itself. Repositioning
+                // again for the same text creates a two-step feedback loop in affected IMEs.
+                if preedit_text_changed {
+                    self.update_ime_position();
+                }
             }
             winit::event::Ime::Commit(chars) => {
                 // Composition has been committed, clear the deduplication baseline to avoid
@@ -2113,3 +2115,14 @@ fn downcast_window(window: &dyn platform::Window) -> &super::Window {
         .downcast_ref::<super::Window>()
         .expect("Should not fail to downcast the platform window to its concrete type")
 }
+
+fn did_preedit_text_change(
+    previous: Option<&(String, Option<(usize, usize)>)>,
+    current_text: &str,
+) -> bool {
+    previous.is_none_or(|(previous_text, _)| previous_text != current_text)
+}
+
+#[cfg(test)]
+#[path = "event_loop_tests.rs"]
+mod tests;

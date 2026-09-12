@@ -6,6 +6,7 @@
 //! user-owned state. These helpers allow us to read and merge with existing
 //! JSON file state easily.
 
+use std::io::Write as _;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -44,13 +45,44 @@ pub(super) fn write_json_file<T>(
 where
     T: Serialize,
 {
+    let serialized = serde_json::to_vec_pretty(value).context(serialize_error)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {}", parent.display()))?;
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".zaplex-provider-config-")
+            .tempfile_in(parent)
+            .with_context(|| {
+                format!("Failed to create a temporary file in {}", parent.display())
+            })?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            temporary
+                .as_file()
+                .set_permissions(std::fs::Permissions::from_mode(0o600))
+                .with_context(|| {
+                    format!("Failed to secure temporary file for {}", path.display())
+                })?;
+        }
+
+        temporary
+            .write_all(&serialized)
+            .and_then(|()| temporary.as_file().sync_all())
+            .with_context(|| format!("Failed to write temporary file for {}", path.display()))?;
+        temporary
+            .persist(path)
+            .map_err(|error| error.error)
+            .with_context(|| format!("Failed to replace {}", path.display()))?;
+        if let Ok(directory) = std::fs::File::open(parent) {
+            let _ = directory.sync_all();
+        }
+        return Ok(());
     }
-    std::fs::write(
-        path,
-        serde_json::to_vec_pretty(value).context(serialize_error)?,
-    )
-    .with_context(|| format!("Failed to write {}", path.display()))
+    anyhow::bail!("Config path has no parent: {}", path.display())
 }
+
+#[cfg(test)]
+#[path = "json_utils_tests.rs"]
+mod tests;
