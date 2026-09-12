@@ -15,7 +15,7 @@ jobs:
     # Recent p90 is below one minute; five minutes also covers the observed outlier.
     timeout-minutes: 5
     steps:
-      - uses: actions/stale@v9
+      - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639 # v9
         with:
           days-before-stale: 30
           days-before-close: 7

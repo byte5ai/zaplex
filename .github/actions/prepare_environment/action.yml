@@ -23,7 +23,29 @@ runs:
   steps:
     - name: Make GitHub token available in the environment
       shell: bash
-      run: echo "GH_TOKEN=${{ github.token }}" >> $GITHUB_ENV
+      env:
+        GH_TOKEN_VALUE: ${{ github.token }}
+      run: echo "GH_TOKEN=$GH_TOKEN_VALUE" >> "$GITHUB_ENV"
+
+    - name: Validate action inputs
+      shell: bash
+      env:
+        TARGET_OS: ${{ inputs.target_os }}
+        INSTALL_TEST_DEPS: ${{ inputs.install_test_deps }}
+        INSTALL_RELEASE_DEPS: ${{ inputs.install_release_deps }}
+        IS_SELF_HOSTED: ${{ inputs.is_self_hosted }}
+      run: |
+        set -euo pipefail
+        case "$TARGET_OS" in
+          macos|linux|windows|wasm) ;;
+          *) echo "::error::Invalid target_os"; exit 1 ;;
+        esac
+        for value in "$INSTALL_TEST_DEPS" "$INSTALL_RELEASE_DEPS" "$IS_SELF_HOSTED"; do
+          case "$value" in
+            ""|true|false) ;;
+            *) echo "::error::Boolean action inputs must be true or false"; exit 1 ;;
+          esac
+        done
 
     - name: Set up git for Windows
       if: ${{ inputs.target_os == 'windows' }}
@@ -50,10 +72,12 @@ runs:
     - name: Determine repository root
       id: repo-root
       shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
       run: |
         # The action lives at <repo-root>/.github/actions/prepare_environment.
         # Derive the repository root from the action path.
-        REPO_ROOT=$(cd "${{ github.action_path }}/../../.." && pwd)
+        REPO_ROOT=$(cd "$ACTION_PATH/../../.." && pwd)
         echo "path=$REPO_ROOT" >> $GITHUB_OUTPUT
         # Normalize $GITHUB_WORKSPACE through cd/pwd so that path formats
         # match on Windows (where $GITHUB_WORKSPACE uses backslashes but
@@ -99,18 +123,23 @@ runs:
 
     - name: Install dependencies
       shell: bash
+      env:
+        REPO_ROOT: ${{ steps.repo-root.outputs.path }}
+        TARGET_OS: ${{ inputs.target_os }}
+        INSTALL_TEST_DEPS: ${{ inputs.install_test_deps }}
+        INSTALL_RELEASE_DEPS: ${{ inputs.install_release_deps }}
       run: |
-        cd "${{ steps.repo-root.outputs.path }}"
-        if ${{ inputs.target_os == 'macos' }}; then
+        cd "$REPO_ROOT"
+        if [[ "$TARGET_OS" == "macos" ]]; then
           # Try to install warp-channel-config but don't complain if it cannot
           # be installed.
           ./script/install_channel_config || true
-          if ${{ inputs.install_release_deps == 'true' }}; then
+          if [[ "$INSTALL_RELEASE_DEPS" == "true" ]]; then
             ./script/install_cargo_release_deps
           else
             ./script/install_cargo_build_deps
           fi
-        elif ${{ inputs.target_os == 'linux' }}; then
+        elif [[ "$TARGET_OS" == "linux" ]]; then
           # Linux CI runners occasionally cannot reach Ubuntu's legacy HTTP
           # endpoints while HTTPS remains available. Use HTTPS and let apt retry
           # transient mirror failures for every install script below.
@@ -141,26 +170,26 @@ runs:
           # don't do it.
           sudo apt-get update -y
 
-          if ${{ inputs.install_test_deps == 'true' }}; then
+          if [[ "$INSTALL_TEST_DEPS" == "true" ]]; then
             ./script/linux/install_test_deps
-          elif ${{ inputs.install_release_deps == 'true' }}; then
+          elif [[ "$INSTALL_RELEASE_DEPS" == "true" ]]; then
             ./script/linux/install_build_deps
             ./script/install_cargo_release_deps
           else
             ./script/linux/install_build_deps
           fi
-        elif ${{ inputs.target_os == 'windows' }}; then
+        elif [[ "$TARGET_OS" == "windows" ]]; then
           ./script/windows/install_build_deps.ps1
-          if ${{ inputs.install_release_deps == 'true' }}; then
+          if [[ "$INSTALL_RELEASE_DEPS" == "true" ]]; then
             ./script/install_cargo_release_deps
           fi
-        elif ${{ inputs.target_os == 'wasm' }}; then
+        elif [[ "$TARGET_OS" == "wasm" ]]; then
           # Update the apt cache before installing dependencies - it can be slow, so the install scripts
           # don't do it (to avoid doing it more than once).
           sudo apt update -y
           ./script/wasm/install_build_deps
         else
-          echo "::error::Missing logic to install build dependencies for OS \"${{ inputs.target_os }}\""
+          echo "::error::Missing logic to install build dependencies for OS \"$TARGET_OS\""
           exit 1
         fi
 
@@ -177,24 +206,27 @@ runs:
 
     - name: Install protoc for generating rust bindings of protobuf APIs
       id: install_protoc
+      if: ${{ inputs.target_os != 'windows' }}
       # Install protoc for generating rust bindings of protobuf APIs.
       uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
-      # Don't fail the job here so the winget fallback below has a chance to run on Windows.
       continue-on-error: true
       with:
         brew: protobuf
-        choco: protoc
 
-    - name: Install protoc via winget (fallback for Windows)
-      if: ${{ inputs.target_os == 'windows' && steps.install_protoc.outcome == 'failure' }}
+    - name: Install digest-verified protoc on Windows
+      if: ${{ inputs.target_os == 'windows' }}
       shell: pwsh
-      run: winget install Google.Protobuf
+      env:
+        REPO_ROOT: ${{ steps.repo-root.outputs.path }}
+      run: '& "$env:REPO_ROOT/script/windows/install_protoc.ps1"'
 
     - name: Fail if protoc install did not succeed
       if: ${{ inputs.target_os != 'windows' && steps.install_protoc.outcome == 'failure' }}
       shell: bash
+      env:
+        TARGET_OS: ${{ inputs.target_os }}
       run: |
-        echo "::error::protoc install step failed on ${{ inputs.target_os }}"
+        echo "::error::protoc install step failed on $TARGET_OS"
         exit 1
 
     - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0

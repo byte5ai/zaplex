@@ -55,20 +55,8 @@ winget install -e --id Kitware.CMake
 winget install -e --id StrawberryPerl.StrawberryPerl `
     --accept-package-agreements --accept-source-agreements
 
-# protoc (Protocol Buffers compiler) is used for build.rs code generation for proto dependencies (e.g. warp_multi_agent_api).
-# Fixed to the same version as script/linux/install_build_deps to ensure consistent code generation across platforms;
-# prost-build requires protoc >= 3.15 (proto3 optional field). winget's Google.Protobuf version is too new, so get official release zip directly.
-$protocVersion = '25.1'
-$protocDir = "$env:LOCALAPPDATA\protoc"
-$protocExe = "$protocDir\bin\protoc.exe"
-if (-not (Test-Path $protocExe)) {
-    $protocZip = "$env:TEMP\protoc-$protocVersion-win64.zip"
-    Invoke-WebRequest -Uri "https://github.com/protocolbuffers/protobuf/releases/download/v$protocVersion/protoc-$protocVersion-win64.zip" -OutFile $protocZip
-    Expand-Archive -Path $protocZip -DestinationPath $protocDir -Force
-    Remove-Item $protocZip
-}
-# prost-build prioritizes reading PROTOC environment variable (see build error message), pointing to fixed version binary is safest.
-[Environment]::SetEnvironmentVariable('PROTOC', $protocExe, 'User')
+# protoc is downloaded from its official release and verified by SHA-256 before extraction.
+& "$PSScriptRoot\install_protoc.ps1"
 
 # We use InnoSetup to build our release bundle installer.
 winget install -e --id JRSoftware.InnoSetup

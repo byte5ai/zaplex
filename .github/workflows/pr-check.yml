@@ -73,6 +73,14 @@ jobs:
         run: script/check-docker-supply-chain --self-test
         shell: bash
 
+      - name: Verify release supply-chain policy
+        run: script/check-release-supply-chain --self-test
+        shell: bash
+
+      - name: Validate release input rejection
+        run: script/validate-release-tag-tests
+        shell: bash
+
       - name: Verify fork-facing repository links
         run: script/fork-link-contract-tests
         shell: bash

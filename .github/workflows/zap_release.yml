@@ -57,7 +57,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       release_tag: ${{ steps.compute_tag.outputs.tag }}
-      release_branch: ${{ steps.compute_tag.outputs.branch }}
+      release_sha: ${{ steps.resolve-release-sha.outputs.sha }}
       release_name: ${{ steps.get-config.outputs.release_base_name }} ${{ steps.compute_tag.outputs.tag }}
       prerelease: ${{ steps.classify-tag.outputs.prerelease }}
       make_latest: ${{ steps.classify-tag.outputs.make_latest }}
@@ -67,6 +67,19 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+
+      - name: Resolve immutable release commit
+        id: resolve-release-sha
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_SHA="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unable to resolve an immutable release commit" >&2
+            exit 1
+          fi
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Classify release tag
         id: classify-tag
@@ -80,18 +93,19 @@ jobs:
           else
             TAG="$REQUESTED_TAG"
           fi
+          script/validate-release-tag "$TAG"
           script/classify-release-tag "$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Verify Phase A release readiness
         env:
           REQUIRES_MAIN: ${{ steps.classify-tag.outputs.requires_main }}
+          RELEASE_SHA: ${{ steps.resolve-release-sha.outputs.sha }}
         run: |
           set -euo pipefail
           if [[ "$REQUIRES_MAIN" == "true" ]]; then
             git fetch origin main:refs/remotes/origin/main --no-tags
             if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-              RELEASE_COMMIT="$(git rev-parse "${GITHUB_SHA}^{commit}")"
-              if ! git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main; then
+              if ! git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main; then
                 echo "Stable releases must point to a commit reachable from origin/main." >&2
                 exit 1
               fi
@@ -116,6 +130,7 @@ jobs:
         env:
           BASE_VERSION: ${{ steps.classify-tag.outputs.base_version }}
           IS_PRERELEASE: ${{ steps.classify-tag.outputs.prerelease }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
         run: |
           VERSION_VALUE="$(tr -d '[:space:]' < VERSION)"
           EXPECTED_TAG="v$VERSION_VALUE"
@@ -123,11 +138,10 @@ jobs:
           # workflow_dispatch: build the selected branch with the explicit release tag.
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
-            BRANCH="$TAG"
           else
-            TAG="${{ inputs.release_tag }}"
-            BRANCH="${GITHUB_REF#refs/heads/}"
+            TAG="$REQUESTED_TAG"
           fi
+          script/validate-release-tag "$TAG"
           if [[ "$IS_PRERELEASE" == "true" ]]; then
             if [[ "$VERSION_VALUE" != "$BASE_VERSION" && "$VERSION_VALUE" != "$BASE_VERSION".* ]]; then
               echo "Prerelease tag '$TAG' does not match VERSION ('$VERSION_VALUE')." >&2
@@ -137,9 +151,8 @@ jobs:
             echo "Release tag '$TAG' does not match VERSION ('$EXPECTED_TAG')." >&2
             exit 1
           fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
-          echo "Release tag: $TAG / build ref: $BRANCH"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $TAG / build commit: ${{ steps.resolve-release-sha.outputs.sha }}"
 
       # Only a published GitHub Release is a valid changelog boundary. A tag can
       # exist after a failed pre-publish run and must not truncate the notes.
@@ -261,7 +274,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          ref: ${{ needs.prepare_metadata.outputs.release_branch }}
+          ref: ${{ needs.prepare_metadata.outputs.release_sha }}
 
       - name: Validate Developer ID signing inputs
         run: |
@@ -286,11 +299,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ needs.prepare_metadata.outputs.release_branch }}
+          ref: ${{ needs.prepare_metadata.outputs.release_sha }}
 
       - name: Restore cached remote-server tarball
         id: daemon_cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: zap-remote-server-linux-x86_64.tar.gz
           key: release-remote-server-musl-x86_64-${{ needs.prepare_metadata.outputs.release_tag }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources') }}
@@ -316,15 +329,8 @@ jobs:
         run: |
           set -euo pipefail
           rustup target add x86_64-unknown-linux-musl
-          ZIG_VERSION="0.13.0"
-          ZIG_DIR="$HOME/.local/zig-${ZIG_VERSION}"
-          if [ ! -x "${ZIG_DIR}/zig" ]; then
-            mkdir -p "${ZIG_DIR}"
-            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
-              | tar -xJ -C "${ZIG_DIR}" --strip-components=1
-          fi
-          echo "${ZIG_DIR}" >> "$GITHUB_PATH"
-          cargo install --locked cargo-zigbuild --version ^0.19
+          script/install_zig
+          cargo install --locked cargo-zigbuild --version '=0.19.8'
 
       - name: Build remote-server CLI (static musl via zigbuild)
         if: steps.daemon_cache.outputs.cache-hit != 'true'
@@ -386,7 +392,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          ref: ${{ needs.prepare_metadata.outputs.release_branch }}
+          ref: ${{ needs.prepare_metadata.outputs.release_sha }}
 
       - name: Fetch bundled remote-server tarball
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -513,7 +519,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          ref: ${{ needs.prepare_metadata.outputs.release_branch }}
+          ref: ${{ needs.prepare_metadata.outputs.release_sha }}
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -559,7 +565,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          ref: ${{ needs.prepare_metadata.outputs.release_branch }}
+          ref: ${{ needs.prepare_metadata.outputs.release_sha }}
 
       - name: Fetch bundled Linux remote-server archive
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -659,6 +665,8 @@ jobs:
       # continue-on-error: Arch toolchain breakage doesn't affect AppImage/deb release.
       - name: Build Arch package (reuse release-lto binary)
         continue-on-error: true
+        env:
+          RELEASE_TAG: ${{ needs.prepare_metadata.outputs.release_tag }}
         run: |
           set -euo pipefail
           # Create builder in the container using the host runner user's uid/gid, avoiding the cost of chowning the entire
@@ -676,7 +684,7 @@ jobs:
             -v "$PWD:/work" \
             -v "$HOME/.cargo:/cargo-home" \
             -w /work \
-            -e GIT_RELEASE_TAG="${{ needs.prepare_metadata.outputs.release_tag }}" \
+            -e GIT_RELEASE_TAG="$RELEASE_TAG" \
             -e SKIP_SETTINGS_SCHEMA=1 \
             -e HOST_UID="$HOST_UID" \
             -e HOST_GID="$HOST_GID" \

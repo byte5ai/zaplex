@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+
+"""Enforce immutable release inputs, actions, source commits, and tool downloads."""
+
+from __future__ import annotations
+
+from pathlib import Path
+import re
+import sys
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKFLOW_ROOTS = (REPO_ROOT / ".github" / "workflows", REPO_ROOT / ".github" / "actions")
+INPUT_SHELL_FILES = (
+    REPO_ROOT / ".github" / "workflows" / "zap_release.yml",
+    REPO_ROOT / ".github" / "workflows" / "test-dmg.yml",
+    REPO_ROOT / ".github" / "workflows" / "build-remote-server.yml",
+    REPO_ROOT / ".github" / "actions" / "prepare_environment" / "action.yml",
+)
+ACTION_USE = re.compile(r"^\s*uses:\s*([^\s#]+)@([^\s#]+)")
+IMMUTABLE_ACTION_REF = re.compile(r"^[0-9a-f]{40}$")
+INPUT_EXPRESSION = "${{ inputs."
+
+
+def label(path: Path) -> str:
+    return str(path.relative_to(REPO_ROOT))
+
+
+def workflow_files() -> list[Path]:
+    files: list[Path] = []
+    for root in WORKFLOW_ROOTS:
+        files.extend(root.glob("**/*.yml"))
+        files.extend(root.glob("**/*.yaml"))
+    return sorted(set(files))
+
+
+def validate_action_pins(paths: list[Path]) -> list[str]:
+    errors = []
+    for path in paths:
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            match = ACTION_USE.match(line)
+            if match is None or match.group(1).startswith("./"):
+                continue
+            if IMMUTABLE_ACTION_REF.fullmatch(match.group(2)) is None:
+                errors.append(
+                    f"{label(path)}:{line_number}: action must use a 40-character commit SHA"
+                )
+    return errors
+
+
+def direct_inputs_in_run_blocks(path: Path) -> list[str]:
+    errors = []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        if not stripped.startswith("run:"):
+            index += 1
+            continue
+
+        if INPUT_EXPRESSION in stripped:
+            errors.append(f"{label(path)}:{index + 1}: action input embedded directly in shell")
+        index += 1
+        while index < len(lines):
+            child = lines[index]
+            child_stripped = child.lstrip()
+            child_indent = len(child) - len(child_stripped)
+            if child_stripped and child_indent <= indent:
+                break
+            if INPUT_EXPRESSION in child:
+                errors.append(
+                    f"{label(path)}:{index + 1}: action input embedded directly in shell"
+                )
+            index += 1
+    return errors
+
+
+def require_order(path: Path, before: str, after: str) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    errors = []
+    if before not in text:
+        errors.append(f"{label(path)}: missing integrity check {before!r}")
+    if after not in text:
+        errors.append(f"{label(path)}: missing extraction step {after!r}")
+    if before in text and after in text and text.index(before) > text.index(after):
+        errors.append(f"{label(path)}: integrity check must precede extraction")
+    return errors
+
+
+def validate_installers() -> list[str]:
+    errors = []
+    zig = REPO_ROOT / "script" / "install_zig"
+    cargo_bundle = REPO_ROOT / "script" / "install_cargo_bundle"
+    protoc = REPO_ROOT / "script" / "windows" / "install_protoc.ps1"
+
+    required_literals = {
+        zig: (
+            "0.13.0",
+            "d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea",
+        ),
+        cargo_bundle: (
+            "ae4c76e92c08774bf54ff077b1c52e3d1cd6c16d",
+            "fae87673dba366bdad287782589ba2c06a2a151c21908d1170a4710dccf045cd",
+            "cargo install --locked --path",
+        ),
+        protoc: (
+            "25.1",
+            "b55901fc748d1679f3a803bdc2a920e1897eb02433c501b5a589ea08c4623844",
+        ),
+    }
+    for path, literals in required_literals.items():
+        text = path.read_text(encoding="utf-8")
+        for literal in literals:
+            if literal not in text:
+                errors.append(f"{label(path)}: missing pinned value {literal!r}")
+
+    errors.extend(require_order(zig, "sha256sum --check", "tar -xJf"))
+    errors.extend(require_order(cargo_bundle, "shasum -a 256 -c", "tar -xzf"))
+    errors.extend(require_order(protoc, "Get-FileHash", "Expand-Archive"))
+
+    prepare_environment = (
+        REPO_ROOT / ".github" / "actions" / "prepare_environment" / "action.yml"
+    ).read_text(encoding="utf-8")
+    for forbidden in ("choco: protoc", "winget install Google.Protobuf"):
+        if forbidden in prepare_environment:
+            errors.append(f"prepare_environment still uses mutable protoc source {forbidden!r}")
+
+    for workflow_name in ("zap_release.yml", "test-dmg.yml", "build-remote-server.yml"):
+        text = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(
+            encoding="utf-8"
+        )
+        if "script/install_zig" not in text:
+            errors.append(f".github/workflows/{workflow_name}: must use script/install_zig")
+        if "cargo-zigbuild --version '=0.19.8'" not in text:
+            errors.append(f".github/workflows/{workflow_name}: cargo-zigbuild must be exact")
+    return errors
+
+
+def validate_source_sha_contract() -> list[str]:
+    errors = []
+    release = (REPO_ROOT / ".github" / "workflows" / "zap_release.yml").read_text(
+        encoding="utf-8"
+    )
+    if "release_branch" in release:
+        errors.append("zap_release.yml: mutable release_branch output is forbidden")
+    if release.count("ref: ${{ needs.prepare_metadata.outputs.release_sha }}") != 5:
+        errors.append("zap_release.yml: every release checkout must use the resolved release SHA")
+
+    test_dmg = (REPO_ROOT / ".github" / "workflows" / "test-dmg.yml").read_text(
+        encoding="utf-8"
+    )
+    if test_dmg.count("ref: ${{ needs.readiness.outputs.source_sha }}") != 4:
+        errors.append("test-dmg.yml: every downstream checkout must use the resolved source SHA")
+    return errors
+
+
+def self_test() -> list[str]:
+    errors = []
+    if IMMUTABLE_ACTION_REF.fullmatch("v4") is not None:
+        errors.append("floating action self-test was accepted")
+    if IMMUTABLE_ACTION_REF.fullmatch("a" * 40) is None:
+        errors.append("immutable action self-test was rejected")
+    return errors
+
+
+def main() -> int:
+    if sys.argv[1:] not in ([], ["--self-test"]):
+        print("usage: script/check-release-supply-chain [--self-test]", file=sys.stderr)
+        return 2
+
+    errors = self_test() if sys.argv[1:] == ["--self-test"] else []
+    errors.extend(validate_action_pins(workflow_files()))
+    for path in INPUT_SHELL_FILES:
+        errors.extend(direct_inputs_in_run_blocks(path))
+    errors.extend(validate_installers())
+    errors.extend(validate_source_sha_contract())
+
+    if errors:
+        for error in errors:
+            print(f"release supply chain: {error}", file=sys.stderr)
+        return 1
+
+    print("release supply chain: ok")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
