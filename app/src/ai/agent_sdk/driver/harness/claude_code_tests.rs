@@ -288,6 +288,34 @@ fn prepare_claude_config_creates_config_file_without_api_suffix() {
 }
 
 #[test]
+fn claude_config_paths_keep_plexed_account_state_inside_its_root() {
+    let home = Path::new("/home/tester");
+    let account_root = home.join(".claude-high5");
+
+    let (identity, settings) =
+        claude_config_paths(home, Some(account_root.clone().into_os_string()));
+
+    assert_eq!(identity, account_root.join(".claude.json"));
+    assert_eq!(settings, account_root.join("settings.json"));
+}
+
+#[test]
+fn claude_config_paths_preserve_default_account_layout() {
+    let home = Path::new("/home/tester");
+    let default_root = home.join(".claude");
+
+    let without_override = claude_config_paths(home, None);
+    let explicit_default = claude_config_paths(home, Some(default_root.clone().into_os_string()));
+
+    let expected = (
+        home.join(".claude.json"),
+        default_root.join("settings.json"),
+    );
+    assert_eq!(without_override, expected);
+    assert_eq!(explicit_default, expected);
+}
+
+#[test]
 fn prepare_claude_config_creates_config_file_with_api_suffix() {
     let tmp = TempDir::new().unwrap();
     let claude_json_path = tmp.path().join(".claude.json");
