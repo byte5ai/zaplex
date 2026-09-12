@@ -73,7 +73,7 @@ fn test_model() -> ServerModel {
         #[cfg(unix)]
         next_pty_generation: 1,
         #[cfg(unix)]
-        safe_files: super::super::safe_file::SafeFileServer::unavailable_for_test(),
+        safe_files: super::SafeFileWorker::unavailable_for_test(),
         agent_inventory_scan_cache: std::sync::Arc::new(std::sync::Mutex::new(
             super::AgentInventoryScanCache::default(),
         )),
@@ -557,6 +557,309 @@ fn blocking_inventory_scan_does_not_starve_single_worker_io() {
     });
 }
 
+#[cfg(unix)]
+#[test]
+fn delayed_safe_file_request_does_not_block_server_model() {
+    use warpui::r#async::FutureExt as _;
+
+    warpui::App::test((), |mut app| async move {
+        let directory = tempfile::tempdir().unwrap();
+        let released =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let released_for_operation = std::sync::Arc::clone(&released);
+        let (started_tx, started_rx) = async_channel::bounded(1);
+        let mut safe_files =
+            super::super::safe_file::SafeFileServer::new_for_test(directory.path().join("journal"));
+        safe_files.set_before_handle_for_test(move |_| {
+            started_tx.try_send(()).unwrap();
+            let (lock, condition) = &*released_for_operation;
+            let mut released = lock.lock().unwrap();
+            while !*released {
+                released = condition.wait(released).unwrap();
+            }
+        });
+
+        let mut server = test_model();
+        server.safe_files = super::SafeFileWorker::from_server_for_test(safe_files);
+        let model = app.add_singleton_model(|_ctx| server);
+        let conn_id = uuid::Uuid::new_v4();
+        let (conn_tx, conn_rx) = async_channel::unbounded();
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(conn_id, conn_tx, ctx);
+            model.connection_features.insert(
+                conn_id,
+                HashSet::from([FEATURE_SAFE_FILE_TRANSACTIONS_V1.to_string()]),
+            );
+            model.handle_message(
+                conn_id,
+                ClientMessage {
+                    request_id: "delayed-safe-file".to_string(),
+                    message: Some(client_message::Message::SafeFile(
+                        super::super::proto::SafeFileRequest {
+                            operation_id: String::new(),
+                            operation: Some(
+                                super::super::proto::safe_file_request::Operation::ListRecoveries(
+                                    super::super::proto::SafeFileListRecoveries {},
+                                ),
+                            ),
+                        },
+                    )),
+                },
+                ctx,
+            );
+        });
+
+        assert!(matches!(
+            started_rx
+                .recv()
+                .with_timeout(std::time::Duration::from_secs(1))
+                .await,
+            Ok(Ok(()))
+        ));
+
+        let model_progressed = model.update(&mut app, |model, _ctx| {
+            model
+                .in_progress
+                .contains_key(&RequestId::from("delayed-safe-file".to_string()))
+        });
+        let (sentinel_tx, sentinel_rx) = async_channel::bounded(1);
+        app.background_executor()
+            .spawn(async move {
+                sentinel_tx.send(()).await.unwrap();
+            })
+            .detach();
+        let async_io_progressed = matches!(
+            sentinel_rx
+                .recv()
+                .with_timeout(std::time::Duration::from_secs(5))
+                .await,
+            Ok(Ok(()))
+        );
+
+        let (lock, condition) = &*released;
+        *lock.lock().unwrap() = true;
+        condition.notify_all();
+
+        assert!(
+            model_progressed,
+            "safe-file request blocked the server model"
+        );
+        assert!(async_io_progressed, "safe-file request blocked async I/O");
+        let response = conn_rx
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("safe-file response timed out")
+            .expect("connection closed before safe-file response");
+        assert_eq!(response.request_id, "delayed-safe-file");
+        assert!(matches!(
+            response.message,
+            Some(server_message::Message::SafeFileResponse(_))
+        ));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn initialize_waits_for_safe_file_worker_without_blocking_model() {
+    use warpui::r#async::FutureExt as _;
+
+    warpui::App::test((), |mut app| async move {
+        let directory = tempfile::tempdir().unwrap();
+        let safe_files =
+            super::super::safe_file::SafeFileServer::new_for_test(directory.path().join("journal"));
+        let released =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let released_for_worker = std::sync::Arc::clone(&released);
+        let (started_tx, started_rx) = async_channel::bounded(1);
+        let worker = super::SafeFileWorker::spawn(move || {
+            started_tx.try_send(()).unwrap();
+            let (lock, condition) = &*released_for_worker;
+            let mut released = lock.lock().unwrap();
+            while !*released {
+                released = condition.wait(released).unwrap();
+            }
+            safe_files
+        });
+
+        let mut server = test_model();
+        server.safe_files = worker;
+        let model = app.add_singleton_model(|_ctx| server);
+        let conn_id = uuid::Uuid::new_v4();
+        let (conn_tx, conn_rx) = async_channel::unbounded();
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(conn_id, conn_tx, ctx);
+            model.handle_message(
+                conn_id,
+                ClientMessage {
+                    request_id: "initialize".to_string(),
+                    message: Some(client_message::Message::Initialize(Initialize {
+                        auth_token: String::new(),
+                        features: Vec::new(),
+                    })),
+                },
+                ctx,
+            );
+        });
+
+        assert!(matches!(
+            started_rx
+                .recv()
+                .with_timeout(std::time::Duration::from_secs(5))
+                .await,
+            Ok(Ok(()))
+        ));
+        let model_progressed = model.update(&mut app, |model, _ctx| {
+            model
+                .in_progress
+                .contains_key(&RequestId::from("initialize".to_string()))
+        });
+        assert!(model_progressed, "worker startup blocked the server model");
+        assert!(conn_rx.try_recv().is_err());
+
+        let (lock, condition) = &*released;
+        *lock.lock().unwrap() = true;
+        condition.notify_all();
+
+        let response = conn_rx
+            .recv()
+            .with_timeout(std::time::Duration::from_secs(5))
+            .await
+            .expect("initialize response timed out")
+            .expect("connection closed before initialize response");
+        let Some(server_message::Message::InitializeResponse(response)) = response.message else {
+            panic!("expected initialize response");
+        };
+        assert!(response
+            .features
+            .iter()
+            .any(|feature| feature == FEATURE_SAFE_FILE_TRANSACTIONS_V1));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn safe_file_worker_preserves_receive_order_for_close_notifications() {
+    use warpui::r#async::FutureExt as _;
+
+    warpui::App::test((), |mut app| async move {
+        let directory = tempfile::tempdir().unwrap();
+        let (observed_tx, observed_rx) = async_channel::unbounded();
+        let mut safe_files =
+            super::super::safe_file::SafeFileServer::new_for_test(directory.path().join("journal"));
+        safe_files.set_before_handle_for_test(move |request| {
+            let operation = match request.operation.as_ref() {
+                Some(super::super::proto::safe_file_request::Operation::ListRecoveries(_)) => {
+                    "request"
+                }
+                Some(super::super::proto::safe_file_request::Operation::CloseHandle(_)) => "close",
+                Some(_) | None => "unexpected",
+            };
+            observed_tx.try_send(operation).unwrap();
+        });
+
+        let mut server = test_model();
+        server.safe_files = super::SafeFileWorker::from_server_for_test(safe_files);
+        let model = app.add_singleton_model(|_ctx| server);
+        let conn_id = uuid::Uuid::new_v4();
+        let (conn_tx, _conn_rx) = async_channel::unbounded();
+        model.update(&mut app, |model, ctx| {
+            model.register_connection(conn_id, conn_tx, ctx);
+            model.connection_features.insert(
+                conn_id,
+                HashSet::from([FEATURE_SAFE_FILE_TRANSACTIONS_V1.to_string()]),
+            );
+            for message in [
+                ClientMessage {
+                    request_id: "first".to_string(),
+                    message: Some(client_message::Message::SafeFile(
+                        super::super::proto::SafeFileRequest {
+                            operation_id: String::new(),
+                            operation: Some(
+                                super::super::proto::safe_file_request::Operation::ListRecoveries(
+                                    super::super::proto::SafeFileListRecoveries {},
+                                ),
+                            ),
+                        },
+                    )),
+                },
+                ClientMessage {
+                    request_id: String::new(),
+                    message: Some(client_message::Message::SafeFile(
+                        super::super::proto::SafeFileRequest {
+                            operation_id: String::new(),
+                            operation: Some(
+                                super::super::proto::safe_file_request::Operation::CloseHandle(
+                                    super::super::proto::SafeFileCloseHandle {
+                                        handle_id: "already-closed".to_string(),
+                                    },
+                                ),
+                            ),
+                        },
+                    )),
+                },
+                ClientMessage {
+                    request_id: "second".to_string(),
+                    message: Some(client_message::Message::SafeFile(
+                        super::super::proto::SafeFileRequest {
+                            operation_id: String::new(),
+                            operation: Some(
+                                super::super::proto::safe_file_request::Operation::ListRecoveries(
+                                    super::super::proto::SafeFileListRecoveries {},
+                                ),
+                            ),
+                        },
+                    )),
+                },
+            ] {
+                model.handle_message(conn_id, message, ctx);
+            }
+        });
+
+        let mut observed = Vec::new();
+        for _ in 0..3 {
+            observed.push(
+                observed_rx
+                    .recv()
+                    .with_timeout(std::time::Duration::from_secs(5))
+                    .await
+                    .expect("safe-file worker did not process queued message")
+                    .expect("safe-file observation channel closed"),
+            );
+        }
+        assert_eq!(observed, ["request", "close", "request"]);
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn safe_file_worker_marks_itself_unavailable_after_panic() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut safe_files =
+        super::super::safe_file::SafeFileServer::new_for_test(directory.path().join("journal"));
+    safe_files.set_before_handle_for_test(|_| panic!("simulated safe-file worker panic"));
+    let worker = super::SafeFileWorker::from_server_for_test(safe_files);
+    assert!(futures::executor::block_on(worker.readiness()));
+
+    let (response, _cancelled) = worker
+        .request(
+            uuid::Uuid::new_v4(),
+            super::super::proto::SafeFileRequest {
+                operation_id: String::new(),
+                operation: Some(
+                    super::super::proto::safe_file_request::Operation::ListRecoveries(
+                        super::super::proto::SafeFileListRecoveries {},
+                    ),
+                ),
+            },
+        )
+        .expect("worker should accept request before panic");
+
+    assert!(futures::executor::block_on(response).is_err());
+    assert!(!worker.is_accepting_requests());
+    assert!(!futures::executor::block_on(worker.readiness()));
+}
+
 #[test]
 fn blocking_handler_join_error_is_correlated_and_cleans_up() {
     use warpui::r#async::FutureExt as _;
@@ -812,13 +1115,12 @@ fn initial_managed_start_never_uses_a_stale_same_inode_account_route() {
 fn initialize_with_auth_token_stores_token() {
     let mut model = test_model();
 
-    model.handle_initialize(
+    model.apply_initialize(
         uuid::Uuid::nil(),
         Initialize {
             auth_token: "initial-token".to_string(),
             features: vec![],
         },
-        &request_id(),
     );
 
     assert_eq!(model.auth_token(), Some("initial-token"));
@@ -827,22 +1129,20 @@ fn initialize_with_auth_token_stores_token() {
 #[test]
 fn empty_initialize_preserves_existing_auth_token() {
     let mut model = test_model();
-    model.handle_initialize(
+    model.apply_initialize(
         uuid::Uuid::nil(),
         Initialize {
             auth_token: "initial-token".to_string(),
             features: vec![],
         },
-        &request_id(),
     );
 
-    model.handle_initialize(
+    model.apply_initialize(
         uuid::Uuid::nil(),
         Initialize {
             auth_token: String::new(),
             features: vec![],
         },
-        &request_id(),
     );
 
     assert_eq!(model.auth_token(), Some("initial-token"));
@@ -1155,13 +1455,12 @@ fn managed_fleet_negotiation_is_usable_only_on_linux_daemons() {
 #[test]
 fn authenticate_with_auth_token_replaces_auth_token() {
     let mut model = test_model();
-    model.handle_initialize(
+    model.apply_initialize(
         uuid::Uuid::nil(),
         Initialize {
             auth_token: "initial-token".to_string(),
             features: vec![],
         },
-        &request_id(),
     );
 
     model.handle_authenticate(Authenticate {
@@ -1174,13 +1473,12 @@ fn authenticate_with_auth_token_replaces_auth_token() {
 #[test]
 fn empty_authenticate_preserves_existing_auth_token() {
     let mut model = test_model();
-    model.handle_initialize(
+    model.apply_initialize(
         uuid::Uuid::nil(),
         Initialize {
             auth_token: "initial-token".to_string(),
             features: vec![],
         },
-        &request_id(),
     );
 
     model.handle_authenticate(Authenticate {

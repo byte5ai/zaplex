@@ -1,3 +1,4 @@
+use anyhow::Result;
 use async_channel::Sender;
 use futures::Future;
 use regex::Regex;
@@ -531,11 +532,13 @@ impl FileMCPWatcher {
         let _ = ctx.spawn(
             async move { parse_mcp_config_file(&config_path, provider).await },
             move |_me, parsed, ctx| {
-                ctx.emit(FileMCPWatcherEvent::ConfigParsed {
-                    root_path: root_path_for_callback,
-                    provider,
-                    servers: parsed,
-                });
+                if let Ok(servers) = parsed {
+                    ctx.emit(FileMCPWatcherEvent::ConfigParsed {
+                        root_path: root_path_for_callback,
+                        provider,
+                        servers,
+                    });
+                }
             },
         );
     }
@@ -552,12 +555,14 @@ impl FileMCPWatcher {
         let config_file_path = config_file_path.to_path_buf();
         let _ = ctx.spawn(
             async move { parse_mcp_config_file(&config_file_path, provider).await },
-            move |_, servers, ctx| {
-                ctx.emit(FileMCPWatcherEvent::ConfigParsed {
-                    root_path,
-                    provider,
-                    servers,
-                });
+            move |_, parsed, ctx| {
+                if let Ok(servers) = parsed {
+                    ctx.emit(FileMCPWatcherEvent::ConfigParsed {
+                        root_path,
+                        provider,
+                        servers,
+                    });
+                }
             },
         );
     }
@@ -610,14 +615,14 @@ fn substitute_env_vars(json_content: &str) -> Result<String, anyhow::Error> {
 
 /// Asynchronously reads and parses an MCP config file and returns parsed MCP servers.
 /// Dispatches to the appropriate parser based on `provider` rather than inferring from path.
-/// Returns an empty vec if the file doesn't exist or parsing fails.
+/// Returns an empty vec if the file doesn't exist and an error if it cannot be read or parsed.
 async fn parse_mcp_config_file(
     file_path: &Path,
     provider: MCPProvider,
-) -> Vec<ParsedTemplatableMCPServerResult> {
+) -> Result<Vec<ParsedTemplatableMCPServerResult>> {
     let file_contents = match async_fs::read_to_string(file_path).await {
         Ok(contents) => contents,
-        Err(err) if err.kind() == ErrorKind::NotFound => return vec![],
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(vec![]),
         Err(err) => {
             safe_warn!(
                 safe: (
@@ -630,7 +635,7 @@ async fn parse_mcp_config_file(
                     err
                 )
             );
-            return vec![];
+            return Err(err.into());
         }
     };
 
@@ -649,7 +654,7 @@ async fn parse_mcp_config_file(
                         err
                     )
                 );
-                return vec![];
+                return Err(err);
             }
         },
         MCPProvider::Claude | MCPProvider::Zaplex | MCPProvider::Agents => file_contents,
@@ -669,12 +674,12 @@ async fn parse_mcp_config_file(
                     err
                 )
             );
-            return vec![];
+            return Err(err);
         }
     };
 
     match ParsedTemplatableMCPServerResult::from_config_file_json(&resolved_contents) {
-        Ok(parsed_servers) => parsed_servers,
+        Ok(parsed_servers) => Ok(parsed_servers),
         Err(err) => {
             safe_warn!(
                 safe: (
@@ -687,7 +692,7 @@ async fn parse_mcp_config_file(
                     err
                 )
             );
-            vec![]
+            Err(err.into())
         }
     }
 }

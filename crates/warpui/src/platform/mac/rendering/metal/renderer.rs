@@ -975,8 +975,11 @@ impl super::super::Renderer for Renderer {
         let drawable = unsafe {
             let native_view = window.native_view();
             let layer: id = msg_send![native_view, layer];
-            let drawable: &metal::MetalDrawableRef = msg_send![layer, nextDrawable];
-            drawable
+            let drawable: Option<&metal::MetalDrawableRef> = msg_send![layer, nextDrawable];
+            drawable_for_render(drawable)
+        };
+        let Some(drawable) = drawable else {
+            return;
         };
 
         let ctx = &MetalDrawContext {
@@ -1047,3 +1050,16 @@ fn create_new_texture_atlas(atlas_size: usize, device: &metal::Device) -> metal:
     texture_descriptor.set_height(atlas_size as u64);
     device.new_texture(&texture_descriptor)
 }
+
+fn drawable_for_render(
+    drawable: Option<&metal::MetalDrawableRef>,
+) -> Option<&metal::MetalDrawableRef> {
+    if drawable.is_none() {
+        log::debug!("Metal layer did not provide a drawable; skipping frame");
+    }
+    drawable
+}
+
+#[cfg(test)]
+#[path = "renderer_tests.rs"]
+mod tests;

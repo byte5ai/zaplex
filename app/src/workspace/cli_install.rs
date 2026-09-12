@@ -1,15 +1,49 @@
+use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
+use std::process::Output;
 
 use anyhow::{anyhow, Context, Result};
 use command::blocking::Command;
 use warp_core::channel::ChannelState;
-use warp_util::path::ShellFamily;
+
+const CREATE_SYMLINK_ADMIN_SCRIPT: &str = concat!(
+    "on run argv\n",
+    "do shell script (\"/bin/ln -sf \" & quoted form of (item 1 of argv) & \" \" & quoted form of (item 2 of argv)) ",
+    "with prompt \"Zaplex needs administrator privileges to install the command in /usr/local/bin.\" ",
+    "with administrator privileges\n",
+    "end run",
+);
+
+const REMOVE_FILE_ADMIN_SCRIPT: &str = concat!(
+    "on run argv\n",
+    "do shell script (\"/bin/rm \" & quoted form of (item 1 of argv)) ",
+    "with prompt \"Zaplex needs administrator privileges to uninstall the command from /usr/local/bin.\" ",
+    "with administrator privileges\n",
+    "end run",
+);
 
 /// Compute the target path where the symlink should be installed, based on channel
 fn cli_install_target_path() -> PathBuf {
     PathBuf::from("/usr/local/bin").join(ChannelState::channel().cli_command_name())
+}
+
+fn admin_script_arguments(script: &str, paths: &[&Path]) -> Vec<OsString> {
+    let mut arguments = vec![
+        OsString::from("-e"),
+        OsString::from(script),
+        OsString::from("--"),
+    ];
+    arguments.extend(paths.iter().map(|path| path.as_os_str().to_owned()));
+    arguments
+}
+
+fn run_admin_script(script: &str, paths: &[&Path]) -> Result<Output> {
+    Command::new("osascript")
+        .args(admin_script_arguments(script, paths))
+        .output()
+        .context("Failed to execute osascript for admin privileges")
 }
 
 /// Create a symlink with elevated privileges using osascript
@@ -17,28 +51,9 @@ fn cli_install_target_path() -> PathBuf {
 /// This function uses macOS's osascript to prompt for administrator privileges
 /// and create a symlink
 fn create_symlink_with_admin(source: &Path, target: &Path) -> Result<()> {
-    let source_str = source
-        .to_str()
-        .ok_or_else(|| anyhow!("Source path contains invalid UTF-8: {source:?}"))?;
-    let target_str = target
-        .to_str()
-        .ok_or_else(|| anyhow!("Target path contains invalid UTF-8: {target:?}"))?;
-
-    let escaped_source = ShellFamily::Posix.shell_escape(source_str);
-    let escaped_target = ShellFamily::Posix.shell_escape(target_str);
-
-    // Use osascript to run the ln command with admin privileges, with a custom prompt
-    let script = format!(
-        "do shell script \"ln -sf {escaped_source} {escaped_target}\" with prompt \"Zaplex needs administrator privileges to install the command in /usr/local/bin.\" with administrator privileges"
-    );
-
     log::debug!("Creating symlink with admin privileges");
 
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-        .context("Failed to execute osascript for admin privileges")?;
+    let output = run_admin_script(CREATE_SYMLINK_ADMIN_SCRIPT, &[source, target])?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -58,23 +73,9 @@ fn create_symlink_with_admin(source: &Path, target: &Path) -> Result<()> {
 /// This function uses macOS's osascript to prompt for administrator privileges
 /// and remove a file, used for CLI uninstallation.
 fn remove_file_with_admin(target: &Path) -> Result<()> {
-    let target_str = target
-        .to_str()
-        .ok_or_else(|| anyhow!("Target path contains invalid UTF-8: {target:?}"))?;
-
-    let escaped_target = ShellFamily::Posix.shell_escape(target_str);
-
-    let script = format!(
-        "do shell script \"rm {escaped_target}\" with prompt \"Zaplex needs administrator privileges to uninstall the command from /usr/local/bin.\" with administrator privileges"
-    );
-
     log::debug!("Removing file with admin privileges");
 
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-        .context("Failed to execute osascript for admin privileges")?;
+    let output = run_admin_script(REMOVE_FILE_ADMIN_SCRIPT, &[target])?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -173,3 +174,7 @@ pub fn uninstall_cli() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "cli_install_tests.rs"]
+mod tests;

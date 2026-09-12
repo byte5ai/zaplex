@@ -43,13 +43,13 @@ void requestNotificationPermissions(void *on_completion_callback) {
     });
 }
 
-void sendNotificationWithErrorHandler(NSString *title, NSString *body, NSString *data,
-                                      void (^error_handler)(NSUInteger error_type, id error_msg),
-                                      BOOL playSound) {
+void sendNotificationWithCompletionHandler(
+    NSString *title, NSString *body, NSString *data,
+    void (^completion_handler)(BOOL sent, NSUInteger error_type, id error_msg), BOOL playSound) {
     UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
     [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings) {
       if (settings.authorizationStatus == UNAuthorizationStatusDenied) {
-          error_handler(0, @"User turned permissions off in system preferences.");
+          completion_handler(NO, 0, @"User turned permissions off in system preferences.");
       } else {
           // Create the notification content.
           // `autorelease` balances the +1 retain from `alloc`; the enclosing UserNotifications
@@ -82,19 +82,22 @@ void sendNotificationWithErrorHandler(NSString *title, NSString *body, NSString 
           [center addNotificationRequest:request
                    withCompletionHandler:^(NSError *_Nullable err) {
                      if (err != nil) {
-                         error_handler(1, err.localizedDescription);
+                         completion_handler(NO, 1, err.localizedDescription);
+                     } else {
+                         completion_handler(YES, 0, nil);
                      }
                    }];
       }
     }];
 }
 
-void sendNotification(id title, id body, id data, void *on_error_callback, BOOL playSound) {
-    sendNotificationWithErrorHandler(
+void sendNotification(id title, id body, id data, void *on_completion_callback, BOOL playSound) {
+    sendNotificationWithCompletionHandler(
         title, body, data,
-        ^(NSUInteger error_type, id error_msg) {
+        ^(BOOL sent, NSUInteger error_type, id error_msg) {
           dispatch_async(dispatch_get_main_queue(), ^{
-            warp_on_notification_send_error(error_type, error_msg, on_error_callback);
+            warp_on_notification_send_completed(sent, error_type, error_msg,
+                                                on_completion_callback);
           });
         },
         playSound);

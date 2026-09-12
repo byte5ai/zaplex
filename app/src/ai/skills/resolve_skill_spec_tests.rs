@@ -132,6 +132,51 @@ fn parse_org_from_git_url_supports_ssh_and_https() {
 }
 
 #[test]
+fn repository_org_filter_keeps_only_matching_known_orgs() {
+    let matching = PathBuf::from("/workspace/first/repo");
+    let mismatching = PathBuf::from("/workspace/second/repo");
+    let repository_orgs = HashMap::from([
+        (matching.clone(), Some("expected".to_string())),
+        (mismatching.clone(), Some("different".to_string())),
+    ]);
+
+    let filtered = filter_candidate_repo_roots_by_org(
+        "repo",
+        "expected",
+        vec![matching.clone(), mismatching],
+        &repository_orgs,
+    )
+    .expect("matching repository should remain");
+
+    assert_eq!(filtered, vec![matching]);
+}
+
+#[test]
+fn repository_org_filter_rejects_unknown_remotes() {
+    let unknown = PathBuf::from("/workspace/repo");
+    let repository_orgs = HashMap::from([(unknown.clone(), None)]);
+
+    let error =
+        filter_candidate_repo_roots_by_org("repo", "expected", vec![unknown], &repository_orgs)
+            .expect_err("fully-qualified repository must fail closed when its org is unknown");
+
+    assert!(matches!(error, ResolveSkillError::OrgMismatch { .. }));
+}
+
+#[test]
+fn repository_org_filter_rejects_roots_missing_from_snapshot() {
+    let error = filter_candidate_repo_roots_by_org(
+        "repo",
+        "expected",
+        vec![PathBuf::from("/workspace/repo")],
+        &HashMap::new(),
+    )
+    .expect_err("root not included in org lookup snapshot must fail closed");
+
+    assert!(matches!(error, ResolveSkillError::OrgMismatch { .. }));
+}
+
+#[test]
 fn resolve_with_full_path_skips_directory_precedence() -> Result<()> {
     let temp_dir = tempfile::TempDir::new().context("Failed to create temp dir")?;
     let root = temp_dir.path();

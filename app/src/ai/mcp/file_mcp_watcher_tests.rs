@@ -1,4 +1,4 @@
-use super::substitute_env_vars;
+use super::{parse_mcp_config_file, substitute_env_vars, MCPProvider};
 use std::env;
 
 fn cleanup_env_vars(vars: &[&str]) {
@@ -71,4 +71,28 @@ fn test_substitute_env_vars_missing_or_empty() {
 
     // Cleanup
     cleanup_env_vars(&["EMPTY_VAR"]);
+}
+
+#[test]
+fn invalid_config_is_not_reported_as_an_empty_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join(".mcp.json");
+    std::fs::write(&config_path, "{ incomplete").unwrap();
+
+    let result =
+        futures_lite::future::block_on(parse_mcp_config_file(&config_path, MCPProvider::Zaplex));
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn missing_config_is_an_empty_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    let result = futures_lite::future::block_on(parse_mcp_config_file(
+        &directory.path().join("missing.json"),
+        MCPProvider::Zaplex,
+    ))
+    .unwrap();
+
+    assert_eq!(result.len(), 0);
 }

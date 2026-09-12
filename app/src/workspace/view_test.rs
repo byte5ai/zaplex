@@ -3273,6 +3273,65 @@ fn unresolved_daemon_scope_never_falls_back_to_display_name() {
     ));
 }
 
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn remote_edit_working_directories_are_unique_and_private() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let first = super::remote_sftp_edit_working_dir().unwrap();
+    let second = super::remote_sftp_edit_working_dir().unwrap();
+    let first_path = first.path().to_path_buf();
+    let second_path = second.path().to_path_buf();
+
+    assert_ne!(first_path, second_path);
+    assert_eq!(
+        std::fs::metadata(&first_path).unwrap().permissions().mode() & 0o077,
+        0
+    );
+    assert_eq!(
+        std::fs::metadata(&second_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o077,
+        0
+    );
+
+    drop(first);
+    drop(second);
+    assert!(!first_path.exists());
+    assert!(!second_path.exists());
+}
+
+#[test]
+fn review_temp_files_are_private_unique_and_owned() {
+    let first_dir = super::create_review_temp_dir("repo").unwrap();
+    let second_dir = super::create_review_temp_dir("repo").unwrap();
+    let first_path = super::write_review_temp_file(&first_dir, "first").unwrap();
+    let second_path = super::write_review_temp_file(&second_dir, "second").unwrap();
+
+    assert_ne!(first_path, second_path);
+    assert_eq!(std::fs::read_to_string(&first_path).unwrap(), "first");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert_eq!(
+            std::fs::metadata(first_dir.path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o077,
+            0
+        );
+    }
+
+    drop(first_dir);
+    drop(second_dir);
+    assert!(!first_path.exists());
+    assert!(!second_path.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn adopted_pty_deduplication_is_host_scoped() {
