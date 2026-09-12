@@ -914,11 +914,10 @@ impl AIDocumentView {
             .unwrap_or_else(|| "Untitled".to_string());
 
         // Sanitize the title for use as a filename
-        let sanitized_title = safe_filename(&title);
-        let filename = if sanitized_title.is_empty() {
+        let filename = if title.trim().is_empty() {
             "Untitled.md".to_string()
         } else {
-            format!("{sanitized_title}.md")
+            format!("{}.md", safe_filename(&title))
         };
 
         // Get the default directory from the associated terminal view's pwd

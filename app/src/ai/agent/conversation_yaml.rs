@@ -4,11 +4,13 @@
 #[path = "conversation_yaml_tests.rs"]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
+use parking_lot::Mutex;
 use warp_multi_agent_api as api;
 
 use api::message::tool_call::Tool;
@@ -17,24 +19,25 @@ use api::message::Message;
 
 use super::task::helper::{SubagentExt, ToolExt};
 
-const BASE_DIR_NAME: &str = "warp_conversation_search";
+const BASE_DIR_PREFIX: &str = "warp_conversation_search-";
+static MATERIALIZED_DIRS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 
-/// Returns the base directory for conversation search temp files.
-///
-/// Uses the platform temp directory so paths are fully qualified with
-/// native separators on every OS (e.g. includes drive prefix on Windows).
-pub(crate) fn base_dir() -> PathBuf {
-    std::env::temp_dir().join(BASE_DIR_NAME)
+fn materialized_dirs() -> &'static Mutex<HashSet<PathBuf>> {
+    MATERIALIZED_DIRS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Consumes ownership of an exact conversation-search directory created by this process.
+pub(crate) fn take_materialized_dir(path: &Path) -> Option<PathBuf> {
+    materialized_dirs().lock().take(path)
 }
 
 /// Materializes a conversation's tasks into a directory of YAML files.
 ///
 /// Returns the path to the root directory, or an error string.
 pub fn materialize_tasks_to_yaml(tasks: &[api::Task]) -> Result<String, String> {
-    let base_dir = base_dir();
-    fs::create_dir_all(&base_dir).map_err(|e| format!("Failed to create base dir: {e}"))?;
-
-    let dir = tempfile::tempdir_in(&base_dir)
+    let dir = tempfile::Builder::new()
+        .prefix(BASE_DIR_PREFIX)
+        .tempdir()
         .map_err(|e| format!("Failed to create temp dir: {e}"))?
         .keep();
 
@@ -57,6 +60,7 @@ pub fn materialize_tasks_to_yaml(tasks: &[api::Task]) -> Result<String, String> 
         return Err(e);
     }
 
+    materialized_dirs().lock().insert(dir.clone());
     Ok(dir.to_string_lossy().into_owned())
 }
 

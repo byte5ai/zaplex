@@ -9,6 +9,7 @@ use std::{
     thread,
 };
 
+use diesel::{connection::SimpleConnection, ExpressionMethods, QueryDsl, RunQueryDsl};
 use warp_core::features::FeatureFlag;
 
 use crate::{
@@ -16,21 +17,22 @@ use crate::{
         AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot,
         PaneNodeSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
     },
-    cloud_object::{Owner, StoredObjectPermissions},
+    cloud_object::{ObjectIdType, Owner, StoredObjectPermissions},
     code::editor_management::CodeSource,
     notebooks::{NotebookObject, NotebookObjectModel},
-    persistence::{model::ObjectPermissions, BlockCompleted, ModelEvent},
-    server::ids::ClientId,
+    persistence::{model::ObjectPermissions, schema, BlockCompleted, ModelEvent},
+    server::ids::{ClientId, ServerId, SyncId},
     server_time::ServerTimestamp,
     tab::SelectedTabColor,
     terminal::cli_agent_sessions::{PersistedCLIAgentAccount, PersistedCLIAgentBinding},
     terminal::model::block::SerializedBlock,
     terminal::{CLIAgent, ShellLaunchData},
+    workspaces::workspace::Workspace as WorkspaceMetadata,
 };
 
 use super::{
-    decode_path, deduplicate_events, encode_path, read_sqlite_data, save_app_state, setup_database,
-    take_prewarmed_result, PrewarmState,
+    decode_path, deduplicate_events, delete_objects, encode_path, read_sqlite_data, save_app_state,
+    save_workspaces, setup_database, take_prewarmed_result, upsert_notebooks, PrewarmState,
 };
 
 #[test]
@@ -240,6 +242,118 @@ fn test_sqlite_round_trips_vertical_tabs_panel_open() {
             .collect::<Vec<_>>(),
         vec![false, true]
     );
+}
+
+#[test]
+fn test_sqlite_round_trips_execution_profile_editor_pane() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let mut window = test_terminal_window_snapshot(false);
+    let PaneNodeSnapshot::Leaf(leaf) = &mut window.tabs[0].root else {
+        panic!("test snapshot should contain a leaf");
+    };
+    leaf.contents = LeafContents::ExecutionProfileEditor;
+    let app_state = AppState {
+        windows: vec![window],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("app state should load")
+        .app_state;
+
+    assert!(matches!(
+        restored.windows[0].tabs[0].root,
+        PaneNodeSnapshot::Leaf(LeafSnapshot {
+            contents: LeafContents::ExecutionProfileEditor,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn workspace_replacement_rolls_back_after_insert_failure() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let original_uid = String::from(ServerId::from(1));
+    diesel::insert_into(schema::workspaces::table)
+        .values((
+            schema::workspaces::server_uid.eq(&original_uid),
+            schema::workspaces::name.eq("Original"),
+            schema::workspaces::is_selected.eq(false),
+        ))
+        .execute(&mut conn)
+        .expect("original workspace should save");
+    diesel::insert_into(schema::teams::table)
+        .values((
+            schema::teams::server_uid.eq(String::from(ServerId::from(3))),
+            schema::teams::name.eq("Original Team"),
+            schema::teams::billing_metadata_json.eq(None::<String>),
+        ))
+        .execute(&mut conn)
+        .expect("original team should save");
+    conn.batch_execute(
+        "CREATE TRIGGER reject_workspace_insert BEFORE INSERT ON workspaces \
+         BEGIN SELECT RAISE(ABORT, 'injected workspace insert failure'); END;",
+    )
+    .expect("failure trigger should be installed");
+    let replacement = WorkspaceMetadata::from_local_cache(
+        ServerId::from(2).into(),
+        "Replacement".to_string(),
+        None,
+    );
+
+    assert!(save_workspaces(&mut conn, vec![replacement]).is_err());
+    let cached = schema::workspaces::table
+        .select((schema::workspaces::server_uid, schema::workspaces::name))
+        .load::<(String, String)>(&mut conn)
+        .expect("workspace cache should remain readable");
+    assert_eq!(cached, vec![(original_uid, "Original".to_string())]);
+    let cached_teams = schema::teams::table
+        .select(schema::teams::name)
+        .load::<String>(&mut conn)
+        .expect("team cache should remain readable");
+    assert_eq!(cached_teams, vec!["Original Team".to_string()]);
+}
+
+#[test]
+fn missing_cloud_object_does_not_block_later_batch_deletes() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let notebook = NotebookObject::new_local(
+        NotebookObjectModel {
+            title: "Delete me".to_string(),
+            data: "content".to_string(),
+            ai_document_id: None,
+            conversation_id: None,
+        },
+        Owner::mock_current_user(),
+        None,
+        ClientId::new(),
+    );
+    let existing_id = notebook.id;
+    upsert_notebooks(&mut conn, vec![notebook]).expect("notebook should save");
+
+    delete_objects(
+        &mut conn,
+        vec![
+            (SyncId::ClientId(ClientId::new()), ObjectIdType::Notebook),
+            (existing_id, ObjectIdType::Notebook),
+        ],
+    )
+    .expect("missing objects should be idempotent");
+
+    let notebook_count = schema::notebooks::table
+        .count()
+        .get_result::<i64>(&mut conn)
+        .expect("notebook count should load");
+    assert_eq!(notebook_count, 0);
 }
 
 #[test]
