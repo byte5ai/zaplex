@@ -8,6 +8,7 @@ fn matches(input: &str) -> bool {
 fn matches_typical_password_prompt() {
     assert!(matches("user@host's password: "));
     assert!(matches("Password:"));
+    assert!(matches("Password for alice:"));
     assert!(matches("password: \r\n"));
 }
 
@@ -27,6 +28,9 @@ fn does_not_match_motd_with_password_word() {
     assert!(!matches(
         "Last login: Mon Jan 1 password rotated yesterday\n"
     ));
+    assert!(!matches("Security notice password:\n"));
+    assert!(!matches("Banner: enter password:\n"));
+    assert!(!matches("NOTICE alice@example.com's password:\n"));
 }
 
 #[test]

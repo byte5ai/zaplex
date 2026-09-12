@@ -137,6 +137,22 @@ fn bash_and_fish_hex_encoding_does_not_append_a_newline() {
 }
 
 #[test]
+fn bash_init_commands_are_hidden_from_history() {
+    let script = bundled_script("bundled/bootstrap/bash_init_shell.sh");
+    for line in script
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+    {
+        assert!(
+            line.starts_with(' '),
+            "bash init command must start with a space: {line}"
+        );
+    }
+
+    assert!(init_shell_script_for_shell(ShellType::Bash, &crate::ASSETS).starts_with(' '));
+}
+
+#[test]
 fn fish_preexec_kills_only_recorded_generator_pids_for_user_commands() {
     let fish = bundled_script("bundled/bootstrap/fish.sh");
 

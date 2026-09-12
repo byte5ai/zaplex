@@ -3,8 +3,9 @@
 //!
 //! ## Key Design Trade-offs
 //!
-//! - **8KB sliding window + strict line-end matching**: regex `(?im)(password|passphrase)[^\n]*:\s*$`
-//!   only matches at line end (avoids false positives from "password" in motd/banner) + sliding window ensures memory bound.
+//! - **8KB sliding window + strict whole-line matching**: only recognized OpenSSH, PAM, sudo,
+//!   and key-passphrase prompt forms match, avoiding banner lines that merely end in `password:`.
+//!   The sliding window keeps memory bounded.
 //!
 //! - **Shell boundary**: seeing a shell prompt permanently disarms the watcher before it considers later output,
 //!   so a post-login `sudo` prompt cannot consume the SSH password.

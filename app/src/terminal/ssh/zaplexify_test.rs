@@ -86,3 +86,34 @@ fn test_mac_zaplexification_script_size() {
         });
     });
 }
+
+#[cfg_attr(windows, ignore = "TODO(CORE-3626)")]
+#[test]
+fn zaplexify_scripts_prefer_managed_tmux_and_reject_missing_candidates() {
+    App::test(Assets, |mut app| async move {
+        initialize_app(&mut app);
+
+        app.read(|ctx| {
+            let bash_mac = zaplexify_ssh_session_command("Darwin", ShellType::Bash, ctx)
+                .expect("Darwin bash script");
+            assert!(bash_mac.contains("if _find \"$TMUX\";then"));
+
+            for (uname, script_name) in [("Darwin", "Darwin fish"), ("Linux", "Linux fish")] {
+                let fish = zaplexify_ssh_session_command(uname, ShellType::Fish, ctx)
+                    .expect("fish script");
+                let managed = fish
+                    .find(".warp/tmux/execute_tmux.sh")
+                    .expect("managed tmux check");
+                let system = fish.find("else if _is tmux").expect("system tmux fallback");
+                assert!(
+                    managed < system,
+                    "{script_name} must prefer the managed tmux binary"
+                );
+            }
+
+            let fish_mac = zaplexify_ssh_session_command("Darwin", ShellType::Fish, ctx)
+                .expect("Darwin fish script");
+            assert!(fish_mac.contains("if _is $TMUX"));
+        });
+    });
+}
