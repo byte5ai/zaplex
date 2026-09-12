@@ -651,9 +651,6 @@ pub enum FeatureFlag {
     /// Enables commit, push, and create-PR actions in the code review panel.
     GitOperationsInCodeReview,
 
-    /// Gates the remote control chip and `/remote-control` slash command in the CLI agent footer.
-    HOARemoteControl,
-
     /// Trims trailing blank rows from CLI agent block output so unused vertical
     /// space is not rendered while the agent is running.
     TrimTrailingBlankLines,
@@ -781,7 +778,6 @@ impl FeatureFlag {
             FeatureFlag::ForceLogin
                 | FeatureFlag::AvatarInTabBar
                 | FeatureFlag::AgentModeComputerUse
-                | FeatureFlag::HOARemoteControl
         ) {
             return false;
         }

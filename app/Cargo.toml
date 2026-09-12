@@ -561,11 +561,11 @@ default = [
     "transfer_control_tool",
     "hoa_notifications",
     "open_code_notifications",
+    "gemini_notifications",
     "cli_agent_rich_input",
     "vertical_tabs",
     "tab_configs",
     "hoa_onboarding_flow",
-    "hoa_remote_control",
     "codex_notifications",
     "trim_trailing_blank_lines",
     "open_warp_new_settings_modes",
@@ -822,12 +822,12 @@ tab_configs = []
 agent_harness = []
 hoa_notifications = []
 open_code_notifications = []
+gemini_notifications = []
 transfer_control_tool = []
 configurable_toolbar = []
 zaplexify_footer = []
 hoa_onboarding_flow = []
 git_operations_in_code_review = []
-hoa_remote_control = []
 codex_notifications = []
 configurable_context_window = []
 
