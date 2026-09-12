@@ -1,18 +1,22 @@
 #!/bin/bash
 
-# Script to install cargo-bundle for CI. This is used as an optimization to speed up CI instead of having to install and
-# compile cargo-bundle on each CI workflow run.
+# Install the exact cargo-bundle revision used by the macOS packaging scripts from a
+# digest-verified source archive.
 
 # This script should be platform-agnostic (eg. no unix-only references like /dev/null).
 
-cargo_location=$(dirname "$(which cargo)")
-if test -f "$cargo_location/cargo-bundle"; then
-    echo "cargo-bundle already exists, not installing."
-else
-    set -e
-    curl https://storage.googleapis.com/cached_crates/cargo-bundle.zip --output cargo-bundle.zip
-    unzip -o cargo-bundle.zip
-    chmod 755 cargo-bundle
-    cp cargo-bundle "$cargo_location"
-    echo "Successfully moved cached cargo-bundle to location $cargo_location"
-fi
+set -euo pipefail
+
+CARGO_BUNDLE_REVISION="ae4c76e92c08774bf54ff077b1c52e3d1cd6c16d"
+CARGO_BUNDLE_SHA256="fae87673dba366bdad287782589ba2c06a2a151c21908d1170a4710dccf045cd"
+CARGO_BUNDLE_URL="https://github.com/burtonageo/cargo-bundle/archive/${CARGO_BUNDLE_REVISION}.tar.gz"
+
+install_root="$(mktemp -d)"
+trap 'rm -rf "$install_root"' EXIT
+archive_path="${install_root}/cargo-bundle.tar.gz"
+source_path="${install_root}/cargo-bundle-${CARGO_BUNDLE_REVISION}"
+
+curl --proto '=https' --tlsv1.2 -fsSL "$CARGO_BUNDLE_URL" --output "$archive_path"
+echo "$CARGO_BUNDLE_SHA256  $archive_path" | shasum -a 256 -c -
+tar -xzf "$archive_path" -C "$install_root"
+cargo install --locked --path "$source_path"
