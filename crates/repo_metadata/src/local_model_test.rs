@@ -1256,4 +1256,29 @@ Thumbs.db
             assert!(debug_str.contains("StandardizedPath"));
         });
     }
+
+    #[cfg(feature = "local_fs")]
+    #[test]
+    fn index_lazy_loaded_home_dir_succeeds_without_registering_a_watcher() {
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            let home_path = StandardizedPath::from_local_canonicalized(&home).unwrap();
+            let indexed_path = home_path.clone();
+
+            model_handle.update(&mut app, |model, ctx| {
+                let result = model.index_lazy_loaded_path(&indexed_path, ctx);
+                assert!(
+                    result.is_ok(),
+                    "home directory should be indexable: {result:?}"
+                );
+            });
+            model_handle.read(&app, |model, _ctx| {
+                assert!(model.is_lazy_loaded_path(&home_path));
+                assert!(model.has_repository(&home_path));
+            });
+        });
+    }
 }
