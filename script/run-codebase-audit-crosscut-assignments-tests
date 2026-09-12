@@ -1,0 +1,425 @@
+#!/usr/bin/env python3
+
+"""Focused tests for the immutable Claude crosscut runner."""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import textwrap
+import unittest
+from unittest import mock
+
+
+SCRIPT = Path(__file__).resolve().parent / "run-codebase-audit-crosscut-assignments"
+LOADER = importlib.machinery.SourceFileLoader("codebase_audit_crosscut_runner", str(SCRIPT))
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
+assert SPEC is not None
+RUNNER = importlib.util.module_from_spec(SPEC)
+sys.modules[LOADER.name] = RUNNER
+LOADER.exec_module(RUNNER)
+
+
+STUB = r'''#!/usr/bin/env python3
+import fcntl
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+state_directory = Path(os.environ["STUB_STATE_DIRECTORY"])
+state_path = state_directory / "state.json"
+lock_path = state_directory / "state.lock"
+prompt = sys.argv[sys.argv.index("-p") + 1]
+review_input = json.loads(Path(".codebase-audit-review.json").read_text())
+crosscut_id = review_input["assignment"]["crosscut_id"]
+
+with lock_path.open("a+") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    state = json.loads(state_path.read_text())
+    state["active"] += 1
+    state["maximum"] = max(state["maximum"], state["active"])
+    state["calls"].append(crosscut_id)
+    call_count = state["calls"].count(crosscut_id)
+    state_path.write_text(json.dumps(state, sort_keys=True))
+    fcntl.flock(lock, fcntl.LOCK_UN)
+
+record = {
+    "argv": sys.argv[1:],
+    "config_dir": os.environ.get("CLAUDE_CONFIG_DIR"),
+    "prompt": prompt,
+    "review_input": review_input,
+}
+(state_directory / f"{crosscut_id}-{call_count}.json").write_text(
+    json.dumps(record, sort_keys=True)
+)
+
+behavior = os.environ.get("STUB_BEHAVIOR", "success")
+if behavior == "timeout":
+    time.sleep(10)
+else:
+    time.sleep(0.04)
+
+with lock_path.open("a+") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    state = json.loads(state_path.read_text())
+    state["active"] -= 1
+    state_path.write_text(json.dumps(state, sort_keys=True))
+    fcntl.flock(lock, fcntl.LOCK_UN)
+
+if behavior == "nonzero":
+    raise SystemExit(7)
+
+target_paths = review_input["assignment"]["target_paths"]
+findings = []
+if target_paths:
+    findings.append({
+        "title": f"Finding for {crosscut_id}",
+        "severity": "medium",
+        "confidence": "high",
+        "category": "correctness",
+        "file": target_paths[0],
+        "line": 1,
+        "evidence": "The first line demonstrates the failure path.",
+        "impact": "The operation can return the wrong result.",
+        "recommendation": "Handle the failing branch explicitly.",
+    })
+review = {
+    "reviewer": "claude/opus",
+    "summary": f"Reviewed {crosscut_id}.",
+    "findings": findings,
+}
+if behavior == "invalid-first" and call_count == 1:
+    review.pop("summary")
+print(json.dumps({"type": "result", "subtype": "success", "structured_output": review}))
+'''
+
+
+class CrosscutRunnerTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="zaplex-crosscut-runner-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.file_bytes = b"fn reviewed() {}\n"
+        self.file_hash = hashlib.sha256(self.file_bytes).hexdigest()
+        self.assignment_hash = "a" * 64
+        self.assignments, self.contract = self.make_contract()
+        self.assignment_bytes = RUNNER.canonical_json(self.assignments)
+        self.evidence_bytes = RUNNER.canonical_json(self.contract["evidence"])
+        self.assignments_path = self.root / "assignments.json"
+        self.assignments_path.write_bytes(self.assignment_bytes)
+        self.evidence_dir = self.root / "evidence"
+        self.evidence_dir.mkdir()
+        self.config_dir = self.root / "claude-high5"
+        self.config_dir.mkdir()
+        self.state_dir = self.root / "state"
+        self.state_dir.mkdir()
+        (self.state_dir / "state.json").write_text(
+            json.dumps({"active": 0, "maximum": 0, "calls": []})
+        )
+        self.stub = self.root / "claude"
+        self.stub.write_text(STUB)
+        self.stub.chmod(0o755)
+
+    def make_contract(self):
+        ids = (
+            "unsafe-app-and-zaplex",
+            "unsafe-framework",
+            "process-spawning",
+            "terminal-model-lock",
+            "async-blocking",
+            "secrets-and-logging",
+            "path-and-transfer-safety",
+            "ssh-bootstrap-injection",
+            "persistence-and-migrations",
+            "ci-release-security",
+            "upstream-drift",
+            "error-swallowing-and-cancellation",
+            "feature-flags-i18n-dead-code",
+        )
+        source_hashes = {}
+        evidence_records = []
+        entries = []
+        definitions = []
+        target_blob = {
+            "blob_oid": "b" * 40,
+            "blob_sha256": self.file_hash,
+            "path": "src/reviewed.rs",
+        }
+        for index, crosscut_id in enumerate(ids):
+            source = f"evidence for {crosscut_id}\n"
+            source_hash = hashlib.sha256(source.encode()).hexdigest()
+            source_hashes[source_hash] = {"sha256": source_hash, "text": source}
+            evidence_id = hashlib.sha256(crosscut_id.encode()).hexdigest()
+            evidence_records.append(
+                {
+                    "crosscut_id": crosscut_id,
+                    "evidence_id": evidence_id,
+                    "source_sha256": source_hash,
+                }
+            )
+            definitions.append(
+                {
+                    "id": crosscut_id,
+                    "description": f"Review {crosscut_id}",
+                    "source_type": (
+                        "upstream-commit-series"
+                        if crosscut_id == "upstream-drift"
+                        else "target-tree"
+                    ),
+                }
+            )
+            blobs = [] if crosscut_id == "upstream-drift" else [target_blob]
+            entry = {
+                "assignment_id": hashlib.sha256(f"assignment-{index}".encode()).hexdigest(),
+                "crosscut_id": crosscut_id,
+                "definition_sha256": "d" * 64,
+                "definitions_sha256": "e" * 64,
+                "estimated_input_bytes": len(source),
+                "evidence_ids": [evidence_id],
+                "evidence_sha256": "f" * 64,
+                "lens_count": 3,
+                "lenses": [
+                    "correctness-security",
+                    "failure-path-lifecycle",
+                    "regression-upstream",
+                ],
+                "mandatory_selector_sha256s": [],
+                "max_attempts": 3,
+                "model_invocations": 1,
+                "source_sha": "1" * 40,
+                "source_sha256s": [source_hash],
+                "target_blobs": blobs,
+                "upstream_commit_oids": [],
+            }
+            entries.append(entry)
+        buckets = []
+        for index in range(3):
+            assigned = entries[index::3]
+            buckets.append(
+                {
+                    "id": f"bucket-{index + 1}",
+                    "entries": assigned,
+                    "crosscut_count": len(assigned),
+                    "estimated_input_bytes": sum(
+                        item["estimated_input_bytes"] for item in assigned
+                    ),
+                    "assignment_sha256": str(index + 1) * 64,
+                }
+            )
+        assignments = {
+            "schema_version": 1,
+            "generator_version": 1,
+            "assignment_sha256": self.assignment_hash,
+            "source_contract": {"target_sha": "1" * 40},
+            "execution_contract": {},
+            "bucket_count": 3,
+            "coverage": {},
+            "buckets": buckets,
+        }
+        evidence = {
+            "sources": sorted(source_hashes.values(), key=lambda value: value["sha256"]),
+            "evidence": evidence_records,
+            "target_blobs": [
+                {
+                    **target_blob,
+                    "line_count": 1,
+                }
+            ],
+            "upstream_commit_series": [],
+        }
+        contract = {
+            "definitions": definitions,
+            "evidence": evidence,
+        }
+        return assignments, contract
+
+    def environment(self, behavior="success"):
+        return mock.patch.dict(
+            os.environ,
+            {
+                "STUB_STATE_DIRECTORY": str(self.state_dir),
+                "STUB_BEHAVIOR": behavior,
+            },
+        )
+
+    def invoke(self, run_dir, *extra):
+        arguments = [
+            "--repo",
+            str(self.repo),
+            "--evidence-dir",
+            str(self.evidence_dir),
+            "--assignments",
+            str(self.assignments_path),
+            "--run-dir",
+            str(run_dir),
+            "--claude-cli",
+            str(self.stub),
+            "--claude-config-dir",
+            str(self.config_dir),
+            "--max-workers",
+            "3",
+            *extra,
+        ]
+        with mock.patch.object(
+            RUNNER,
+            "load_and_validate_inputs",
+            return_value=(
+                self.assignments,
+                self.assignment_bytes,
+                self.contract,
+                self.evidence_bytes,
+            ),
+        ), mock.patch.object(
+            RUNNER,
+            "load_target_files",
+            return_value=(
+                {"src/reviewed.rs": self.file_bytes},
+                {"src/reviewed.rs": 1},
+                set(),
+            ),
+        ):
+            return RUNNER.main(arguments)
+
+    def read_state(self):
+        return json.loads((self.state_dir / "state.json").read_text())
+
+    def test_runs_exactly_thirteen_restricted_leaf_reviews_and_resumes(self):
+        run_dir = self.root / "run"
+        with self.environment():
+            self.assertEqual(self.invoke(run_dir), 0)
+        state = self.read_state()
+        self.assertEqual(len(state["calls"]), 13)
+        self.assertEqual(len(set(state["calls"])), 13)
+        self.assertGreaterEqual(state["maximum"], 2)
+        self.assertLessEqual(state["maximum"], 3)
+        record = json.loads(
+            (self.state_dir / "unsafe-app-and-zaplex-1.json").read_text()
+        )
+        self.assertEqual(record["config_dir"], str(self.config_dir))
+        self.assertTrue(record["prompt"].startswith(RUNNER.LEAF_MARKER))
+        self.assertEqual(record["argv"][record["argv"].index("--tools") + 1], "Read,Glob,Grep")
+        self.assertEqual(
+            record["argv"][record["argv"].index("--disallowed-tools") + 1],
+            "Agent,Task,Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch",
+        )
+        self.assertIn("--disable-slash-commands", record["argv"])
+        self.assertIn("--no-session-persistence", record["argv"])
+        self.assertEqual(
+            record["argv"][record["argv"].index("--permission-mode") + 1], "plan"
+        )
+        summary = json.loads((run_dir / "run.json").read_text())
+        self.assertTrue(summary["complete"])
+        self.assertEqual(summary["completed_crosscuts"], 13)
+        self.assertEqual(summary["finding_count"], 12)
+        with self.environment():
+            self.assertEqual(self.invoke(run_dir, "--resume"), 0)
+        self.assertEqual(len(self.read_state()["calls"]), 13)
+
+    def test_invalid_structured_response_gets_only_one_retry(self):
+        run_dir = self.root / "retry-run"
+        with self.environment("invalid-first"):
+            self.assertEqual(self.invoke(run_dir, "--max-attempts", "2"), 0)
+        state = self.read_state()
+        self.assertEqual(len(state["calls"]), 26)
+        self.assertTrue(
+            (run_dir / "logs" / "unsafe-app-and-zaplex.attempt-1.error.txt").is_file()
+        )
+        result = json.loads(
+            (run_dir / "results" / "unsafe-app-and-zaplex.json").read_text()
+        )
+        self.assertEqual(result["attempt"], 2)
+
+    def test_timeout_is_terminated_without_retry(self):
+        sleeper = self.root / "sleeper"
+        sleeper.write_text("#!/bin/sh\nsleep 10\n")
+        sleeper.chmod(0o755)
+        with self.assertRaises(RUNNER.RunnerTimeout):
+            RUNNER.communicate_with_timeout(
+                [str(sleeper)], self.root, os.environ.copy(), 1
+            )
+
+    def test_rejects_finding_outside_crosscut_snapshot(self):
+        task = RUNNER.build_tasks(
+            self.assignments,
+            self.contract,
+            {"src/reviewed.rs": self.file_bytes},
+            {"src/reviewed.rs": 1},
+        )[0]
+        response = {
+            "reviewer": "claude/opus",
+            "summary": "Reviewed the immutable scope.",
+            "findings": [
+                {
+                    "title": "Outside finding",
+                    "severity": "high",
+                    "confidence": "high",
+                    "category": "correctness",
+                    "file": "src/outside.rs",
+                    "line": 1,
+                    "evidence": "Outside the assigned target files.",
+                    "impact": "Would violate immutable coverage.",
+                    "recommendation": "Reject the response.",
+                }
+            ],
+        }
+        with self.assertRaisesRegex(RUNNER.RunnerError, "outside its crosscut"):
+            RUNNER.validate_review(response, task)
+
+    def test_rejects_sensitive_paths_and_secret_like_content(self):
+        with self.assertRaisesRegex(RUNNER.RunnerError, "sensitive path"):
+            RUNNER.reject_sensitive_export("config/.env.production", b"VALUE=fixture\n")
+        private_key = b"-----BEGIN " + b"OPENSSH PRIVATE KEY-----\nfixture\n"
+        with self.assertRaisesRegex(RUNNER.RunnerError, "secret-like content"):
+            RUNNER.reject_sensitive_export("fixtures/key.txt", private_key)
+
+    def test_cli_rejects_unsafe_parallelism_and_retry_budget(self):
+        with mock.patch("builtins.print"):
+            self.assertEqual(
+                RUNNER.main(
+                    [
+                        "--repo",
+                        str(self.repo),
+                        "--evidence-dir",
+                        str(self.evidence_dir),
+                        "--assignments",
+                        str(self.assignments_path),
+                        "--run-dir",
+                        str(self.root / "unused"),
+                        "--max-workers",
+                        "4",
+                    ]
+                ),
+                1,
+            )
+            self.assertEqual(
+                RUNNER.main(
+                    [
+                        "--repo",
+                        str(self.repo),
+                        "--evidence-dir",
+                        str(self.evidence_dir),
+                        "--assignments",
+                        str(self.assignments_path),
+                        "--run-dir",
+                        str(self.root / "unused"),
+                        "--max-attempts",
+                        "3",
+                    ]
+                ),
+                1,
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -11,6 +11,8 @@ use crate::ai::subscription_agent::{
 use std::os::unix::fs::PermissionsExt as _;
 #[cfg(unix)]
 use std::time::Duration;
+#[cfg(unix)]
+use warpui::r#async::FutureExt as _;
 
 #[cfg(unix)]
 fn write_executable(path: &std::path::Path, script: &str) {
@@ -696,6 +698,62 @@ cat >/dev/null
         let thread = std::fs::read_to_string(observed_thread).unwrap();
         assert!(thread.contains("\"method\":\"thread/start\""));
         assert!(thread.contains(working_directory.to_str().unwrap()));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+#[serial_test::serial]
+fn codex_turn_start_error_is_delivered_without_waiting_for_another_frame() {
+    futures_lite::future::block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-codex-error");
+        write_executable(
+            &executable,
+            r#"
+IFS= read -r initialize
+printf '%s\n' '{"id":1,"result":{}}'
+IFS= read -r initialized
+IFS= read -r account
+printf '%s\n' '{"id":2,"result":{"account":{"type":"chatgpt","email":"developer@example.com","planType":"plus"}}}'
+IFS= read -r rate_limits
+printf '%s\n' '{"id":3,"result":{"accountId":"codex-account-42","rateLimits":{}}}'
+IFS= read -r models
+printf '%s\n' '{"id":4,"result":{"data":[{"id":"gpt-test","displayName":"Test","isDefault":true,"supportedReasoningEfforts":[]}],"nextCursor":null}}'
+IFS= read -r thread
+printf '%s\n' '{"id":5,"result":{"thread":{"id":"codex-thread-error"}}}'
+IFS= read -r turn
+printf '%s\n' '{"id":6,"error":{"code":-32000,"message":"quota exhausted"}}'
+cat >/dev/null
+"#,
+        );
+        let target = subscription_target(
+            SubscriptionAgent::Codex,
+            executable,
+            directory.path().to_path_buf(),
+            directory.path().join("account"),
+        );
+        let mut session = SubscriptionSession::open(target, None, ProcessLocation::Local)
+            .await
+            .unwrap();
+        session.send_prompt("Run").await.unwrap();
+
+        let event = session
+            .next_event()
+            .with_timeout(Duration::from_millis(250))
+            .await
+            .expect("Codex error must be delivered without another app-server frame")
+            .unwrap();
+
+        assert_eq!(
+            event,
+            Some(SubscriptionEvent::Error {
+                message: "quota exhausted".to_string(),
+                recoverable: true,
+                session: None,
+            })
+        );
+        session.end().await.unwrap();
     });
 }
 
