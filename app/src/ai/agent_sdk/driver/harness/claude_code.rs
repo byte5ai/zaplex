@@ -364,20 +364,27 @@ impl HarnessRunner for ClaudeHarnessRunner {
 fn prepare_claude_environment_config(working_dir: &Path) -> Result<()> {
     let home_dir =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
-    let claude_json_path = home_dir.join(CLAUDE_JSON_FILE_NAME);
-    let claude_settings_path = claude_config_dir()?.join(CLAUDE_SETTINGS_FILE_NAME);
+    let (claude_json_path, claude_settings_path) =
+        claude_config_paths(&home_dir, std::env::var_os("CLAUDE_CONFIG_DIR"));
     prepare_claude_config(&claude_json_path, working_dir, None)?;
     prepare_claude_settings(&claude_settings_path)?;
     Ok(())
 }
 
-fn claude_config_dir() -> Result<PathBuf> {
-    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
-        return Ok(PathBuf::from(dir));
-    }
-    dirs::home_dir()
-        .map(|h| h.join(".claude"))
-        .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))
+fn claude_config_paths(
+    home_dir: &Path,
+    configured_dir: Option<std::ffi::OsString>,
+) -> (PathBuf, PathBuf) {
+    let default_config_dir = home_dir.join(".claude");
+    let config_dir = configured_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_config_dir.clone());
+    let identity_path = if config_dir == default_config_dir {
+        home_dir.join(CLAUDE_JSON_FILE_NAME)
+    } else {
+        config_dir.join(CLAUDE_JSON_FILE_NAME)
+    };
+    (identity_path, config_dir.join(CLAUDE_SETTINGS_FILE_NAME))
 }
 
 fn prepare_claude_config(
