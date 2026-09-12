@@ -24,7 +24,8 @@ pub use skill_utils::{
 mod resolve_skill_spec;
 #[cfg(not(target_family = "wasm"))]
 pub use resolve_skill_spec::{
-    clone_repo_for_skill, resolve_skill_spec, ResolveSkillError, ResolvedSkill,
+    clone_repo_for_skill, repository_orgs_for_skill_roots, resolve_skill_spec,
+    snapshot_skill_resolution, ResolveSkillError, ResolvedSkill, SkillResolutionSnapshot,
 };
 
 cfg_if::cfg_if! {
