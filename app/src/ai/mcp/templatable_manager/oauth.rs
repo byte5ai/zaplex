@@ -558,6 +558,13 @@ impl TemplatableMCPServerManager {
         installation_uuid: Uuid,
         app: &mut warpui::AppContext,
     ) {
+        let file_based_hash =
+            { FileBasedMCPManager::as_ref(app).get_hash_by_uuid(installation_uuid) };
+        if let Some(hash) = file_based_hash {
+            self.purge_file_based_server_credentials(&[hash], app);
+            return;
+        }
+
         if let Some(template_uuid) = self.get_template_uuid(installation_uuid) {
             self.server_credentials.remove(&template_uuid);
             write_to_secure_storage(
