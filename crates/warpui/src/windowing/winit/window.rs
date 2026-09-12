@@ -1567,6 +1567,15 @@ fn create_window(
                     log::warn!("Couldn't retrieve system caption button bounds: {err:?}");
                 }
             };
+
+            // Post-creation operations can reset DWMWA_SYSTEMBACKDROP_TYPE to its Windows
+            // default. Reapply the requested value on the live window so transparent content
+            // does not expose a light system underpaint.
+            window.set_system_backdrop(if window_options.background_blur_texture {
+                BackdropType::TransientWindow
+            } else {
+                BackdropType::None
+            });
         }
     }
 

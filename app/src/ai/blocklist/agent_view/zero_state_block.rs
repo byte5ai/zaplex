@@ -722,6 +722,17 @@ struct RecentConversationProps<'a> {
     state_handles: &'a StateHandles,
 }
 
+fn format_recent_conversation_activity(
+    last_updated: chrono::DateTime<chrono::Local>,
+    never_label: &str,
+) -> String {
+    if last_updated.timestamp() <= 0 {
+        never_label.to_owned()
+    } else {
+        format_approx_duration_from_now_utc(last_updated.to_utc())
+    }
+}
+
 fn render_recent_conversations_section(
     props: RecentConversationProps<'_>,
     app: &AppContext,
@@ -826,7 +837,10 @@ fn render_recent_conversations_section(
                         .with_margin_right(8.)
                         .finish(),
                         Text::new_inline(
-                            format_approx_duration_from_now_utc(last_updated.to_utc()),
+                            format_recent_conversation_activity(
+                                last_updated,
+                                &crate::t!("common-never"),
+                            ),
                             appearance.ui_font_family(),
                             appearance.monospace_font_size() - 1.,
                         )

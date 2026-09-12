@@ -429,6 +429,8 @@ pub struct SshManagerPanel {
     session_row_states: HashMap<String, MouseStateHandle>,
     /// Fixed-width icon actions for existing tmux/byobu sessions.
     multiplexer_open_actions: HashMap<String, CompactRowAction>,
+    /// Shared scroll position for the add-host block and saved host tree.
+    content_scroll_state: ClippedScrollStateHandle,
     tailscale_discovery_in_flight: bool,
     command_factory: Arc<dyn WorkspaceCommandFactory>,
 }
@@ -516,6 +518,7 @@ impl SshManagerPanel {
             sessions_error: HashMap::new(),
             session_row_states: HashMap::new(),
             multiplexer_open_actions: HashMap::new(),
+            content_scroll_state: ClippedScrollStateHandle::default(),
             tailscale_discovery_in_flight: false,
             command_factory,
         };
@@ -2818,7 +2821,7 @@ impl SshManagerPanel {
         if let Some(icon_el) = icon_el {
             row_flex = row_flex.with_child(icon_el);
         }
-        row_flex = row_flex.with_child(label_or_editor);
+        row_flex = row_flex.with_child(Shrinkable::new(1.0, label_or_editor).finish());
         // Lightning mark: this host opens as a Zaplexify persistent session
         // (survives disconnects). The icon-font mark (#107) is the at-a-glance
         // signal in the host list — quiet, muted, body-sized, not a shout.
@@ -3368,17 +3371,30 @@ impl View for SshManagerPanel {
             .with_padding_right(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
             .finish();
 
-        // Let the tree fill the remaining vertical space — so the root DropTarget covers down to the panel bottom,
-        // and dragging into the blank area below the tree can still land at root (`SshDropData{parent_id:None}`).
-        let tree_filled = warpui::elements::Shrinkable::new(1.0, tree).finish();
+        let root_content = Flex::column()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(candidates_section)
+            .with_child(tree)
+            .finish();
+
+        let scrollable_content = ClippedScrollable::vertical_centered(
+            self.content_scroll_state.clone(),
+            root_content,
+            ScrollbarWidth::Custom(4.0),
+            appearance.theme().nonactive_ui_detail().into(),
+            appearance.theme().active_ui_detail().into(),
+            ElementFill::None,
+        )
+        .with_overlayed_scrollbar()
+        .finish();
 
         let panel_content = Container::new(
             Flex::column()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .with_child(toolbar)
-                .with_child(candidates_section)
-                .with_child(tree_filled)
+                .with_child(Shrinkable::new(1.0, scrollable_content).finish())
                 .finish(),
         )
         .finish();
