@@ -1,0 +1,1138 @@
+#!/usr/bin/env python3
+
+"""Run immutable codebase-audit crosscuts with a read-only Claude reviewer."""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import copy
+from dataclasses import dataclass
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+from typing import Any
+
+
+SCHEMA_VERSION = 1
+RUNNER_VERSION = 1
+DEFAULT_MODEL = "opus"
+DEFAULT_EFFORT = "high"
+DEFAULT_MAX_WORKERS = 3
+DEFAULT_MAX_ATTEMPTS = 2
+LEAF_MARKER = "MULTIMODEL_REVIEW_LEAF_V1"
+SEVERITIES = {"critical", "high", "medium", "low", "info"}
+CONFIDENCES = {"high", "medium", "low"}
+SENSITIVE_BASENAMES = {
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    "auth.json",
+    "credentials.json",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_rsa",
+}
+SENSITIVE_DIRECTORIES = {".aws", ".gnupg", ".ssh"}
+SENSITIVE_SUFFIXES = {".jks", ".key", ".keystore", ".mobileprovision", ".p12", ".pem", ".pfx"}
+FINDING_KEYS = {
+    "title",
+    "severity",
+    "confidence",
+    "category",
+    "file",
+    "line",
+    "evidence",
+    "impact",
+    "recommendation",
+}
+REVIEW_KEYS = {"reviewer", "summary", "findings"}
+RESULT_KEYS = {
+    "schema_version",
+    "runner_version",
+    "assignment_sha256",
+    "assignment_id",
+    "crosscut_id",
+    "provider",
+    "model",
+    "effort",
+    "attempt",
+    "prompt_sha256",
+    "review_input_sha256",
+    "schema_sha256",
+    "stdout_sha256",
+    "stderr_sha256",
+    "response_sha256",
+    "response",
+}
+
+
+class RunnerError(RuntimeError):
+    """Raised when an immutable crosscut run cannot be accepted."""
+
+
+class RunnerTimeout(RunnerError):
+    """Raised when a reviewer invocation exceeds its fixed time limit."""
+
+
+@dataclass(frozen=True)
+class Task:
+    bucket_id: str
+    position: int
+    entry: dict[str, Any]
+    definition: dict[str, Any]
+    evidence_summary: dict[str, Any]
+    upstream_commits: list[dict[str, Any]]
+    upstream_patches: list[dict[str, str]]
+    files: dict[str, bytes]
+    line_counts: dict[str, int]
+    excluded_sensitive_paths: list[str]
+
+
+@dataclass(frozen=True)
+class TaskResult:
+    bucket_id: str
+    position: int
+    document: dict[str, Any]
+
+
+def canonical_json(value: Any) -> bytes:
+    try:
+        encoded = json.dumps(
+            value,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise RunnerError(f"value is not canonical JSON: {error}") from error
+    return (encoded + "\n").encode("utf-8")
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def reject_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def decode_json(raw: bytes, label: str) -> Any:
+    try:
+        return json.loads(
+            raw,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise RunnerError(f"invalid {label} JSON: {error}") from error
+
+
+def load_canonical_json(path: Path, label: str) -> tuple[Any, bytes]:
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        raise RunnerError(f"cannot read {label} {path}: {error}") from error
+    value = decode_json(raw, label)
+    if canonical_json(value) != raw:
+        raise RunnerError(f"{label} is not canonical JSON")
+    return value, raw
+
+
+def require_exact_keys(value: Any, expected: set[str], label: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != expected:
+        raise RunnerError(f"{label} shape is invalid")
+    return value
+
+
+def require_text(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip() or "\0" in value:
+        raise RunnerError(f"{label} must be non-empty text")
+    return value
+
+
+def require_plain_int(value: Any, label: str, minimum: int = 0) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        raise RunnerError(f"{label} must be an integer >= {minimum}")
+    return value
+
+
+def require_hash(value: Any, label: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise RunnerError(f"{label} must be a canonical SHA-256")
+    return value
+
+
+def require_path(value: Any, label: str) -> str:
+    value = require_text(value, label)
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or str(path) != value
+        or any(part in ("", ".", "..") for part in path.parts)
+        or any(part.casefold() == ".git" for part in path.parts)
+    ):
+        raise RunnerError(f"{label} must be a normalized repository-relative path")
+    return value
+
+
+def sensitive_export_reason(path: str, contents: bytes) -> str | None:
+    normalized = PurePosixPath(require_path(path, "export path"))
+    lowered_parts = tuple(part.casefold() for part in normalized.parts)
+    basename = lowered_parts[-1]
+    if (
+        basename == ".env"
+        or basename.startswith(".env.")
+        or basename in SENSITIVE_BASENAMES
+        or any(part in SENSITIVE_DIRECTORIES for part in lowered_parts)
+        or any(basename.endswith(suffix) for suffix in SENSITIVE_SUFFIXES)
+    ):
+        return "sensitive path"
+    signatures = (
+        re.compile(b"-----BEGIN (?:[A-Z ]+ )?" + b"PRIVATE KEY-----"),
+        re.compile(b"AKIA" + b"[0-9A-Z]{16}"),
+        re.compile(b"gh" + b"[pousr]_[A-Za-z0-9_]{30,}"),
+        re.compile(b"sk-" + b"[A-Za-z0-9]{32,}"),
+    )
+    if any(pattern.search(contents) is not None for pattern in signatures):
+        return "secret-like content"
+    return None
+
+
+def reject_sensitive_export(path: str, contents: bytes) -> None:
+    reason = sensitive_export_reason(path, contents)
+    if reason is not None:
+        raise RunnerError(f"{reason} is excluded from external review: {path}")
+
+
+def document_hash(value: dict[str, Any], hash_key: str) -> str:
+    payload = copy.deepcopy(value)
+    payload.pop(hash_key, None)
+    return sha256_bytes(canonical_json(payload))
+
+
+def load_assignment_generator() -> Any:
+    path = Path(__file__).resolve().parent / "generate-codebase-audit-crosscut-assignments"
+    loader = importlib.machinery.SourceFileLoader(
+        "codebase_audit_crosscut_assignment_generator", str(path)
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    if spec is None:
+        raise RunnerError(f"cannot load assignment generator: {path}")
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def load_and_validate_inputs(
+    evidence_directory: Path, assignments_path: Path
+) -> tuple[dict[str, Any], bytes, dict[str, Any], bytes]:
+    assignments, assignment_bytes = load_canonical_json(
+        assignments_path, "crosscut assignments"
+    )
+    if not isinstance(assignments, dict):
+        raise RunnerError("crosscut assignments must be an object")
+    source = assignments.get("source_contract")
+    if not isinstance(source, dict):
+        raise RunnerError("crosscut assignments have no source contract")
+    generator = load_assignment_generator()
+    try:
+        contract = generator.load_contract(
+            evidence_directory,
+            source.get("target_sha"),
+            source.get("definitions_sha256"),
+            source.get("evidence_sha256"),
+        )
+        generator.validate_assignments(assignments, contract)
+    except (OSError, generator.CrosscutAssignmentError) as error:
+        raise RunnerError(f"crosscut assignment validation failed: {error}") from error
+    evidence_path = evidence_directory / "crosscut-evidence.json"
+    try:
+        evidence_bytes = evidence_path.read_bytes()
+    except OSError as error:
+        raise RunnerError(f"cannot read crosscut evidence {evidence_path}: {error}") from error
+    if sha256_bytes(evidence_bytes) != source["evidence_sha256"]:
+        raise RunnerError("crosscut evidence changed during validation")
+    return assignments, assignment_bytes, contract, evidence_bytes
+
+
+def git_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    ):
+        environment.pop(name, None)
+    for name in tuple(environment):
+        if name == "GIT_CONFIG_COUNT" or name.startswith("GIT_CONFIG_KEY_"):
+            environment.pop(name, None)
+        if name.startswith("GIT_CONFIG_VALUE_"):
+            environment.pop(name, None)
+    environment["GIT_GRAFT_FILE"] = os.devnull
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+    return environment
+
+
+def run_git(repo: Path, *arguments: str, input_bytes: bytes | None = None) -> bytes:
+    try:
+        completed = subprocess.run(
+            ["git", "--no-replace-objects", "-C", str(repo), *arguments],
+            input=input_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=git_environment(),
+            check=False,
+        )
+    except OSError as error:
+        raise RunnerError(f"cannot execute git: {error}") from error
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RunnerError(f"git {' '.join(arguments)} failed: {detail}")
+    return completed.stdout
+
+
+def target_tree(repo: Path, target_sha: str) -> dict[str, str]:
+    canonical = run_git(repo, "rev-parse", "--verify", f"{target_sha}^{{commit}}")
+    if canonical.decode("ascii").strip() != target_sha:
+        raise RunnerError("target SHA does not resolve to its exact commit")
+    tree = {}
+    raw = run_git(repo, "ls-tree", "-rz", "--full-tree", target_sha)
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, path_bytes = record.split(b"\t", 1)
+            _mode, object_type, object_id = metadata.decode("ascii").split(" ")
+            path = path_bytes.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise RunnerError("target tree contains an invalid record") from error
+        require_path(path, "target tree path")
+        if object_type == "blob":
+            tree[path] = object_id
+    return tree
+
+
+def load_target_files(
+    repo: Path, assignments: dict[str, Any], evidence: dict[str, Any]
+) -> tuple[dict[str, bytes], dict[str, int], set[str]]:
+    target_sha = assignments["source_contract"]["target_sha"]
+    tree = target_tree(repo, target_sha)
+    expected = {
+        blob["path"]: blob
+        for blob in evidence["target_blobs"]
+    }
+    assigned = {
+        blob["path"]: blob
+        for bucket in assignments["buckets"]
+        for entry in bucket["entries"]
+        for blob in entry["target_blobs"]
+    }
+    files = {}
+    line_counts = {}
+    excluded_sensitive_paths = set()
+    for path, blob in sorted(assigned.items()):
+        require_path(path, "assigned target path")
+        evidence_blob = expected.get(path)
+        if evidence_blob is None or evidence_blob["blob_oid"] != blob["blob_oid"]:
+            raise RunnerError(f"assigned target blob is absent from evidence: {path}")
+        if tree.get(path) != blob["blob_oid"]:
+            raise RunnerError(f"assigned target blob is absent from target tree: {path}")
+        contents = run_git(repo, "cat-file", "blob", blob["blob_oid"])
+        if sha256_bytes(contents) != blob["blob_sha256"]:
+            raise RunnerError(f"assigned target blob SHA-256 mismatch: {path}")
+        if sensitive_export_reason(path, contents) is not None:
+            excluded_sensitive_paths.add(path)
+            continue
+        files[path] = contents
+        line_counts[path] = evidence_blob["line_count"]
+    if not files:
+        raise RunnerError("crosscut assignments contain no target files")
+    return files, line_counts, excluded_sensitive_paths
+
+
+def build_tasks(
+    assignments: dict[str, Any], contract: dict[str, Any], files: dict[str, bytes],
+    line_counts: dict[str, int], excluded_sensitive_paths: set[str] | None = None
+) -> list[Task]:
+    excluded_sensitive_paths = excluded_sensitive_paths or set()
+    evidence = contract["evidence"]
+    definitions = {item["id"]: item for item in contract["definitions"]}
+    source_by_hash = {item["sha256"]: item for item in evidence["sources"]}
+    evidence_by_id = {item["evidence_id"]: item for item in evidence["evidence"]}
+    commits_by_id = {
+        item["commit_oid"]: item for item in evidence["upstream_commit_series"]
+    }
+    tasks = []
+    seen = set()
+    for bucket in assignments["buckets"]:
+        for position, entry in enumerate(bucket["entries"]):
+            crosscut_id = entry["crosscut_id"]
+            if crosscut_id in seen:
+                raise RunnerError(f"crosscut is assigned more than once: {crosscut_id}")
+            seen.add(crosscut_id)
+            try:
+                task_evidence = [evidence_by_id[value] for value in entry["evidence_ids"]]
+                task_commits = [commits_by_id[value] for value in entry["upstream_commit_oids"]]
+            except KeyError as error:
+                raise RunnerError(f"crosscut references missing evidence: {error}") from error
+            kind_counts: dict[str, int] = {}
+            matcher_counts: dict[str, int] = {}
+            evidence_paths = set()
+            for item in task_evidence:
+                kind = item.get("kind", "unknown")
+                kind_counts[kind] = kind_counts.get(kind, 0) + 1
+                matcher = item.get("matcher_id")
+                if matcher is not None:
+                    matcher_counts[matcher] = matcher_counts.get(matcher, 0) + 1
+                path = item.get("path")
+                if path is not None:
+                    evidence_paths.add(path)
+            upstream_patches = []
+            for commit in task_commits:
+                source_hash = next(
+                    item["source_sha256"]
+                    for item in task_evidence
+                    if item.get("commit_oid") == commit["commit_oid"]
+                )
+                upstream_patches.append(
+                    {
+                        "commit_oid": commit["commit_oid"],
+                        "sha256": source_hash,
+                        "text": source_by_hash[source_hash]["text"],
+                    }
+                )
+            task_files = {
+                blob["path"]: files[blob["path"]]
+                for blob in entry["target_blobs"]
+                if blob["path"] not in excluded_sensitive_paths
+            }
+            task_exclusions = sorted(
+                blob["path"]
+                for blob in entry["target_blobs"]
+                if blob["path"] in excluded_sensitive_paths
+            )
+            tasks.append(
+                Task(
+                    bucket_id=bucket["id"],
+                    position=position,
+                    entry=copy.deepcopy(entry),
+                    definition=copy.deepcopy(definitions[crosscut_id]),
+                    evidence_summary={
+                        "entry_count": len(task_evidence),
+                        "source_count": len(entry["source_sha256s"]),
+                        "path_count": len(evidence_paths),
+                        "kind_counts": dict(sorted(kind_counts.items())),
+                        "matcher_counts": dict(sorted(matcher_counts.items())),
+                    },
+                    upstream_commits=copy.deepcopy(task_commits),
+                    upstream_patches=upstream_patches,
+                    files=task_files,
+                    line_counts={path: line_counts[path] for path in task_files},
+                    excluded_sensitive_paths=task_exclusions,
+                )
+            )
+    if len(tasks) != 13:
+        raise RunnerError("crosscut task coverage must contain exactly 13 tasks")
+    return tasks
+
+
+def review_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["reviewer", "summary", "findings"],
+        "properties": {
+            "reviewer": {"type": "string"},
+            "summary": {"type": "string"},
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": sorted(FINDING_KEYS),
+                    "properties": {
+                        "title": {"type": "string"},
+                        "severity": {"enum": sorted(SEVERITIES)},
+                        "confidence": {"enum": sorted(CONFIDENCES)},
+                        "category": {"type": "string"},
+                        "file": {"type": "string"},
+                        "line": {"type": ["integer", "null"]},
+                        "evidence": {"type": "string"},
+                        "impact": {"type": "string"},
+                        "recommendation": {"type": "string"},
+                    },
+                },
+            },
+        },
+    }
+
+
+def review_input(assignments: dict[str, Any], task: Task) -> dict[str, Any]:
+    entry = task.entry
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "assignment_sha256": assignments["assignment_sha256"],
+        "source_contract": copy.deepcopy(assignments["source_contract"]),
+        "bucket_id": task.bucket_id,
+        "assignment": {
+            "assignment_id": entry["assignment_id"],
+            "crosscut_id": entry["crosscut_id"],
+            "definition_sha256": entry["definition_sha256"],
+            "evidence_ids_sha256": sha256_bytes(canonical_json(entry["evidence_ids"])),
+            "evidence_sha256": entry["evidence_sha256"],
+            "lenses": copy.deepcopy(entry["lenses"]),
+            "mandatory_selector_sha256s": copy.deepcopy(
+                entry["mandatory_selector_sha256s"]
+            ),
+            "source_sha256s_sha256": sha256_bytes(
+                canonical_json(entry["source_sha256s"])
+            ),
+            "target_paths": sorted(task.files),
+            "excluded_sensitive_path_count": len(task.excluded_sensitive_paths),
+            "excluded_sensitive_paths_sha256": sha256_bytes(
+                canonical_json(task.excluded_sensitive_paths)
+            ),
+            "upstream_commit_oids": copy.deepcopy(entry["upstream_commit_oids"]),
+        },
+        "definition": copy.deepcopy(task.definition),
+        "evidence_summary": copy.deepcopy(task.evidence_summary),
+        "upstream_commits": [
+            {
+                **copy.deepcopy(commit),
+                "patch_file": (
+                    ".codebase-audit/upstream/"
+                    f"{commit['index']:04d}-{commit['commit_oid']}.patch"
+                ),
+            }
+            for commit in task.upstream_commits
+        ],
+    }
+
+
+def prompt_for_task(task: Task) -> bytes:
+    crosscut_id = task.entry["crosscut_id"]
+    prompt = f"""{LEAF_MARKER}
+You are a leaf reviewer for the Zaplex codebase audit crosscut `{crosscut_id}`.
+Do not delegate, spawn agents, invoke other AI CLIs, modify files, or use the network.
+Use only Read, Glob, and Grep. Stay inside the current read-only snapshot.
+
+First read `.codebase-audit-review.json`; it contains the immutable definition,
+scope, provenance, evidence counts, and all three required review lenses. Apply
+the definition's path rules and matchers with Glob and Grep across the snapshot,
+then inspect the surrounding functions with Read. For upstream drift, read every
+listed patch file under `.codebase-audit/upstream/` and check whether each relevant
+fix is absent from the target snapshot. Treat matcher hits as leads, not findings.
+Report only concrete shipped-path defects
+with a specific failure scenario and actionable fix. Do not report style, broad
+hardening ideas, duplicates, or claims unsupported by the snapshot. Apply all
+three lenses: correctness/security, failure-path/lifecycle, regression/upstream.
+For target-tree findings, use the exact repository-relative file and 1-based line.
+For upstream-drift findings, identify the affected target file when possible and
+cite the upstream commit in evidence. Return only the structured schema response.
+Use reviewer `claude/opus`. Use an empty findings array if nothing qualifies.
+"""
+    return prompt.encode("utf-8")
+
+
+def validate_review(response: Any, task: Task) -> dict[str, Any]:
+    response = require_exact_keys(response, REVIEW_KEYS, "Claude review")
+    reviewer = require_text(response["reviewer"], "reviewer")
+    if reviewer != "claude/opus":
+        raise RunnerError("reviewer must be claude/opus")
+    require_text(response["summary"], "review summary")
+    findings = response["findings"]
+    if not isinstance(findings, list):
+        raise RunnerError("review findings must be an array")
+    seen = set()
+    upstream = task.entry["crosscut_id"] == "upstream-drift"
+    for finding in findings:
+        finding = require_exact_keys(finding, FINDING_KEYS, "review finding")
+        for key in (
+            "title",
+            "category",
+            "file",
+            "evidence",
+            "impact",
+            "recommendation",
+        ):
+            require_text(finding[key], f"finding {key}")
+        if finding["severity"] not in SEVERITIES:
+            raise RunnerError("finding severity is invalid")
+        if finding["confidence"] not in CONFIDENCES:
+            raise RunnerError("finding confidence is invalid")
+        path = require_path(finding["file"], "finding file")
+        line = finding["line"]
+        if line is not None:
+            require_plain_int(line, "finding line", 1)
+        if not upstream:
+            if path not in task.files:
+                raise RunnerError(f"finding path is outside its crosscut: {path}")
+            if line is None or line > task.line_counts[path]:
+                raise RunnerError(f"finding line is outside its target blob: {path}")
+        identity = (finding["title"], path, line)
+        if identity in seen:
+            raise RunnerError(f"duplicate finding in crosscut response: {path}:{line}")
+        seen.add(identity)
+    return response
+
+
+def extract_review(raw: bytes, task: Task) -> dict[str, Any]:
+    outer = decode_json(raw, f"{task.entry['crosscut_id']} Claude output")
+    if not isinstance(outer, dict):
+        raise RunnerError("Claude output must be an object")
+    if outer.get("is_error") is True or outer.get("subtype") in {
+        "error_during_execution",
+        "error_max_turns",
+    }:
+        raise RunnerError("Claude output reports a failed review")
+    if "structured_output" not in outer:
+        raise RunnerError("Claude output has no structured_output")
+    return validate_review(outer["structured_output"], task)
+
+
+def atomic_publish(path: Path, contents: bytes) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(contents)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def create_snapshot(task: Task, parent: Path, review_input_bytes: bytes) -> Path:
+    snapshot = parent / task.entry["crosscut_id"]
+    snapshot.mkdir(mode=0o700)
+    for relative_path, contents in sorted(task.files.items()):
+        destination = snapshot.joinpath(*PurePosixPath(relative_path).parts)
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(destination, flags, 0o400)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(contents)
+    control = snapshot / ".codebase-audit-review.json"
+    descriptor = os.open(control, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(review_input_bytes)
+    upstream_directory = snapshot / ".codebase-audit" / "upstream"
+    if task.upstream_patches:
+        upstream_directory.mkdir(mode=0o700, parents=True)
+    commit_by_id = {commit["commit_oid"]: commit for commit in task.upstream_commits}
+    for patch in task.upstream_patches:
+        commit = commit_by_id[patch["commit_oid"]]
+        destination = upstream_directory / (
+            f"{commit['index']:04d}-{patch['commit_oid']}.patch"
+        )
+        contents = patch["text"].encode("utf-8")
+        if sha256_bytes(contents) != patch["sha256"]:
+            raise RunnerError(f"upstream patch SHA-256 mismatch: {patch['commit_oid']}")
+        reject_sensitive_export(
+            f"upstream/{commit['index']:04d}-{patch['commit_oid']}.patch", contents
+        )
+        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(contents)
+    return snapshot
+
+
+def communicate_with_timeout(
+    command: list[str], cwd: Path, environment: dict[str, str], timeout_seconds: int
+) -> tuple[int, bytes, bytes]:
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except OSError as error:
+        raise RunnerError(f"cannot start Claude CLI: {error}") from error
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        raise RunnerTimeout(
+            f"Claude CLI timed out after {timeout_seconds} seconds", (stdout, stderr)
+        )
+    return process.returncode, stdout, stderr
+
+
+def result_path(run_directory: Path, task: Task) -> Path:
+    return run_directory / "results" / f"{task.entry['crosscut_id']}.json"
+
+
+def validate_result_document(
+    document: Any,
+    assignments: dict[str, Any],
+    task: Task,
+    prompt_sha256: str,
+    review_input_sha256: str,
+    schema_sha256: str,
+    provider: str,
+    model: str,
+    effort: str,
+) -> dict[str, Any]:
+    document = require_exact_keys(document, RESULT_KEYS, "crosscut result")
+    if document["schema_version"] != SCHEMA_VERSION:
+        raise RunnerError("crosscut result schema version mismatch")
+    if document["runner_version"] != RUNNER_VERSION:
+        raise RunnerError("crosscut result runner version mismatch")
+    expected = {
+        "assignment_sha256": assignments["assignment_sha256"],
+        "assignment_id": task.entry["assignment_id"],
+        "crosscut_id": task.entry["crosscut_id"],
+        "provider": provider,
+        "model": model,
+        "effort": effort,
+        "prompt_sha256": prompt_sha256,
+        "review_input_sha256": review_input_sha256,
+        "schema_sha256": schema_sha256,
+    }
+    for key, value in expected.items():
+        if document[key] != value:
+            raise RunnerError(f"crosscut result {key} mismatch")
+    require_plain_int(document["attempt"], "crosscut result attempt", 1)
+    for key in ("stdout_sha256", "stderr_sha256", "response_sha256"):
+        require_hash(document[key], f"crosscut result {key}")
+    response = validate_review(document["response"], task)
+    if document["response_sha256"] != sha256_bytes(canonical_json(response)):
+        raise RunnerError("crosscut response SHA-256 mismatch")
+    return document
+
+
+def load_completed_result(
+    path: Path,
+    assignments: dict[str, Any],
+    task: Task,
+    prompt_sha256: str,
+    review_input_sha256: str,
+    schema_sha256: str,
+    provider: str,
+    model: str,
+    effort: str,
+) -> TaskResult | None:
+    if not path.exists():
+        return None
+    document, _raw = load_canonical_json(path, "crosscut result")
+    validated = validate_result_document(
+        document,
+        assignments,
+        task,
+        prompt_sha256,
+        review_input_sha256,
+        schema_sha256,
+        provider,
+        model,
+        effort,
+    )
+    return TaskResult(task.bucket_id, task.position, validated)
+
+
+def existing_attempts(logs_directory: Path, crosscut_id: str) -> int:
+    pattern = re.compile(rf"^{re.escape(crosscut_id)}\.attempt-([1-9][0-9]*)\.stdout\.json$")
+    attempts = []
+    for path in logs_directory.glob(f"{crosscut_id}.attempt-*.stdout.json"):
+        match = pattern.fullmatch(path.name)
+        if match:
+            attempts.append(int(match.group(1)))
+    if not attempts:
+        return 0
+    if sorted(attempts) != list(range(1, max(attempts) + 1)):
+        raise RunnerError(f"attempt log sequence is incomplete: {crosscut_id}")
+    return max(attempts)
+
+
+def execute_task(
+    claude_cli: str,
+    claude_config_directory: Path | None,
+    provider: str,
+    model: str,
+    effort: str,
+    timeout_seconds: int,
+    max_attempts: int,
+    run_directory: Path,
+    temporary_directory: Path,
+    assignments: dict[str, Any],
+    task: Task,
+    prompt: bytes,
+    review_input_bytes: bytes,
+    schema_bytes: bytes,
+) -> TaskResult:
+    crosscut_id = task.entry["crosscut_id"]
+    logs_directory = run_directory / "logs"
+    attempts = existing_attempts(logs_directory, crosscut_id)
+    if attempts >= max_attempts:
+        raise RunnerError(f"{crosscut_id} exhausted its retry budget")
+    snapshot = create_snapshot(task, temporary_directory, review_input_bytes)
+    environment = os.environ.copy()
+    if claude_config_directory is not None:
+        environment["CLAUDE_CONFIG_DIR"] = str(claude_config_directory)
+    command = [
+        claude_cli,
+        "-p",
+        prompt.decode("utf-8"),
+        "--model",
+        model,
+        "--effort",
+        effort,
+        "--output-format",
+        "json",
+        "--json-schema",
+        schema_bytes.decode("utf-8"),
+        "--tools",
+        "Read,Glob,Grep",
+        "--disallowed-tools",
+        "Agent,Task,Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch",
+        "--disable-slash-commands",
+        "--no-session-persistence",
+        "--permission-mode",
+        "plan",
+    ]
+    last_error = None
+    for attempt in range(attempts + 1, max_attempts + 1):
+        stdout = b""
+        stderr = b""
+        timed_out = False
+        try:
+            returncode, stdout, stderr = communicate_with_timeout(
+                command, snapshot, environment, timeout_seconds
+            )
+        except RunnerTimeout as error:
+            timed_out = True
+            last_error = error
+            if len(error.args) > 1 and isinstance(error.args[1], tuple):
+                stdout, stderr = error.args[1]
+            returncode = -1
+        stdout_path = logs_directory / f"{crosscut_id}.attempt-{attempt}.stdout.json"
+        stderr_path = logs_directory / f"{crosscut_id}.attempt-{attempt}.stderr.log"
+        atomic_publish(stdout_path, stdout)
+        atomic_publish(stderr_path, stderr)
+        if timed_out:
+            atomic_publish(
+                logs_directory / f"{crosscut_id}.attempt-{attempt}.error.txt",
+                f"{last_error.args[0]}\n".encode("utf-8"),
+            )
+            raise RunnerError(f"{crosscut_id}: {last_error.args[0]}") from last_error
+        try:
+            if returncode != 0:
+                raise RunnerError(f"Claude CLI exited with status {returncode}")
+            response = extract_review(stdout, task)
+            response_bytes = canonical_json(response)
+            document = {
+                "schema_version": SCHEMA_VERSION,
+                "runner_version": RUNNER_VERSION,
+                "assignment_sha256": assignments["assignment_sha256"],
+                "assignment_id": task.entry["assignment_id"],
+                "crosscut_id": crosscut_id,
+                "provider": provider,
+                "model": model,
+                "effort": effort,
+                "attempt": attempt,
+                "prompt_sha256": sha256_bytes(prompt),
+                "review_input_sha256": sha256_bytes(review_input_bytes),
+                "schema_sha256": sha256_bytes(schema_bytes),
+                "stdout_sha256": sha256_bytes(stdout),
+                "stderr_sha256": sha256_bytes(stderr),
+                "response_sha256": sha256_bytes(response_bytes),
+                "response": response,
+            }
+            validate_result_document(
+                document,
+                assignments,
+                task,
+                sha256_bytes(prompt),
+                sha256_bytes(review_input_bytes),
+                sha256_bytes(schema_bytes),
+                provider,
+                model,
+                effort,
+            )
+            atomic_publish(result_path(run_directory, task), canonical_json(document))
+            return TaskResult(task.bucket_id, task.position, document)
+        except RunnerError as error:
+            last_error = error
+            atomic_publish(
+                logs_directory / f"{crosscut_id}.attempt-{attempt}.error.txt",
+                f"{error}\n".encode("utf-8"),
+            )
+    raise RunnerError(f"{crosscut_id}: {last_error}") from last_error
+
+
+def prepare_run_directory(
+    path: Path,
+    resume: bool,
+    assignment_bytes: bytes,
+    evidence_bytes: bytes,
+    schema_bytes: bytes,
+) -> Path:
+    path = path.parent.resolve() / path.name
+    if path.exists():
+        if not resume:
+            raise RunnerError(f"run directory already exists; pass --resume: {path}")
+        if not path.is_dir() or path.is_symlink():
+            raise RunnerError(f"run directory is invalid: {path}")
+    else:
+        if resume:
+            raise RunnerError(f"run directory does not exist for --resume: {path}")
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.mkdir(mode=0o700)
+        for name in ("inputs", "logs", "results"):
+            (path / name).mkdir(mode=0o700)
+        atomic_publish(path / "inputs" / "assignments.json", assignment_bytes)
+        atomic_publish(path / "inputs" / "crosscut-evidence.json", evidence_bytes)
+        atomic_publish(path / "inputs" / "review.schema.json", schema_bytes)
+    expected = {
+        "assignments.json": assignment_bytes,
+        "crosscut-evidence.json": evidence_bytes,
+        "review.schema.json": schema_bytes,
+    }
+    for name, contents in expected.items():
+        stored = path / "inputs" / name
+        if not stored.is_file() or stored.is_symlink() or stored.read_bytes() != contents:
+            raise RunnerError(f"run input changed or is missing: {name}")
+    for name in ("logs", "results"):
+        directory = path / name
+        if not directory.is_dir() or directory.is_symlink():
+            raise RunnerError(f"run directory component is invalid: {name}")
+    return path
+
+
+def publish_task_inputs(
+    run_directory: Path, assignments: dict[str, Any], task: Task
+) -> tuple[bytes, bytes]:
+    prompt = prompt_for_task(task)
+    review_input_bytes = canonical_json(review_input(assignments, task))
+    paths = {
+        run_directory / "inputs" / f"{task.entry['crosscut_id']}.prompt.txt": prompt,
+        run_directory / "inputs" / f"{task.entry['crosscut_id']}.review.json": (
+            review_input_bytes
+        ),
+    }
+    for path, contents in paths.items():
+        if path.exists():
+            if not path.is_file() or path.is_symlink() or path.read_bytes() != contents:
+                raise RunnerError(f"persisted task input changed: {path.name}")
+        else:
+            atomic_publish(path, contents)
+    return prompt, review_input_bytes
+
+
+def build_run_summary(
+    assignments: dict[str, Any], results: list[TaskResult], provider: str,
+    model: str, effort: str
+) -> dict[str, Any]:
+    ordered = sorted(results, key=lambda item: (item.bucket_id, item.position))
+    if len(ordered) != 13:
+        raise RunnerError("cannot publish an incomplete crosscut run")
+    findings = [
+        {
+            "crosscut_id": result.document["crosscut_id"],
+            **copy.deepcopy(finding),
+        }
+        for result in ordered
+        for finding in result.document["response"]["findings"]
+    ]
+    summary = {
+        "schema_version": SCHEMA_VERSION,
+        "runner_version": RUNNER_VERSION,
+        "assignment_sha256": assignments["assignment_sha256"],
+        "source_contract": copy.deepcopy(assignments["source_contract"]),
+        "provider": provider,
+        "model": model,
+        "effort": effort,
+        "expected_crosscuts": 13,
+        "completed_crosscuts": len(ordered),
+        "finding_count": len(findings),
+        "executions": [
+            {
+                key: value
+                for key, value in result.document.items()
+                if key != "response"
+            }
+            for result in ordered
+        ],
+        "findings": findings,
+        "complete": True,
+    }
+    summary["run_sha256"] = document_hash(summary, "run_sha256")
+    return summary
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--evidence-dir", type=Path, required=True)
+    parser.add_argument("--assignments", type=Path, required=True)
+    parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument("--claude-cli", default="claude")
+    parser.add_argument("--claude-config-dir", type=Path)
+    parser.add_argument("--provider", default="claude-high5")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--effort", choices=("low", "medium", "high"), default=DEFAULT_EFFORT)
+    parser.add_argument("--timeout-seconds", type=int, default=900)
+    parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
+    parser.add_argument("--max-attempts", type=int, default=DEFAULT_MAX_ATTEMPTS)
+    parser.add_argument("--resume", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    if args.timeout_seconds <= 0 or not 1 <= args.max_workers <= 3:
+        print(
+            "crosscut runner: timeout must be positive and max-workers must be 1..3",
+            file=sys.stderr,
+        )
+        return 1
+    if not 1 <= args.max_attempts <= 2:
+        print("crosscut runner: max-attempts must be 1..2", file=sys.stderr)
+        return 1
+    try:
+        repo = args.repo.resolve(strict=True)
+        evidence_directory = args.evidence_dir.resolve(strict=True)
+        config_directory = (
+            args.claude_config_dir.resolve(strict=True)
+            if args.claude_config_dir is not None
+            else None
+        )
+        assignments, assignment_bytes, contract, evidence_bytes = load_and_validate_inputs(
+            evidence_directory, args.assignments
+        )
+        files, line_counts, excluded_sensitive_paths = load_target_files(
+            repo, assignments, contract["evidence"]
+        )
+        tasks = build_tasks(
+            assignments,
+            contract,
+            files,
+            line_counts,
+            excluded_sensitive_paths,
+        )
+        schema_bytes = canonical_json(review_schema())
+        run_directory = prepare_run_directory(
+            args.run_dir, args.resume, assignment_bytes, evidence_bytes, schema_bytes
+        )
+        pending = []
+        results = []
+        for task in tasks:
+            prompt, review_input_bytes = publish_task_inputs(
+                run_directory, assignments, task
+            )
+            completed = load_completed_result(
+                result_path(run_directory, task),
+                assignments,
+                task,
+                sha256_bytes(prompt),
+                sha256_bytes(review_input_bytes),
+                sha256_bytes(schema_bytes),
+                args.provider,
+                args.model,
+                args.effort,
+            )
+            if completed is None:
+                pending.append((task, prompt, review_input_bytes))
+            else:
+                results.append(completed)
+        failures = []
+        with tempfile.TemporaryDirectory(
+            prefix="zaplex-codebase-audit-crosscuts-"
+        ) as temporary_name:
+            temporary = Path(temporary_name)
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=args.max_workers,
+                thread_name_prefix="codebase-audit-crosscut",
+            ) as executor:
+                futures = [
+                    executor.submit(
+                        execute_task,
+                        args.claude_cli,
+                        config_directory,
+                        args.provider,
+                        args.model,
+                        args.effort,
+                        args.timeout_seconds,
+                        args.max_attempts,
+                        run_directory,
+                        temporary,
+                        assignments,
+                        task,
+                        prompt,
+                        review_input_bytes,
+                        schema_bytes,
+                    )
+                    for task, prompt, review_input_bytes in pending
+                ]
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        results.append(future.result())
+                    except Exception as error:
+                        failures.append(str(error))
+        if failures:
+            raise RunnerError("; ".join(sorted(failures)))
+        summary = build_run_summary(
+            assignments, results, args.provider, args.model, args.effort
+        )
+        atomic_publish(run_directory / "run.json", canonical_json(summary))
+    except (OSError, RunnerError) as error:
+        print(f"crosscut runner: {error}", file=sys.stderr)
+        return 1
+    print(
+        f"crosscut runner: completed 13 crosscuts with {summary['finding_count']} findings "
+        f"in {run_directory}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

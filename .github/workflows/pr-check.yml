@@ -164,6 +164,8 @@ jobs:
           script/codebase-audit-verification-assignments-tests
           script/run-codebase-audit-verification-assignments-tests
           script/codebase-audit-crosscut-evidence-tests
+          script/codebase-audit-crosscut-assignments-tests
+          script/run-codebase-audit-crosscut-assignments-tests
           script/aggregate-codebase-audit-verification-results-tests
         shell: bash
 
