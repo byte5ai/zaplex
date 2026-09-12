@@ -11,3 +11,18 @@ fn test_all_preview_flags_have_a_description() {
         );
     }
 }
+
+#[test]
+fn oss_notification_features_match_manifest_and_runtime_wiring() {
+    let manifest = include_str!("../../../app/Cargo.toml");
+    let app_features = include_str!("../../../app/src/lib.rs");
+
+    assert!(manifest.contains("\"gemini_notifications\""));
+    assert!(manifest.contains("gemini_notifications = []"));
+    assert!(app_features.contains(
+        "#[cfg(feature = \"gemini_notifications\")]\n        FeatureFlag::GeminiNotifications,"
+    ));
+
+    assert!(!manifest.contains("hoa_remote_control"));
+    assert!(!app_features.contains("HOARemoteControl"));
+}

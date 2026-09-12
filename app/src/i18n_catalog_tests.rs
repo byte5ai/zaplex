@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use regex::Regex;
+
 #[derive(Debug, Default, Eq, PartialEq)]
 struct FluentEntrySignature {
     attributes: BTreeSet<String>,
@@ -246,5 +248,22 @@ fn spaced_ellipsis_detection_ignores_comments_and_leading_ellipses() {
         "    *[other] …and { $count } more",
     ] {
         assert!(!has_space_before_ellipsis(line), "misclassified {line:?}");
+    }
+}
+
+#[test]
+fn localized_rendering_sources_do_not_construct_text_from_literals() {
+    let direct_text_literal =
+        Regex::new(r#"Text::new(?:_inline)?\(\s*\""#).expect("valid source guard regex");
+    let sources = [(
+        "tab_configs/session_config_rendering.rs",
+        include_str!("tab_configs/session_config_rendering.rs"),
+    )];
+
+    for (path, source) in sources {
+        assert!(
+            !direct_text_literal.is_match(source),
+            "localized rendering source constructs visible text from a literal: {path}"
+        );
     }
 }

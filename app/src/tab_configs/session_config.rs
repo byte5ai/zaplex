@@ -47,14 +47,14 @@ impl SessionType {
     }
 
     /// Short label for the session type pill in the modal.
-    pub(crate) fn pill_label(&self) -> &'static str {
+    pub(crate) fn pill_label(&self) -> String {
         match self {
-            SessionType::Terminal => "Terminal",
-            SessionType::Oz => "Built in agent",
-            SessionType::CliAgent(CLIAgent::Claude) => "Claude",
-            SessionType::CliAgent(CLIAgent::Codex) => "Codex",
-            SessionType::CliAgent(CLIAgent::Gemini) => "Gemini",
-            SessionType::CliAgent(agent) => agent.display_name(),
+            SessionType::Terminal => crate::t!("tab-config-session-terminal"),
+            SessionType::Oz => crate::t!("tab-config-session-built-in-agent"),
+            SessionType::CliAgent(CLIAgent::Claude) => "Claude".to_string(),
+            SessionType::CliAgent(CLIAgent::Codex) => "Codex".to_string(),
+            SessionType::CliAgent(CLIAgent::Gemini) => "Gemini".to_string(),
+            SessionType::CliAgent(agent) => agent.display_name().to_string(),
         }
     }
 }
