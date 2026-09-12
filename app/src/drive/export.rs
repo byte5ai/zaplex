@@ -328,7 +328,7 @@ impl ExportManager {
         };
 
         let path = if is_bulk {
-            parent_path.join(safe_filename(&id.1.name(ctx)))
+            confined_bulk_export_path(parent_path, &id.1.name(ctx))?
         } else {
             parent_path.to_path_buf()
         };
@@ -490,8 +490,7 @@ async fn write_object(
     let mut open_options = async_fs::OpenOptions::new();
     open_options.write(true).create_new(true);
     loop {
-        let mut current_path = parent_path.join(&current_name);
-        current_path.set_extension(extension);
+        let current_path = confined_export_file_path(&parent_path, &current_name, extension)?;
         let file = open_options.open(&current_path).await;
         match file {
             Ok(mut file) => {
@@ -523,9 +522,11 @@ lazy_static::lazy_static! {
 #[cfg(feature = "local_fs")]
 fn make_forbidden_filenames_matcher() -> AhoCorasick {
     // NTFS (Windows) disallows ASCII control characters in path names.
-    let ascii_control = 0x00..0x1f;
+    let ascii_control = 0x00..=0x1f;
     // These characters are disallowed by UNIX filesystems, APFS or HFS+ (macOS), or NTFS.
-    let forbidden = [b'/', b':', b'#', b'*', b'<', b'>', b'?', b'\\', b'|'];
+    let forbidden = [
+        b'/', b':', b'#', b'*', b'<', b'>', b'?', b'\\', b'|', b'"', 0x7f,
+    ];
 
     let patterns = ascii_control.chain(forbidden).map(|ch| [ch]);
     AhoCorasick::builder()
@@ -535,7 +536,8 @@ fn make_forbidden_filenames_matcher() -> AhoCorasick {
 }
 
 /// Replaces characters that are not allowed in a path name. This is _not_ escaping - disallowed
-/// characters cannot be escaped in a path.
+/// characters cannot be escaped in a path. Windows device names are prefixed on every platform so
+/// exported files remain portable.
 ///
 /// See [Comparison of filename limitations](https://en.wikipedia.org/wiki/Filename#Comparison_of_filename_limitations).
 #[cfg(feature = "local_fs")]
@@ -547,7 +549,54 @@ pub fn safe_filename(filename: &str) -> String {
         dst.push('_');
         true
     });
-    result
+    let result = result.trim_end_matches([' ', '.']);
+    if result.is_empty() {
+        "_".to_string()
+    } else if is_windows_reserved_filename(result) {
+        format!("_{result}")
+    } else {
+        result.to_string()
+    }
+}
+
+#[cfg(feature = "local_fs")]
+fn is_windows_reserved_filename(filename: &str) -> bool {
+    let stem = filename.split('.').next().unwrap_or_default();
+    let upper = stem.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$"
+    ) || ["COM", "LPT"].iter().any(|prefix| {
+        upper.strip_prefix(prefix).is_some_and(|suffix| {
+            matches!(
+                suffix,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
+    })
+}
+
+#[cfg(feature = "local_fs")]
+fn confined_bulk_export_path(parent_path: &Path, space_name: &str) -> anyhow::Result<PathBuf> {
+    let path = parent_path.join(safe_filename(space_name));
+    if path.parent() != Some(parent_path) {
+        anyhow::bail!("Bulk export path escaped the selected directory");
+    }
+    Ok(path)
+}
+
+#[cfg(feature = "local_fs")]
+fn confined_export_file_path(
+    parent_path: &Path,
+    object_name: &str,
+    extension: &str,
+) -> anyhow::Result<PathBuf> {
+    let mut path = parent_path.join(object_name);
+    path.set_extension(extension);
+    if path.parent() != Some(parent_path) {
+        anyhow::bail!("Export path escaped the selected directory");
+    }
+    Ok(path)
 }
 
 #[cfg(test)]

@@ -1684,15 +1684,15 @@ impl TemplatableMCPServerManager {
 
     pub fn purge_file_based_server_credentials(
         &mut self,
-        installation_hashes: &Vec<u64>,
-        ctx: &mut ModelContext<Self>,
+        installation_hashes: &[u64],
+        app: &mut warpui::AppContext,
     ) {
         for hash in installation_hashes {
             self.file_based_server_credentials.remove(hash);
         }
         if !installation_hashes.is_empty() {
             write_to_secure_storage(
-                ctx,
+                app,
                 FILE_BASED_MCP_CREDENTIALS_KEY,
                 &self.file_based_server_credentials,
             );
@@ -1803,11 +1803,15 @@ async fn spawn_server(
                     let mut buf = String::new();
                     let mut reader = tokio::io::BufReader::new(stderr);
                     loop {
+                        buf.clear();
                         match reader.read_line(&mut buf).await {
                             // EOF.
                             Ok(0) => return,
                             // Read some data.
-                            Ok(_) => logger.log(format!("[info] MCP [pid: {pid}] stderr: {buf}")),
+                            Ok(_) => logger.log(format!(
+                                "[info] MCP [pid: {pid}] stderr: {}",
+                                buf.trim_end()
+                            )),
                             // Failed to read from the child process's stderr.
                             Err(e) => {
                                 log::error!("Failed to read stderr: {e}");
