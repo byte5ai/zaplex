@@ -549,7 +549,7 @@ pub fn safe_filename(filename: &str) -> String {
         dst.push('_');
         true
     });
-    let result = result.trim_end_matches(|ch| matches!(ch, ' ' | '.'));
+    let result = result.trim_end_matches([' ', '.']);
     if result.is_empty() {
         "_".to_string()
     } else if is_windows_reserved_filename(result) {
