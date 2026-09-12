@@ -328,7 +328,7 @@ impl ExportManager {
         };
 
         let path = if is_bulk {
-            parent_path.join(safe_filename(&id.1.name(ctx)))
+            confined_bulk_export_path(parent_path, &id.1.name(ctx))?
         } else {
             parent_path.to_path_buf()
         };
@@ -523,9 +523,11 @@ lazy_static::lazy_static! {
 #[cfg(feature = "local_fs")]
 fn make_forbidden_filenames_matcher() -> AhoCorasick {
     // NTFS (Windows) disallows ASCII control characters in path names.
-    let ascii_control = 0x00..0x1f;
+    let ascii_control = 0x00..=0x1f;
     // These characters are disallowed by UNIX filesystems, APFS or HFS+ (macOS), or NTFS.
-    let forbidden = [b'/', b':', b'#', b'*', b'<', b'>', b'?', b'\\', b'|'];
+    let forbidden = [
+        b'/', b':', b'#', b'*', b'<', b'>', b'?', b'\\', b'|', b'"', 0x7f,
+    ];
 
     let patterns = ascii_control.chain(forbidden).map(|ch| [ch]);
     AhoCorasick::builder()
@@ -547,11 +549,35 @@ pub fn safe_filename(filename: &str) -> String {
         dst.push('_');
         true
     });
-    if matches!(result.as_str(), "" | "." | "..") {
+    let result = result.trim_end_matches(|ch| matches!(ch, ' ' | '.'));
+    if result.is_empty() {
         "_".to_string()
+    } else if is_windows_reserved_filename(result) {
+        format!("_{result}")
     } else {
-        result
+        result.to_string()
     }
+}
+
+#[cfg(feature = "local_fs")]
+fn is_windows_reserved_filename(filename: &str) -> bool {
+    let stem = filename.split('.').next().unwrap_or_default();
+    let upper = stem.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$")
+        || ["COM", "LPT"].iter().any(|prefix| {
+            upper.strip_prefix(prefix).is_some_and(|suffix| {
+                matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+            })
+        })
+}
+
+#[cfg(feature = "local_fs")]
+fn confined_bulk_export_path(parent_path: &Path, space_name: &str) -> anyhow::Result<PathBuf> {
+    let path = parent_path.join(safe_filename(space_name));
+    if path.parent() != Some(parent_path) {
+        anyhow::bail!("Bulk export path escaped the selected directory");
+    }
+    Ok(path)
 }
 
 #[cfg(test)]

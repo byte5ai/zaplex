@@ -3439,7 +3439,9 @@ fn cleanup_conversation_search_temp_dir(
         return;
     };
 
-    let base_dir = super::conversation_yaml::base_dir();
+    let Ok(base_dir) = super::conversation_yaml::base_dir() else {
+        return;
+    };
     for msg in subtask.messages() {
         if let Some(api::message::Message::ToolCallResult(tcr)) = &msg.message {
             if let Some(api::message::tool_call_result::Result::FetchConversation(result)) =

@@ -108,7 +108,7 @@ fn mixed_message_types_produce_sequentially_indexed_files() {
 
     let dir = materialize_tasks_to_yaml(&tasks).unwrap();
     assert!(
-        Path::new(&dir).starts_with(base_dir()),
+        Path::new(&dir).starts_with(base_dir().unwrap()),
         "returned path should be under temp_dir(), got: {dir}",
     );
     // Verify no mixed separators: on Windows the path should use only '\',

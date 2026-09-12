@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use warp_multi_agent_api as api;
 
@@ -17,22 +18,31 @@ use api::message::Message;
 
 use super::task::helper::{SubagentExt, ToolExt};
 
-const BASE_DIR_NAME: &str = "warp_conversation_search";
+const BASE_DIR_PREFIX: &str = "warp_conversation_search-";
+static BASE_DIR: OnceLock<Result<tempfile::TempDir, String>> = OnceLock::new();
 
 /// Returns the base directory for conversation search temp files.
 ///
 /// Uses the platform temp directory so paths are fully qualified with
 /// native separators on every OS (e.g. includes drive prefix on Windows).
-pub(crate) fn base_dir() -> PathBuf {
-    std::env::temp_dir().join(BASE_DIR_NAME)
+pub(crate) fn base_dir() -> Result<PathBuf, String> {
+    BASE_DIR
+        .get_or_init(|| {
+            tempfile::Builder::new()
+                .prefix(BASE_DIR_PREFIX)
+                .tempdir()
+                .map_err(|error| format!("Failed to create base dir: {error}"))
+        })
+        .as_ref()
+        .map(|directory| directory.path().to_path_buf())
+        .map_err(Clone::clone)
 }
 
 /// Materializes a conversation's tasks into a directory of YAML files.
 ///
 /// Returns the path to the root directory, or an error string.
 pub fn materialize_tasks_to_yaml(tasks: &[api::Task]) -> Result<String, String> {
-    let base_dir = base_dir();
-    fs::create_dir_all(&base_dir).map_err(|e| format!("Failed to create base dir: {e}"))?;
+    let base_dir = base_dir()?;
 
     let dir = tempfile::tempdir_in(&base_dir)
         .map_err(|e| format!("Failed to create temp dir: {e}"))?

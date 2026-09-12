@@ -3280,19 +3280,54 @@ fn remote_edit_working_directories_are_unique_and_private() {
 
     let first = super::remote_sftp_edit_working_dir().unwrap();
     let second = super::remote_sftp_edit_working_dir().unwrap();
+    let first_path = first.path().to_path_buf();
+    let second_path = second.path().to_path_buf();
 
-    assert_ne!(first, second);
+    assert_ne!(first_path, second_path);
     assert_eq!(
-        std::fs::metadata(&first).unwrap().permissions().mode() & 0o777,
-        0o700
+        std::fs::metadata(&first_path).unwrap().permissions().mode() & 0o077,
+        0
     );
     assert_eq!(
-        std::fs::metadata(&second).unwrap().permissions().mode() & 0o777,
-        0o700
+        std::fs::metadata(&second_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o077,
+        0
     );
 
-    std::fs::remove_dir_all(first).unwrap();
-    std::fs::remove_dir_all(second).unwrap();
+    drop(first);
+    drop(second);
+    assert!(!first_path.exists());
+    assert!(!second_path.exists());
+}
+
+#[test]
+fn review_temp_files_are_private_unique_and_owned() {
+    let (first_dir, first_path) = super::write_review_temp_file("repo", "first").unwrap();
+    let (second_dir, second_path) = super::write_review_temp_file("repo", "second").unwrap();
+
+    assert_ne!(first_path, second_path);
+    assert_eq!(std::fs::read_to_string(&first_path).unwrap(), "first");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert_eq!(
+            std::fs::metadata(first_dir.path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o077,
+            0
+        );
+    }
+
+    drop(first_dir);
+    drop(second_dir);
+    assert!(!first_path.exists());
+    assert!(!second_path.exists());
 }
 
 #[cfg(unix)]
