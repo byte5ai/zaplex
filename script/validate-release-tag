@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+tag="${1:-}"
+if [[ ! "$tag" =~ ^v[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$ ]] ||
+  [[ "$tag" == *..* ]] || [[ "$tag" == *'@{'* ]] || [[ "$tag" == *. ]]; then
+  echo "Invalid release tag format" >&2
+  exit 1
+fi

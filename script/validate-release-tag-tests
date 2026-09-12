@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+for tag in v1.0.29 v1.0.29-rc.1 v0.daemontest v1.0.0+build.5; do
+  script/validate-release-tag "$tag"
+done
+
+for tag in '' '1.0.0' 'v1.0.0;echo-pwned' 'v1.0.0$(id)' 'v../escape' 'v1.0.0@{1}'; do
+  if script/validate-release-tag "$tag" >/dev/null 2>&1; then
+    echo "unsafe release tag was accepted: $tag" >&2
+    exit 1
+  fi
+done
+
+echo "release tag validation: ok"

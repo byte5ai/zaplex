@@ -31,7 +31,7 @@ _check_tmux() {
         _log SshTmuxInstaller "\"user\""
     fi
 
-    if [ "$TMUX" ]; then
+    if _find "$TMUX";then
         VER=$("$TMUX" -V 2>/dev/null | awk '{print $2}')
         if [ -z "$VER" ]; then
             _err "\"TmuxFailed\""
