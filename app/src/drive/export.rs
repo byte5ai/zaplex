@@ -547,7 +547,11 @@ pub fn safe_filename(filename: &str) -> String {
         dst.push('_');
         true
     });
-    result
+    if matches!(result.as_str(), "" | "." | "..") {
+        "_".to_string()
+    } else {
+        result
+    }
 }
 
 #[cfg(test)]

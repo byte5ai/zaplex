@@ -1023,17 +1023,14 @@ fn spawn_host_scope_requires_explicit_selection(
     registry_node_id.is_none() && daemon_host_id.is_some() && translated_node_id.is_none()
 }
 
-/// A unique local directory for one classic-SSH remote-edit working copy. The
-/// original filename is placed *inside* it (kept intact for the editor's
-/// language detection + tab title). Lives under the OS temp dir; leftovers are
-/// small text files reclaimed by the OS. Never reused (pid + monotonic counter),
-/// so two edits — even of the same remote file — never collide.
+/// Creates a private local directory for one classic-SSH remote-edit working copy.
+/// The original filename is placed inside it for language detection and tab titles.
 #[cfg(all(unix, feature = "local_tty"))]
-fn remote_sftp_edit_working_dir() -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("zaplex-remote-edit-{}-{n}", std::process::id()))
+fn remote_sftp_edit_working_dir() -> std::io::Result<PathBuf> {
+    tempfile::Builder::new()
+        .prefix("zaplex-remote-edit-")
+        .tempdir()
+        .map(tempfile::TempDir::keep)
 }
 
 /// The result of attempting one guardrail signal send (local or remote) —
@@ -9702,18 +9699,20 @@ impl Workspace {
             .map(|name| name.to_os_string())
             .unwrap_or_else(|| std::ffi::OsString::from("remote-file"));
         let display_name = file_name.to_string_lossy().to_string();
-        let working_dir = remote_sftp_edit_working_dir();
-        if let Err(error) = std::fs::create_dir_all(&working_dir) {
-            self.toast_stack.update(ctx, |view, ctx| {
-                view.add_ephemeral_toast(
-                    DismissibleToast::error(format!(
-                        "Couldn't prepare a local copy of {display_name}: {error}"
-                    )),
-                    ctx,
-                );
-            });
-            return true;
-        }
+        let working_dir = match remote_sftp_edit_working_dir() {
+            Ok(working_dir) => working_dir,
+            Err(error) => {
+                self.toast_stack.update(ctx, |view, ctx| {
+                    view.add_ephemeral_toast(
+                        DismissibleToast::error(format!(
+                            "Couldn't prepare a local copy of {display_name}: {error}"
+                        )),
+                        ctx,
+                    );
+                });
+                return true;
+            }
+        };
         let working_copy = working_dir.join(&file_name);
 
         let node_label = node_id.to_string();

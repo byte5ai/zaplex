@@ -3273,6 +3273,28 @@ fn unresolved_daemon_scope_never_falls_back_to_display_name() {
     ));
 }
 
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn remote_edit_working_directories_are_unique_and_private() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let first = super::remote_sftp_edit_working_dir().unwrap();
+    let second = super::remote_sftp_edit_working_dir().unwrap();
+
+    assert_ne!(first, second);
+    assert_eq!(
+        std::fs::metadata(&first).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        std::fs::metadata(&second).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+
+    std::fs::remove_dir_all(first).unwrap();
+    std::fs::remove_dir_all(second).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn adopted_pty_deduplication_is_host_scoped() {
