@@ -73,6 +73,10 @@ jobs:
         run: script/check-docker-supply-chain --self-test
         shell: bash
 
+      - name: Verify fork-facing repository links
+        run: script/fork-link-contract-tests
+        shell: bash
+
       - name: Verify Linux development container security
         run: script/check-linux-dev-container-security
         shell: bash
