@@ -80,7 +80,7 @@ pub fn open_url_in_system(url: &str) {
         //    "native" opening of files is not necessarily going to work.
         // We choose to do the following:
         // 1. First attempt to open with `wslview`, since that is basically made to open stuff in wsl
-        // 2. Use `cmd.exe /c start {url}` to open in the user's default windows browser
+        // 2. Use Windows' URL protocol handler to open the URL in the user's default browser
         //    - If a user does not want this behavior, and wants all opening to go through
         //      WSL, they can set the env variable ZAPLEX_FORCE_WSL_BROWSER.
         // 3. Fall back to default linux url opening behavior.
@@ -92,10 +92,11 @@ pub fn open_url_in_system(url: &str) {
                 ),
             };
 
-            // Attempt to open by
+            // Attempt to open with the Windows URL protocol handler without invoking a shell.
             if !use_wsl_browser() {
-                let mut cmd = command::blocking::Command::new("cmd.exe");
-                cmd.args(["/c", "start", url]);
+                let (program, args) = wsl_url_handler_command(url);
+                let mut cmd = command::blocking::Command::new(program);
+                cmd.args(args);
 
                 // Note: Ideally, we would be calling detached like open::that_detached does.
                 // However, it is probably fine.
@@ -107,7 +108,7 @@ pub fn open_url_in_system(url: &str) {
                 {
                     Ok(_) => return,
                     Err(e) => log::info!(
-                        "Failed to open url with cmd.exe {e:?}, falling back to another method"
+                        "Failed to open url with the Windows protocol handler {e:?}, falling back to another method"
                     ),
                 }
             }
@@ -123,6 +124,11 @@ pub fn open_url_in_system(url: &str) {
             log::warn!("Unable to open url {e:?}");
         }
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn wsl_url_handler_command(url: &str) -> (&'static str, [&str; 2]) {
+    ("rundll32.exe", ["url.dll,FileProtocolHandler", url])
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -296,9 +302,9 @@ impl platform::Delegate for AppDelegate {
     fn open_file_path(&self, path: &Path) {
         cfg_if::cfg_if! {
             if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-                let _ = command::blocking::Command::new("xdg-open")
-                    .arg(path)
-                    .spawn();
+                if let Err(error) = spawn_file_opener("xdg-open", path) {
+                    log::warn!("Unable to open path with xdg-open: {error}");
+                }
             } else if #[cfg(target_family = "wasm")] {
                 if let Some(window) = web_sys::window() {
                     if let Some(path) = path.to_str() {
@@ -558,6 +564,18 @@ impl platform::Delegate for AppDelegate {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn spawn_file_opener(program: &str, path: &Path) -> std::io::Result<()> {
+    let mut command = command::r#async::Command::new(program);
+    command.arg(path).reap_on_drop(true);
+    drop(command.spawn()?);
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "delegate_tests.rs"]
+mod tests;
+
 pub struct IntegrationTestDelegate {
     app_delegate: AppDelegate,
     clipboard: InMemoryClipboard,
@@ -686,3 +704,7 @@ impl platform::Delegate for IntegrationTestDelegate {
         // no-op
     }
 }
+
+#[cfg(test)]
+#[path = "delegate_tests.rs"]
+mod tests;

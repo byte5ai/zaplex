@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,6 +26,8 @@ const ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
 /// claudeplex-desktop reference.
 const TTL: Duration = Duration::from_secs(15 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(target_os = "macos")]
+const KEYCHAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One cached per-account result. `usage: None` records a failed attempt so we
 /// do not hammer the endpoint (or the keychain) again before the TTL elapses.
@@ -41,6 +43,7 @@ pub struct CachedOauth {
 #[derive(Clone, Default)]
 pub struct OauthCache {
     entries: Arc<Mutex<HashMap<PathBuf, CachedOauth>>>,
+    refresh_gate: Arc<Mutex<()>>,
 }
 
 impl OauthCache {
@@ -54,47 +57,49 @@ impl OauthCache {
 /// **default** login only — the keychain entry "Claude Code-credentials" holds
 /// one token (the OS-default login's); reusing it for other accounts would
 /// report one account's quota for all of them.
-fn read_access_token(config_dir: &Path, default_config_dir: &Path) -> Option<String> {
-    if let Ok(raw) = std::fs::read_to_string(config_dir.join(".credentials.json")) {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(token) = json
-                .get("claudeAiOauth")
-                .and_then(|o| o.get("accessToken"))
-                .and_then(|t| t.as_str())
-            {
-                if !token.is_empty() {
-                    return Some(token.to_string());
-                }
-            }
-        }
+async fn read_access_token(config_dir: PathBuf, default_config_dir: PathBuf) -> Option<String> {
+    let credentials_path = config_dir.join(".credentials.json");
+    if let Some(token) = tokio::task::spawn_blocking(move || {
+        let raw = std::fs::read_to_string(credentials_path).ok()?;
+        parse_access_token(&raw)
+    })
+    .await
+    .ok()
+    .flatten()
+    {
+        return Some(token);
     }
     #[cfg(target_os = "macos")]
     if config_dir == default_config_dir {
-        let output = command::blocking::Command::new("security")
+        let mut command = command::r#async::Command::new("security");
+        command
             .args([
                 "find-generic-password",
                 "-s",
                 "Claude Code-credentials",
                 "-w",
             ])
-            .output()
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(KEYCHAIN_TIMEOUT, command.output())
+            .await
+            .ok()?
             .ok()?;
         if output.status.success() {
-            let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
-            if let Some(token) = json
-                .get("claudeAiOauth")
-                .and_then(|o| o.get("accessToken"))
-                .and_then(|t| t.as_str())
-            {
-                if !token.is_empty() {
-                    return Some(token.to_string());
-                }
-            }
+            return parse_access_token(std::str::from_utf8(&output.stdout).ok()?);
         }
     }
     #[cfg(not(target_os = "macos"))]
     let _ = default_config_dir;
     None
+}
+
+fn parse_access_token(raw: &str) -> Option<String> {
+    let json = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    let token = json
+        .get("claudeAiOauth")
+        .and_then(|oauth| oauth.get("accessToken"))
+        .and_then(|token| token.as_str())?;
+    (!token.is_empty()).then(|| token.to_string())
 }
 
 /// GET the usage endpoint with the account's bearer token. Any failure —
@@ -141,7 +146,7 @@ pub async fn refresh_cache(
         let client = client.clone();
         let default_config_dir = default_config_dir.clone();
         async move {
-            match read_access_token(&dir, &default_config_dir) {
+            match read_access_token(dir.clone(), default_config_dir).await {
                 Some(token) => fetch_one(&client, &token).await,
                 None => None,
             }
@@ -162,26 +167,33 @@ where
     claude_config_dirs.sort();
     claude_config_dirs.dedup();
 
-    // Keep the lock for the complete refresh. A concurrent caller waits, then
-    // observes the freshly timestamped entries and skips their requests. The
-    // existing implementation already fetched accounts sequentially, so this
-    // adds cross-refresh single-flight without reducing per-refresh parallelism.
-    let mut cache = cache.entries.lock().await;
-
-    // Drop cache entries for accounts that disappeared.
-    cache.retain(|dir, _| claude_config_dirs.contains(dir));
-
-    let stale: Vec<PathBuf> = claude_config_dirs
-        .into_iter()
-        .filter(|dir| cache.get(dir).is_none_or(|c| c.fetched_at.elapsed() >= TTL))
-        .collect();
+    // Serialize refresh flights without holding the cache mutex across file, keychain, or network
+    // waits. A concurrent caller waits here, then observes the first flight's fresh entries.
+    let _refresh_flight = cache.refresh_gate.lock().await;
+    let stale: Vec<PathBuf> = {
+        let mut entries = cache.entries.lock().await;
+        entries.retain(|dir, _| claude_config_dirs.contains(dir));
+        claude_config_dirs
+            .into_iter()
+            .filter(|dir| {
+                entries
+                    .get(dir)
+                    .is_none_or(|cached| cached.fetched_at.elapsed() >= TTL)
+            })
+            .collect()
+    };
     if stale.is_empty() {
-        return cache.clone();
+        return cache.snapshot().await;
     }
 
-    for dir in stale {
-        let usage = fetch(dir.clone()).await;
-        cache.insert(
+    let fetches = stale.into_iter().map(|dir| {
+        let future = fetch(dir.clone());
+        async move { (dir, future.await) }
+    });
+    let fetched = futures::future::join_all(fetches).await;
+    let mut entries = cache.entries.lock().await;
+    for (dir, usage) in fetched {
+        entries.insert(
             dir,
             CachedOauth {
                 usage,
@@ -189,7 +201,7 @@ where
             },
         );
     }
-    cache.clone()
+    entries.clone()
 }
 
 /// The merge view of a cache: only successful results, keyed by config dir.

@@ -33,7 +33,8 @@ use crate::{
 use driver::AgentDriverError;
 
 use crate::ai::skills::{
-    clone_repo_for_skill, resolve_skill_spec, ResolveSkillError, ResolvedSkill,
+    clone_repo_for_skill, repository_orgs_for_skill_roots, resolve_skill_spec,
+    snapshot_skill_resolution, ResolveSkillError, ResolvedSkill,
 };
 
 pub(crate) use driver::harness::{
@@ -448,13 +449,31 @@ impl AgentDriverRunner {
                 })?;
         }
 
+        let snapshot_spec = skill_spec.clone();
+        let snapshot_working_dir = working_dir.to_path_buf();
+        let resolution_snapshot = foreground
+            .spawn(move |_, ctx| {
+                snapshot_skill_resolution(&snapshot_spec, &snapshot_working_dir, ctx)
+            })
+            .await?;
+        let repository_orgs =
+            repository_orgs_for_skill_roots(resolution_snapshot.repository_roots().to_vec()).await;
         let working_dir_buf = working_dir.to_path_buf();
-        let skill = foreground
-            .spawn(move |_, ctx| resolve_skill_spec(&skill_spec, &working_dir_buf, ctx))
-            .await?
-            .map_err(|err| {
-                AgentDriverError::SkillResolutionFailed(format_skill_resolution_error(err))
-            })?;
+        let skill = tokio::task::spawn_blocking(move || {
+            resolve_skill_spec(
+                &skill_spec,
+                &working_dir_buf,
+                &resolution_snapshot,
+                &repository_orgs,
+            )
+        })
+        .await
+        .map_err(|err| {
+            AgentDriverError::SkillResolutionFailed(format!("Skill resolver worker failed: {err}"))
+        })?
+        .map_err(|err| {
+            AgentDriverError::SkillResolutionFailed(format_skill_resolution_error(err))
+        })?;
         log::debug!(
             "Resolved skill '{}' from {}",
             skill.name,
