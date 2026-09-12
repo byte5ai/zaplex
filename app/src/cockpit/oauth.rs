@@ -27,6 +27,15 @@ const ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
 const TTL: Duration = Duration::from_secs(15 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+fn build_oauth_client_with_proxy(
+    proxy_config: http_client::ProxyConfig,
+) -> Result<reqwest::Client, reqwest::Error> {
+    proxy_config
+        .apply(reqwest::Client::builder())
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+}
+
 /// One cached per-account result. `usage: None` records a failed attempt so we
 /// do not hammer the endpoint (or the keychain) again before the TTL elapses.
 #[derive(Clone, Copy, Debug)]
@@ -134,7 +143,7 @@ pub async fn refresh_cache(
     default_config_dir: PathBuf,
     cache: OauthCache,
 ) -> HashMap<PathBuf, CachedOauth> {
-    let Ok(client) = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build() else {
+    let Ok(client) = build_oauth_client_with_proxy(http_client::current_proxy_config()) else {
         return cache.snapshot().await;
     };
     refresh_cache_with(claude_config_dirs, cache, move |dir| {

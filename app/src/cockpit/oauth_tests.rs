@@ -1,7 +1,43 @@
 use super::*;
+use http_client::{ProxyConfig, ProxyMode};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex as StdMutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex as StdMutex, Once};
 use std::thread;
+
+static INSTALL_CRYPTO_PROVIDER: Once = Once::new();
+
+fn ensure_crypto_provider() {
+    INSTALL_CRYPTO_PROVIDER.call_once(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
+
+#[test]
+fn cockpit_oauth_client_accepts_every_global_proxy_mode() {
+    ensure_crypto_provider();
+    let configs = [
+        ProxyConfig {
+            mode: ProxyMode::System,
+            ..Default::default()
+        },
+        ProxyConfig {
+            mode: ProxyMode::Custom,
+            url: "http://proxy.example:8080".to_string(),
+            username: "alice".to_string(),
+            password: "secret".to_string(),
+            no_proxy: "localhost,.internal".to_string(),
+        },
+        ProxyConfig {
+            mode: ProxyMode::Off,
+            ..Default::default()
+        },
+    ];
+
+    for config in configs {
+        build_oauth_client_with_proxy(config)
+            .expect("cockpit OAuth client should accept the configured proxy mode");
+    }
+}
 
 #[test]
 fn endpoint_contract_treats_low_utilization_as_percent() {
