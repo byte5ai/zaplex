@@ -8,7 +8,9 @@
 
 After an app restart or a transport drop, the daemon sessions on a host keep
 running. The user opens the SSH-manager sidebar, sees the host's **running
-sessions** listed under it (title = cwd basename / shell), clicks one, and it
+Zaplex sessions** listed under it (title = foreground agent provider plus
+task name, falling back to the project/cwd basename where available, otherwise a neutral Zaplex identifier;
+never a shell executable name), clicks one, and it
 opens in a new tab attached to the live session with full scrollback replay.
 Also covers "open a second view of a running session" while connected.
 
@@ -16,7 +18,8 @@ Also covers "open a second view of a running session" while connected.
 
 - **Protocol:** `RemoteServerClient::list_sessions() -> SessionList` and the
   daemon's `handle_list_sessions` (returns `SessionInfo { session_id, title,
-  cwd, alive, last_attached_epoch_millis }`). Runtime-tested.
+  cwd, alive, last_attached_epoch_millis }`). Cross-version recovery requires
+  CI and signed-client/real-host acceptance evidence for the tested commit.
 - **Adopt entry:** `Workspace::adopt_daemon_session(server, pty_session_id, ctx)`
   — creates a daemon tab in *adopt* mode (attach + replay) and connects.
 - **Routing pattern:** panel emits `SshManagerPanelEvent` → `left_panel.rs`
@@ -33,49 +36,50 @@ terminal / no existing connection** at all.
 
 ## Architecture decision
 
-**Workspace orchestrates; the panel is a thin renderer.** Workspace already owns
-the daemon-connect logic (`spawn_daemon_session_connect`: `ensure_control_master`
-→ `check/install_binary` → `connect_session`) and learns the `HostId` on
-`SessionConnected`. So:
+**The panel owns discovery state; Workspace owns adopted tabs.** Discovery must
+also work after restart when no Workspace terminal exists, so the panel uses the
+headless connect-to-list path and keeps loading/error/inventory state per saved
+node. Workspace remains the only owner of opening an adopted terminal tab. So:
 
-- **List:** the panel requests a listing for a node; Workspace ensures the
-  ControlMaster + connects a **list-only** session (no tab) + calls
-  `list_sessions`, then pushes the `Vec<SessionInfo>` back into the panel's
-  per-node state for rendering. Reuses the existing connect path (the running
-  daemon is reused; if none is running the connect spawns it, which is also what
-  surfaces zero sessions cleanly).
-- **Adopt:** the panel emits the picked `pty_session_id`; Workspace calls
-  `adopt_daemon_session`.
+- **List:** the panel runs a **list-only** headless connection (no tab), calls
+  `list_sessions` on every eligible identity-local daemon runtime, and stores
+  the routed result in per-node render state. The default/current route retains
+  the normal install/start/self-heal behaviour; historical routes remain
+  strictly connect-only. Titles use the generation-matched foreground agent
+  provider and task, then project. Failed inventory on a capable daemon may
+  retain a cwd-based project title; peers without agent-inventory support use a
+  neutral session identifier while retaining cwd metadata for routed operations.
+  When multiple runtimes contribute, the combined host-cap row is hidden because
+  each daemon enforces its own ring cap; per-session values remain exact.
+- **Adopt:** the panel emits the picked PTY id, generation, and historical
+  runtime route when present; Workspace calls `adopt_daemon_session`. Historical
+  routes are connect-only and remain pinned through reconnect.
 
-Routing (mirrors `OpenSshTerminal`), both directions:
-- panel → `SshManagerPanelEvent::{RequestSessionList, AdoptDaemonSession}` →
-  `left_panel` → `LeftPanelEvent::…` → `Workspace`.
-- Workspace → `panel.update(set host_sessions[node_id] = sessions)` via the
-  held panel handle (left_panel owns it).
+Routing for adoption mirrors `OpenSshTerminal`: panel →
+`SshManagerPanelEvent::AdoptDaemonSession` → `left_panel` →
+`LeftPanelEvent::AdoptDaemonSession` → `Workspace`.
 
 ## Increments (each compiles warning-clean — wired end-to-end)
 
-1. **Routing + render together (vertical slice):** add the two events through
-   the chain; Workspace handler for `AdoptDaemonSession` → `adopt_daemon_session`;
-   Workspace handler for `RequestSessionList` → connect-list → push back; panel
-   gains `host_sessions: HashMap<node_id, Vec<SessionInfo>>` + renders session
-   child-rows under an **expanded** host + a per-host refresh affordance; row
-   click emits `AdoptDaemonSession`. (Build it as one slice so there's no
-   dead-code interim.)
-2. **List-only connect path:** factor a `spawn_daemon_session_connect` variant
-   that connects without opening a tab and resolves `list_sessions`, used by the
-   `RequestSessionList` handler.
-3. **Polish:** loading/empty/error states per host; refresh on
-   `SessionReconnected`; only show the expander for `session_resilience`-capable
-   key-auth hosts.
+1. **Routing + render together (vertical slice):** wire `AdoptDaemonSession`
+   through Workspace; the panel gains per-node inventory state, renders session
+   child rows under an **expanded** host, and exposes a per-host refresh action.
+2. **List-only connect path:** use the headless connect-to-list helper directly
+   from the panel so discovery never depends on an already-open terminal.
+3. **Polish:** loading/empty/error states per host; refresh on relevant
+   connection/session lifecycle events; only show the expander for
+   `session_resilience`-capable key-auth hosts.
 
-## Open UX decision (before build)
+## Resolved UX decision (2026-09-13)
 
-- **Fetch trigger:** on host-row **expand** (+ a manual refresh icon) — lazy,
-  no background connects. Alternative: auto-fetch on host-connect.
-- **Scope:** any daemon-capable (key-auth, `session_resilience`) host via the
-  connect-to-list path (covers the post-restart case) — vs. only hosts that
-  already have an open daemon terminal (simpler, but misses the main use case).
-
-Recommended: **on-expand fetch + connect-to-list for any daemon-capable host**
-(serves the post-restart adopt case, no background work).
+- **Fetch trigger:** a persistence-enabled host auto-reveals and fetches its
+  Zaplex-session disclosure once when it first becomes connected in an app run.
+  Relevant daemon/session lifecycle events refresh each expanded
+  persistence-enabled disclosure after each acknowledged normal or managed open,
+  on exit, and after every managed Stop/Restart RPC result, including detached
+  sessions and partial failures. An event during an in-flight fetch schedules
+  one follow-up refresh, so a stale response cannot hide the change;
+  the host menu also offers a manual refresh. The user can collapse/reopen it,
+  and the app never reopens a section the user already collapsed.
+- **Scope:** any daemon-capable key-auth host through the connect-to-list path,
+  including the post-restart recovery case and older still-running runtimes.

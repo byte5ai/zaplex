@@ -335,13 +335,14 @@
           <li><code>#spec C1</code> Verbindungen ist das eigenständige Register für alle konfigurierten Hosts und deren Favoriten.</li>
           <li><code>#spec C2</code> Das Tab-Menü projiziert ausschließlich favorisierte Hosts; es speichert keine zweite Konfiguration.</li>
           <li><code>#spec C3</code> Es entsteht keine neue vertikale Symbolleiste. Die vorhandene Sidebar-Navigation bleibt unverändert.</li>
+          <li><code>#spec C4</code> Resiliente Hosts dürfen unterhalb der unveränderten Hostzeile eine „Zaplex-Sessions“-Recovery aufklappen; Shellnamen sind keine Sessionidentität.</li>
         </ul>
       </div>
       <div class="spec-block">
         <h2>Live-Baum</h2>
         <ul>
           <li><code>#spec T1</code> Hierarchie: Host → Projekt → PTY-Session → Agent.</li>
-          <li><code>#spec T2</code> Lokal ist immer sichtbar; ein Remote-Host nur von der ersten bis zur letzten offenen Verbindung.</li>
+          <li><code>#spec T2</code> Lokal ist immer sichtbar; eine Remote-Daemon-Identität nur von ihrer ersten bis zur letzten offenen Verbindung. Aktueller und historischer Daemon desselben Registry-Hosts dürfen während Recovery getrennt erscheinen.</li>
           <li><code>#spec T3</code> Container starten aufgeklappt. Zähler erscheinen nur im zugeklappten Zustand.</li>
         </ul>
       </div>

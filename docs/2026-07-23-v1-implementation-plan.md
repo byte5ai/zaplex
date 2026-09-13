@@ -348,9 +348,11 @@ Push, PR, Tag, Publish oder Release.
   Host-IDs mit dem Register angereichert, Anzeigenamen sind kein Join-Key.
   Entfernte Hosts und verspätete Scans dürfen keine Route wiederbeleben.
 - **Deps/Abnahme:** Issues 09/11, vor 13; lokale Sessions bleiben sichtbar,
-  die erste Remote-Verbindung ergänzt genau eine Hostwurzel und das Schließen
-  der letzten entfernt sie wieder. Verbindungen und Cockpit bleiben getrennte
-  Sidebar-Elemente ohne doppelte Host-/Session-Darstellung.
+  die erste Remote-Verbindung ergänzt genau eine Hostwurzel pro Daemon-Identität
+  und das Schließen der letzten entfernt sie wieder. Während einer
+  versionsübergreifenden Recovery dürfen aktueller und historischer Daemon
+  vorübergehend zwei exakt geroutete Wurzeln desselben Registry-Hosts liefern.
+  Verbindungen und Cockpit bleiben getrennte Sidebar-Elemente.
 - **Rot-Tests:** `tree_hierarchy_is_host_project_pty_agent`,
   `primary_sidebar_keeps_cockpit_and_connections_separate`,
   `connection_server_rows_expose_favorite_connect_disconnect_and_management_actions`,

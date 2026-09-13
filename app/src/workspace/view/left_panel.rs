@@ -154,6 +154,7 @@ pub enum LeftPanelEvent {
         server: warp_ssh_manager::SshServerInfo,
         pty_session_id: String,
         pty_generation: u64,
+        daemon_route: Option<remote_server::transport::DaemonRuntimeRoute>,
     },
     OpenMultiplexerSession {
         node_id: String,
@@ -364,11 +365,13 @@ impl LeftPanelView {
                     server,
                     pty_session_id,
                     pty_generation,
+                    daemon_route,
                 } => {
                     ctx.emit(LeftPanelEvent::AdoptDaemonSession {
                         server: server.clone(),
                         pty_session_id: pty_session_id.clone(),
                         pty_generation: *pty_generation,
+                        daemon_route: daemon_route.clone(),
                     });
                 }
                 SshManagerPanelEvent::OpenMultiplexerSession {

@@ -1197,7 +1197,7 @@ async fn run_remote_guardrail_signal(
     }
 }
 
-type DaemonAdoptionKey = (String, String, u64);
+type DaemonAdoptionKey = (String, String, String, u64);
 
 #[derive(Clone)]
 struct AdoptedDaemonSession {
@@ -1206,8 +1206,21 @@ struct AdoptedDaemonSession {
 }
 
 #[cfg(unix)]
-fn daemon_adoption_key(node_id: &str, pty_session_id: &str, generation: u64) -> DaemonAdoptionKey {
-    (node_id.to_string(), pty_session_id.to_string(), generation)
+fn daemon_adoption_key(
+    node_id: &str,
+    daemon_route: Option<&remote_server::transport::DaemonRuntimeRoute>,
+    pty_session_id: &str,
+    generation: u64,
+) -> DaemonAdoptionKey {
+    let runtime = daemon_route
+        .map(|route| route.runtime_filename())
+        .unwrap_or("current");
+    (
+        node_id.to_string(),
+        runtime.to_string(),
+        pty_session_id.to_string(),
+        generation,
+    )
 }
 
 #[cfg(unix)]
@@ -5217,19 +5230,25 @@ impl Workspace {
             });
             return false;
         };
-        let daemon_supports_account_routing = host_id
-            .and_then(|host_id| {
-                RemoteServerManager::as_ref(ctx)
-                    .connected_daemons()
-                    .into_iter()
-                    .find(|daemon| daemon.host_id == host_id)
-            })
-            .is_some_and(|daemon| {
-                zaplex_remote_session::types::has_feature(
-                    &daemon.features,
-                    zaplex_remote_session::types::FEATURE_AGENT_ACCOUNT_ROUTING_V1,
-                )
+        // Opaque account ids belong to the daemon that supplied the row. Never
+        // move one from a historical runtime to the current peer on the same host.
+        let daemon = RemoteServerManager::as_ref(ctx)
+            .connected_daemons()
+            .into_iter()
+            .find(|daemon| {
+                Some(daemon.host_id.as_str()) == host_id && daemon.is_current_runtime()
             });
+        let Some(daemon) = daemon else {
+            self.show_agent_launch_error(
+                format!("New agent work on {host} requires a session from the current daemon."),
+                ctx,
+            );
+            return false;
+        };
+        let daemon_supports_account_routing = zaplex_remote_session::types::has_feature(
+            &daemon.features,
+            zaplex_remote_session::types::FEATURE_AGENT_ACCOUNT_ROUTING_V1,
+        );
         let account_agent = matches!(agent, CLIAgent::Claude | CLIAgent::Codex);
         if account_agent
             && ((daemon_supports_account_routing && account_id.is_none())
@@ -5777,6 +5796,14 @@ impl Workspace {
                 );
                 return;
             };
+            if !daemon.is_current_runtime() {
+                self.show_agent_launch_error(
+                    "Historical Zaplex sessions can be attached or stopped, but new work starts on the current daemon."
+                        .to_string(),
+                    ctx,
+                );
+                return;
+            }
             let client = daemon.client;
             let session_id = route.session_id.clone();
             let fingerprint = fingerprint.to_string();
@@ -6289,10 +6316,20 @@ impl Workspace {
                     if let Some((pty_session_id, generation)) =
                         crate::cockpit::capabilities::daemon_reattach_target(&session)
                     {
-                        let server = host_id
-                            .and_then(|host_id| self.node_for_daemon_host(host_id, &*ctx))
-                            .and_then(|node_id| resolved_daemon_connection(&node_id));
-                        if let Some(connection) = server {
+                        let daemon = host_id.and_then(|host_id| {
+                            RemoteServerManager::as_ref(ctx)
+                                .connected_daemons()
+                                .into_iter()
+                                .find(|daemon| daemon.host_id == host_id)
+                        });
+                        let target = daemon.and_then(|daemon| {
+                            let connection = daemon
+                                .registry_node_id
+                                .as_deref()
+                                .and_then(resolved_daemon_connection)?;
+                            Some((connection, daemon.daemon_runtime))
+                        });
+                        if let Some((connection, daemon_route)) = target {
                             let expected_agent_binding =
                                 crate::remote_server::agent_session::snapshot_agent_identity(
                                     &session,
@@ -6301,6 +6338,7 @@ impl Workspace {
                                 connection,
                                 pty_session_id.to_string(),
                                 generation,
+                                daemon_route,
                                 Some(expected_agent_binding),
                                 ctx,
                             );
@@ -6386,7 +6424,7 @@ impl Workspace {
                 self.session_not_found_toast(&current.host_label, ctx);
                 return;
             }
-            let node_id = RemoteServerManager::as_ref(ctx)
+            let daemon = RemoteServerManager::as_ref(ctx)
                 .connected_daemons()
                 .into_iter()
                 .find(|daemon| {
@@ -6395,9 +6433,15 @@ impl Workspace {
                             &daemon.features,
                             zaplex_remote_session::types::FEATURE_MANAGED_AGENT_FLEET_V1,
                         )
-                })
-                .and_then(|daemon| daemon.registry_node_id);
-            let Some(connection) = node_id.as_deref().and_then(resolved_daemon_connection) else {
+                });
+            let target = daemon.and_then(|daemon| {
+                let connection = daemon
+                    .registry_node_id
+                    .as_deref()
+                    .and_then(resolved_daemon_connection)?;
+                Some((connection, daemon.daemon_runtime))
+            });
+            let Some((connection, daemon_route)) = target else {
                 self.session_not_found_toast(&current.host_label, ctx);
                 return;
             };
@@ -6405,6 +6449,7 @@ impl Workspace {
                 connection,
                 current.session_id,
                 current.generation,
+                daemon_route,
                 Some(expected_agent_binding),
                 ctx,
             );
@@ -6451,6 +6496,16 @@ impl Workspace {
                 self.session_not_found_toast(&current.host_label, ctx);
                 return;
             };
+            if action == remote_server::proto::ManagedSessionLifecycleAction::Restart
+                && !daemon.is_current_runtime()
+            {
+                self.show_agent_launch_error(
+                    "Historical Zaplex sessions can be attached or stopped, but new work starts on the current daemon."
+                        .to_string(),
+                    ctx,
+                );
+                return;
+            }
             let provider = match current.provider {
                 zaplex_cockpit::Provider::Claude => "claude",
                 zaplex_cockpit::Provider::Codex => "codex",
@@ -6470,6 +6525,7 @@ impl Workspace {
                 project_root: current.project_root,
             };
             let expected_response = request.clone();
+            let host_id = HostId::new(daemon.host_id);
             let client = daemon.client;
             ctx.spawn(
                 async move { client.managed_session_lifecycle(request).await },
@@ -6483,8 +6539,9 @@ impl Workspace {
                     workspace.toast_stack.update(ctx, |stack, ctx| {
                         stack.add_ephemeral_toast(DismissibleToast::default(message), ctx);
                     });
-                    crate::cockpit::CockpitModel::handle(ctx)
-                        .update(ctx, |model, ctx| model.rescan(ctx));
+                    RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+                        manager.report_session_inventory_changed(host_id, ctx);
+                    });
                 },
             );
         }
@@ -9342,6 +9399,7 @@ impl Workspace {
                 server,
                 pty_session_id,
                 pty_generation,
+                daemon_route,
             } => {
                 #[cfg(unix)]
                 match resolve_ssh_connection(server) {
@@ -9349,6 +9407,7 @@ impl Workspace {
                         connection,
                         pty_session_id.clone(),
                         *pty_generation,
+                        daemon_route.clone(),
                         None,
                         ctx,
                     ),
@@ -9359,7 +9418,7 @@ impl Workspace {
                 };
                 #[cfg(not(unix))]
                 {
-                    let _ = (server, pty_session_id, pty_generation);
+                    let _ = (server, pty_session_id, pty_generation, daemon_route);
                     log::warn!("AdoptDaemonSession ignored: daemon sessions are unix-only");
                 }
             }
@@ -9532,7 +9591,8 @@ impl Workspace {
             .connected_daemons()
             .into_iter()
             .any(|daemon| {
-                daemon.registry_node_id.as_deref() == Some(node_id)
+                daemon.is_current_runtime()
+                    && daemon.registry_node_id.as_deref() == Some(node_id)
                     && zaplex_remote_session::types::has_feature(
                         &daemon.features,
                         zaplex_remote_session::types::FEATURE_SAFE_FILE_TRANSACTIONS_V1,
@@ -10213,7 +10273,8 @@ impl Workspace {
             .connected_daemons()
             .into_iter()
             .any(|daemon| {
-                daemon.registry_node_id.as_deref() == Some(node_id.as_str())
+                daemon.is_current_runtime()
+                    && daemon.registry_node_id.as_deref() == Some(node_id.as_str())
                     && zaplex_remote_session::types::has_feature(
                         &daemon.features,
                         zaplex_remote_session::types::FEATURE_MANAGED_AGENT_FLEET_V1,
@@ -11334,8 +11395,8 @@ impl Workspace {
             });
             return;
         };
-        let pty_session_id = binding_key.1.clone();
-        let generation = binding_key.2;
+        let pty_session_id = binding_key.2.clone();
+        let generation = binding_key.3;
         let validation = async move { client.list_agent_sessions().await };
 
         ctx.spawn(validation, move |workspace, result, ctx| {
@@ -11390,12 +11451,14 @@ impl Workspace {
         connection: warp_ssh_manager::ResolvedSshConnection,
         pty_session_id: String,
         pty_generation: u64,
+        daemon_route: Option<remote_server::transport::DaemonRuntimeRoute>,
         expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::remote_server::headless_connect;
 
         let server = connection.server.clone();
+        let is_current_runtime = daemon_route.is_none();
 
         // Prune entries whose tab has since closed, then, if this session is
         // already open in a tab, focus that tab instead of opening a second view
@@ -11403,7 +11466,12 @@ impl Workspace {
         let live_pg_ids: Vec<EntityId> = self.tabs.iter().map(|t| t.pane_group.id()).collect();
         self.adopted_daemon_sessions
             .retain(|_, adopted| live_pg_ids.contains(&adopted.pane_group_id));
-        let binding_key = daemon_adoption_key(&server.node_id, &pty_session_id, pty_generation);
+        let binding_key = daemon_adoption_key(
+            &server.node_id,
+            daemon_route.as_ref(),
+            &pty_session_id,
+            pty_generation,
+        );
         if let Some(adopted) = self.adopted_daemon_sessions.get(&binding_key) {
             let pg_id = adopted.pane_group_id;
             let connection_session_id = adopted.connection_session_id;
@@ -11465,16 +11533,19 @@ impl Workspace {
             self.ssh_tab_nodes
                 .insert(pane_group_id, server.node_id.clone());
         }
-        // Same node_id → daemon session mapping as the fresh-connect path, so the
-        // file manager on an adopted host can open files natively too.
+        // Current-runtime adoption participates in the node's host-level route,
+        // like a fresh connection. Historical adoption is PTY-only: recording it
+        // here could route file operations or new launches to the old daemon.
         #[cfg(feature = "local_tty")]
-        remember_daemon_node_session(
-            &mut self.daemon_node_sessions,
-            server.node_id.clone(),
-            session_id,
-        );
+        if is_current_runtime {
+            remember_daemon_node_session(
+                &mut self.daemon_node_sessions,
+                server.node_id.clone(),
+                session_id,
+            );
+        }
 
-        self.spawn_daemon_session_connect(connection, session_id, ctx);
+        self.spawn_daemon_session_connect(connection, session_id, daemon_route, ctx);
     }
 
     /// Establishes the headless SSH ControlMaster for a daemon session, then
@@ -11485,6 +11556,7 @@ impl Workspace {
         &mut self,
         connection: warp_ssh_manager::ResolvedSshConnection,
         session_id: SessionId,
+        daemon_route: Option<remote_server::transport::DaemonRuntimeRoute>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::remote_server::auth_context::server_api_auth_context;
@@ -11521,8 +11593,11 @@ impl Workspace {
                     log::info!(
                         "daemon connect [{host}]: transport ready — connecting session {session_id:?}"
                     );
-                    let transport = SshTransport::new(socket_path, auth_context.clone())
-                        .with_self_heal(server_for_transport);
+                    let mut transport = SshTransport::new(socket_path, auth_context.clone());
+                    if let Some(daemon_route) = daemon_route {
+                        transport = transport.with_daemon_runtime(daemon_route);
+                    }
+                    let transport = transport.with_self_heal(server_for_transport);
                     let host_label = host.clone();
                     RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
                         // Persistent: a transport drop (ssh slave exit) must trigger
@@ -22082,13 +22157,15 @@ impl Workspace {
             .connected_daemons()
             .into_iter()
             .filter(|daemon| {
-                zaplex_remote_session::types::has_feature(
-                    &daemon.features,
-                    zaplex_remote_session::types::FEATURE_MANAGED_AGENT_FLEET_V1,
-                ) && zaplex_remote_session::types::has_feature(
-                    &daemon.features,
-                    zaplex_remote_session::types::FEATURE_AGENT_ACCOUNT_ROUTING_V1,
-                )
+                daemon.is_current_runtime()
+                    && zaplex_remote_session::types::has_feature(
+                        &daemon.features,
+                        zaplex_remote_session::types::FEATURE_MANAGED_AGENT_FLEET_V1,
+                    )
+                    && zaplex_remote_session::types::has_feature(
+                        &daemon.features,
+                        zaplex_remote_session::types::FEATURE_AGENT_ACCOUNT_ROUTING_V1,
+                    )
             })
             .filter_map(|daemon| daemon.registry_node_id)
             .collect();
@@ -22182,7 +22259,10 @@ impl Workspace {
                 let daemon = RemoteServerManager::as_ref(ctx)
                     .connected_daemons()
                     .into_iter()
-                    .find(|daemon| daemon.registry_node_id.as_deref() == Some(node_id.as_str()));
+                    .find(|daemon| {
+                        daemon.is_current_runtime()
+                            && daemon.registry_node_id.as_deref() == Some(node_id.as_str())
+                    });
                 let Some(daemon) = daemon else {
                     self.spawn_card.update(ctx, |card, ctx| {
                         card.apply_remote_accounts(
@@ -22273,7 +22353,8 @@ impl Workspace {
                         .connected_daemons()
                         .into_iter()
                         .find(|daemon| {
-                            daemon.registry_node_id.as_deref() == Some(node_id)
+                            daemon.is_current_runtime()
+                                && daemon.registry_node_id.as_deref() == Some(node_id)
                                 && zaplex_remote_session::types::has_feature(
                                     &daemon.features,
                                     zaplex_remote_session::types::FEATURE_AGENT_MODEL_DISCOVERY_V1,
@@ -22543,7 +22624,9 @@ impl Workspace {
                                 .connected_daemons()
                                 .into_iter()
                                 .find(|daemon| {
-                                    daemon.registry_node_id.as_deref() == Some(node_id.as_str())
+                                    daemon.is_current_runtime()
+                                        && daemon.registry_node_id.as_deref()
+                                            == Some(node_id.as_str())
                                 });
                             let Some(daemon) = daemon else {
                                 self.spawn_card.update(ctx, |card, ctx| {
@@ -22648,7 +22731,9 @@ impl Workspace {
                                 .connected_daemons()
                                 .into_iter()
                                 .find(|daemon| {
-                                    daemon.registry_node_id.as_deref() == Some(node_id.as_str())
+                                    daemon.is_current_runtime()
+                                        && daemon.registry_node_id.as_deref()
+                                            == Some(node_id.as_str())
                                 });
                             let Some(daemon) = daemon else {
                                 self.execute_spawn_batch(

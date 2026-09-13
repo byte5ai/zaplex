@@ -574,6 +574,39 @@ fn same_display_name_hosts_remain_distinct_by_stable_id() {
 }
 
 #[test]
+fn two_daemon_runtimes_can_share_one_registered_node() {
+    let mut tree = fold_inventory(
+        "local",
+        Vec::new(),
+        vec![
+            (remote_host("devhost", "daemon-current"), Vec::new()),
+            (remote_host("devhost", "daemon-old"), Vec::new()),
+        ],
+    );
+    let registered = vec![
+        RegisteredHost {
+            node_id: "node-dev".to_string(),
+            label: "devhost".to_string(),
+            live_host_id: Some("daemon-current".to_string()),
+        },
+        RegisteredHost {
+            node_id: "node-dev".to_string(),
+            label: "devhost".to_string(),
+            live_host_id: Some("daemon-old".to_string()),
+        },
+    ];
+
+    reconcile_connected_hosts(&mut tree, &registered);
+
+    let remotes: Vec<_> = tree.hosts.iter().filter(|host| !host.is_local).collect();
+    assert_eq!(remotes.len(), 2);
+    assert!(remotes.iter().all(|host| host.is_available()));
+    assert!(remotes
+        .iter()
+        .all(|host| host.registry_node_id.as_deref() == Some("node-dev")));
+}
+
+#[test]
 fn local_host_is_rendered_exactly_once() {
     let mut tree = fold_inventory("box", Vec::new(), Vec::new());
     reconcile_connected_hosts(

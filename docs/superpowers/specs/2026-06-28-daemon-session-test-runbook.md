@@ -3,20 +3,22 @@
 > Branch `feat/stage2-client-attach`. Bring-up of the native persistent
 > remote-session layer against a real SSH host. Covers the **open** flow, the
 > **drop/reconnect** survival, and the **adopt-sidebar** (list + re-attach running
-> sessions). B3 UDP is out of scope. The code path is verified by headless tests +
-> 8 Codex review rounds + a deep self-review; this runbook is for the steps only a
-> real host can exercise (GUI render, mouse, real drop survival).
+> sessions). B3 UDP is out of scope. This document describes acceptance steps,
+> not completed runtime evidence. Record the tested commit and artifact plus
+> observed GUI, replay, and recovery results in the PR.
 
 ## Build & install (handled for the tester)
 
-- DMG: built via `test-dmg.yml` (arch **aarch64**, fast/debug profile) under a tag,
-  delivered to the project `exports/` directory (you fetch it from there — you're on
-  the MacBook, not devhost). Install: open the DMG, drag to Applications. It is
-  ad-hoc self-signed; it installed cleanly last time (no `xattr` dance needed).
-- Daemon binary on the target host (devhost): pre-placed at
-  `~/.zaplex/remote-server/zaplex-<tag>` (matching the DMG's `GIT_RELEASE_TAG`), so
-  the client's `check_binary` passes and the auto-download path (which points at the
-  upstream repo) is never taken. The tag must match the DMG; current: `v0.daemontest-0630`.
+- DMG: build via `test-dmg.yml` on GitHub Actions for **aarch64** with
+  `fast=false`. `dmg_tag` must equal `v` plus `VERSION`; it is a build input,
+  not an instruction to create a Git tag or publish a release. Use the
+  `zap-test-dmg-aarch64` workflow artifact only after the signing/notarization
+  and artifact-upload steps pass. Open the DMG and drag Zaplex to Applications;
+  the MacBook is the test client, never a build or signing host.
+- The workflow bundles the version-matched Linux x86_64 musl daemon for offline
+  installation at `~/.zaplex/remote-server/zaplex-<tag>`. Other supported targets
+  use the pinned [install ladder](2026-07-02-daemon-install-ladder-design.md).
+  No manual daemon pre-placement is required for the bundled target.
 
 ## Preconditions
 
@@ -32,7 +34,7 @@
 
 ## Steps
 
-1. Build + launch the app (debug is fine).
+1. Install and launch the signed/notarized CI artifact described above.
 2. Open the saved host (the same action as a normal SSH connect).
 3. A new tab should appear and, after the connect sequence, show a working remote
    shell **with Zaplex blocks/prompt** (not a bare VT).
@@ -43,8 +45,10 @@
    daemon ring evicted old output, the screen resets and shows a one-line notice
    `[zaplex] scrollback truncated during a long disconnect` (instead of a garbled
    grid) — that's expected.
-6. **Adopt-sidebar:** right-click the host → **Running sessions**. It should list
-   the daemon session(s) on that host (title = cwd/shell). Click one → it re-attaches
+6. **Adopt-sidebar:** expand the connected persistent host's automatically revealed
+   **Zaplex sessions** section (or use the host menu → **Zaplex sessions**). It should list
+   the daemon session(s) on that host (title = agent provider plus task name, falling back to project where available,
+   otherwise a neutral Zaplex session identifier; never a shell executable name). Click one → it re-attaches
    in a new tab (replay + live). Adopting a session that's already open should
    **focus the existing tab**, not open a duplicate. (Only offered for key-auth /
    key-backed-OneKey hosts; otherwise you get a clear "needs key-based
@@ -52,9 +56,20 @@
 7. **Add-host UX:** the saved list shows **only hosts you added** — no auto-imported
    entries. Click **+** → the "Add a host" block offers *Create a blank server* plus
    on-demand `~/.ssh/config` suggestions (the list is otherwise untouched).
-8. **Failure visibility:** a failed connect/open/attach now shows a red
+8. **Failure visibility:** a failed connect/open/attach shows a red
    `[zaplex] …` notice in the tab (e.g. `connection failed (…)`, `could not start
    session: …`, `session ended`) instead of a blank/hung tab.
+9. **Cross-version recovery:** with a session still owned by an older release,
+   connect the current client and confirm that the old session remains listed.
+   Attach and reconnect must reach that exact PTY/runtime; new work uses the
+   current daemon. Historical managed sessions retain Attach/Stop, while
+   Start/Restart are unavailable. Two connected runtimes may have separate
+   Cockpit roots; the combined Connections list must hide their shared host-cap
+   row. A daemon lacking agent inventory uses a neutral session title.
+10. **Refresh:** open and end a session with the disclosure expanded, including
+    while a list request is pending; the final list must reflect the latest
+    lifecycle event. Collapse the section, reconnect, and confirm it stays
+    collapsed until explicitly reopened.
 
 ## Expected client-log sequence (happy path)
 

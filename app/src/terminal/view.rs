@@ -4209,6 +4209,8 @@ impl TerminalView {
                     | RemoteServerManagerEvent::SessionExited { .. }
                     // Advisory notices are rendered by the daemon tab + workspace.
                     | RemoteServerManagerEvent::SessionNotice { .. }
+                    | RemoteServerManagerEvent::SessionInventoryChanged { .. }
+                    | RemoteServerManagerEvent::SessionOpened { .. }
                     | RemoteServerManagerEvent::ManagedLaunchOpened { .. }
                     | RemoteServerManagerEvent::ManagedLaunchFailed { .. } => {}
                 }

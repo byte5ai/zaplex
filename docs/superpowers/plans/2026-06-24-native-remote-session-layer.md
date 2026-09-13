@@ -93,7 +93,7 @@ Additiv zum bestehenden Envelope (`ClientMessage`/`ServerMessage`, 4-Byte-LE-Len
 - `SessionOutput { session_id, seq, bytes }` → Live-PTY-Bytes (monoton steigende `seq` für Replay-Korrelation).
 - `SessionExited { session_id, exit_status }`.
 
-**Versionierung:** Die neuen Messages sind protobuf-additiv (neue Feldnummern) → alte/neue Binaries bleiben dekodierbar; die exakte Version-Handshake-Logik (`Initialize`/`InitializeResponse{server_version}`, exact-match → Reinstall, `manager.rs`) erzwingt aber ohnehin gleiche Release-Tags zwischen Client und Daemon. Capability-Negotiation: `InitializeResponse` um `features: []` ergänzen, damit der Client weiß, ob der Daemon den Session-Host kann.
+**Versionierung:** Die neuen Messages sind protobuf-additiv (neue Feldnummern) → alte/neue Binaries bleiben dekodierbar. Normale Routen starten weiterhin den versionsgleichen aktuellen Daemon; eine später ergänzte Recovery-Ausnahme darf einen explizit inventarisierten älteren Daemon connect-only für dessen bestehende Sessions ansprechen. Capability-Negotiation: `InitializeResponse` um `features: []` ergänzen, damit der Client weiß, ob der Daemon den Session-Host kann.
 
 ---
 
@@ -164,7 +164,7 @@ Die bestehende Zustandsmaschine (`crates/remote_server/src/manager.rs`: `Connect
 ## 11. Build, Deploy, Versionierung
 
 - Der Daemon ist **dasselbe App-Binary** mit Subcommand (`remote-server-daemon`/`-proxy`, `app/src/remote_server/mod.rs`); der neue Session-Host wird darin feature-gegated mitgeliefert — **kein** separates Deploy.
-- **Install/Version:** vorhandener Pfad wiederverwenden (`ssh_transport.rs` install_binary + GitHub-Release/SCP-Fallback + Dev-Cross-Compile-musl). Version-Handshake erzwingt Client==Daemon-Tag; `features` im `InitializeResponse` für sanftes Degradieren, falls ein alter Daemon den Session-Host nicht kann.
+- **Install/Version:** vorhandener Pfad wiederverwenden (`ssh_transport.rs` install_binary + GitHub-Release/SCP-Fallback + Dev-Cross-Compile-musl). Der Standardpfad erzwingt den aktuellen Client-Tag; die spätere Recovery-Ausnahme bindet Attach und Reconnect an die exakt inventarisierte ältere Daemon-Version und bleibt connect-only. `features` im `InitializeResponse` erlauben sanftes Degradieren, falls ein alter Daemon den Session-Host nicht kann.
 
 ---
 
@@ -197,7 +197,7 @@ Stufen 0–4 = **Must-Have-Persistenz (B2)**. Stufe 5 = **B3-Kür**. Jede Stufe 
 
 - **PTY-Ownership-Refactor:** Der Daemon muss robustes PTY-Handling bekommen (heute lebt PTY-Code client-seitig in `local_tty/unix.rs`). Sauber: gemeinsamen PTY-Kern in ein geteiltes Modul ziehen, das Client und Daemon nutzen — **nicht** duplizieren. Aufwand real, aber das ist der nachhaltige Weg.
 - **Daemon-Speicher:** N persistente Sessions × Ring-Buffer → Host-RAM. Ceiling + Detached-Idle-Alter sind Pflicht, kein Nice-to-have.
-- **Version-Lockstep:** Client==Daemon-Tag-Zwang erschwert gemischte Stände; `features`-Negotiation mildert, aber Roll-out-Reihenfolge bedenken.
+- **Gemischte Versionen:** Neue Arbeit verlangt den aktuellen Daemon; bestehende Sessions bleiben bei ihrem besitzenden älteren Daemon. Recovery benötigt dessen inventarisierte Version und Fähigkeiten, migriert keine PTYs und darf den historischen Daemon weder neu starten noch ersetzen.
 - **B3-Komplexität & Security:** eigener AEAD-UDP-Transport ist anspruchsvoll; mosh als Referenz, ggf. Krypto-Review extern. Genau deshalb nachrangig zu B2.
 - **Daemon-Crash/Host-Reboot:** Sessions überleben das (bewusst) **nicht** — ehrlich kommunizieren (§2.3), kein Fake-Versprechen.
 - **Upstream-Touchpoints:** Erweiterungen an `crates/remote_server`/`app/src/terminal` rebase-fähig additiv halten; Substanz in `zaplex_remote_session`.

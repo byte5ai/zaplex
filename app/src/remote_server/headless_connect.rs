@@ -22,18 +22,23 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use futures::lock::Mutex as AsyncMutex;
 use remote_server::auth::RemoteServerAuthContext;
-use remote_server::proto::{InitializeResponse, MultiplexerSessionList, SessionList};
+use remote_server::proto::{
+    AgentSessionInfo, AgentSessionList, InitializeResponse, MultiplexerSessionList, SessionList,
+};
 use remote_server::transport::{Connection, RemoteTransport};
-use warp_core::SessionId;
+use warp_core::{channel::ChannelState, SessionId};
 use warp_ssh_manager::{
     build_ssh_args, preflight_host_key_with_factory, validate_ssh_endpoint, AuthType,
     DefaultWorkspaceCommandFactory, EndpointUse, HostKeyPreflight, ResolvedSshConnection,
     SshServerInfo, WorkspaceCommandFactory,
 };
 use warpui::r#async::executor::Background;
-use zaplex_remote_session::types::{has_feature, FEATURE_MULTIPLEXER_INVENTORY_V1};
+use zaplex_remote_session::types::{
+    has_feature, FEATURE_AGENT_INVENTORY, FEATURE_MULTIPLEXER_INVENTORY_V1, FEATURE_SESSION_HOST,
+};
 
-use super::ssh_transport::SshTransport;
+use super::session_inventory::{HostSessionInventory, RoutedDaemonSession};
+use super::ssh_transport::{DaemonRuntimeRoute, SshTransport};
 
 /// Daemon sessions are allocated `SessionId`s in the **top half** of the u64
 /// space so they cannot collide with shell-bootstrap-minted ids (which are
@@ -44,19 +49,101 @@ static NEXT_DAEMON_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 static CONTROL_MASTER_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>> =
     LazyLock::new(Mutex::default);
 
-/// Session inventory returned by one authenticated daemon connection.
-///
-/// Older daemons contribute their native sessions and an empty multiplexer
-/// list. A client never replaces the typed multiplexer RPC with a host-shell
-/// fallback.
-#[derive(Debug, Default)]
-pub struct HostSessionInventory {
-    pub daemon: SessionList,
-    pub multiplexers: MultiplexerSessionList,
-}
-
 fn supports_multiplexer_inventory(response: &InitializeResponse) -> bool {
     has_feature(&response.features, FEATURE_MULTIPLEXER_INVENTORY_V1)
+}
+
+fn supports_agent_inventory(response: &InitializeResponse) -> bool {
+    has_feature(&response.features, FEATURE_AGENT_INVENTORY)
+}
+
+fn supports_session_host(response: &InitializeResponse) -> bool {
+    has_feature(&response.features, FEATURE_SESSION_HOST)
+}
+
+fn parse_release_daemon_version(version: &str) -> Option<semver::Version> {
+    let version = version.strip_prefix('v').unwrap_or(version);
+    let mut parsed = semver::Version::parse(version).ok().or_else(|| {
+        let parts = version.split('.').collect::<Vec<_>>();
+        match parts.as_slice() {
+            [major, minor] => format!("{major}.{minor}.0").parse().ok(),
+            [major, minor, suffix]
+                if suffix
+                    .strip_prefix("dev")
+                    .or_else(|| suffix.strip_prefix("rc"))
+                    .is_some_and(|number| {
+                        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+                    }) =>
+            {
+                format!("{major}.{minor}.0-{suffix}").parse().ok()
+            }
+            _ => None,
+        }
+    })?;
+    // Release tags also use rcN/devN (and alphaN/betaN). Split the numeric
+    // component so rc10 follows rc2, and dotted legacy tags compare equally.
+    for label in ["alpha", "beta", "dev", "rc"] {
+        if let Some(number) = parsed.pre.as_str().strip_prefix(label) {
+            if !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()) {
+                parsed.pre = format!("{label}.{number}").parse().ok()?;
+                break;
+            }
+        }
+    }
+    Some(parsed)
+}
+
+fn is_older_release_daemon(current: Option<&str>, observed: &str) -> bool {
+    match (
+        current.and_then(parse_release_daemon_version),
+        parse_release_daemon_version(observed),
+    ) {
+        (Some(current), Some(observed)) => observed.cmp_precedence(&current).is_lt(),
+        (None, _) | (Some(_), None) => false,
+    }
+}
+
+fn agent_provider_display_name(provider: &str) -> &str {
+    if provider.eq_ignore_ascii_case("codex") {
+        "Codex"
+    } else if provider.eq_ignore_ascii_case("claude") {
+        "Claude"
+    } else {
+        provider
+    }
+}
+
+fn agent_session_display_title(session: &AgentSessionInfo) -> String {
+    let provider = agent_provider_display_name(&session.provider);
+    let identity = [&session.name, &session.project_name]
+        .into_iter()
+        .find(|value| !value.is_empty() && !value.eq_ignore_ascii_case(provider));
+    identity
+        .map(|identity| format!("{provider} · {identity}"))
+        .unwrap_or_else(|| provider.to_string())
+}
+
+fn enrich_daemon_session_titles(daemon: &mut SessionList, agents: &AgentSessionList) {
+    for session in &mut daemon.sessions {
+        let agent = agents.sessions.iter().find(|agent| {
+            agent.pty_foreground
+                && agent.pty_session_id == session.session_id
+                && agent.pty_session_generation == session.generation
+        });
+        session.title = agent.map(agent_session_display_title).unwrap_or_else(|| {
+            std::path::Path::new(&session.cwd)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+    }
+}
+
+fn neutralize_legacy_session_titles(daemon: &mut SessionList) {
+    for session in &mut daemon.sessions {
+        session.title.clear();
+        session.managed = None;
+    }
 }
 
 /// Allocates a fresh, collision-safe `SessionId` for a daemon-hosted session.
@@ -448,10 +535,10 @@ pub async fn prepare_daemon_transport(
     }
 }
 
-/// Connects to `server`'s daemon (a transient connection) and returns the
-/// sessions it currently owns plus any existing tmux/byobu sessions — including
-/// ones that survived an app restart or transport drop, which is the whole point
-/// of the adopt-sidebar. Self-contained:
+/// Connects transiently to every discoverable daemon runtime on `server` and
+/// returns the sessions they own plus any existing tmux/byobu sessions —
+/// including ones that survived an app restart, transport drop, or client
+/// upgrade, which is the whole point of the adopt-sidebar. Self-contained:
 /// brings up the ControlMaster + binary, connects, runs the initialize handshake,
 /// calls `list_sessions`, then tears the transient connection down again (the
 /// daemon and its sessions persist independently of this connection).
@@ -459,14 +546,11 @@ pub async fn prepare_daemon_transport(
 /// Request/response works without draining the client event channel — responses
 /// are routed to per-request oneshots; the event channel is unbounded so the
 /// reader never blocks on our ignoring it.
-pub async fn list_daemon_sessions(
-    server: SshServerInfo,
-    socket_path: PathBuf,
-    auth_context: Arc<RemoteServerAuthContext>,
+async fn query_daemon_inventory(
+    transport: &SshTransport,
+    auth_context: &RemoteServerAuthContext,
     executor: Arc<Background>,
-) -> std::result::Result<HostSessionInventory, String> {
-    prepare_daemon_transport(server, socket_path.clone(), auth_context.clone()).await?;
-    let transport = SshTransport::new(socket_path, auth_context.clone());
+) -> std::result::Result<(InitializeResponse, SessionList, MultiplexerSessionList), String> {
     let Connection { client, child, .. } = transport
         .connect(executor)
         .await
@@ -479,10 +563,23 @@ pub async fn list_daemon_sessions(
         .initialize(auth_token.as_deref())
         .await
         .map_err(|e| format!("daemon handshake failed: {e:#}"))?;
-    let daemon = client
+    let mut daemon = client
         .list_sessions()
         .await
         .map_err(|e| format!("list_sessions failed: {e:#}"))?;
+    if supports_agent_inventory(&initialize) {
+        match client.list_agent_sessions().await {
+            Ok(agents) => enrich_daemon_session_titles(&mut daemon, &agents),
+            Err(error) => {
+                log::warn!(
+                    "list_agent_sessions failed while enriching persistent session names: {error:#}"
+                );
+                enrich_daemon_session_titles(&mut daemon, &AgentSessionList::default());
+            }
+        }
+    } else {
+        neutralize_legacy_session_titles(&mut daemon);
+    }
     let multiplexers = if supports_multiplexer_inventory(&initialize) {
         client
             .list_multiplexer_sessions()
@@ -491,10 +588,151 @@ pub async fn list_daemon_sessions(
     } else {
         MultiplexerSessionList::default()
     };
-    Ok(HostSessionInventory {
+    Ok((initialize, daemon, multiplexers))
+}
+
+fn merge_daemon_inventory(
+    inventory: &mut HostSessionInventory,
+    daemon: SessionList,
+    multiplexers: MultiplexerSessionList,
+    route: Option<DaemonRuntimeRoute>,
+    observed_daemons: usize,
+) {
+    let routed_sessions: Vec<RoutedDaemonSession> = daemon
+        .sessions
+        .iter()
+        .cloned()
+        .map(|session| RoutedDaemonSession {
+            session,
+            route: route.clone(),
+        })
+        .collect();
+    if observed_daemons == 0 {
+        inventory.daemon = daemon;
+        inventory.multiplexers = multiplexers;
+    } else {
+        // Every daemon enforces its own ring cap. A single SessionList cannot
+        // represent several independent caps honestly, so suppress the host
+        // aggregate while retaining exact per-session usage.
+        inventory.daemon.host_ring_cap_bytes = 0;
+        inventory.daemon.sessions.extend(daemon.sessions);
+        if inventory.multiplexers.sessions.is_empty() {
+            inventory.multiplexers = multiplexers;
+        }
+    }
+    inventory.sessions.extend(routed_sessions);
+}
+
+fn single_daemon_inventory(
+    daemon: SessionList,
+    multiplexers: MultiplexerSessionList,
+    route: Option<DaemonRuntimeRoute>,
+) -> HostSessionInventory {
+    let sessions = daemon
+        .sessions
+        .iter()
+        .cloned()
+        .map(|session| RoutedDaemonSession {
+            session,
+            route: route.clone(),
+        })
+        .collect();
+    HostSessionInventory {
         daemon,
+        sessions,
         multiplexers,
-    })
+    }
+}
+
+pub async fn list_daemon_sessions(
+    server: SshServerInfo,
+    socket_path: PathBuf,
+    auth_context: Arc<RemoteServerAuthContext>,
+    executor: Arc<Background>,
+) -> std::result::Result<HostSessionInventory, String> {
+    prepare_daemon_transport(server, socket_path.clone(), auth_context.clone()).await?;
+    let base_transport = SshTransport::new(socket_path, auth_context.clone());
+    let runtimes = match base_transport.list_daemon_runtime_filenames().await {
+        Ok(runtimes) => runtimes,
+        Err(error) => {
+            log::warn!("{error}; falling back to the current daemon runtime");
+            let (_, daemon, multiplexers) =
+                query_daemon_inventory(&base_transport, &auth_context, executor).await?;
+            return Ok(single_daemon_inventory(daemon, multiplexers, None));
+        }
+    };
+
+    if runtimes.is_empty() {
+        let (_, daemon, multiplexers) =
+            query_daemon_inventory(&base_transport, &auth_context, executor).await?;
+        return Ok(single_daemon_inventory(daemon, multiplexers, None));
+    }
+
+    let mut inventory = HostSessionInventory::default();
+    let mut observed_daemons = 0;
+    for runtime_filename in runtimes {
+        let current_runtime =
+            runtime_filename == remote_server::setup::daemon_runtime_filename("sock");
+        if !current_runtime && ChannelState::app_version().is_none() {
+            log::warn!(
+                "skipping daemon runtime {runtime_filename} from an unversioned source build"
+            );
+            continue;
+        }
+        let transport = if current_runtime {
+            base_transport.clone()
+        } else {
+            let probe_route = DaemonRuntimeRoute::new(runtime_filename.clone(), String::new())?;
+            base_transport.clone().with_daemon_runtime(probe_route)
+        };
+        let (initialize, daemon, multiplexers) =
+            match query_daemon_inventory(&transport, &auth_context, executor.clone()).await {
+                Ok(result) => result,
+                Err(error) => {
+                    log::warn!("skipping unreachable daemon runtime {runtime_filename}: {error}");
+                    continue;
+                }
+            };
+        if !supports_session_host(&initialize) {
+            log::warn!("skipping daemon runtime {runtime_filename} without session-host support");
+            continue;
+        }
+        if !current_runtime
+            && !is_older_release_daemon(
+                ChannelState::app_version(),
+                initialize.server_version.as_str(),
+            )
+        {
+            log::warn!(
+                "skipping non-older daemon runtime {runtime_filename} reporting version {:?}",
+                initialize.server_version
+            );
+            continue;
+        }
+        let route = if current_runtime {
+            None
+        } else {
+            Some(DaemonRuntimeRoute::new(
+                runtime_filename,
+                initialize.server_version,
+            )?)
+        };
+        merge_daemon_inventory(
+            &mut inventory,
+            daemon,
+            multiplexers,
+            route,
+            observed_daemons,
+        );
+        observed_daemons += 1;
+    }
+
+    if observed_daemons == 0 {
+        let (_, daemon, multiplexers) =
+            query_daemon_inventory(&base_transport, &auth_context, executor).await?;
+        return Ok(single_daemon_inventory(daemon, multiplexers, None));
+    }
+    Ok(inventory)
 }
 
 #[cfg(test)]

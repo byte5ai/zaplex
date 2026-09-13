@@ -608,7 +608,11 @@ pub fn run() -> Result<()> {
             #[cfg(not(target_family = "wasm"))]
             warp_cli::Command::Worker(warp_cli::WorkerCommand::RemoteServerProxy(args)) => {
                 init_common(&LaunchMode::RemoteServerProxy, None)?;
-                return crate::remote_server::run_proxy(args.identity_key.clone());
+                return crate::remote_server::run_proxy(
+                    args.identity.identity_key.clone(),
+                    args.runtime_filename.clone(),
+                    args.list_runtimes,
+                );
             }
             #[cfg(not(target_family = "wasm"))]
             warp_cli::Command::Worker(warp_cli::WorkerCommand::RemoteServerDaemon(args)) => {

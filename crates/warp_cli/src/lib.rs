@@ -62,6 +62,20 @@ pub struct RemoteServerIdentityArgs {
     pub identity_key: String,
 }
 
+/// Hidden proxy-only routing arguments. A current client may explicitly bridge
+/// to an older, still-running daemon that owns persistent sessions.
+#[derive(Debug, Clone, Default, clap::Args)]
+pub struct RemoteServerProxyArgs {
+    #[command(flatten)]
+    pub identity: RemoteServerIdentityArgs,
+    /// Existing daemon socket filename inside the identity directory.
+    #[arg(long = "runtime-filename", hide = true)]
+    pub runtime_filename: Option<String>,
+    /// Print the identity's existing daemon socket filenames and exit.
+    #[arg(long = "list-runtimes", hide = true)]
+    pub list_runtimes: bool,
+}
+
 /// Agent identity accepted by the hidden structured hook worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum CliAgentHookAgent {
@@ -337,7 +351,7 @@ pub enum WorkerCommand {
     /// to the daemon via a Unix domain socket.
     #[cfg(not(target_family = "wasm"))]
     #[clap(hide = true)]
-    RemoteServerProxy(RemoteServerIdentityArgs),
+    RemoteServerProxy(RemoteServerProxyArgs),
 
     /// Run the long-lived remote development server daemon.
     /// Listens on a Unix domain socket and accepts multiple concurrent

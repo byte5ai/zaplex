@@ -19,6 +19,42 @@ fn remote_proxy_command_quotes_identity_key() {
 
     assert!(command.contains("remote-server-proxy --identity-key"));
     assert!(command.contains("'user id/with spaces'"));
+    assert!(!command.contains("--runtime-filename"));
+}
+
+#[test]
+fn proxy_command_targets_the_exact_discovered_runtime() {
+    let route =
+        DaemonRuntimeRoute::new("server-v1.0.28.sock".to_string(), "v1.0.28".to_string()).unwrap();
+    let transport = SshTransport::new(PathBuf::from("/tmp/control"), static_auth_context())
+        .with_daemon_runtime(route.clone());
+
+    assert!(transport
+        .remote_proxy_command()
+        .contains("--runtime-filename server-v1.0.28.sock"));
+    assert_eq!(transport.daemon_runtime(), Some(&route));
+    assert_eq!(
+        transport.server_version_requirement(),
+        ServerVersionRequirement::Exact("v1.0.28".to_string())
+    );
+}
+
+#[test]
+fn default_proxy_command_keeps_the_current_version_isolated_route() {
+    let transport = SshTransport::new(PathBuf::from("/tmp/control"), static_auth_context());
+
+    assert!(!transport
+        .remote_proxy_command()
+        .contains("--runtime-filename"));
+    assert_eq!(
+        transport.server_version_requirement(),
+        ServerVersionRequirement::Current
+    );
+}
+
+#[test]
+fn daemon_runtime_route_rejects_path_traversal() {
+    assert!(DaemonRuntimeRoute::new("../server-v1.sock".to_string(), "v1".to_string()).is_err());
 }
 
 #[test]

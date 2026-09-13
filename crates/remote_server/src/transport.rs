@@ -20,6 +20,44 @@ use warpui::r#async::executor;
 use crate::client::{ClientEvent, RemoteServerClient};
 use crate::setup::{PreinstallCheckResult, RemotePlatform};
 
+/// Version identity the manager must observe after a transport connects.
+/// Explicit legacy daemon routes pin the exact version discovered during
+/// inventory instead of weakening the normal current-client requirement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ServerVersionRequirement {
+    Current,
+    Exact(String),
+}
+
+/// Exact identity-local daemon runtime selected from authenticated inventory.
+/// The filename routes the proxy; the independently observed version pins the
+/// handshake on initial attach and every reconnect.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct DaemonRuntimeRoute {
+    runtime_filename: String,
+    server_version: String,
+}
+
+impl DaemonRuntimeRoute {
+    pub fn new(runtime_filename: String, server_version: String) -> Result<Self, String> {
+        if !crate::setup::is_daemon_socket_filename(&runtime_filename) {
+            return Err("invalid daemon runtime filename".to_string());
+        }
+        Ok(Self {
+            runtime_filename,
+            server_version,
+        })
+    }
+
+    pub fn runtime_filename(&self) -> &str {
+        &self.runtime_filename
+    }
+
+    pub fn server_version(&self) -> &str {
+        &self.server_version
+    }
+}
+
 /// A successful return from [`RemoteTransport::connect`].
 ///
 /// Bundles the live [`RemoteServerClient`] and its [`ClientEvent`]
@@ -61,6 +99,17 @@ pub struct Connection {
 /// Object-safe: returns boxed futures so implementations can be stored
 /// as `Arc<dyn RemoteTransport>` for reconnection.
 pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
+    /// Returns the explicit historical daemon route, if this transport is not
+    /// using the normal current-runtime rendezvous.
+    fn daemon_runtime_route(&self) -> Option<&DaemonRuntimeRoute> {
+        None
+    }
+
+    /// Declares which daemon version is valid for this exact transport route.
+    fn server_version_requirement(&self) -> ServerVersionRequirement {
+        ServerVersionRequirement::Current
+    }
+
     /// Detects the remote host's OS and architecture by running `uname -sm`.
     ///
     /// Returns the parsed [`RemotePlatform`] on success, or an error string

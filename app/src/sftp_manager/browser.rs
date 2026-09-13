@@ -1462,7 +1462,8 @@ impl SftpBrowserView {
             .connected_daemons()
             .into_iter()
             .find(|daemon| {
-                daemon.registry_node_id.as_deref() == Some(self.node_id.as_str())
+                daemon.is_current_runtime()
+                    && daemon.registry_node_id.as_deref() == Some(self.node_id.as_str())
                     && has_feature(&daemon.features, FEATURE_SAFE_FILE_TRANSACTIONS_V1)
             })
             .map(|daemon| {

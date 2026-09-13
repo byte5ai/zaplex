@@ -32,7 +32,7 @@ Figma: none provided. The existing approved Cockpit mockups in GitHub issue #160
 
 5. Stop terminates the selected managed PTY and its process group, waits for process exit, removes it from the daemon inventory, and reports success only after that exact generation is gone. A process that already exited produces an idempotent not-running result rather than targeting another process.
 
-6. Restart performs a generation-checked stop followed by a new managed start with the same host, account, project, provider, and launch configuration. The replacement receives a new PTY session id/generation; partial failure is visible and never presented as a successful restart.
+6. Restart performs a generation-checked stop followed by a new managed start with the same host, account, project, provider, and launch configuration. The replacement receives a new PTY session id/generation; partial failure is visible and never presented as a successful restart. Start and Restart require the current daemon route. A historical runtime may still Attach or Stop its existing managed sessions, but cannot start replacement work; its Start/Restart controls are unavailable and direct requests fail before any mutation. Daemon-local account ids are never silently transferred to the current daemon.
 
 7. Attach uses the existing daemon replay path, including the frozen bootstrap preamble and exact foreground-agent binding. Reattach after a transport interruption cannot attach to an unrelated PTY that reused a client-side display row.
 

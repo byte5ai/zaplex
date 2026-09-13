@@ -833,6 +833,232 @@ fn old_daemon_without_host_cap_never_gets_a_guessed_aggregate() {
 }
 
 #[test]
+fn daemon_session_rows_keep_the_same_mouse_state_across_renders() {
+    let mut states = HashMap::new();
+    let inventory = vec![
+        crate::remote_server::session_inventory::RoutedDaemonSession {
+            session: remote_server::proto::SessionInfo {
+                session_id: "pty-1".to_string(),
+                ..Default::default()
+            },
+            route: None,
+        },
+    ];
+    let key = session_row_key("devhost", &inventory[0].session, None);
+
+    sync_session_row_states(&mut states, "devhost", &inventory);
+    let original = states[&key].clone();
+    sync_session_row_states(&mut states, "devhost", &inventory);
+
+    assert!(Arc::ptr_eq(&original, &states[&key]));
+
+    let replacement = vec![
+        crate::remote_server::session_inventory::RoutedDaemonSession {
+            session: remote_server::proto::SessionInfo {
+                session_id: "pty-2".to_string(),
+                ..Default::default()
+            },
+            route: None,
+        },
+    ];
+    let replacement_key = session_row_key("devhost", &replacement[0].session, None);
+    sync_session_row_states(&mut states, "devhost", &replacement);
+    assert!(!states.contains_key(&key));
+    assert!(states.contains_key(&replacement_key));
+}
+
+#[test]
+fn identical_pty_identities_on_two_daemons_have_distinct_row_state() {
+    let session = remote_server::proto::SessionInfo {
+        session_id: "pty-1".to_string(),
+        generation: 7,
+        ..Default::default()
+    };
+    let old_route = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.28.sock".to_string(),
+        "v1.0.28".to_string(),
+    )
+    .unwrap();
+    let current_route = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.29.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap();
+
+    assert_ne!(
+        session_row_key("devhost", &session, Some(&old_route)),
+        session_row_key("devhost", &session, Some(&current_route))
+    );
+}
+
+#[test]
+fn one_registry_node_keeps_every_connected_daemon_identity() {
+    let grouped = connected_hosts_by_registry_node([
+        (
+            "node-dev".to_string(),
+            HostId::new("daemon-current".to_string()),
+        ),
+        (
+            "node-dev".to_string(),
+            HostId::new("daemon-old".to_string()),
+        ),
+    ]);
+
+    assert_eq!(
+        grouped["node-dev"],
+        vec!["daemon-current".to_string(), "daemon-old".to_string()]
+    );
+}
+
+fn with_session_panel(
+    test: impl FnOnce(&mut SshManagerPanel, &mut ViewContext<SshManagerPanel>) + 'static,
+) {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        app.add_singleton_model(FavoritesStore::new_for_test);
+        app.add_singleton_model(RemoteServerManager::new);
+        let (_, panel) = app.add_window(WindowStyle::NotStealFocus, SshManagerPanel::new);
+        panel.update(&mut app, |panel, ctx| {
+            panel.set_nodes_for_test(vec![server("devhost", None, "Development", 0)], ctx);
+            test(panel, ctx);
+        });
+    });
+}
+
+#[test]
+fn persistent_disclosures_refresh_after_disconnect_without_reopening_collapsed_hosts() {
+    with_session_panel(|panel, _ctx| {
+        panel.resilient_hosts.insert("devhost".to_string());
+        panel
+            .connected_host_ids
+            .insert("devhost".to_string(), vec!["daemon-current".to_string()]);
+        panel.auto_reveal_connected_sessions();
+        assert!(panel.sessions_expanded.contains("devhost"));
+
+        panel.connected_host_ids.clear();
+        assert_eq!(panel.session_refresh_ids(), ["devhost"]);
+
+        panel.sessions_expanded.remove("devhost");
+        panel
+            .connected_host_ids
+            .insert("devhost".to_string(), vec!["daemon-current".to_string()]);
+        panel.auto_reveal_connected_sessions();
+        assert!(!panel.sessions_expanded.contains("devhost"));
+        assert!(panel.session_refresh_ids().is_empty());
+    });
+}
+
+#[test]
+fn session_lifecycle_events_during_inventory_fetch_coalesce_into_one_followup() {
+    with_session_panel(|panel, ctx| {
+        let generation = panel.begin_session_fetch("devhost").unwrap();
+        assert_eq!(panel.begin_session_fetch("devhost"), None);
+        assert_eq!(panel.begin_session_fetch("devhost"), None);
+        assert_eq!(panel.sessions_loading.len(), 1);
+        assert!(panel.complete_session_fetch("devhost", generation, Ok(Default::default()), ctx));
+
+        let next_generation = panel.begin_session_fetch("devhost").unwrap();
+        let inventory = crate::remote_server::session_inventory::HostSessionInventory {
+            sessions: vec![
+                crate::remote_server::session_inventory::RoutedDaemonSession {
+                    session: SessionInfo {
+                        session_id: "newly-opened-session".to_string(),
+                        ..Default::default()
+                    },
+                    route: None,
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(!panel.complete_session_fetch("devhost", next_generation, Ok(inventory), ctx));
+        assert_eq!(
+            panel.host_session_inventories["devhost"].sessions[0]
+                .session
+                .session_id,
+            "newly-opened-session"
+        );
+        assert!(panel.sessions_loading.is_empty());
+        assert!(panel.sessions_refresh_pending.is_empty());
+    });
+}
+
+#[test]
+fn changed_or_deleted_hosts_reject_old_inventory_results() {
+    with_session_panel(|panel, ctx| {
+        let old_generation = panel.begin_session_fetch("devhost").unwrap();
+        panel.invalidate_session_inventories();
+        assert_eq!(panel.begin_session_fetch("devhost"), None);
+        assert!(panel.complete_session_fetch(
+            "devhost",
+            old_generation,
+            Ok(Default::default()),
+            ctx
+        ));
+        assert!(!panel.host_session_inventories.contains_key("devhost"));
+
+        let changed_generation = panel.begin_session_fetch("devhost").unwrap();
+        panel.set_nodes_for_test(Vec::new(), ctx);
+        assert!(!panel.complete_session_fetch(
+            "devhost",
+            changed_generation,
+            Err("old endpoint".to_string()),
+            ctx
+        ));
+        assert!(!panel.sessions_error.contains_key("devhost"));
+        assert!(panel.sessions_loading.is_empty());
+
+        panel.set_nodes_for_test(vec![server("devhost", None, "Replacement", 0)], ctx);
+        let replacement_generation = panel.begin_session_fetch("devhost").unwrap();
+        assert!(!panel.complete_session_fetch(
+            "devhost",
+            changed_generation,
+            Ok(Default::default()),
+            ctx
+        ));
+        assert_eq!(
+            panel.sessions_loading.get("devhost"),
+            Some(&replacement_generation)
+        );
+        assert!(!panel.host_session_inventories.contains_key("devhost"));
+        assert!(!panel.complete_session_fetch(
+            "devhost",
+            replacement_generation,
+            Ok(Default::default()),
+            ctx
+        ));
+        assert!(panel.host_session_inventories.contains_key("devhost"));
+    });
+}
+
+#[test]
+fn empty_titles_are_presented_as_zaplex_sessions() {
+    crate::i18n::init(Some("en"));
+    let session = remote_server::proto::SessionInfo {
+        session_id: "12345678-abcdef".to_string(),
+        cwd: "/srv/project".to_string(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        daemon_session_title(&session),
+        "Zaplex session · \u{2068}12345678\u{2069}"
+    );
+}
+
+#[test]
+fn normalized_agent_titles_are_preserved() {
+    let session = remote_server::proto::SessionInfo {
+        title: "Codex · zaplex".to_string(),
+        ..Default::default()
+    };
+
+    assert_eq!(daemon_session_title(&session), "Codex · zaplex");
+}
+
+#[test]
 fn multiplexer_kind_selects_only_non_destructive_attach_modes() {
     assert_eq!(
         multiplexer_attach_mode(MultiplexerKind::Tmux as i32, 0),

@@ -211,6 +211,7 @@ fn available_subscription_hosts(ctx: &AppContext) -> Vec<HostIdentity> {
         RemoteServerManager::as_ref(ctx)
             .connected_daemons()
             .into_iter()
+            .filter(|daemon| daemon.is_current_runtime())
             .map(|daemon| HostIdentity {
                 id: daemon.host_id,
                 display_name: daemon.host_label,
@@ -1067,7 +1068,7 @@ fn remote_candidates(
     let daemon = RemoteServerManager::as_ref(ctx)
         .connected_daemons()
         .into_iter()
-        .find(|daemon| daemon.host_id == host_id)
+        .find(|daemon| daemon.host_id == host_id && daemon.is_current_runtime())
         .with_context(|| format!("remote host {host_id} is not connected"))?;
     if !has_feature(&daemon.features, FEATURE_AGENT_ACCOUNT_ROUTING_V1) {
         bail!("remote host cannot verify subscription account identity; update its Zaplex daemon");

@@ -4,23 +4,26 @@
 //! Responsibilities:
 //! 1. Acquire an exclusive `flock` on the PID file to serialise concurrent
 //!    proxy starts (e.g. two tabs SSH-ing to the same host at the same time).
-//! 2. Connect to the matching daemon socket (versioned for Zaplex release builds, see
-//!    [`setup::daemon_runtime_filename`]).
-//! 3. If not: spawn the daemon subcommand in a new session and wait for its
-//!    socket to accept connections.
+//! 2. Connect to the matching daemon socket (versioned for Zaplex release
+//!    builds, see [`setup::daemon_runtime_filename`]). An explicit historical
+//!    runtime is connect-only and is never started or replaced.
+//! 3. On the default route only, spawn the daemon subcommand in a new session
+//!    and wait for its socket to accept connections.
 //! 4. Bridge stdin/stdout over the connected socket using the existing
 //!    4-byte length-prefixed frame format.
 //!
 //! For Zaplex (Oss) release builds the socket/PID names carry the release
 //! tag: reuse-by-liveness alone once bridged new clients to a running daemon
 //! from a PREVIOUS release (RC finding 2026-07-19) — versioned rendezvous
-//! makes that structurally impossible. An old daemon stays reachable only
-//! under its old rendezvous name (its own release's clients) and retires via
-//! its idle grace timer once its last session ends. Source builds and
-//! non-Oss channels keep the legacy unversioned names.
+//! makes that structurally impossible on the default route. A newer client can
+//! inventory identity-local runtime sockets and explicitly bridge to an old
+//! daemon for session recovery. The old daemon retires via its idle grace timer
+//! once its last session ends. Source builds and non-Oss channels keep the
+//! legacy unversioned names.
 
 use std::fs::Permissions;
 use std::io::ErrorKind;
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -29,6 +32,8 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use super::super::setup;
+
+const MAX_LISTED_DAEMON_RUNTIMES: usize = 32;
 
 /// Path to the daemon Unix domain socket (versioned on Zaplex release
 /// builds — see [`setup::daemon_runtime_filename`]).
@@ -46,6 +51,68 @@ pub(super) fn pid_path(identity_key: &str) -> PathBuf {
     PathBuf::from(expanded).join(setup::daemon_runtime_filename("pid"))
 }
 
+fn socket_path_for_runtime(identity_key: &str, runtime_filename: &str) -> anyhow::Result<PathBuf> {
+    anyhow::ensure!(
+        setup::is_daemon_socket_filename(runtime_filename),
+        "invalid daemon runtime filename"
+    );
+    let dir = setup::remote_server_daemon_dir(identity_key);
+    let expanded = shellexpand::tilde(&dir).into_owned();
+    Ok(PathBuf::from(expanded).join(runtime_filename))
+}
+
+/// Lists existing identity-local daemon sockets. The current release sorts
+/// first; older runtimes follow deterministically and can be queried without
+/// weakening the default version-isolated rendezvous.
+pub(crate) fn runtime_filenames(identity_key: &str) -> anyhow::Result<Vec<String>> {
+    let dir = setup::remote_server_daemon_dir(identity_key);
+    let expanded = shellexpand::tilde(&dir).into_owned();
+    runtime_filenames_in_dir(std::path::Path::new(&expanded))
+}
+
+fn runtime_filenames_in_dir(dir: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let current = setup::daemon_runtime_filename("sock");
+    let mut filenames = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if !file_type.is_socket() {
+            continue;
+        }
+        let Some(filename) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if setup::is_daemon_socket_filename(&filename) {
+            filenames.push(filename);
+        }
+    }
+    filenames.sort_by(|left, right| {
+        let left_current = left == &current;
+        let right_current = right == &current;
+        right_current
+            .cmp(&left_current)
+            .then_with(|| left.cmp(right))
+    });
+    filenames.truncate(MAX_LISTED_DAEMON_RUNTIMES);
+    Ok(filenames)
+}
+
+fn connect_existing_daemon(socket_path: &std::path::Path) -> std::io::Result<UnixStream> {
+    let metadata = std::fs::symlink_metadata(socket_path)?;
+    if !metadata.file_type().is_socket() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "daemon runtime is not a direct Unix socket",
+        ));
+    }
+    UnixStream::connect(socket_path)
+}
+
 /// Ensures the daemon directory exists with owner-only permissions.
 pub(super) fn ensure_private_daemon_dir(path: &std::path::Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(path)?;
@@ -57,7 +124,17 @@ pub(super) fn ensure_private_daemon_dir(path: &std::path::Path) -> anyhow::Resul
 ///
 /// Ensures the daemon is running, then bridges stdin/stdout to the daemon's
 /// Unix socket for the lifetime of this SSH session.
-pub fn run(identity_key: &str) -> anyhow::Result<()> {
+pub fn run(identity_key: &str, runtime_filename: Option<&str>) -> anyhow::Result<()> {
+    if let Some(runtime_filename) = runtime_filename {
+        let socket_path = socket_path_for_runtime(identity_key, runtime_filename)?;
+        let stream = connect_existing_daemon(&socket_path).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to connect to existing daemon at {}: {error}",
+                socket_path.display()
+            )
+        })?;
+        return bridge_stdio_to_stream(stream);
+    }
     let socket_path = socket_path(identity_key);
     let pid_path = pid_path(identity_key);
 

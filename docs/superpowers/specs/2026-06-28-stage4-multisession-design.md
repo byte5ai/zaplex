@@ -17,7 +17,7 @@
 
 - **S4a — ListSessions (server + client).**
   - `Session` gains metadata: `cwd: Option<String>`, `shell: String`, `last_attached_ms: u64` (epoch millis; 0 = never). Set on open (opener counts as attached); `last_attached_ms` refreshed on every `AttachSession`.
-  - `handle_list_sessions` → `SessionList` of `SessionInfo` over `self.sessions` (title derived from cwd basename else shell; `alive = true` for every registry entry — exited sessions are removed on reader-EOF/close).
+  - `handle_list_sessions` → `SessionList` of `SessionInfo` over `self.sessions` (`title` identifies the foreground agent provider plus project/cwd basename where available; the client prefers the foreground task name from generation-matched agent inventory, then the project name. A failed supported inventory request permits a cwd-based project title; a daemon without agent-inventory support instead receives a neutral Zaplex session identifier while its cwd metadata remains intact. No title falls back to a shell executable name; `alive = true` for every registry entry — exited sessions are removed on reader-EOF/close).
   - Client `list_sessions() -> SessionList` (request/response, mirrors `attach_session`). Dispatch: unix → handler; non-unix → reject.
 
 - **S4b — headless test** (server_model_tests, xl): open N sessions with distinct cwds → `ListSessions` → assert N entries with the right ids/cwds/alive; close one → list shrinks.

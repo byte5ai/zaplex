@@ -161,7 +161,7 @@ Keep the match **exhaustive**, no `_` wildcard (AGENTS.md §5.2).
 - **Push addressing:** confirm the daemon can push to a specific `ConnectionId` outside a request/response turn (needed for `SessionOutput`). If not, add a minimal per-connection outbound channel — additively.
 - **Backpressure** policy (slow client vs shell) — pick and document a bound.
 - **Feature gating:** the daemon and the same client binary share one build; ensure enabling `zaplex_remote_session/server` for the daemon does not pull server-only deps into the client/WASM targets (`#[cfg(unix)]` + feature gates).
-- **Version lockstep:** client==daemon tag is already enforced; `features` negotiation lets a capability-aware client degrade if it meets an older daemon (plan §11).
+- **Version lockstep:** normal routes enforce client==daemon tag; the later recovery amendment permits only an explicitly inventoried older daemon, connect-only for its existing sessions. `features` negotiation still controls graceful degradation (plan §11).
 
 ---
 

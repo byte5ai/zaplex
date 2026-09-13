@@ -13974,6 +13974,7 @@ dependencies = [
  "rustls",
  "schemars",
  "security-framework-sys",
+ "semver",
  "serde",
  "serde-bytes-repr",
  "serde-wasm-bindgen",

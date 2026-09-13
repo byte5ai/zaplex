@@ -518,7 +518,10 @@ impl ControlSurfaceServer {
             return;
         }
 
-        let daemons = RemoteServerManager::as_ref(ctx).connected_daemons();
+        let daemons = RemoteServerManager::as_ref(ctx)
+            .connected_daemons()
+            .into_iter()
+            .filter(|daemon| daemon.is_current_runtime());
         let requests = daemons.into_iter().map(|daemon| async move {
             let outcome = if daemon.features.iter().any(|feature| {
                 feature == zaplex_remote_session::types::FEATURE_AGENT_ACCOUNT_ROUTING_V1

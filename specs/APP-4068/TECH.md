@@ -1,5 +1,15 @@
 # TECH.md — Long-Running SSH Remote Server (APP-4068)
 
+> **Zaplex recovery amendment (approved 2026-09-13):** Multiplexing remains
+> one daemon process per identity and runtime version. During an update, an old
+> daemon may coexist temporarily with the current daemon while it still owns
+> persistent PTYs. New clients reach it only through an explicit, connect-only
+> recovery route; once it has no sessions or connections, its idle grace period
+> can retire it. This exception does not permit two daemons for the same runtime
+> version. The sections below retain the original design before persistent PTYs
+> and versioned sockets; the current idle condition requires both zero PTYs and
+> zero connections, rather than zero connections alone.
+
 ## Problem
 
 The current `remote-server` process runs directly over SSH stdio. When the SSH
@@ -10,8 +20,9 @@ SSH-ing to the same host each spin up a separate server process.
 
 1. **Survival**: the server must survive SSH disconnections and remain available for
    reconnect for up to 10 minutes.
-2. **Multiplexing**: multiple Warp tabs SSH-ing to the same host must share a single
-   underlying server process.
+2. **Multiplexing**: multiple Warp tabs SSH-ing to the same host and daemon runtime
+   version must share a single underlying server process. A still-owning older
+   runtime may coexist only for explicit session recovery.
 3. **Reconnect**: when an SSH connection drops, the client must automatically detect
    this and reconnect to the existing server.
 4. **Session isolation**: each tab's requests and responses must stay within its own
@@ -209,6 +220,8 @@ sequenceDiagram
 ## Follow-ups
 
 - Client-side reconnect loop (re-run proxy, re-attach to daemon on disconnect).
-- Detect `server_version` mismatch in `InitializeResponse` and force-restart daemon.
+- Detect `server_version` mismatch in `InitializeResponse`; normal routes start
+  the current daemon, while an explicitly inventoried historical route remains
+  pinned and connect-only for its existing sessions.
 - Windows support (ControlMaster not supported on Windows OpenSSH; named pipes alternative).
 - Telemetry: daemon start, reconnect attempts, grace period expiry.

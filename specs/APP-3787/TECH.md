@@ -2,6 +2,12 @@
 
 Linear: [APP-3787](https://linear.app/warpdotdev/issue/APP-3787)
 
+> **Zaplex recovery amendment (approved 2026-09-13):** `HostId` identifies one
+> live daemon process, not a physical machine across runtime versions. Normal
+> tabs still share one daemon and one `HostId`; a temporarily coexisting older
+> daemon retains its own `HostId` so attach, signals, and file operations cannot
+> cross-route between processes.
+
 ## 1. Problem
 
 The Warp client needs a centralized way to manage connections to `remote_server` processes running on remote hosts. Today, each downstream feature (file tree, code review, agent apply diff) would need to independently figure out how to reach the remote server for its session's host. Each SSH session needs its own dedicated connection to the remote server because SSH connections are tied to the parent session's lifecycle — if the parent session dies, all multiplexed connections through it die too. Deduplication to a single long-lived server process happens on the remote host, not on the client.
@@ -61,7 +67,7 @@ This spec covers three pieces:
 
 ### 4.1. Protocol: `HostId` in `InitializeResponse`
 
-Update the protobuf schema so that `InitializeResponse` includes a `host_id` field. The server generates a stable identifier for the host and returns it during the initialize handshake, eliminating the need for a separate host-id probe step.
+Update the protobuf schema so that `InitializeResponse` includes a `host_id` field. The server generates an identifier stable for the lifetime of that daemon process and returns it during the initialize handshake, eliminating the need for a separate host-id probe step.
 
 ```protobuf
 message InitializeResponse {
@@ -70,7 +76,7 @@ message InitializeResponse {
 }
 ```
 
-The server generates the `host_id` once when the long-lived server process starts (a v4 UUID). Since the remote host infrastructure deduplicates connections to a single long-lived server process, all clients connecting to the same host receive the same `host_id`.
+The server generates the `host_id` once when the long-lived server process starts (a v4 UUID). Since the remote host infrastructure deduplicates connections to a single long-lived server process within one runtime version, all normal clients connecting to that runtime receive the same `host_id`. A connect-only historical recovery runtime has a distinct `host_id`; clients must retain it rather than guessing physical-host identity from a label.
 
 **Server-side implementation**: The `ServerModel` generates a UUID at construction time and includes it in every `InitializeResponse`. Because the remote host routes multiple incoming connections to the same long-lived `ServerModel` process, all clients receive the same ID.
 
