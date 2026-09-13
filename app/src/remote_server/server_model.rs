@@ -4495,6 +4495,17 @@ fn managed_session_info(
 }
 
 #[cfg(unix)]
+fn persistent_session_provider_name(provider: &str) -> &str {
+    if provider.eq_ignore_ascii_case("codex") {
+        "Codex"
+    } else if provider.eq_ignore_ascii_case("claude") {
+        "Claude"
+    } else {
+        provider
+    }
+}
+
+#[cfg(unix)]
 fn managed_session_plan_info(
     plan: &super::managed_fleet::ManagedLaunchPlan,
     generation: u64,
@@ -6140,7 +6151,7 @@ impl ServerModel {
             .sessions
             .iter()
             .map(|(id, session)| {
-                let title = session
+                let project = session
                     .cwd
                     .as_deref()
                     .filter(|c| !c.is_empty())
@@ -6148,13 +6159,27 @@ impl ServerModel {
                         std::path::Path::new(cwd)
                             .file_name()
                             .map(|b| b.to_string_lossy().into_owned())
-                    })
-                    .unwrap_or_else(|| {
-                        std::path::Path::new(&session.shell)
-                            .file_name()
-                            .map(|b| b.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| session.shell.clone())
                     });
+                let provider = self
+                    .agent_pty_bindings
+                    .foreground_for_pty(id, session.generation)
+                    .map(|binding| binding.agent.provider.as_str())
+                    .or_else(|| {
+                        session
+                            .managed
+                            .as_ref()
+                            .map(|managed| managed.plan().launch_key().provider())
+                    });
+                let title = match (provider, project) {
+                    (Some(provider), Some(project)) => {
+                        format!("{} · {project}", persistent_session_provider_name(provider))
+                    }
+                    (Some(provider), None) => {
+                        persistent_session_provider_name(provider).to_string()
+                    }
+                    (None, Some(project)) => project,
+                    (None, None) => String::new(),
+                };
                 (
                     SessionInfo {
                         session_id: id.clone(),

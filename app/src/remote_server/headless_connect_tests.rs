@@ -54,6 +54,46 @@ fn multiplexer_inventory_requires_explicit_daemon_capability() {
 }
 
 #[test]
+fn agent_inventory_requires_explicit_daemon_capability() {
+    let old_daemon = InitializeResponse::default();
+    assert!(!supports_agent_inventory(&old_daemon));
+
+    let capable_daemon = InitializeResponse {
+        features: vec![FEATURE_AGENT_INVENTORY.to_string()],
+        ..Default::default()
+    };
+    assert!(supports_agent_inventory(&capable_daemon));
+}
+
+#[test]
+fn agent_inventory_replaces_shell_name_with_agent_identity() {
+    let mut daemon = remote_server::proto::SessionList {
+        sessions: vec![remote_server::proto::SessionInfo {
+            session_id: "pty-1".to_string(),
+            title: "bash".to_string(),
+            generation: 7,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let agents = remote_server::proto::AgentSessionList {
+        sessions: vec![remote_server::proto::AgentSessionInfo {
+            name: "release checks".to_string(),
+            provider: "codex".to_string(),
+            pty_session_id: "pty-1".to_string(),
+            pty_session_generation: 7,
+            pty_foreground: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    enrich_daemon_session_titles(&mut daemon, &agents);
+
+    assert_eq!(daemon.sessions[0].title, "Codex · release checks");
+}
+
+#[test]
 fn control_socket_path_is_stable_and_per_host() {
     let a1 = control_socket_path(&server(AuthType::Key));
     let a2 = control_socket_path(&server(AuthType::Key));

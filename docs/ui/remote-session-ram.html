@@ -79,7 +79,8 @@
       <div>
         <h2>Platzierung</h2>
         <ul>
-          <li>Im aufgeklappten Hostblock direkt über den laufenden Sessions.</li>
+          <li>Verbundene Hosts mit aktivierter Persistenz öffnen ihren Abschnitt „Zaplex-Sessions“ beim ersten Anzeigen automatisch; die Funktion darf nicht ausschließlich in einem Kontextmenü verborgen sein.</li>
+          <li>Die Host-RAM-Zeile steht im aufgeklappten Hostblock direkt über den laufenden Sessions.</li>
           <li>Pro Session bleibt die RAM-Zahl rechtsbündig in derselben Zeile.</li>
         </ul>
       </div>
@@ -103,7 +104,8 @@
         <ul>
           <li>Anzeige lautet semantisch „Host-RAM: genutzt / Cap“ und ist nicht nur farbcodiert.</li>
           <li>Die Summe aktualisiert sich mit jedem erneuten Session-Abruf.</li>
-          <li>Adoptieren und Tastaturfokus der Sessionzeilen bleiben unverändert.</li>
+          <li>Sessionzeilen zeigen bevorzugt Agent und Aufgabe/Projekt; ein Shellname wie „bash“ ist keine Sessionidentität und fällt auf „Zaplex-Session · Kurz-ID“ zurück.</li>
+          <li>Ein Klick auf eine Session adoptiert sie in einem Tab; ein Auflösungsfehler erscheint inline und bleibt nie still.</li>
         </ul>
       </div>
     </div>
@@ -116,12 +118,13 @@
         <div class="sidebar-head"><strong>SSH-Verbindungen</strong><span class="icon-button">＋　⟳</span></div>
         <div class="tree">
           <div class="host"><span>⌄</span><span>◉</span><strong>devhost</strong><small>verbunden</small></div>
+          <div class="old-daemon">Zaplex-Sessions</div>
           <div class="ram-summary">
             <div class="ram-label"><span>Host-RAM</span><strong>18.4 MB / 256 MB</strong></div>
             <div class="meter"><i></i></div>
           </div>
-          <div class="session"><span>↳</span><span class="title">zaplex — release/v1.0</span><span class="bytes">12.1 MB</span></div>
-          <div class="session"><span>↳</span><span class="title">docs — theme editor</span><span class="bytes">6.3 MB</span></div>
+          <div class="session"><span>↳</span><span class="title">Codex · release checks</span><span class="bytes">12.1 MB</span></div>
+          <div class="session"><span>↳</span><span class="title">Claude · theme editor</span><span class="bytes">6.3 MB</span></div>
           <div class="host" style="margin-top:8px;background:transparent"><span>⌄</span><span>◉</span><strong>agenthost</strong><small>älterer Daemon</small></div>
           <div class="old-daemon">Der Host-Cap wird von diesem Daemon noch nicht gemeldet.</div>
           <div class="session"><span>↳</span><span class="title">monitor</span><span class="bytes">3.5 MB</span></div>

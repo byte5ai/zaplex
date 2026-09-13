@@ -22,7 +22,9 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use futures::lock::Mutex as AsyncMutex;
 use remote_server::auth::RemoteServerAuthContext;
-use remote_server::proto::{InitializeResponse, MultiplexerSessionList, SessionList};
+use remote_server::proto::{
+    AgentSessionInfo, AgentSessionList, InitializeResponse, MultiplexerSessionList, SessionList,
+};
 use remote_server::transport::{Connection, RemoteTransport};
 use warp_core::SessionId;
 use warp_ssh_manager::{
@@ -31,7 +33,9 @@ use warp_ssh_manager::{
     SshServerInfo, WorkspaceCommandFactory,
 };
 use warpui::r#async::executor::Background;
-use zaplex_remote_session::types::{has_feature, FEATURE_MULTIPLEXER_INVENTORY_V1};
+use zaplex_remote_session::types::{
+    has_feature, FEATURE_AGENT_INVENTORY, FEATURE_MULTIPLEXER_INVENTORY_V1,
+};
 
 use super::ssh_transport::SshTransport;
 
@@ -57,6 +61,43 @@ pub struct HostSessionInventory {
 
 fn supports_multiplexer_inventory(response: &InitializeResponse) -> bool {
     has_feature(&response.features, FEATURE_MULTIPLEXER_INVENTORY_V1)
+}
+
+fn supports_agent_inventory(response: &InitializeResponse) -> bool {
+    has_feature(&response.features, FEATURE_AGENT_INVENTORY)
+}
+
+fn agent_provider_display_name(provider: &str) -> &str {
+    if provider.eq_ignore_ascii_case("codex") {
+        "Codex"
+    } else if provider.eq_ignore_ascii_case("claude") {
+        "Claude"
+    } else {
+        provider
+    }
+}
+
+fn agent_session_display_title(session: &AgentSessionInfo) -> String {
+    let provider = agent_provider_display_name(&session.provider);
+    let identity = [&session.name, &session.project_name]
+        .into_iter()
+        .find(|value| !value.is_empty() && !value.eq_ignore_ascii_case(provider));
+    identity
+        .map(|identity| format!("{provider} · {identity}"))
+        .unwrap_or_else(|| provider.to_string())
+}
+
+fn enrich_daemon_session_titles(daemon: &mut SessionList, agents: &AgentSessionList) {
+    for session in &mut daemon.sessions {
+        let Some(agent) = agents.sessions.iter().find(|agent| {
+            agent.pty_foreground
+                && agent.pty_session_id == session.session_id
+                && agent.pty_session_generation == session.generation
+        }) else {
+            continue;
+        };
+        session.title = agent_session_display_title(agent);
+    }
 }
 
 /// Allocates a fresh, collision-safe `SessionId` for a daemon-hosted session.
@@ -479,10 +520,18 @@ pub async fn list_daemon_sessions(
         .initialize(auth_token.as_deref())
         .await
         .map_err(|e| format!("daemon handshake failed: {e:#}"))?;
-    let daemon = client
+    let mut daemon = client
         .list_sessions()
         .await
         .map_err(|e| format!("list_sessions failed: {e:#}"))?;
+    if supports_agent_inventory(&initialize) {
+        match client.list_agent_sessions().await {
+            Ok(agents) => enrich_daemon_session_titles(&mut daemon, &agents),
+            Err(error) => log::warn!(
+                "list_agent_sessions failed while enriching persistent session names: {error:#}"
+            ),
+        }
+    }
     let multiplexers = if supports_multiplexer_inventory(&initialize) {
         client
             .list_multiplexer_sessions()

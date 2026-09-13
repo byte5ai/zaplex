@@ -46,7 +46,7 @@ use warp_ssh_manager::{
 };
 
 use remote_server::proto::{
-    MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList, SessionList,
+    MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList, SessionInfo, SessionList,
 };
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warp_core::HostId;
@@ -150,6 +150,79 @@ fn compose_connection_row_targets(
                 .finish(),
         )
         .finish()
+}
+
+fn session_row_key(node_id: &str, session_id: &str) -> String {
+    format!("{node_id}:{session_id}")
+}
+
+fn sync_session_row_states(
+    states: &mut HashMap<String, MouseStateHandle>,
+    node_id: &str,
+    inventory: &SessionList,
+) {
+    let prefix = format!("{node_id}:");
+    let active: std::collections::HashSet<String> = inventory
+        .sessions
+        .iter()
+        .map(|session| session_row_key(node_id, &session.session_id))
+        .collect();
+    states.retain(|key, _| !key.starts_with(&prefix) || active.contains(key));
+    for key in active {
+        states.entry(key).or_default();
+    }
+}
+
+fn provider_display_name(provider: &str) -> Option<&'static str> {
+    if provider.eq_ignore_ascii_case("codex") {
+        Some("Codex")
+    } else if provider.eq_ignore_ascii_case("claude") {
+        Some("Claude")
+    } else {
+        None
+    }
+}
+
+fn is_generic_shell_title(title: &str) -> bool {
+    let executable = std::path::Path::new(title)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(title);
+    matches!(
+        executable.to_ascii_lowercase().as_str(),
+        "bash" | "zsh" | "fish" | "sh" | "dash" | "ksh" | "pwsh" | "powershell"
+    )
+}
+
+fn daemon_session_title(session: &SessionInfo) -> String {
+    if !session.title.is_empty() && !is_generic_shell_title(&session.title) {
+        return provider_display_name(&session.title)
+            .map(str::to_string)
+            .unwrap_or_else(|| session.title.clone());
+    }
+    if let Some(managed) = session.managed.as_ref() {
+        if let Some(provider) = provider_display_name(&managed.provider) {
+            let project = std::path::Path::new(&managed.project_root)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty());
+            return project
+                .map(|project| format!("{provider} · {project}"))
+                .unwrap_or_else(|| provider.to_string());
+        }
+    }
+    if let Some(cwd) = std::path::Path::new(&session.cwd)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+    {
+        return cwd.to_string();
+    }
+    let short_id: String = session.session_id.chars().take(8).collect();
+    crate::t!(
+        "workspace-left-panel-ssh-manager-session-fallback",
+        id = short_id
+    )
 }
 
 async fn tailscale_status_output(
@@ -413,6 +486,10 @@ pub struct SshManagerPanel {
     host_multiplexer_sessions: HashMap<String, MultiplexerSessionList>,
     /// Server node_ids whose session list is currently shown (expanded).
     sessions_expanded: std::collections::HashSet<String>,
+    /// Hosts whose persistent-session disclosure has already been initialized.
+    /// This lets connected persistent hosts reveal their sessions once without
+    /// reopening a section the user deliberately collapsed.
+    session_disclosure_seen: std::collections::HashSet<String>,
     /// Server node_ids with an in-flight session fetch.
     sessions_loading: std::collections::HashSet<String>,
     /// Server node_ids with an in-flight connect (daemon preflight/install or
@@ -512,6 +589,7 @@ impl SshManagerPanel {
             host_sessions: HashMap::new(),
             host_multiplexer_sessions: HashMap::new(),
             sessions_expanded: std::collections::HashSet::new(),
+            session_disclosure_seen: std::collections::HashSet::new(),
             sessions_loading: std::collections::HashSet::new(),
             connecting: std::collections::HashSet::new(),
             resilient_hosts: std::collections::HashSet::new(),
@@ -586,6 +664,24 @@ impl SshManagerPanel {
             .into_iter()
             .map(|(node_id, host_id)| (node_id, host_id.as_str().to_string()))
             .collect();
+        self.auto_reveal_connected_sessions(ctx);
+    }
+
+    fn auto_reveal_connected_sessions(&mut self, ctx: &mut ViewContext<Self>) {
+        let newly_visible: Vec<String> = self
+            .connected_host_ids
+            .keys()
+            .filter(|node_id| {
+                self.resilient_hosts.contains(*node_id)
+                    && !self.session_disclosure_seen.contains(*node_id)
+            })
+            .cloned()
+            .collect();
+        for node_id in newly_visible {
+            self.session_disclosure_seen.insert(node_id.clone());
+            self.sessions_expanded.insert(node_id.clone());
+            self.fetch_sessions(node_id, ctx);
+        }
     }
 
     fn sync_node_derived_state(&mut self, ctx: &mut ViewContext<Self>) {
@@ -662,6 +758,8 @@ impl SshManagerPanel {
         self.host_multiplexer_sessions
             .retain(|id, _| active_ids.contains(id));
         self.sessions_expanded.retain(|id| active_ids.contains(id));
+        self.session_disclosure_seen
+            .retain(|id| active_ids.contains(id));
         self.sessions_loading.retain(|id| active_ids.contains(id));
         self.sessions_error.retain(|id, _| active_ids.contains(id));
         self.session_row_states.retain(|key, _| {
@@ -725,6 +823,7 @@ impl SshManagerPanel {
         }
 
         self.sync_node_derived_state(ctx);
+        self.auto_reveal_connected_sessions(ctx);
 
         // Tree changed → recompute the "Added" set (PRODUCT.md decision E). "Imported" is determined by
         // `server.host == candidate.alias` — aligned with ImportCandidate's write
@@ -1232,6 +1331,7 @@ impl SshManagerPanel {
     /// Toggle the inline running-sessions list for a server node; the first
     /// expand kicks off a connect-to-list fetch.
     fn on_toggle_sessions(&mut self, id: String, ctx: &mut ViewContext<Self>) {
+        self.session_disclosure_seen.insert(id.clone());
         if self.sessions_expanded.remove(&id) {
             ctx.notify();
             return;
@@ -1289,6 +1389,11 @@ impl SshManagerPanel {
                     me.sessions_loading.remove(&id);
                     match result {
                         Ok(inventory) => {
+                            sync_session_row_states(
+                                &mut me.session_row_states,
+                                &id,
+                                &inventory.daemon,
+                            );
                             me.host_sessions.insert(id.clone(), inventory.daemon);
                             me.host_multiplexer_sessions
                                 .insert(id.clone(), inventory.multiplexers);
@@ -1322,15 +1427,29 @@ impl SshManagerPanel {
         // Resolve OneKey → effective auth so the adopt connects with the same
         // username/key_path the listing + connect paths use — otherwise an
         // OneKey-key host would target a different ControlMaster / fail auth.
-        let server = warp_ssh_manager::with_conn(|c| resolve_server_for_node(c, &node_id))
-            .ok()
-            .flatten();
-        if let Some(server) = server {
-            ctx.emit(SshManagerPanelEvent::AdoptDaemonSession {
+        match warp_ssh_manager::with_conn(|c| resolve_server_for_node(c, &node_id)) {
+            Ok(Some(server)) => ctx.emit(SshManagerPanelEvent::AdoptDaemonSession {
                 server,
                 pty_session_id,
                 pty_generation,
-            });
+            }),
+            Ok(None) => {
+                self.sessions_error.insert(
+                    node_id,
+                    crate::t!("workspace-left-panel-ssh-manager-session-host-missing"),
+                );
+                ctx.notify();
+            }
+            Err(error) => {
+                self.sessions_error.insert(
+                    node_id,
+                    crate::t!(
+                        "workspace-left-panel-ssh-manager-session-open-error",
+                        detail = error.to_string()
+                    ),
+                );
+                ctx.notify();
+            }
         }
     }
 
@@ -2454,18 +2573,23 @@ impl SshManagerPanel {
             .finish()
         };
 
+        let mut rows = vec![message(
+            crate::t!("workspace-left-panel-ssh-manager-zaplex-sessions"),
+            theme.main_text_color(theme.background()).into(),
+        )];
         if self.sessions_loading.contains(&node.id) {
-            return vec![message(
+            rows.push(message(
                 crate::t!("workspace-left-panel-ssh-manager-sessions-loading"),
                 muted,
-            )];
+            ));
+            return rows;
         }
         if let Some(err) = self.sessions_error.get(&node.id) {
             // A failed session fetch is an error — render it in the theme's error
             // color, matching the candidates error row (no glyph needed).
-            return vec![message(err.clone(), theme.ui_error_color())];
+            rows.push(message(err.clone(), theme.ui_error_color()));
+            return rows;
         }
-        let mut rows = Vec::new();
         let daemon_inventory = self.host_sessions.get(&node.id);
         if let Some(usage) = daemon_inventory.and_then(host_ring_usage) {
             let color = match usage.tone {
@@ -2490,7 +2614,7 @@ impl SshManagerPanel {
             .filter(|sessions| !sessions.is_empty())
         {
             for session in sessions {
-                let key = format!("{}:{}", node.id, session.session_id);
+                let key = session_row_key(&node.id, &session.session_id);
                 let state = self
                     .session_row_states
                     .get(&key)
@@ -2499,13 +2623,7 @@ impl SshManagerPanel {
                 let node_id = node.id.clone();
                 let pty_session_id = session.session_id.clone();
                 let pty_generation = session.generation;
-                let title = if !session.title.is_empty() {
-                    session.title.clone()
-                } else if !session.cwd.is_empty() {
-                    session.cwd.clone()
-                } else {
-                    pty_session_id.clone()
-                };
+                let title = daemon_session_title(session);
                 // Per-session RAM (the daemon's output-ring footprint the memory
                 // governor accounts against the host cap) — muted, trailing.
                 let ram_text = format_ring_bytes(session.ring_bytes);

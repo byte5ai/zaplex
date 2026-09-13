@@ -293,7 +293,13 @@ impl CockpitModel {
         ctx.subscribe_to_model(
             &RemoteServerManager::handle(ctx),
             |me, event, ctx| match event {
-                RemoteServerManagerEvent::HostConnected { .. } => me.spawn_refresh(ctx),
+                RemoteServerManagerEvent::HostConnected { .. }
+                | RemoteServerManagerEvent::SessionConnected { .. }
+                | RemoteServerManagerEvent::SessionDisconnected { .. }
+                | RemoteServerManagerEvent::SessionReconnected { .. }
+                | RemoteServerManagerEvent::SessionDeregistered { .. }
+                | RemoteServerManagerEvent::SessionExited { .. }
+                | RemoteServerManagerEvent::ManagedLaunchOpened { .. } => me.spawn_refresh(ctx),
                 RemoteServerManagerEvent::HostDisconnected { host_id } => {
                     let inventory_changed =
                         remove_disconnected_host(&mut me.inventory, host_id.as_str());
@@ -304,11 +310,7 @@ impl CockpitModel {
                     me.spawn_refresh(ctx);
                 }
                 RemoteServerManagerEvent::SessionConnecting { .. }
-                | RemoteServerManagerEvent::SessionConnected { .. }
                 | RemoteServerManagerEvent::SessionConnectionFailed { .. }
-                | RemoteServerManagerEvent::SessionDisconnected { .. }
-                | RemoteServerManagerEvent::SessionReconnected { .. }
-                | RemoteServerManagerEvent::SessionDeregistered { .. }
                 | RemoteServerManagerEvent::NavigatedToDirectory { .. }
                 | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
                 | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
@@ -320,10 +322,8 @@ impl CockpitModel {
                 | RemoteServerManagerEvent::ClientRequestFailed { .. }
                 | RemoteServerManagerEvent::ServerMessageDecodingError { .. }
                 | RemoteServerManagerEvent::SessionOutput { .. }
-                | RemoteServerManagerEvent::SessionExited { .. }
                 | RemoteServerManagerEvent::SessionNotice { .. } => {}
-                RemoteServerManagerEvent::ManagedLaunchOpened { .. }
-                | RemoteServerManagerEvent::ManagedLaunchFailed { .. } => {}
+                RemoteServerManagerEvent::ManagedLaunchFailed { .. } => {}
             },
         );
 

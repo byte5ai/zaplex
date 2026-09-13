@@ -833,6 +833,62 @@ fn old_daemon_without_host_cap_never_gets_a_guessed_aggregate() {
 }
 
 #[test]
+fn daemon_session_rows_keep_the_same_mouse_state_across_renders() {
+    let mut states = HashMap::new();
+    let inventory = SessionList {
+        sessions: vec![remote_server::proto::SessionInfo {
+            session_id: "pty-1".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    sync_session_row_states(&mut states, "devhost", &inventory);
+    let original = states["devhost:pty-1"].clone();
+    sync_session_row_states(&mut states, "devhost", &inventory);
+
+    assert!(Arc::ptr_eq(&original, &states["devhost:pty-1"]));
+
+    let replacement = SessionList {
+        sessions: vec![remote_server::proto::SessionInfo {
+            session_id: "pty-2".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    sync_session_row_states(&mut states, "devhost", &replacement);
+    assert!(!states.contains_key("devhost:pty-1"));
+    assert!(states.contains_key("devhost:pty-2"));
+}
+
+#[test]
+fn generic_shell_titles_are_presented_as_zaplex_sessions() {
+    crate::i18n::init(Some("en"));
+    let session = remote_server::proto::SessionInfo {
+        session_id: "12345678-abcdef".to_string(),
+        title: "/bin/bash".to_string(),
+        ..Default::default()
+    };
+
+    assert_eq!(daemon_session_title(&session), "Zaplex session · 12345678");
+}
+
+#[test]
+fn managed_session_titles_include_provider_and_project() {
+    let session = remote_server::proto::SessionInfo {
+        title: "bash".to_string(),
+        managed: Some(remote_server::proto::ManagedSessionInfo {
+            provider: "codex".to_string(),
+            project_root: "/srv/zaplex".to_string(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(daemon_session_title(&session), "Codex · zaplex");
+}
+
+#[test]
 fn multiplexer_kind_selects_only_non_destructive_attach_modes() {
     assert_eq!(
         multiplexer_attach_mode(MultiplexerKind::Tmux as i32, 0),
