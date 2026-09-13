@@ -67,16 +67,28 @@ auch von `handle_close_session` und `on_session_reader_eof` aufgerufen (ctx
 wird durchgereicht; beide Call-Sites haben es). Verhalten unverändert, nur
 sofort statt ≤ 5 min später.
 
-## Übergang / bewusste Grenzen
-- Der HEUTE laufende Alt-Daemon (v0.rc-cockpit, Legacy-Socket) wird von
-  neuen Clients schlicht nie mehr gefunden; er räumt sich nach Ende seiner
-  letzten Session über seine eigene Grace/GC-Logik weg. Für die laufende
-  RC-Abnahme bleibt der einmalige manuelle Kill der schnellste Weg.
-- Alt-Sessions eines Alt-Daemons sind für den neuen Client **unsichtbar**
-  (er spricht nur seinen eigenen Daemon). Sichtbarkeit + Ein-Klick-Migration
-  („N Sessions laufen noch auf vX — beenden & upgraden") = eigenes
-  Follow-up-Paket (Cockpit-UI), hier bewusst NICHT enthalten.
-- PTY-Handover zwischen Daemon-Versionen (FD-Passing): explizit out of scope.
+## Übergang / Follow-up: versionsübergreifende Adoption
+
+Der ursprüngliche Stand isolierte alte Daemons korrekt, machte deren noch
+laufende Sessions für neue Clients aber unsichtbar. Der Adopt-Sidebar-Follow-up
+schließt diese Lücke, ohne die Versionsisolierung zurückzunehmen:
+
+- Der aktuelle, vertrauenswürdige Proxy listet ausschließlich Socket-Dateien im
+  aktuellen Identity-Verzeichnis. Beliebige Pfade, Symlinks und Traversal sind
+  ausgeschlossen; die Anzahl der Runtime-Einträge ist begrenzt.
+- Der Standardpfad bleibt unverändert: Nur der Socket des aktuellen Releases
+  darf bei Bedarf einen neuen Daemon starten. Ein explizit ausgewählter alter
+  Socket ist strikt **connect-only** und wird niemals neu angelegt oder gelöscht.
+- Beim Inventarabruf wird `InitializeResponse.server_version` des jeweiligen
+  Daemons gespeichert. Anzeige, Klick, Tab und Reconnect tragen Socketname und
+  diese exakte Version gemeinsam weiter; der Manager prüft gegen die beobachtete
+  Daemon-Version statt den Versionscheck pauschal abzuschalten.
+- Neue RPCs bleiben capability-gated. Alte Daemons ohne Agent-Inventar liefern
+  weiterhin eine neutrale Zaplex-Session-Kennung; Generation 0 behält den
+  bestehenden ID-only-Attach-Pfad.
+- PTY-Handover zwischen Daemon-Prozessen (FD-Passing) bleibt out of scope: Die
+  Session wird nicht migriert, sondern bis zu ihrem Ende am besitzenden alten
+  Daemon bedient.
 
 ## Abnahme
 1. Neuer Daemon + neuer Client → Socket heißt `server-<tag>.sock`, Connect
@@ -87,3 +99,9 @@ sofort statt ≤ 5 min später.
    `server.sock`, keine Enforcement-Fehler.
 4. Session schließen als letzte bei 0 Clients → Grace-Timer-Log sofort,
    nicht erst nach GC-Tick.
+5. Neuer Client + Alt-Daemon mit laufenden Sessions → beide Runtime-Sockets
+   werden getrennt inventarisiert; ein Klick verbindet exakt den Alt-Daemon und
+   Reconnects bleiben an dessen beobachtete Version gebunden.
+6. Staler oder manipulierter Alt-Socket → keine Daemon-Neugründung, keine
+   Pfadauflösung außerhalb des Identity-Verzeichnisses und kein stiller Fallback
+   auf den aktuellen Daemon.

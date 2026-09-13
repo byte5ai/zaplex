@@ -45,9 +45,7 @@ use warp_ssh_manager::{
     SshServerInfo, ValidatedSshEndpoint, WorkspaceCommandFactory,
 };
 
-use remote_server::proto::{
-    MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList, SessionInfo, SessionList,
-};
+use remote_server::proto::{MultiplexerKind, MultiplexerSessionInfo, SessionInfo, SessionList};
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warp_core::HostId;
 
@@ -152,20 +150,29 @@ fn compose_connection_row_targets(
         .finish()
 }
 
-fn session_row_key(node_id: &str, session_id: &str) -> String {
-    format!("{node_id}:{session_id}")
+fn session_row_key(
+    node_id: &str,
+    session: &SessionInfo,
+    route: Option<&crate::remote_server::ssh_transport::DaemonRuntimeRoute>,
+) -> String {
+    let runtime = route
+        .map(|route| route.runtime_filename())
+        .unwrap_or("current");
+    format!(
+        "{node_id}:{runtime}:{}:{}",
+        session.session_id, session.generation
+    )
 }
 
 fn sync_session_row_states(
     states: &mut HashMap<String, MouseStateHandle>,
     node_id: &str,
-    inventory: &SessionList,
+    sessions: &[crate::remote_server::headless_connect::RoutedDaemonSession],
 ) {
     let prefix = format!("{node_id}:");
-    let active: std::collections::HashSet<String> = inventory
-        .sessions
+    let active: std::collections::HashSet<String> = sessions
         .iter()
-        .map(|session| session_row_key(node_id, &session.session_id))
+        .map(|session| session_row_key(node_id, &session.session, session.route.as_ref()))
         .collect();
     states.retain(|key, _| !key.starts_with(&prefix) || active.contains(key));
     for key in active {
@@ -278,6 +285,7 @@ pub enum SshManagerPanelAction {
         node_id: String,
         pty_session_id: String,
         pty_generation: u64,
+        daemon_route: Option<crate::remote_server::ssh_transport::DaemonRuntimeRoute>,
     },
     /// Open one exact existing tmux/byobu session in a new classic SSH tab.
     OpenMultiplexerSession {
@@ -350,6 +358,7 @@ pub enum SshManagerPanelEvent {
         server: SshServerInfo,
         pty_session_id: String,
         pty_generation: u64,
+        daemon_route: Option<crate::remote_server::ssh_transport::DaemonRuntimeRoute>,
     },
     OpenMultiplexerSession {
         node_id: String,
@@ -480,10 +489,8 @@ pub struct SshManagerPanel {
     /// Running daemon sessions per server node, fetched on demand via
     /// `headless_connect::list_daemon_sessions` (connect-to-list, so it also
     /// surfaces sessions that survived a restart / drop — the main use case).
-    host_sessions: HashMap<String, SessionList>,
-    /// Existing tmux/byobu sessions from the same typed inventory fetch. Kept
-    /// separate from native sessions because adoption uses a classic SSH tab.
-    host_multiplexer_sessions: HashMap<String, MultiplexerSessionList>,
+    host_session_inventories:
+        HashMap<String, crate::remote_server::headless_connect::HostSessionInventory>,
     /// Server node_ids whose session list is currently shown (expanded).
     sessions_expanded: std::collections::HashSet<String>,
     /// Hosts whose persistent-session disclosure has already been initialized.
@@ -502,7 +509,8 @@ pub struct SshManagerPanel {
     resilient_hosts: std::collections::HashSet<String>,
     /// Last fetch error per server node_id (shown inline under the host).
     sessions_error: HashMap<String, String>,
-    /// Hover/click state per session row (key = "<node_id>:<pty_session_id>").
+    /// Hover/click state per session row, scoped by host, daemon runtime, PTY
+    /// identity, and generation.
     session_row_states: HashMap<String, MouseStateHandle>,
     /// Fixed-width icon actions for existing tmux/byobu sessions.
     multiplexer_open_actions: HashMap<String, CompactRowAction>,
@@ -586,8 +594,7 @@ impl SshManagerPanel {
             add_blank_btn: MouseStateHandle::default(),
             add_tailscale_btn: MouseStateHandle::default(),
             add_cancel_btn: MouseStateHandle::default(),
-            host_sessions: HashMap::new(),
-            host_multiplexer_sessions: HashMap::new(),
+            host_session_inventories: HashMap::new(),
             sessions_expanded: std::collections::HashSet::new(),
             session_disclosure_seen: std::collections::HashSet::new(),
             sessions_loading: std::collections::HashSet::new(),
@@ -753,9 +760,8 @@ impl SshManagerPanel {
 
         // Prune per-host adopt-session state for nodes that were deleted, so these
         // maps don't grow unbounded across deletions (keyed by node_id; the
-        // row-state map is keyed by "<node_id>:<pty_session_id>").
-        self.host_sessions.retain(|id, _| active_ids.contains(id));
-        self.host_multiplexer_sessions
+        // row-state map carries host, daemon runtime, PTY identity, and generation.
+        self.host_session_inventories
             .retain(|id, _| active_ids.contains(id));
         self.sessions_expanded.retain(|id| active_ids.contains(id));
         self.session_disclosure_seen
@@ -1342,7 +1348,7 @@ impl SshManagerPanel {
     }
 
     /// Fetches a server's running daemon sessions via connect-to-list and stores
-    /// them in `host_sessions` (or records `sessions_error`).
+    /// them in `host_session_inventories` (or records `sessions_error`).
     #[allow(unused_variables)]
     fn fetch_sessions(&mut self, id: String, ctx: &mut ViewContext<Self>) {
         let server = warp_ssh_manager::with_conn(|c| resolve_server_for_node(c, &id))
@@ -1392,11 +1398,9 @@ impl SshManagerPanel {
                             sync_session_row_states(
                                 &mut me.session_row_states,
                                 &id,
-                                &inventory.daemon,
+                                &inventory.sessions,
                             );
-                            me.host_sessions.insert(id.clone(), inventory.daemon);
-                            me.host_multiplexer_sessions
-                                .insert(id.clone(), inventory.multiplexers);
+                            me.host_session_inventories.insert(id.clone(), inventory);
                             me.sync_multiplexer_open_actions(&id, ctx);
                         }
                         Err(e) => {
@@ -1422,6 +1426,7 @@ impl SshManagerPanel {
         node_id: String,
         pty_session_id: String,
         pty_generation: u64,
+        daemon_route: Option<crate::remote_server::ssh_transport::DaemonRuntimeRoute>,
         ctx: &mut ViewContext<Self>,
     ) {
         // Resolve OneKey → effective auth so the adopt connects with the same
@@ -1432,6 +1437,7 @@ impl SshManagerPanel {
                 server,
                 pty_session_id,
                 pty_generation,
+                daemon_route,
             }),
             Ok(None) => {
                 self.sessions_error.insert(
@@ -1458,9 +1464,9 @@ impl SshManagerPanel {
         self.multiplexer_open_actions
             .retain(|key, _| !key.starts_with(&prefix));
         let sessions = self
-            .host_multiplexer_sessions
+            .host_session_inventories
             .get(node_id)
-            .map(|inventory| inventory.sessions.clone())
+            .map(|inventory| inventory.multiplexers.sessions.clone())
             .unwrap_or_default();
         for session in sessions {
             let key = multiplexer_row_key(node_id, &session);
@@ -2590,8 +2596,11 @@ impl SshManagerPanel {
             rows.push(message(err.clone(), theme.ui_error_color()));
             return rows;
         }
-        let daemon_inventory = self.host_sessions.get(&node.id);
-        if let Some(usage) = daemon_inventory.and_then(host_ring_usage) {
+        let host_inventory = self.host_session_inventories.get(&node.id);
+        if let Some(usage) = host_inventory
+            .map(|inventory| &inventory.daemon)
+            .and_then(host_ring_usage)
+        {
             let color = match usage.tone {
                 HostRingTone::Calm => theme.accent().into_solid(),
                 HostRingTone::Warning => theme.ui_warning_color(),
@@ -2609,12 +2618,13 @@ impl SshManagerPanel {
             ));
         }
 
-        if let Some(sessions) = daemon_inventory
+        if let Some(sessions) = host_inventory
             .map(|inventory| inventory.sessions.as_slice())
             .filter(|sessions| !sessions.is_empty())
         {
-            for session in sessions {
-                let key = session_row_key(&node.id, &session.session_id);
+            for routed_session in sessions {
+                let session = &routed_session.session;
+                let key = session_row_key(&node.id, session, routed_session.route.as_ref());
                 let state = self
                     .session_row_states
                     .get(&key)
@@ -2623,6 +2633,7 @@ impl SshManagerPanel {
                 let node_id = node.id.clone();
                 let pty_session_id = session.session_id.clone();
                 let pty_generation = session.generation;
+                let daemon_route = routed_session.route.clone();
                 let title = daemon_session_title(session);
                 // Per-session RAM (the daemon's output-ring footprint the memory
                 // governor accounts against the host cap) — muted, trailing.
@@ -2684,6 +2695,7 @@ impl SshManagerPanel {
                             node_id: node_id.clone(),
                             pty_session_id: pty_session_id.clone(),
                             pty_generation,
+                            daemon_route: daemon_route.clone(),
                         });
                     })
                     .finish(),
@@ -2696,7 +2708,11 @@ impl SshManagerPanel {
             ));
         }
 
-        if let Some(inventory) = self.host_multiplexer_sessions.get(&node.id) {
+        if let Some(inventory) = self
+            .host_session_inventories
+            .get(&node.id)
+            .map(|inventory| &inventory.multiplexers)
+        {
             if !inventory.sessions.is_empty() || !inventory.warnings.is_empty() {
                 rows.push(message(
                     crate::t!("workspace-left-panel-ssh-manager-multiplexer-heading"),
@@ -3400,10 +3416,12 @@ impl TypedActionView for SshManagerPanel {
                 node_id,
                 pty_session_id,
                 pty_generation,
+                daemon_route,
             } => self.on_adopt_session(
                 node_id.clone(),
                 pty_session_id.clone(),
                 *pty_generation,
+                daemon_route.clone(),
                 ctx,
             ),
             SshManagerPanelAction::OpenMultiplexerSession {

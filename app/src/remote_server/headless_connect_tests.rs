@@ -94,6 +94,44 @@ fn agent_inventory_replaces_shell_name_with_agent_identity() {
 }
 
 #[test]
+fn merged_daemon_inventory_preserves_exact_route_per_session() {
+    let old_route =
+        DaemonRuntimeRoute::new("server-v1.0.28.sock".to_string(), "v1.0.28".to_string()).unwrap();
+    let current_route =
+        DaemonRuntimeRoute::new("server-v1.0.29.sock".to_string(), "v1.0.29".to_string()).unwrap();
+    let sessions = || SessionList {
+        sessions: vec![remote_server::proto::SessionInfo {
+            session_id: "same-id".to_string(),
+            generation: 7,
+            ..Default::default()
+        }],
+        host_ring_cap_bytes: 1024,
+        ..Default::default()
+    };
+    let mut inventory = HostSessionInventory::default();
+
+    merge_daemon_inventory(
+        &mut inventory,
+        sessions(),
+        MultiplexerSessionList::default(),
+        Some(current_route.clone()),
+        0,
+    );
+    merge_daemon_inventory(
+        &mut inventory,
+        sessions(),
+        MultiplexerSessionList::default(),
+        Some(old_route.clone()),
+        1,
+    );
+
+    assert_eq!(inventory.sessions.len(), 2);
+    assert_eq!(inventory.sessions[0].route.as_ref(), Some(&current_route));
+    assert_eq!(inventory.sessions[1].route.as_ref(), Some(&old_route));
+    assert_eq!(inventory.daemon.host_ring_cap_bytes, 0);
+}
+
+#[test]
 fn control_socket_path_is_stable_and_per_host() {
     let a1 = control_socket_path(&server(AuthType::Key));
     let a2 = control_socket_path(&server(AuthType::Key));

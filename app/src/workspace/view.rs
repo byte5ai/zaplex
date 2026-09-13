@@ -1197,7 +1197,7 @@ async fn run_remote_guardrail_signal(
     }
 }
 
-type DaemonAdoptionKey = (String, String, u64);
+type DaemonAdoptionKey = (String, String, String, u64);
 
 #[derive(Clone)]
 struct AdoptedDaemonSession {
@@ -1206,8 +1206,21 @@ struct AdoptedDaemonSession {
 }
 
 #[cfg(unix)]
-fn daemon_adoption_key(node_id: &str, pty_session_id: &str, generation: u64) -> DaemonAdoptionKey {
-    (node_id.to_string(), pty_session_id.to_string(), generation)
+fn daemon_adoption_key(
+    node_id: &str,
+    daemon_route: Option<&crate::remote_server::ssh_transport::DaemonRuntimeRoute>,
+    pty_session_id: &str,
+    generation: u64,
+) -> DaemonAdoptionKey {
+    let runtime = daemon_route
+        .map(|route| route.runtime_filename())
+        .unwrap_or("current");
+    (
+        node_id.to_string(),
+        runtime.to_string(),
+        pty_session_id.to_string(),
+        generation,
+    )
 }
 
 #[cfg(unix)]
@@ -6301,6 +6314,7 @@ impl Workspace {
                                 connection,
                                 pty_session_id.to_string(),
                                 generation,
+                                None,
                                 Some(expected_agent_binding),
                                 ctx,
                             );
@@ -6405,6 +6419,7 @@ impl Workspace {
                 connection,
                 current.session_id,
                 current.generation,
+                None,
                 Some(expected_agent_binding),
                 ctx,
             );
@@ -9342,6 +9357,7 @@ impl Workspace {
                 server,
                 pty_session_id,
                 pty_generation,
+                daemon_route,
             } => {
                 #[cfg(unix)]
                 match resolve_ssh_connection(server) {
@@ -9349,6 +9365,7 @@ impl Workspace {
                         connection,
                         pty_session_id.clone(),
                         *pty_generation,
+                        daemon_route.clone(),
                         None,
                         ctx,
                     ),
@@ -9359,7 +9376,7 @@ impl Workspace {
                 };
                 #[cfg(not(unix))]
                 {
-                    let _ = (server, pty_session_id, pty_generation);
+                    let _ = (server, pty_session_id, pty_generation, daemon_route);
                     log::warn!("AdoptDaemonSession ignored: daemon sessions are unix-only");
                 }
             }
@@ -11334,8 +11351,8 @@ impl Workspace {
             });
             return;
         };
-        let pty_session_id = binding_key.1.clone();
-        let generation = binding_key.2;
+        let pty_session_id = binding_key.2.clone();
+        let generation = binding_key.3;
         let validation = async move { client.list_agent_sessions().await };
 
         ctx.spawn(validation, move |workspace, result, ctx| {
@@ -11390,6 +11407,7 @@ impl Workspace {
         connection: warp_ssh_manager::ResolvedSshConnection,
         pty_session_id: String,
         pty_generation: u64,
+        daemon_route: Option<crate::remote_server::ssh_transport::DaemonRuntimeRoute>,
         expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -11403,7 +11421,12 @@ impl Workspace {
         let live_pg_ids: Vec<EntityId> = self.tabs.iter().map(|t| t.pane_group.id()).collect();
         self.adopted_daemon_sessions
             .retain(|_, adopted| live_pg_ids.contains(&adopted.pane_group_id));
-        let binding_key = daemon_adoption_key(&server.node_id, &pty_session_id, pty_generation);
+        let binding_key = daemon_adoption_key(
+            &server.node_id,
+            daemon_route.as_ref(),
+            &pty_session_id,
+            pty_generation,
+        );
         if let Some(adopted) = self.adopted_daemon_sessions.get(&binding_key) {
             let pg_id = adopted.pane_group_id;
             let connection_session_id = adopted.connection_session_id;
@@ -11474,7 +11497,7 @@ impl Workspace {
             session_id,
         );
 
-        self.spawn_daemon_session_connect(connection, session_id, ctx);
+        self.spawn_daemon_session_connect(connection, session_id, daemon_route, ctx);
     }
 
     /// Establishes the headless SSH ControlMaster for a daemon session, then
@@ -11485,6 +11508,7 @@ impl Workspace {
         &mut self,
         connection: warp_ssh_manager::ResolvedSshConnection,
         session_id: SessionId,
+        daemon_route: Option<crate::remote_server::ssh_transport::DaemonRuntimeRoute>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::remote_server::auth_context::server_api_auth_context;
@@ -11521,8 +11545,11 @@ impl Workspace {
                     log::info!(
                         "daemon connect [{host}]: transport ready — connecting session {session_id:?}"
                     );
-                    let transport = SshTransport::new(socket_path, auth_context.clone())
-                        .with_self_heal(server_for_transport);
+                    let mut transport = SshTransport::new(socket_path, auth_context.clone());
+                    if let Some(daemon_route) = daemon_route {
+                        transport = transport.with_daemon_runtime(daemon_route);
+                    }
+                    let transport = transport.with_self_heal(server_for_transport);
                     let host_label = host.clone();
                     RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
                         // Persistent: a transport drop (ssh slave exit) must trigger

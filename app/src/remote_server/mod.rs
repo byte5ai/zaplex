@@ -35,12 +35,30 @@ pub mod unix;
 
 /// Run the `remote-server-proxy` subcommand.
 #[cfg(unix)]
-pub fn run_proxy(identity_key: String) -> anyhow::Result<()> {
-    unix::proxy::run(&identity_key)
+pub fn run_proxy(
+    identity_key: String,
+    runtime_filename: Option<String>,
+    list_runtimes: bool,
+) -> anyhow::Result<()> {
+    if list_runtimes {
+        anyhow::ensure!(
+            runtime_filename.is_none(),
+            "--list-runtimes and --runtime-filename are mutually exclusive"
+        );
+        for filename in unix::proxy::runtime_filenames(&identity_key)? {
+            println!("{filename}");
+        }
+        return Ok(());
+    }
+    unix::proxy::run(&identity_key, runtime_filename.as_deref())
 }
 
 #[cfg(not(unix))]
-pub fn run_proxy(_identity_key: String) -> anyhow::Result<()> {
+pub fn run_proxy(
+    _identity_key: String,
+    _runtime_filename: Option<String>,
+    _list_runtimes: bool,
+) -> anyhow::Result<()> {
     anyhow::bail!("remote-server-proxy is not supported on this platform")
 }
 

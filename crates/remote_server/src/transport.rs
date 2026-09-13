@@ -20,6 +20,15 @@ use warpui::r#async::executor;
 use crate::client::{ClientEvent, RemoteServerClient};
 use crate::setup::{PreinstallCheckResult, RemotePlatform};
 
+/// Version identity the manager must observe after a transport connects.
+/// Explicit legacy daemon routes pin the exact version discovered during
+/// inventory instead of weakening the normal current-client requirement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ServerVersionRequirement {
+    Current,
+    Exact(String),
+}
+
 /// A successful return from [`RemoteTransport::connect`].
 ///
 /// Bundles the live [`RemoteServerClient`] and its [`ClientEvent`]
@@ -61,6 +70,11 @@ pub struct Connection {
 /// Object-safe: returns boxed futures so implementations can be stored
 /// as `Arc<dyn RemoteTransport>` for reconnection.
 pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
+    /// Declares which daemon version is valid for this exact transport route.
+    fn server_version_requirement(&self) -> ServerVersionRequirement {
+        ServerVersionRequirement::Current
+    }
+
     /// Detects the remote host's OS and architecture by running `uname -sm`.
     ///
     /// Returns the parsed [`RemotePlatform`] on success, or an error string

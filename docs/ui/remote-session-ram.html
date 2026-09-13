@@ -96,6 +96,7 @@
         <ul>
           <li>Unter 80 % ruhig im Akzentton, ab 80 % amber, ab 100 % rot.</li>
           <li>Alte Daemons mit Cap 0 zeigen weiter Sitzungswerte, aber keinen erfundenen Gesamt-Cap.</li>
+          <li>Noch laufende Sessions älterer Zaplex-Versionen erscheinen im selben Hostabschnitt; ihre Socket-Version bleibt unsichtbares Routing-Metadatum.</li>
           <li>0 Bytes pro Session bleibt verborgen.</li>
         </ul>
       </div>
@@ -106,6 +107,7 @@
           <li>Die Summe aktualisiert sich mit jedem erneuten Session-Abruf.</li>
           <li>Sessionzeilen zeigen bevorzugt Agent und Aufgabe/Projekt; ein Shellname wie „bash“ ist keine Sessionidentität und fällt auf „Zaplex-Session · Kurz-ID“ zurück.</li>
           <li>Ein Klick auf eine Session adoptiert sie in einem Tab; ein Auflösungsfehler erscheint inline und bleibt nie still.</li>
+          <li>Die Adoption verbindet exakt den Daemon, der die Zeile gemeldet hat, auch nach einem Zaplex-Update.</li>
         </ul>
       </div>
     </div>

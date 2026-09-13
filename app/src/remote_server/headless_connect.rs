@@ -34,10 +34,10 @@ use warp_ssh_manager::{
 };
 use warpui::r#async::executor::Background;
 use zaplex_remote_session::types::{
-    has_feature, FEATURE_AGENT_INVENTORY, FEATURE_MULTIPLEXER_INVENTORY_V1,
+    has_feature, FEATURE_AGENT_INVENTORY, FEATURE_MULTIPLEXER_INVENTORY_V1, FEATURE_SESSION_HOST,
 };
 
-use super::ssh_transport::SshTransport;
+use super::ssh_transport::{DaemonRuntimeRoute, SshTransport};
 
 /// Daemon sessions are allocated `SessionId`s in the **top half** of the u64
 /// space so they cannot collide with shell-bootstrap-minted ids (which are
@@ -48,15 +48,22 @@ static NEXT_DAEMON_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 static CONTROL_MASTER_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>> =
     LazyLock::new(Mutex::default);
 
-/// Session inventory returned by one authenticated daemon connection.
+/// Session inventory returned by authenticated daemon connections on one host.
 ///
 /// Older daemons contribute their native sessions and an empty multiplexer
 /// list. A client never replaces the typed multiplexer RPC with a host-shell
 /// fallback.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct HostSessionInventory {
     pub daemon: SessionList,
+    pub sessions: Vec<RoutedDaemonSession>,
     pub multiplexers: MultiplexerSessionList,
+}
+
+#[derive(Clone, Debug)]
+pub struct RoutedDaemonSession {
+    pub session: remote_server::proto::SessionInfo,
+    pub route: Option<DaemonRuntimeRoute>,
 }
 
 fn supports_multiplexer_inventory(response: &InitializeResponse) -> bool {
@@ -65,6 +72,10 @@ fn supports_multiplexer_inventory(response: &InitializeResponse) -> bool {
 
 fn supports_agent_inventory(response: &InitializeResponse) -> bool {
     has_feature(&response.features, FEATURE_AGENT_INVENTORY)
+}
+
+fn supports_session_host(response: &InitializeResponse) -> bool {
+    has_feature(&response.features, FEATURE_SESSION_HOST)
 }
 
 fn agent_provider_display_name(provider: &str) -> &str {
@@ -489,10 +500,10 @@ pub async fn prepare_daemon_transport(
     }
 }
 
-/// Connects to `server`'s daemon (a transient connection) and returns the
-/// sessions it currently owns plus any existing tmux/byobu sessions — including
-/// ones that survived an app restart or transport drop, which is the whole point
-/// of the adopt-sidebar. Self-contained:
+/// Connects transiently to every discoverable daemon runtime on `server` and
+/// returns the sessions they own plus any existing tmux/byobu sessions —
+/// including ones that survived an app restart, transport drop, or client
+/// upgrade, which is the whole point of the adopt-sidebar. Self-contained:
 /// brings up the ControlMaster + binary, connects, runs the initialize handshake,
 /// calls `list_sessions`, then tears the transient connection down again (the
 /// daemon and its sessions persist independently of this connection).
@@ -500,14 +511,11 @@ pub async fn prepare_daemon_transport(
 /// Request/response works without draining the client event channel — responses
 /// are routed to per-request oneshots; the event channel is unbounded so the
 /// reader never blocks on our ignoring it.
-pub async fn list_daemon_sessions(
-    server: SshServerInfo,
-    socket_path: PathBuf,
-    auth_context: Arc<RemoteServerAuthContext>,
+async fn query_daemon_inventory(
+    transport: &SshTransport,
+    auth_context: &RemoteServerAuthContext,
     executor: Arc<Background>,
-) -> std::result::Result<HostSessionInventory, String> {
-    prepare_daemon_transport(server, socket_path.clone(), auth_context.clone()).await?;
-    let transport = SshTransport::new(socket_path, auth_context.clone());
+) -> std::result::Result<(InitializeResponse, SessionList, MultiplexerSessionList), String> {
     let Connection { client, child, .. } = transport
         .connect(executor)
         .await
@@ -540,10 +548,123 @@ pub async fn list_daemon_sessions(
     } else {
         MultiplexerSessionList::default()
     };
-    Ok(HostSessionInventory {
-        daemon,
-        multiplexers,
-    })
+    Ok((initialize, daemon, multiplexers))
+}
+
+fn merge_daemon_inventory(
+    inventory: &mut HostSessionInventory,
+    daemon: SessionList,
+    multiplexers: MultiplexerSessionList,
+    route: Option<DaemonRuntimeRoute>,
+    observed_daemons: usize,
+) {
+    let routed_sessions: Vec<RoutedDaemonSession> = daemon
+        .sessions
+        .iter()
+        .cloned()
+        .map(|session| RoutedDaemonSession {
+            session,
+            route: route.clone(),
+        })
+        .collect();
+    if observed_daemons == 0 {
+        inventory.daemon = daemon;
+        inventory.multiplexers = multiplexers;
+    } else {
+        // Every daemon enforces its own ring cap. A single SessionList cannot
+        // represent several independent caps honestly, so suppress the host
+        // aggregate while retaining exact per-session usage.
+        inventory.daemon.host_ring_cap_bytes = 0;
+        inventory.daemon.sessions.extend(daemon.sessions);
+        if inventory.multiplexers.sessions.is_empty() {
+            inventory.multiplexers = multiplexers;
+        }
+    }
+    inventory.sessions.extend(routed_sessions);
+}
+
+pub async fn list_daemon_sessions(
+    server: SshServerInfo,
+    socket_path: PathBuf,
+    auth_context: Arc<RemoteServerAuthContext>,
+    executor: Arc<Background>,
+) -> std::result::Result<HostSessionInventory, String> {
+    prepare_daemon_transport(server, socket_path.clone(), auth_context.clone()).await?;
+    let base_transport = SshTransport::new(socket_path, auth_context.clone());
+    let runtimes = match base_transport.list_daemon_runtime_filenames().await {
+        Ok(runtimes) => runtimes,
+        Err(error) => {
+            log::warn!("{error}; falling back to the current daemon runtime");
+            Vec::new()
+        }
+    };
+
+    if runtimes.is_empty() {
+        let (_, daemon, multiplexers) =
+            query_daemon_inventory(&base_transport, &auth_context, executor).await?;
+        return Ok(HostSessionInventory {
+            sessions: daemon
+                .sessions
+                .iter()
+                .cloned()
+                .map(|session| RoutedDaemonSession {
+                    session,
+                    route: None,
+                })
+                .collect(),
+            daemon,
+            multiplexers,
+            ..Default::default()
+        });
+    }
+
+    let mut inventory = HostSessionInventory::default();
+    let mut observed_daemons = 0;
+    for runtime_filename in runtimes {
+        let probe_route = DaemonRuntimeRoute::new(runtime_filename.clone(), String::new())?;
+        let transport = base_transport.clone().with_daemon_runtime(probe_route);
+        let (initialize, daemon, multiplexers) =
+            match query_daemon_inventory(&transport, &auth_context, executor.clone()).await {
+                Ok(result) => result,
+                Err(error) => {
+                    log::warn!("skipping unreachable daemon runtime {runtime_filename}: {error}");
+                    continue;
+                }
+            };
+        if !supports_session_host(&initialize) {
+            log::warn!("skipping daemon runtime {runtime_filename} without session-host support");
+            continue;
+        }
+        let route = DaemonRuntimeRoute::new(runtime_filename, initialize.server_version)?;
+        merge_daemon_inventory(
+            &mut inventory,
+            daemon,
+            multiplexers,
+            Some(route),
+            observed_daemons,
+        );
+        observed_daemons += 1;
+    }
+
+    if observed_daemons == 0 {
+        let (_, daemon, multiplexers) =
+            query_daemon_inventory(&base_transport, &auth_context, executor).await?;
+        return Ok(HostSessionInventory {
+            sessions: daemon
+                .sessions
+                .iter()
+                .cloned()
+                .map(|session| RoutedDaemonSession {
+                    session,
+                    route: None,
+                })
+                .collect(),
+            daemon,
+            multiplexers,
+            ..Default::default()
+        });
+    }
+    Ok(inventory)
 }
 
 #[cfg(test)]

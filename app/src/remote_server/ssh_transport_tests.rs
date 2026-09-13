@@ -22,6 +22,41 @@ fn remote_proxy_command_quotes_identity_key() {
 }
 
 #[test]
+fn proxy_command_targets_the_exact_discovered_runtime() {
+    let route =
+        DaemonRuntimeRoute::new("server-v1.0.28.sock".to_string(), "v1.0.28".to_string()).unwrap();
+    let transport = SshTransport::new(PathBuf::from("/tmp/control"), static_auth_context())
+        .with_daemon_runtime(route.clone());
+
+    assert!(transport
+        .remote_proxy_command()
+        .contains("--runtime-filename server-v1.0.28.sock"));
+    assert_eq!(transport.daemon_runtime(), Some(&route));
+    assert_eq!(
+        transport.server_version_requirement(),
+        ServerVersionRequirement::Exact("v1.0.28".to_string())
+    );
+}
+
+#[test]
+fn default_proxy_command_keeps_the_current_version_isolated_route() {
+    let transport = SshTransport::new(PathBuf::from("/tmp/control"), static_auth_context());
+
+    assert!(!transport
+        .remote_proxy_command()
+        .contains("--runtime-filename"));
+    assert_eq!(
+        transport.server_version_requirement(),
+        ServerVersionRequirement::Current
+    );
+}
+
+#[test]
+fn daemon_runtime_route_rejects_path_traversal() {
+    assert!(DaemonRuntimeRoute::new("../server-v1.sock".to_string(), "v1".to_string()).is_err());
+}
+
+#[test]
 fn downloaded_remote_server_tarball_rejects_digest_mismatch() {
     let tempdir = tempfile::tempdir().unwrap();
     let archive_path = tempdir.path().join("zap-remote-server-linux-x86_64.tar.gz");

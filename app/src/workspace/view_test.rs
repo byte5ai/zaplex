@@ -3335,12 +3335,32 @@ fn review_temp_files_are_private_unique_and_owned() {
 #[cfg(unix)]
 #[test]
 fn adopted_pty_deduplication_is_host_scoped() {
-    let first = super::daemon_adoption_key("node-a", "pty-1", 7);
-    let second = super::daemon_adoption_key("node-b", "pty-1", 7);
+    let first = super::daemon_adoption_key("node-a", None, "pty-1", 7);
+    let second = super::daemon_adoption_key("node-b", None, "pty-1", 7);
 
     assert_ne!(
         first, second,
         "matching daemon-local PTY ids and generations on different hosts must open different tabs"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn adopted_pty_deduplication_is_daemon_runtime_scoped() {
+    let old_route = crate::remote_server::ssh_transport::DaemonRuntimeRoute::new(
+        "server-v1.0.28.sock".to_string(),
+        "v1.0.28".to_string(),
+    )
+    .unwrap();
+    let current_route = crate::remote_server::ssh_transport::DaemonRuntimeRoute::new(
+        "server-v1.0.29.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap();
+
+    assert_ne!(
+        super::daemon_adoption_key("node-a", Some(&old_route), "pty-1", 7),
+        super::daemon_adoption_key("node-a", Some(&current_route), "pty-1", 7)
     );
 }
 
@@ -3461,8 +3481,8 @@ fn managed_lifecycle_rejects_malformed_success_and_accepts_typed_failure() {
 fn rejected_adopt_cleanup_does_not_poison_retry_key() {
     let rejected_connection = warp_core::SessionId::from(41u64);
     let live_connection = warp_core::SessionId::from(42u64);
-    let rejected_key = super::daemon_adoption_key("node-a", "pty-1", 7);
-    let live_key = super::daemon_adoption_key("node-a", "pty-2", 8);
+    let rejected_key = super::daemon_adoption_key("node-a", None, "pty-1", 7);
+    let live_key = super::daemon_adoption_key("node-a", None, "pty-2", 8);
     let mut adopted = std::collections::HashMap::from([
         (
             rejected_key.clone(),

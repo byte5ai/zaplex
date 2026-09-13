@@ -67,6 +67,23 @@ fn version_compat_client_untagged_server_tagged() {
     assert!(!version_is_compatible(None, "v0.2026.05.10.stable"));
 }
 
+#[test]
+fn explicit_daemon_route_requires_the_discovered_server_version() {
+    let requirement = ServerVersionRequirement::Exact("v1.0.28".to_string());
+
+    assert!(server_version_matches_requirement(
+        &requirement,
+        Some("v1.0.29"),
+        "v1.0.28"
+    ));
+    assert!(!server_version_matches_requirement(
+        &requirement,
+        Some("v1.0.29"),
+        "v1.0.27"
+    ));
+    assert!(should_enforce_server_version(Channel::Oss, &requirement));
+}
+
 // ---------------------------------------------------------------------------
 // should_enforce_remote_version_check
 // ---------------------------------------------------------------------------

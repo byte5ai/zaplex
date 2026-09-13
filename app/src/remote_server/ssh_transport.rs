@@ -21,11 +21,42 @@ use remote_server::setup::{
     parse_uname_output, remote_server_daemon_dir, PreinstallCheckResult, RemotePlatform,
 };
 use remote_server::ssh::ssh_args;
-use remote_server::transport::{Connection, RemoteTransport};
+use remote_server::transport::{Connection, RemoteTransport, ServerVersionRequirement};
 // ControlMaster self-healing is unix-only (the `headless_connect` module is
 // `#[cfg(unix)]`), so the related field/import are gated to match.
 #[cfg(unix)]
 use warp_ssh_manager::SshServerInfo;
+
+const MAX_DISCOVERED_DAEMON_RUNTIMES: usize = 32;
+
+/// Exact legacy daemon selected from an authenticated runtime inventory.
+/// The filename routes the proxy; the independently observed server version
+/// pins the handshake on initial attach and every reconnect.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct DaemonRuntimeRoute {
+    runtime_filename: String,
+    server_version: String,
+}
+
+impl DaemonRuntimeRoute {
+    pub fn new(runtime_filename: String, server_version: String) -> Result<Self, String> {
+        if !remote_server::setup::is_daemon_socket_filename(&runtime_filename) {
+            return Err("invalid daemon runtime filename".to_string());
+        }
+        Ok(Self {
+            runtime_filename,
+            server_version,
+        })
+    }
+
+    pub fn runtime_filename(&self) -> &str {
+        &self.runtime_filename
+    }
+
+    pub fn server_version(&self) -> &str {
+        &self.server_version
+    }
+}
 
 /// SSH transport: connects via a ControlMaster socket.
 ///
@@ -37,6 +68,7 @@ use warp_ssh_manager::SshServerInfo;
 pub struct SshTransport {
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
+    daemon_runtime: Option<DaemonRuntimeRoute>,
     /// When set (daemon sessions), `connect` first re-establishes the per-host
     /// shared ControlMaster if its socket went stale/dead — so a persistent
     /// session can reconnect after a network drop killed the master. `None` for
@@ -58,9 +90,19 @@ impl SshTransport {
         Self {
             socket_path,
             auth_context,
+            daemon_runtime: None,
             #[cfg(unix)]
             self_heal_server: None,
         }
+    }
+
+    pub fn with_daemon_runtime(mut self, route: DaemonRuntimeRoute) -> Self {
+        self.daemon_runtime = Some(route);
+        self
+    }
+
+    pub fn daemon_runtime(&self) -> Option<&DaemonRuntimeRoute> {
+        self.daemon_runtime.as_ref()
     }
 
     /// Opt into ControlMaster self-healing on `connect` (daemon sessions). The
@@ -78,10 +120,16 @@ impl SshTransport {
     }
 
     pub fn remote_daemon_socket_path(&self) -> String {
+        let runtime_filename = self
+            .daemon_runtime
+            .as_ref()
+            .map(DaemonRuntimeRoute::runtime_filename)
+            .map(str::to_owned)
+            .unwrap_or_else(|| remote_server::setup::daemon_runtime_filename("sock"));
         format!(
             "{}/{}",
             remote_server_daemon_dir(&self.auth_context.remote_server_identity_key()),
-            remote_server::setup::daemon_runtime_filename("sock")
+            runtime_filename
         )
     }
 
@@ -97,7 +145,50 @@ impl SshTransport {
         let binary = remote_server::setup::remote_server_binary();
         let identity_key = self.auth_context.remote_server_identity_key();
         let quoted_identity_key = shell_words::quote(&identity_key);
-        format!("{binary} remote-server-proxy --identity-key {quoted_identity_key}")
+        let mut command =
+            format!("{binary} remote-server-proxy --identity-key {quoted_identity_key}");
+        if let Some(route) = &self.daemon_runtime {
+            let runtime_filename = shell_words::quote(route.runtime_filename());
+            command.push_str(&format!(" --runtime-filename {runtime_filename}"));
+        }
+        command
+    }
+
+    fn remote_runtime_listing_command(&self) -> String {
+        let binary = remote_server::setup::remote_server_binary();
+        let identity_key = self.auth_context.remote_server_identity_key();
+        let quoted_identity_key = shell_words::quote(&identity_key);
+        format!("{binary} remote-server-proxy --identity-key {quoted_identity_key} --list-runtimes")
+    }
+
+    pub async fn list_daemon_runtime_filenames(&self) -> Result<Vec<String>, String> {
+        let output = remote_server::ssh::run_ssh_command(
+            &self.socket_path,
+            &self.remote_runtime_listing_command(),
+            remote_server::setup::CHECK_TIMEOUT,
+        )
+        .await
+        .map_err(|error| format!("daemon runtime discovery failed: {error:#}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "daemon runtime discovery exited with code {}: {}",
+                output.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let mut runtimes = Vec::new();
+        for runtime in String::from_utf8_lossy(&output.stdout).lines() {
+            if !remote_server::setup::is_daemon_socket_filename(runtime) {
+                return Err("daemon runtime discovery returned an invalid filename".to_string());
+            }
+            if runtimes.len() == MAX_DISCOVERED_DAEMON_RUNTIMES {
+                return Err(format!(
+                    "daemon runtime discovery exceeded {MAX_DISCOVERED_DAEMON_RUNTIMES} entries"
+                ));
+            }
+            runtimes.push(runtime.to_string());
+        }
+        Ok(runtimes)
     }
 
     /// Fast, bounded check for whether the remote-server binary can be sourced at all,
@@ -817,6 +908,13 @@ async fn install_ladder(
 }
 
 impl RemoteTransport for SshTransport {
+    fn server_version_requirement(&self) -> ServerVersionRequirement {
+        self.daemon_runtime
+            .as_ref()
+            .map(|route| ServerVersionRequirement::Exact(route.server_version().to_string()))
+            .unwrap_or(ServerVersionRequirement::Current)
+    }
+
     fn detect_platform(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<RemotePlatform, String>> + Send>> {

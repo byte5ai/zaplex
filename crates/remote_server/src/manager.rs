@@ -18,6 +18,8 @@ use crate::setup::UnsupportedReason;
 #[cfg(not(target_family = "wasm"))]
 use crate::transport::Connection;
 use crate::transport::RemoteTransport;
+#[cfg(not(target_family = "wasm"))]
+use crate::transport::ServerVersionRequirement;
 use crate::HostId;
 use repo_metadata::RepoMetadataUpdate;
 use serde::Serialize;
@@ -145,6 +147,18 @@ fn version_is_compatible(client: Option<&str>, server: &str) -> bool {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn server_version_matches_requirement(
+    requirement: &ServerVersionRequirement,
+    client: Option<&str>,
+    server: &str,
+) -> bool {
+    match requirement {
+        ServerVersionRequirement::Current => version_is_compatible(client, server),
+        ServerVersionRequirement::Exact(expected) => expected == server,
+    }
+}
+
 /// Whether to enforce strict tag matching for the remote `server_version`.
 ///
 /// For [`Channel::Oss`](Zaplex), **release** builds (a `GIT_RELEASE_TAG` is
@@ -163,6 +177,12 @@ fn should_enforce_remote_version_check(channel: Channel) -> bool {
         Channel::Oss => ChannelState::app_version().is_some(),
         _ => true,
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn should_enforce_server_version(channel: Channel, requirement: &ServerVersionRequirement) -> bool {
+    matches!(requirement, ServerVersionRequirement::Exact(_))
+        || should_enforce_remote_version_check(channel)
 }
 
 /// Per-session connection state. Encodes which data is available at each
@@ -1009,29 +1029,43 @@ impl RemoteServerManager {
             .await
             .map_err(|e| ConnectAndHandshakeError::Initialize(anyhow::anyhow!("{e:#}")))?;
 
-        // Version compatibility check — see [`should_enforce_remote_version_check`]
-        // for when it is armed. What a mismatch MEANS differs by channel:
+        // Version compatibility check. The default route requires the current
+        // client version; an explicitly discovered historical route requires
+        // the exact version observed during inventory. What a mismatch means
+        // differs by route and channel:
         //
         // - Non-Oss channels keep their original recovery semantics: treat
         //   the on-disk binary as the stale artefact, remove it so the next
         //   reconnect reinstalls (upstream behavior, unchanged here).
-        // - Zaplex release builds (versioned install slot + versioned daemon
-        //   socket, both keyed on the same tag): the on-disk binary is the
-        //   right one for this client by construction; a mismatch means a
-        //   wrong RUNNING daemon answered our socket. Removing the binary
+        // - Zaplex release builds on the default route (versioned install slot
+        //   + versioned daemon socket, both keyed on the same tag): the on-disk
+        //   binary is the right one for this client by construction; a mismatch
+        //   means a wrong RUNNING daemon answered our socket. Removing the binary
         //   would delete a good install and buy nothing — fail the connect
         //   loudly instead (the daemon tab shows it via the connect-failed
         //   path and the caller falls back to classic SSH).
+        // - Historical routes never remove a binary. They are connect-only and
+        //   must keep targeting the exact daemon version that supplied the row.
         let client_version = ChannelState::app_version();
-        let enforce_version_check = should_enforce_remote_version_check(ChannelState::channel());
-        if enforce_version_check && !version_is_compatible(client_version, &resp.server_version) {
+        let version_requirement = transport.server_version_requirement();
+        let enforce_version_check =
+            should_enforce_server_version(ChannelState::channel(), &version_requirement);
+        if enforce_version_check
+            && !server_version_matches_requirement(
+                &version_requirement,
+                client_version,
+                &resp.server_version,
+            )
+        {
             log::warn!(
                 "Remote server version mismatch for session {session_id:?}: \
-                 client={client_version:?}, server={:?}.",
+                 requirement={version_requirement:?}, client={client_version:?}, server={:?}.",
                 resp.server_version
             );
 
-            if !matches!(ChannelState::channel(), Channel::Oss) {
+            if matches!(version_requirement, ServerVersionRequirement::Current)
+                && !matches!(ChannelState::channel(), Channel::Oss)
+            {
                 const REMOVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
                 if let Err(e) = transport
@@ -1046,8 +1080,8 @@ impl RemoteServerManager {
                 }
             }
             return Err(ConnectAndHandshakeError::Initialize(anyhow::anyhow!(
-                "remote server version mismatch (client: {client_version:?}, \
-                 server: {:?})",
+                "remote server version mismatch (required: {version_requirement:?}, \
+                 client: {client_version:?}, server: {:?})",
                 resp.server_version
             )));
         }

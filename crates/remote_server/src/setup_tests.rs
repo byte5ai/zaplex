@@ -244,3 +244,24 @@ fn install_script_rejects_missing_or_untrusted_digest() {
     assert!(install_script(None, &"g".repeat(64)).is_err());
     assert!(install_script(None, &"A".repeat(64)).is_err());
 }
+
+#[test]
+fn daemon_socket_filename_accepts_only_identity_local_rendezvous_names() {
+    assert!(is_daemon_socket_filename("server.sock"));
+    assert!(is_daemon_socket_filename("server-v1.0.0.sock"));
+    assert!(is_daemon_socket_filename(
+        "server-v0.2026.-0123456789abcdef.sock"
+    ));
+
+    for invalid in [
+        "server-.sock",
+        "server-v1/socket.sock",
+        "../server-v1.sock",
+        "server-v1.pid",
+        "other-v1.sock",
+        "server-abcdefghijklmnopqrstuvwxyz.sock",
+        "server-v1.sock\nnext",
+    ] {
+        assert!(!is_daemon_socket_filename(invalid), "accepted {invalid:?}");
+    }
+}

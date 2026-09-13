@@ -835,30 +835,60 @@ fn old_daemon_without_host_cap_never_gets_a_guessed_aggregate() {
 #[test]
 fn daemon_session_rows_keep_the_same_mouse_state_across_renders() {
     let mut states = HashMap::new();
-    let inventory = SessionList {
-        sessions: vec![remote_server::proto::SessionInfo {
-            session_id: "pty-1".to_string(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let inventory = vec![
+        crate::remote_server::headless_connect::RoutedDaemonSession {
+            session: remote_server::proto::SessionInfo {
+                session_id: "pty-1".to_string(),
+                ..Default::default()
+            },
+            route: None,
+        },
+    ];
+    let key = session_row_key("devhost", &inventory[0].session, None);
 
     sync_session_row_states(&mut states, "devhost", &inventory);
-    let original = states["devhost:pty-1"].clone();
+    let original = states[&key].clone();
     sync_session_row_states(&mut states, "devhost", &inventory);
 
-    assert!(Arc::ptr_eq(&original, &states["devhost:pty-1"]));
+    assert!(Arc::ptr_eq(&original, &states[&key]));
 
-    let replacement = SessionList {
-        sessions: vec![remote_server::proto::SessionInfo {
-            session_id: "pty-2".to_string(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let replacement = vec![
+        crate::remote_server::headless_connect::RoutedDaemonSession {
+            session: remote_server::proto::SessionInfo {
+                session_id: "pty-2".to_string(),
+                ..Default::default()
+            },
+            route: None,
+        },
+    ];
+    let replacement_key = session_row_key("devhost", &replacement[0].session, None);
     sync_session_row_states(&mut states, "devhost", &replacement);
-    assert!(!states.contains_key("devhost:pty-1"));
-    assert!(states.contains_key("devhost:pty-2"));
+    assert!(!states.contains_key(&key));
+    assert!(states.contains_key(&replacement_key));
+}
+
+#[test]
+fn identical_pty_identities_on_two_daemons_have_distinct_row_state() {
+    let session = remote_server::proto::SessionInfo {
+        session_id: "pty-1".to_string(),
+        generation: 7,
+        ..Default::default()
+    };
+    let old_route = crate::remote_server::ssh_transport::DaemonRuntimeRoute::new(
+        "server-v1.0.28.sock".to_string(),
+        "v1.0.28".to_string(),
+    )
+    .unwrap();
+    let current_route = crate::remote_server::ssh_transport::DaemonRuntimeRoute::new(
+        "server-v1.0.29.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap();
+
+    assert_ne!(
+        session_row_key("devhost", &session, Some(&old_route)),
+        session_row_key("devhost", &session, Some(&current_route))
+    );
 }
 
 #[test]
