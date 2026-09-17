@@ -39,7 +39,7 @@ Users need one honest path that uses their installed Claude Code or Codex subscr
 4. Codex runs with the selected account's `CODEX_HOME`, with `OPENAI_API_KEY` removed, and communicates through `codex app-server` after a successful protocol capability check.
 5. Zaplex never reads or displays a Claude or Codex token and never sends the turn directly to a model-provider HTTP API.
 6. A target is identified by agent, account, host, working directory, and model. The composer is enabled only while that target is reachable and able to accept input.
-7. With one reachable agent, the router selects it. With both agents reachable, the router uses the stored default or asks for a choice. With multiple accounts, it uses the stored account or asks for a choice; no selection is based on an assumed pricing tier.
+7. Without a stored preference, the router selects a unique reachable agent and account. With multiple agents or accounts, it uses an explicit stored selection or asks for a choice. A stored agent or account that disappears requires an explicit replacement, even if only one alternative remains. No account selection or ranking is based on pricing tier, quota, or utilization.
 8. The conversation header continuously shows the selected agent, account, host, working directory, session, and model without covering navigation or composer controls.
 9. New and resumed conversations use the CLI's real session/thread identifiers. Ending, resuming, restarting, and cancelling a session are explicit actions.
 10. The UI represents these distinct states: no agent installed, not signed in, ready, starting, responding, running a tool, waiting for approval or input, turn completed and resumable, session ended, and recoverable error.
@@ -48,6 +48,8 @@ Users need one honest path that uses their installed Claude Code or Codex subscr
 13. BYOP provider settings, API-key fields, provider/model preferences, provider-specific slash commands, and BYOP-only readiness or compaction controls are absent.
 14. Existing settings containing retired BYOP fields are tolerated during loading but are not written back. Stored BYOP secrets are deleted once and are not recreated.
 15. If a CLI is missing, signed out, incompatible, disconnected, or exits unexpectedly, the UI names the affected target, preserves the resumable session when possible, and offers a relevant setup, retry, resume, or new-session action.
+
+For a conversation without an agent or account preference, an account explicitly selected by the user in Cockpit supplies that preference when it resolves to a discovered Claude or Codex account. Its full identity remains selected even if that agent's CLI is unavailable; switching to another reachable agent requires an explicit choice. Unknown account keys and unsupported providers do not supply a subscription preference, and an existing conversation identity always takes precedence.
 
 ## Primary flows
 

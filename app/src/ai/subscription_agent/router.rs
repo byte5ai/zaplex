@@ -81,10 +81,8 @@ pub(crate) fn route_target(
         (false, None, None) => None,
     };
     let Some(selected_account) = selected_account else {
-        // Candidate order is caller policy order. Sorting opaque account ids
-        // here would discard any freeness ranking established before capability
-        // discovery. Deduplicate the complete identity in place instead: two
-        // accounts may share a display/routing id while differing by provider
+        // Preserve discovery order while deduplicating complete identities.
+        // Accounts may share a display/routing id while differing by provider
         // identity or isolated config root.
         let mut accounts = Vec::new();
         for capability in &capabilities {
