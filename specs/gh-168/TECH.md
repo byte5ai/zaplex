@@ -107,7 +107,7 @@ Call sites:
 
 - Spawn card: a dedicated managed/Claude Remote Control choice produces one stable launch intent and uses opaque account routing. A normal remote agent launch remains unchanged.
 - Cockpit model refresh: joins `SessionInfo.managed` to agent inventory by exact PTY id/generation and daemon host id.
-- Cockpit pane: renders the compact detail projection and dispatches start/stop/restart/attach. Sidebar receives at most a managed-state icon.
+- Cockpit pane: renders the compact detail projection and dispatches start/stop/restart/attach. Historical runtime rows retain exact-route Attach/Stop but hide Start/Restart. Workspace resolves the exact daemon `HostId`, checks its current/historical route before mutation, and rejects historical Start/Restart; it never transfers an old daemon's opaque account id to a new daemon. Sidebar receives at most a managed-state icon.
 - Workspace attach: reuses generation-checked native session attach. The official Claude mobile flow is reached by attaching to the managed PTY; no pairing data is copied into Zaplex state.
 
 ### 6. Security boundary

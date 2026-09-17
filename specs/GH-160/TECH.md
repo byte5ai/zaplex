@@ -36,6 +36,13 @@ compact row-action/button components, stop row-click propagation, and do not int
 theme. Default rows do not render connection-state prose, open-session counts, or a legend.
 Transient error/progress feedback may still be announced accessibly.
 
+For a resilience-enabled host, the existing Zaplex-sessions action owns a subordinate recovery
+disclosure. The default host row remains unchanged; the disclosure may auto-open once when that
+host first becomes connected and otherwise opens only on request. It queries identity-local daemon
+runtimes, renders recoverable native PTYs plus typed tmux/byobu inventory, and carries the exact
+daemon route on every native-session action. This is not a second connection store and contributes
+no state to the host row itself.
+
 The tab `+` menu in `app/src/workspace/view.rs` continues to query `FavoritesStore` and resolve its
 stable references against the SSH registry. Its first level is a quiet favorite-host entry; launch
 commands stay in the submenu. It never reads the Cockpit tree and never creates a duplicate host.
@@ -56,10 +63,30 @@ Each contribution carries `AgentInventoryStatus`:
 The local contribution is always retained. Every connected remote contribution is retained even
 when its session list is empty or its inventory is unsupported/unavailable.
 
-`CockpitModel` subscribes to `RemoteServerManagerEvent`. `HostConnected` starts a refresh.
-`HostDisconnected` first removes the stable daemon id synchronously from the visible tree, emits an
-update, and then starts a refresh. Existing refresh-generation gating prevents an older in-flight
-result from re-adding the disconnected root. Session-level events do not add duplicate roots.
+The ordinary topology remains one contribution per connected registry host and runtime because
+its current tabs share one daemon. Cross-version recovery is the bounded exception: a historical daemon that
+still owns PTYs retains a distinct `HostId` and therefore a distinct temporary contribution. The
+two contributions may share a registry node and display label, but must remain separately routed;
+registry reconciliation binds that node to every live daemon identity rather than selecting one.
+Existing-session attach, managed Stop, signals, transcript reads, and file operations bound to an
+adopted terminal resolve the exact `HostId` and historical route. New launches, managed Start and
+Restart, account/model discovery, directory validation, and standalone file operations such as
+SFTP use only the current route. Historical fleet rows cannot Start or Restart; their daemon-local
+account identities must not be reused on the current runtime. Disconnecting the Connections row
+deregisters every live daemon identity for that registry node. Each contribution is removed when
+its final manager connection disappears; ending its last PTY does not by itself mean the transport
+is already disconnected. Without live PTYs or connections, the historical daemon can retire after
+its idle grace period. The combined Connections inventory hides the host-cap row when several
+runtimes contribute because their independent ring caps cannot represent one shared limit.
+
+`CockpitModel` subscribes to `RemoteServerManagerEvent`. `HostConnected` and events that complete,
+reconnect, disconnect, deregister, or exit start a refresh. `SessionOpened` follows every
+authoritative normal or managed open acknowledgement; `SessionInventoryChanged` follows every
+managed Stop/Restart RPC result, including detached sessions and partial failures. Both refresh
+the inventory after the operation so changes appear without restarting the app. `HostDisconnected`
+first removes the stable daemon id synchronously from the visible tree, emits an update, and then
+starts a refresh. Existing refresh-generation gating prevents an older in-flight result from
+re-adding the disconnected root. Session-level events do not add duplicate roots.
 
 ## 2. Four-level presentation tree
 

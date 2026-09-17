@@ -263,7 +263,7 @@ fn registry_read_error_reuses_last_successful_snapshot() {
         label: "registry-label".to_string(),
         live_host_id: None,
     }];
-    let live_hosts = HashMap::from([("node-dev".to_string(), "host-dev".to_string())]);
+    let live_hosts = vec![("node-dev".to_string(), "host-dev".to_string())];
 
     let read = resolve_registry_read(Err("database busy".to_string()), Some(&cached));
     reconcile_registry_read(&mut inventory, &read, &live_hosts);
@@ -276,6 +276,29 @@ fn registry_read_error_reuses_last_successful_snapshot() {
     );
     assert_eq!(host.registry_node_id.as_deref(), Some("node-dev"));
     assert_eq!(inventory.needs_me, 1);
+}
+
+#[test]
+fn registry_binding_preserves_multiple_daemons_for_one_node() {
+    let registered = vec![RegisteredHost {
+        node_id: "node-dev".to_string(),
+        label: "devhost".to_string(),
+        live_host_id: None,
+    }];
+    let live_hosts = vec![
+        ("node-dev".to_string(), "daemon-current".to_string()),
+        ("node-dev".to_string(), "daemon-old".to_string()),
+    ];
+
+    let bound = bind_live_registry_hosts(&registered, &live_hosts);
+
+    assert_eq!(bound.len(), 2);
+    assert!(bound
+        .iter()
+        .any(|host| host.live_host_id.as_deref() == Some("daemon-current")));
+    assert!(bound
+        .iter()
+        .any(|host| host.live_host_id.as_deref() == Some("daemon-old")));
 }
 
 #[test]
@@ -294,7 +317,7 @@ fn first_registry_read_error_marks_bound_hosts_unverified() {
     };
 
     let read = resolve_registry_read(Err("database busy".to_string()), None);
-    reconcile_registry_read(&mut inventory, &read, &HashMap::new());
+    reconcile_registry_read(&mut inventory, &read, &[]);
 
     let host = &inventory.hosts[0];
     assert_eq!(
@@ -326,7 +349,7 @@ fn successful_empty_registry_read_remains_authoritative() {
     }];
 
     let read = resolve_registry_read(Ok(Vec::new()), Some(&cached));
-    reconcile_registry_read(&mut inventory, &read, &HashMap::new());
+    reconcile_registry_read(&mut inventory, &read, &[]);
 
     assert_eq!(
         inventory.hosts[0].availability,

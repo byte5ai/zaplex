@@ -46,11 +46,12 @@ Binary-Pfade versioniert). Das Versions-Segment ist **längenbegrenzt** (max.
 `prefix-<fnv64>`): der Socket-Pfad muss in `sockaddr_un.sun_path` (104/108
 Bytes) passen — codex-Fund im Review.
 
-Wirkung: Ein v0.rc3-Client KANN keinen v0.rc2-Daemon mehr erwischen — der
-Proxy (selbst das versionierte Binary) findet nur den arteigenen Socket und
-spawnt sonst frisch. Der Alt-Daemon bleibt nur unter seinem Alt-Namen
-erreichbar (also für Clients seines eigenen Releases) und stirbt über
-Grace/GC, sobald seine letzte Session endet.
+Wirkung im Standardpfad: Ein v0.rc3-Client KANN nicht versehentlich einen
+v0.rc2-Daemon erwischen — der Proxy findet nur den arteigenen Socket und
+spawnt sonst frisch. Die spätere, ausdrücklich ausgewählte Recovery-Ausnahme
+unten darf den Alt-Daemon unter seinem Alt-Namen connect-only erreichen; neue
+Sessions und Host-Operationen bleiben am aktuellen Daemon. Hat der Alt-Daemon
+keine Sessions und keine Verbindungen mehr, kann seine Leerlauffrist ihn beenden.
 
 ### 2. Handshake-Enforcement einschalten (Gürtel + Hosenträger)
 `should_enforce_remote_version_check`: `Oss → app_version().is_some()`
@@ -67,23 +68,63 @@ auch von `handle_close_session` und `on_session_reader_eof` aufgerufen (ctx
 wird durchgereicht; beide Call-Sites haben es). Verhalten unverändert, nur
 sofort statt ≤ 5 min später.
 
-## Übergang / bewusste Grenzen
-- Der HEUTE laufende Alt-Daemon (v0.rc-cockpit, Legacy-Socket) wird von
-  neuen Clients schlicht nie mehr gefunden; er räumt sich nach Ende seiner
-  letzten Session über seine eigene Grace/GC-Logik weg. Für die laufende
-  RC-Abnahme bleibt der einmalige manuelle Kill der schnellste Weg.
-- Alt-Sessions eines Alt-Daemons sind für den neuen Client **unsichtbar**
-  (er spricht nur seinen eigenen Daemon). Sichtbarkeit + Ein-Klick-Migration
-  („N Sessions laufen noch auf vX — beenden & upgraden") = eigenes
-  Follow-up-Paket (Cockpit-UI), hier bewusst NICHT enthalten.
-- PTY-Handover zwischen Daemon-Versionen (FD-Passing): explizit out of scope.
+## Übergang / Follow-up: versionsübergreifende Adoption
+
+Der ursprüngliche Stand isolierte alte Daemons korrekt, machte deren noch
+laufende Sessions für neue Clients aber unsichtbar. Der Adopt-Sidebar-Follow-up
+schließt diese Lücke, ohne die Versionsisolierung zurückzunehmen:
+
+- Der aktuelle, vertrauenswürdige Proxy listet ausschließlich Socket-Dateien im
+  aktuellen Identity-Verzeichnis. Beliebige Pfade, Symlinks und Traversal sind
+  ausgeschlossen; die Anzahl der Runtime-Einträge ist begrenzt.
+- Der Standardpfad bleibt unverändert: Nur der Socket des aktuellen Releases
+  darf bei Bedarf einen neuen Daemon starten. Ein explizit ausgewählter alter
+  Socket ist strikt **connect-only** und wird niemals neu angelegt oder gelöscht.
+- Scheitert die Runtime-Inventarisierung, fällt der Client auf genau diesen
+  start- und reparaturfähigen Standardpfad zurück. Auch ein im Inventar
+  aufgeführter aktueller Runtime-Socket wird über den Standardpfad geöffnet;
+  nur historische Runtime-Sockets erhalten die connect-only Route.
+- Beim Inventarabruf wird `InitializeResponse.server_version` des jeweiligen
+  Daemons gespeichert. Anzeige, Klick, Tab und Reconnect tragen Socketname und
+  diese exakte Version gemeinsam weiter; der Manager prüft gegen die beobachtete
+  Daemon-Version statt den Versionscheck pauschal abzuschalten.
+- Adoptierbar sind nur semantisch ältere Release-Tags. Gleich alte, neuere oder
+  nicht parsebare Versionen werden ebenso verworfen wie Release-Sockets, die ein
+  unversionierter Source-Build im gemeinsamen Verzeichnis vorfindet.
+- Der Manager kennzeichnet historische Verbindungen explizit. Attach und Stop
+  bestehender PTYs einschließlich Managed-Fleet-Sessions, Signale, Transkripte
+  und an eine adoptierte Session gebundene Datei-/Lesezugriffe dürfen diese
+  Route verwenden. Neue Sessions, Managed-Fleet-Start/-Restart, Account-/Model-
+  Discovery, Verzeichnisvalidierung und eigenständige Dateioperationen wie SFTP
+  wählen ausschließlich den aktuellen Standard-Daemon. Start/Restart auf einer
+  historischen Fleet-Zeile bleiben gesperrt; Zaplex überträgt ihre daemonlokalen
+  Konto-IDs nicht still an den aktuellen Daemon. „Trennen“ beendet alle Runtime-
+  Verbindungen eines Registry-Hosts.
+- Neue RPCs bleiben capability-gated. Alte Daemons ohne Agent-Inventar erhalten
+  eine neutrale Zaplex-Session-Kennung, behalten aber ihre cwd-Metadaten. Scheitert
+  nur der Abruf eines unterstützten Agent-Inventars, darf der Projekttitel aus
+  cwd bestehen bleiben. Generation 0 behält den bestehenden ID-only-Attach-Pfad.
+- PTY-Handover zwischen Daemon-Prozessen (FD-Passing) bleibt out of scope: Die
+  Session wird nicht migriert, sondern bis zu ihrem Ende am besitzenden alten
+  Daemon bedient.
 
 ## Abnahme
 1. Neuer Daemon + neuer Client → Socket heißt `server-<tag>.sock`, Connect
    wie gehabt (Regression: Bootstrap, Reattach, Adopt).
-2. Alt-Daemon läuft weiter → neuer Connect erreicht ihn NICHT (frischer
-   Daemon), Alt-Daemon exit nach Ende seiner Sessions (Log: grace timer).
+2. Alt-Daemon läuft weiter → der normale Connect startet/erreicht den frischen
+   Daemon; eine explizite Recovery-Inventarisierung erreicht den Alt-Daemon
+   connect-only. Nach Ende der letzten Session und Verbindung beginnt dessen
+   Leerlauffrist (Log: grace timer).
 3. Dev-Loop (`cargo run` + `deploy_remote_server`): unverändert
    `server.sock`, keine Enforcement-Fehler.
 4. Session schließen als letzte bei 0 Clients → Grace-Timer-Log sofort,
    nicht erst nach GC-Tick.
+5. Neuer Client + Alt-Daemon mit laufenden Sessions → beide Runtime-Sockets
+   werden getrennt inventarisiert; ein Klick verbindet exakt den Alt-Daemon und
+   Reconnects bleiben an dessen beobachtete Version gebunden.
+6. Staler oder manipulierter Alt-Socket → keine Neugründung auf der
+   historischen Route und keine Pfadauflösung außerhalb des
+   Identity-Verzeichnisses. Bleibt kein erreichbarer Runtime-Eintrag, darf die
+   reine Inventarabfrage den aktuellen Standardpfad starten oder reparieren und
+   zeigt dessen ehrlichen Leerzustand; ein Klick auf eine historische Session
+   fällt dagegen niemals auf den aktuellen Daemon zurück.

@@ -331,6 +331,29 @@ pub fn daemon_runtime_filename(extension: &str) -> String {
     }
 }
 
+/// Returns whether `filename` is a daemon rendezvous socket name that Zaplex
+/// may safely resolve inside an identity-scoped daemon directory.
+///
+/// This deliberately accepts both the legacy unversioned name and release-tag
+/// names while rejecting path separators and traversal. Newer clients use it
+/// when reconnecting to sessions still owned by an older release daemon.
+pub fn is_daemon_socket_filename(filename: &str) -> bool {
+    if filename == "server.sock" {
+        return true;
+    }
+    let Some(version) = filename
+        .strip_prefix("server-")
+        .and_then(|name| name.strip_suffix(".sock"))
+    else {
+        return false;
+    };
+    !version.is_empty()
+        && version.len() <= VERSION_SEGMENT_MAX + 5
+        && version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
 /// A release tag can appear in the version segment at most this long. The
 /// socket path lives inside `sockaddr_un.sun_path` (104 bytes on macOS, 108
 /// on Linux) together with `$HOME`, `.zaplex/remote-server` and the identity

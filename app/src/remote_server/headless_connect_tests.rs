@@ -54,6 +54,171 @@ fn multiplexer_inventory_requires_explicit_daemon_capability() {
 }
 
 #[test]
+fn agent_inventory_requires_explicit_daemon_capability() {
+    let old_daemon = InitializeResponse::default();
+    assert!(!supports_agent_inventory(&old_daemon));
+
+    let capable_daemon = InitializeResponse {
+        features: vec![FEATURE_AGENT_INVENTORY.to_string()],
+        ..Default::default()
+    };
+    assert!(supports_agent_inventory(&capable_daemon));
+}
+
+#[test]
+fn historical_recovery_accepts_only_older_semantic_versions() {
+    assert!(is_older_release_daemon(Some("v1.0.29"), "v1.0.28"));
+    assert!(!is_older_release_daemon(Some("v1.0.29"), "v1.0.29"));
+    assert!(!is_older_release_daemon(Some("v1.0.29"), "v1.0.30"));
+    assert!(!is_older_release_daemon(None, "v1.0.28"));
+    assert!(!is_older_release_daemon(Some("v1.0.29"), "development"));
+    assert!(!is_older_release_daemon(Some("v1.1"), "v1.1.rcbad"));
+    assert!(!is_older_release_daemon(Some("v1.1"), "v1.1.dev"));
+    assert!(is_older_release_daemon(Some("v1.1"), "v1.0.29"));
+    assert!(is_older_release_daemon(Some("v1.1.rc1"), "v1.1.dev2"));
+    assert!(!is_older_release_daemon(Some("v1.1.dev2"), "v1.1.rc1"));
+}
+
+#[test]
+fn release_tag_forms_compare_by_numeric_prerelease_precedence() {
+    for (newer, older) in [
+        ("v1.1", "v1.1.rc10"),
+        ("v1.1.rc10", "v1.1.rc2"),
+        ("v1.1.dev10", "v1.1.dev2"),
+        ("v1.1.0-rc10", "v1.1.0-rc2"),
+        ("v1.1.0-beta10", "v1.1.0-beta2"),
+        ("v1.1.0-alpha10", "v1.1.0-alpha2"),
+        ("v1.1.0-dev10", "v1.1.dev2"),
+    ] {
+        assert!(
+            is_older_release_daemon(Some(newer), older),
+            "{older} < {newer}"
+        );
+        assert!(
+            !is_older_release_daemon(Some(older), newer),
+            "{newer} > {older}"
+        );
+    }
+    for (left, right) in [
+        ("v1.1", "v1.1.0"),
+        ("v1.1.rc2", "v1.1.0-rc2"),
+        ("v1.1.dev2", "v1.1.0-dev2"),
+        ("v1.1.0+build2", "v1.1.0+build1"),
+    ] {
+        assert!(!is_older_release_daemon(Some(left), right));
+        assert!(!is_older_release_daemon(Some(right), left));
+    }
+}
+
+#[test]
+fn agent_inventory_replaces_shell_name_with_agent_identity() {
+    let mut daemon = remote_server::proto::SessionList {
+        sessions: vec![remote_server::proto::SessionInfo {
+            session_id: "pty-1".to_string(),
+            title: "bash".to_string(),
+            generation: 7,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let agents = remote_server::proto::AgentSessionList {
+        sessions: vec![remote_server::proto::AgentSessionInfo {
+            name: "release checks".to_string(),
+            provider: "codex".to_string(),
+            pty_session_id: "pty-1".to_string(),
+            pty_session_generation: 7,
+            pty_foreground: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    enrich_daemon_session_titles(&mut daemon, &agents);
+
+    assert_eq!(daemon.sessions[0].title, "Codex · release checks");
+}
+
+#[test]
+fn unmatched_agent_inventory_never_preserves_a_shell_title() {
+    let mut daemon = SessionList {
+        sessions: vec![remote_server::proto::SessionInfo {
+            session_id: "pty-1".to_string(),
+            title: "tcsh".to_string(),
+            cwd: "/srv/project".to_string(),
+            generation: 7,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    enrich_daemon_session_titles(&mut daemon, &AgentSessionList::default());
+
+    assert_eq!(daemon.sessions[0].title, "project");
+}
+
+#[test]
+fn legacy_daemon_without_agent_inventory_uses_neutral_session_identity() {
+    let mut daemon = SessionList {
+        sessions: vec![remote_server::proto::SessionInfo {
+            session_id: "pty-legacy".to_string(),
+            title: "bash".to_string(),
+            cwd: "/srv/project".to_string(),
+            managed: Some(remote_server::proto::ManagedSessionInfo {
+                provider: "codex".to_string(),
+                project_root: "/srv/project".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    neutralize_legacy_session_titles(&mut daemon);
+
+    assert!(daemon.sessions[0].title.is_empty());
+    assert_eq!(daemon.sessions[0].cwd, "/srv/project");
+    assert!(daemon.sessions[0].managed.is_none());
+}
+
+#[test]
+fn merged_daemon_inventory_preserves_exact_route_per_session() {
+    let old_route =
+        DaemonRuntimeRoute::new("server-v1.0.28.sock".to_string(), "v1.0.28".to_string()).unwrap();
+    let current_route =
+        DaemonRuntimeRoute::new("server-v1.0.29.sock".to_string(), "v1.0.29".to_string()).unwrap();
+    let sessions = || SessionList {
+        sessions: vec![remote_server::proto::SessionInfo {
+            session_id: "same-id".to_string(),
+            generation: 7,
+            ..Default::default()
+        }],
+        host_ring_cap_bytes: 1024,
+        ..Default::default()
+    };
+    let mut inventory = HostSessionInventory::default();
+
+    merge_daemon_inventory(
+        &mut inventory,
+        sessions(),
+        MultiplexerSessionList::default(),
+        Some(current_route.clone()),
+        0,
+    );
+    merge_daemon_inventory(
+        &mut inventory,
+        sessions(),
+        MultiplexerSessionList::default(),
+        Some(old_route.clone()),
+        1,
+    );
+
+    assert_eq!(inventory.sessions.len(), 2);
+    assert_eq!(inventory.sessions[0].route.as_ref(), Some(&current_route));
+    assert_eq!(inventory.sessions[1].route.as_ref(), Some(&old_route));
+    assert_eq!(inventory.daemon.host_ring_cap_bytes, 0);
+}
+
+#[test]
 fn control_socket_path_is_stable_and_per_host() {
     let a1 = control_socket_path(&server(AuthType::Key));
     let a2 = control_socket_path(&server(AuthType::Key));

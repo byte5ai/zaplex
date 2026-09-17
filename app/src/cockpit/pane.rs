@@ -82,6 +82,24 @@ fn session_table_viewport_height(row_count: usize) -> f32 {
     SESSION_TABLE_HEADER_HEIGHT + visible_rows as f32 * SESSION_TABLE_ROW_HEIGHT
 }
 
+fn session_allows_new_work(is_local: bool, host_id: Option<&str>, app: &AppContext) -> bool {
+    if is_local {
+        return true;
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        RemoteServerManager::as_ref(app)
+            .connected_daemons()
+            .into_iter()
+            .any(|daemon| Some(daemon.host_id.as_str()) == host_id && daemon.is_current_runtime())
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = (host_id, app);
+        false
+    }
+}
+
 fn session_today_cost(
     is_local: bool,
     session_id: &str,
@@ -1698,7 +1716,8 @@ impl CockpitPaneView {
             SessionRowLifecycle {
                 route,
                 current_name: session.name.clone(),
-                can_restart: capabilities.can_restart,
+                can_restart: capabilities.can_restart
+                    && session_allows_new_work(is_local, host_id.as_deref(), app),
                 can_rename: capabilities.can_rename,
                 cleanup_candidate: None,
             },
@@ -1861,6 +1880,7 @@ impl CockpitPaneView {
         } = matching_session_row(&rows, &menu.row_key)?;
 
         let caps = SessionCapabilities::of(session, is_local);
+        let allows_new_work = session_allows_new_work(is_local, host_id.as_deref(), app);
         let agent = crate::cockpit::agent_of(session.provider);
         // The stamped account route pins fork/resume/slash to the subscription
         // that owns this exact session. New remote peers route through the
@@ -1882,7 +1902,7 @@ impl CockpitPaneView {
 
         // Adopt — the row click does this too, but a menu that omitted the
         // primary action would read as if it were missing.
-        if caps.can_resume {
+        if caps.can_resume && allows_new_work {
             push(
                 self.menu_item(
                     &k("adopt"),
@@ -1903,7 +1923,7 @@ impl CockpitPaneView {
                 &mut col,
             );
         }
-        if caps.can_fork {
+        if caps.can_fork && allows_new_work {
             push(
                 self.menu_item(
                     &k("fork"),
@@ -3343,6 +3363,7 @@ impl CockpitPaneView {
         &self,
         inventory: &ManagedFleetInventory,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         if inventory.sessions().is_empty() {
             return None;
@@ -3364,6 +3385,7 @@ impl CockpitPaneView {
                 main,
             ));
         for session in inventory.sessions() {
+            let current_runtime = session_allows_new_work(false, Some(&session.host_id), app);
             let details = managed_fleet_details_from_proto(session);
             let mode = if session.is_claude_remote_control() {
                 " · Remote Control"
@@ -3447,7 +3469,7 @@ impl CockpitPaneView {
                     stop,
                 ));
             }
-            if !details.launch_blocked {
+            if !details.launch_blocked && current_runtime {
                 actions = actions.with_child(verb_button(
                     self.managed_fleet_action_states
                         .get(&Self::managed_action_key(session, "restart"))
@@ -3689,7 +3711,7 @@ impl View for CockpitPaneView {
                     .with_margin_bottom(CARD_SPACING * 2.0)
                     .finish(),
             );
-            if let Some(managed) = self.render_managed_fleet(&managed_fleet, appearance) {
+            if let Some(managed) = self.render_managed_fleet(&managed_fleet, appearance, app) {
                 col = col.with_child(managed);
             }
             // No Conductor tree here any more (P6). The sidebar carries it, and

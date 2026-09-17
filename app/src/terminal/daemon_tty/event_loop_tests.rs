@@ -1,6 +1,8 @@
 use super::*;
 use std::borrow::Cow;
+use std::time::Duration;
 use warp_core::HostId;
+use warpui::r#async::FutureExt;
 use warpui::{App, ModelHandle};
 
 const OUR_PTY: &str = "pty-ours";
@@ -121,6 +123,24 @@ fn start_adopted_loop_impl(
     (manager, event_loop, model, wakeups_rx)
 }
 
+/// Replay callbacks run on the app executor after a background task completes.
+/// Their terminal wakeups let tests await the finished state without guessing
+/// how many foreground yields the background executor needs.
+async fn wait_for_attach_replay(
+    event_loop: &ModelHandle<EventLoop>,
+    app: &App,
+    wakeups: &async_channel::Receiver<()>,
+) {
+    async {
+        while event_loop.read(app, |me, _| me.pending_attach_replay.is_some()) {
+            wakeups.recv().await.expect("terminal wakeup channel closed");
+        }
+    }
+    .with_timeout(Duration::from_secs(5))
+    .await
+    .expect("attach replay did not complete");
+}
+
 fn complete_adopted_attach(event_loop: &ModelHandle<EventLoop>, app: &mut App) {
     event_loop.update(app, |me, ctx| {
         me.on_session_attached(
@@ -136,6 +156,63 @@ fn complete_adopted_attach(event_loop: &ModelHandle<EventLoop>, app: &mut App) {
             true,
             ctx,
         );
+    });
+}
+
+#[test]
+fn ordinary_session_open_ack_emits_inventory_refresh_event_without_managed_launch() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(36u64);
+        let manager = app.add_singleton_model(RemoteServerManager::new);
+        let (events_tx, events_rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&manager, move |_manager, event, _ctx| {
+                events_tx.try_send(event.clone()).unwrap();
+            });
+        });
+        let (listener, _wakeups_rx) = test_listener();
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(
+            None,
+            Some(listener.clone()),
+        )));
+        let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::start(
+                model,
+                event_loop_rx,
+                listener,
+                SizeInfo::new_without_font_metrics(24, 80),
+                conn,
+                OpenSessionParams::default(),
+                None,
+                None,
+                None,
+                None,
+                HOST.to_string(),
+                ctx,
+            )
+        });
+        assert!(events_rx.is_empty());
+
+        event_loop.update(&mut app, |me, ctx| {
+            assert!(me.managed_launch_id.is_none());
+            assert!(me.pty_session_id.is_none());
+            me.on_session_opened("pty-new".to_string(), 9, ctx);
+        });
+
+        let event = events_rx
+            .try_recv()
+            .expect("OpenSession acknowledgement event");
+        assert_eq!(event.session_id(), Some(conn));
+        assert!(matches!(
+            event,
+            RemoteServerManagerEvent::SessionOpened {
+                session_id,
+                pty_session_id,
+                generation: 9,
+            } if session_id == conn && pty_session_id == "pty-new"
+        ));
+        assert!(events_rx.is_empty());
     });
 }
 
@@ -238,7 +315,7 @@ fn adopt_output_waits_for_authoritative_attach_snapshot() {
 fn exit_waits_for_matching_attach_snapshot() {
     App::test((), |mut app| async move {
         let conn = SessionId::from(28u64);
-        let (manager, event_loop, _model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
+        let (manager, event_loop, _model, wakeups_rx) = start_adopted_loop(&mut app, conn);
 
         manager.update(&mut app, |_manager, ctx| {
             ctx.emit(RemoteServerManagerEvent::SessionExited {
@@ -268,6 +345,7 @@ fn exit_waits_for_matching_attach_snapshot() {
                 ctx,
             );
         });
+        wait_for_attach_replay(&event_loop, &app, &wakeups_rx).await;
         event_loop.read(&app, |me, _ctx| {
             assert!(me.terminated);
             assert!(me.pending_exit.is_none());
@@ -285,7 +363,7 @@ fn exit_waits_for_matching_attach_snapshot() {
 fn attach_output_overflow_requests_replay_before_live_delivery() {
     App::test((), |mut app| async move {
         let conn = SessionId::from(29u64);
-        let (_manager, event_loop, _model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
+        let (_manager, event_loop, _model, wakeups_rx) = start_adopted_loop(&mut app, conn);
 
         event_loop.update(&mut app, |me, ctx| {
             me.buffer_pending_output(OUR_PTY, 4, &vec![b'x'; MAX_PENDING_OUTPUT_BYTES]);
@@ -304,6 +382,7 @@ fn attach_output_overflow_requests_replay_before_live_delivery() {
                 ctx,
             );
         });
+        wait_for_attach_replay(&event_loop, &app, &wakeups_rx).await;
         event_loop.read(&app, |me, _ctx| {
             assert!(
                 me.awaiting_attach_snapshot,
@@ -381,7 +460,7 @@ fn session_output_routes_to_terminal_and_filters_by_pty() {
 fn live_cursor_query_is_routed_back_as_session_input() {
     App::test((), |mut app| async move {
         let conn = SessionId::from(31u64);
-        let (manager, event_loop, _model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
+        let (manager, event_loop, _model, wakeups_rx) = start_adopted_loop(&mut app, conn);
         let query = b"\x1b[6n";
 
         event_loop.update(&mut app, |me, ctx| {
@@ -398,6 +477,9 @@ fn live_cursor_query_is_routed_back_as_session_input() {
                 true,
                 ctx,
             );
+        });
+        wait_for_attach_replay(&event_loop, &app, &wakeups_rx).await;
+        event_loop.update(&mut app, |me, _ctx| {
             me.process_historical_pty_bytes(b"\x1b[H");
         });
         event_loop.read(&app, |me, _| {
@@ -1663,7 +1745,7 @@ fn apply_attach_without_preamble_replays_plainly() {
 fn large_attach_replay_yields_with_model_unlocked_between_chunks() {
     App::test((), |mut app| async move {
         let conn = SessionId::from(42u64);
-        let (manager, event_loop, model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
+        let (manager, event_loop, model, wakeups_rx) = start_adopted_loop(&mut app, conn);
         let replay = vec![b'x'; ATTACH_PARSE_CHUNK_BYTES * 3 + 17];
         let replay_len = replay.len() as u64;
         let live_output = b"live-after-snapshot";
@@ -1708,9 +1790,7 @@ fn large_attach_replay_yields_with_model_unlocked_between_chunks() {
             assert!(!me.terminated, "exit stays ordered behind the replay");
         });
 
-        for _ in 0..8 {
-            futures_lite::future::yield_now().await;
-        }
+        wait_for_attach_replay(&event_loop, &app, &wakeups_rx).await;
         event_loop.read(&app, |me, _| {
             assert!(me.pending_attach_replay.is_none());
             assert_eq!(me.last_seq, replay_len + live_output.len() as u64);

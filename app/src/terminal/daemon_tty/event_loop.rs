@@ -1277,6 +1277,14 @@ impl EventLoop {
         log::info!("daemon_tty: session opened, pty_session_id={pty_session_id}");
         self.pty_session_id = Some(pty_session_id.clone());
         self.pty_generation = (generation != 0).then_some(generation);
+        RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.report_session_opened(
+                self.connection_session_id,
+                pty_session_id.clone(),
+                generation,
+                ctx,
+            );
+        });
         if self.managed_launch_id.is_some() {
             if generation == 0 {
                 self.report_managed_launch_failed(

@@ -41,6 +41,12 @@ Figma: none provided. The binding visual reference is
    such as “local,” “not connected,” or “2 open,” and it has no explanatory legend or live-root
    summary.
 
+   A resilience-enabled host may expose one subordinate “Zaplex sessions” recovery disclosure.
+   It is session recovery, not a second registry or a live-root summary: opening it inventories
+   daemon-owned PTYs, and the first resilient connection may reveal it once so sessions surviving
+   an app restart are not undiscoverable. Its rows use agent/project identity when trustworthy and
+   a neutral Zaplex-session identifier otherwise; raw shell executable names are never identities.
+
 3. **Favorites project into the tab `+` menu.** The menu reads stable host references from the
    Connections registry and shows favorite hosts only. Its first level contains only the favorite
    mark, host label, and submenu chevron; launch actions appear in the submenu. Editing a favorite
@@ -55,10 +61,18 @@ Figma: none provided. The binding visual reference is
 5. **Local remains visible.** The local host root and its discovered live sessions are always part
    of the Cockpit. With no local agent sessions, the root remains and shows an honest empty state.
 
-6. **Remote roots follow actual open Zaplex sessions.** Opening the first session to a remote host
-   adds exactly one root keyed by stable host identity. Further sessions reuse it. Closing or
+6. **Remote roots follow actual open Zaplex sessions.** Opening the first session to a remote
+   daemon adds exactly one root keyed by its stable daemon identity. Further sessions to that
+   daemon reuse it. Closing or
    disconnecting the final open session removes the root synchronously without deleting the host
    or changing its favorite state in Connections.
+
+   During explicit cross-version recovery, the still-owning historical daemon keeps a separate
+   stable daemon identity. The Cockpit may therefore temporarily retain one root per connected
+   daemon runtime for the same registered host; each root follows that runtime's connection
+   lifecycle, including the final disconnect. It must never merge their routing identities or
+   route an old session through the current daemon. The combined Connections inventory hides
+   the host-cap row when multiple runtimes contribute; per-session ring usage remains visible.
 
 7. **Connection and inventory are different states.** A connected remote root remains visible
    while its AI inventory is honestly empty, temporarily unavailable, or unsupported by an older

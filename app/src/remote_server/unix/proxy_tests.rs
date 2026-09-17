@@ -1,4 +1,4 @@
-use super::{select_daemon, DaemonSelection};
+use super::{connect_existing_daemon, runtime_filenames_in_dir, select_daemon, DaemonSelection};
 
 #[test]
 fn live_unrelated_pid_without_socket_is_not_a_live_daemon() {
@@ -27,4 +27,49 @@ fn existing_daemon_connection_is_reused() {
 
     assert!(stream.peer_addr().is_ok());
     assert!(accepted.peer_addr().is_ok());
+}
+
+#[test]
+fn explicit_historical_runtime_missing_does_not_create_a_socket() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket_path = directory.path().join("server-v0.9.sock");
+
+    assert!(connect_existing_daemon(&socket_path).is_err());
+    assert!(!socket_path.exists());
+}
+
+#[test]
+fn explicit_historical_runtime_rejects_a_socket_symlink() {
+    use std::os::unix::fs::symlink;
+    use std::os::unix::net::UnixListener;
+
+    let directory = tempfile::tempdir().unwrap();
+    let target_path = directory.path().join("outside.sock");
+    let _target = UnixListener::bind(&target_path).unwrap();
+    let socket_path = directory.path().join("server-v0.9.sock");
+    symlink(&target_path, &socket_path).unwrap();
+
+    assert!(connect_existing_daemon(&socket_path).is_err());
+}
+
+#[test]
+fn runtime_inventory_contains_only_daemon_sockets_with_current_first() {
+    use std::os::unix::net::UnixListener;
+
+    let directory = tempfile::tempdir().unwrap();
+    let _legacy = UnixListener::bind(directory.path().join("server-v0.9.sock")).unwrap();
+    let current_name = remote_server::setup::daemon_runtime_filename("sock");
+    let _current = UnixListener::bind(directory.path().join(&current_name)).unwrap();
+    let _unversioned = (current_name != "server.sock")
+        .then(|| UnixListener::bind(directory.path().join("server.sock")).unwrap());
+    std::fs::write(directory.path().join("server-v0.8.sock"), "not a socket").unwrap();
+    let _unrelated = UnixListener::bind(directory.path().join("unrelated.sock")).unwrap();
+
+    let runtimes = runtime_filenames_in_dir(directory.path()).unwrap();
+
+    assert_eq!(runtimes.first(), Some(&current_name));
+    assert!(runtimes.contains(&"server-v0.9.sock".to_string()));
+    assert!(runtimes.contains(&"server.sock".to_string()));
+    assert!(!runtimes.contains(&"server-v0.8.sock".to_string()));
+    assert!(!runtimes.contains(&"unrelated.sock".to_string()));
 }

@@ -13,7 +13,6 @@
 //! The (blocking) disk scan runs on the background executor; results are applied back
 //! on the model's thread via the spawner round-trip.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -166,22 +165,37 @@ fn resolve_registry_read(
 
 fn bind_live_registry_hosts(
     registered: &[RegisteredHost],
-    live_hosts_by_registry_node: &HashMap<String, String>,
+    live_hosts_by_registry_node: &[(String, String)],
 ) -> Vec<RegisteredHost> {
-    registered
-        .iter()
-        .map(|host| RegisteredHost {
-            node_id: host.node_id.clone(),
-            label: host.label.clone(),
-            live_host_id: live_hosts_by_registry_node.get(&host.node_id).cloned(),
-        })
-        .collect()
+    let mut bound = Vec::new();
+    for host in registered {
+        let mut matched = false;
+        for (_, host_id) in live_hosts_by_registry_node
+            .iter()
+            .filter(|(node_id, _)| node_id == &host.node_id)
+        {
+            matched = true;
+            bound.push(RegisteredHost {
+                node_id: host.node_id.clone(),
+                label: host.label.clone(),
+                live_host_id: Some(host_id.clone()),
+            });
+        }
+        if !matched {
+            bound.push(RegisteredHost {
+                node_id: host.node_id.clone(),
+                label: host.label.clone(),
+                live_host_id: None,
+            });
+        }
+    }
+    bound
 }
 
 fn reconcile_registry_read(
     inventory: &mut FleetTree,
     read: &RegistryRead,
-    live_hosts_by_registry_node: &HashMap<String, String>,
+    live_hosts_by_registry_node: &[(String, String)],
 ) {
     match read {
         RegistryRead::Current(registered) => {
@@ -293,7 +307,14 @@ impl CockpitModel {
         ctx.subscribe_to_model(
             &RemoteServerManager::handle(ctx),
             |me, event, ctx| match event {
-                RemoteServerManagerEvent::HostConnected { .. } => me.spawn_refresh(ctx),
+                RemoteServerManagerEvent::HostConnected { .. }
+                | RemoteServerManagerEvent::SessionConnected { .. }
+                | RemoteServerManagerEvent::SessionDisconnected { .. }
+                | RemoteServerManagerEvent::SessionReconnected { .. }
+                | RemoteServerManagerEvent::SessionDeregistered { .. }
+                | RemoteServerManagerEvent::SessionExited { .. }
+                | RemoteServerManagerEvent::SessionOpened { .. }
+                | RemoteServerManagerEvent::SessionInventoryChanged { .. } => me.spawn_refresh(ctx),
                 RemoteServerManagerEvent::HostDisconnected { host_id } => {
                     let inventory_changed =
                         remove_disconnected_host(&mut me.inventory, host_id.as_str());
@@ -304,11 +325,7 @@ impl CockpitModel {
                     me.spawn_refresh(ctx);
                 }
                 RemoteServerManagerEvent::SessionConnecting { .. }
-                | RemoteServerManagerEvent::SessionConnected { .. }
                 | RemoteServerManagerEvent::SessionConnectionFailed { .. }
-                | RemoteServerManagerEvent::SessionDisconnected { .. }
-                | RemoteServerManagerEvent::SessionReconnected { .. }
-                | RemoteServerManagerEvent::SessionDeregistered { .. }
                 | RemoteServerManagerEvent::NavigatedToDirectory { .. }
                 | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
                 | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
@@ -320,7 +337,6 @@ impl CockpitModel {
                 | RemoteServerManagerEvent::ClientRequestFailed { .. }
                 | RemoteServerManagerEvent::ServerMessageDecodingError { .. }
                 | RemoteServerManagerEvent::SessionOutput { .. }
-                | RemoteServerManagerEvent::SessionExited { .. }
                 | RemoteServerManagerEvent::SessionNotice { .. } => {}
                 RemoteServerManagerEvent::ManagedLaunchOpened { .. }
                 | RemoteServerManagerEvent::ManagedLaunchFailed { .. } => {}
@@ -503,7 +519,7 @@ impl CockpitModel {
                 // `proto_to_snapshot`) is `#[cfg(not(wasm))]`. On WASM there are
                 // no daemon connections, so `remotes` is empty and the fold below
                 // degrades to the local tree alone.
-                let live_hosts_by_registry_node: HashMap<String, String> = inputs
+                let live_hosts_by_registry_node: Vec<(String, String)> = inputs
                     .daemons
                     .iter()
                     .filter_map(|daemon| {
@@ -534,10 +550,12 @@ impl CockpitModel {
                                     daemon.host_label
                                 ),
                             }
-                            if has_feature(
-                                &daemon.features,
-                                FEATURE_AGENT_ACCOUNT_ROUTING_V1,
-                            ) {
+                            if daemon.is_current_runtime()
+                                && has_feature(
+                                    &daemon.features,
+                                    FEATURE_AGENT_ACCOUNT_ROUTING_V1,
+                                )
+                            {
                                 match daemon.client.list_agent_accounts().await {
                                     Ok(accounts) => managed_fleet.enrich_remote_account_labels(
                                         &daemon.host_id,

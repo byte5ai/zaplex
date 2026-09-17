@@ -17,7 +17,10 @@ use crate::setup::RemoteServerSetupState;
 use crate::setup::UnsupportedReason;
 #[cfg(not(target_family = "wasm"))]
 use crate::transport::Connection;
+use crate::transport::DaemonRuntimeRoute;
 use crate::transport::RemoteTransport;
+#[cfg(not(target_family = "wasm"))]
+use crate::transport::ServerVersionRequirement;
 use crate::HostId;
 use repo_metadata::RepoMetadataUpdate;
 use serde::Serialize;
@@ -145,6 +148,18 @@ fn version_is_compatible(client: Option<&str>, server: &str) -> bool {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn server_version_matches_requirement(
+    requirement: &ServerVersionRequirement,
+    client: Option<&str>,
+    server: &str,
+) -> bool {
+    match requirement {
+        ServerVersionRequirement::Current => version_is_compatible(client, server),
+        ServerVersionRequirement::Exact(expected) => expected == server,
+    }
+}
+
 /// Whether to enforce strict tag matching for the remote `server_version`.
 ///
 /// For [`Channel::Oss`](Zaplex), **release** builds (a `GIT_RELEASE_TAG` is
@@ -163,6 +178,12 @@ fn should_enforce_remote_version_check(channel: Channel) -> bool {
         Channel::Oss => ChannelState::app_version().is_some(),
         _ => true,
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn should_enforce_server_version(channel: Channel, requirement: &ServerVersionRequirement) -> bool {
+    matches!(requirement, ServerVersionRequirement::Exact(_))
+        || should_enforce_remote_version_check(channel)
 }
 
 /// Per-session connection state. Encodes which data is available at each
@@ -261,6 +282,14 @@ pub enum RemoteServerManagerEvent {
         /// The error message from the failed phase.
         error: String,
     },
+    /// A new daemon-hosted PTY was opened successfully. Unlike SessionConnected,
+    /// this is emitted after the OpenSession acknowledgement, when inventories
+    /// can observe the new session, including launches without managed metadata.
+    SessionOpened {
+        session_id: SessionId,
+        pty_session_id: String,
+        generation: u64,
+    },
     /// A capability-gated managed OpenSession was acknowledged by the daemon.
     /// The launch id is the stable client-created correlation key; PTY identity
     /// is returned only after admission and spawn actually succeeded.
@@ -312,6 +341,9 @@ pub enum RemoteServerManagerEvent {
     SessionDeregistered { session_id: SessionId },
 
     // --- Host-scoped events ---
+    /// A lifecycle operation may have changed this daemon's PTY inventory,
+    /// including detached sessions that cannot deliver SessionExited pushes.
+    SessionInventoryChanged { host_id: HostId },
     /// The first session for this host reached `Connected`. Downstream
     /// features should create per-host models (e.g. `RepoMetadataModel`).
     HostConnected { host_id: HostId },
@@ -441,6 +473,7 @@ impl RemoteServerManagerEvent {
         match self {
             RemoteServerManagerEvent::SessionConnecting { session_id }
             | RemoteServerManagerEvent::SessionConnected { session_id, .. }
+            | RemoteServerManagerEvent::SessionOpened { session_id, .. }
             | RemoteServerManagerEvent::SessionConnectionFailed { session_id, .. }
             | RemoteServerManagerEvent::SessionDisconnected { session_id, .. }
             | RemoteServerManagerEvent::SessionReconnected { session_id, .. }
@@ -456,6 +489,7 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::SessionNotice { session_id, .. } => Some(*session_id),
             RemoteServerManagerEvent::HostConnected { .. }
             | RemoteServerManagerEvent::HostDisconnected { .. }
+            | RemoteServerManagerEvent::SessionInventoryChanged { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
             | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
@@ -478,7 +512,8 @@ struct SessionBootstrapInfo {
 }
 
 /// A live daemon connection as seen by cross-host consumers (the Agent-Inventory
-/// fold). One entry per connected **host** — see [`RemoteServerManager::connected_daemons`].
+/// fold). One entry per connected daemon process — current and historical
+/// runtimes on one physical host remain distinct.
 #[derive(Clone)]
 pub struct ConnectedDaemon {
     /// Human host label (SSH host name) for tagging this host's sessions —
@@ -496,12 +531,23 @@ pub struct ConnectedDaemon {
     /// registered host navigator. It is absent for legacy/classic connections
     /// that were not opened from a registry node.
     pub registry_node_id: Option<String>,
+    /// Explicit historical runtime route. `None` is the ordinary current
+    /// daemon and is the only route eligible for new host-level work.
+    pub daemon_runtime: Option<DaemonRuntimeRoute>,
     /// Live client handle — call e.g. `list_agent_sessions()` on it.
     pub client: Arc<RemoteServerClient>,
     /// Capabilities the daemon advertised at handshake. Gate feature-specific
     /// requests on this (e.g. `agent-inventory`) so an old daemon is skipped
     /// rather than erroring.
     pub features: Vec<String>,
+}
+
+impl ConnectedDaemon {
+    /// Current daemon routes may accept new host-level work. Historical routes
+    /// exist only to recover the PTYs they already own.
+    pub fn is_current_runtime(&self) -> bool {
+        self.daemon_runtime.is_none()
+    }
 }
 
 fn preferred_registry_node_id(existing: Option<&str>, candidate: Option<&str>) -> Option<String> {
@@ -552,6 +598,9 @@ pub struct RemoteServerManager {
     /// `RemoteSessionState` so it survives reconnects and can join live daemon
     /// inventory to the registry without comparing display labels.
     session_registry_node_ids: HashMap<SessionId, String>,
+    /// Exact historical daemon route per connection. Current daemon sessions
+    /// are deliberately absent so consumers can fail closed for new work.
+    session_daemon_runtimes: HashMap<SessionId, DaemonRuntimeRoute>,
     /// Sessions backed by a persistent daemon (native remote-session layer). For
     /// these, a transport-child exit on a network blip does NOT mean the remote
     /// session died — the daemon keeps it running — so `mark_session_disconnected`
@@ -567,6 +616,28 @@ impl Entity for RemoteServerManager {
 impl SingletonEntity for RemoteServerManager {}
 
 impl RemoteServerManager {
+    pub fn report_session_inventory_changed(
+        &mut self,
+        host_id: HostId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(RemoteServerManagerEvent::SessionInventoryChanged { host_id });
+    }
+
+    pub fn report_session_opened(
+        &mut self,
+        session_id: SessionId,
+        pty_session_id: String,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(RemoteServerManagerEvent::SessionOpened {
+            session_id,
+            pty_session_id,
+            generation,
+        });
+    }
+
     pub fn report_managed_launch_opened(
         &mut self,
         launch_id: String,
@@ -600,6 +671,7 @@ impl RemoteServerManager {
             session_platforms: HashMap::new(),
             session_host_labels: HashMap::new(),
             session_registry_node_ids: HashMap::new(),
+            session_daemon_runtimes: HashMap::new(),
             persistent_session_ids: HashSet::new(),
         }
     }
@@ -843,6 +915,15 @@ impl RemoteServerManager {
         if !host_label.is_empty() {
             self.session_host_labels.insert(session_id, host_label);
         }
+        match transport.daemon_runtime_route() {
+            Some(route) => {
+                self.session_daemon_runtimes
+                    .insert(session_id, route.clone());
+            }
+            None => {
+                self.session_daemon_runtimes.remove(&session_id);
+            }
+        }
         match registry_node_id {
             Some(node_id) => {
                 self.session_registry_node_ids.insert(session_id, node_id);
@@ -1009,29 +1090,43 @@ impl RemoteServerManager {
             .await
             .map_err(|e| ConnectAndHandshakeError::Initialize(anyhow::anyhow!("{e:#}")))?;
 
-        // Version compatibility check — see [`should_enforce_remote_version_check`]
-        // for when it is armed. What a mismatch MEANS differs by channel:
+        // Version compatibility check. The default route requires the current
+        // client version; an explicitly discovered historical route requires
+        // the exact version observed during inventory. What a mismatch means
+        // differs by route and channel:
         //
         // - Non-Oss channels keep their original recovery semantics: treat
         //   the on-disk binary as the stale artefact, remove it so the next
         //   reconnect reinstalls (upstream behavior, unchanged here).
-        // - Zaplex release builds (versioned install slot + versioned daemon
-        //   socket, both keyed on the same tag): the on-disk binary is the
-        //   right one for this client by construction; a mismatch means a
-        //   wrong RUNNING daemon answered our socket. Removing the binary
+        // - Zaplex release builds on the default route (versioned install slot
+        //   + versioned daemon socket, both keyed on the same tag): the on-disk
+        //   binary is the right one for this client by construction; a mismatch
+        //   means a wrong RUNNING daemon answered our socket. Removing the binary
         //   would delete a good install and buy nothing — fail the connect
         //   loudly instead (the daemon tab shows it via the connect-failed
         //   path and the caller falls back to classic SSH).
+        // - Historical routes never remove a binary. They are connect-only and
+        //   must keep targeting the exact daemon version that supplied the row.
         let client_version = ChannelState::app_version();
-        let enforce_version_check = should_enforce_remote_version_check(ChannelState::channel());
-        if enforce_version_check && !version_is_compatible(client_version, &resp.server_version) {
+        let version_requirement = transport.server_version_requirement();
+        let enforce_version_check =
+            should_enforce_server_version(ChannelState::channel(), &version_requirement);
+        if enforce_version_check
+            && !server_version_matches_requirement(
+                &version_requirement,
+                client_version,
+                &resp.server_version,
+            )
+        {
             log::warn!(
                 "Remote server version mismatch for session {session_id:?}: \
-                 client={client_version:?}, server={:?}.",
+                 requirement={version_requirement:?}, client={client_version:?}, server={:?}.",
                 resp.server_version
             );
 
-            if !matches!(ChannelState::channel(), Channel::Oss) {
+            if matches!(version_requirement, ServerVersionRequirement::Current)
+                && !matches!(ChannelState::channel(), Channel::Oss)
+            {
                 const REMOVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
                 if let Err(e) = transport
@@ -1046,8 +1141,8 @@ impl RemoteServerManager {
                 }
             }
             return Err(ConnectAndHandshakeError::Initialize(anyhow::anyhow!(
-                "remote server version mismatch (client: {client_version:?}, \
-                 server: {:?})",
+                "remote server version mismatch (required: {version_requirement:?}, \
+                 client: {client_version:?}, server: {:?})",
                 resp.server_version
             )));
         }
@@ -1142,6 +1237,7 @@ impl RemoteServerManager {
         self.session_platforms.remove(&session_id);
         self.session_host_labels.remove(&session_id);
         self.session_registry_node_ids.remove(&session_id);
+        self.session_daemon_runtimes.remove(&session_id);
         self.persistent_session_ids.remove(&session_id);
 
         // Remove the session entry. Dropping the `RemoteSessionState`
@@ -1198,9 +1294,9 @@ impl RemoteServerManager {
         }
     }
 
-    /// Returns one entry per connected **host** for cross-host consumers (the
-    /// Agent-Inventory fold): its human label, a live client handle, and the
-    /// capabilities it advertised at handshake.
+    /// Returns one entry per connected daemon process for cross-host consumers
+    /// (the Agent-Inventory fold): its human label, exact route, live client
+    /// handle, and capabilities advertised at handshake.
     ///
     /// Deduplicated by `HostId`: a host may back several sessions (multiple
     /// tabs), but its agent-session inventory is host-wide, so querying it once
@@ -1218,12 +1314,16 @@ impl RemoteServerManager {
             } = state
             {
                 let registry_node_id = self.session_registry_node_ids.get(session_id).cloned();
+                let daemon_runtime = self.session_daemon_runtimes.get(session_id).cloned();
                 match by_host.get_mut(host_id) {
                     Some(existing) => {
                         existing.registry_node_id = preferred_registry_node_id(
                             existing.registry_node_id.as_deref(),
                             registry_node_id.as_deref(),
                         );
+                        if existing.daemon_runtime.is_none() {
+                            existing.daemon_runtime = daemon_runtime;
+                        }
                     }
                     None => {
                         by_host.insert(
@@ -1232,6 +1332,7 @@ impl RemoteServerManager {
                                 host_label: host_label.clone(),
                                 host_id: host_id.as_str().to_string(),
                                 registry_node_id,
+                                daemon_runtime,
                                 client: Arc::clone(client),
                                 features: features.clone(),
                             },

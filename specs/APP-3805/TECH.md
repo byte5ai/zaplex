@@ -2,8 +2,16 @@
 
 Linear: [APP-3805](https://linear.app/warpdotdev/issue/APP-3805/client-server-version-skew)
 
-> **Zaplex supersession (approved 2026-07-02):** The exact-version path and
-> handshake invariants in this document still apply. The Warp-specific
+> **Zaplex supersession (approved 2026-07-02, amended 2026-09-13):** The
+> exact-version path and handshake invariants in this document apply to every
+> default/current daemon route. The sole exception is explicit recovery of a
+> session that is still owned by an older, already-running daemon: the current
+> proxy may connect-only to its identity-local socket after inventory, and the
+> client pins the exact server version observed in that daemon's handshake for
+> attach and reconnect. It may never start, replace, or silently substitute a
+> historical route. Recovery accepts only a semantically older release tag;
+> equal/newer tags, unparsable versions, and release sockets seen by an
+> unversioned source build are not adoptable. The Warp-specific
 > `/download/cli` source and the "upload-over-SSH fallback" non-goal do not.
 > Zaplex releases the remote-server tarballs as GitHub Release assets and uses
 > the approved install ladder in
@@ -11,16 +19,22 @@ Linear: [APP-3805](https://linear.app/warpdotdev/issue/APP-3805/client-server-ve
 > host download when reachable, then an app-bundled tarball or client download
 > relayed over SSH/SCP. Every rung remains pinned to the client's exact release
 > version.
+> The remaining sections retain the original Warp design for historical context.
+> Their Local/Oss equivalence, CDN examples, and binary deletion on mismatch do
+> not describe current Zaplex releases: tagged Oss builds use versioned binary
+> and runtime paths, and reject a mismatch without deleting the historical
+> daemon or its binary. The current contract is the amendment above plus
+> [daemon self-healing](../../docs/superpowers/specs/2026-07-19-daemon-version-selfheal-design.md).
 
 ## 1. Problem
 
 The Warp remote server binary is installed at a single, unversioned path per channel (e.g. `~/.warp/remote-server/oz`). The existence check is `test -x {bin}` and we never inspect the binary's version before talking to it. When the client auto-updates to a new version, it happily reuses the old remote server binary, which can drift arbitrarily far from the protocol/behaviour the client expects. The `InitializeResponse` already carries `server_version`, but the client ignores it.
 
-We need a version-gated install flow: connecting from a client at version *V* always ends up talking to a server binary also at *V*. Any local `cargo run` workflow (where the client has no `GIT_RELEASE_TAG`) keeps working with `script/deploy_remote_server`: a deployed binary at the unversioned path always wins, and when one is missing the client falls back to installing latest-for-channel at the same unversioned path so the dev loop self-heals.
+We need a version-gated install flow: the default connection from a client at version *V* always ends up talking to a server binary also at *V*. The later Zaplex recovery amendment above governs explicit historical-session routes. Any local `cargo run` workflow (where the client has no `GIT_RELEASE_TAG`) keeps working with `script/deploy_remote_server`: a deployed binary at the unversioned path always wins, and when one is missing the client falls back to installing latest-for-channel at the same unversioned path so the dev loop self-heals.
 
 ## 2. Requirements
 
-R1. **Exact version match.** A connected client at version *V* must only communicate with a remote daemon spawned from a binary at the same version *V*. No silent skew.
+R1. **Exact version match.** A normal connection from client version *V* must only communicate with a remote daemon spawned from version *V*. An explicit historical-session recovery route instead requires the exact older daemon version independently observed during inventory; no route accepts silent or unverified skew.
 
 R2. **Automatic reinstall on drift.** When the installed binary is the wrong version (or missing), the client reinstalls the correct version as part of the connect flow. No manual `rm -rf` step.
 
