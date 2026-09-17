@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use warpui::{AppContext, SingletonEntity};
-use zaplex_cockpit::Provider;
+use zaplex_cockpit::{Account, AccountUsage, Provider};
 use zaplex_remote_session::types::{has_feature, FEATURE_AGENT_ACCOUNT_ROUTING_V1};
 
 #[derive(Clone)]
@@ -932,38 +932,50 @@ fn prompt_from_inputs(inputs: &[AIAgentInput]) -> Result<String> {
 }
 
 fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec<RuntimeCandidate> {
-    let snapshot = CockpitModel::as_ref(ctx).snapshot();
+    let cockpit = CockpitModel::as_ref(ctx);
+    let snapshot = cockpit.snapshot();
+    local_candidates_from_inventory(
+        preferences,
+        &snapshot.accounts,
+        cockpit.selected_account(),
+        crate::terminal::cli_agent::resolve_cli_executable,
+    )
+}
+
+fn local_candidates_from_inventory(
+    preferences: &mut RoutePreferences,
+    accounts: &[AccountUsage],
+    selected_account: Option<&str>,
+    mut resolve_executable: impl FnMut(&str) -> Option<PathBuf>,
+) -> Vec<RuntimeCandidate> {
     if preferences.agent.is_none()
         && preferences.account_id.is_none()
+        && preferences.account_identity.is_none()
         && !preferences.require_agent_choice
         && !preferences.require_account_choice
     {
-        if let Some(selected) = CockpitModel::as_ref(ctx).selected_account() {
-            if let Some(account) = snapshot
-                .accounts
-                .iter()
-                .find(|usage| usage.account.key == selected)
-            {
-                preferences.agent = provider_agent(account.account.provider);
-                preferences.account_id = Some(account.account.key.clone());
-                preferences.account_identity = None;
+        if let Some(selected) = selected_account {
+            if let Some(account) = accounts.iter().find(|usage| usage.account.key == selected) {
+                if let Some(agent) = provider_agent(account.account.provider) {
+                    preferences.agent = Some(agent);
+                    preferences.account_id = Some(account.account.key.clone());
+                    preferences.account_identity = Some(local_account_identity(&account.account));
+                }
             }
         }
     }
+    // Discovery must preserve remembered identities, even when they disappear.
+    // The router requires an explicit replacement instead of choosing another
+    // agent or account here based on availability or quota.
     let mut candidates = Vec::new();
     for (agent, provider, command, default_dir) in local_agent_specs() {
-        let Some(executable) = crate::terminal::cli_agent::resolve_cli_executable(command) else {
+        let Some(executable) = resolve_executable(command) else {
             continue;
         };
-        let accounts = zaplex_cockpit::rank_by_freeness(provider, &snapshot.accounts);
-        if preferences.agent == Some(agent)
-            && preferences.account_id.is_none()
-            && !preferences.require_account_choice
-        {
-            preferences.account_id = zaplex_cockpit::pick_freest(provider, &snapshot.accounts)
-                .map(|usage| usage.account.key.clone());
-            preferences.account_identity = None;
-        }
+        let accounts: Vec<_> = accounts
+            .iter()
+            .filter(|usage| usage.account.provider == provider)
+            .collect();
         if accounts.is_empty() {
             candidates.push(RuntimeCandidate {
                 installation: installation(
@@ -990,74 +1002,23 @@ fn local_candidates(preferences: &mut RoutePreferences, ctx: &AppContext) -> Vec
                         id: "local".to_string(),
                         display_name: "Local".to_string(),
                     },
-                    AccountIdentity {
-                        id: usage.account.key.clone(),
-                        display_name: usage.account.label.clone(),
-                        provider_account_id: usage.account.provider_account_id.clone(),
-                        config_dir: Some(usage.account.config_dir.clone()),
-                    },
+                    local_account_identity(&usage.account),
                     executable.clone(),
                 ),
                 location: ProcessLocation::Local,
             }));
         }
     }
-    let mut available_agents: Vec<_> = candidates
-        .iter()
-        .map(|candidate| candidate.installation.agent)
-        .collect();
-    available_agents.sort_by_key(|agent| match agent {
-        SubscriptionAgent::ClaudeCode => 0,
-        SubscriptionAgent::Codex => 1,
-    });
-    available_agents.dedup();
-    if preferences
-        .agent
-        .is_some_and(|agent| !available_agents.contains(&agent))
-    {
-        preferences.agent = None;
-        preferences.account_id = None;
-        preferences.account_identity = None;
-        preferences.model_id = None;
-        preferences.effort = None;
-    }
-    if preferences.agent.is_none() && available_agents.len() == 1 {
-        preferences.agent = Some(available_agents[0]);
-    }
-    if let Some(agent) = preferences.agent {
-        let account_is_valid = preferences
-            .account_identity
-            .as_ref()
-            .is_some_and(|identity| {
-                candidates.iter().any(|candidate| {
-                    candidate.installation.agent == agent
-                        && candidate.installation.account == *identity
-                })
-            })
-            || (preferences.account_identity.is_none()
-                && preferences.account_id.as_deref().is_some_and(|account_id| {
-                    candidates.iter().any(|candidate| {
-                        candidate.installation.agent == agent
-                            && candidate.installation.account.id == account_id
-                    })
-                }));
-        if !account_is_valid {
-            preferences.account_identity = None;
-            preferences.account_id = (!preferences.require_account_choice)
-                .then(|| {
-                    zaplex_cockpit::pick_freest(agent_provider(agent), &snapshot.accounts)
-                        .map(|usage| usage.account.key.clone())
-                        .or_else(|| {
-                            candidates
-                                .iter()
-                                .find(|candidate| candidate.installation.agent == agent)
-                                .map(|candidate| candidate.installation.account.id.clone())
-                        })
-                })
-                .flatten();
-        }
-    }
     candidates
+}
+
+fn local_account_identity(account: &Account) -> AccountIdentity {
+    AccountIdentity {
+        id: account.key.clone(),
+        display_name: account.label.clone(),
+        provider_account_id: account.provider_account_id.clone(),
+        config_dir: Some(account.config_dir.clone()),
+    }
 }
 
 fn remote_candidates(
@@ -1224,13 +1185,6 @@ fn provider_agent(provider: Provider) -> Option<SubscriptionAgent> {
         Provider::Claude => Some(SubscriptionAgent::ClaudeCode),
         Provider::Codex => Some(SubscriptionAgent::Codex),
         Provider::Antigravity => None,
-    }
-}
-
-fn agent_provider(agent: SubscriptionAgent) -> Provider {
-    match agent {
-        SubscriptionAgent::ClaudeCode => Provider::Claude,
-        SubscriptionAgent::Codex => Provider::Codex,
     }
 }
 

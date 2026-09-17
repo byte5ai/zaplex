@@ -79,10 +79,14 @@ The selected model is a structured identity, not a display-name string. Context-
 
 1. Filter to installations whose discovery result is ready and signed in.
 2. Apply an explicitly stored agent preference when it resolves to a reachable installation.
-3. If exactly one agent remains, select it; if multiple remain with no valid preference, return `NeedsAgentChoice`.
-4. Within an agent, apply an explicitly stored account identity. If exactly one account remains, select it; otherwise return `NeedsAccountChoice`.
+3. If a stored agent is unavailable, return `NeedsAgentChoice` without replacing it during runtime preparation. Only when no preference exists may a unique agent be selected automatically.
+4. Within an agent, apply an explicitly stored account identity. If that identity is unavailable or changed, return `NeedsAccountChoice`, even when one other account remains. Only when no preference exists may a unique account be selected automatically. Preserve provider identity and account-directory checks; an explicit Cockpit selection seeds the full identity only for an otherwise unselected conversation.
 5. Apply a valid exact model preference. If absent, use only a model explicitly marked default by that CLI; otherwise return `NeedsModelChoice`.
 6. Never rank accounts by inferred cost, plan, quota, or model-name heuristics.
+
+The local runtime preparation path preserves these preferences before capability routing and leaves explicit live-selection flags intact. Regression tests inject the local account inventory and executable discovery into that production path, then verify the resulting routing decision; router-only tests cannot detect an earlier preference replacement.
+
+An explicit Cockpit account key seeds agent, route ID, provider identity, and config directory only when it resolves in the inventory to a supported provider and no agent/account preference or explicit agent/account selection request exists. Executable availability does not invalidate that user choice: if its CLI is missing, routing returns `NeedsAgentChoice` rather than selecting another provider. Unknown keys and unsupported providers leave preferences unchanged; a complete stored account identity blocks Cockpit seeding even when no agent preference is present.
 
 ## UI integration
 
@@ -145,7 +149,7 @@ The existing conversation/message persistence remains authoritative for UI histo
 | 13–14 | Repository reference audit, settings compatibility tests, secure-secret cleanup test, and dependency audit verify BYOP retirement. |
 | 15 | Protocol fixture tests cover missing CLI, signed-out, incompatible version, disconnect, malformed event, process exit, retry, and resume. |
 
-Repository policy forbids local Cargo builds. Local verification therefore uses formatting/static checks such as `git diff --check`, targeted source audits, and the repository's Phase A readiness script; compile and test execution belongs to GitHub Actions after explicit approval.
+Required validation follows the current repository rules and session instructions: run the applicable Cargo checks and focused regression tests in the authorized build environment, together with formatting/static checks such as `git diff --check` and relevant readiness checks. macOS artifact packaging, signing, and notarization run in GitHub Actions.
 
 ## Risks
 

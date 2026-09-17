@@ -1,9 +1,10 @@
 use super::{
-    discovery_failure_lifecycle, legacy_ssh_candidates, remote_candidates_for_resolved_ssh,
-    remote_candidates_for_ssh, same_resume_target, selected_authentication_error, AccountIdentity,
-    AgentLifecycle, ExplicitRuntimeHost, HostIdentity, InstallationIdentity, ProcessLocation,
-    RoutePreferences, SubscriptionAgent, SubscriptionLocationPreference,
-    SubscriptionSessionRegistry, SubscriptionTarget,
+    discovery_failure_lifecycle, legacy_ssh_candidates, local_account_identity,
+    local_candidates_from_inventory, remote_candidates_for_resolved_ssh, remote_candidates_for_ssh,
+    route_target, same_resume_target, selected_authentication_error, AccountIdentity,
+    AgentCapability, AgentLifecycle, ExplicitRuntimeHost, HostIdentity, InstallationIdentity,
+    ProcessLocation, RoutePreferences, RouteResult, SubscriptionAgent,
+    SubscriptionLocationPreference, SubscriptionSessionRegistry, SubscriptionTarget,
 };
 use crate::ai::subscription_agent::{ModelCapability, SessionIdentity};
 use crate::remote_server::proto::{AgentAccountInfo, AgentAccountInventory};
@@ -11,6 +12,7 @@ use crate::terminal::ssh::util::InteractiveSshCommand;
 use warp_ssh_manager::{
     AuthType, ResolvedSshConnection, SecretKind, SessionResilience, SshServerInfo,
 };
+use zaplex_cockpit::{Account, AccountStatus, AccountUsage, Provider, UsageProvenance};
 
 fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
     SubscriptionTarget {
@@ -77,6 +79,350 @@ fn account_identity(id: &str, provider_account_id: &str) -> AccountIdentity {
         provider_account_id: Some(provider_account_id.to_string()),
         config_dir: None,
     }
+}
+
+fn local_usage(provider: Provider, id: &str, heat: f64) -> AccountUsage {
+    AccountUsage {
+        account: Account {
+            provider,
+            key: id.to_string(),
+            config_dir: format!("/accounts/{id}").into(),
+            label: id.to_string(),
+            provider_account_id: Some(format!("provider-{id}")),
+            email: None,
+            org: None,
+            role: None,
+            plan_tier: None,
+            is_default: false,
+        },
+        block5h: Default::default(),
+        today: Default::default(),
+        today_by_session: Default::default(),
+        week: Default::default(),
+        reset5h: None,
+        reset_week: None,
+        heat,
+        heat_week: heat,
+        heat_opus: None,
+        heat_sonnet: None,
+        sessions: Vec::new(),
+        idle_sessions: Vec::new(),
+        status: AccountStatus::Live,
+        provenance: UsageProvenance::Real,
+    }
+}
+
+fn prepare_local_route(
+    preferences: &mut RoutePreferences,
+    accounts: &[AccountUsage],
+    selected_account: Option<&str>,
+    commands: &[&str],
+) -> RouteResult {
+    let candidates =
+        local_candidates_from_inventory(preferences, accounts, selected_account, |command| {
+            commands
+                .contains(&command)
+                .then(|| format!("/bin/{command}").into())
+        });
+    // Only the external CLI capability response is a fixture. Candidate
+    // preparation and preference handling use the production runtime path.
+    let capabilities = candidates.into_iter().map(|candidate| AgentCapability {
+        models: vec![target(candidate.installation.agent).model],
+        installation: candidate.installation,
+    });
+    route_target(capabilities, preferences, "/workspace".into())
+}
+
+#[test]
+fn local_preparation_preserves_a_missing_preferred_agent() {
+    let mut preferences = RoutePreferences {
+        agent: Some(SubscriptionAgent::ClaudeCode),
+        account_id: Some("missing-account".to_string()),
+        model_id: Some("remembered-model".to_string()),
+        effort: Some("high".to_string()),
+        ..Default::default()
+    };
+    let original = preferences.clone();
+    let accounts = [local_usage(Provider::Codex, "remaining-account", 0.0)];
+
+    assert_eq!(
+        prepare_local_route(
+            &mut preferences,
+            &accounts,
+            Some("remaining-account"),
+            &["codex"]
+        ),
+        RouteResult::NeedsAgentChoice(vec![SubscriptionAgent::Codex])
+    );
+    assert_eq!(preferences, original);
+}
+
+#[test]
+fn local_preparation_preserves_a_missing_preferred_account() {
+    let missing = local_usage(Provider::Claude, "missing-account", 0.9);
+    let accounts = [local_usage(Provider::Claude, "remaining-account", 0.0)];
+    for identity in [None, Some(local_account_identity(&missing.account))] {
+        let mut preferences = RoutePreferences {
+            agent: Some(SubscriptionAgent::ClaudeCode),
+            account_id: Some(missing.account.key.clone()),
+            account_identity: identity,
+            model_id: Some("model".to_string()),
+            ..Default::default()
+        };
+        let original = preferences.clone();
+
+        assert_eq!(
+            prepare_local_route(
+                &mut preferences,
+                &accounts,
+                Some("remaining-account"),
+                &["claude"]
+            ),
+            RouteResult::NeedsAccountChoice {
+                agent: SubscriptionAgent::ClaudeCode,
+                accounts: vec![local_account_identity(&accounts[0].account)],
+            }
+        );
+        assert_eq!(preferences, original);
+    }
+}
+
+#[test]
+fn local_preparation_preserves_identity_when_an_account_route_is_reused() {
+    let account = local_usage(Provider::Claude, "shared-route", 0.0);
+    let mut changed_provider = account.clone();
+    changed_provider.account.provider_account_id = Some("different-provider-account".to_string());
+    let mut changed_directory = account.clone();
+    changed_directory.account.config_dir = "/accounts/different-root".into();
+    for replacement in [changed_provider, changed_directory] {
+        let expected_account = local_account_identity(&replacement.account);
+        let mut preferences = RoutePreferences {
+            agent: Some(SubscriptionAgent::ClaudeCode),
+            account_id: Some(account.account.key.clone()),
+            account_identity: Some(local_account_identity(&account.account)),
+            ..Default::default()
+        };
+        let original = preferences.clone();
+
+        assert_eq!(
+            prepare_local_route(
+                &mut preferences,
+                &[replacement],
+                Some("shared-route"),
+                &["claude"]
+            ),
+            RouteResult::NeedsAccountChoice {
+                agent: SubscriptionAgent::ClaudeCode,
+                accounts: vec![expected_account],
+            }
+        );
+        assert_eq!(preferences, original);
+    }
+}
+
+#[test]
+fn local_preparation_requires_account_choice_without_quota_ranking() {
+    let accounts = [
+        local_usage(Provider::Claude, "busy-account", 0.95),
+        local_usage(Provider::Claude, "freest-account", 0.0),
+    ];
+    for agent in [None, Some(SubscriptionAgent::ClaudeCode)] {
+        let mut preferences = RoutePreferences {
+            agent,
+            ..Default::default()
+        };
+        let original = preferences.clone();
+
+        assert_eq!(
+            prepare_local_route(&mut preferences, &accounts, None, &["claude"]),
+            RouteResult::NeedsAccountChoice {
+                agent: SubscriptionAgent::ClaudeCode,
+                accounts: accounts
+                    .iter()
+                    .map(|usage| local_account_identity(&usage.account))
+                    .collect(),
+            }
+        );
+        assert_eq!(preferences, original);
+    }
+}
+
+#[test]
+fn local_preparation_keeps_an_explicit_cockpit_account_identity() {
+    let accounts = [
+        local_usage(Provider::Claude, "selected-account", 0.95),
+        local_usage(Provider::Claude, "freest-account", 0.0),
+    ];
+    let mut preferences = RoutePreferences::default();
+    let RouteResult::Ready(target) = prepare_local_route(
+        &mut preferences,
+        &accounts,
+        Some("selected-account"),
+        &["claude"],
+    ) else {
+        panic!("the explicitly selected account must remain routable");
+    };
+
+    assert_eq!(
+        target.installation.account,
+        local_account_identity(&accounts[0].account)
+    );
+    assert_eq!(
+        preferences.account_identity,
+        Some(target.installation.account)
+    );
+}
+
+#[test]
+fn local_preparation_requires_agent_choice_when_the_cockpit_selection_has_no_cli() {
+    let accounts = [
+        local_usage(Provider::Codex, "selected-codex", 0.0),
+        local_usage(Provider::Claude, "available-claude", 0.0),
+    ];
+    let mut preferences = RoutePreferences::default();
+
+    assert_eq!(
+        prepare_local_route(
+            &mut preferences,
+            &accounts,
+            Some("selected-codex"),
+            &["claude"]
+        ),
+        RouteResult::NeedsAgentChoice(vec![SubscriptionAgent::ClaudeCode])
+    );
+    assert_eq!(
+        preferences,
+        RoutePreferences {
+            agent: Some(SubscriptionAgent::Codex),
+            account_id: Some("selected-codex".to_string()),
+            account_identity: Some(local_account_identity(&accounts[0].account)),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn local_preparation_ignores_an_unknown_cockpit_account_key() {
+    let accounts = [local_usage(Provider::Claude, "available-account", 0.0)];
+    let mut preferences = RoutePreferences::default();
+    let RouteResult::Ready(target) = prepare_local_route(
+        &mut preferences,
+        &accounts,
+        Some("unknown-account"),
+        &["claude"],
+    ) else {
+        panic!("an unknown Cockpit key must not invent a routing preference");
+    };
+
+    assert_eq!(
+        target.installation.account,
+        local_account_identity(&accounts[0].account)
+    );
+    assert_eq!(preferences, RoutePreferences::default());
+}
+
+#[test]
+fn local_preparation_ignores_an_unsupported_cockpit_provider() {
+    let accounts = [
+        local_usage(Provider::Antigravity, "unsupported-account", 0.0),
+        local_usage(Provider::Claude, "available-account", 0.0),
+    ];
+    let mut preferences = RoutePreferences::default();
+    let RouteResult::Ready(target) = prepare_local_route(
+        &mut preferences,
+        &accounts,
+        Some("unsupported-account"),
+        &["claude"],
+    ) else {
+        panic!("an unsupported provider must not seed subscription routing");
+    };
+
+    assert_eq!(
+        target.installation.account,
+        local_account_identity(&accounts[1].account)
+    );
+    assert_eq!(preferences, RoutePreferences::default());
+}
+
+#[test]
+fn local_preparation_keeps_a_stored_account_identity_without_an_agent_preference() {
+    let accounts = [
+        local_usage(Provider::Claude, "remembered-account", 0.0),
+        local_usage(Provider::Codex, "cockpit-account", 0.0),
+    ];
+    let mut preferences = RoutePreferences {
+        account_identity: Some(local_account_identity(&accounts[0].account)),
+        ..Default::default()
+    };
+    let original = preferences.clone();
+    let RouteResult::Ready(target) = prepare_local_route(
+        &mut preferences,
+        &accounts,
+        Some("cockpit-account"),
+        &["claude"],
+    ) else {
+        panic!("the stored account identity must take precedence over the Cockpit selection");
+    };
+
+    assert_eq!(
+        target.installation.account,
+        local_account_identity(&accounts[0].account)
+    );
+    assert_eq!(preferences, original);
+}
+
+#[test]
+fn local_preparation_preserves_live_selection_requests() {
+    let accounts = [local_usage(Provider::Claude, "selected-account", 0.0)];
+    for mut preferences in [
+        RoutePreferences {
+            require_agent_choice: true,
+            ..Default::default()
+        },
+        RoutePreferences {
+            agent: Some(SubscriptionAgent::ClaudeCode),
+            require_account_choice: true,
+            ..Default::default()
+        },
+    ] {
+        let original = preferences.clone();
+        let expected = if preferences.require_agent_choice {
+            RouteResult::NeedsAgentChoice(vec![SubscriptionAgent::ClaudeCode])
+        } else {
+            RouteResult::NeedsAccountChoice {
+                agent: SubscriptionAgent::ClaudeCode,
+                accounts: vec![local_account_identity(&accounts[0].account)],
+            }
+        };
+
+        assert_eq!(
+            prepare_local_route(
+                &mut preferences,
+                &accounts,
+                Some("selected-account"),
+                &["claude"]
+            ),
+            expected
+        );
+        assert_eq!(preferences, original);
+    }
+}
+
+#[test]
+fn local_preparation_routes_a_unique_unselected_account() {
+    let accounts = [local_usage(Provider::Claude, "only-account", 0.95)];
+    let mut preferences = RoutePreferences::default();
+    let RouteResult::Ready(target) =
+        prepare_local_route(&mut preferences, &accounts, None, &["claude"])
+    else {
+        panic!("a unique reachable target needs no additional choice");
+    };
+
+    assert_eq!(
+        target.installation.account,
+        local_account_identity(&accounts[0].account)
+    );
+    assert_eq!(preferences, RoutePreferences::default());
 }
 
 #[test]
