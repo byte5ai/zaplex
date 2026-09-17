@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Execute the remote installer with real archives and isolated host tools."""
+
+import hashlib
+import io
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import unittest
+
+
+TEMPLATE = (
+    Path(__file__).resolve().parent.parent
+    / "crates/remote_server/src/install_remote_server.sh"
+).read_text()
+BINARY = b"#!/bin/sh\nprintf 'installer test binary\\n'\n"
+
+
+class RemoteInstallerTest(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix="zaplex-installer-test-")
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.install_dir = self.root / "remote server"
+        self.install_dir.mkdir()
+        self.installed = self.install_dir / "zaplex-v1.0.29"
+        self.tools = self.root / "tools"
+        self.tools.mkdir()
+        for name in ("uname", "mkdir", "mktemp", "mv", "rm", "awk", "tar", "gzip", "chmod", "find", "head"):
+            source = shutil.which(name)
+            self.assertIsNotNone(source, f"Required test tool missing: {name}")
+            (self.tools / name).symlink_to(source)
+        self.bash = shutil.which("bash")
+        self.assertIsNotNone(self.bash)
+        self.archive = self.root / "staged archive.tar.gz"
+        with tarfile.open(self.archive, "w:gz") as archive:
+            member = tarfile.TarInfo("zaplex")
+            member.size = len(BINARY)
+            member.mode = 0o644
+            archive.addfile(member, io.BytesIO(BINARY))
+        self.digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+
+    def use_hash_tool(self, name):
+        source = shutil.which(name)
+        self.assertIsNotNone(source, f"Required test tool missing: {name}")
+        (self.tools / name).symlink_to(source)
+
+    def install(self, digest):
+        replacements = {
+            "download_base_url": "https://example.invalid/unused",
+            "install_dir": str(self.install_dir),
+            "binary_name": "zaplex",
+            "version_suffix": "-v1.0.29",
+            "staging_tarball_path": str(self.archive),
+            "expected_sha256": digest,
+        }
+        script = TEMPLATE
+        for name, value in replacements.items():
+            script = script.replace("{" + name + "}", value)
+        result = subprocess.run(
+            [self.bash, "-s"],
+            input=script,
+            text=True,
+            capture_output=True,
+            env={**os.environ, "PATH": str(self.tools)},
+            timeout=10,
+        )
+        self.assertEqual(list(self.install_dir.glob(".install.*")), [])
+        return result
+
+    def assert_install_succeeds(self, hash_tool):
+        self.use_hash_tool(hash_tool)
+        result = self.install(self.digest)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.installed.read_bytes(), BINARY)
+        self.assertTrue(os.access(self.installed, os.X_OK))
+        self.assertFalse(self.archive.exists())
+
+    def assert_install_rejected(self, digest, message):
+        self.installed.write_bytes(b"previous working binary")
+        # Rejecting before extraction must preserve the installed binary.
+        marker = self.root / "extraction-attempted"
+        (self.tools / "tar").unlink()
+        (self.tools / "tar").write_text(f"#!{self.bash}\n: > '{marker}'\nexit 99\n")
+        (self.tools / "tar").chmod(0o755)
+        result = self.install(digest)
+        self.assertEqual(result.returncode, 4, result.stderr)
+        self.assertIn(message, result.stderr)
+        self.assertEqual(self.installed.read_bytes(), b"previous working binary")
+        self.assertFalse(marker.exists(), "Unverified archive was extracted")
+
+    @unittest.skipUnless(shutil.which("sha256sum"), "sha256sum is not installed")
+    def test_valid_digest_installs_with_sha256sum(self):
+        self.assert_install_succeeds("sha256sum")
+
+    def test_valid_digest_installs_with_shasum_fallback(self):
+        self.assert_install_succeeds("shasum")
+
+    def test_mismatched_digest_rejects_before_extraction(self):
+        self.use_hash_tool("shasum")
+        wrong_digest = ("0" if self.digest[0] != "0" else "1") + self.digest[1:]
+        self.assert_install_rejected(wrong_digest, "archive SHA-256 mismatch")
+
+    def test_missing_hash_tool_rejects_before_extraction(self):
+        self.assert_install_rejected(self.digest, "neither sha256sum nor shasum")
+
+    def test_invalid_digests_reject_before_extraction(self):
+        original_archive = self.archive.read_bytes()
+        for digest in ("", "a" * 61, "a" * 63, "a" * 65, "A" * 64, "B" * 64, "g" * 64, "a" * 63 + "\n"):
+            with self.subTest(digest=repr(digest)):
+                self.archive.write_bytes(original_archive)
+                self.assert_install_rejected(digest, "missing or invalid authenticated archive digest")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

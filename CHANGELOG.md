@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.0.29] — 2026-09-11
 
+- Die Remote-Daemon-Installation akzeptiert gültige SHA-256-Prüfsummen mit 64 Zeichen; fehlerhafte oder abweichende Prüfsummen werden weiterhin vor dem Entpacken abgewiesen.
+
 - Neue Zaplex-App-Icons und Installationsgrafiken werden in die Plattformpakete übernommen.
 - Subscription-Routing ersetzt verschwundene ausgewählte Agenten oder Konten nicht mehr still durch andere Ziele; mehrdeutige Konten verlangen eine explizite Auswahl.
 - Persistente Remote-Sessions bleiben nach App-Neustart und Versionswechsel auffindbar: ältere Daemons werden ausschließlich für ihre bestehenden Sessions wiederverbunden, neue Arbeit bleibt beim aktuellen Dienst. Attach, Stop, Transkripte und sessiongebundene Dateioperationen behalten ihre exakte Daemon-Identität.
