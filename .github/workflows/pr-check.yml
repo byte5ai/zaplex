@@ -397,6 +397,14 @@ jobs:
           harness_parse_orchestration_harness_rejects_legacy_gemini
         shell: bash
 
+      # This bounded model suite includes deterministic scheduling/connection regressions.
+      - name: cargo test (Cockpit refresh and connected hosts)
+        run: |
+          cargo test --locked -p zaplex_cockpit --lib fleet::tests
+          cargo test --locked -p warp_cli --lib cockpit::tests
+          cargo test --locked -p warp --lib cockpit::model::tests
+        shell: bash
+
       # Focused app-crate unit tests: the FM-toggle + spawn-card launch payload,
       # catalog copy guard, plus the real boot/open smoke gate. Targeted by name so only these run —
       # the app crate's full test suite has known harness/env-dependent failures

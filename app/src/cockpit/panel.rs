@@ -1073,10 +1073,15 @@ impl CockpitPanel {
                 }
             }
             if host.projects.is_empty() {
-                let message = if host.is_local {
+                let message = if host.inventory_status == AgentInventoryStatus::Pending {
+                    crate::t!("cockpit-host-inventory-pending")
+                } else if host.is_local {
                     crate::t!("cockpit-host-no-local-agents")
                 } else {
                     match host.inventory_status {
+                        AgentInventoryStatus::Pending => {
+                            crate::t!("cockpit-host-inventory-pending")
+                        }
                         AgentInventoryStatus::Ready => crate::t!("cockpit-host-no-agents"),
                         AgentInventoryStatus::Unsupported => {
                             crate::t!("cockpit-host-inventory-unsupported")

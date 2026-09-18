@@ -3967,6 +3967,7 @@ cockpit-host-action-files = Open files
 cockpit-tt-review = Review changes
 cockpit-host-no-agents = No AI sessions on this host
 cockpit-host-no-local-agents = No local AI sessions
+cockpit-host-inventory-pending = Loading AI sessions…
 cockpit-host-inventory-unsupported = Update the host service to list AI sessions
 cockpit-host-inventory-unavailable = AI sessions are temporarily unavailable
 cockpit-host-removed = removed from Connections
