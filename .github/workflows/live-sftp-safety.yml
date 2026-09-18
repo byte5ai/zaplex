@@ -58,6 +58,7 @@ jobs:
 
           ssh-keygen -q -t ed25519 -N "" -f "${test_key}"
           ssh-keygen -q -t ed25519 -N "" -f "${RUNNER_TEMP}/live-sftp-host-key"
+          ssh-keygen -q -t ecdsa -b 256 -N "" -f "${RUNNER_TEMP}/live-sftp-host-ecdsa-key"
           # Unlock sshd's account check while password authentication remains disabled.
           test_password="$(openssl rand -hex 32)"
           printf '%s:%s\n' "${test_user}" "${test_password}" | sudo chpasswd
@@ -76,6 +77,7 @@ jobs:
             echo "Port ${test_port}"
             echo "ListenAddress 127.0.0.1"
             echo "HostKey ${RUNNER_TEMP}/live-sftp-host-key"
+            echo "HostKey ${RUNNER_TEMP}/live-sftp-host-ecdsa-key"
             echo "PidFile ${sshd_pid_file}"
             echo "AuthorizedKeysFile ${authorized_keys}"
             echo "PasswordAuthentication no"
@@ -125,5 +127,10 @@ jobs:
           export ZAPLEX_LIVE_SFTP_USERNAME="${test_user}"
           export ZAPLEX_LIVE_SFTP_KEY_PATH="${test_key}"
           export ZAPLEX_LIVE_SFTP_ROOT="${test_root}"
+          # The server offers ECDSA and Ed25519, but only Ed25519 is trusted.
+          # Exercise the actual SFTP connection, including pre-handshake selection.
+          cargo test --locked -p zap_sftp
+          cargo test --locked -p zap_sftp --lib session::live_tests::live_sftp_prefers_known_host_key -- --ignored --exact | tee "${RUNNER_TEMP}/sftp-host-key-test.log"
+          grep -q 'test result: ok. 1 passed;' "${RUNNER_TEMP}/sftp-host-key-test.log"
           cargo test --locked -p warp --lib live_sftp_ -- --ignored
           cargo test --locked -p warp --lib openssh_v3 -- --ignored

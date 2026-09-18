@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.0.29] — 2026-09-11
 
+- Der Dateimanager bevorzugt bereits bekannte SSH-Schlüsseltypen und unterscheidet zusätzliche Schlüsseltypen von echten Schlüsseländerungen. Beim bestätigten Ersetzen bleiben andere Hosts, Ports und Schlüsseltypen erhalten.
+
 - Die Remote-Daemon-Installation akzeptiert gültige SHA-256-Prüfsummen mit 64 Zeichen; fehlerhafte oder abweichende Prüfsummen werden weiterhin vor dem Entpacken abgewiesen.
 
 - Neue Zaplex-App-Icons und Installationsgrafiken werden in die Plattformpakete übernommen.

@@ -5,15 +5,16 @@
 //! date: 2026-05-31
 
 use std::fs;
+use std::io::Write;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::Engine as _;
 use sha2::{Digest as _, Sha256};
-use ssh2::{CheckResult, HostKeyType, KnownHostFileKind};
+use ssh2::{CheckResult, HostKeyType, KnownHostFileKind, MethodType};
 use zeroize::Zeroizing;
 
 use crate::error::SftpError;
@@ -21,6 +22,10 @@ use crate::sftp::Sftp;
 
 /// Default connection timeout (10 seconds)
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
+// Serialize this process's read-modify-write updates; atomic rename alone does
+// not prevent two SFTP sessions from overwriting each other's newly trusted keys.
+static KNOWN_HOSTS_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Authentication method
 #[derive(Clone)]
@@ -175,6 +180,11 @@ impl SftpSession {
         // Set SSH session timeout (milliseconds); affects handshake and all subsequent blocking operations
         session.set_timeout(effective_timeout.as_millis() as u32);
 
+        let known_hosts_path = default_known_hosts_path()?;
+        let known_hosts = load_known_hosts(&session, &known_hosts_path)?;
+        let algorithms = preferred_host_key_algorithms(&session, &known_hosts, host, port)?;
+        session.method_pref(MethodType::HostKey, &algorithms.join(","))?;
+
         session.handshake().map_err(|e| {
             if is_timeout_error(&e) {
                 SftpError::Timeout
@@ -183,7 +193,6 @@ impl SftpSession {
             }
         })?;
 
-        let known_hosts_path = default_known_hosts_path()?;
         authenticate_after_host_key_check(
             verify_host_key(&session, host, port, &known_hosts_path, confirmation),
             || authenticate(&session, username, &auth),
@@ -270,6 +279,124 @@ fn default_known_hosts_path() -> Result<PathBuf, SftpError> {
         })
 }
 
+fn load_known_hosts(session: &ssh2::Session, path: &Path) -> Result<ssh2::KnownHosts, SftpError> {
+    let mut known_hosts = session.known_hosts()?;
+    match fs::metadata(path) {
+        Ok(_) => {
+            known_hosts.read_file(path, KnownHostFileKind::OpenSSH)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(SftpError::Io(error)),
+    }
+    Ok(known_hosts)
+}
+
+fn check_host_endpoint(
+    known_hosts: &ssh2::KnownHosts,
+    host: &str,
+    port: u16,
+    key: &[u8],
+) -> CheckResult {
+    if port == 22 {
+        known_hosts.check_port(host, port, key)
+    } else {
+        // check_port also falls back to the bare host for non-default ports.
+        // A pin for port 22 must not authenticate a different endpoint.
+        known_hosts.check(&format!("[{host}]:{port}"), key)
+    }
+}
+
+fn public_key_algorithm(key: &[u8]) -> Option<&str> {
+    let length = u32::from_be_bytes(key.get(..4)?.try_into().ok()?) as usize;
+    std::str::from_utf8(key.get(4..4usize.checked_add(length)?)?).ok()
+}
+
+fn known_host_key_algorithms(
+    known_hosts: &ssh2::KnownHosts,
+    host: &str,
+    port: u16,
+) -> Result<Vec<String>, SftpError> {
+    let mut algorithms = Vec::new();
+    for entry in known_hosts.hosts()? {
+        let Ok(key) = base64::engine::general_purpose::STANDARD.decode(entry.key()) else {
+            continue;
+        };
+        if matches!(
+            check_host_endpoint(known_hosts, host, port, &key),
+            CheckResult::Match
+        ) {
+            if let Some(algorithm) = public_key_algorithm(&key) {
+                algorithms.push(algorithm.to_string());
+            }
+        }
+    }
+    Ok(algorithms)
+}
+
+fn preferred_host_key_algorithms(
+    session: &ssh2::Session,
+    known_hosts: &ssh2::KnownHosts,
+    host: &str,
+    port: u16,
+) -> Result<Vec<&'static str>, SftpError> {
+    let known = known_host_key_algorithms(known_hosts, host, port)?;
+    let mut supported = session.supported_algs(MethodType::HostKey)?;
+    // Preserve the library's order within each group, including RSA SHA-2
+    // signatures for stored ssh-rsa public keys. Never add unsupported methods.
+    supported.sort_by_key(|algorithm| {
+        let key_algorithm = match *algorithm {
+            "rsa-sha2-256" | "rsa-sha2-512" => "ssh-rsa",
+            algorithm => algorithm,
+        };
+        !known.iter().any(|known| known == key_algorithm)
+    });
+    Ok(supported)
+}
+
+fn check_known_host_key(
+    session: &ssh2::Session,
+    known_hosts: &ssh2::KnownHosts,
+    host: &str,
+    port: u16,
+    key: &[u8],
+) -> Result<CheckResult, SftpError> {
+    let result = check_host_endpoint(known_hosts, host, port, key);
+    if !matches!(result, CheckResult::Mismatch) {
+        return Ok(result);
+    }
+    let Some(algorithm) = public_key_algorithm(key) else {
+        return Ok(CheckResult::Failure);
+    };
+    // ssh2's check API omits the key type. Recheck only entries of the
+    // negotiated algorithm so a new key type is unknown, not a rotation.
+    let mut same_algorithm = session.known_hosts()?;
+    for entry in known_hosts.hosts()? {
+        let Ok(candidate) = base64::engine::general_purpose::STANDARD.decode(entry.key()) else {
+            continue;
+        };
+        if public_key_algorithm(&candidate) == Some(algorithm)
+            && matches!(
+                check_host_endpoint(known_hosts, host, port, &candidate),
+                CheckResult::Match
+            )
+        {
+            // Identity was checked above; this temporary collection needs only
+            // the exact target and its keys, not the original aliases or hashes.
+            let endpoint = if port == 22 {
+                host.to_string()
+            } else {
+                format!("[{host}]:{port}")
+            };
+            let encoded = base64::engine::general_purpose::STANDARD.encode(candidate);
+            same_algorithm.read_str(
+                &format!("{endpoint} {algorithm} {encoded}"),
+                KnownHostFileKind::OpenSSH,
+            )?;
+        }
+    }
+    Ok(check_host_endpoint(&same_algorithm, host, port, key))
+}
+
 fn verify_host_key(
     session: &ssh2::Session,
     host: &str,
@@ -282,20 +409,10 @@ fn verify_host_key(
     })?;
     let fingerprint_sha256 = host_key_fingerprint_sha256(host_key);
     let key_type = host_key_type_name(host_key_type).to_string();
-    let mut known_hosts = session.known_hosts().map_err(SftpError::Ssh2)?;
-
-    match fs::metadata(known_hosts_path) {
-        Ok(_) => {
-            known_hosts
-                .read_file(known_hosts_path, KnownHostFileKind::OpenSSH)
-                .map_err(SftpError::Ssh2)?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(SftpError::Io(error)),
-    }
+    let known_hosts = load_known_hosts(session, known_hosts_path)?;
 
     match enforce_host_key_policy(
-        known_hosts.check_port(host, port, host_key),
+        check_known_host_key(session, &known_hosts, host, port, host_key)?,
         host,
         port,
         fingerprint_sha256,
@@ -304,7 +421,7 @@ fn verify_host_key(
     )? {
         HostKeyPolicyAction::Accept => Ok(()),
         HostKeyPolicyAction::Persist => persist_host_key(
-            &mut known_hosts,
+            session,
             known_hosts_path,
             host,
             port,
@@ -312,7 +429,7 @@ fn verify_host_key(
             host_key_type,
         ),
         HostKeyPolicyAction::Replace => replace_host_key(
-            &mut known_hosts,
+            session,
             known_hosts_path,
             host,
             port,
@@ -371,25 +488,62 @@ fn enforce_host_key_policy(
 }
 
 fn replace_host_key(
-    known_hosts: &mut ssh2::KnownHosts,
+    session: &ssh2::Session,
     known_hosts_path: &Path,
     host: &str,
     port: u16,
     host_key: &[u8],
     host_key_type: HostKeyType,
 ) -> Result<(), SftpError> {
+    let _write_guard = KNOWN_HOSTS_WRITE_LOCK.lock().map_err(|error| {
+        SftpError::ConnectionFailed(format!("Cannot lock known_hosts for writing: {error}"))
+    })?;
+    let Some(algorithm) = public_key_algorithm(host_key) else {
+        return Err(SftpError::ConnectionFailed(
+            "Invalid SSH host key".to_string(),
+        ));
+    };
+    let original = fs::read_to_string(known_hosts_path)?;
+    let mut updated = String::new();
     let mut removed_existing_key = false;
-    for known_host in known_hosts.hosts().map_err(SftpError::Ssh2)? {
-        let Ok(candidate_key) = base64::engine::general_purpose::STANDARD.decode(known_host.key())
+    for line in original.split_inclusive('\n') {
+        let mut fields = line.split_whitespace();
+        let (Some(hosts), Some(key_type), Some(key)) =
+            (fields.next(), fields.next(), fields.next())
         else {
+            updated.push_str(line);
             continue;
         };
-        if matches!(
-            known_hosts.check_port(host, port, &candidate_key),
-            CheckResult::Match
-        ) {
-            known_hosts.remove(&known_host).map_err(SftpError::Ssh2)?;
-            removed_existing_key = true;
+        if hosts.starts_with('#') || key_type != algorithm {
+            updated.push_str(line);
+            continue;
+        }
+        let mut remaining_hosts = Vec::new();
+        for candidate_host in hosts.split(',') {
+            // Match each original token independently. Iterating/removing ssh2
+            // Host objects aliases hashed entries that share the same key.
+            let mut candidate = session.known_hosts()?;
+            candidate.read_str(
+                &format!("{candidate_host} {key_type} {key}"),
+                KnownHostFileKind::OpenSSH,
+            )?;
+            match check_host_endpoint(&candidate, host, port, host_key) {
+                CheckResult::Match | CheckResult::Mismatch => removed_existing_key = true,
+                CheckResult::NotFound => remaining_hosts.push(candidate_host),
+                CheckResult::Failure => {
+                    return Err(SftpError::ConnectionFailed(
+                        "The stored SSH host key could not be checked safely".to_string(),
+                    ))
+                }
+            }
+        }
+        if remaining_hosts.len() == hosts.split(',').count() {
+            updated.push_str(line);
+        } else if !remaining_hosts.is_empty() {
+            let start = line.len() - line.trim_start().len();
+            updated.push_str(&line[..start]);
+            updated.push_str(&remaining_hosts.join(","));
+            updated.push_str(&line[start + hosts.len()..]);
         }
     }
     if !removed_existing_key {
@@ -397,14 +551,8 @@ fn replace_host_key(
             "The stored SSH host key could not be replaced safely".to_string(),
         ));
     }
-    persist_host_key(
-        known_hosts,
-        known_hosts_path,
-        host,
-        port,
-        host_key,
-        host_key_type,
-    )
+    append_host_key(session, &mut updated, host, port, host_key, host_key_type)?;
+    write_known_hosts(known_hosts_path, &updated)
 }
 
 fn authenticate_after_host_key_check<T>(
@@ -416,35 +564,96 @@ fn authenticate_after_host_key_check<T>(
 }
 
 fn persist_host_key(
-    known_hosts: &mut ssh2::KnownHosts,
+    session: &ssh2::Session,
     known_hosts_path: &Path,
     host: &str,
     port: u16,
     host_key: &[u8],
     host_key_type: HostKeyType,
 ) -> Result<(), SftpError> {
-    let Some(parent) = known_hosts_path.parent() else {
-        return Err(SftpError::ConnectionFailed(
-            "known_hosts path has no parent directory".to_string(),
-        ));
+    let _write_guard = KNOWN_HOSTS_WRITE_LOCK.lock().map_err(|error| {
+        SftpError::ConnectionFailed(format!("Cannot lock known_hosts for writing: {error}"))
+    })?;
+    // Keep all original text, including OpenSSH markers libssh2 cannot round-trip.
+    let mut updated = match fs::read_to_string(known_hosts_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(SftpError::Io(error)),
     };
-    fs::create_dir_all(parent)?;
-    let host_pattern = if port == 22 {
+    append_host_key(session, &mut updated, host, port, host_key, host_key_type)?;
+    write_known_hosts(known_hosts_path, &updated)
+}
+
+fn append_host_key(
+    session: &ssh2::Session,
+    contents: &mut String,
+    host: &str,
+    port: u16,
+    host_key: &[u8],
+    host_key_type: HostKeyType,
+) -> Result<(), SftpError> {
+    let endpoint = if port == 22 {
         host.to_string()
     } else {
         format!("[{host}]:{port}")
     };
-    known_hosts
-        .add(
-            &host_pattern,
-            host_key,
-            "added by Zaplex SFTP",
-            host_key_type.into(),
-        )
-        .map_err(SftpError::Ssh2)?;
-    known_hosts
-        .write_file(known_hosts_path, KnownHostFileKind::OpenSSH)
-        .map_err(SftpError::Ssh2)
+    let mut entry = session.known_hosts()?;
+    entry.add(
+        &endpoint,
+        host_key,
+        "added by Zaplex SFTP",
+        host_key_type.into(),
+    )?;
+    if !contents.is_empty() && !contents.ends_with('\n') {
+        contents.push('\n');
+    }
+    for host in entry.hosts()? {
+        contents.push_str(&entry.write_string(&host, KnownHostFileKind::OpenSSH)?);
+    }
+    Ok(())
+}
+
+fn write_known_hosts(path: &Path, contents: &str) -> Result<(), SftpError> {
+    // Preserve an existing symlink and atomically update its target instead.
+    let target = match fs::canonicalize(path) {
+        Ok(target) => target,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+                return Err(SftpError::Io(error));
+            }
+            path.to_path_buf()
+        }
+        Err(error) => return Err(SftpError::Io(error)),
+    };
+    let parent = target.parent().ok_or_else(|| {
+        SftpError::ConnectionFailed("known_hosts path has no parent directory".to_string())
+    })?;
+    let mut directory = fs::DirBuilder::new();
+    directory.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        directory.mode(0o700);
+    }
+    directory.create(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    match fs::metadata(&target) {
+        Ok(metadata) => temporary
+            .as_file()
+            .set_permissions(metadata.permissions())?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(SftpError::Io(error)),
+    }
+    temporary.write_all(contents.as_bytes())?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(&target)
+        .map_err(|error| SftpError::Io(error.error))?;
+    // The replacement has already committed. A filesystem that cannot flush a
+    // directory must not turn a successful key update into a connection error.
+    #[cfg(unix)]
+    let _ = fs::File::open(parent).and_then(|directory| directory.sync_all());
+    Ok(())
 }
 
 fn host_key_fingerprint_sha256(host_key: &[u8]) -> String {
@@ -570,3 +779,7 @@ fn authenticate_like_openssh(
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "session_live_tests.rs"]
+mod live_tests;
