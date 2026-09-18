@@ -539,8 +539,14 @@ fn pending_connected_host_is_serialized_as_loading_with_partial_status() {
     let document = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet, &[]);
     assert_eq!(document.exit_code(), EXIT_PARTIAL);
     let json = serde_json::to_value(&document).unwrap();
-    assert_eq!(json["hosts"][0]["state"], "loading");
-    assert_eq!(json["hosts"][0]["label"], "remote");
+    let remote = json["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|host| host["kind"] == "remote")
+        .expect("the connected remote host must remain in the snapshot");
+    assert_eq!(remote["state"], "loading");
+    assert_eq!(remote["label"], "remote");
     assert_eq!(
         host_state(HostAvailability::Unverified, AgentInventoryStatus::Pending),
         "unverified"
