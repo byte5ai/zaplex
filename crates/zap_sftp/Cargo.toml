@@ -13,8 +13,6 @@ ssh2 = { version = "0.9", features = ["openssl-on-win32"] }
 openssl-sys = { version = "0.9", features = ["vendored"] }
 shell-escape.workspace = true
 smol = "2"
+tempfile.workspace = true
 thiserror = "2"
 zeroize = "1.8"
-
-[dev-dependencies]
-tempfile = "3"

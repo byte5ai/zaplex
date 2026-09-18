@@ -27,7 +27,7 @@ fn test_sftp_error_auth_failed() {
 #[test]
 fn test_sftp_error_timeout() {
     let err = SftpError::Timeout;
-    assert_eq!(format!("{err}"), "Operation timeout");
+    assert_eq!(format!("{err}"), "Operation timed out");
 }
 
 /// Verify NoSuchFile formatting
@@ -59,14 +59,14 @@ fn test_sftp_error_general() {
 #[test]
 fn test_sftp_channel_error_send_failed() {
     let err = SftpChannelError::SendFailed("channel closed".to_string());
-    assert_eq!(format!("{err}"), "Send request failed: channel closed");
+    assert_eq!(format!("{err}"), "Failed to send request: channel closed");
 }
 
 /// Verify RecvFailed formatting
 #[test]
 fn test_sftp_channel_error_recv_failed() {
     let err = SftpChannelError::RecvFailed("timeout".to_string());
-    assert_eq!(format!("{err}"), "Receive response failed: timeout");
+    assert_eq!(format!("{err}"), "Failed to receive response: timeout");
 }
 
 // ============================================================
