@@ -240,7 +240,9 @@ fn install_script_uses_zap_asset_and_staging_placeholder() {
 
 #[test]
 fn install_script_rejects_missing_or_untrusted_digest() {
-    assert!(install_script(None, "").is_err());
+    for length in [0, 61, 63, 65] {
+        assert!(install_script(None, &"a".repeat(length)).is_err());
+    }
     assert!(install_script(None, &"g".repeat(64)).is_err());
     assert!(install_script(None, &"A".repeat(64)).is_err());
 }

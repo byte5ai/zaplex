@@ -58,9 +58,12 @@ else
 fi
 
 expected_sha256="{expected_sha256}"
+if [ "${#expected_sha256}" -ne 64 ]; then
+  echo "error: missing or invalid authenticated archive digest" >&2
+  exit 4
+fi
 case "$expected_sha256" in
-  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
-  *) echo "error: missing or invalid authenticated archive digest" >&2; exit 4 ;;
+  *[!0123456789abcdef]*) echo "error: missing or invalid authenticated archive digest" >&2; exit 4 ;;
 esac
 
 if command -v sha256sum >/dev/null 2>&1; then
