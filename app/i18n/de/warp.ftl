@@ -98,6 +98,7 @@ cockpit-host-action-files = Dateien öffnen
 cockpit-tt-review = Änderungen prüfen
 cockpit-host-no-agents = Keine KI-Sessions auf diesem Host
 cockpit-host-no-local-agents = Keine lokalen KI-Sessions
+cockpit-host-inventory-pending = KI-Sessions werden geladen…
 cockpit-host-inventory-unsupported = Host-Dienst aktualisieren, um KI-Sessions anzuzeigen
 cockpit-host-inventory-unavailable = KI-Sessions sind vorübergehend nicht verfügbar
 cockpit-host-removed = aus Verbindungen entfernt

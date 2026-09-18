@@ -1,3 +1,5 @@
+use settings::Setting;
+
 use super::*;
 
 #[test]
@@ -50,7 +52,12 @@ fn stale_inventory_cannot_readd_disconnected_host() {
     };
     let mut visible = stale_result.clone();
 
-    assert!(remove_disconnected_host(&mut visible, "host-dev"));
+    assert!(reconcile_live_daemon_roots(
+        &mut visible,
+        &mut ManagedFleetInventory::default(),
+        "local",
+        &[],
+    ));
     let current_generation = 2;
     let stale_generation = 1;
     if should_apply_refresh_result(current_generation, stale_generation) {
@@ -141,23 +148,6 @@ fn disable_cancels_a_coalesced_refresh_rerun() {
     assert!(!flight.rerun_requested);
 }
 
-#[test]
-fn coalesced_rerun_uses_the_latest_requested_generation() {
-    let mut flight = RefreshSingleFlight::default();
-    let mut generation = 1;
-    assert!(flight.request());
-
-    generation += 1;
-    assert!(!flight.request());
-    generation += 1;
-    assert!(!flight.request());
-
-    assert!(flight.finish());
-    assert_eq!(generation, 3);
-    assert!(should_apply_refresh_result(generation, 3));
-    assert!(!flight.finish());
-}
-
 fn empty_snapshot() -> CockpitSnapshot {
     CockpitSnapshot {
         accounts: Vec::new(),
@@ -233,7 +223,13 @@ fn last_open_remote_session_removes_host_root() {
         needs_me: 3,
     };
 
-    assert!(remove_disconnected_host(&mut inventory, "host-dev"));
+    let remotes = [connected_root("buildhost", "host-build", None)];
+    assert!(reconcile_live_daemon_roots(
+        &mut inventory,
+        &mut ManagedFleetInventory::default(),
+        "local",
+        &remotes,
+    ));
     assert_eq!(inventory.hosts.len(), 2);
     assert!(inventory.hosts.iter().any(|host| host.is_local));
     assert!(inventory
@@ -241,7 +237,12 @@ fn last_open_remote_session_removes_host_root() {
         .iter()
         .any(|host| host.host_id.as_deref() == Some("host-build")));
     assert_eq!(inventory.needs_me, 1);
-    assert!(!remove_disconnected_host(&mut inventory, "host-dev"));
+    assert!(!reconcile_live_daemon_roots(
+        &mut inventory,
+        &mut ManagedFleetInventory::default(),
+        "local",
+        &remotes,
+    ));
 }
 
 #[test]
@@ -560,4 +561,369 @@ fn same_host_and_session_id_in_different_accounts_do_not_mask_waiting_transition
         vec!["box — job".to_string()],
         "the already-waiting account must not overwrite the other account's old state"
     );
+}
+
+fn connected_root(label: &str, host_id: &str, registry: Option<&str>) -> RemoteHost {
+    RemoteHost {
+        label: label.into(),
+        host_id: host_id.into(),
+        registry_node_id: registry.map(str::to_owned),
+        inventory_status: AgentInventoryStatus::Pending,
+    }
+}
+
+#[test]
+fn repeated_ticks_cannot_starve_a_slow_refresh_result() {
+    let mut flight = RefreshSingleFlight::default();
+    assert!(flight.request());
+    let started_generation = flight.generation;
+    // A daemon request can span several reconcile ticks. Every completed
+    // scan must remain publishable unless an authoritative input changed.
+    for _tick in 0..8 {
+        assert!(!flight.request());
+    }
+    assert!(should_apply_refresh_result(
+        flight.generation,
+        started_generation
+    ));
+    assert!(flight.finish());
+    let rerun_generation = flight.generation;
+    for _tick in 0..8 {
+        assert!(!flight.request());
+    }
+    assert!(should_apply_refresh_result(
+        flight.generation,
+        rerun_generation
+    ));
+    assert!(flight.finish());
+    assert!(!flight.finish());
+}
+
+#[test]
+fn topology_change_rejects_old_result_but_ticks_allow_the_followup() {
+    let mut flight = RefreshSingleFlight::default();
+    assert!(flight.request());
+    let before_disconnect = flight.generation;
+    flight.invalidate();
+    assert!(!flight.request());
+    assert!(!should_apply_refresh_result(
+        flight.generation,
+        before_disconnect
+    ));
+    assert!(flight.finish());
+    let after_disconnect = flight.generation;
+    assert!(!flight.request());
+    assert!(should_apply_refresh_result(
+        flight.generation,
+        after_disconnect
+    ));
+    assert!(flight.finish());
+    assert!(!flight.finish());
+}
+
+#[test]
+fn disabled_then_reenabled_cannot_publish_the_pre_disable_scan() {
+    let mut flight = RefreshSingleFlight::default();
+    assert!(flight.request());
+    let old_generation = flight.generation;
+    flight.invalidate();
+    flight.cancel_rerun();
+    assert!(!flight.request(), "re-enabling queues behind the old scan");
+    assert!(!should_apply_refresh_result(
+        flight.generation,
+        old_generation
+    ));
+    assert!(flight.finish());
+    assert!(should_apply_refresh_result(
+        flight.generation,
+        flight.generation
+    ));
+    assert!(!flight.finish());
+}
+
+#[test]
+fn connected_host_is_visible_before_any_inventory_response() {
+    let mut inventory = FleetTree::default();
+    let mut managed = ManagedFleetInventory::default();
+    let remotes = [connected_root("remote", "host-a", Some("node-a"))];
+    assert!(reconcile_live_daemon_roots(
+        &mut inventory,
+        &mut managed,
+        "laptop",
+        &remotes
+    ));
+    assert_eq!(inventory.hosts.len(), 2);
+    let local = inventory.hosts.iter().find(|host| host.is_local).unwrap();
+    assert_eq!(local.host, "laptop");
+    assert_eq!(local.inventory_status, AgentInventoryStatus::Pending);
+    let remote = inventory.hosts.iter().find(|host| !host.is_local).unwrap();
+    assert_eq!(remote.host_id.as_deref(), Some("host-a"));
+    assert_eq!(remote.registry_node_id.as_deref(), Some("node-a"));
+    assert_eq!(
+        remote.availability,
+        zaplex_cockpit::HostAvailability::Unverified
+    );
+    assert_eq!(remote.inventory_status, AgentInventoryStatus::Pending);
+    assert!(remote.projects.is_empty());
+    assert_eq!(inventory.needs_me, 0);
+    assert!(!reconcile_live_daemon_roots(
+        &mut inventory,
+        &mut managed,
+        "laptop",
+        &remotes
+    ));
+}
+
+#[test]
+fn classic_ssh_host_without_registry_is_visible_and_same_labels_stay_distinct() {
+    let mut inventory = FleetTree::default();
+    let mut managed = ManagedFleetInventory::default();
+    let remotes = [
+        connected_root("same", "current-daemon", None),
+        connected_root("same", "older-daemon", None),
+    ];
+    reconcile_live_daemon_roots(&mut inventory, &mut managed, "same", &remotes);
+    assert_eq!(inventory.hosts.len(), 3);
+    assert_eq!(
+        inventory.hosts.iter().filter(|host| host.is_local).count(),
+        1
+    );
+    for id in ["current-daemon", "older-daemon"] {
+        let host = inventory
+            .hosts
+            .iter()
+            .find(|host| host.host_id.as_deref() == Some(id))
+            .unwrap();
+        assert!(!host.is_local);
+        assert_eq!(
+            host.availability,
+            zaplex_cockpit::HostAvailability::Available
+        );
+    }
+}
+
+#[test]
+fn connection_events_preserve_inventory_for_other_live_hosts() {
+    let mut existing = remote_host(
+        "same",
+        "host-a",
+        session("agent-a", zaplex_cockpit::SessionState::Waiting),
+    );
+    existing.needs_me = 1;
+    existing.projects[0].needs_me = 1;
+    let mut inventory = fold_inventory(
+        "laptop",
+        vec![session("local-agent", zaplex_cockpit::SessionState::Active)],
+        Vec::new(),
+    );
+    let local_before = inventory.hosts[0].clone();
+    inventory.hosts.push(existing.clone());
+    inventory.needs_me = 1;
+    let mut managed = ManagedFleetInventory::default();
+    reconcile_live_daemon_roots(
+        &mut inventory,
+        &mut managed,
+        "laptop",
+        &[
+            connected_root("same", "host-a", None),
+            connected_root("same", "host-b", None),
+        ],
+    );
+    assert!(inventory.hosts.contains(&local_before));
+    assert!(inventory.hosts.contains(&existing));
+    assert_eq!(inventory.needs_me, 1);
+    let new_host = inventory
+        .hosts
+        .iter()
+        .find(|host| host.host_id.as_deref() == Some("host-b"))
+        .unwrap();
+    assert!(new_host.projects.is_empty());
+}
+
+#[test]
+fn changed_registry_binding_is_unverified_until_current_registry_read() {
+    let mut existing = remote_host(
+        "remote",
+        "host-a",
+        session("agent-a", zaplex_cockpit::SessionState::Waiting),
+    );
+    existing.registry_node_id = Some("old-node".into());
+    existing.needs_me = 1;
+    let mut inventory = FleetTree {
+        hosts: vec![existing],
+        needs_me: 1,
+    };
+    let mut managed = ManagedFleetInventory::default();
+    reconcile_live_daemon_roots(
+        &mut inventory,
+        &mut managed,
+        "laptop",
+        &[connected_root("remote", "host-a", Some("new-node"))],
+    );
+    let host = inventory.hosts.iter().find(|host| !host.is_local).unwrap();
+    assert_eq!(host.registry_node_id.as_deref(), Some("new-node"));
+    assert_eq!(
+        host.availability,
+        zaplex_cockpit::HostAvailability::Unverified
+    );
+    assert_eq!(inventory.needs_me, 0);
+}
+
+#[test]
+fn last_disconnect_removes_host_and_managed_actions_before_scan_finishes() {
+    use remote_server::proto::{ManagedSessionInfo, SessionInfo, SessionList};
+    let mut inventory = FleetTree::default();
+    let mut managed = ManagedFleetInventory::default();
+    let remotes = [
+        connected_root("remote", "host-a", None),
+        connected_root("remote", "host-b", None),
+    ];
+    reconcile_live_daemon_roots(&mut inventory, &mut managed, "laptop", &remotes);
+    for host_id in ["host-a", "host-b"] {
+        managed.extend_session_list(
+            host_id,
+            "remote",
+            None,
+            SessionList {
+                sessions: vec![SessionInfo {
+                    session_id: "pty-1".into(),
+                    generation: 1,
+                    managed: Some(ManagedSessionInfo {
+                        schema_version: 1,
+                        provider: "claude".into(),
+                        account_id: "account-a".into(),
+                        project_root: "/work/project".into(),
+                        launch_kind: "interactive-agent".into(),
+                        launch_id: "launch-a".into(),
+                        generation: 1,
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        );
+    }
+    assert_eq!(managed.sessions().len(), 2);
+    reconcile_live_daemon_roots(&mut inventory, &mut managed, "laptop", &remotes[1..]);
+    assert_eq!(inventory.hosts.len(), 2);
+    assert_eq!(managed.sessions().len(), 1);
+    assert_eq!(managed.sessions()[0].host_id, "host-b");
+    reconcile_live_daemon_roots(&mut inventory, &mut managed, "laptop", &[]);
+    assert_eq!(inventory.hosts.len(), 1);
+    assert!(inventory.hosts[0].is_local);
+    assert!(managed.sessions().is_empty());
+}
+
+#[test]
+fn model_refresh_ticks_preserve_active_scan_and_disable_invalidates_it() {
+    warpui::App::test((), |mut app| async move {
+        crate::test_util::settings::initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(RemoteServerManager::new);
+        // Reserve an active scan without starting disk/network work. Calls below
+        // exercise the real model scheduling path while that scan is blocked.
+        let model = app.add_model(|_| CockpitModel {
+            snapshot: initial_snapshot(),
+            refresh_flight: RefreshSingleFlight {
+                generation: 7,
+                running: true,
+                rerun_requested: false,
+            },
+            inventory: fold_inventory("laptop", Vec::new(), Vec::new()),
+            managed_fleet: ManagedFleetInventory::default(),
+            pricing: PricingTable::default(),
+            oauth_cache: OauthCache::default(),
+            transcript_cache: TranscriptScanCache::default(),
+            registry_hosts: None,
+            overrides: AccountOverrides::default(),
+            local_label: "laptop".into(),
+            selected_account: None,
+        });
+        model.update(&mut app, |model, ctx| {
+            for _tick in 0..8 {
+                model.spawn_refresh(ctx);
+            }
+            assert!(should_apply_refresh_result(
+                model.refresh_flight.generation,
+                7
+            ));
+            assert!(model.refresh_flight.running);
+            assert!(model.refresh_flight.rerun_requested);
+        });
+        CockpitSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.enabled.set_value(false, ctx).unwrap();
+        });
+        model.update(&mut app, |model, ctx| {
+            model.spawn_refresh(ctx);
+            assert!(!should_apply_refresh_result(
+                model.refresh_flight.generation,
+                7
+            ));
+            assert!(!model.refresh_flight.rerun_requested);
+            assert!(model.inventory.hosts.is_empty());
+        });
+    });
+}
+
+#[test]
+fn full_inventory_registry_fold_stays_stable_on_following_tick() {
+    let mut remote = connected_root("daemon-label", "host-a", Some("node-a"));
+    remote.inventory_status = AgentInventoryStatus::Ready;
+    let mut inventory = fold_inventory(
+        "laptop",
+        vec![session("local-agent", zaplex_cockpit::SessionState::Active)],
+        vec![(
+            remote,
+            vec![session(
+                "remote-agent",
+                zaplex_cockpit::SessionState::Waiting,
+            )],
+        )],
+    );
+    zaplex_cockpit::reconcile_connected_hosts(
+        &mut inventory,
+        &[RegisteredHost {
+            node_id: "node-a".into(),
+            label: "registry-label".into(),
+            live_host_id: Some("host-a".into()),
+        }],
+    );
+    let completed = inventory.clone();
+    let mut managed = ManagedFleetInventory::default();
+    assert!(!reconcile_live_daemon_roots(
+        &mut inventory,
+        &mut managed,
+        "laptop",
+        &[connected_root("daemon-label", "host-a", Some("node-a"))],
+    ));
+    assert_eq!(inventory, completed);
+}
+
+#[test]
+fn removed_registry_host_does_not_invalidate_each_following_refresh() {
+    let mut remote = connected_root("remote", "host-a", Some("deleted-node"));
+    remote.inventory_status = AgentInventoryStatus::Ready;
+    let mut inventory = fold_inventory(
+        "laptop",
+        Vec::new(),
+        vec![(
+            remote,
+            vec![session("waiting", zaplex_cockpit::SessionState::Waiting)],
+        )],
+    );
+    zaplex_cockpit::reconcile_connected_hosts(&mut inventory, &[]);
+    let removed = inventory.hosts.iter().find(|host| !host.is_local).unwrap();
+    assert_eq!(removed.availability, HostAvailability::Removed);
+    assert_eq!(removed.registry_node_id, None);
+    assert_eq!(inventory.needs_me, 0);
+    let accepted = inventory.clone();
+    let mut managed = ManagedFleetInventory::default();
+    for _tick in 0..8 {
+        assert!(!reconcile_live_daemon_roots(
+            &mut inventory,
+            &mut managed,
+            "laptop",
+            &[connected_root("remote", "host-a", Some("deleted-node"))],
+        ));
+        assert_eq!(inventory, accepted);
+    }
 }

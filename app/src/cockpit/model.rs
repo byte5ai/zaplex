@@ -20,13 +20,14 @@ use async_compat::CompatExt as _;
 use chrono::Utc;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use watcher::HomeDirectoryWatcher;
+use zaplex_cockpit::fleet::sort_hosts;
 #[cfg(test)]
 use zaplex_cockpit::HostNode;
 use zaplex_cockpit::{
     apply_oauth_usage, build_snapshot_with_cache, fold_inventory,
     mark_registry_bound_hosts_unverified, session_key, AccountOverrides, AgentInventoryStatus,
-    CockpitSnapshot, FleetTree, PricingTable, Provider, RegisteredHost, RemoteHost, ScanHealth,
-    SessionSnapshot, TranscriptScanCache,
+    CockpitSnapshot, FleetTree, HostAvailability, PricingTable, Provider, RegisteredHost,
+    RemoteHost, ScanHealth, SessionSnapshot, TranscriptScanCache,
 };
 // Cross-host daemon fold is a native-only concern: the `agent_session` module
 // (and the whole remote-daemon layer it lives in) is `#[cfg(not(wasm))]`, and a
@@ -91,16 +92,21 @@ fn should_apply_refresh_result(current_generation: u64, completed_generation: u6
     current_generation == completed_generation
 }
 
-/// Actor-local single-flight state for full cockpit builds. A request received
-/// during a build reserves one follow-up build; further requests are folded
-/// into that reservation and only advance the generation it will use.
+/// Actor-local single-flight state for full cockpit builds. Ordinary requests
+/// reserve one follow-up build without invalidating useful work already running.
+/// Connection changes and disabling invalidate results from the previous topology.
 #[derive(Debug, Default)]
 struct RefreshSingleFlight {
+    generation: u64,
     running: bool,
     rerun_requested: bool,
 }
 
 impl RefreshSingleFlight {
+    fn invalidate(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+    }
+
     /// Returns true when the caller must start a build now.
     fn request(&mut self) -> bool {
         if self.running {
@@ -218,10 +224,6 @@ fn reconcile_registry_read(
 
 pub struct CockpitModel {
     snapshot: CockpitSnapshot,
-    /// Monotonic identity of the newest requested refresh. Background scans can
-    /// complete out of order; only the result matching this generation may
-    /// replace the current snapshot.
-    refresh_generation: u64,
     refresh_flight: RefreshSingleFlight,
     /// The unified cross-host Agent-Inventory: local sessions folded together
     /// with every connected daemon's sessions into one Host▸Project▸Session
@@ -242,8 +244,9 @@ pub struct CockpitModel {
     /// metadata. Survives reconcile ticks so unchanged transcripts are not
     /// reopened every 45 seconds.
     transcript_cache: TranscriptScanCache,
-    /// Last authoritative SSH-registry snapshot. `Some(Vec::new())` is a valid
-    /// successful empty read; `None` means no successful read has completed.
+    /// Last accepted SSH-registry snapshot. `Some(Vec::new())` is a valid empty
+    /// read; `None` means no successful read from a current generation completed.
+    /// Invalidated scans must not replace the fallback used by the next generation.
     registry_hosts: Option<Vec<RegisteredHost>>,
     /// User overrides (instances.json: label/color/order/hide), applied to every
     /// snapshot. Kept here so the card renderer can look up per-account colors
@@ -312,18 +315,13 @@ impl CockpitModel {
                 | RemoteServerManagerEvent::SessionDisconnected { .. }
                 | RemoteServerManagerEvent::SessionReconnected { .. }
                 | RemoteServerManagerEvent::SessionDeregistered { .. }
-                | RemoteServerManagerEvent::SessionExited { .. }
-                | RemoteServerManagerEvent::SessionOpened { .. }
-                | RemoteServerManagerEvent::SessionInventoryChanged { .. } => me.spawn_refresh(ctx),
-                RemoteServerManagerEvent::HostDisconnected { host_id } => {
-                    let inventory_changed =
-                        remove_disconnected_host(&mut me.inventory, host_id.as_str());
-                    let managed_changed = me.managed_fleet.remove_host(host_id.as_str());
-                    if inventory_changed || managed_changed {
-                        ctx.emit(CockpitEvent::Updated);
-                    }
+                | RemoteServerManagerEvent::HostDisconnected { .. } => {
+                    me.refresh_flight.invalidate();
                     me.spawn_refresh(ctx);
                 }
+                RemoteServerManagerEvent::SessionExited { .. }
+                | RemoteServerManagerEvent::SessionOpened { .. }
+                | RemoteServerManagerEvent::SessionInventoryChanged { .. } => me.spawn_refresh(ctx),
                 RemoteServerManagerEvent::SessionConnecting { .. }
                 | RemoteServerManagerEvent::SessionConnectionFailed { .. }
                 | RemoteServerManagerEvent::NavigatedToDirectory { .. }
@@ -345,7 +343,6 @@ impl CockpitModel {
 
         let mut model = Self {
             snapshot: initial_snapshot(),
-            refresh_generation: 0,
             refresh_flight: RefreshSingleFlight::default(),
             inventory: FleetTree::default(),
             managed_fleet: ManagedFleetInventory::default(),
@@ -354,7 +351,11 @@ impl CockpitModel {
             transcript_cache: TranscriptScanCache::default(),
             registry_hosts: None,
             overrides: AccountOverrides::default(),
-            local_label: "local".to_string(),
+            local_label: gethostname::gethostname()
+                .into_string()
+                .ok()
+                .filter(|label| !label.is_empty())
+                .unwrap_or_else(|| "local".to_string()),
             selected_account: None,
         };
         model.spawn_refresh(ctx);
@@ -436,20 +437,52 @@ impl CockpitModel {
     /// Request a background scan. Requests received while one is active are
     /// coalesced into one rerun that captures the latest inputs after completion.
     fn spawn_refresh(&mut self, ctx: &mut ModelContext<Self>) {
-        // Advance before reading inputs: disabling the cockpit must invalidate a
-        // scan that is already in flight as surely as starting a newer scan does.
-        self.refresh_generation = self.refresh_generation.wrapping_add(1);
-        let generation = self.refresh_generation;
-
         if !*CockpitSettings::as_ref(ctx).enabled {
+            self.refresh_flight.invalidate();
             self.refresh_flight.cancel_rerun();
             self.clear_for_disabled(ctx);
             return;
         }
+        // Publish connection presence before any disk, OAuth or inventory work.
+        // This also restores live roots immediately when the cockpit is re-enabled.
+        if self.publish_connected_hosts(ctx) {
+            self.refresh_flight.invalidate();
+        }
         if !self.refresh_flight.request() {
             return;
         }
-        self.spawn_refresh_generation(generation, ctx);
+        self.spawn_refresh_generation(self.refresh_flight.generation, ctx);
+    }
+
+    /// Reflect the manager's current connections without waiting for inventory RPCs.
+    fn publish_connected_hosts(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        #[cfg(not(target_family = "wasm"))]
+        let remotes: Vec<RemoteHost> = RemoteServerManager::as_ref(ctx)
+            .connected_daemons()
+            .into_iter()
+            .map(|daemon| RemoteHost {
+                label: daemon.host_label,
+                host_id: daemon.host_id,
+                registry_node_id: daemon.registry_node_id,
+                inventory_status: if has_feature(&daemon.features, FEATURE_AGENT_INVENTORY) {
+                    AgentInventoryStatus::Pending
+                } else {
+                    AgentInventoryStatus::Unsupported
+                },
+            })
+            .collect();
+        #[cfg(target_family = "wasm")]
+        let remotes = Vec::new();
+        let changed = reconcile_live_daemon_roots(
+            &mut self.inventory,
+            &mut self.managed_fleet,
+            &self.local_label,
+            &remotes,
+        );
+        if changed {
+            ctx.emit(CockpitEvent::Updated);
+        }
+        changed
     }
 
     /// Start the build already reserved in [`Self::refresh_flight`]. Reruns use
@@ -696,10 +729,10 @@ impl CockpitModel {
                             me.clear_for_disabled(ctx);
                             return;
                         }
-                        if let RegistryRead::Current(registered) = registry_read {
-                            me.registry_hosts = Some(registered);
-                        }
-                        if should_apply_refresh_result(me.refresh_generation, generation) {
+                        if should_apply_refresh_result(me.refresh_flight.generation, generation) {
+                            if let RegistryRead::Current(registered) = registry_read {
+                                me.registry_hosts = Some(registered);
+                            }
                             me.apply(
                                 snapshot,
                                 inputs.transcript_cache,
@@ -715,7 +748,7 @@ impl CockpitModel {
                             me.transcript_cache = inputs.transcript_cache;
                         }
                         if rerun {
-                            let generation = me.refresh_generation;
+                            let generation = me.refresh_flight.generation;
                             me.spawn_refresh_generation(generation, ctx);
                         }
                     })
@@ -911,25 +944,74 @@ fn is_blank(snapshot: &CockpitSnapshot, inventory: &FleetTree) -> bool {
     snapshot.accounts.is_empty() && *inventory == FleetTree::default()
 }
 
-/// Remove one disconnected remote root synchronously, before the background
-/// disk/inventory refresh completes. The manager emits `HostDisconnected` only
-/// after the last session for this stable host id is gone, so retaining another
-/// session cannot race this removal. Local never matches a daemon id.
-fn remove_disconnected_host(inventory: &mut FleetTree, host_id: &str) -> bool {
-    let before = inventory.hosts.len();
-    inventory
-        .hosts
-        .retain(|host| host.is_local || host.host_id.as_deref() != Some(host_id));
-    if inventory.hosts.len() == before {
-        return false;
+/// Reconcile connection presence independently from slow inventory refreshes.
+/// Existing projects and labels belong to their stable daemon identity, never to
+/// a matching display label. Preserve the last verified registry label until the
+/// next full scan; a daemon label must not overwrite it. New registry routes remain
+/// unusable until verified.
+fn reconcile_live_daemon_roots(
+    inventory: &mut FleetTree,
+    managed_fleet: &mut ManagedFleetInventory,
+    local_label: &str,
+    remotes: &[RemoteHost],
+) -> bool {
+    let mut next = fold_inventory(
+        local_label,
+        Vec::new(),
+        remotes
+            .iter()
+            .cloned()
+            .map(|host| (host, Vec::new()))
+            .collect(),
+    );
+    for host in &mut next.hosts {
+        if let Some(previous) = inventory
+            .hosts
+            .iter()
+            .find(|previous| previous.is_local == host.is_local && previous.host_id == host.host_id)
+        {
+            let registry_node_id = host.registry_node_id.clone();
+            // A registry reconciliation clears the binding on removed hosts.
+            // Keep that verified removal until a full scan validates a new binding.
+            let binding_changed = previous.registry_node_id != registry_node_id;
+            let current_label = host.host.clone();
+            *host = previous.clone();
+            if host.is_local {
+                host.host = current_label;
+            } else if binding_changed && host.availability != HostAvailability::Removed {
+                host.host = current_label;
+                host.registry_node_id = registry_node_id;
+                host.availability = if host.registry_node_id.is_some() {
+                    HostAvailability::Unverified
+                } else {
+                    HostAvailability::Available
+                };
+            }
+        } else if host.is_local {
+            host.inventory_status = AgentInventoryStatus::Pending;
+        } else if host.registry_node_id.is_some() {
+            host.availability = HostAvailability::Unverified;
+        }
     }
-    inventory.needs_me = inventory
+    sort_hosts(&mut next.hosts);
+    next.needs_me = next
         .hosts
         .iter()
         .filter(|host| host.is_available())
         .map(|host| host.needs_me)
         .sum();
-    true
+    let disconnected_managed_hosts: Vec<String> = managed_fleet
+        .sessions()
+        .iter()
+        .filter(|session| !remotes.iter().any(|host| host.host_id == session.host_id))
+        .map(|session| session.host_id.clone())
+        .collect();
+    let mut changed = *inventory != next;
+    *inventory = next;
+    for host_id in disconnected_managed_hosts {
+        changed |= managed_fleet.remove_host(&host_id);
+    }
+    changed
 }
 
 /// Detect working→Waiting transitions across the WHOLE fleet — local and every

@@ -429,7 +429,9 @@ fn supplied_empty_remote_hosts_are_retained_and_empty_fleet_is_zero() {
 }
 
 #[test]
-fn connected_empty_unsupported_and_unavailable_remotes_remain_visible() {
+fn connected_pending_empty_unsupported_and_unavailable_remotes_remain_visible() {
+    let mut pending = remote_host("loading", "daemon-pending");
+    pending.inventory_status = AgentInventoryStatus::Pending;
     let mut unsupported = remote_host("legacy", "daemon-legacy");
     unsupported.inventory_status = AgentInventoryStatus::Unsupported;
     let mut unavailable = remote_host("offline-inventory", "daemon-unavailable");
@@ -439,6 +441,7 @@ fn connected_empty_unsupported_and_unavailable_remotes_remain_visible() {
         "local",
         Vec::new(),
         vec![
+            (pending, Vec::new()),
             (remote_host("empty", "daemon-empty"), Vec::new()),
             (unsupported, Vec::new()),
             (unavailable, Vec::new()),
@@ -446,6 +449,7 @@ fn connected_empty_unsupported_and_unavailable_remotes_remain_visible() {
     );
 
     for (host_id, status) in [
+        ("daemon-pending", AgentInventoryStatus::Pending),
         ("daemon-empty", AgentInventoryStatus::Ready),
         ("daemon-legacy", AgentInventoryStatus::Unsupported),
         ("daemon-unavailable", AgentInventoryStatus::Unavailable),

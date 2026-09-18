@@ -78,6 +78,8 @@ pub struct RemoteHost {
 /// Availability of the AI-agent inventory on an otherwise connected host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentInventoryStatus {
+    /// The host is present, but its initial inventory scan has not completed.
+    Pending,
     /// The inventory request completed, including an honest empty result.
     Ready,
     /// The connected daemon did not negotiate the inventory capability.
@@ -94,8 +96,8 @@ pub enum AgentInventoryStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostAvailability {
     Available,
-    /// The live daemon reports a registry binding, but no authoritative
-    /// registry snapshot has been read yet. Keep the observed host visible,
+    /// The live daemon reports a registry binding that has not been validated
+    /// by an accepted registry snapshot. Keep the observed host visible,
     /// but do not route actions or attention through it.
     Unverified,
     Removed,
@@ -262,7 +264,8 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
     FleetTree { hosts, needs_me }
 }
 
-fn sort_hosts(hosts: &mut [HostNode]) {
+/// Apply the shared attention-first order after folding or reconciling host roots.
+pub fn sort_hosts(hosts: &mut [HostNode]) {
     hosts.sort_by(|a, b| {
         b.is_available()
             .cmp(&a.is_available())

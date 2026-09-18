@@ -12,7 +12,7 @@ use super::{
     COCKPIT_SNAPSHOT_PROTOCOL_VERSION, COCKPIT_SNAPSHOT_SCHEMA_VERSION, CockpitSnapshotDocument,
     CockpitSnapshotRequest, EXIT_HARD_ERROR, EXIT_PARTIAL, EXIT_SUCCESS,
     RemoteAccountInventorySnapshot, RemoteAccountInventoryStatus, RemoteAccountSnapshot,
-    SnapshotStatus, SourceStatus,
+    SnapshotStatus, SourceStatus, host_state,
 };
 
 fn generated_at() -> chrono::DateTime<Utc> {
@@ -517,4 +517,42 @@ fn snapshot_request_is_versioned_and_revalidates_auth() {
     assert_eq!(request.version, COCKPIT_SNAPSHOT_PROTOCOL_VERSION);
     assert!(request.validate().is_ok());
     assert!(serde_json::to_string(&request).is_ok());
+}
+
+#[test]
+fn pending_connected_host_is_serialized_as_loading_with_partial_status() {
+    let snapshot = CockpitSnapshot {
+        accounts: Vec::new(),
+        generated_at: generated_at(),
+        health: ScanHealth::Loaded,
+    };
+    let fleet = FleetTree {
+        hosts: vec![host(
+            "remote",
+            false,
+            Some("host-a"),
+            AgentInventoryStatus::Pending,
+            Vec::new(),
+        )],
+        needs_me: 0,
+    };
+    let document = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet, &[]);
+    assert_eq!(document.exit_code(), EXIT_PARTIAL);
+    let json = serde_json::to_value(&document).unwrap();
+    let remote = json["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|host| host["kind"] == "remote")
+        .expect("the connected remote host must remain in the snapshot");
+    assert_eq!(remote["state"], "loading");
+    assert_eq!(remote["label"], "remote");
+    assert_eq!(
+        host_state(HostAvailability::Unverified, AgentInventoryStatus::Pending),
+        "unverified"
+    );
+    assert_eq!(
+        host_state(HostAvailability::Removed, AgentInventoryStatus::Pending),
+        "removed"
+    );
 }
