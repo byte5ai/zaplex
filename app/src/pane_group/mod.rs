@@ -74,6 +74,8 @@ use warp_cli::agent::Harness;
 use warp_core::command::ExitCode;
 use warp_core::context_flag::ContextFlag;
 use warp_core::HostId;
+#[cfg(unix)]
+use warp_core::SessionId;
 use warp_util::path::convert_wsl_to_windows_host_path;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
@@ -118,6 +120,8 @@ use crate::server::telemetry::{PaletteSource, TelemetryEvent};
 use crate::session_management::SessionNavigationData;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+#[cfg(unix)]
+use crate::terminal::daemon_tty::TerminalManager as DaemonTerminalManager;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty;
@@ -5902,6 +5906,46 @@ impl PaneGroup {
             self.update_pane_history(id);
         }
         focused
+    }
+
+    /// Includes a terminal temporarily covered by the file manager, but not a closed pane.
+    #[cfg(unix)]
+    pub(crate) fn daemon_connection_pane(
+        &self,
+        connection_session_id: SessionId,
+        ctx: &AppContext,
+    ) -> Option<PaneId> {
+        self.panes_of::<TerminalPane>().find_map(|pane| {
+            let pane_id = pane.terminal_pane_id().into();
+            if self.is_pane_hidden_for_close(pane_id) {
+                return None;
+            }
+            let manager = pane.terminal_manager(ctx);
+            let daemon = manager
+                .as_ref(ctx)
+                .as_any()
+                .downcast_ref::<DaemonTerminalManager>()?;
+            (daemon.connection_session_id() == connection_session_id).then_some(pane_id)
+        })
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn focus_daemon_connection(
+        &mut self,
+        connection_session_id: SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(pane_id) = self.daemon_connection_pane(connection_session_id, ctx) else {
+            return;
+        };
+        let replacement = self
+            .visible_pane_ids()
+            .into_iter()
+            .find(|candidate| self.original_pane_for_replacement(*candidate) == Some(pane_id));
+        if let Some(replacement) = replacement {
+            self.close_temporary_replacement_pane(replacement, ctx);
+        }
+        self.focus_pane_by_id(pane_id, ctx);
     }
 
     pub fn terminal_manager(

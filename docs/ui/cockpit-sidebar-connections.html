@@ -336,6 +336,7 @@
           <li><code>#spec C2</code> Das Tab-Menü projiziert ausschließlich favorisierte Hosts; es speichert keine zweite Konfiguration.</li>
           <li><code>#spec C3</code> Es entsteht keine neue vertikale Symbolleiste. Die vorhandene Sidebar-Navigation bleibt unverändert.</li>
           <li><code>#spec C4</code> Resiliente Hosts dürfen unterhalb der unveränderten Hostzeile eine „Zaplex-Sessions“-Recovery aufklappen; Shellnamen sind keine Sessionidentität.</li>
+          <li><code>#spec C5</code> Recovery-Abschnitte und Host-RAM beginnen auf der Textachse des Hosts. Zaplex- und tmux/byobu-Sessions stehen eine Einrückung (16 px) darunter; ihre Metadaten beginnen auf derselben Achse wie der Sessiontitel.</li>
         </ul>
       </div>
       <div class="spec-block">
@@ -361,6 +362,7 @@
           <li><code>#spec A2</code> Stecker und Stern haben feste 22-px-Slots; keine Statusprosa verschiebt Hostnamen.</li>
           <li><code>#spec A3</code> Große Tabellen markieren eine wartende Session dezent über die ganze Zeile; Detailansichten dürfen Statuswörter verwenden.</li>
           <li><code>#spec A4</code> Hover ändert nur Farbe/Füllung und niemals Geometrie oder Inhalt.</li>
+          <li><code>#spec A5</code> Recovery-Titel erhalten die verbleibende endliche Breite und kürzen darin mit Ellipse. RAM steht in einer gedämpften Unterzeile; Multiplexer-Metadaten und Abschnittstitel dürfen umbrechen. Der Öffnen-Button bleibt in einem festen 22-px-Slot. Zu prüfen bei 250, 320 und 480 px Sidebarbreite, auf Deutsch und Englisch, mit langen und fehlenden Titeln. <a href="connections-session-rows.html">Anonymisierte Layout-Fixture</a> (HTML-Entwurf; ersetzt keine native Abnahme).</li>
         </ul>
       </div>
     </div>
@@ -368,6 +370,7 @@
       <div class="state-card"><strong>Verbindung</strong><code>verbunden</code> = grüner intakter Stecker; <code>getrennt</code> = gedämpfter Stecker mit Diagonale. Der Hostname bleibt neutral.</div>
       <div class="state-card"><strong>Agent im Baum</strong><code>wartet</code> = orange, pulsierend; <code>arbeitet</code> = grün, gefüllt; <code>idle</code> = neutraler Ring. Kein sichtbarer Statustext.</div>
       <div class="state-card"><strong>Inventar</strong>Lokale und verbundene Remote-Hosts erscheinen sofort, auch während ihr KI-Inventar noch geladen wird. Ein verbundener Host bleibt auch bei leerem, nicht unterstütztem oder temporär nicht verfügbarem KI-Inventar sichtbar; ein kurzer Inline-Hinweis erklärt den Sonderzustand. Solange die erste Abfrage läuft, steht dort „KI-Sessions werden geladen…“ statt einer leeren Session-Liste.</div>
+      <div class="state-card"><strong>Recovery-Inventar</strong>Unter Verbindungen bleibt vorhandenes Inventar während einer erneuten Abfrage mit „Sessions werden aktualisiert…“ sichtbar. Ein Fehler ersetzt die alten Zeilen durch eine sichtbare Meldung. Fehlende Titel erscheinen innerhalb der Gruppe „Zaplex-Sessions“ als „Session ·“ mit acht ID-Zeichen.</div>
     </div>
   </section>
 

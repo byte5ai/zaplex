@@ -442,6 +442,7 @@ struct BootstrappingMessageProducer;
 impl MessageProvider<AgentMessageArgs<'_>> for BootstrappingMessageProducer {
     fn produce_message(&self, args: AgentMessageArgs<'_>) -> Option<Message> {
         if args.terminal_model.block_list().is_bootstrapped()
+            || args.terminal_model.is_read_only()
             || args.terminal_model.is_dummy_ambient_agent_session()
             || args.terminal_model.is_shared_ambient_agent_session()
         {

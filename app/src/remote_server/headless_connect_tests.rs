@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
+use std::sync::atomic::AtomicBool;
 #[cfg(unix)]
 use std::sync::Mutex;
 use warp_ssh_manager::{AuthType, ResolvedSshConnection, SecretKind, SshServerInfo};
@@ -469,4 +470,94 @@ async fn concurrent_ensure_control_master_spawns_once() {
         .unwrap()
         .iter()
         .all(|program| program == "ssh"));
+}
+
+#[tokio::test]
+async fn inventory_deadline_preserves_completed_results() {
+    let mut inventory = HostSessionInventory::default();
+    inventory.daemon.host_ring_cap_bytes = 42;
+    let result = inventory_with_timeout(async { Ok(inventory) }, Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert_eq!(result.daemon.host_ring_cap_bytes, 42);
+
+    let error = inventory_with_timeout(
+        async { Err("daemon authentication failed".to_string()) },
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error, "daemon authentication failed");
+}
+
+#[tokio::test]
+async fn inventory_deadline_drops_pending_scan_resources_and_releases_lock() {
+    crate::i18n::init(Some("en"));
+    struct DropFlag(Arc<AtomicBool>);
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let dropped = Arc::new(AtomicBool::new(false));
+    let resource = DropFlag(dropped.clone());
+    let lock = AsyncMutex::new(());
+    let guard = lock.lock().await;
+    let scan = async move {
+        let _resource = resource;
+        let _guard = guard;
+        futures::future::pending::<std::result::Result<HostSessionInventory, String>>().await
+    };
+
+    let timeout = Duration::from_millis(10);
+    let error = inventory_with_timeout(scan, timeout).await.unwrap_err();
+    assert_eq!(
+        error,
+        crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-timeout",
+            seconds = timeout.as_secs()
+        )
+    );
+    assert!(dropped.load(Ordering::SeqCst));
+    assert!(lock.try_lock().is_some());
+}
+
+#[tokio::test]
+async fn inventory_deadline_includes_waiting_for_control_master_lock() {
+    crate::i18n::init(Some("en"));
+    let lock = AsyncMutex::new(());
+    let guard = lock.lock().await;
+    let scan = async {
+        let _guard = lock.lock().await;
+        Ok(HostSessionInventory::default())
+    };
+
+    let timeout = Duration::from_millis(10);
+    let error = inventory_with_timeout(scan, timeout).await.unwrap_err();
+    assert_eq!(
+        error,
+        crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-timeout",
+            seconds = timeout.as_secs()
+        )
+    );
+    drop(guard);
+    assert!(lock.try_lock().is_some());
+}
+
+#[test]
+fn inventory_preflight_accepts_an_existing_daemon() {
+    assert!(require_daemon_inventory_ready(DaemonPreflight::Ready).is_ok());
+}
+
+#[test]
+fn inventory_preflight_requires_explicit_connection_before_installing() {
+    crate::i18n::init(Some("en"));
+    assert_eq!(
+        require_daemon_inventory_ready(DaemonPreflight::NeedsInstall),
+        Err(crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-needs-install"
+        ))
+    );
 }

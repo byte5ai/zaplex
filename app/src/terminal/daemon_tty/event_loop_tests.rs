@@ -2155,3 +2155,113 @@ fn initshell_of_a_non_daemon_model_stays_unstamped() {
         let _ = &mut app_;
     });
 }
+
+#[test]
+fn rejected_initial_attach_finishes_the_hidden_bootstrap_block() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(901u64);
+        let (_manager, event_loop, model, _wakeups) =
+            start_adopted_loop_unbootstrapped(&mut app, conn);
+        event_loop.update(&mut app, |me, ctx| {
+            me.buffer_pending(EventLoopMessage::Input(Cow::Borrowed(b"must not run")));
+            me.write_notice("could not re-attach session: already attached");
+            me.abandon_failed_attach(ctx);
+            me.on_transport_connected(ctx);
+            me.on_session_opened("late-open".to_string(), 7, ctx);
+            me.on_event_loop_message(EventLoopMessage::Input(Cow::Borrowed(b"late input")), ctx);
+            assert!(me.terminated);
+            assert!(me.pending_input.is_empty());
+            assert!(me.pending_open.is_none());
+            assert_eq!(me.pty_session_id.as_deref(), Some(OUR_PTY));
+        });
+        assert!(model.lock().is_read_only());
+        assert!(!model.lock().block_list().is_bootstrapped());
+    });
+}
+
+#[test]
+fn connection_failure_before_bootstrap_finishes_starting_state() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(902u64);
+        let (manager, event_loop, model, _wakeups) =
+            start_adopted_loop_unbootstrapped(&mut app, conn);
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(RemoteServerManagerEvent::SessionConnectionFailed {
+                session_id: conn,
+                phase: crate::remote_server::manager::RemoteServerInitPhase::Connect,
+                error: "connection refused".to_string(),
+            });
+        });
+        assert!(model.lock().is_read_only());
+        assert!(event_loop.read(&app, |me, _| me.terminated));
+    });
+}
+
+#[test]
+fn initial_attach_deadline_finishes_missing_handshake() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(903u64);
+        let (_manager, event_loop, model, _wakeups) =
+            start_adopted_loop_unbootstrapped(&mut app, conn);
+        complete_adopted_attach(&event_loop, &mut app);
+        // An empty successful attach is insufficient: the shell never bootstrapped.
+        event_loop.update(&mut app, |me, ctx| me.on_initial_attach_timeout(ctx));
+        assert!(model.lock().is_read_only());
+        assert!(event_loop.read(&app, |me, _| me.terminated));
+    });
+}
+
+#[test]
+fn completed_initial_attach_deadline_cannot_cancel_a_later_reconnect() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(904u64);
+        let (_manager, event_loop, model, wakeups) = start_adopted_loop(&mut app, conn);
+        complete_adopted_attach(&event_loop, &mut app);
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+        event_loop.update(&mut app, |me, ctx| {
+            assert!(!me.initial_attach_pending);
+            me.begin_transport_reconnect();
+            me.awaiting_attach_snapshot = true;
+            me.on_initial_attach_timeout(ctx);
+            assert!(!me.terminated);
+        });
+        assert!(!model.lock().is_read_only());
+    });
+}
+
+#[test]
+fn initial_attach_deadline_preserves_an_interactive_shell_initialization() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(905u64);
+        let (_manager, event_loop, model, wakeups) =
+            start_adopted_loop_unbootstrapped(&mut app, conn);
+        event_loop.update(&mut app, |me, ctx| {
+            let mut replay = init_shell_dcs();
+            replay.extend_from_slice(b"Update shell plugins? [y/N] ");
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: 0,
+                    replay,
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+        assert!(model.lock().pending_session_id().is_some());
+        assert!(!model.lock().block_list().is_bootstrapped());
+        event_loop.update(&mut app, |me, ctx| {
+            assert!(!me.initial_attach_pending);
+            me.on_initial_attach_timeout(ctx);
+            assert!(!me.terminated);
+            me.on_event_loop_message(EventLoopMessage::Input(Cow::Borrowed(b"n")), ctx);
+            assert_eq!(me.pending_input.len(), 1, "raw input must remain available");
+        });
+        assert!(!model.lock().is_read_only());
+    });
+}

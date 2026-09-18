@@ -202,6 +202,220 @@ fn compact_connection_secondary_action_survives_rerender_without_triggering_prim
 }
 
 #[test]
+fn session_rows_constrain_long_titles_and_keep_metadata_and_actions_inside_the_sidebar() {
+    for width in [250.0, 320.0, 480.0] {
+        App::test((), |mut app| async move {
+            crate::i18n::init(Some("en"));
+            initialize_settings_for_tests(&mut app);
+            app.add_singleton_model(|_| Appearance::mock());
+            app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+            app.add_singleton_model(FavoritesStore::new_for_test);
+            app.add_singleton_model(RemoteServerManager::new);
+
+            let sessions = [
+                SessionInfo {
+                    session_id: "12345678-abcdef-0123456789".into(),
+                    title: "A session identity that is much wider than the minimum sidebar".into(),
+                    ring_bytes: 223_232,
+                    ..Default::default()
+                },
+                SessionInfo {
+                    session_id: "87654321-abcdef-0123456789".into(),
+                    ring_bytes: 1_048_576,
+                    ..Default::default()
+                },
+            ];
+            let multiplexer = MultiplexerSessionInfo {
+                name: "A byobu session with a deliberately long descriptive name".into(),
+                target: "fixture-session".into(),
+                kind: MultiplexerKind::ByobuTmux as i32,
+                windows: 12,
+                attached_clients: 2,
+            };
+            let mut keys: Vec<String> = sessions
+                .iter()
+                .map(|session| session_row_key("fixture-host", session, None))
+                .collect();
+            let mux_key = multiplexer_row_key("fixture-host", &multiplexer);
+            keys.push(mux_key.clone());
+            let (window_id, panel) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+                let mut panel = SshManagerPanel::new(ctx);
+                panel.set_nodes_for_test(vec![server("fixture-host", None, "build-node", 0)], ctx);
+                panel.sessions_expanded.insert("fixture-host".into());
+                let generation = panel.begin_session_fetch("fixture-host").unwrap();
+                panel.complete_session_fetch(
+                    "fixture-host",
+                    generation,
+                    Ok(
+                        crate::remote_server::session_inventory::HostSessionInventory {
+                            daemon: SessionList {
+                                sessions: sessions.to_vec(),
+                                host_ring_cap_bytes: 268_435_456,
+                                ..Default::default()
+                            },
+                            sessions: sessions
+                                .into_iter()
+                                .map(|session| {
+                                    crate::remote_server::session_inventory::RoutedDaemonSession {
+                                        session,
+                                        route: None,
+                                    }
+                                })
+                                .collect(),
+                            multiplexers: remote_server::proto::MultiplexerSessionList {
+                                sessions: vec![multiplexer],
+                                ..Default::default()
+                            },
+                        },
+                    ),
+                    ctx,
+                );
+                panel
+            });
+            let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+            let invalidation = WindowInvalidation {
+                updated: app.read(|ctx| ctx.view_ids_for_window(window_id).into_iter().collect()),
+                ..Default::default()
+            };
+            let render = |app: &mut App| {
+                app.update(|ctx| {
+                    presenter.borrow_mut().invalidate(invalidation.clone(), ctx);
+                    presenter
+                        .borrow_mut()
+                        .build_scene(vec2f(width, 800.0), 1.0, None, ctx);
+                });
+            };
+            render(&mut app);
+            let position = |key: &str, part: &str| {
+                presenter
+                    .borrow()
+                    .position_cache()
+                    .get_position(&format!("ssh-manager-session:{key}:{part}"))
+                    .expect("the actual session row should be positioned")
+            };
+            let action = position(&mux_key, "open");
+            let first_title = position(&keys[0], "title");
+            for key in &keys {
+                let title = position(key, "title");
+                let metadata = position(key, "metadata");
+                assert!((title.min_x() - first_title.min_x()).abs() < 0.5);
+                assert!((metadata.min_x() - title.min_x()).abs() < 0.5);
+                assert!(title.width() > 100.0, "identity must retain useful width");
+                assert!(title.max_x() <= width - ITEM_PADDING_HORIZONTAL + 0.5);
+                assert!(metadata.max_x() <= width - ITEM_PADDING_HORIZONTAL + 0.5);
+                assert!(
+                    metadata.min_y() >= title.max_y(),
+                    "metadata must be below the title"
+                );
+            }
+            assert!(position(&mux_key, "title").max_x() <= action.min_x());
+            assert!(position(&mux_key, "metadata").max_x() <= action.min_x());
+            assert!((action.width() - 22.0).abs() < 0.5);
+            assert!(action.max_x() <= width - ITEM_PADDING_HORIZONTAL + 0.5);
+
+            app.update(|ctx| {
+                ctx.simulate_window_event(
+                    Event::MouseMoved {
+                        position: action.center(),
+                        cmd: false,
+                        shift: false,
+                        is_synthetic: false,
+                    },
+                    window_id,
+                    presenter.clone(),
+                );
+            });
+            render(&mut app);
+            assert_eq!(
+                position(&mux_key, "open"),
+                action,
+                "hover must not shift actions"
+            );
+            assert_eq!(position(&keys[0], "title"), first_title);
+
+            let generation = panel.update(&mut app, |panel, ctx| {
+                let generation = panel.begin_session_fetch("fixture-host").unwrap();
+                ctx.notify();
+                generation
+            });
+            render(&mut app);
+            for key in &keys {
+                assert!(position(key, "title").width() > 100.0);
+            }
+            panel.update(&mut app, |panel, ctx| {
+                panel.complete_session_fetch(
+                    "fixture-host",
+                    generation,
+                    Err("The inventory refresh timed out.".into()),
+                    ctx,
+                );
+            });
+            render(&mut app);
+            {
+                let presenter = presenter.borrow();
+                assert!(presenter
+                    .position_cache()
+                    .get_position("ssh-manager-session-error:fixture-host")
+                    .is_some());
+                for key in &keys {
+                    assert!(
+                        presenter
+                            .position_cache()
+                            .get_position(&format!("ssh-manager-session:{key}:title"))
+                            .is_none(),
+                        "failed refresh must not present old inventory as current"
+                    );
+                }
+            }
+            let (retry_generation, inventory) = panel.update(&mut app, |panel, ctx| {
+                // Cover the first-load failure too: there is no cached inventory
+                // available to keep the previous error visible during a retry.
+                let inventory = panel
+                    .host_session_inventories
+                    .remove("fixture-host")
+                    .unwrap();
+                let generation = panel.begin_session_fetch("fixture-host").unwrap();
+                assert_eq!(panel.begin_session_fetch("fixture-host"), None);
+                assert_eq!(panel.begin_session_fetch("fixture-host"), None);
+                assert_eq!(
+                    panel.sessions_error["fixture-host"],
+                    "The inventory refresh timed out."
+                );
+                ctx.notify();
+                (generation, inventory)
+            });
+            render(&mut app);
+            assert!(
+                presenter
+                    .borrow()
+                    .position_cache()
+                    .get_position("ssh-manager-session-error:fixture-host")
+                    .is_some(),
+                "a queued retry must not replace a first-load error with loading alone"
+            );
+            panel.update(&mut app, |panel, ctx| {
+                assert!(panel.complete_session_fetch(
+                    "fixture-host",
+                    retry_generation,
+                    Ok(inventory),
+                    ctx
+                ));
+                assert!(!panel.sessions_error.contains_key("fixture-host"));
+            });
+            render(&mut app);
+            assert!(presenter
+                .borrow()
+                .position_cache()
+                .get_position("ssh-manager-session-error:fixture-host")
+                .is_none());
+            for key in &keys {
+                assert!(position(key, "title").width() > 100.0);
+            }
+        });
+    }
+}
+
+#[test]
 fn panel_content_can_scroll_when_ssh_list_is_taller_than_panel() {
     App::test((), |mut app| async move {
         crate::i18n::init(Some("en"));
@@ -1034,7 +1248,7 @@ fn changed_or_deleted_hosts_reject_old_inventory_results() {
 }
 
 #[test]
-fn empty_titles_are_presented_as_zaplex_sessions() {
+fn empty_titles_show_a_short_identity_within_the_zaplex_session_group() {
     crate::i18n::init(Some("en"));
     let session = remote_server::proto::SessionInfo {
         session_id: "12345678-abcdef".to_string(),
@@ -1044,7 +1258,7 @@ fn empty_titles_are_presented_as_zaplex_sessions() {
 
     assert_eq!(
         daemon_session_title(&session),
-        "Zaplex session · \u{2068}12345678\u{2069}"
+        "Session · \u{2068}12345678\u{2069}"
     );
 }
 

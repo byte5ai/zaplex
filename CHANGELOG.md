@@ -4,6 +4,9 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.0.29] — 2026-09-11
 
+- Die Verbindungsliste hält Sessiontitel, Zusatzangaben und Aktionen auch in schmalen Seitenleisten lesbar; vorhandene Sessions bleiben bei fehlerfreier Aktualisierung sichtbar. Nach einem Fehler bleibt dessen Meldung bis zur erfolgreichen Wiederholung stehen. Eine vollständige Inventarabfrage endet spätestens nach 30 Sekunden mit einem Fehlerhinweis; eine erforderliche Erstinstallation erfolgt über das Verbinden des Hosts.
+- Ein Klick auf eine bereits geöffnete Zaplex-Session fokussiert ihre vorhandene Shell, auch hinter dem Dateimanager. Abgewiesene Attach-Versuche beenden den Startzustand sichtbar; das erstmalige Wiederanbinden wartet höchstens 60 Sekunden und beendet keine Remote-Session.
+
 - Das Cockpit zeigt verbundene Remote-Hosts sofort an. Regelmäßige Aktualisierungen verwerfen laufende Abfragen nicht mehr; getrennte Hosts bleiben auch bei verspäteten Antworten entfernt.
 
 - Der Dateimanager bevorzugt bereits bekannte SSH-Schlüsseltypen und unterscheidet zusätzliche Schlüsseltypen von echten Schlüsseländerungen. Beim bestätigten Ersetzen bleiben andere Hosts, Ports und Schlüsseltypen erhalten.

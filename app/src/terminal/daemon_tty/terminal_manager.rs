@@ -104,6 +104,10 @@ pub struct TerminalManager {
 }
 
 impl TerminalManager {
+    pub(crate) fn connection_session_id(&self) -> SessionId {
+        self.connection_session_id
+    }
+
     /// Creates a terminal manager backed by a daemon-hosted PTY session.
     ///
     /// `connection_session_id` identifies an already-connected remote-server

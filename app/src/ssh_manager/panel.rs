@@ -204,6 +204,53 @@ fn daemon_session_title(session: &SessionInfo) -> String {
     )
 }
 
+fn session_row_details(
+    title: String,
+    metadata: Option<String>,
+    key: &str,
+    appearance: &warp_core::ui::appearance::Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    // Stretch passes the finite row width through to both text elements. An
+    // unconstrained nested row would measure the title at its natural width.
+    let mut details = Flex::column()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_spacing(2.0)
+        .with_child(
+            SavePosition::new(
+                Text::new_inline(
+                    title,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_subheading(),
+                )
+                .with_color(theme.main_text_color(theme.background()).into())
+                .with_clip(ClipConfig::ellipsis())
+                .finish(),
+                &format!("ssh-manager-session:{key}:title"),
+            )
+            .for_single_frame()
+            .finish(),
+        );
+    if let Some(metadata) = metadata {
+        details = details.with_child(
+            SavePosition::new(
+                Text::new(
+                    metadata,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_body(),
+                )
+                .with_color(theme.sub_text_color(theme.background()).into())
+                .finish(),
+                &format!("ssh-manager-session:{key}:metadata"),
+            )
+            .for_single_frame()
+            .finish(),
+        );
+    }
+    details.finish()
+}
+
 async fn tailscale_status_output(
     command_factory: Arc<dyn WorkspaceCommandFactory>,
 ) -> Result<std::process::Output, String> {
@@ -1377,6 +1424,7 @@ impl SshManagerPanel {
         if generation == self.session_inventory_generation {
             match result {
                 Ok(inventory) => {
+                    self.sessions_error.remove(id);
                     sync_session_row_states(&mut self.session_row_states, id, &inventory.sessions);
                     self.host_session_inventories
                         .insert(id.to_string(), inventory);
@@ -1401,8 +1449,6 @@ impl SshManagerPanel {
         let Some(server) = server else {
             return;
         };
-        self.sessions_error.remove(&id);
-
         #[cfg(unix)]
         {
             use crate::auth::AuthStateProvider;
@@ -2593,22 +2639,23 @@ impl SshManagerPanel {
         let theme = appearance.theme();
         let muted: pathfinder_color::ColorU = theme.sub_text_color(theme.background()).into();
         let depth = self.depths.get(&node.id).copied().unwrap_or(0);
-        // Align the session title under the host *name*: the tree row places its
-        // label after the depth indent + chevron + icon (each ITEM_ICON_SIZE) with
-        // ITEM_ICON_TEXT_SPACING between, so a child session lines up on that grid.
-        let indent = depth as f32 * FOLDER_DEPTH_INDENT
-            + 2.0 * ITEM_ICON_SIZE
+        // Server names follow one empty chevron slot, without a leading icon.
+        // Section labels align with the host; session content is one level in.
+        let section_indent = ITEM_PADDING_HORIZONTAL
+            + depth as f32 * FOLDER_DEPTH_INDENT
+            + ITEM_ICON_SIZE
             + 2.0 * ITEM_ICON_TEXT_SPACING;
+        let session_indent = section_indent + FOLDER_DEPTH_INDENT;
 
         let message = |text: String, color: pathfinder_color::ColorU| -> Box<dyn Element> {
             Container::new(
-                Text::new_inline(text, appearance.ui_font_family(), appearance.ui_font_body())
+                Text::new(text, appearance.ui_font_family(), appearance.ui_font_body())
                     .with_color(color)
                     .finish(),
             )
             .with_padding_top(ITEM_PADDING_VERTICAL)
             .with_padding_bottom(ITEM_PADDING_VERTICAL)
-            .with_padding_left(indent)
+            .with_padding_left(section_indent)
             .with_padding_right(ITEM_PADDING_HORIZONTAL)
             .with_margin_bottom(ITEM_MARGIN_BOTTOM)
             .finish()
@@ -2618,20 +2665,33 @@ impl SshManagerPanel {
             crate::t!("workspace-left-panel-ssh-manager-zaplex-sessions"),
             theme.main_text_color(theme.background()).into(),
         )];
+        let host_inventory = self.host_session_inventories.get(&node.id);
         if self.sessions_loading.contains_key(&node.id) {
             rows.push(message(
-                crate::t!("workspace-left-panel-ssh-manager-sessions-loading"),
+                if host_inventory.is_some() {
+                    crate::t!("workspace-left-panel-ssh-manager-sessions-refreshing")
+                } else {
+                    crate::t!("workspace-left-panel-ssh-manager-sessions-loading")
+                },
                 muted,
             ));
-            return rows;
+            if host_inventory.is_none() && !self.sessions_error.contains_key(&node.id) {
+                return rows;
+            }
         }
         if let Some(err) = self.sessions_error.get(&node.id) {
             // A failed session fetch is an error — render it in the theme's error
             // color, matching the candidates error row (no glyph needed).
-            rows.push(message(err.clone(), theme.ui_error_color()));
+            rows.push(
+                SavePosition::new(
+                    message(err.clone(), theme.ui_error_color()),
+                    &format!("ssh-manager-session-error:{}", node.id),
+                )
+                .for_single_frame()
+                .finish(),
+            );
             return rows;
         }
-        let host_inventory = self.host_session_inventories.get(&node.id);
         if let Some(usage) = host_inventory
             .map(|inventory| &inventory.daemon)
             .and_then(host_ring_usage)
@@ -2670,52 +2730,28 @@ impl SshManagerPanel {
                 let pty_generation = session.generation;
                 let daemon_route = routed_session.route.clone();
                 let title = daemon_session_title(session);
-                // Per-session RAM (the daemon's output-ring footprint the memory
-                // governor accounts against the host cap) — muted, trailing.
-                let ram_text = format_ring_bytes(session.ring_bytes);
-                let left = Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(ITEM_ICON_TEXT_SPACING)
-                    .with_child(
-                        ConstrainedBox::new(Empty::new().finish())
-                            .with_width(indent)
-                            .finish(),
-                    )
-                    .with_child(
-                        Text::new_inline(
-                            title,
-                            appearance.ui_font_family(),
-                            appearance.ui_font_subheading(),
-                        )
-                        .with_color(theme.main_text_color(theme.background()).into())
-                        .with_clip(ClipConfig::ellipsis())
-                        .finish(),
-                    )
-                    .with_main_axis_size(MainAxisSize::Min)
-                    .finish();
-                let mut row = Flex::row()
+                // RAM belongs below the identity so it cannot consume the
+                // title's entire slot at the minimum sidebar width.
+                let metadata = format_ring_bytes(session.ring_bytes).map(|used| {
+                    crate::t!("workspace-left-panel-ssh-manager-session-ram", used = used)
+                });
+                let row = Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_main_axis_size(MainAxisSize::Max)
-                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                    .with_child(Shrinkable::new(1.0, left).finish());
-                if let Some(ram) = ram_text {
-                    row = row.with_child(
-                        Text::new_inline(
-                            ram,
-                            appearance.ui_font_family(),
-                            appearance.ui_font_subheading(),
+                    .with_child(
+                        Shrinkable::new(
+                            1.0,
+                            session_row_details(title, metadata, &key, appearance),
                         )
-                        .with_color(theme.sub_text_color(theme.background()).into())
                         .finish(),
-                    );
-                }
-                let row = row.finish();
+                    )
+                    .finish();
                 rows.push(
                     Hoverable::new(state, move |mouse| {
                         let mut c = Container::new(row)
                             .with_padding_top(ITEM_PADDING_VERTICAL)
                             .with_padding_bottom(ITEM_PADDING_VERTICAL)
-                            .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                            .with_padding_left(session_indent)
                             .with_padding_right(ITEM_PADDING_HORIZONTAL)
                             .with_margin_bottom(ITEM_MARGIN_BOTTOM)
                             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
@@ -2775,55 +2811,32 @@ impl SshManagerPanel {
                         windows = session.windows,
                         clients = session.attached_clients
                     );
-                    let details = Flex::column()
-                        .with_main_axis_size(MainAxisSize::Min)
-                        .with_child(
-                            Text::new_inline(
-                                title,
-                                appearance.ui_font_family(),
-                                appearance.ui_font_subheading(),
-                            )
-                            .with_color(theme.main_text_color(theme.background()).into())
-                            .with_clip(ClipConfig::ellipsis())
-                            .finish(),
-                        )
-                        .with_child(
-                            Text::new_inline(
-                                metadata,
-                                appearance.ui_font_family(),
-                                appearance.ui_font_body(),
-                            )
-                            .with_color(muted)
-                            .finish(),
-                        )
-                        .finish();
-                    let left = Flex::row()
-                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                        .with_spacing(ITEM_ICON_TEXT_SPACING)
-                        .with_child(
-                            ConstrainedBox::new(Empty::new().finish())
-                                .with_width(indent)
-                                .finish(),
-                        )
-                        .with_child(Shrinkable::new(1.0, details).finish())
-                        .with_main_axis_size(MainAxisSize::Min)
-                        .finish();
+                    let details = session_row_details(title, Some(metadata), &key, appearance);
                     // ui-contract: compact-row-actions:start
                     let mut row = Flex::row()
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                        .with_spacing(ITEM_ICON_TEXT_SPACING)
                         .with_main_axis_size(MainAxisSize::Max)
-                        .with_child(Shrinkable::new(1.0, left).finish());
+                        .with_child(Shrinkable::new(1.0, details).finish());
                     debug_assert!(self.multiplexer_open_actions.contains_key(&key));
                     if let Some(action) = self.multiplexer_open_actions.get(&key) {
-                        row = row.with_child(action.render());
+                        row = row.with_child(
+                            SavePosition::new(
+                                Container::new(action.render())
+                                    .with_horizontal_padding(1.0)
+                                    .finish(),
+                                &format!("ssh-manager-session:{key}:open"),
+                            )
+                            .for_single_frame()
+                            .finish(),
+                        );
                     }
                     // ui-contract: compact-row-actions:end
                     rows.push(
                         Container::new(row.finish())
                             .with_padding_top(ITEM_PADDING_VERTICAL)
                             .with_padding_bottom(ITEM_PADDING_VERTICAL)
-                            .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                            .with_padding_left(session_indent)
                             .with_padding_right(ITEM_PADDING_HORIZONTAL)
                             .with_margin_bottom(ITEM_MARGIN_BOTTOM)
                             .finish(),

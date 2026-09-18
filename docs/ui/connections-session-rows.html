@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="de">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verbindungen – schmale Sessionzeilen (#455)</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 24px; background: #0e1420; color: #d9dce5; font: 14px/1.2 system-ui, sans-serif; }
+  h1 { font-size: 22px; margin: 0 0 12px; }
+  p { max-width: 1000px; line-height: 1.5; color: #adb5c6; }
+  .matrix { display: grid; grid-template-columns: 250px 320px 480px; gap: 20px; align-items: start; }
+  .caption { margin: 24px 0 8px; font-size: 12px; color: #adb5c6; }
+  .panel { background: #111722; outline: 1px solid #303849; border-radius: 6px; padding-block: 8px; }
+  .host { display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 38px; }
+  .host-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .host-actions { display: flex; }
+  .host-actions span, .open { width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 22px; }
+  .section { margin-bottom: 2px; padding: 5px 8px 5px 38px; font-size: 12px; overflow-wrap: anywhere; }
+  .muted, .metadata { color: #98a2b3; }
+  .ram { color: #a89cef; }
+  .session { display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 54px; margin-bottom: 2px; border-radius: 4px; }
+  .session:hover { background: #ffffff08; }
+  .details { flex: 1; min-width: 0; }
+  .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .metadata { margin-top: 2px; font-size: 12px; overflow-wrap: anywhere; }
+  .open { border: 0; padding: 0; border-radius: 4px; background: transparent; color: #b9c0d0; cursor: pointer; font: 13px monospace; }
+  .open:hover { background: #ffffff12; }
+  .error { color: #f39191; }
+</style>
+<h1>Verbindungen: Sessionzeilen bei 250, 320 und 480 px</h1>
+<p>Anonymisierte HTML-Layout-Fixture zu #455 und #456. Sie illustriert die beabsichtigte Breitenaufteilung, Einrückung und Umbrüche. Sie rendert keine WarpUI-Elemente und ersetzt daher weder den nativen Presenter-Test noch eine Abnahme auf macOS. Kein App-Build erforderlich.</p>
+<div class="matrix" id="matrix"></div>
+<p>Beim Aktualisieren bleiben die zuletzt geladenen Zeilen unter einem ausdrücklichen Aktualisierungshinweis sichtbar. Schlägt die Abfrage fehl, erscheint der Fehler anstelle der alten Zeilen. Alle Bezeichnungen und Identitäten in dieser Fixture sind erfunden.</p>
+<script>
+  const copy = {
+    de: {
+      group: "Zaplex-Sessions", ram: "Host-RAM: 1,2 MB / 256,0 MB", fallback: "Session · 87654321",
+      long: "Eine sehr lange Sessionidentität zur Überprüfung des Seitenleistenlayouts",
+      muxGroup: "Bestehende tmux-/byobu-Sessions", mux: "Lang benannte byobu-Sitzung zur Layoutprüfung",
+      metadata: "byobu (tmux) · 12 Fenster · 2 Clients", open: "Session im Terminal öffnen",
+      refreshing: "Sessions werden aktualisiert…"
+    },
+    en: {
+      group: "Zaplex sessions", ram: "Host RAM: 1.2 MB / 256.0 MB", fallback: "Session · 87654321",
+      long: "A very long session identity for checking the narrow sidebar layout",
+      muxGroup: "Existing tmux/byobu sessions", mux: "A long named byobu session for checking the layout",
+      metadata: "byobu (tmux) · 12 windows · 2 clients", open: "Open session in terminal",
+      refreshing: "Refreshing sessions…"
+    }
+  };
+  for (const locale of ["de", "en"]) {
+    for (const width of [250, 320, 480]) {
+      const c = copy[locale];
+      const fixture = document.createElement("article");
+      fixture.lang = locale;
+      fixture.innerHTML = `<div class="caption">${locale.toUpperCase()} · ${width} px · ${width === 320 ? "Aktualisierung" : "Inventar"}</div>
+        <div class="panel" data-width="${width}">
+          <div class="host"><span class="host-name">build-node</span><span class="host-actions"><span aria-label="Favorit">☆</span><span aria-label="Verbunden">⌁</span></span></div>
+          <div class="section">${c.group}</div>
+          ${width === 320 ? `<div class="section muted">${c.refreshing}</div>` : ""}
+          <div class="section ram">${c.ram}</div>
+          <div class="session"><div class="details"><div class="title">${c.long}</div><div class="metadata">RAM: 218 KB</div></div></div>
+          <div class="session"><div class="details"><div class="title fallback">${c.fallback}</div><div class="metadata">RAM: 1.0 MB</div></div></div>
+          <div class="section">${c.muxGroup}</div>
+          <div class="session"><div class="details"><div class="title">${c.mux}</div><div class="metadata">${c.metadata}</div></div><button class="open" title="${c.open}" aria-label="${c.open}">&gt;_</button></div>
+        </div>`;
+      document.querySelector("#matrix").appendChild(fixture);
+    }
+  }
+  const checks = [];
+  for (const panel of document.querySelectorAll(".panel")) {
+    const outer = panel.getBoundingClientRect();
+    for (const row of panel.querySelectorAll(".session")) {
+      const title = row.querySelector(".title").getBoundingClientRect();
+      const metadata = row.querySelector(".metadata").getBoundingClientRect();
+      const action = row.querySelector(".open")?.getBoundingClientRect();
+      checks.push(title.width > 100, title.left === outer.left + 54, title.right <= outer.right - 8,
+        metadata.left === title.left, metadata.top >= title.bottom, metadata.right <= outer.right - 8);
+      if (action) checks.push(action.width === 22, title.right <= action.left, metadata.right <= action.left);
+    }
+    const fallback = panel.querySelector(".fallback");
+    checks.push(fallback.scrollWidth <= fallback.clientWidth);
+  }
+  document.documentElement.dataset.fixtureChecks = checks.every(Boolean) ? "passed" : "failed";
+  document.documentElement.dataset.fixtureAssertions = checks.length;
+</script>
+</html>
