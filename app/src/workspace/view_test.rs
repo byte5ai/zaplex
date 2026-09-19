@@ -3628,6 +3628,7 @@ fn matching_process_identity_reaches_signal_backend_once() {
 #[cfg(all(unix, feature = "local_tty"))]
 #[test]
 fn listed_fresh_daemon_session_focuses_its_existing_shell_under_file_manager() {
+    let _undo_closed_panes_guard = FeatureFlag::UndoClosedPanes.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
@@ -3672,7 +3673,18 @@ fn listed_fresh_daemon_session_focuses_its_existing_shell_under_file_manager() {
                     },
                     ctx,
                 );
-                assert_ne!(group.focused_pane_id(ctx), shell);
+                let replacement = group.focused_pane_id(ctx);
+                assert_ne!(replacement, shell);
+                assert!(!group.visible_pane_ids().contains(&shell));
+                assert_eq!(
+                    group.original_pane_for_replacement(replacement),
+                    Some(shell)
+                );
+                assert_eq!(
+                    group.daemon_connection_pane(conn, ctx),
+                    Some(shell),
+                    "a temporarily covered shell remains an open connection"
+                );
             });
             // The acknowledgement must find the owning pane even when another tab is active.
             workspace.activate_tab(0, ctx);
@@ -3709,6 +3721,28 @@ fn listed_fresh_daemon_session_focuses_its_existing_shell_under_file_manager() {
             assert_eq!(workspace.active_tab_pane_group().id(), group.id());
             assert_eq!(group.as_ref(ctx).focused_pane_id(ctx), shell);
             assert!(group.as_ref(ctx).visible_pane_ids().contains(&shell));
+        });
+        group.update(&mut app, |group, ctx| {
+            group.add_terminal_pane_ignoring_default_session_mode(Direction::Right, None, ctx);
+            assert_eq!(group.visible_pane_ids().len(), 2);
+            group.close_pane(shell, ctx);
+            assert!(group.is_pane_hidden_for_close(shell));
+            assert!(group.terminal_view_from_pane_id(shell, ctx).is_some());
+            assert!(!group.visible_pane_ids().contains(&shell));
+            assert_eq!(
+                group.daemon_connection_pane(conn, ctx),
+                None,
+                "a shell retained only for Undo Close must not be reused"
+            );
+        });
+        RemoteServerManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.report_session_opened(conn, "pty-fresh".to_string(), 8, ctx);
+        });
+        workspace.read(&app, |workspace, _| {
+            assert!(!workspace
+                .adopted_daemon_sessions
+                .contains_key(&daemon_adoption_key("node-a", None, "pty-fresh", 8)));
+            assert_eq!(workspace.tabs.len(), tab_count);
         });
     });
 }

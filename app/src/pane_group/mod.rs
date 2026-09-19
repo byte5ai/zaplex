@@ -5915,9 +5915,14 @@ impl PaneGroup {
         connection_session_id: SessionId,
         ctx: &AppContext,
     ) -> Option<PaneId> {
+        let visible_panes = self.visible_pane_ids();
         self.panes_of::<TerminalPane>().find_map(|pane| {
             let pane_id = pane.terminal_pane_id().into();
-            if self.is_pane_hidden_for_close(pane_id) {
+            if !visible_panes.contains(&pane_id)
+                && !visible_panes.iter().any(|replacement| {
+                    self.original_pane_for_replacement(*replacement) == Some(pane_id)
+                })
+            {
                 return None;
             }
             let manager = pane.terminal_manager(ctx);
