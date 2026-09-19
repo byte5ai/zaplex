@@ -90,6 +90,33 @@ fn fake_process(script: &str) -> (tempfile::TempDir, JsonLineProcess) {
 #[cfg(unix)]
 #[test]
 #[serial_test::serial]
+fn nonzero_exit_preserves_buffered_frame_and_session_eof() {
+    futures_lite::future::block_on(async {
+        let (_directory, mut process) = fake_process(
+            r#"printf '%s\n' '{"session_id":"session-before-crash"}'
+printf '%s\n' 'unclassified crash diagnostic' >&2
+exit 17"#,
+        );
+        // Observe the completed exit before reading to avoid depending on process scheduling.
+        let status = process
+            .child
+            .status()
+            .with_timeout(Duration::from_secs(3))
+            .await
+            .expect("fake process must exit")
+            .unwrap();
+        assert_eq!(status.code(), Some(17));
+        assert_eq!(
+            process.receive().await.unwrap(),
+            Some(serde_json::json!({"session_id": "session-before-crash"}))
+        );
+        assert_eq!(process.receive().await.unwrap(), None);
+    });
+}
+
+#[cfg(unix)]
+#[test]
+#[serial_test::serial]
 fn process_exits_gracefully_when_protocol_input_closes() {
     futures_lite::future::block_on(async {
         let (_directory, mut process) = fake_process("cat >/dev/null");

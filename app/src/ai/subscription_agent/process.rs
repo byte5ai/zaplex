@@ -520,11 +520,7 @@ impl JsonLineProcess {
             if let Some(message) = process_diagnostic(&self.diagnostics) {
                 bail!("{message}");
             }
-            if let Some(status) = self.child.try_status()? {
-                if !status.success() {
-                    bail!("subscription agent exited with {status}");
-                }
-            }
+            // The session layer maps EOF to an error event carrying the native session ID.
             return Ok(None);
         }
         serde_json::from_str(&line)

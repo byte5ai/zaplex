@@ -22,10 +22,10 @@ use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     AcceptedByDropTarget, Border, ChildAnchor, ChildView, ClippedScrollStateHandle,
     ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
-    Draggable, DraggableState, DropTarget, DropTargetData, Element, Empty, Fill as ElementFill,
-    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
-    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollTarget,
-    ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Text,
+    Draggable, DraggableState, DropTarget, DropTargetData, Element, Empty, Expanded,
+    Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
+    ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Text,
 };
 use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
@@ -3312,7 +3312,9 @@ impl SshManagerPanel {
         if let Some(icon_el) = icon_el {
             row_flex = row_flex.with_child(icon_el);
         }
-        row_flex = row_flex.with_child(Shrinkable::new(1.0, label_or_editor).finish());
+        // Keep the identity slot full-width even for short names; the trailing
+        // persistence mark must not move with the text's intrinsic width.
+        row_flex = row_flex.with_child(Expanded::new(1.0, label_or_editor).finish());
         // Lightning mark: this host opens as a Zaplexify persistent session
         // (survives disconnects). The icon-font mark (#107) is the at-a-glance
         // signal in the host list — quiet, muted, body-sized, not a shout.

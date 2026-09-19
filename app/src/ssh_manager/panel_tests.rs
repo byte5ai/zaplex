@@ -350,12 +350,30 @@ fn session_rows_constrain_long_titles_and_keep_metadata_and_actions_inside_the_s
                 .position_cache()
                 .get_position("ssh-manager-node:fixture-host:disclosure")
                 .unwrap();
+            let persistence_mark_width = app.read(|ctx| Appearance::as_ref(ctx).ui_font_body());
+            // The test FontDB has zero intrinsic text width. Check the allocated
+            // slot against every fixed neighbor, rather than an estimated minimum.
+            let expected_title_start = disclosure.max_x() + ITEM_PADDING_HORIZONTAL;
+            let expected_title_end = refresh.min_x()
+                - ITEM_PADDING_HORIZONTAL
+                - persistence_mark_width
+                - ITEM_ICON_TEXT_SPACING;
+            let expected_title_width = expected_title_end - expected_title_start;
+            assert!((host_title.min_x() - expected_title_start).abs() < 0.5);
             assert!(
-                host_title.width() > width - 145.0,
-                "host identity must get the entire flexible remainder"
+                (host_title.width() - expected_title_width).abs() < 0.5,
+                "host identity must fill the flexible remainder at {width}px: got {}, expected {expected_title_width}",
+                host_title.width()
             );
-            assert!(host_title.max_x() <= refresh.min_x());
+            assert!((host_title.max_x() - expected_title_end).abs() < 0.5);
+            assert!((disclosure.min_x() - ITEM_PADDING_HORIZONTAL).abs() < 0.5);
             assert!((disclosure.width() - ROW_ACTION_SIZE).abs() < 0.5);
+            assert!((refresh.width() - ROW_ACTION_SIZE).abs() < 0.5);
+            assert!(
+                (refresh.min_x() + 3.0 * ROW_ACTION_SIZE + ITEM_PADDING_HORIZONTAL - width).abs()
+                    < 0.5,
+                "refresh, favorite and connection must retain their fixed trailing slots"
+            );
             for key in &keys {
                 let title = position(key, "title");
                 let metadata = position(key, "metadata");
