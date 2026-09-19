@@ -783,3 +783,58 @@ fn location_change_is_rejected_while_a_turn_is_active() {
         Some(AgentLifecycle::Responding)
     );
 }
+
+#[test]
+fn known_live_daemon_migration_preserves_native_identity_and_preferences() {
+    let registry = SubscriptionSessionRegistry::default();
+    let mut selected = target();
+    selected.installation.host.id = "daemon-process".to_string();
+    registry.remember_initial_location(
+        "conversation",
+        SubscriptionLocationPreference {
+            host: selected.installation.host.clone(),
+            working_directory: selected.working_directory.clone(),
+        },
+    );
+    registry.set_target("conversation", selected.clone());
+    let identity = SessionIdentity::Codex("native-thread".to_string());
+    registry.store("conversation".to_string(), selected, identity.clone());
+    let preferences = registry.preferences("conversation");
+    let host = HostIdentity {
+        id: "ssh-registry:registered-node".to_string(),
+        display_name: "Renamed host".to_string(),
+    };
+    registry.migrate_host_identity("conversation", "daemon-process", host.clone());
+    assert_eq!(
+        registry.location_preference("conversation").unwrap().host,
+        host
+    );
+    assert_eq!(
+        registry.target("conversation").unwrap().installation.host,
+        host
+    );
+    assert_eq!(
+        registry
+            .get("conversation")
+            .unwrap()
+            .target
+            .installation
+            .host,
+        host
+    );
+    assert_eq!(registry.get("conversation").unwrap().session, identity);
+    assert_eq!(registry.preferences("conversation"), preferences);
+
+    registry.migrate_host_identity(
+        "conversation",
+        "different-process",
+        HostIdentity {
+            id: "ssh-registry:other-node".to_string(),
+            display_name: "Renamed host".to_string(),
+        },
+    );
+    assert_eq!(
+        registry.location_preference("conversation").unwrap().host,
+        host
+    );
+}

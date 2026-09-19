@@ -365,6 +365,18 @@ fn unknown_host_key_requires_confirmation_before_control_master() {
     let HostKeyPreflight::ConfirmationRequired(host_key) = outcome else {
         panic!("unknown host key must require confirmation");
     };
+    crate::i18n::init(Some("en"));
+    assert_eq!(
+        require_daemon_inventory_ready(DaemonPreflight::HostKeyConfirmationRequired(
+            host_key.clone(),
+        )),
+        Err(crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-confirm-host-key",
+            host = host_key.host.clone(),
+            port = host_key.port,
+            fingerprint = host_key.fingerprint.clone()
+        ))
+    );
     let invocations = std::fs::read_to_string(&factory.log_path).unwrap();
     assert!(
         !invocations
@@ -560,4 +572,33 @@ fn inventory_preflight_requires_explicit_connection_before_installing() {
             "workspace-left-panel-ssh-manager-sessions-needs-install"
         ))
     );
+}
+
+#[test]
+fn subscription_agent_reuses_verified_master_without_fresh_connection_fallback() {
+    let host = server(AuthType::Key);
+    let args = managed_agent_ssh_args(&host).unwrap();
+    let delimiter = args.iter().position(|arg| arg == "--").unwrap();
+    assert_eq!(&args[delimiter + 1..], &["me@example.com"]);
+    assert!(args[..delimiter].windows(2).any(|pair| {
+        pair[0] == "-S" && pair[1] == control_socket_path(&host).to_string_lossy()
+    }));
+    for option in [
+        "ControlMaster=no",
+        "ProxyCommand=false",
+        "StrictHostKeyChecking=yes",
+        "RequestTTY=no",
+    ] {
+        assert!(args[..delimiter]
+            .windows(2)
+            .any(|pair| pair == ["-o", option]));
+    }
+    assert!(!args.iter().any(|arg| arg == "StrictHostKeyChecking=ask"));
+}
+
+#[test]
+fn subscription_agent_route_rejects_an_invalid_endpoint_before_spawn() {
+    let mut invalid = server(AuthType::Key);
+    invalid.host = "-oProxyCommand=malicious".to_string();
+    assert!(managed_agent_ssh_args(&invalid).is_err());
 }

@@ -259,6 +259,7 @@ pub struct CockpitPanel {
     /// Hover state of the „KI-KONTEN" header's fleet total — the cross-account
     /// spend figure doubles as the entry point to the fleet pane (spec v3 §S1).
     fleet_total_btn: MouseStateHandle,
+    connections_btn: MouseStateHandle,
     /// Stable hover state for the waiting-summary glyph in the Sessions header.
     conductor_attention_state: MouseStateHandle,
     /// Hover/click state for the account-zone "try again" retry (the loading /
@@ -377,6 +378,7 @@ impl CockpitPanel {
             conductor_host_glyph_states: HashMap::new(),
             expanded_hosts: HashMap::new(),
             fleet_total_btn: MouseStateHandle::default(),
+            connections_btn: MouseStateHandle::default(),
             conductor_attention_state: MouseStateHandle::default(),
             rescan_btn: MouseStateHandle::default(),
             conductor_project_states: HashMap::new(),
@@ -1110,6 +1112,26 @@ impl CockpitPanel {
                 .finish(),
             );
         }
+        let accent = theme.accent().into_solid();
+        col = col.with_child(
+            Container::new(
+                Hoverable::new(self.connections_btn.clone(), move |mouse| {
+                    Text::new(
+                        crate::t!("cockpit-shell-sessions-connections"),
+                        family,
+                        body,
+                    )
+                    .with_color(if mouse.is_hovered() { accent } else { muted })
+                    .finish()
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::OpenSshManager))
+                .finish(),
+            )
+            .with_padding_left(10.0)
+            .with_padding_top(4.0)
+            .finish(),
+        );
         Some(col.finish())
     }
 

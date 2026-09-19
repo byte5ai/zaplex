@@ -59,6 +59,7 @@ enum ConnectionRowTestAction {
 struct ConnectionRowTestView {
     primary_state: MouseStateHandle,
     favorite_action: CompactRowAction,
+    use_session_layout: bool,
     primary_clicks: usize,
     favorite_clicks: usize,
 }
@@ -73,6 +74,7 @@ impl ConnectionRowTestView {
                 ConnectionRowTestAction::Favorite,
                 ctx,
             ),
+            use_session_layout: false,
             primary_clicks: 0,
             favorite_clicks: 0,
         }
@@ -115,90 +117,119 @@ impl View for ConnectionRowTestView {
         )
         .finish();
 
-        Stack::new()
-            .with_child(compose_connection_row_targets(
-                primary_target,
-                Some(favorite_action),
-                None,
-            ))
-            .finish()
+        let row = if self.use_session_layout {
+            compose_session_row_targets(primary_target, Some(favorite_action))
+        } else {
+            compose_connection_row_targets(primary_target, Some(favorite_action), None, None, None)
+        };
+        Stack::new().with_child(row).finish()
     }
 }
 
 #[test]
 fn compact_connection_secondary_action_survives_rerender_without_triggering_primary_row_click() {
-    App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
-            ConnectionRowTestView::new(ctx)
-        });
-        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
-        let invalidation = WindowInvalidation {
-            updated: app.read(|ctx| ctx.view_ids_for_window(window_id).into_iter().collect()),
-            ..Default::default()
-        };
+    for use_session_layout in [false, true] {
+        App::test((), |mut app| async move {
+            app.add_singleton_model(|_| Appearance::mock());
+            let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+                let mut view = ConnectionRowTestView::new(ctx);
+                view.use_session_layout = use_session_layout;
+                view
+            });
+            let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+            let invalidation = WindowInvalidation {
+                updated: app.read(|ctx| ctx.view_ids_for_window(window_id).into_iter().collect()),
+                ..Default::default()
+            };
 
-        let click_position = app.update({
-            let presenter = presenter.clone();
-            let invalidation = invalidation.clone();
-            move |ctx| {
-                presenter.borrow_mut().invalidate(invalidation, ctx);
-                presenter
-                    .borrow_mut()
-                    .build_scene(vec2f(320.0, 60.0), 1.0, None, ctx);
-                presenter
-                    .borrow()
-                    .position_cache()
-                    .get_position("connection_row_test:favorite")
-                    .expect("favorite action should be positioned")
-                    .center()
+            let click_position = app.update({
+                let presenter = presenter.clone();
+                let invalidation = invalidation.clone();
+                move |ctx| {
+                    presenter.borrow_mut().invalidate(invalidation, ctx);
+                    presenter
+                        .borrow_mut()
+                        .build_scene(vec2f(320.0, 60.0), 1.0, None, ctx);
+                    presenter
+                        .borrow()
+                        .position_cache()
+                        .get_position("connection_row_test:favorite")
+                        .expect("favorite action should be positioned")
+                        .center()
+                }
+            });
+
+            app.update({
+                let presenter = presenter.clone();
+                move |ctx| {
+                    ctx.simulate_window_event(
+                        Event::LeftMouseDown {
+                            position: click_position,
+                            modifiers: Default::default(),
+                            click_count: 1,
+                            is_first_mouse: false,
+                        },
+                        window_id,
+                        presenter,
+                    );
+                }
+            });
+            app.update({
+                let presenter = presenter.clone();
+                let invalidation = invalidation.clone();
+                move |ctx| {
+                    presenter.borrow_mut().invalidate(invalidation, ctx);
+                    presenter
+                        .borrow_mut()
+                        .build_scene(vec2f(320.0, 60.0), 1.0, None, ctx);
+                }
+            });
+            app.update({
+                let presenter = presenter.clone();
+                move |ctx| {
+                    ctx.simulate_window_event(
+                        Event::LeftMouseUp {
+                            position: click_position,
+                            modifiers: Default::default(),
+                        },
+                        window_id,
+                        presenter,
+                    );
+                }
+            });
+
+            view.read(&app, |view, _| {
+                assert_eq!(view.favorite_clicks, 1);
+                assert_eq!(view.primary_clicks, 0);
+            });
+            for event in [
+                Event::LeftMouseDown {
+                    position: vec2f(30.0, 15.0),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                Event::LeftMouseUp {
+                    position: vec2f(30.0, 15.0),
+                    modifiers: Default::default(),
+                },
+            ] {
+                app.update(|ctx| {
+                    ctx.simulate_window_event(event, window_id, presenter.clone());
+                });
             }
-        });
-
-        app.update({
-            let presenter = presenter.clone();
-            move |ctx| {
-                ctx.simulate_window_event(
-                    Event::LeftMouseDown {
-                        position: click_position,
-                        modifiers: Default::default(),
-                        click_count: 1,
-                        is_first_mouse: false,
-                    },
-                    window_id,
-                    presenter,
+            view.read(&app, |view, _| {
+                assert_eq!(
+                    view.primary_clicks, 1,
+                    "the identity must open exactly once"
                 );
-            }
-        });
-        app.update({
-            let presenter = presenter.clone();
-            let invalidation = invalidation.clone();
-            move |ctx| {
-                presenter.borrow_mut().invalidate(invalidation, ctx);
-                presenter
-                    .borrow_mut()
-                    .build_scene(vec2f(320.0, 60.0), 1.0, None, ctx);
-            }
-        });
-        app.update({
-            let presenter = presenter.clone();
-            move |ctx| {
-                ctx.simulate_window_event(
-                    Event::LeftMouseUp {
-                        position: click_position,
-                        modifiers: Default::default(),
-                    },
-                    window_id,
-                    presenter,
+                assert_eq!(
+                    view.favorite_clicks, 1,
+                    "the primary must not trigger the sibling icon"
                 );
-            }
+            });
         });
-
-        view.read(&app, |view, _| {
-            assert_eq!(view.favorite_clicks, 1);
-            assert_eq!(view.primary_clicks, 0);
-        });
-    });
+    }
 }
 
 #[test]
@@ -240,7 +271,16 @@ fn session_rows_constrain_long_titles_and_keep_metadata_and_actions_inside_the_s
             keys.push(mux_key.clone());
             let (window_id, panel) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
                 let mut panel = SshManagerPanel::new(ctx);
-                panel.set_nodes_for_test(vec![server("fixture-host", None, "build-node", 0)], ctx);
+                panel.set_nodes_for_test(
+                    vec![server(
+                        "fixture-host",
+                        None,
+                        "build-node-with-a-long-identity-to-test-the-whole-remaining-width",
+                        0,
+                    )],
+                    ctx,
+                );
+                panel.resilient_hosts.insert("fixture-host".into());
                 panel.sessions_expanded.insert("fixture-host".into());
                 let generation = panel.begin_session_fetch("fixture-host").unwrap();
                 panel.complete_session_fetch(
@@ -295,6 +335,27 @@ fn session_rows_constrain_long_titles_and_keep_metadata_and_actions_inside_the_s
             };
             let action = position(&mux_key, "open");
             let first_title = position(&keys[0], "title");
+            let host_title = presenter
+                .borrow()
+                .position_cache()
+                .get_position("ssh-manager-node:fixture-host:title")
+                .unwrap();
+            let refresh = presenter
+                .borrow()
+                .position_cache()
+                .get_position("ssh-manager-node:fixture-host:refresh")
+                .unwrap();
+            let disclosure = presenter
+                .borrow()
+                .position_cache()
+                .get_position("ssh-manager-node:fixture-host:disclosure")
+                .unwrap();
+            assert!(
+                host_title.width() > width - 145.0,
+                "host identity must get the entire flexible remainder"
+            );
+            assert!(host_title.max_x() <= refresh.min_x());
+            assert!((disclosure.width() - ROW_ACTION_SIZE).abs() < 0.5);
             for key in &keys {
                 let title = position(key, "title");
                 let metadata = position(key, "metadata");
@@ -342,6 +403,32 @@ fn session_rows_constrain_long_titles_and_keep_metadata_and_actions_inside_the_s
             for key in &keys {
                 assert!(position(key, "title").width() > 100.0);
             }
+            assert_eq!(
+                position(&keys[0], "title"),
+                first_title,
+                "refresh must not move existing rows"
+            );
+            assert_eq!(
+                presenter
+                    .borrow()
+                    .position_cache()
+                    .get_position("ssh-manager-node:fixture-host:refresh")
+                    .unwrap(),
+                refresh
+            );
+            panel.update(&mut app, |panel, ctx| {
+                panel.set_connecting("fixture-host", true, ctx);
+            });
+            render(&mut app);
+            assert_eq!(
+                presenter
+                    .borrow()
+                    .position_cache()
+                    .get_position("ssh-manager-node:fixture-host:title")
+                    .unwrap(),
+                host_title,
+                "connecting feedback must not steal identity width"
+            );
             panel.update(&mut app, |panel, ctx| {
                 panel.complete_session_fetch(
                     "fixture-host",
@@ -411,6 +498,117 @@ fn session_rows_constrain_long_titles_and_keep_metadata_and_actions_inside_the_s
             for key in &keys {
                 assert!(position(key, "title").width() > 100.0);
             }
+            let mux_events = Rc::new(RefCell::new(0usize));
+            app.update(|ctx| {
+                let events = mux_events.clone();
+                ctx.subscribe_to_view(&panel, move |_, event, _| {
+                    if matches!(
+                        event,
+                        SshManagerPanelEvent::PersistenceError(_)
+                            | SshManagerPanelEvent::OpenMultiplexerSession { .. }
+                    ) {
+                        *events.borrow_mut() += 1;
+                    }
+                });
+            });
+            for (key, part, is_mux) in [
+                (&keys[0], "open", false),
+                (&mux_key, "open", true),
+                (&mux_key, "title", true),
+            ] {
+                let click = position(key, part).center();
+                let before = *mux_events.borrow();
+                app.update(|ctx| {
+                    ctx.simulate_window_event(
+                        Event::LeftMouseDown {
+                            position: click,
+                            modifiers: Default::default(),
+                            click_count: 1,
+                            is_first_mouse: false,
+                        },
+                        window_id,
+                        presenter.clone(),
+                    );
+                });
+                let inventory = panel.update(&mut app, |panel, ctx| {
+                    let inventory = panel.host_session_inventories["fixture-host"].clone();
+                    let generation = panel.begin_session_fetch("fixture-host").unwrap();
+                    panel.complete_session_fetch(
+                        "fixture-host",
+                        generation,
+                        Ok(inventory.clone()),
+                        ctx,
+                    );
+                    inventory
+                });
+                render(&mut app);
+                app.update(|ctx| {
+                    ctx.simulate_window_event(
+                        Event::LeftMouseUp {
+                            position: click,
+                            modifiers: Default::default(),
+                        },
+                        window_id,
+                        presenter.clone(),
+                    );
+                });
+                if is_mux {
+                    assert_eq!(
+                        *mux_events.borrow(),
+                        before + 1,
+                        "refresh must preserve the mux title/icon click exactly once"
+                    );
+                } else {
+                    panel.read(&app, |panel, _| {
+                        assert!(
+                            panel.sessions_error.contains_key("fixture-host"),
+                            "refresh must preserve the daemon open click"
+                        )
+                    });
+                }
+                panel.update(&mut app, |panel, ctx| {
+                    let generation = panel.begin_session_fetch("fixture-host").unwrap();
+                    panel.complete_session_fetch("fixture-host", generation, Ok(inventory), ctx);
+                });
+                render(&mut app);
+            }
+            for event in [
+                Event::LeftMouseDown {
+                    position: disclosure.center(),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                Event::LeftMouseUp {
+                    position: disclosure.center(),
+                    modifiers: Default::default(),
+                },
+            ] {
+                app.update(|ctx| {
+                    ctx.simulate_window_event(event, window_id, presenter.clone());
+                });
+            }
+            render(&mut app);
+            panel.read(&app, |panel, _| {
+                assert!(!panel.sessions_expanded.contains("fixture-host"));
+                assert!(
+                    panel.selected_id.is_none(),
+                    "disclosure must not bubble to host selection"
+                );
+            });
+            assert!(presenter
+                .borrow()
+                .position_cache()
+                .get_position(&format!("ssh-manager-session:{}:title", keys[0]))
+                .is_none());
+            assert_eq!(
+                presenter
+                    .borrow()
+                    .position_cache()
+                    .get_position("ssh-manager-node:fixture-host:disclosure")
+                    .unwrap(),
+                disclosure
+            );
         });
     }
 }
@@ -463,6 +661,240 @@ fn panel_content_can_scroll_when_ssh_list_is_taller_than_panel() {
         let scroll_start = scroll_state.scroll_start().as_f32();
         assert!(scroll_start > 0.0);
         assert!(scroll_start < 10_000.0);
+    });
+}
+
+#[test]
+fn right_click_moves_visible_focus_to_the_context_menu_target() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        app.add_singleton_model(FavoritesStore::new_for_test);
+        app.add_singleton_model(RemoteServerManager::new);
+        let (window_id, panel) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut panel = SshManagerPanel::new(ctx);
+            panel.set_nodes_for_test(
+                vec![
+                    server("host-a", None, "Host A", 0),
+                    server("host-b", None, "Host B", 1),
+                ],
+                ctx,
+            );
+            panel
+        });
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        let render = |app: &mut App| {
+            app.update(|ctx| {
+                presenter.borrow_mut().invalidate(
+                    WindowInvalidation {
+                        updated: ctx.view_ids_for_window(window_id).into_iter().collect(),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                presenter
+                    .borrow_mut()
+                    .build_scene(vec2f(320.0, 500.0), 1.0, None, ctx)
+            })
+        };
+        let position = |id: &str| {
+            presenter
+                .borrow()
+                .position_cache()
+                .get_position(&format!("ssh-manager-node:{id}:title"))
+                .expect("the real host title must be laid out")
+                .center()
+        };
+        render(&mut app);
+        let host_a = position("host-a");
+        let host_b = position("host-b");
+        for event in [
+            Event::LeftMouseDown {
+                position: host_a,
+                modifiers: Default::default(),
+                click_count: 1,
+                is_first_mouse: false,
+            },
+            Event::LeftMouseUp {
+                position: host_a,
+                modifiers: Default::default(),
+            },
+        ] {
+            app.update(|ctx| {
+                ctx.simulate_window_event(event, window_id, presenter.clone());
+            });
+        }
+        let selection_background: ElementFill =
+            app.read(|ctx| internal_colors::fg_overlay_3(Appearance::as_ref(ctx).theme()).into());
+        let scene = render(&mut app);
+        assert!(
+            scene.layers().flat_map(|layer| &layer.rects).any(|rect| {
+                rect.bounds.contains_point(host_a) && rect.background == selection_background
+            }),
+            "left click must visibly focus host A before opening the other menu"
+        );
+        panel.read(&app, |panel, _| {
+            assert!(panel.keyboard_focused);
+            assert_eq!(panel.focused_row, Some(FocusedRow::Node("host-a".into())));
+        });
+        app.update(|ctx| {
+            ctx.simulate_window_event(
+                Event::RightMouseDown {
+                    position: host_b,
+                    cmd: false,
+                    shift: false,
+                    click_count: 1,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        });
+        let scene = render(&mut app);
+        panel.read(&app, |panel, _| {
+            assert!(panel.keyboard_focused);
+            assert_eq!(panel.selected_id.as_deref(), Some("host-b"));
+            assert_eq!(panel.focused_row, Some(FocusedRow::Node("host-b".into())));
+            assert_eq!(panel.context_menu_target.as_deref(), Some("host-b"));
+            assert!(panel.context_menu_position.is_some());
+        });
+        assert!(
+            scene.layers().flat_map(|layer| &layer.rects).any(|rect| {
+                rect.bounds.contains_point(host_b) && rect.background == selection_background
+            }),
+            "the highlighted host must be the host affected by context-menu actions"
+        );
+        assert!(
+            !scene.layers().flat_map(|layer| &layer.rects).any(|rect| {
+                rect.bounds.contains_point(host_a) && rect.background == selection_background
+            }),
+            "the previous host must not retain the selection highlight"
+        );
+        panel.update(&mut app, |panel, ctx| {
+            panel.on_open_context_menu(None, vec2f(0.0, 400.0), ctx);
+            assert!(panel.selected_id.is_none());
+            assert!(panel.focused_row.is_none());
+            assert!(panel.context_menu_target.is_none());
+        });
+    });
+}
+
+#[test]
+fn keyboard_navigation_reaches_both_session_kinds_and_enter_uses_the_exact_session() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        app.add_singleton_model(FavoritesStore::new_for_test);
+        app.add_singleton_model(RemoteServerManager::new);
+        app.update(init);
+        let daemon = SessionInfo {
+            session_id: "keyboard-pty".into(),
+            generation: 7,
+            ..Default::default()
+        };
+        let mux = MultiplexerSessionInfo {
+            name: "keyboard-mux".into(),
+            target: "exact-mux".into(),
+            kind: MultiplexerKind::Tmux as i32,
+            ..Default::default()
+        };
+        let daemon_key = session_row_key("keyboard-host", &daemon, None);
+        let mux_key = multiplexer_row_key("keyboard-host", &mux);
+        let (window_id, panel) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut panel = SshManagerPanel::new(ctx);
+            panel.set_nodes_for_test(vec![server("keyboard-host", None, "Keyboard host", 0)], ctx);
+            panel.resilient_hosts.insert("keyboard-host".into());
+            panel.sessions_expanded.insert("keyboard-host".into());
+            let generation = panel.begin_session_fetch("keyboard-host").unwrap();
+            panel.complete_session_fetch(
+                "keyboard-host",
+                generation,
+                Ok(
+                    crate::remote_server::session_inventory::HostSessionInventory {
+                        daemon: SessionList::default(),
+                        sessions: vec![
+                            crate::remote_server::session_inventory::RoutedDaemonSession {
+                                session: daemon,
+                                route: None,
+                            },
+                        ],
+                        multiplexers: remote_server::proto::MultiplexerSessionList {
+                            sessions: vec![mux],
+                            ..Default::default()
+                        },
+                    },
+                ),
+                ctx,
+            );
+            ctx.focus_self();
+            panel
+        });
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        let render = |app: &mut App| {
+            app.update(|ctx| {
+                presenter.borrow_mut().invalidate(
+                    WindowInvalidation {
+                        updated: ctx.view_ids_for_window(window_id).into_iter().collect(),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                presenter
+                    .borrow_mut()
+                    .build_scene(vec2f(250.0, 300.0), 1.0, None, ctx);
+            })
+        };
+        let key = |app: &mut App, key: &str| {
+            app.update(|ctx| {
+                ctx.simulate_window_event(
+                    Event::KeyDown {
+                        keystroke: warpui::keymap::Keystroke::parse(key).unwrap(),
+                        chars: key.to_string(),
+                        details: warpui::event::KeyEventDetails::default(),
+                        is_composing: false,
+                    },
+                    window_id,
+                    presenter.clone(),
+                )
+            })
+        };
+        render(&mut app);
+        assert!(key(&mut app, "down"));
+        render(&mut app);
+        panel.read(&app, |panel, _| {
+            assert_eq!(
+                panel.focused_row,
+                Some(FocusedRow::Session(daemon_key.clone()))
+            )
+        });
+        assert!(key(&mut app, "down"));
+        render(&mut app);
+        panel.read(&app, |panel, _| {
+            assert_eq!(panel.focused_row, Some(FocusedRow::Session(mux_key.clone())));
+            let rows = panel.navigation_rows();
+            assert!(matches!(&rows[2].1, SshManagerPanelAction::OpenMultiplexerSession { target, .. } if target == "exact-mux"));
+        });
+        assert!(key(&mut app, "up"));
+        render(&mut app);
+        assert!(key(&mut app, "enter"));
+        panel.read(&app, |panel, _| {
+            // This fixture intentionally has no saved database host. Reaching the
+            // daemon's missing-host error proves Enter dispatched adoption, not Connect.
+            assert!(panel.sessions_error.contains_key("keyboard-host"));
+            assert_eq!(
+                panel.focused_row,
+                Some(FocusedRow::Node("keyboard-host".into()))
+            );
+            assert_eq!(panel.focused_node_id().as_deref(), Some("keyboard-host"));
+            assert_eq!(
+                panel.navigation_rows().len(),
+                1,
+                "stale/error sessions must not remain keyboard targets"
+            );
+        });
     });
 }
 
@@ -1060,9 +1492,9 @@ fn daemon_session_rows_keep_the_same_mouse_state_across_renders() {
     ];
     let key = session_row_key("devhost", &inventory[0].session, None);
 
-    sync_session_row_states(&mut states, "devhost", &inventory);
+    sync_session_row_states(&mut states, "devhost", &inventory, &[]);
     let original = states[&key].clone();
-    sync_session_row_states(&mut states, "devhost", &inventory);
+    sync_session_row_states(&mut states, "devhost", &inventory, &[]);
 
     assert!(Arc::ptr_eq(&original, &states[&key]));
 
@@ -1076,7 +1508,7 @@ fn daemon_session_rows_keep_the_same_mouse_state_across_renders() {
         },
     ];
     let replacement_key = session_row_key("devhost", &replacement[0].session, None);
-    sync_session_row_states(&mut states, "devhost", &replacement);
+    sync_session_row_states(&mut states, "devhost", &replacement, &[]);
     assert!(!states.contains_key(&key));
     assert!(states.contains_key(&replacement_key));
 }
@@ -1139,6 +1571,58 @@ fn with_session_panel(
             panel.set_nodes_for_test(vec![server("devhost", None, "Development", 0)], ctx);
             test(panel, ctx);
         });
+    });
+}
+
+#[test]
+fn inventory_refresh_preserves_control_views_and_mouse_state_but_uses_fresh_mux_metadata() {
+    with_session_panel(|panel, ctx| {
+        panel.sessions_expanded.insert("devhost".into());
+        let mux = MultiplexerSessionInfo {
+            target: "same-screen".into(),
+            kind: MultiplexerKind::ByobuScreen as i32,
+            attached_clients: 0,
+            ..Default::default()
+        };
+        let key = multiplexer_row_key("devhost", &mux);
+        let mut inventory = crate::remote_server::session_inventory::HostSessionInventory {
+            multiplexers: remote_server::proto::MultiplexerSessionList {
+                sessions: vec![mux],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let generation = panel.begin_session_fetch("devhost").unwrap();
+        panel.complete_session_fetch("devhost", generation, Ok(inventory.clone()), ctx);
+        let mouse = panel.session_row_states[&key].clone();
+        let views: std::collections::HashSet<_> = ctx
+            .view_ids_for_window(ctx.window_id())
+            .into_iter()
+            .collect();
+        inventory.multiplexers.sessions[0].attached_clients = 2;
+        let generation = panel.begin_session_fetch("devhost").unwrap();
+        panel.complete_session_fetch("devhost", generation, Ok(inventory), ctx);
+        assert!(Arc::ptr_eq(&mouse, &panel.session_row_states[&key]));
+        assert_eq!(
+            views,
+            ctx.view_ids_for_window(ctx.window_id())
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
+        );
+        assert!(matches!(
+            panel.session_row_action(&key),
+            Some(SshManagerPanelAction::OpenMultiplexerSession {
+                attached_clients: 2,
+                ..
+            })
+        ));
+        panel.focused_row = Some(FocusedRow::Session(key));
+        let generation = panel.begin_session_fetch("devhost").unwrap();
+        panel.complete_session_fetch("devhost", generation, Err("timeout".into()), ctx);
+        assert_eq!(panel.focused_row, Some(FocusedRow::Node("devhost".into())));
+        assert_eq!(panel.focused_node_id().as_deref(), Some("devhost"));
+        panel.handle_action(&SshManagerPanelAction::RefreshFocused, ctx);
+        assert!(panel.sessions_expanded.contains("devhost"));
     });
 }
 

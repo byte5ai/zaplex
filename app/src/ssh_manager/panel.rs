@@ -24,17 +24,18 @@ use warpui::elements::{
     ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
     Draggable, DraggableState, DropTarget, DropTargetData, Element, Empty, Fill as ElementFill,
     Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
-    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth,
-    Shrinkable, Stack, Text,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollTarget,
+    ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Text,
 };
+use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
 use warpui::r#async::FutureExt;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
 use warpui::{
-    AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    AppContext, BlurContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView,
+    View, ViewContext, ViewHandle,
 };
 
 use warp_ssh_manager::{
@@ -75,6 +76,7 @@ const ITEM_PADDING_HORIZONTAL: f32 = 8.0;
 const ITEM_ICON_TEXT_SPACING: f32 = 8.0;
 const ITEM_MARGIN_BOTTOM: f32 = 2.0;
 const ITEM_ICON_SIZE: f32 = 14.0;
+const ROW_ACTION_SIZE: f32 = 20.0;
 const FOLDER_DEPTH_INDENT: f32 = 16.0;
 const PANEL_HORIZONTAL_PADDING: f32 = 8.0;
 
@@ -123,14 +125,23 @@ fn compose_connection_row_targets(
     primary_target: Box<dyn Element>,
     favorite_action: Option<Box<dyn Element>>,
     connection_action: Option<Box<dyn Element>>,
+    refresh_action: Option<Box<dyn Element>>,
+    disclosure: Option<Box<dyn Element>>,
 ) -> Box<dyn Element> {
-    if favorite_action.is_none() && connection_action.is_none() {
+    if favorite_action.is_none()
+        && connection_action.is_none()
+        && refresh_action.is_none()
+        && disclosure.is_none()
+    {
         return primary_target;
     }
 
     let mut actions = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_size(MainAxisSize::Min);
+    if let Some(action) = refresh_action {
+        actions = actions.with_child(action);
+    }
     if let Some(action) = favorite_action {
         actions = actions.with_child(action);
     }
@@ -138,16 +149,36 @@ fn compose_connection_row_targets(
         actions = actions.with_child(action);
     }
 
-    Flex::row()
+    let mut row = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_child(Shrinkable::new(1.0, primary_target).finish())
+        .with_main_axis_size(MainAxisSize::Max);
+    if let Some(disclosure) = disclosure {
+        row = row.with_child(disclosure);
+    }
+    row.with_child(Shrinkable::new(1.0, primary_target).finish())
         .with_child(
             Container::new(actions.finish())
                 .with_padding_right(ITEM_PADDING_HORIZONTAL)
                 .finish(),
         )
         .finish()
+}
+
+fn compose_session_row_targets(
+    primary: Box<dyn Element>,
+    open: Option<Box<dyn Element>>,
+) -> Box<dyn Element> {
+    // ui-contract: compact-row-actions:start
+    let mut row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(ITEM_ICON_TEXT_SPACING)
+        .with_child(Shrinkable::new(1.0, primary).finish());
+    if let Some(open) = open {
+        row = row.with_child(open);
+    }
+    row.finish()
+    // ui-contract: compact-row-actions:end
 }
 
 fn session_row_key(
@@ -168,11 +199,17 @@ fn sync_session_row_states(
     states: &mut HashMap<String, MouseStateHandle>,
     node_id: &str,
     sessions: &[crate::remote_server::session_inventory::RoutedDaemonSession],
+    multiplexers: &[MultiplexerSessionInfo],
 ) {
     let prefix = format!("{node_id}:");
     let active: std::collections::HashSet<String> = sessions
         .iter()
         .map(|session| session_row_key(node_id, &session.session, session.route.as_ref()))
+        .chain(
+            multiplexers
+                .iter()
+                .map(|session| multiplexer_row_key(node_id, session)),
+        )
         .collect();
     states.retain(|key, _| !key.starts_with(&prefix) || active.contains(key));
     for key in active {
@@ -271,8 +308,68 @@ async fn tailscale_status_output(
         .map_err(|error| format!("Could not read Tailscale status: {error}"))
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum FocusedRow {
+    Node(String),
+    Session(String),
+}
+
+impl FocusedRow {
+    fn position_id(&self) -> String {
+        match self {
+            Self::Node(id) => format!("ssh-manager-node:{id}"),
+            Self::Session(key) => format!("ssh-manager-session:{key}:row"),
+        }
+    }
+}
+
+pub fn init(app: &mut AppContext) {
+    use warpui::keymap::macros::*;
+
+    app.register_fixed_bindings(vec![
+        FixedBinding::new(
+            "up",
+            SshManagerPanelAction::FocusPrevious,
+            id!("SshManagerPanelNavigation"),
+        ),
+        FixedBinding::new(
+            "down",
+            SshManagerPanelAction::FocusNext,
+            id!("SshManagerPanelNavigation"),
+        ),
+        FixedBinding::new(
+            "enter",
+            SshManagerPanelAction::ActivateFocused,
+            id!("SshManagerPanelNavigation"),
+        ),
+        FixedBinding::new(
+            "left",
+            SshManagerPanelAction::CollapseFocused,
+            id!("SshManagerPanelNavigation"),
+        ),
+        FixedBinding::new(
+            "right",
+            SshManagerPanelAction::ExpandFocused,
+            id!("SshManagerPanelNavigation"),
+        ),
+        FixedBinding::new(
+            "cmdorctrl-r",
+            SshManagerPanelAction::RefreshFocused,
+            id!("SshManagerPanelNavigation"),
+        ),
+    ]);
+}
+
 #[derive(Clone, Debug)]
 pub enum SshManagerPanelAction {
+    /// Resolve a stable row identity against the latest visible inventory.
+    OpenSessionRow(String),
+    FocusPrevious,
+    FocusNext,
+    ActivateFocused,
+    CollapseFocused,
+    ExpandFocused,
+    RefreshFocused,
     /// Toolbar button: always creates a folder at the root level.
     AddRootFolder,
     /// Context menu: the parent is determined by context.
@@ -453,6 +550,8 @@ pub struct SshManagerPanel {
     nodes: Vec<SshNode>,
     depths: HashMap<String, usize>,
     selected_id: Option<String>,
+    focused_row: Option<FocusedRow>,
+    keyboard_focused: bool,
 
     add_folder_btn: MouseStateHandle,
     add_server_btn: MouseStateHandle,
@@ -468,6 +567,11 @@ pub struct SshManagerPanel {
     connected_host_ids: HashMap<String, Vec<String>>,
     connect_actions: HashMap<String, CompactRowAction>,
     disconnect_actions: HashMap<String, CompactRowAction>,
+    connecting_actions: HashMap<String, CompactRowAction>,
+    expand_actions: HashMap<String, CompactRowAction>,
+    collapse_actions: HashMap<String, CompactRowAction>,
+    refresh_actions: HashMap<String, CompactRowAction>,
+    refreshing_actions: HashMap<String, CompactRowAction>,
     /// Per-row DraggableState — preserves drag progress across renders, so it must be cached in the view state.
     row_drag_states: HashMap<String, DraggableState>,
 
@@ -538,8 +642,8 @@ pub struct SshManagerPanel {
     /// Hover/click state per session row, scoped by host, daemon runtime, PTY
     /// identity, and generation.
     session_row_states: HashMap<String, MouseStateHandle>,
-    /// Fixed-width icon actions for existing tmux/byobu sessions.
-    multiplexer_open_actions: HashMap<String, CompactRowAction>,
+    /// Fixed-width open actions for both daemon and tmux/byobu sessions.
+    session_open_actions: HashMap<String, CompactRowAction>,
     /// Shared scroll position for the add-host block and saved host tree.
     content_scroll_state: ClippedScrollStateHandle,
     tailscale_discovery_in_flight: bool,
@@ -589,6 +693,8 @@ impl SshManagerPanel {
             nodes: Vec::new(),
             depths: HashMap::new(),
             selected_id: None,
+            focused_row: None,
+            keyboard_focused: false,
             add_folder_btn: MouseStateHandle::default(),
             add_server_btn: MouseStateHandle::default(),
             toggle_all_btn: MouseStateHandle::default(),
@@ -599,6 +705,11 @@ impl SshManagerPanel {
             connected_host_ids: HashMap::new(),
             connect_actions: HashMap::new(),
             disconnect_actions: HashMap::new(),
+            connecting_actions: HashMap::new(),
+            expand_actions: HashMap::new(),
+            collapse_actions: HashMap::new(),
+            refresh_actions: HashMap::new(),
+            refreshing_actions: HashMap::new(),
             row_drag_states: HashMap::new(),
             context_menu_position: None,
             context_menu_target: None,
@@ -630,7 +741,7 @@ impl SshManagerPanel {
             resilient_hosts: std::collections::HashSet::new(),
             sessions_error: HashMap::new(),
             session_row_states: HashMap::new(),
-            multiplexer_open_actions: HashMap::new(),
+            session_open_actions: HashMap::new(),
             content_scroll_state: ClippedScrollStateHandle::default(),
             tailscale_discovery_in_flight: false,
             command_factory,
@@ -753,7 +864,51 @@ impl SshManagerPanel {
         self.connect_actions.retain(|id, _| server_ids.contains(id));
         self.disconnect_actions
             .retain(|id, _| server_ids.contains(id));
+        self.connecting_actions
+            .retain(|id, _| server_ids.contains(id));
+        self.expand_actions.retain(|id, _| server_ids.contains(id));
+        self.collapse_actions
+            .retain(|id, _| server_ids.contains(id));
+        self.refresh_actions.retain(|id, _| server_ids.contains(id));
+        self.refreshing_actions
+            .retain(|id, _| server_ids.contains(id));
         for node_id in server_ids {
+            for (actions, icon, tooltip, action) in [
+                (
+                    &mut self.connecting_actions,
+                    crate::ui_components::icons::Icon::Loading,
+                    crate::t!("workspace-left-panel-ssh-manager-connecting"),
+                    SshManagerPanelAction::ToggleConnection(node_id.clone()),
+                ),
+                (
+                    &mut self.expand_actions,
+                    crate::ui_components::icons::Icon::ChevronRight,
+                    crate::t!("workspace-left-panel-ssh-manager-sessions-expand"),
+                    SshManagerPanelAction::ToggleSessions(node_id.clone()),
+                ),
+                (
+                    &mut self.collapse_actions,
+                    crate::ui_components::icons::Icon::ChevronDown,
+                    crate::t!("workspace-left-panel-ssh-manager-sessions-collapse"),
+                    SshManagerPanelAction::ToggleSessions(node_id.clone()),
+                ),
+                (
+                    &mut self.refresh_actions,
+                    crate::ui_components::icons::Icon::Refresh,
+                    crate::t!("workspace-left-panel-ssh-manager-menu-refresh-sessions"),
+                    SshManagerPanelAction::RefreshSessions(node_id.clone()),
+                ),
+                (
+                    &mut self.refreshing_actions,
+                    crate::ui_components::icons::Icon::Loading,
+                    crate::t!("workspace-left-panel-ssh-manager-sessions-refreshing"),
+                    SshManagerPanelAction::RefreshSessions(node_id.clone()),
+                ),
+            ] {
+                actions
+                    .entry(node_id.clone())
+                    .or_insert_with(|| CompactRowAction::new(icon, tooltip, action, ctx));
+            }
             self.favorite_actions
                 .entry(node_id.clone())
                 .or_insert_with(|| {
@@ -815,7 +970,7 @@ impl SshManagerPanel {
                 .next()
                 .is_some_and(|node_id| active_ids.contains(node_id))
         });
-        self.multiplexer_open_actions.retain(|key, _| {
+        self.session_open_actions.retain(|key, _| {
             key.split(':')
                 .next()
                 .is_some_and(|node_id| active_ids.contains(node_id))
@@ -927,6 +1082,7 @@ impl SshManagerPanel {
             Ok(node) => {
                 let new_id = node.id.clone();
                 self.selected_id = Some(new_id.clone());
+                self.focused_row = Some(FocusedRow::Node(new_id.clone()));
                 self.refresh_tree(ctx);
                 // Rename right after creating — Drive convention.
                 self.enter_rename(new_id, true, ctx);
@@ -1015,6 +1171,7 @@ impl SshManagerPanel {
             Ok(node) => {
                 let new_id = node.id.clone();
                 self.selected_id = Some(new_id.clone());
+                self.focused_row = Some(FocusedRow::Node(new_id.clone()));
                 self.refresh_tree(ctx);
                 // Consistent with manual creation: open the central editor pane so the user can fill in the password / tweak fields.
                 ctx.emit(SshManagerPanelEvent::OpenServerEditor { node_id: new_id });
@@ -1061,6 +1218,7 @@ impl SshManagerPanel {
             Ok(node) => {
                 let new_id = node.id.clone();
                 self.selected_id = Some(new_id.clone());
+                self.focused_row = Some(FocusedRow::Node(new_id.clone()));
                 self.refresh_tree(ctx);
                 // After creating a server, open the central editor pane (user fills in fields) — the name is edited
                 // there together with the other fields, not inline in the tree.
@@ -1204,6 +1362,7 @@ impl SshManagerPanel {
             Ok(node) => {
                 let new_id = node.id.clone();
                 self.selected_id = Some(new_id.clone());
+                self.focused_row = Some(FocusedRow::Node(new_id.clone()));
                 self.refresh_tree(ctx);
                 ctx.emit(SshManagerPanelEvent::OpenServerEditor { node_id: new_id });
             }
@@ -1380,6 +1539,8 @@ impl SshManagerPanel {
     /// Toggle the inline running-sessions list for a server node; the first
     /// expand kicks off a connect-to-list fetch.
     fn on_toggle_sessions(&mut self, id: String, ctx: &mut ViewContext<Self>) {
+        self.focused_row = Some(FocusedRow::Node(id.clone()));
+        ctx.focus_self();
         self.session_disclosure_seen.insert(id.clone());
         if self.sessions_expanded.remove(&id) {
             ctx.notify();
@@ -1391,11 +1552,14 @@ impl SshManagerPanel {
     }
 
     fn invalidate_session_inventories(&mut self) {
+        if let Some(node_id) = self.focused_node_id() {
+            self.focused_row = Some(FocusedRow::Node(node_id));
+        }
         self.session_inventory_generation += 1;
         self.host_session_inventories.clear();
         self.sessions_error.clear();
         self.session_row_states.clear();
-        self.multiplexer_open_actions.clear();
+        self.session_open_actions.clear();
     }
 
     fn begin_session_fetch(&mut self, id: &str) -> Option<u64> {
@@ -1425,16 +1589,22 @@ impl SshManagerPanel {
             match result {
                 Ok(inventory) => {
                     self.sessions_error.remove(id);
-                    sync_session_row_states(&mut self.session_row_states, id, &inventory.sessions);
+                    sync_session_row_states(
+                        &mut self.session_row_states,
+                        id,
+                        &inventory.sessions,
+                        &inventory.multiplexers.sessions,
+                    );
                     self.host_session_inventories
                         .insert(id.to_string(), inventory);
-                    self.sync_multiplexer_open_actions(id, ctx);
+                    self.sync_session_open_actions(id, ctx);
                 }
                 Err(error) => {
                     self.sessions_error.insert(id.to_string(), error);
                 }
             }
         }
+        self.normalize_session_focus(id);
         ctx.notify();
         refresh_pending
     }
@@ -1457,9 +1627,10 @@ impl SshManagerPanel {
 
             if !server.session_resilience.is_enabled() {
                 self.sessions_error.insert(
-                    id,
+                    id.clone(),
                     crate::t!("workspace-left-panel-ssh-manager-sessions-not-persistent"),
                 );
+                self.normalize_session_focus(&id);
                 return;
             }
             // The daemon listing runs headless (BatchMode), which only works
@@ -1468,9 +1639,10 @@ impl SshManagerPanel {
             // normal connection path.
             if server.auth_type != AuthType::Key {
                 self.sessions_error.insert(
-                    id,
+                    id.clone(),
                     crate::t!("workspace-left-panel-ssh-manager-sessions-needs-key"),
                 );
+                self.normalize_session_focus(&id);
                 return;
             }
             let Some(generation) = self.begin_session_fetch(&id) else {
@@ -1520,14 +1692,14 @@ impl SshManagerPanel {
             }),
             Ok(None) => {
                 self.sessions_error.insert(
-                    node_id,
+                    node_id.clone(),
                     crate::t!("workspace-left-panel-ssh-manager-session-host-missing"),
                 );
                 ctx.notify();
             }
             Err(error) => {
                 self.sessions_error.insert(
-                    node_id,
+                    node_id.clone(),
                     crate::t!(
                         "workspace-left-panel-ssh-manager-session-open-error",
                         detail = error.to_string()
@@ -1536,35 +1708,163 @@ impl SshManagerPanel {
                 ctx.notify();
             }
         }
+        self.normalize_session_focus(&node_id);
     }
 
-    fn sync_multiplexer_open_actions(&mut self, node_id: &str, ctx: &mut ViewContext<Self>) {
-        let prefix = format!("{node_id}:mux:");
-        self.multiplexer_open_actions
-            .retain(|key, _| !key.starts_with(&prefix));
-        let sessions = self
-            .host_session_inventories
-            .get(node_id)
-            .map(|inventory| inventory.multiplexers.sessions.clone())
-            .unwrap_or_default();
-        for session in sessions {
-            let key = multiplexer_row_key(node_id, &session);
-            let action = SshManagerPanelAction::OpenMultiplexerSession {
-                node_id: node_id.to_string(),
-                kind: session.kind,
-                target: session.target,
-                attached_clients: session.attached_clients,
-            };
-            self.multiplexer_open_actions.insert(
-                key,
-                CompactRowAction::new(
-                    crate::ui_components::icons::Icon::Terminal,
-                    crate::t!("workspace-left-panel-ssh-manager-multiplexer-open"),
-                    action,
-                    ctx,
-                ),
-            );
+    fn sync_session_open_actions(&mut self, node_id: &str, ctx: &mut ViewContext<Self>) {
+        let prefix = format!("{node_id}:");
+        let keys: std::collections::HashSet<String> = self
+            .session_navigation_rows(node_id)
+            .into_iter()
+            .filter_map(|(row, _)| match row {
+                FocusedRow::Session(key) => Some(key),
+                FocusedRow::Node(_) => None,
+            })
+            .collect();
+        self.session_open_actions
+            .retain(|key, _| !key.starts_with(&prefix) || keys.contains(key));
+        for key in keys {
+            self.session_open_actions
+                .entry(key.clone())
+                .or_insert_with(|| {
+                    CompactRowAction::new(
+                        crate::ui_components::icons::Icon::Terminal,
+                        crate::t!("workspace-left-panel-ssh-manager-multiplexer-open"),
+                        SshManagerPanelAction::OpenSessionRow(key),
+                        ctx,
+                    )
+                });
         }
+    }
+
+    fn session_row_action(&self, key: &str) -> Option<SshManagerPanelAction> {
+        self.navigation_rows()
+            .into_iter()
+            .find_map(|(row, action)| {
+                (row == FocusedRow::Session(key.to_string())).then_some(action)
+            })
+    }
+
+    fn normalize_session_focus(&mut self, node_id: &str) {
+        let Some(FocusedRow::Session(key)) = self.focused_row.as_ref() else {
+            return;
+        };
+        if key.starts_with(&format!("{node_id}:")) && self.session_row_action(key).is_none() {
+            self.focused_row = Some(FocusedRow::Node(node_id.to_string()));
+        }
+    }
+
+    fn session_navigation_rows(&self, node_id: &str) -> Vec<(FocusedRow, SshManagerPanelAction)> {
+        if self.sessions_error.contains_key(node_id) {
+            return Vec::new();
+        }
+        let Some(inventory) = self.host_session_inventories.get(node_id) else {
+            return Vec::new();
+        };
+        let mut rows: Vec<_> = inventory
+            .sessions
+            .iter()
+            .map(|routed| {
+                let session = &routed.session;
+                (
+                    FocusedRow::Session(session_row_key(node_id, session, routed.route.as_ref())),
+                    SshManagerPanelAction::AdoptSession {
+                        node_id: node_id.to_string(),
+                        pty_session_id: session.session_id.clone(),
+                        pty_generation: session.generation,
+                        daemon_route: routed.route.clone(),
+                    },
+                )
+            })
+            .collect();
+        rows.extend(inventory.multiplexers.sessions.iter().map(|session| {
+            (
+                FocusedRow::Session(multiplexer_row_key(node_id, session)),
+                SshManagerPanelAction::OpenMultiplexerSession {
+                    node_id: node_id.to_string(),
+                    kind: session.kind,
+                    target: session.target.clone(),
+                    attached_clients: session.attached_clients,
+                },
+            )
+        }));
+        rows
+    }
+
+    fn navigation_rows(&self) -> Vec<(FocusedRow, SshManagerPanelAction)> {
+        let mut rows = Vec::new();
+        for node in self.nodes.iter().filter(|node| self.is_visible(node)) {
+            let action = match node.kind {
+                NodeKind::Folder => SshManagerPanelAction::Click(node.id.clone()),
+                NodeKind::Server => SshManagerPanelAction::DoubleClick(node.id.clone()),
+            };
+            rows.push((FocusedRow::Node(node.id.clone()), action));
+            if self.sessions_expanded.contains(&node.id) {
+                rows.extend(self.session_navigation_rows(&node.id));
+            }
+        }
+        rows
+    }
+
+    fn move_focus(&mut self, forward: bool, ctx: &mut ViewContext<Self>) {
+        let rows = self.navigation_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let current = rows
+            .iter()
+            .position(|(row, _)| Some(row) == self.focused_row.as_ref());
+        let index = match current {
+            Some(index) if forward => (index + 1).min(rows.len() - 1),
+            Some(index) => index.saturating_sub(1),
+            None => 0,
+        };
+        self.focused_row = Some(rows[index].0.clone());
+        if let FocusedRow::Node(id) = &rows[index].0 {
+            self.selected_id = Some(id.clone());
+        }
+        self.content_scroll_state.scroll_to_position(ScrollTarget {
+            position_id: rows[index].0.position_id(),
+            mode: ScrollToPositionMode::FullyIntoView,
+        });
+        ctx.focus_self();
+        ctx.notify();
+    }
+
+    fn focused_node_id(&self) -> Option<String> {
+        match self.focused_row.as_ref()? {
+            FocusedRow::Node(id) => Some(id.clone()),
+            FocusedRow::Session(key) => self
+                .nodes
+                .iter()
+                .find(|node| key.starts_with(&format!("{}:", node.id)))
+                .map(|node| node.id.clone()),
+        }
+    }
+
+    fn set_focused_expanded(&mut self, expanded: bool, ctx: &mut ViewContext<Self>) {
+        let Some(id) = self.focused_node_id() else {
+            return;
+        };
+        let Some(node) = self.nodes.iter().find(|node| node.id == id) else {
+            return;
+        };
+        match node.kind {
+            NodeKind::Folder if node.is_collapsed == expanded => {
+                self.on_toggle_node_collapsed(&id, ctx)
+            }
+            NodeKind::Server
+                if self.resilient_hosts.contains(&id)
+                    && self.sessions_expanded.contains(&id) != expanded =>
+            {
+                self.on_toggle_sessions(id.clone(), ctx)
+            }
+            NodeKind::Folder | NodeKind::Server => {}
+        }
+        if !expanded {
+            self.focused_row = Some(FocusedRow::Node(id));
+        }
+        ctx.notify();
     }
 
     fn on_open_multiplexer_session(
@@ -1708,6 +2008,8 @@ impl SshManagerPanel {
         // — the clear only applies to exit paths with no new selection (Enter/ESC/blur to empty space); a click
         // itself already provides a new selection context.
         self.selected_id = Some(id.clone());
+        self.focused_row = Some(FocusedRow::Node(id.clone()));
+        ctx.focus_self();
         // Navigating the tree dismisses the guided add block — it's only relevant
         // while the user is actively adding a host from the toolbar.
         self.adding_mode = false;
@@ -1727,6 +2029,9 @@ impl SshManagerPanel {
     }
 
     fn on_toggle_connection(&mut self, node_id: &str, ctx: &mut ViewContext<Self>) {
+        if self.connecting.contains(node_id) {
+            return;
+        }
         let Some(host_ids) = self.connected_host_ids.get(node_id).cloned() else {
             self.dispatch_connect_for(node_id, ctx);
             return;
@@ -1758,9 +2063,11 @@ impl SshManagerPanel {
         }
         if let Some(t) = target.as_ref() {
             self.selected_id = Some(t.clone());
+            self.focused_row = Some(FocusedRow::Node(t.clone()));
         } else {
             // Right-clicking empty space means operating at the root level; clear the old selection state.
             self.selected_id = None;
+            self.focused_row = None;
         }
         self.context_menu_target = target;
         self.context_menu_position = Some(position);
@@ -2628,6 +2935,62 @@ impl SshManagerPanel {
         .finish()
     }
 
+    fn render_session_row(
+        &self,
+        key: &str,
+        title: String,
+        metadata: Option<String>,
+        indent: f32,
+        appearance: &warp_core::ui::appearance::Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let focused =
+            self.keyboard_focused && self.focused_row == Some(FocusedRow::Session(key.to_string()));
+        let state = self
+            .session_row_states
+            .get(key)
+            .cloned()
+            .unwrap_or_default();
+        let details = session_row_details(title, metadata, key, appearance);
+        let row_key = key.to_string();
+        let primary = Hoverable::new(state, move |mouse| {
+            let mut row = Container::new(details)
+                .with_padding_top(ITEM_PADDING_VERTICAL)
+                .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+            if mouse.is_hovered() || focused {
+                row = row.with_background(internal_colors::fg_overlay_3(theme));
+            }
+            row.finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(SshManagerPanelAction::OpenSessionRow(row_key.clone()))
+        })
+        .finish();
+        let open = self.session_open_actions.get(key).map(|action| {
+            SavePosition::new(
+                Container::new(action.render())
+                    .with_horizontal_padding(1.0)
+                    .finish(),
+                &format!("ssh-manager-session:{key}:open"),
+            )
+            .for_single_frame()
+            .finish()
+        });
+        let row = compose_session_row_targets(primary, open);
+        SavePosition::new(
+            Container::new(row)
+                .with_padding_left(indent)
+                .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                .with_margin_bottom(ITEM_MARGIN_BOTTOM)
+                .finish(),
+            &FocusedRow::Session(key.to_string()).position_id(),
+        )
+        .for_single_frame()
+        .finish()
+    }
+
     /// Renders one host's native daemon sessions followed by its separately
     /// labelled existing tmux/byobu sessions. Host RAM is derived solely from
     /// daemon-ring bytes and the daemon-reported cap.
@@ -2639,12 +3002,12 @@ impl SshManagerPanel {
         let theme = appearance.theme();
         let muted: pathfinder_color::ColorU = theme.sub_text_color(theme.background()).into();
         let depth = self.depths.get(&node.id).copied().unwrap_or(0);
-        // Server names follow one empty chevron slot, without a leading icon.
+        // Server names follow one fixed disclosure slot, without a leading icon.
         // Section labels align with the host; session content is one level in.
         let section_indent = ITEM_PADDING_HORIZONTAL
             + depth as f32 * FOLDER_DEPTH_INDENT
-            + ITEM_ICON_SIZE
-            + 2.0 * ITEM_ICON_TEXT_SPACING;
+            + ROW_ACTION_SIZE
+            + ITEM_PADDING_HORIZONTAL;
         let session_indent = section_indent + FOLDER_DEPTH_INDENT;
 
         let message = |text: String, color: pathfinder_color::ColorU| -> Box<dyn Element> {
@@ -2666,13 +3029,9 @@ impl SshManagerPanel {
             theme.main_text_color(theme.background()).into(),
         )];
         let host_inventory = self.host_session_inventories.get(&node.id);
-        if self.sessions_loading.contains_key(&node.id) {
+        if self.sessions_loading.contains_key(&node.id) && host_inventory.is_none() {
             rows.push(message(
-                if host_inventory.is_some() {
-                    crate::t!("workspace-left-panel-ssh-manager-sessions-refreshing")
-                } else {
-                    crate::t!("workspace-left-panel-ssh-manager-sessions-loading")
-                },
+                crate::t!("workspace-left-panel-ssh-manager-sessions-loading"),
                 muted,
             ));
             if host_inventory.is_none() && !self.sessions_error.contains_key(&node.id) {
@@ -2720,57 +3079,16 @@ impl SshManagerPanel {
             for routed_session in sessions {
                 let session = &routed_session.session;
                 let key = session_row_key(&node.id, session, routed_session.route.as_ref());
-                let state = self
-                    .session_row_states
-                    .get(&key)
-                    .cloned()
-                    .unwrap_or_default();
-                let node_id = node.id.clone();
-                let pty_session_id = session.session_id.clone();
-                let pty_generation = session.generation;
-                let daemon_route = routed_session.route.clone();
-                let title = daemon_session_title(session);
-                // RAM belongs below the identity so it cannot consume the
-                // title's entire slot at the minimum sidebar width.
                 let metadata = format_ring_bytes(session.ring_bytes).map(|used| {
                     crate::t!("workspace-left-panel-ssh-manager-session-ram", used = used)
                 });
-                let row = Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_child(
-                        Shrinkable::new(
-                            1.0,
-                            session_row_details(title, metadata, &key, appearance),
-                        )
-                        .finish(),
-                    )
-                    .finish();
-                rows.push(
-                    Hoverable::new(state, move |mouse| {
-                        let mut c = Container::new(row)
-                            .with_padding_top(ITEM_PADDING_VERTICAL)
-                            .with_padding_bottom(ITEM_PADDING_VERTICAL)
-                            .with_padding_left(session_indent)
-                            .with_padding_right(ITEM_PADDING_HORIZONTAL)
-                            .with_margin_bottom(ITEM_MARGIN_BOTTOM)
-                            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
-                        if mouse.is_hovered() {
-                            c = c.with_background(internal_colors::fg_overlay_3(theme));
-                        }
-                        c.finish()
-                    })
-                    .with_cursor(Cursor::PointingHand)
-                    .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(SshManagerPanelAction::AdoptSession {
-                            node_id: node_id.clone(),
-                            pty_session_id: pty_session_id.clone(),
-                            pty_generation,
-                            daemon_route: daemon_route.clone(),
-                        });
-                    })
-                    .finish(),
-                );
+                rows.push(self.render_session_row(
+                    &key,
+                    daemon_session_title(session),
+                    metadata,
+                    session_indent,
+                    appearance,
+                ));
             }
         } else {
             rows.push(message(
@@ -2811,36 +3129,13 @@ impl SshManagerPanel {
                         windows = session.windows,
                         clients = session.attached_clients
                     );
-                    let details = session_row_details(title, Some(metadata), &key, appearance);
-                    // ui-contract: compact-row-actions:start
-                    let mut row = Flex::row()
-                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                        .with_spacing(ITEM_ICON_TEXT_SPACING)
-                        .with_main_axis_size(MainAxisSize::Max)
-                        .with_child(Shrinkable::new(1.0, details).finish());
-                    debug_assert!(self.multiplexer_open_actions.contains_key(&key));
-                    if let Some(action) = self.multiplexer_open_actions.get(&key) {
-                        row = row.with_child(
-                            SavePosition::new(
-                                Container::new(action.render())
-                                    .with_horizontal_padding(1.0)
-                                    .finish(),
-                                &format!("ssh-manager-session:{key}:open"),
-                            )
-                            .for_single_frame()
-                            .finish(),
-                        );
-                    }
-                    // ui-contract: compact-row-actions:end
-                    rows.push(
-                        Container::new(row.finish())
-                            .with_padding_top(ITEM_PADDING_VERTICAL)
-                            .with_padding_bottom(ITEM_PADDING_VERTICAL)
-                            .with_padding_left(session_indent)
-                            .with_padding_right(ITEM_PADDING_HORIZONTAL)
-                            .with_margin_bottom(ITEM_MARGIN_BOTTOM)
-                            .finish(),
-                    );
+                    rows.push(self.render_session_row(
+                        &key,
+                        title,
+                        Some(metadata),
+                        session_indent,
+                        appearance,
+                    ));
                 }
             }
         }
@@ -2916,7 +3211,11 @@ impl SshManagerPanel {
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let depth = self.depths.get(&node.id).copied().unwrap_or(0);
-        let is_selected = self.selected_id.as_deref() == Some(node.id.as_str());
+        let is_selected = if self.keyboard_focused {
+            self.focused_row == Some(FocusedRow::Node(node.id.clone()))
+        } else {
+            self.selected_id.as_deref() == Some(node.id.as_str())
+        };
         let is_renaming = self
             .rename_state
             .as_ref()
@@ -2931,8 +3230,8 @@ impl SshManagerPanel {
                 .finish()
         });
 
-        // Folder rows get a leading chevron (▼ expanded / ▶ collapsed); Server rows use equal-width blank padding
-        // so all rows' icons line up.
+        // Folder chevrons belong to their primary target. Server disclosures
+        // are separate compact actions so they never trigger the host click.
         let chevron_el: Box<dyn Element> = match node.kind {
             NodeKind::Folder => {
                 let chevron_icon = if node.is_collapsed {
@@ -2987,19 +3286,29 @@ impl SshManagerPanel {
                 appearance.ui_font_subheading(),
             )
             .with_color(theme.main_text_color(theme.background()).into())
+            .with_clip(ClipConfig::ellipsis())
             .finish()
         };
 
+        let label_or_editor = SavePosition::new(
+            label_or_editor,
+            &format!("ssh-manager-node:{}:title", node.id),
+        )
+        .for_single_frame()
+        .finish();
         // Use MainAxisSize::Max so the tree node row fills the panel width, eliminating the gap on the right.
         let mut row_flex = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(ITEM_ICON_TEXT_SPACING)
-            .with_child(
-                ConstrainedBox::new(Empty::new().finish())
-                    .with_width(depth as f32 * FOLDER_DEPTH_INDENT)
-                    .finish(),
-            )
-            .with_child(chevron_el);
+            .with_spacing(ITEM_ICON_TEXT_SPACING);
+        if node.kind == NodeKind::Folder {
+            row_flex = row_flex
+                .with_child(
+                    ConstrainedBox::new(Empty::new().finish())
+                        .with_width(depth as f32 * FOLDER_DEPTH_INDENT)
+                        .finish(),
+                )
+                .with_child(chevron_el);
+        }
         if let Some(icon_el) = icon_el {
             row_flex = row_flex.with_child(icon_el);
         }
@@ -3020,27 +3329,11 @@ impl SshManagerPanel {
                 .finish(),
             );
         }
-        // Instant connect feedback: the daemon preflight runs a few seconds
-        // before any tab appears; show it on the row instead of feeling dead.
-        if self.connecting.contains(&node.id) {
-            row_flex = row_flex.with_child(
-                Text::new_inline(
-                    crate::t!("workspace-left-panel-ssh-manager-connecting"),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_subheading(),
-                )
-                .with_color(theme.sub_text_color(theme.background()).into_solid())
-                .finish(),
-            );
-        }
         let row_capabilities = connection_row_capabilities(
             node.kind,
             is_renaming,
             self.connected_host_ids.contains_key(&node.id),
         );
-        if row_capabilities.favorite || row_capabilities.connect || row_capabilities.disconnect {
-            row_flex = row_flex.with_child(Shrinkable::new(1.0, Empty::new().finish()).finish());
-        }
         let favorite_action: Option<Box<dyn Element>> = if row_capabilities.favorite {
             let action = if self.favorite_host_ids.contains(&node.id) {
                 self.unfavorite_actions.get(&node.id)
@@ -3052,17 +3345,22 @@ impl SshManagerPanel {
         } else {
             None
         };
-        let connection_action: Option<Box<dyn Element>> = if row_capabilities.connect {
-            let action = self.connect_actions.get(&node.id);
-            debug_assert!(action.is_some());
-            action.map(CompactRowAction::render)
-        } else if row_capabilities.disconnect {
-            let action = self.disconnect_actions.get(&node.id);
-            debug_assert!(action.is_some());
-            action.map(CompactRowAction::render)
-        } else {
-            None
-        };
+        let connection_action: Option<Box<dyn Element>> =
+            if row_capabilities.connect && self.connecting.contains(&node.id) {
+                self.connecting_actions
+                    .get(&node.id)
+                    .map(CompactRowAction::render)
+            } else if row_capabilities.connect {
+                let action = self.connect_actions.get(&node.id);
+                debug_assert!(action.is_some());
+                action.map(CompactRowAction::render)
+            } else if row_capabilities.disconnect {
+                let action = self.disconnect_actions.get(&node.id);
+                debug_assert!(action.is_some());
+                action.map(CompactRowAction::render)
+            } else {
+                None
+            };
         let row = row_flex.with_main_axis_size(MainAxisSize::Max).finish();
 
         let state = self.row_states.get(&node.id).cloned().unwrap_or_default();
@@ -3078,7 +3376,13 @@ impl SshManagerPanel {
             return Container::new(row)
                 .with_padding_top(ITEM_PADDING_VERTICAL)
                 .with_padding_bottom(ITEM_PADDING_VERTICAL)
-                .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                .with_padding_left(if node.kind == NodeKind::Server {
+                    2.0 * ITEM_PADDING_HORIZONTAL
+                        + ROW_ACTION_SIZE
+                        + depth as f32 * FOLDER_DEPTH_INDENT
+                } else {
+                    ITEM_PADDING_HORIZONTAL
+                })
                 .with_padding_right(ITEM_PADDING_HORIZONTAL)
                 .finish();
         }
@@ -3121,8 +3425,65 @@ impl SshManagerPanel {
 
         // Keep favorite and connection controls outside the primary click
         // target: either action must remain independent from row selection.
-        let interactive_row =
-            compose_connection_row_targets(hoverable, favorite_action, connection_action);
+        let persistent = self.resilient_hosts.contains(&node.id);
+        let refresh_action = if persistent {
+            let action = if self.sessions_loading.contains_key(&node.id) {
+                self.refreshing_actions.get(&node.id)
+            } else {
+                self.refresh_actions.get(&node.id)
+            };
+            action.map(|action| {
+                SavePosition::new(
+                    action.render(),
+                    &format!("ssh-manager-node:{}:refresh", node.id),
+                )
+                .for_single_frame()
+                .finish()
+            })
+        } else {
+            None
+        };
+        let disclosure = if node.kind == NodeKind::Server {
+            let action = if persistent {
+                let actions = if self.sessions_expanded.contains(&node.id) {
+                    &self.collapse_actions
+                } else {
+                    &self.expand_actions
+                };
+                actions.get(&node.id).map(CompactRowAction::render)
+            } else {
+                None
+            };
+            Some(
+                Container::new(
+                    SavePosition::new(
+                        ConstrainedBox::new(action.unwrap_or_else(|| Empty::new().finish()))
+                            .with_width(ROW_ACTION_SIZE)
+                            .with_height(ROW_ACTION_SIZE)
+                            .finish(),
+                        &format!("ssh-manager-node:{}:disclosure", node.id),
+                    )
+                    .for_single_frame()
+                    .finish(),
+                )
+                .with_padding_left(ITEM_PADDING_HORIZONTAL + depth as f32 * FOLDER_DEPTH_INDENT)
+                .finish(),
+            )
+        } else {
+            None
+        };
+        let interactive_row = SavePosition::new(
+            compose_connection_row_targets(
+                hoverable,
+                favorite_action,
+                connection_action,
+                refresh_action,
+                disclosure,
+            ),
+            &FocusedRow::Node(node.id.clone()).position_id(),
+        )
+        .for_single_frame()
+        .finish();
 
         // Wrap the row into an element that is "both draggable and accepts drops".
         //
@@ -3436,6 +3797,34 @@ impl TypedActionView for SshManagerPanel {
 
     fn handle_action(&mut self, action: &SshManagerPanelAction, ctx: &mut ViewContext<Self>) {
         match action {
+            SshManagerPanelAction::OpenSessionRow(key) => {
+                if let Some(action) = self.session_row_action(key) {
+                    self.focused_row = Some(FocusedRow::Session(key.clone()));
+                    self.handle_action(&action, ctx);
+                }
+            }
+            SshManagerPanelAction::FocusPrevious => self.move_focus(false, ctx),
+            SshManagerPanelAction::FocusNext => self.move_focus(true, ctx),
+            SshManagerPanelAction::ActivateFocused => {
+                let action = self
+                    .navigation_rows()
+                    .into_iter()
+                    .find(|(row, _)| Some(row) == self.focused_row.as_ref())
+                    .map(|(_, action)| action);
+                if let Some(action) = action {
+                    self.handle_action(&action, ctx);
+                }
+            }
+            SshManagerPanelAction::CollapseFocused => self.set_focused_expanded(false, ctx),
+            SshManagerPanelAction::ExpandFocused => self.set_focused_expanded(true, ctx),
+            SshManagerPanelAction::RefreshFocused => {
+                if let Some(id) = self
+                    .focused_node_id()
+                    .filter(|id| self.resilient_hosts.contains(id))
+                {
+                    self.handle_action(&SshManagerPanelAction::RefreshSessions(id), ctx);
+                }
+            }
             SshManagerPanelAction::AddRootFolder => self.on_add_folder_with_parent(None, ctx),
             SshManagerPanelAction::AddFolder => {
                 let parent = self.parent_for_new_node();
@@ -3465,6 +3854,8 @@ impl TypedActionView for SshManagerPanel {
             SshManagerPanelAction::ToggleConnection(id) => self.on_toggle_connection(id, ctx),
             SshManagerPanelAction::ToggleSessions(id) => self.on_toggle_sessions(id.clone(), ctx),
             SshManagerPanelAction::RefreshSessions(id) => {
+                self.focused_row = Some(FocusedRow::Node(id.clone()));
+                ctx.focus_self();
                 self.sessions_expanded.insert(id.clone());
                 self.fetch_sessions(id.clone(), ctx);
                 ctx.notify();
@@ -3533,7 +3924,38 @@ impl View for SshManagerPanel {
         "SshManagerPanel"
     }
 
-    fn on_focus(&mut self, _focus_ctx: &FocusContext, _ctx: &mut ViewContext<Self>) {}
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() {
+            self.keyboard_focused = true;
+            if !self
+                .navigation_rows()
+                .iter()
+                .any(|(row, _)| Some(row) == self.focused_row.as_ref())
+            {
+                self.focused_row = self.navigation_rows().first().map(|(row, _)| row.clone());
+            }
+            ctx.notify();
+        }
+    }
+
+    fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
+        if blur_ctx.is_self_blurred() {
+            self.keyboard_focused = false;
+            ctx.notify();
+        }
+    }
+
+    fn keymap_context(&self, _ctx: &AppContext) -> warpui::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.keyboard_focused
+            && self.rename_state.is_none()
+            && self.pending_delete.is_none()
+            && self.context_menu_position.is_none()
+        {
+            context.set.insert("SshManagerPanelNavigation");
+        }
+        context
+    }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = warp_core::ui::appearance::Appearance::as_ref(app);

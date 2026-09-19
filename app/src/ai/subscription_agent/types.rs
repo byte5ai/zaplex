@@ -35,7 +35,7 @@ pub(crate) struct HostIdentity {
 }
 
 /// An explicit per-conversation execution location selected in the Agent UI.
-/// `host.id` is either the reserved local id or the daemon's stable host id;
+/// `host.id` is either the reserved local id or a namespaced SSH registry node id;
 /// display names never participate in routing.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct SubscriptionLocationPreference {

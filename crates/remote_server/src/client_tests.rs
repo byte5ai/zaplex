@@ -1542,3 +1542,140 @@ async fn typed_multiplexer_inventory_round_trip() {
     assert_eq!(inventory.sessions[0].target, "release; touch /tmp/never");
     assert!(inventory.warnings.is_empty());
 }
+
+#[tokio::test]
+async fn timed_out_inventory_is_removed_aborted_and_late_response_does_not_poison_retry() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let server = tokio::spawn(async move {
+        let mut reader = server_read.compat();
+        let mut writer = server_write.compat_write();
+        let first = protocol::read_client_message(&mut reader).await.unwrap();
+        assert!(matches!(
+            first.message,
+            Some(client_message::Message::ListSessions(_))
+        ));
+        let abort = protocol::read_client_message(&mut reader).await.unwrap();
+        let Some(client_message::Message::Abort(abort)) = abort.message else {
+            panic!("deadline must send an Abort for the expired request");
+        };
+        assert_eq!(abort.request_id_to_abort, first.request_id);
+        protocol::write_server_message(
+            &mut writer,
+            &ServerMessage {
+                request_id: first.request_id.clone(),
+                message: Some(server_message::Message::SessionList(SessionList {
+                    sessions: vec![SessionInfo {
+                        session_id: "late-session".to_string(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })),
+            },
+        )
+        .await
+        .unwrap();
+        let retry = protocol::read_client_message(&mut reader).await.unwrap();
+        assert_ne!(retry.request_id, first.request_id);
+        protocol::write_server_message(
+            &mut writer,
+            &ServerMessage {
+                request_id: retry.request_id,
+                message: Some(server_message::Message::SessionList(SessionList {
+                    sessions: vec![SessionInfo {
+                        session_id: "fresh-session".to_string(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })),
+            },
+        )
+        .await
+        .unwrap();
+    });
+    let executor = executor::Background::default();
+    let (client, _events) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+    let timeout = Duration::from_millis(20);
+    assert!(matches!(
+        client.list_sessions_with_timeout(timeout).await,
+        Err(ClientError::Timeout(elapsed)) if elapsed == timeout
+    ));
+    assert!(client.pending_requests.is_empty());
+    let inventory = client
+        .list_sessions_with_timeout(Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert_eq!(inventory.sessions[0].session_id, "fresh-session");
+    assert!(client.pending_requests.is_empty());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn inventory_deadline_includes_blocked_outbound_queue() {
+    let (outbound_tx, outbound_rx) = async_channel::bounded(1);
+    outbound_tx.send(ClientMessage::default()).await.unwrap();
+    let client = RemoteServerClient {
+        outbound_tx,
+        pending_requests: Arc::new(DashMap::new()),
+        disconnected: Arc::new(AtomicBool::new(false)),
+        agent_account_inventory: RwLock::new(None),
+    };
+    let timeout = Duration::from_millis(20);
+    let result = client.list_agent_sessions_with_timeout(timeout).await;
+    assert!(matches!(result, Err(ClientError::Timeout(elapsed)) if elapsed == timeout));
+    assert!(client.pending_requests.is_empty());
+    assert_eq!(outbound_rx.len(), 1, "the expired request was never queued");
+}
+
+#[tokio::test]
+async fn dropping_inventory_future_removes_its_pending_response() {
+    let (outbound_tx, _outbound_rx) = async_channel::unbounded();
+    let client = RemoteServerClient {
+        outbound_tx,
+        pending_requests: Arc::new(DashMap::new()),
+        disconnected: Arc::new(AtomicBool::new(false)),
+        agent_account_inventory: RwLock::new(None),
+    };
+    let mut request = Box::pin(client.list_agent_accounts_with_timeout(Duration::from_secs(10)));
+    assert!(futures::poll!(request.as_mut()).is_pending());
+    assert_eq!(client.pending_requests.len(), 1);
+    drop(request);
+    assert!(client.pending_requests.is_empty());
+    assert!(client.cached_agent_accounts().is_none());
+}
+
+#[tokio::test]
+async fn short_account_inventory_deadline_preserves_successful_cache_and_server_errors() {
+    let (client, _events, _executor) = setup_mock_client(|message| {
+        assert!(matches!(
+            message.message,
+            Some(client_message::Message::ListAgentAccounts(_))
+        ));
+        server_message::Message::AgentAccountInventory(AgentAccountInventory {
+            schema_version: 1,
+            health: "loaded".to_string(),
+            ..Default::default()
+        })
+    });
+    let inventory = client
+        .list_agent_accounts_with_timeout(Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert_eq!(client.cached_agent_accounts(), Some(inventory));
+    assert!(client.pending_requests.is_empty());
+
+    let (client, _events, _executor) = setup_mock_client(|_| {
+        server_message::Message::Error(crate::proto::ErrorResponse {
+            code: ErrorCode::Internal as i32,
+            message: "inventory unavailable".to_string(),
+        })
+    });
+    assert!(matches!(
+        client.list_agent_accounts_with_timeout(Duration::from_secs(1)).await,
+        Err(ClientError::ServerError { message, .. }) if message == "inventory unavailable"
+    ));
+    assert!(client.pending_requests.is_empty());
+    assert!(client.cached_agent_accounts().is_none());
+}

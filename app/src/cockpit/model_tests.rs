@@ -927,3 +927,256 @@ fn removed_registry_host_does_not_invalidate_each_following_refresh() {
         assert_eq!(inventory, accepted);
     }
 }
+
+#[test]
+fn partial_local_refresh_preserves_pending_remote_roots_and_their_attention_counts() {
+    let remote_a = connected_root("same-label", "host-a", None);
+    let remote_b = connected_root("same-label", "host-b", None);
+    let mut visible = fold_inventory(
+        "laptop",
+        vec![session("old-local", zaplex_cockpit::SessionState::Active)],
+        vec![
+            (
+                remote_a,
+                vec![session("remote-a", zaplex_cockpit::SessionState::Waiting)],
+            ),
+            (
+                remote_b,
+                vec![session("remote-b", zaplex_cockpit::SessionState::Active)],
+            ),
+        ],
+    );
+    let previous_remotes: Vec<_> = visible
+        .hosts
+        .iter()
+        .filter(|host| !host.is_local)
+        .cloned()
+        .collect();
+    let updated = fold_inventory(
+        "laptop",
+        vec![session("new-local", zaplex_cockpit::SessionState::Waiting)],
+        Vec::new(),
+    );
+    let expected_local = updated
+        .hosts
+        .iter()
+        .find(|host| host.is_local)
+        .unwrap()
+        .clone();
+
+    replace_inventory_roots(&mut visible, updated);
+
+    assert_eq!(
+        visible.hosts.iter().find(|host| host.is_local),
+        Some(&expected_local)
+    );
+    assert_eq!(
+        visible
+            .hosts
+            .iter()
+            .filter(|host| !host.is_local)
+            .cloned()
+            .collect::<Vec<_>>(),
+        previous_remotes
+    );
+    assert_eq!(visible.needs_me, 2);
+}
+
+#[test]
+fn failed_partial_host_refresh_clears_only_that_exact_host() {
+    let mut visible = fold_inventory(
+        "laptop",
+        vec![session("local", zaplex_cockpit::SessionState::Active)],
+        vec![
+            (
+                connected_root("same-label", "host-a", None),
+                vec![session("a", zaplex_cockpit::SessionState::Waiting)],
+            ),
+            (
+                connected_root("same-label", "host-b", None),
+                vec![session("b", zaplex_cockpit::SessionState::Waiting)],
+            ),
+        ],
+    );
+    let untouched: Vec<_> = visible
+        .hosts
+        .iter()
+        .filter(|host| host.host_id.as_deref() != Some("host-a"))
+        .cloned()
+        .collect();
+    let mut failed = connected_root("same-label", "host-a", None);
+    failed.inventory_status = AgentInventoryStatus::Unavailable;
+    let mut completed = fold_inventory("", Vec::new(), vec![(failed, Vec::new())]);
+    completed.hosts.retain(|host| !host.is_local);
+
+    replace_inventory_roots(&mut visible, completed);
+
+    let failed = visible
+        .hosts
+        .iter()
+        .find(|host| host.host_id.as_deref() == Some("host-a"))
+        .unwrap();
+    assert_eq!(failed.inventory_status, AgentInventoryStatus::Unavailable);
+    assert!(failed.projects.is_empty());
+    assert_eq!(
+        visible
+            .hosts
+            .iter()
+            .filter(|host| host.host_id.as_deref() != Some("host-a"))
+            .cloned()
+            .collect::<Vec<_>>(),
+        untouched
+    );
+    assert_eq!(visible.needs_me, 1);
+}
+
+#[test]
+fn obsolete_partial_refresh_cannot_restore_a_disconnected_root() {
+    let mut flight = RefreshSingleFlight::default();
+    assert!(flight.request());
+    let completed_generation = flight.generation;
+    let mut visible = fold_inventory(
+        "laptop",
+        Vec::new(),
+        vec![
+            (
+                connected_root("same-label", "host-a", None),
+                vec![session("a", zaplex_cockpit::SessionState::Waiting)],
+            ),
+            (
+                connected_root("same-label", "host-b", None),
+                vec![session("b", zaplex_cockpit::SessionState::Active)],
+            ),
+        ],
+    );
+    let completed = FleetTree {
+        hosts: visible
+            .hosts
+            .iter()
+            .filter(|host| host.host_id.as_deref() == Some("host-a"))
+            .cloned()
+            .collect(),
+        needs_me: 1,
+    };
+    assert!(reconcile_live_daemon_roots(
+        &mut visible,
+        &mut ManagedFleetInventory::default(),
+        "laptop",
+        &[connected_root("same-label", "host-b", None)],
+    ));
+    flight.invalidate();
+    assert!(!flight.request());
+    let after_disconnect = visible.clone();
+    if should_apply_refresh_result(flight.generation, completed_generation) {
+        replace_inventory_roots(&mut visible, completed);
+    }
+    assert_eq!(visible, after_disconnect);
+    assert!(
+        flight.finish(),
+        "one refresh must remain queued for the new topology"
+    );
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[tokio::test]
+async fn remote_refresh_publishes_a_healthy_host_while_another_rpc_hangs() {
+    use crate::remote_server::client::RemoteServerClient;
+    use crate::remote_server::proto::{
+        client_message, server_message, AgentSessionInfo, AgentSessionList, ServerMessage,
+    };
+    use crate::remote_server::protocol;
+    use futures::FutureExt as _;
+    use std::sync::Arc;
+    use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+    use warpui::r#async::executor;
+
+    let executor = executor::Background::default();
+    let mut daemons = Vec::new();
+    let mut servers = Vec::new();
+    let (seen_sender, mut seen_receiver) = tokio::sync::mpsc::unbounded_channel();
+    for (host_id, respond) in [("hung-host", false), ("healthy-host", true)] {
+        let (client_stream, server_stream) = tokio::io::duplex(4096);
+        let (client_read, client_write) = tokio::io::split(client_stream);
+        let (server_read, server_write) = tokio::io::split(server_stream);
+        let (client, _events) =
+            RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+        daemons.push(ConnectedDaemon {
+            host_label: "same-label".to_string(),
+            host_id: host_id.to_string(),
+            registry_node_id: None,
+            daemon_runtime: None,
+            client: Arc::new(client),
+            features: vec![FEATURE_AGENT_INVENTORY.to_string()],
+        });
+        let seen_sender = seen_sender.clone();
+        servers.push(tokio::spawn(async move {
+            let mut reader = server_read.compat();
+            let mut writer = server_write.compat_write();
+            let request = protocol::read_client_message(&mut reader).await.unwrap();
+            assert!(matches!(
+                request.message,
+                Some(client_message::Message::ListAgentSessions(_))
+            ));
+            seen_sender.send(host_id).unwrap();
+            if respond {
+                protocol::write_server_message(
+                    &mut writer,
+                    &ServerMessage {
+                        request_id: request.request_id,
+                        message: Some(server_message::Message::AgentSessionList(
+                            AgentSessionList {
+                                sessions: vec![AgentSessionInfo {
+                                    session_id: "fresh-session".to_string(),
+                                    provider: "codex".to_string(),
+                                    state: "active".to_string(),
+                                    cwd: "/work/project".to_string(),
+                                    project_root: "/work/project".to_string(),
+                                    effort: "high".to_string(),
+                                    ..Default::default()
+                                }],
+                                ..Default::default()
+                            },
+                        )),
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            // Keep both transports open. The hung peer never answers its RPC.
+            std::future::pending::<()>().await;
+        }));
+    }
+    let mut pending: FuturesUnordered<_> = daemons.into_iter().map(refresh_remote_host).collect();
+    let ((host, sessions), fleet) = tokio::time::timeout(Duration::from_secs(2), pending.next())
+        .await
+        .expect("healthy host must finish independently")
+        .unwrap();
+    assert_eq!(host.host_id, "healthy-host");
+    assert_eq!(host.inventory_status, AgentInventoryStatus::Ready);
+    assert_eq!(sessions[0].session_id, "fresh-session");
+    assert!(fleet.sessions().is_empty());
+    let mut seen = Vec::new();
+    for _request in 0..2 {
+        seen.push(
+            tokio::time::timeout(Duration::from_secs(2), seen_receiver.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    seen.sort_unstable();
+    assert_eq!(seen, vec!["healthy-host", "hung-host"]);
+    assert!(pending.next().now_or_never().is_none());
+
+    // A disconnect completes only the stalled host with an honest empty error result.
+    servers[0].abort();
+    let ((failed, sessions), fleet) = tokio::time::timeout(Duration::from_secs(2), pending.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.host_id, "hung-host");
+    assert_eq!(failed.inventory_status, AgentInventoryStatus::Unavailable);
+    assert!(sessions.is_empty());
+    assert!(fleet.sessions().is_empty());
+    servers[1].abort();
+}

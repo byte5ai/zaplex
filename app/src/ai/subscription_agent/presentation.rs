@@ -137,7 +137,7 @@ impl ConversationPresentation {
                 let actions = match session {
                     Some(SessionIdentity::ClaudeCode(_)) | Some(SessionIdentity::Codex(_)) => vec![
                         ConversationAction::Resume,
-                        ConversationAction::Restart,
+                        ConversationAction::NewConversation,
                         ConversationAction::End,
                     ],
                     None => vec![

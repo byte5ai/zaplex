@@ -291,3 +291,13 @@ the owning task finishes.
   propagation boundaries.
 - **Private audit leakage:** record only public revisions, sanitized schemas, and repository-relative
   evidence; never include local hostnames, credentials, paths, or transcript content.
+
+## Umsetzung der Release-Review-Korrekturen
+
+`CockpitModel` publiziert die lokale Teilansicht zuerst. `FuturesUnordered` sammelt parallele Host-Abfragen in Abschlussreihenfolge; die drei Inventar-RPCs pro Host laufen ebenfalls parallel. Ein Ergebnis ersetzt nur die Wurzel seiner exakten Daemon-ID und deren Managed-Fleet-Daten. Jede Veröffentlichung prüft die aktuelle Refresh-Generation und die Registry-Zuordnung. `RefreshSingleFlight` bleibt bis zum Abschluss aller begrenzten Host-Abfragen reserviert.
+
+Der Remote-Client bietet zeitschrankenfähige Listenmethoden. Die Frist umfasst Ausgangsqueue und Antwort, und eine RAII-Korrelation entfernt Pending-Einträge auch bei Abbruch. Ein Timeout sendet best-effort Abort; spätere Antworten können keine neue Anfrage erfüllen. Die übrigen Aufrufer behalten ihre bisherige Standardfrist.
+
+`ssh_manager::panel::init` registriert ausschließlich im fokussierten Verbindungsbaum aktive Keybindings. Der gemeinsame Session-Renderer hält primäre Identität flexibel und Öffnen-Aktion fest; Statuswechsel erzeugen keine Zusatzzeile. Der Cockpit-Link öffnet die vorhandene Verbindungen-Ansicht. `adopt_daemon_session` reicht denselben echten Installationsfortschrittskanal wie eine neue Verbindung durch.
+
+SFTP lädt bekannte Schlüssel zeilenweise in voneinander getrennte libssh2-Sammlungen. Aliasaufteilung und Hash-/Port-Matching bleiben bei libssh2; Verifikationsansichten schreiben keine normalisierten oder verlustbehafteten Daten zurück. Tests enthalten identische Schlüssel gehashter Endpunkte, kurze Aliase, große fremde Inventare, Ports, Marker und nicht-UTF8-Kommentare.

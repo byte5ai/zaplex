@@ -3961,9 +3961,9 @@ cockpit-conductor-title = Hosts
 # Sidebar zone headers (spec v3 §S1) — the label is rendered uppercased
 cockpit-zone-connections = Connections
 cockpit-zone-connections-settings = Open SSH configuration
-cockpit-zone-sessions = Sessions
+cockpit-zone-sessions = AI sessions
 cockpit-zone-accounts = AI accounts
-cockpit-conductor-empty = No sessions yet
+cockpit-conductor-empty = No AI sessions yet
 cockpit-tt-favorite-add = Add to favorites
 cockpit-tt-favorite-remove = Remove from favorites
 cockpit-tt-manage-host = Manage host
@@ -4325,3 +4325,15 @@ connect-fallback-daemon-missing = Persistent session unavailable on { $host }: t
 connect-fallback-daemon-failed = Couldn't start a persistent session on { $host } ({ $error }). Opened a standard SSH session instead — a disconnect will lose open work.
 connect-fallback-install-failed = Couldn't install the Zaplex session daemon on { $host } ({ $error }). Opened a standard SSH session instead — a disconnect will lose open work.
 connect-fallback-handshake-failed = Couldn't start the persistent-session daemon on { $host } (handshake failed — often a daemon of a different zaplex version). Opened a standard SSH session instead — a disconnect will lose open work.
+
+workspace-left-panel-ssh-manager-sessions-expand = Show sessions
+
+workspace-left-panel-ssh-manager-sessions-collapse = Hide sessions
+
+ai-footer-subscription-target-unavailable = The selected agent target is no longer available. Check the agent, account and installation, then retry.
+
+workspace-left-panel-ssh-manager-sessions-confirm-host-key = Connect to this host and confirm the SSH key for { $host }:{ $port } ({ $fingerprint }) first.
+
+cockpit-shell-sessions-connections = Open shell sessions in Connections
+
+ai-footer-subscription-target-changed = This session's execution target has changed. Restore the previous target or start a new conversation.

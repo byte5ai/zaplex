@@ -88,3 +88,12 @@ For a conversation without an agent or account preference, an account explicitly
 - No product path can dispatch an in-app agent turn through a BYOP HTTP provider.
 - No in-app Claude path uses `--dangerously-skip-permissions`.
 - Model/account selections are derived from and keyed by the selected CLI installation identity and version.
+
+## Verbindliche Korrekturen aus dem Release-Review
+
+- Verschwindet ein bestätigtes Agent-Ziel zwischen Auswahl und Start (Provider-ID, Config, CLI oder Host), endet „Starting“ in einem bedienbaren Fehlerzustand. Keine stille Ersatzwahl; Auswahl und native Session-ID bleiben für eine vollständig neu geprüfte Wiederholung erhalten.
+- Vor jedem Prompt werden Installation, Version und Fähigkeiten erneut geprüft. Resume verlangt dieselbe Provider-/Konto-/Installations-/Modell-/Effort-/Verzeichnisidentität.
+- Entfernte Standorte werden im laufenden Client stabil an die SSH-Registry-ID gebunden. Ein Daemon-Neustart kann ausschließlich über genau einen aktuellen Daemon dieses Registry-Eintrags wieder aufgelöst werden. Historische Daemons und Anzeigenamen dienen nie als Ersatzroute. Alte Prozess-IDs können nur solange migriert werden, wie ihre exakte lebende Zuordnung bekannt ist; andernfalls bleibt die Hostwahl explizit.
+- Remote-Agenten verwenden den bereits bestätigten SSH-ControlMaster. Fehlt er, schlägt der Start geschlossen fehl. Der tatsächliche absolute CLI-Pfad und der zugehörige PATH werden vor dem Start im Login-Shell-Kontext ermittelt, damit auch nvm-/Benutzerinstallationen funktionieren; der Protokollprozess bleibt nichtinteraktiv.
+
+Ändert die erneute Prüfung die CLI-Version, die aufgelöste Modellidentität oder einen anderen Resume-relevanten Teil des Ziels, darf kein stiller Neustart erfolgen. Der Fehler erhält die native Session-ID. „Fortsetzen“ prüft das bisherige Ziel erneut; „Neue Unterhaltung“ eröffnet ausdrücklich eine getrennte Unterhaltung, ohne die alte Zuordnung zu löschen. Im Fehlerzustand mit vorhandener Session wird diese Aktion statt des unmittelbar verwerfenden „Neu starten“ angeboten.

@@ -39,7 +39,7 @@ use zaplex_remote_session::types::{
 };
 
 use super::session_inventory::{HostSessionInventory, RoutedDaemonSession};
-use super::ssh_transport::{DaemonRuntimeRoute, SshTransport};
+use super::ssh_transport::{DaemonRuntimeRoute, InstallProgress, SshTransport};
 
 /// Daemon sessions are allocated `SessionId`s in the **top half** of the u64
 /// space so they cannot collide with shell-bootstrap-minted ids (which are
@@ -190,6 +190,41 @@ pub fn control_socket_path(server: &SshServerInfo) -> PathBuf {
     let key = format!("{}@{}:{}", server.username, server.host, server.port);
     home.join(".ssh")
         .join(format!("zaplex-daemon-{:016x}", stable_hash(&key)))
+}
+
+/// Reuses the verified daemon connection without falling back to a new SSH route.
+/// OpenSSH otherwise opens a fresh connection when a multiplex socket disappears.
+pub(crate) fn managed_agent_ssh_args(server: &SshServerInfo) -> Result<Vec<String>> {
+    let endpoint =
+        validate_ssh_endpoint(EndpointUse::Connect, &server.host, &server.port.to_string())
+            .map_err(|error| anyhow!(error))?;
+    let mut validated_server = server.clone();
+    validated_server.host = endpoint.host;
+    validated_server.port = endpoint.port;
+    let mut args = build_ssh_args(&validated_server);
+    let host_key_policy = args
+        .iter_mut()
+        .find(|arg| arg.starts_with("StrictHostKeyChecking="))
+        .ok_or_else(|| anyhow!("SSH host-key policy is missing"))?;
+    *host_key_policy = "StrictHostKeyChecking=yes".to_string();
+    let destination_delimiter = args
+        .iter()
+        .position(|arg| arg == "--")
+        .ok_or_else(|| anyhow!("SSH destination delimiter is missing"))?;
+    args.splice(
+        destination_delimiter..destination_delimiter,
+        [
+            "-S".to_string(),
+            control_socket_path(server).to_string_lossy().into_owned(),
+            "-o".to_string(),
+            "ControlMaster=no".to_string(),
+            "-o".to_string(),
+            "ProxyCommand=false".to_string(),
+            "-o".to_string(),
+            "RequestTTY=no".to_string(),
+        ],
+    );
+    Ok(args)
 }
 
 fn managed_known_hosts_path(server: &SshServerInfo) -> Result<PathBuf> {
@@ -518,6 +553,23 @@ pub async fn prepare_daemon_transport(
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
 ) -> std::result::Result<(), String> {
+    prepare_daemon_transport_with_progress(
+        server,
+        socket_path,
+        auth_context,
+        InstallProgress::silent(),
+    )
+    .await
+}
+
+/// Prepares an explicit connection and forwards actual installation phases to
+/// its owning progress surface. Inventory scans continue to use preflight only.
+pub async fn prepare_daemon_transport_with_progress(
+    server: SshServerInfo,
+    socket_path: PathBuf,
+    auth_context: Arc<RemoteServerAuthContext>,
+    progress: InstallProgress,
+) -> std::result::Result<(), String> {
     let host = server.host.clone();
     match preflight_daemon_transport(server, socket_path.clone(), auth_context.clone()).await? {
         DaemonPreflight::Ready => Ok(()),
@@ -525,15 +577,17 @@ pub async fn prepare_daemon_transport(
             log::info!("daemon connect [{host}]: binary missing — installing (first connect)");
             let transport = SshTransport::new(socket_path, auth_context);
             transport
-                .install_binary()
+                .install_binary_with_progress(progress)
                 .await
                 .map_err(|e| format!("remote-server install failed: {e}"))?;
             log::info!("daemon connect [{host}]: install complete");
             Ok(())
         }
-        DaemonPreflight::HostKeyConfirmationRequired(host_key) => Err(format!(
-            "SSH host-key confirmation required for {}:{} ({})",
-            host_key.host, host_key.port, host_key.fingerprint
+        DaemonPreflight::HostKeyConfirmationRequired(host_key) => Err(crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-confirm-host-key",
+            host = host_key.host,
+            port = host_key.port,
+            fingerprint = host_key.fingerprint
         )),
     }
 }
@@ -680,9 +734,11 @@ fn require_daemon_inventory_ready(preflight: DaemonPreflight) -> std::result::Re
         DaemonPreflight::NeedsInstall => Err(crate::t!(
             "workspace-left-panel-ssh-manager-sessions-needs-install"
         )),
-        DaemonPreflight::HostKeyConfirmationRequired(host_key) => Err(format!(
-            "SSH host-key confirmation required for {}:{} ({})",
-            host_key.host, host_key.port, host_key.fingerprint
+        DaemonPreflight::HostKeyConfirmationRequired(host_key) => Err(crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-confirm-host-key",
+            host = host_key.host,
+            port = host_key.port,
+            fingerprint = host_key.fingerprint
         )),
     }
 }

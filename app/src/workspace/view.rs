@@ -11555,13 +11555,17 @@ impl Workspace {
         }
 
         let session_id = headless_connect::alloc_daemon_session_id();
+        let (progress_tx, install_progress_rx) = async_channel::unbounded();
+        let _ = progress_tx.try_send(
+            crate::t!("connect-progress-starting", host = server.host.clone()).to_string(),
+        );
         let request = crate::terminal::daemon_tty::DaemonSessionRequest {
             connection_session_id: session_id,
             open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
             adopt_pty_session_id: Some(pty_session_id.clone()),
             adopt_pty_generation: Some(pty_generation),
             expected_agent_binding,
-            install_progress_rx: None,
+            install_progress_rx: Some(install_progress_rx),
             host_label: server.host.clone(),
         };
 
@@ -11605,7 +11609,7 @@ impl Workspace {
             );
         }
 
-        self.spawn_daemon_session_connect(connection, session_id, daemon_route, ctx);
+        self.spawn_daemon_session_connect(connection, session_id, daemon_route, progress_tx, ctx);
     }
 
     /// Establishes the headless SSH ControlMaster for a daemon session, then
@@ -11617,12 +11621,13 @@ impl Workspace {
         connection: warp_ssh_manager::ResolvedSshConnection,
         session_id: SessionId,
         daemon_route: Option<remote_server::transport::DaemonRuntimeRoute>,
+        progress_tx: async_channel::Sender<String>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::remote_server::auth_context::server_api_auth_context;
         use crate::remote_server::headless_connect;
         use crate::remote_server::manager::{RemoteServerInitPhase, RemoteServerManager};
-        use crate::remote_server::ssh_transport::SshTransport;
+        use crate::remote_server::ssh_transport::{InstallProgress, SshTransport};
 
         let server = &connection.server;
         let auth_context = std::sync::Arc::new(server_api_auth_context(
@@ -11643,10 +11648,11 @@ impl Workspace {
         // Off the main thread: bring up the ControlMaster + ensure the
         // remote-server binary is installed, then connect the session.
         ctx.spawn(
-            headless_connect::prepare_daemon_transport(
+            headless_connect::prepare_daemon_transport_with_progress(
                 connection.server.clone(),
                 socket_path.clone(),
                 auth_context.clone(),
+                InstallProgress::new(progress_tx),
             ),
             move |workspace, result, ctx| {
                 if !workspace.daemon_session_servers.contains_key(&session_id) {

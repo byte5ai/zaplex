@@ -156,3 +156,13 @@ Required validation follows the current repository rules and session instruction
 - Both CLI protocols evolve. The version-keyed catalog and tolerant envelopes isolate changes, while required-method checks fail closed with an upgrade message.
 - Remote stdio can be disrupted by shell startup output. The remote launcher must use the existing non-interactive SSH path and treat pre-protocol stdout as a typed initialization error.
 - BYOP removal touches broad settings and test surfaces. It lands only after subscription dispatch works and is verified with a final `rg` reference/dependency audit.
+
+## Release-Review: Start, Identität und Transport
+
+`generate_subscription_output` invalidiert unbrauchbare Preflight-Ziele und publiziert `RecoverableError`, bevor ein fehlendes `ProcessLocation` den Start verlassen kann. Ein erneut gestarteter Prompt durchläuft Capability-Discovery samt vollständigem Resume-Identitätsvergleich. Die konversationsgebundene Standortwahl im laufenden Client verwendet `ssh-registry:<node>`; Prozess-UUIDs bleiben ausschließlich exakte Live-Routen.
+
+Remote-CLI-Aufrufe verwenden den verifizierten ControlMaster mit unterbundener frischer SSH-Verbindung. Eine begrenzte Probe trennt Login-Startup-Ausgaben vom absoluten Executable und dessen PATH; diese Umgebung gilt auch für Node-Shebangs. Stdout und Stderr werden parallel gelesen; Diagnosepuffer bleiben begrenzt und zeigen klassifizierte Fehler statt ungefilterter möglicher Zugangsdaten.
+
+Regressionstests decken den echten Dispatch bei verschwundenem Konto/Config/CLI, Neustart-/Historical-/Mehrdeutigkeitsfälle, exakt gebundenes Resume, Shellquoting, Login-PATH und Transportfehler ab. Ohne freigegebenen Build stellen vorhandene Tests noch keinen ausgeführten Nachweis dar.
+
+Ändert die erneute Prüfung die CLI-Version, die aufgelöste Modellidentität oder einen anderen Resume-relevanten Teil des Ziels, darf kein stiller Neustart erfolgen. Der Fehler erhält die native Session-ID. „Fortsetzen“ prüft das bisherige Ziel erneut; „Neue Unterhaltung“ eröffnet ausdrücklich eine getrennte Unterhaltung, ohne die alte Zuordnung zu löschen. Im Fehlerzustand mit vorhandener Session wird diese Aktion statt des unmittelbar verwerfenden „Neu starten“ angeboten.

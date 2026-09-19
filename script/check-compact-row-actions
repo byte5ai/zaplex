@@ -72,9 +72,13 @@ if ! rg --quiet 'with_clip\(ClipConfig::ellipsis\(\)\)' app/src/cockpit/panel.rs
     echo "cockpit host identity must ellipsize at the final boundary" >&2
     fail=1
 fi
-ssh_identity_slots="$( (rg -o 'with_child\(Shrinkable::new\(1\.0, left\)\.finish\(\)\)' app/src/ssh_manager/panel.rs || true) | awk 'END { print NR }')"
-if [ "$ssh_identity_slots" -lt 2 ]; then
-    echo "SSH daemon and multiplexer identities must own the flexible row width" >&2
+if ! rg --quiet --multiline --pcre2 'fn compose_session_row_targets\([^}]*with_child\(Shrinkable::new\(1\.0, primary\)\.finish\(\)\)' app/src/ssh_manager/panel.rs; then
+    echo "SSH session identity must own the flexible width in the shared row composer" >&2
+    fail=1
+fi
+ssh_session_renderers="$( (rg -o 'self\.render_session_row\(' app/src/ssh_manager/panel.rs || true) | awk 'END { print NR }')"
+if [ "$ssh_session_renderers" -ne 2 ] || ! rg --quiet 'let details = session_row_details' app/src/ssh_manager/panel.rs; then
+    echo "SSH daemon and multiplexer rows must share the constrained session renderer" >&2
     fail=1
 fi
 ssh_ellipsis_count="$( (rg -o 'with_clip\(ClipConfig::ellipsis\(\)\)' app/src/ssh_manager/panel.rs || true) | awk 'END { print NR }')"

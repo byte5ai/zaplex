@@ -1508,6 +1508,7 @@ fn initialize_app(
     ai::blocklist::init(ctx);
     ai::blocklist::block::status_bar::init(ctx);
     drive::index::init(ctx);
+    ssh_manager::panel::init(ctx);
     ai_assistant::panel::init(ctx);
     // Zaplex Wave 7-2: `settings_view::update_environment_form::init` removed together with cloud ambient agent
     // main subsystem.

@@ -57,6 +57,40 @@ impl SubscriptionSessionRegistry {
         self.sessions.lock().remove(conversation_id);
     }
 
+    /// Discard stale readiness without silently replacing the selected account
+    /// or destroying a native session that can be revalidated on retry.
+    pub(crate) fn invalidate_target(&self, conversation_id: &str) {
+        self.targets.lock().remove(conversation_id);
+        self.clear_approvals(conversation_id);
+        self.clear_choices(conversation_id);
+    }
+
+    /// Upgrade a known process-bound location only through its exact live
+    /// daemon's registry link; labels and disconnected historical routes do not
+    /// establish continuity.
+    pub(crate) fn migrate_host_identity(
+        &self,
+        conversation_id: &str,
+        previous_host_id: &str,
+        host: HostIdentity,
+    ) {
+        if let Some(location) = self.locations.lock().get_mut(conversation_id) {
+            if location.host.id == previous_host_id {
+                location.host = host.clone();
+            }
+        }
+        if let Some(target) = self.targets.lock().get_mut(conversation_id) {
+            if target.installation.host.id == previous_host_id {
+                target.installation.host = host.clone();
+            }
+        }
+        if let Some(stored) = self.sessions.lock().get_mut(conversation_id) {
+            if stored.target.installation.host.id == previous_host_id {
+                stored.target.installation.host = host;
+            }
+        }
+    }
+
     pub(crate) fn remove(&self, conversation_id: &str) {
         self.sessions.lock().remove(conversation_id);
         self.targets.lock().remove(conversation_id);

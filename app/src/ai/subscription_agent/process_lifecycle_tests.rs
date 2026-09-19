@@ -410,6 +410,7 @@ exec /bin/sh -c "$last"
             target,
             None,
             ProcessLocation::Remote {
+                environment_path: None,
                 ssh_argv: vec![
                     fake_ssh.to_string_lossy().into_owned(),
                     "--".to_string(),
@@ -534,6 +535,7 @@ exec /bin/sh -c "$last"
             target,
             Some(resume.clone()),
             ProcessLocation::Remote {
+                environment_path: None,
                 ssh_argv: vec![
                     fake_ssh.to_string_lossy().into_owned(),
                     "--".to_string(),
