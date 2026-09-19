@@ -11,8 +11,6 @@ use crate::ai::subscription_agent::{
 use std::os::unix::fs::PermissionsExt as _;
 #[cfg(unix)]
 use std::time::Duration;
-#[cfg(unix)]
-use warpui::r#async::FutureExt as _;
 
 #[cfg(unix)]
 fn write_executable(path: &std::path::Path, script: &str) {

@@ -1098,8 +1098,11 @@ async fn remote_refresh_publishes_a_healthy_host_while_another_rpc_hangs() {
         let (client_stream, server_stream) = tokio::io::duplex(4096);
         let (client_read, client_write) = tokio::io::split(client_stream);
         let (server_read, server_write) = tokio::io::split(server_stream);
-        let (client, _events) =
-            RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+        let (client, _events) = RemoteServerClient::new(
+            TokioAsyncReadCompatExt::compat(client_read),
+            client_write.compat_write(),
+            &executor,
+        );
         daemons.push(ConnectedDaemon {
             host_label: "same-label".to_string(),
             host_id: host_id.to_string(),
@@ -1110,7 +1113,7 @@ async fn remote_refresh_publishes_a_healthy_host_while_another_rpc_hangs() {
         });
         let seen_sender = seen_sender.clone();
         servers.push(tokio::spawn(async move {
-            let mut reader = server_read.compat();
+            let mut reader = TokioAsyncReadCompatExt::compat(server_read);
             let mut writer = server_write.compat_write();
             let request = protocol::read_client_message(&mut reader).await.unwrap();
             assert!(matches!(

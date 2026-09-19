@@ -1112,7 +1112,7 @@ impl CockpitPanel {
                 .finish(),
             );
         }
-        let accent = theme.accent().into_solid();
+        let accent = appearance.theme().accent().into_solid();
         col = col.with_child(
             Container::new(
                 Hoverable::new(self.connections_btn.clone(), move |mouse| {
