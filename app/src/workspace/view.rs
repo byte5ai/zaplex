@@ -3584,6 +3584,14 @@ impl Workspace {
                     me.daemon_session_servers.remove(session_id);
                     me.finish_daemon_ssh_connect(*session_id, ctx);
                 }
+                RemoteServerManagerEvent::SessionOpened {
+                    session_id,
+                    pty_session_id,
+                    generation,
+                    ..
+                } => {
+                    me.index_opened_daemon_session(*session_id, pty_session_id, *generation, ctx);
+                }
                 RemoteServerManagerEvent::SessionExited { session_id, .. } => {
                     me.finish_daemon_ssh_connect(*session_id, ctx);
                     remove_adopted_daemon_session(&mut me.adopted_daemon_sessions, *session_id);
@@ -11437,8 +11445,44 @@ impl Workspace {
                 .position(|tab| tab.pane_group.id() == pane_group_id)
             {
                 workspace.activate_tab(index, ctx);
+                workspace.tabs[index]
+                    .pane_group
+                    .clone()
+                    .update(ctx, |group, ctx| {
+                        group.focus_daemon_connection(connection_session_id, ctx);
+                    });
             }
         });
+    }
+
+    /// Register the authoritative identity of a freshly opened PTY too. The owning
+    /// pane can be inactive or temporarily covered by its file manager.
+    #[cfg(unix)]
+    fn index_opened_daemon_session(
+        &mut self,
+        connection_session_id: SessionId,
+        pty_session_id: &str,
+        generation: u64,
+        ctx: &AppContext,
+    ) {
+        let Some(pane_group_id) = self.tabs.iter().find_map(|tab| {
+            tab.pane_group
+                .as_ref(ctx)
+                .daemon_connection_pane(connection_session_id, ctx)
+                .map(|_| tab.pane_group.id())
+        }) else {
+            return;
+        };
+        let Some(node_id) = self.node_for_session(connection_session_id) else {
+            return;
+        };
+        self.adopted_daemon_sessions.insert(
+            daemon_adoption_key(&node_id, None, pty_session_id, generation),
+            AdoptedDaemonSession {
+                pane_group_id,
+                connection_session_id,
+            },
+        );
     }
 
     /// Adopts an already-running daemon session in a new tab: attaches to
@@ -11460,12 +11504,22 @@ impl Workspace {
         let server = connection.server.clone();
         let is_current_runtime = daemon_route.is_none();
 
-        // Prune entries whose tab has since closed, then, if this session is
-        // already open in a tab, focus that tab instead of opening a second view
-        // onto it (a second adopt would split input/output across two tabs).
-        let live_pg_ids: Vec<EntityId> = self.tabs.iter().map(|t| t.pane_group.id()).collect();
-        self.adopted_daemon_sessions
-            .retain(|_, adopted| live_pg_ids.contains(&adopted.pane_group_id));
+        // Follow panes moved between tabs and discard closed panes, including
+        // ones retained only for Undo Close. A tab alone is not a live shell.
+        self.adopted_daemon_sessions.retain(|_, adopted| {
+            let owner = self.tabs.iter().find(|tab| {
+                tab.pane_group
+                    .as_ref(ctx)
+                    .daemon_connection_pane(adopted.connection_session_id, ctx)
+                    .is_some()
+            });
+            if let Some(owner) = owner {
+                adopted.pane_group_id = owner.pane_group.id();
+                true
+            } else {
+                false
+            }
+        });
         let binding_key = daemon_adoption_key(
             &server.node_id,
             daemon_route.as_ref(),
@@ -11490,18 +11544,28 @@ impl Workspace {
                     "daemon adopt: session {pty_session_id} already open — focusing its tab"
                 );
                 self.activate_tab(index, ctx);
+                self.tabs[index]
+                    .pane_group
+                    .clone()
+                    .update(ctx, |group, ctx| {
+                        group.focus_daemon_connection(connection_session_id, ctx);
+                    });
                 return;
             }
         }
 
         let session_id = headless_connect::alloc_daemon_session_id();
+        let (progress_tx, install_progress_rx) = async_channel::unbounded();
+        let _ = progress_tx.try_send(
+            crate::t!("connect-progress-starting", host = server.host.clone()).to_string(),
+        );
         let request = crate::terminal::daemon_tty::DaemonSessionRequest {
             connection_session_id: session_id,
             open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
             adopt_pty_session_id: Some(pty_session_id.clone()),
             adopt_pty_generation: Some(pty_generation),
             expected_agent_binding,
-            install_progress_rx: None,
+            install_progress_rx: Some(install_progress_rx),
             host_label: server.host.clone(),
         };
 
@@ -11545,7 +11609,7 @@ impl Workspace {
             );
         }
 
-        self.spawn_daemon_session_connect(connection, session_id, daemon_route, ctx);
+        self.spawn_daemon_session_connect(connection, session_id, daemon_route, progress_tx, ctx);
     }
 
     /// Establishes the headless SSH ControlMaster for a daemon session, then
@@ -11557,12 +11621,13 @@ impl Workspace {
         connection: warp_ssh_manager::ResolvedSshConnection,
         session_id: SessionId,
         daemon_route: Option<remote_server::transport::DaemonRuntimeRoute>,
+        progress_tx: async_channel::Sender<String>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::remote_server::auth_context::server_api_auth_context;
         use crate::remote_server::headless_connect;
         use crate::remote_server::manager::{RemoteServerInitPhase, RemoteServerManager};
-        use crate::remote_server::ssh_transport::SshTransport;
+        use crate::remote_server::ssh_transport::{InstallProgress, SshTransport};
 
         let server = &connection.server;
         let auth_context = std::sync::Arc::new(server_api_auth_context(
@@ -11583,12 +11648,17 @@ impl Workspace {
         // Off the main thread: bring up the ControlMaster + ensure the
         // remote-server binary is installed, then connect the session.
         ctx.spawn(
-            headless_connect::prepare_daemon_transport(
+            headless_connect::prepare_daemon_transport_with_progress(
                 connection.server.clone(),
                 socket_path.clone(),
                 auth_context.clone(),
+                InstallProgress::new(progress_tx),
             ),
-            move |_workspace, result, ctx| match result {
+            move |workspace, result, ctx| {
+                if !workspace.daemon_session_servers.contains_key(&session_id) {
+                    return;
+                }
+                match result {
                 Ok(()) => {
                     log::info!(
                         "daemon connect [{host}]: transport ready — connecting session {session_id:?}"
@@ -11621,6 +11691,7 @@ impl Workspace {
                     RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
                         mgr.fail_session(session_id, RemoteServerInitPhase::Connect, e, ctx);
                     });
+                }
                 }
             },
         );

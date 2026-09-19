@@ -151,7 +151,7 @@ fn recoverable_error_presentation_preserves_a_safe_diagnostic() {
         presentation.actions,
         [
             ConversationAction::Resume,
-            ConversationAction::Restart,
+            ConversationAction::NewConversation,
             ConversationAction::End,
         ]
     );
@@ -159,6 +159,34 @@ fn recoverable_error_presentation_preserves_a_safe_diagnostic() {
     assert_eq!(detail.contains('\n'), false);
     assert_eq!(detail.chars().count(), MAX_DIAGNOSTIC_CHARS);
     assert!(detail.ends_with('…'));
+}
+
+#[test]
+fn recoverable_native_sessions_offer_a_separate_conversation_without_restart() {
+    for session in [
+        SessionIdentity::ClaudeCode("claude-session".to_string()),
+        SessionIdentity::Codex("codex-thread".to_string()),
+    ] {
+        let lifecycle = AgentLifecycle::RecoverableError {
+            message: "The selected CLI installation changed".to_string(),
+            session: Some(session.clone()),
+        };
+        let presentation = ConversationPresentation::for_lifecycle(&lifecycle);
+        assert_eq!(
+            presentation.actions,
+            [
+                ConversationAction::Resume,
+                ConversationAction::NewConversation,
+                ConversationAction::End,
+            ]
+        );
+        assert!(!presentation.composer.accepts_prompt());
+        assert!(matches!(
+            lifecycle,
+            AgentLifecycle::RecoverableError { session: Some(preserved), .. }
+                if preserved == session
+        ));
+    }
 }
 
 #[test]

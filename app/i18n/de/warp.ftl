@@ -40,7 +40,7 @@ cockpit-conductor-title = Hosts
 # Zonen-Header der Sidebar (spec v3 §S1) — Label wird großgeschrieben gerendert
 cockpit-zone-connections = Verbindungen
 cockpit-zone-connections-settings = SSH-Konfiguration öffnen
-cockpit-zone-sessions = Sessions
+cockpit-zone-sessions = KI-Sessions
 cockpit-zone-accounts = KI-Konten
 
 # Session-Zeilen-Aktionen im Cockpit
@@ -89,7 +89,7 @@ cockpit-flow-quick-issue = GitHub-Issue entwerfen (freieste)
 cockpit-flow-pr-review = PR reviewen (freieste)
 cockpit-flow-triage = Issue triagieren (freieste)
 cockpit-spawn-card-new-agent = Neuer Agent…
-cockpit-conductor-empty = Noch keine Sessions
+cockpit-conductor-empty = Noch keine KI-Sessions
 cockpit-tt-favorite-add = Zu Favoriten hinzufügen
 cockpit-tt-favorite-remove = Aus Favoriten entfernen
 cockpit-tt-manage-host = Host verwalten
@@ -691,10 +691,15 @@ workspace-left-panel-ssh-manager-sessions-empty = Keine Zaplex-Sessions
 workspace-left-panel-ssh-manager-sessions-loading = Lade Sessions…
 workspace-left-panel-ssh-manager-sessions-needs-key = Zaplex-Sessions benötigen schlüsselbasierte Authentifizierung
 workspace-left-panel-ssh-manager-sessions-not-persistent = „Session-Persistenz“ auf „Dauerhaft“ setzen, um dies zu nutzen
-workspace-left-panel-ssh-manager-session-fallback = Zaplex-Session · { $id }
+workspace-left-panel-ssh-manager-session-fallback = Session · { $id }
 workspace-left-panel-ssh-manager-session-host-missing = Dieser Host existiert nicht mehr unter Verbindungen
 workspace-left-panel-ssh-manager-session-open-error = Diese Session konnte nicht geöffnet werden: { $detail }
 workspace-left-panel-ssh-manager-host-ram = Host-RAM: { $used } / { $cap }
+workspace-left-panel-ssh-manager-session-ram = RAM: { $used }
+workspace-left-panel-ssh-manager-sessions-refreshing = Sessions werden aktualisiert…
+workspace-left-panel-ssh-manager-sessions-timeout = Die Sessionliste konnte innerhalb von { $seconds } Sekunden nicht geladen werden. Aktualisiere die Sessions, um es erneut zu versuchen.
+workspace-left-panel-ssh-manager-sessions-needs-install = Verbinde zuerst den Host, um den Zaplex-Sitzungsdienst einzurichten. Aktualisiere danach die Sessions.
+terminal-daemon-initial-attach-timeout = Verbindung und Shell-Initialisierung wurden nach { $seconds } Sekunden nicht abgeschlossen. Die Remote-Session wurde nicht beendet. Aktualisiere „Verbindungen“ und öffne die Session erneut.
 workspace-left-panel-ssh-manager-multiplexer-heading = Bestehende tmux-/byobu-Sessions
 workspace-left-panel-ssh-manager-multiplexer-open = In neuem Tab öffnen
 terminal-cli-agent-restore-title = Gespeicherte { $provider }-Session { $session } fortsetzen? Falls sie nicht mehr verfügbar ist, bleibt dieses Pane eine normale Shell.
@@ -3975,3 +3980,15 @@ connect-fallback-daemon-missing = Dauerhafte Sitzung auf { $host } nicht verfüg
 connect-fallback-daemon-failed = Dauerhafte Sitzung auf { $host } konnte nicht gestartet werden ({ $error }). Stattdessen wurde eine Standard-SSH-Sitzung geöffnet — bei einem Verbindungsabbruch geht offene Arbeit verloren.
 connect-fallback-install-failed = Der zaplex-Sitzungs-Daemon konnte auf { $host } nicht installiert werden ({ $error }). Stattdessen wurde eine Standard-SSH-Sitzung geöffnet — bei einem Verbindungsabbruch geht offene Arbeit verloren.
 connect-fallback-handshake-failed = Der Dauer-Sitzungs-Daemon auf { $host } konnte nicht gestartet werden (Handshake fehlgeschlagen — oft ein Daemon einer anderen zaplex-Version). Stattdessen wurde eine Standard-SSH-Sitzung geöffnet — bei einem Verbindungsabbruch geht offene Arbeit verloren.
+
+workspace-left-panel-ssh-manager-sessions-expand = Sessions anzeigen
+
+workspace-left-panel-ssh-manager-sessions-collapse = Sessions ausblenden
+
+ai-footer-subscription-target-unavailable = Das ausgewählte Agent-Ziel ist nicht mehr verfügbar. Prüfe Agent, Konto und Installation und versuche es erneut.
+
+workspace-left-panel-ssh-manager-sessions-confirm-host-key = Verbinde diesen Host und bestätige zuerst den SSH-Schlüssel für { $host }:{ $port } ({ $fingerprint }).
+
+cockpit-shell-sessions-connections = Shell-Sessions in Verbindungen öffnen
+
+ai-footer-subscription-target-changed = Das Ausführungsziel dieser Session hat sich geändert. Stelle das bisherige Ziel wieder her oder beginne eine neue Unterhaltung.

@@ -13,6 +13,7 @@
 //! `docs/superpowers/specs/2026-06-27-stage2-increment3c-daemon-trigger-design.md`.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,19 +33,20 @@ use warp_ssh_manager::{
     DefaultWorkspaceCommandFactory, EndpointUse, HostKeyPreflight, ResolvedSshConnection,
     SshServerInfo, WorkspaceCommandFactory,
 };
-use warpui::r#async::executor::Background;
+use warpui::r#async::{executor::Background, FutureExt as _};
 use zaplex_remote_session::types::{
     has_feature, FEATURE_AGENT_INVENTORY, FEATURE_MULTIPLEXER_INVENTORY_V1, FEATURE_SESSION_HOST,
 };
 
 use super::session_inventory::{HostSessionInventory, RoutedDaemonSession};
-use super::ssh_transport::{DaemonRuntimeRoute, SshTransport};
+use super::ssh_transport::{DaemonRuntimeRoute, InstallProgress, SshTransport};
 
 /// Daemon sessions are allocated `SessionId`s in the **top half** of the u64
 /// space so they cannot collide with shell-bootstrap-minted ids (which are
 /// PID/timestamp-derived and stay well below `2^63`). The manager keys all
 /// sessions — interactive and daemon — by `SessionId`, so uniqueness matters.
 const DAEMON_SESSION_ID_BASE: u64 = 1 << 63;
+const SESSION_INVENTORY_TIMEOUT: Duration = Duration::from_secs(30);
 static NEXT_DAEMON_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 static CONTROL_MASTER_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>> =
     LazyLock::new(Mutex::default);
@@ -188,6 +190,41 @@ pub fn control_socket_path(server: &SshServerInfo) -> PathBuf {
     let key = format!("{}@{}:{}", server.username, server.host, server.port);
     home.join(".ssh")
         .join(format!("zaplex-daemon-{:016x}", stable_hash(&key)))
+}
+
+/// Reuses the verified daemon connection without falling back to a new SSH route.
+/// OpenSSH otherwise opens a fresh connection when a multiplex socket disappears.
+pub(crate) fn managed_agent_ssh_args(server: &SshServerInfo) -> Result<Vec<String>> {
+    let endpoint =
+        validate_ssh_endpoint(EndpointUse::Connect, &server.host, &server.port.to_string())
+            .map_err(|error| anyhow!(error))?;
+    let mut validated_server = server.clone();
+    validated_server.host = endpoint.host;
+    validated_server.port = endpoint.port;
+    let mut args = build_ssh_args(&validated_server);
+    let host_key_policy = args
+        .iter_mut()
+        .find(|arg| arg.starts_with("StrictHostKeyChecking="))
+        .ok_or_else(|| anyhow!("SSH host-key policy is missing"))?;
+    *host_key_policy = "StrictHostKeyChecking=yes".to_string();
+    let destination_delimiter = args
+        .iter()
+        .position(|arg| arg == "--")
+        .ok_or_else(|| anyhow!("SSH destination delimiter is missing"))?;
+    args.splice(
+        destination_delimiter..destination_delimiter,
+        [
+            "-S".to_string(),
+            control_socket_path(server).to_string_lossy().into_owned(),
+            "-o".to_string(),
+            "ControlMaster=no".to_string(),
+            "-o".to_string(),
+            "ProxyCommand=false".to_string(),
+            "-o".to_string(),
+            "RequestTTY=no".to_string(),
+        ],
+    );
+    Ok(args)
 }
 
 fn managed_known_hosts_path(server: &SshServerInfo) -> Result<PathBuf> {
@@ -417,8 +454,8 @@ pub enum DaemonPreflight {
     /// The remote-server binary is present — connect right away.
     Ready,
     /// Binary missing, but an install source exists (dev cross-compile, bundled
-    /// tarball, or reachable release asset) — run the auto-install, showing
-    /// progress in the daemon tab, then connect.
+    /// tarball, or reachable release asset). An explicit connection may install
+    /// it; inventory requests must ask the user to connect first.
     NeedsInstall,
     /// The endpoint presented an unknown key. The ControlMaster has not been
     /// started; the caller must obtain explicit confirmation first.
@@ -507,13 +544,31 @@ fn format_control_master_setup_error(error: anyhow::Error) -> String {
 
 /// Brings up the headless ControlMaster for `server` at `socket_path` and ensures
 /// the remote-server binary is present, auto-installing (without progress UI) if
-/// needed. Used by the adopt-sidebar's connect-to-list and other headless flows;
-/// the interactive first-connect path uses [`preflight_daemon_transport`] +
-/// `install_binary_with_progress` instead so the tab can show progress.
+/// needed. Used for explicit headless connections; session inventory only calls
+/// [`preflight_daemon_transport`] and never installs. The interactive first-connect
+/// path uses that preflight + `install_binary_with_progress` so the tab can show
+/// progress.
 pub async fn prepare_daemon_transport(
     server: SshServerInfo,
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
+) -> std::result::Result<(), String> {
+    prepare_daemon_transport_with_progress(
+        server,
+        socket_path,
+        auth_context,
+        InstallProgress::silent(),
+    )
+    .await
+}
+
+/// Prepares an explicit connection and forwards actual installation phases to
+/// its owning progress surface. Inventory scans continue to use preflight only.
+pub async fn prepare_daemon_transport_with_progress(
+    server: SshServerInfo,
+    socket_path: PathBuf,
+    auth_context: Arc<RemoteServerAuthContext>,
+    progress: InstallProgress,
 ) -> std::result::Result<(), String> {
     let host = server.host.clone();
     match preflight_daemon_transport(server, socket_path.clone(), auth_context.clone()).await? {
@@ -522,26 +577,26 @@ pub async fn prepare_daemon_transport(
             log::info!("daemon connect [{host}]: binary missing — installing (first connect)");
             let transport = SshTransport::new(socket_path, auth_context);
             transport
-                .install_binary()
+                .install_binary_with_progress(progress)
                 .await
                 .map_err(|e| format!("remote-server install failed: {e}"))?;
             log::info!("daemon connect [{host}]: install complete");
             Ok(())
         }
-        DaemonPreflight::HostKeyConfirmationRequired(host_key) => Err(format!(
-            "SSH host-key confirmation required for {}:{} ({})",
-            host_key.host, host_key.port, host_key.fingerprint
+        DaemonPreflight::HostKeyConfirmationRequired(host_key) => Err(crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-confirm-host-key",
+            host = host_key.host,
+            port = host_key.port,
+            fingerprint = host_key.fingerprint
         )),
     }
 }
 
-/// Connects transiently to every discoverable daemon runtime on `server` and
-/// returns the sessions they own plus any existing tmux/byobu sessions —
-/// including ones that survived an app restart, transport drop, or client
-/// upgrade, which is the whole point of the adopt-sidebar. Self-contained:
-/// brings up the ControlMaster + binary, connects, runs the initialize handshake,
-/// calls `list_sessions`, then tears the transient connection down again (the
-/// daemon and its sessions persist independently of this connection).
+/// Connects transiently to one prepared daemon runtime and returns its sessions
+/// plus any existing tmux/byobu sessions. The caller must establish the
+/// ControlMaster and verify that the binary is present; this query never installs.
+/// After the initialize handshake and inventory requests, the transient connection
+/// is torn down. The daemon and its sessions persist independently.
 ///
 /// Request/response works without draining the client event channel — responses
 /// are routed to per-request oneshots; the event channel is unbounded so the
@@ -644,13 +699,59 @@ fn single_daemon_inventory(
     }
 }
 
+/// Lists sessions across discoverable runtimes without installing a daemon.
+/// One deadline covers preflight, the ControlMaster queue, and every query.
 pub async fn list_daemon_sessions(
     server: SshServerInfo,
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
     executor: Arc<Background>,
 ) -> std::result::Result<HostSessionInventory, String> {
-    prepare_daemon_transport(server, socket_path.clone(), auth_context.clone()).await?;
+    inventory_with_timeout(
+        list_daemon_sessions_inner(server, socket_path, auth_context, executor),
+        SESSION_INVENTORY_TIMEOUT,
+    )
+    .await
+}
+
+async fn inventory_with_timeout(
+    inventory: impl Future<Output = std::result::Result<HostSessionInventory, String>>,
+    timeout: Duration,
+) -> std::result::Result<HostSessionInventory, String> {
+    // Bound the whole scan, including the ControlMaster queue and all daemon
+    // runtimes. Dropping the owned future releases its lock guards and SSH child.
+    inventory.with_timeout(timeout).await.map_err(|_| {
+        crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-timeout",
+            seconds = timeout.as_secs()
+        )
+    })?
+}
+
+fn require_daemon_inventory_ready(preflight: DaemonPreflight) -> std::result::Result<(), String> {
+    match preflight {
+        DaemonPreflight::Ready => Ok(()),
+        DaemonPreflight::NeedsInstall => Err(crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-needs-install"
+        )),
+        DaemonPreflight::HostKeyConfirmationRequired(host_key) => Err(crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-confirm-host-key",
+            host = host_key.host,
+            port = host_key.port,
+            fingerprint = host_key.fingerprint
+        )),
+    }
+}
+
+async fn list_daemon_sessions_inner(
+    server: SshServerInfo,
+    socket_path: PathBuf,
+    auth_context: Arc<RemoteServerAuthContext>,
+    executor: Arc<Background>,
+) -> std::result::Result<HostSessionInventory, String> {
+    let preflight =
+        preflight_daemon_transport(server, socket_path.clone(), auth_context.clone()).await?;
+    require_daemon_inventory_ready(preflight)?;
     let base_transport = SshTransport::new(socket_path, auth_context.clone());
     let runtimes = match base_transport.list_daemon_runtime_filenames().await {
         Ok(runtimes) => runtimes,

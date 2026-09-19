@@ -4,6 +4,14 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.0.29] — 2026-09-11
 
+- Das Cockpit kennzeichnet KI-Sessions eindeutig, verlinkt Shell-Sessions unter Verbindungen und aktualisiert lokale sowie entfernte Inventare unabhängig. Hängende Remote-Abfragen blockieren andere Hosts nicht mehr.
+- Sichtbare Aufklapp-/Refresh-Aktionen und Tastaturbedienung verbessern die Verbindungsliste; feste Statusplätze verhindern springende Sessionzeilen. Wiederverbundene Sessions zeigen den tatsächlichen Verbindungs- und Installationsfortschritt.
+- Subscription-Agenten verlassen fehlerhafte Startzustände bedienbar, prüfen Ziele vor jedem Prompt erneut und behalten ihre Registry-Identität über Daemon-Neustarts. Änderungen an CLI-Version oder Modellidentität verlangen eine explizite neue Unterhaltung und verwerfen den bisherigen Kontext nicht still. Remote-CLI-Starts verwenden die bestätigte SSH-Verbindung und den tatsächlichen CLI-/Login-PATH.
+- Die SFTP-Schlüsselprüfung verarbeitet große bekannte Hostlisten linear und bewahrt gehashte Hosts, kurze Aliase sowie Port- und Algorithmusgrenzen.
+
+- Die Verbindungsliste hält Sessiontitel, Zusatzangaben und Aktionen auch in schmalen Seitenleisten lesbar; vorhandene Sessions bleiben bei fehlerfreier Aktualisierung sichtbar. Nach einem Fehler bleibt dessen Meldung bis zur erfolgreichen Wiederholung stehen. Eine vollständige Inventarabfrage endet spätestens nach 30 Sekunden mit einem Fehlerhinweis; eine erforderliche Erstinstallation erfolgt über das Verbinden des Hosts.
+- Ein Klick auf eine bereits geöffnete Zaplex-Session fokussiert ihre vorhandene Shell, auch hinter dem Dateimanager. Abgewiesene Attach-Versuche beenden den Startzustand sichtbar; das erstmalige Wiederanbinden wartet höchstens 60 Sekunden und beendet keine Remote-Session.
+
 - Das Cockpit zeigt verbundene Remote-Hosts sofort an. Regelmäßige Aktualisierungen verwerfen laufende Abfragen nicht mehr; getrennte Hosts bleiben auch bei verspäteten Antworten entfernt.
 
 - Der Dateimanager bevorzugt bereits bekannte SSH-Schlüsseltypen und unterscheidet zusätzliche Schlüsseltypen von echten Schlüsseländerungen. Beim bestätigten Ersetzen bleiben andere Hosts, Ports und Schlüsseltypen erhalten.

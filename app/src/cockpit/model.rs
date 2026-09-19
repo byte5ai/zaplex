@@ -18,6 +18,8 @@ use std::time::Duration;
 
 use async_compat::CompatExt as _;
 use chrono::Utc;
+#[cfg(not(target_family = "wasm"))]
+use futures::{stream::FuturesUnordered, StreamExt};
 use warpui::{Entity, ModelContext, SingletonEntity};
 use watcher::HomeDirectoryWatcher;
 use zaplex_cockpit::fleet::sort_hosts;
@@ -63,6 +65,8 @@ fn retain_negotiated_agent_pty_routes(features: &[String], sessions: &mut [Sessi
 
 /// How often to re-scan transcripts even when no top-level home change fired.
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(45);
+#[cfg(not(target_family = "wasm"))]
+const REMOTE_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Emitted whenever the snapshot changes.
 pub enum CockpitEvent {
@@ -141,7 +145,7 @@ impl RefreshSingleFlight {
 
 /// Result of one SSH-registry read. A failed read is deliberately distinct
 /// from an authoritative empty registry snapshot.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum RegistryRead {
     Current(Vec<RegisteredHost>),
     Cached {
@@ -562,112 +566,6 @@ impl CockpitModel {
                             .map(|node_id| (node_id, daemon.host_id.clone()))
                     })
                     .collect();
-                #[cfg(not(target_family = "wasm"))]
-                let (remotes, managed_fleet): (
-                    Vec<(RemoteHost, Vec<SessionSnapshot>)>,
-                    ManagedFleetInventory,
-                ) = {
-                    let mut remotes = Vec::with_capacity(inputs.daemons.len());
-                    let mut managed_fleet = ManagedFleetInventory::default();
-                    for daemon in inputs.daemons {
-                        if has_feature(&daemon.features, FEATURE_MANAGED_AGENT_FLEET_V1) {
-                            match daemon.client.list_sessions().await {
-                                Ok(list) => managed_fleet.extend_session_list(
-                                    &daemon.host_id,
-                                    &daemon.host_label,
-                                    daemon.registry_node_id.as_deref(),
-                                    list,
-                                ),
-                                Err(error) => log::warn!(
-                                    "cockpit managed fleet: list_sessions failed for host {:?}: {error}",
-                                    daemon.host_label
-                                ),
-                            }
-                            if daemon.is_current_runtime()
-                                && has_feature(
-                                    &daemon.features,
-                                    FEATURE_AGENT_ACCOUNT_ROUTING_V1,
-                                )
-                            {
-                                match daemon.client.list_agent_accounts().await {
-                                    Ok(accounts) => managed_fleet.enrich_remote_account_labels(
-                                        &daemon.host_id,
-                                        &accounts,
-                                    ),
-                                    Err(error) => log::warn!(
-                                        "cockpit managed fleet: list_agent_accounts failed for host {:?}: {error}",
-                                        daemon.host_label
-                                    ),
-                                }
-                            }
-                        }
-                        if !has_feature(&daemon.features, FEATURE_AGENT_INVENTORY) {
-                            remotes.push((
-                                RemoteHost {
-                                    label: daemon.host_label,
-                                    host_id: daemon.host_id,
-                                    registry_node_id: daemon.registry_node_id,
-                                    inventory_status: AgentInventoryStatus::Unsupported,
-                                },
-                                Vec::new(),
-                            ));
-                            continue;
-                        }
-                        match daemon.client.list_agent_sessions().await {
-                            Ok(list) => {
-                                let mut sessions: Vec<SessionSnapshot> =
-                                    list.sessions.iter().map(proto_to_snapshot).collect();
-                                retain_negotiated_agent_pty_routes(&daemon.features, &mut sessions);
-                                for session in &mut sessions {
-                                    session.effort = super::session_effort(
-                                        session,
-                                        false,
-                                        Some(&daemon.host_id),
-                                    );
-                                }
-                                // Carry the daemon's stable `host_id` alongside its
-                                // display label so the folded inventory can route
-                                // guardrails/attach by id, not by a collidable label.
-                                remotes.push((
-                                    RemoteHost {
-                                        label: daemon.host_label,
-                                        host_id: daemon.host_id,
-                                        registry_node_id: daemon.registry_node_id,
-                                        inventory_status: AgentInventoryStatus::Ready,
-                                    },
-                                    sessions,
-                                ));
-                            }
-                            Err(e) => {
-                                log::warn!(
-                                    "cockpit fold: list_agent_sessions failed for host {:?}: {e} \
-                                     — retaining the connected host without inventory",
-                                    daemon.host_label
-                                );
-                                remotes.push((
-                                    RemoteHost {
-                                        label: daemon.host_label,
-                                        host_id: daemon.host_id,
-                                        registry_node_id: daemon.registry_node_id,
-                                        inventory_status: AgentInventoryStatus::Unavailable,
-                                    },
-                                    Vec::new(),
-                                ));
-                            }
-                        }
-                    }
-                    (remotes, managed_fleet)
-                };
-                #[cfg(target_family = "wasm")]
-                let (remotes, managed_fleet): (
-                    Vec<(RemoteHost, Vec<SessionSnapshot>)>,
-                    ManagedFleetInventory,
-                ) = {
-                    // No daemon connections on WASM; the captured (empty) list is
-                    // consumed here so the fold is honestly local-only.
-                    let _ = inputs.daemons;
-                    (Vec::new(), ManagedFleetInventory::default())
-                };
                 // Local contribution: every live account session plus
                 // Antigravity's per-workspace resume registry. Antigravity is
                 // deliberately Idle: its disk state proves a resumable
@@ -688,7 +586,7 @@ impl CockpitModel {
                     .chain(antigravity)
                     .collect();
                 let local_label = inputs.local_label.clone();
-                let mut inventory = fold_inventory(inputs.local_label, local, remotes);
+                let mut inventory = fold_inventory(inputs.local_label, local, Vec::new());
 
                 // Validate only the connected roots against the SSH registry.
                 // Registry-only/offline hosts belong to Connections and are never
@@ -718,8 +616,81 @@ impl CockpitModel {
                     &live_hosts_by_registry_node,
                 );
                 session_names.apply_to_inventory(&mut inventory);
-                let mut managed_fleet = managed_fleet;
-                managed_fleet.enrich_account_labels(&inventory);
+                // Publish local work before waiting for any remote RPC. Keep each
+                // previous remote root until that host's own refresh completes.
+                let initial_registry = registry_read.clone();
+                let initial_live_hosts = live_hosts_by_registry_node.clone();
+                let local_applied = spawner
+                    .spawn(move |me, ctx| {
+                        if !*CockpitSettings::as_ref(ctx).enabled {
+                            me.clear_for_disabled(ctx);
+                            return false;
+                        }
+                        if !should_apply_refresh_result(me.refresh_flight.generation, generation) {
+                            me.transcript_cache = inputs.transcript_cache;
+                            return false;
+                        }
+                        let mut next = me.inventory.clone();
+                        replace_inventory_roots(&mut next, inventory);
+                        reconcile_registry_read(&mut next, &initial_registry, &initial_live_hosts);
+                        if let RegistryRead::Current(registered) = initial_registry {
+                            me.registry_hosts = Some(registered);
+                        }
+                        let mut managed_fleet = me.managed_fleet.clone();
+                        managed_fleet.enrich_account_labels(&next);
+                        me.apply(
+                            snapshot,
+                            inputs.transcript_cache,
+                            overrides,
+                            next,
+                            managed_fleet,
+                            local_label,
+                            ctx,
+                        );
+                        true
+                    })
+                    .await
+                    .unwrap_or(false);
+
+                #[cfg(not(target_family = "wasm"))]
+                if local_applied {
+                    let mut pending: FuturesUnordered<_> = inputs
+                        .daemons
+                        .into_iter()
+                        .map(refresh_remote_host)
+                        .collect();
+                    while let Some((remote, mut managed_fleet)) = pending.next().await {
+                        let host_id = remote.0.host_id.clone();
+                        let mut inventory = fold_inventory("", Vec::new(), vec![remote]);
+                        inventory.hosts.retain(|host| !host.is_local);
+                        reconcile_registry_read(
+                            &mut inventory,
+                            &registry_read,
+                            &live_hosts_by_registry_node,
+                        );
+                        session_names.apply_to_inventory(&mut inventory);
+                        managed_fleet.enrich_account_labels(&inventory);
+                        let _ = spawner
+                            .spawn(move |me, ctx| {
+                                if !*CockpitSettings::as_ref(ctx).enabled
+                                    || !should_apply_refresh_result(
+                                        me.refresh_flight.generation,
+                                        generation,
+                                    )
+                                {
+                                    return;
+                                }
+                                let mut next = me.inventory.clone();
+                                replace_inventory_roots(&mut next, inventory);
+                                let mut fleet = me.managed_fleet.clone();
+                                fleet.replace_host(&host_id, managed_fleet);
+                                me.apply_inventory(next, fleet, ctx);
+                            })
+                            .await;
+                    }
+                }
+                #[cfg(target_family = "wasm")]
+                let _ = (local_applied, inputs.daemons);
 
                 let _ = spawner
                     .spawn(move |me, ctx| {
@@ -727,27 +698,7 @@ impl CockpitModel {
                         if !*CockpitSettings::as_ref(ctx).enabled {
                             me.refresh_flight.stop();
                             me.clear_for_disabled(ctx);
-                            return;
-                        }
-                        if should_apply_refresh_result(me.refresh_flight.generation, generation) {
-                            if let RegistryRead::Current(registered) = registry_read {
-                                me.registry_hosts = Some(registered);
-                            }
-                            me.apply(
-                                snapshot,
-                                inputs.transcript_cache,
-                                overrides,
-                                inventory,
-                                managed_fleet,
-                                local_label,
-                                ctx,
-                            );
-                        } else {
-                            // The visible result is stale, but this bounded parse
-                            // cache remains valid input for the coalesced rerun.
-                            me.transcript_cache = inputs.transcript_cache;
-                        }
-                        if rerun {
+                        } else if rerun {
                             let generation = me.refresh_flight.generation;
                             me.spawn_refresh_generation(generation, ctx);
                         }
@@ -829,6 +780,26 @@ impl CockpitModel {
         local_label: String,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.snapshot = snapshot;
+        self.transcript_cache = transcript_cache;
+        self.overrides = overrides;
+        self.local_label = local_label;
+        // Drop a selection whose account no longer exists, so the highlight never
+        // points at a vanished card.
+        if let Some(sel) = &self.selected_account {
+            if !self.snapshot.accounts.iter().any(|a| &a.account.key == sel) {
+                self.selected_account = None;
+            }
+        }
+        self.apply_inventory(inventory, managed_fleet, ctx);
+    }
+
+    fn apply_inventory(
+        &mut self,
+        inventory: FleetTree,
+        managed_fleet: ManagedFleetInventory,
+        ctx: &mut ModelContext<Self>,
+    ) {
         // Transition detection (claudeplex's most-loved signal): a session that
         // was working (Active/Monitor) and is now Waiting needs the user NOW.
         // Diffed off the unified inventory (old → new); see
@@ -874,19 +845,8 @@ impl CockpitModel {
             }
         }
 
-        self.snapshot = snapshot;
         self.inventory = inventory;
         self.managed_fleet = managed_fleet;
-        self.transcript_cache = transcript_cache;
-        self.overrides = overrides;
-        self.local_label = local_label;
-        // Drop a selection whose account no longer exists, so the highlight never
-        // points at a vanished card.
-        if let Some(sel) = &self.selected_account {
-            if !self.snapshot.accounts.iter().any(|a| &a.account.key == sel) {
-                self.selected_account = None;
-            }
-        }
         ctx.emit(CockpitEvent::Updated);
         if !became_waiting.is_empty() {
             ctx.emit(CockpitEvent::SessionsBecameWaiting(became_waiting));
@@ -933,6 +893,128 @@ impl CockpitModel {
             })
             .detach();
     }
+}
+
+/// Each RPC has its own deadline and correlation cleanup in the client. All
+/// three inventories on a host, and all hosts, can progress independently.
+#[cfg(not(target_family = "wasm"))]
+async fn refresh_remote_host(
+    daemon: ConnectedDaemon,
+) -> ((RemoteHost, Vec<SessionSnapshot>), ManagedFleetInventory) {
+    let managed = has_feature(&daemon.features, FEATURE_MANAGED_AGENT_FLEET_V1);
+    let (session_list, accounts, agent_sessions) = futures::join!(
+        async {
+            if managed {
+                Some(
+                    daemon
+                        .client
+                        .list_sessions_with_timeout(REMOTE_REFRESH_TIMEOUT)
+                        .await,
+                )
+            } else {
+                None
+            }
+        },
+        async {
+            if managed
+                && daemon.is_current_runtime()
+                && has_feature(&daemon.features, FEATURE_AGENT_ACCOUNT_ROUTING_V1)
+            {
+                Some(
+                    daemon
+                        .client
+                        .list_agent_accounts_with_timeout(REMOTE_REFRESH_TIMEOUT)
+                        .await,
+                )
+            } else {
+                None
+            }
+        },
+        async {
+            if has_feature(&daemon.features, FEATURE_AGENT_INVENTORY) {
+                Some(
+                    daemon
+                        .client
+                        .list_agent_sessions_with_timeout(REMOTE_REFRESH_TIMEOUT)
+                        .await,
+                )
+            } else {
+                None
+            }
+        },
+    );
+    let mut fleet = ManagedFleetInventory::default();
+    if let Some(result) = session_list {
+        match result {
+            Ok(list) => fleet.extend_session_list(
+                &daemon.host_id,
+                &daemon.host_label,
+                daemon.registry_node_id.as_deref(),
+                list,
+            ),
+            Err(error) => log::warn!(
+                "cockpit managed fleet: session inventory failed for {:?}: {error}",
+                daemon.host_label
+            ),
+        }
+    }
+    if let Some(result) = accounts {
+        match result {
+            Ok(accounts) => fleet.enrich_remote_account_labels(&daemon.host_id, &accounts),
+            Err(error) => log::warn!(
+                "cockpit managed fleet: account inventory failed for {:?}: {error}",
+                daemon.host_label
+            ),
+        }
+    }
+    let (inventory_status, mut sessions) = match agent_sessions {
+        Some(Ok(list)) => (
+            AgentInventoryStatus::Ready,
+            list.sessions.iter().map(proto_to_snapshot).collect(),
+        ),
+        Some(Err(error)) => {
+            log::warn!(
+                "cockpit: agent inventory failed for {:?}: {error}",
+                daemon.host_label
+            );
+            (AgentInventoryStatus::Unavailable, Vec::new())
+        }
+        None => (AgentInventoryStatus::Unsupported, Vec::new()),
+    };
+    retain_negotiated_agent_pty_routes(&daemon.features, &mut sessions);
+    for session in &mut sessions {
+        session.effort = super::session_effort(session, false, Some(&daemon.host_id));
+    }
+    (
+        (
+            RemoteHost {
+                label: daemon.host_label,
+                host_id: daemon.host_id,
+                registry_node_id: daemon.registry_node_id,
+                inventory_status,
+            },
+            sessions,
+        ),
+        fleet,
+    )
+}
+
+/// Replace only roots covered by a completed refresh, preserving unrelated
+/// hosts. Callers reject obsolete topology generations before invoking this.
+fn replace_inventory_roots(inventory: &mut FleetTree, completed: FleetTree) {
+    for host in completed.hosts {
+        inventory.hosts.retain(|previous| {
+            previous.is_local != host.is_local || previous.host_id != host.host_id
+        });
+        inventory.hosts.push(host);
+    }
+    sort_hosts(&mut inventory.hosts);
+    inventory.needs_me = inventory
+        .hosts
+        .iter()
+        .filter(|host| host.is_available())
+        .map(|host| host.needs_me)
+        .sum();
 }
 
 /// Whether the model's public state is already the disabled/blank state (no

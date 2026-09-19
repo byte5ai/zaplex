@@ -89,9 +89,8 @@ impl SubscriptionAgentLayoutState {
             | Self::Responding
             | Self::RunningTool => &[],
             Self::WaitingForApproval => &["allow", "allow_for_session", "deny", "cancel"],
-            Self::TurnCompleted | Self::RecoverableErrorWithSession => {
-                &["resume", "restart", "end"]
-            }
+            Self::TurnCompleted => &["resume", "restart", "end"],
+            Self::RecoverableErrorWithSession => &["resume", "new_conversation", "end"],
             Self::SessionEnded => &["new_conversation", "back_to_shell"],
             Self::RecoverableErrorWithoutSession => &["retry", "new_conversation", "back_to_shell"],
         }

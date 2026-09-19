@@ -189,3 +189,12 @@ Figma: none provided. The binding visual reference is
     discovery, or transcript code run the executable reference-parity matrix. The gate validates
     fresh reference revisions, targeted checks, responsive/reduced-motion screenshots, and a
     documented real two-host smoke procedure; missing or stale evidence fails closed.
+
+## Verbindliche Bedienungs- und Refresh-Korrekturen
+
+- Die Cockpit-Überschrift lautet „KI-Sessions“. Gezählt werden die angezeigten Agent-Container; reine Shell-Sessions liegen unter Verbindungen und sind von hier aus direkt erreichbar. Exakte bekannte Modell-IDs bleiben sichtbar.
+- Die Hostzeile unter Verbindungen zeigt bei resilienten Hosts dauerhaft sichtbare Aufklapp- und Refresh-Aktionen. Refresh öffnet den Recovery-Bereich bei Bedarf. Hostnamen erhalten die gesamte verbleibende Breite mit Ellipse. Verbindungs- und Refresh-Status nutzen feste Symbolplätze; laufende Aktualisierungen schieben vorhandene Sessionzeilen nicht nach unten.
+- Zaplex- und tmux/byobu-Sessions haben denselben primären Klickbereich und dieselbe Öffnen-Aktion. Pfeiltasten navigieren sichtbare Zeilen; Enter öffnet/aktiviert, Links/Rechts klappen auf oder zu, Cmd/Ctrl-R aktualisiert den ausgewählten Host. Eingabefelder und geöffnete Menüs behalten ihre eigene Tastaturbedienung.
+- Übernommene Sessions zeigen tatsächlichen Verbindungs-/Installationsfortschritt. Die bestehende Startfrist von 60 Sekunden bleibt erhalten und beendet keine entfernte Session.
+- Lokale Cockpit-Daten erscheinen vor Remote-Abfragen. Hosts werden parallel abgefragt und einzeln veröffentlicht; jede Inventar-RPC hat eine Frist von zehn Sekunden. Ein fehlerhafter Host bleibt mit ehrlichem Fehlerstatus sichtbar und löscht nur sein eigenes veraltetes Inventar. Ergebnisse veralteter Topologien bleiben verworfen.
+- Die SFTP-Prüfung bekannter Schlüssel skaliert linear mit der Datei. Gehashte Hosts, Aliaslisten, Ports und unterschiedliche Algorithmen behalten ihre bisherigen Identitätsgrenzen; bestätigte Schlüsselabweichungen werden nicht automatisch übernommen.

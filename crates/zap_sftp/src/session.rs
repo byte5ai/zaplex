@@ -181,7 +181,7 @@ impl SftpSession {
         session.set_timeout(effective_timeout.as_millis() as u32);
 
         let known_hosts_path = default_known_hosts_path()?;
-        let known_hosts = load_known_hosts(&session, &known_hosts_path)?;
+        let known_hosts = load_known_hosts(&known_hosts_path)?;
         let algorithms = preferred_host_key_algorithms(&session, &known_hosts, host, port)?;
         session.method_pref(MethodType::HostKey, &algorithms.join(","))?;
 
@@ -279,16 +279,14 @@ fn default_known_hosts_path() -> Result<PathBuf, SftpError> {
         })
 }
 
-fn load_known_hosts(session: &ssh2::Session, path: &Path) -> Result<ssh2::KnownHosts, SftpError> {
-    let mut known_hosts = session.known_hosts()?;
-    match fs::metadata(path) {
-        Ok(_) => {
-            known_hosts.read_file(path, KnownHostFileKind::OpenSSH)?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(SftpError::Io(error)),
+fn load_known_hosts(path: &Path) -> Result<String, SftpError> {
+    // Verification ignores non-UTF8 comments; this transient view is never
+    // written back. Persistence continues to preserve the original file.
+    match fs::read(path) {
+        Ok(contents) => Ok(String::from_utf8_lossy(&contents).into_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(SftpError::Io(error)),
     }
-    Ok(known_hosts)
 }
 
 fn check_host_endpoint(
@@ -311,35 +309,59 @@ fn public_key_algorithm(key: &[u8]) -> Option<&str> {
     std::str::from_utf8(key.get(4..4usize.checked_add(length)?)?).ok()
 }
 
-fn known_host_key_algorithms(
-    known_hosts: &ssh2::KnownHosts,
+/// Match each original line against its own collection, preserving alias lists. Checking the entire
+/// known_hosts collection for every key scales quadratically and can confuse
+/// entries sharing a key. libssh2 still owns hashed-host and endpoint matching.
+fn matching_known_host_keys(
+    session: &ssh2::Session,
+    contents: &str,
     host: &str,
     port: u16,
-) -> Result<Vec<String>, SftpError> {
-    let mut algorithms = Vec::new();
-    for entry in known_hosts.hosts()? {
-        let Ok(key) = base64::engine::general_purpose::STANDARD.decode(entry.key()) else {
+) -> Result<Vec<Vec<u8>>, SftpError> {
+    let mut keys = Vec::new();
+    for line in contents.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(hosts), Some(algorithm), Some(encoded)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
             continue;
         };
-        if matches!(
-            check_host_endpoint(known_hosts, host, port, &key),
-            CheckResult::Match
-        ) {
-            if let Some(algorithm) = public_key_algorithm(&key) {
-                algorithms.push(algorithm.to_string());
+        // OpenSSH markers are not ordinary positive host-key pins. Preserve
+        // them on disk and never turn a revoked/certificate entry into trust.
+        if hosts.starts_with('#') || hosts.starts_with('@') {
+            continue;
+        }
+        let Ok(key) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
+            continue;
+        };
+        if public_key_algorithm(&key) != Some(algorithm) {
+            continue;
+        }
+        let mut candidate = session.known_hosts()?;
+        candidate.read_str(
+            &format!("{hosts} {algorithm} {encoded}"),
+            KnownHostFileKind::OpenSSH,
+        )?;
+        match check_host_endpoint(&candidate, host, port, &key) {
+            CheckResult::Match => keys.push(key),
+            CheckResult::NotFound => {}
+            CheckResult::Mismatch | CheckResult::Failure => {
+                return Err(SftpError::ConnectionFailed(
+                    "The stored SSH host key could not be checked safely".to_string(),
+                ));
             }
         }
     }
-    Ok(algorithms)
+    Ok(keys)
 }
 
 fn preferred_host_key_algorithms(
     session: &ssh2::Session,
-    known_hosts: &ssh2::KnownHosts,
+    contents: &str,
     host: &str,
     port: u16,
 ) -> Result<Vec<&'static str>, SftpError> {
-    let known = known_host_key_algorithms(known_hosts, host, port)?;
+    let known = matching_known_host_keys(session, contents, host, port)?;
     let mut supported = session.supported_algs(MethodType::HostKey)?;
     // Preserve the library's order within each group, including RSA SHA-2
     // signatures for stored ssh-rsa public keys. Never add unsupported methods.
@@ -348,53 +370,37 @@ fn preferred_host_key_algorithms(
             "rsa-sha2-256" | "rsa-sha2-512" => "ssh-rsa",
             algorithm => algorithm,
         };
-        !known.iter().any(|known| known == key_algorithm)
+        !known
+            .iter()
+            .any(|key| public_key_algorithm(key) == Some(key_algorithm))
     });
     Ok(supported)
 }
 
 fn check_known_host_key(
     session: &ssh2::Session,
-    known_hosts: &ssh2::KnownHosts,
+    contents: &str,
     host: &str,
     port: u16,
     key: &[u8],
 ) -> Result<CheckResult, SftpError> {
-    let result = check_host_endpoint(known_hosts, host, port, key);
-    if !matches!(result, CheckResult::Mismatch) {
-        return Ok(result);
-    }
     let Some(algorithm) = public_key_algorithm(key) else {
         return Ok(CheckResult::Failure);
     };
-    // ssh2's check API omits the key type. Recheck only entries of the
-    // negotiated algorithm so a new key type is unknown, not a rotation.
-    let mut same_algorithm = session.known_hosts()?;
-    for entry in known_hosts.hosts()? {
-        let Ok(candidate) = base64::engine::general_purpose::STANDARD.decode(entry.key()) else {
-            continue;
-        };
-        if public_key_algorithm(&candidate) == Some(algorithm)
-            && matches!(
-                check_host_endpoint(known_hosts, host, port, &candidate),
-                CheckResult::Match
-            )
-        {
-            // Identity was checked above; this temporary collection needs only
-            // the exact target and its keys, not the original aliases or hashes.
-            let endpoint = if port == 22 {
-                host.to_string()
-            } else {
-                format!("[{host}]:{port}")
-            };
-            let encoded = base64::engine::general_purpose::STANDARD.encode(candidate);
-            same_algorithm.read_str(
-                &format!("{endpoint} {algorithm} {encoded}"),
-                KnownHostFileKind::OpenSSH,
-            )?;
+    let mut same_algorithm = false;
+    for candidate in matching_known_host_keys(session, contents, host, port)? {
+        if public_key_algorithm(&candidate) == Some(algorithm) {
+            if candidate == key {
+                return Ok(CheckResult::Match);
+            }
+            same_algorithm = true;
         }
     }
-    Ok(check_host_endpoint(&same_algorithm, host, port, key))
+    Ok(if same_algorithm {
+        CheckResult::Mismatch
+    } else {
+        CheckResult::NotFound
+    })
 }
 
 fn verify_host_key(
@@ -409,7 +415,7 @@ fn verify_host_key(
     })?;
     let fingerprint_sha256 = host_key_fingerprint_sha256(host_key);
     let key_type = host_key_type_name(host_key_type).to_string();
-    let known_hosts = load_known_hosts(session, known_hosts_path)?;
+    let known_hosts = load_known_hosts(known_hosts_path)?;
 
     match enforce_host_key_policy(
         check_known_host_key(session, &known_hosts, host, port, host_key)?,

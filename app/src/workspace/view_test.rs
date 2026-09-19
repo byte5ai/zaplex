@@ -3624,3 +3624,125 @@ fn matching_process_identity_reaches_signal_backend_once() {
 
     assert_eq!(signal_calls, 1);
 }
+
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn listed_fresh_daemon_session_focuses_its_existing_shell_under_file_manager() {
+    let _undo_closed_panes_guard = FeatureFlag::UndoClosedPanes.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
+        app.add_singleton_model(|_| crate::sftp_manager::transfer_queue::TransferQueue::new());
+        let workspace = mock_workspace(&mut app);
+        let conn = warp_core::SessionId::from(901u64);
+        let directory = tempfile::tempdir().unwrap();
+        let (group, shell, tab_count) = workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    daemon_request: Some(crate::terminal::daemon_tty::DaemonSessionRequest {
+                        connection_session_id: conn,
+                        open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+                        adopt_pty_session_id: None,
+                        adopt_pty_generation: None,
+                        expected_agent_binding: None,
+                        install_progress_rx: None,
+                        host_label: "example.test".to_string(),
+                    }),
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let group = workspace.active_tab_pane_group().clone();
+            let shell = group.as_ref(ctx).daemon_connection_pane(conn, ctx).unwrap();
+            workspace
+                .ssh_tab_nodes
+                .insert(group.id(), "unrelated-tab-host".to_string());
+            remember_daemon_node_session(
+                &mut workspace.daemon_node_sessions,
+                "node-a".to_string(),
+                conn,
+            );
+            group.update(ctx, |group, ctx| {
+                group.open_file_manager_in_place(
+                    shell,
+                    crate::pane_group::FileManagerTarget::Local {
+                        start_path: directory.path().to_path_buf(),
+                    },
+                    ctx,
+                );
+                let replacement = group.focused_pane_id(ctx);
+                assert_ne!(replacement, shell);
+                assert!(!group.visible_pane_ids().contains(&shell));
+                assert_eq!(
+                    group.original_pane_for_replacement(replacement),
+                    Some(shell)
+                );
+                assert_eq!(
+                    group.daemon_connection_pane(conn, ctx),
+                    Some(shell),
+                    "a temporarily covered shell remains an open connection"
+                );
+            });
+            // The acknowledgement must find the owning pane even when another tab is active.
+            workspace.activate_tab(0, ctx);
+            (group, shell, workspace.tabs.len())
+        });
+        RemoteServerManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.report_session_opened(conn, "pty-fresh".to_string(), 7, ctx);
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            let binding = daemon_adoption_key("node-a", None, "pty-fresh", 7);
+            assert_eq!(
+                workspace.adopted_daemon_sessions[&binding].connection_session_id,
+                conn
+            );
+            let mut server = warp_ssh_manager::SshServerInfo::new_default("node-a".to_string());
+            server.host = "example.test".to_string();
+            workspace.adopt_daemon_session(
+                warp_ssh_manager::ResolvedSshConnection {
+                    server,
+                    secret_lookup_id: "node-a".to_string(),
+                    secret_kind: warp_ssh_manager::SecretKind::Password,
+                },
+                "pty-fresh".to_string(),
+                7,
+                None,
+                None,
+                ctx,
+            );
+            assert_eq!(
+                workspace.tabs.len(),
+                tab_count,
+                "must not open a duplicate connection"
+            );
+            assert_eq!(workspace.active_tab_pane_group().id(), group.id());
+            assert_eq!(group.as_ref(ctx).focused_pane_id(ctx), shell);
+            assert!(group.as_ref(ctx).visible_pane_ids().contains(&shell));
+        });
+        group.update(&mut app, |group, ctx| {
+            group.add_terminal_pane_ignoring_default_session_mode(Direction::Right, None, ctx);
+            assert_eq!(group.visible_pane_ids().len(), 2);
+            group.close_pane(shell, ctx);
+            assert!(group.is_pane_hidden_for_close(shell));
+            assert!(group.terminal_view_from_pane_id(shell, ctx).is_some());
+            assert!(!group.visible_pane_ids().contains(&shell));
+            assert_eq!(
+                group.daemon_connection_pane(conn, ctx),
+                None,
+                "a shell retained only for Undo Close must not be reused"
+            );
+        });
+        RemoteServerManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.report_session_opened(conn, "pty-fresh".to_string(), 8, ctx);
+        });
+        workspace.read(&app, |workspace, _| {
+            assert!(!workspace
+                .adopted_daemon_sessions
+                .contains_key(&daemon_adoption_key("node-a", None, "pty-fresh", 8)));
+            assert_eq!(workspace.tabs.len(), tab_count);
+        });
+    });
+}

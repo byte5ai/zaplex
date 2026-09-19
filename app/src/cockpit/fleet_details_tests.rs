@@ -380,3 +380,59 @@ fn stale_proto_details_degrade_and_block_restart() {
     assert_eq!(details.host_headroom.hint, "Messung veraltet");
     assert!(details.launch_blocked);
 }
+
+#[test]
+fn partial_managed_refresh_replaces_only_the_requested_host_and_rejects_foreign_entries() {
+    let mut inventory = ManagedFleetInventory::default();
+    for host_id in ["host-a", "host-b"] {
+        inventory.extend_session_list(
+            host_id,
+            "same-label",
+            None,
+            SessionList {
+                sessions: vec![managed_session(3)],
+                ..Default::default()
+            },
+        );
+    }
+    let untouched = inventory
+        .sessions()
+        .iter()
+        .find(|session| session.host_id == "host-b")
+        .unwrap()
+        .clone();
+    let mut refreshed = ManagedFleetInventory::default();
+    for host_id in ["host-a", "host-b", "foreign-host"] {
+        refreshed.extend_session_list(
+            host_id,
+            "same-label",
+            None,
+            SessionList {
+                sessions: vec![managed_session(9)],
+                ..Default::default()
+            },
+        );
+    }
+
+    inventory.replace_host("host-a", refreshed);
+
+    assert_eq!(inventory.sessions().len(), 2);
+    assert_eq!(
+        inventory
+            .sessions()
+            .iter()
+            .find(|session| session.host_id == "host-b"),
+        Some(&untouched)
+    );
+    assert_eq!(
+        inventory
+            .sessions()
+            .iter()
+            .find(|session| session.host_id == "host-a")
+            .unwrap()
+            .generation,
+        9
+    );
+    inventory.replace_host("host-a", ManagedFleetInventory::default());
+    assert_eq!(inventory.sessions(), &[untouched]);
+}

@@ -1,15 +1,16 @@
+use super::process::resolve_remote_executable;
 use super::{
     discover_capabilities, query_cli_version, route_target, AccountIdentity, AgentCapability,
     AgentLifecycle, HostIdentity, InstallationIdentity, ProcessLocation, ResponseEventAdapter,
-    RoutePreferences, RouteResult, SubscriptionAgent, SubscriptionAuthenticationError,
-    SubscriptionLocationPreference, SubscriptionSession, SubscriptionSessionRegistry,
-    SubscriptionTarget, LOCAL_SUBSCRIPTION_HOST_ID,
+    RoutePreferences, RouteResult, SessionIdentity, SubscriptionAgent,
+    SubscriptionAuthenticationError, SubscriptionLocationPreference, SubscriptionSession,
+    SubscriptionSessionRegistry, SubscriptionTarget, LOCAL_SUBSCRIPTION_HOST_ID,
 };
 use crate::ai::agent::{api, AIAgentInput, AIIdentifiers};
 use crate::ai::api_error::AIApiError;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, SessionContext};
 use crate::cockpit::CockpitModel;
-use crate::remote_server::manager::RemoteServerManager;
+use crate::remote_server::manager::{ConnectedDaemon, RemoteServerManager};
 use crate::report_if_error;
 use crate::terminal::ssh::util::InteractiveSshCommand;
 use anyhow::{anyhow, bail, Context, Result};
@@ -124,8 +125,18 @@ fn runtime_candidates(
     use_cached_remote_inventory: bool,
     ctx: &AppContext,
 ) -> Result<(RuntimeCandidates, RoutePreferences, PathBuf)> {
-    let hosts = available_subscription_hosts(ctx);
+    let daemons = RemoteServerManager::as_ref(ctx).connected_daemons();
+    let hosts = available_subscription_hosts(&daemons);
     registry.set_host_choices(conversation_id.to_string(), hosts.clone());
+    if let Some(location) = registry.location_preference(conversation_id) {
+        if let Some(host) = daemons
+            .iter()
+            .find(|daemon| daemon.host_id == location.host.id)
+            .and_then(subscription_host_identity)
+        {
+            registry.migrate_host_identity(conversation_id, &location.host.id, host);
+        }
+    }
     let existing_location = registry.location_preference(conversation_id);
     let working_directory = existing_location
         .as_ref()
@@ -150,10 +161,10 @@ fn runtime_candidates(
                 bail!("remote host returned the reserved local subscription-host identity")
             }
             Some(host_id) => Some(
-                hosts
+                daemons
                     .iter()
-                    .find(|host| host.id == host_id.as_str())
-                    .cloned()
+                    .find(|daemon| daemon.host_id == host_id.as_str())
+                    .and_then(subscription_host_identity)
                     .unwrap_or_else(|| HostIdentity {
                         id: host_id.to_string(),
                         display_name: host_id.to_string(),
@@ -202,24 +213,48 @@ fn runtime_candidates(
     Ok((candidates, preferences, working_directory))
 }
 
-fn available_subscription_hosts(ctx: &AppContext) -> Vec<HostIdentity> {
+/// A subscription location follows a registered machine across daemon restarts.
+/// PTY attach and historical runtimes keep using their exact daemon identities.
+fn subscription_host_identity(daemon: &ConnectedDaemon) -> Option<HostIdentity> {
+    if !daemon.is_current_runtime() {
+        return None;
+    }
+    let node_id = daemon
+        .registry_node_id
+        .as_deref()
+        .filter(|id| !id.is_empty())?;
+    Some(HostIdentity {
+        id: format!("ssh-registry:{node_id}"),
+        display_name: daemon.host_label.clone(),
+    })
+}
+
+fn available_subscription_hosts(daemons: &[ConnectedDaemon]) -> Vec<HostIdentity> {
     let mut hosts = vec![HostIdentity {
         id: LOCAL_SUBSCRIPTION_HOST_ID.to_string(),
         display_name: crate::t!("ai-footer-subscription-local-machine"),
     }];
-    hosts.extend(
-        RemoteServerManager::as_ref(ctx)
-            .connected_daemons()
-            .into_iter()
-            .filter(|daemon| daemon.is_current_runtime())
-            .map(|daemon| HostIdentity {
-                id: daemon.host_id,
-                display_name: daemon.host_label,
-            }),
-    );
+    hosts.extend(daemons.iter().filter_map(subscription_host_identity));
     hosts.sort_by(|left, right| left.id.cmp(&right.id));
     hosts.dedup_by(|left, right| left.id == right.id);
     hosts
+}
+
+fn selected_remote_daemon<'a>(
+    host_id: &str,
+    daemons: &'a [ConnectedDaemon],
+) -> Result<&'a ConnectedDaemon> {
+    let mut matches = daemons.iter().filter(|daemon| {
+        subscription_host_identity(daemon)
+            .is_some_and(|host| host.id == host_id || daemon.host_id == host_id)
+    });
+    let daemon = matches
+        .next()
+        .with_context(|| format!("remote host {host_id} is not connected"))?;
+    if matches.next().is_some() {
+        bail!("remote host {host_id} has more than one current runtime; reconnect it before starting an agent");
+    }
+    Ok(daemon)
 }
 
 pub(crate) fn subscription_preflight_info(
@@ -228,16 +263,17 @@ pub(crate) fn subscription_preflight_info(
     ctx: &AppContext,
 ) -> Result<SubscriptionPreflight> {
     let registry = SubscriptionSessionRegistry::as_ref(ctx).clone();
+    registry.invalidate_target(&conversation_id);
     registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Starting);
     let (candidates, preferences, working_directory) =
         match runtime_candidates(&conversation_id, session_context, &registry, false, ctx) {
             Ok(runtime) => runtime,
             Err(error) => {
                 registry.set_lifecycle(
-                    conversation_id,
+                    conversation_id.clone(),
                     AgentLifecycle::RecoverableError {
                         message: error.to_string(),
-                        session: None,
+                        session: registry.get(&conversation_id).map(|stored| stored.session),
                     },
                 );
                 return Err(error);
@@ -393,6 +429,7 @@ async fn resolve_runtime_candidates(
     let candidates = match candidates.resolve(preferences.agent).await {
         Ok(candidates) => candidates,
         Err(error) => {
+            registry.invalidate_target(conversation_id);
             registry.set_lifecycle(
                 conversation_id.to_string(),
                 recoverable_lifecycle(registry, conversation_id, error.to_string()),
@@ -401,13 +438,68 @@ async fn resolve_runtime_candidates(
         }
     };
     if candidates.is_empty() {
+        registry.invalidate_target(conversation_id);
         registry.set_lifecycle(
             conversation_id.to_string(),
             AgentLifecycle::NoAgentInstalled,
         );
         bail!("Install Claude Code or Codex and sign in with a subscription account");
     }
-    Ok(candidates)
+    let mut resolved = Vec::new();
+    let mut errors = Vec::new();
+    for mut candidate in candidates {
+        if matches!(candidate.location, ProcessLocation::Local) {
+            resolved.push(candidate);
+            continue;
+        }
+        match with_timeout(
+            "remote subscription executable discovery",
+            resolve_remote_executable(&mut candidate.installation, &mut candidate.location),
+        )
+        .await
+        {
+            Ok(()) => resolved.push(candidate),
+            Err(error) => {
+                let selected_account = match preferences.account_identity.as_ref() {
+                    Some(account) => {
+                        account.id == candidate.installation.account.id
+                            && account.provider_account_id
+                                == candidate.installation.account.provider_account_id
+                            && account.config_dir == candidate.installation.account.config_dir
+                    }
+                    None => preferences
+                        .account_id
+                        .as_ref()
+                        .is_none_or(|account| *account == candidate.installation.account.id),
+                };
+                if !preferences.require_agent_choice
+                    && !preferences.require_account_choice
+                    && preferences.agent == Some(candidate.installation.agent)
+                    && selected_account
+                {
+                    // Keep the selected installation's actionable probe failure
+                    // even when another agent or account resolved successfully.
+                    registry.invalidate_target(conversation_id);
+                    registry.set_lifecycle(
+                        conversation_id,
+                        recoverable_lifecycle(registry, conversation_id, error.to_string()),
+                    );
+                    return Err(error);
+                }
+                errors.push(error.to_string());
+            }
+        }
+    }
+    if resolved.is_empty() {
+        let message = errors.join("; ");
+        registry.invalidate_target(conversation_id);
+        registry.set_lifecycle(
+            conversation_id,
+            recoverable_lifecycle(registry, conversation_id, message.clone()),
+        );
+        bail!(message);
+    }
+    Ok(resolved)
 }
 
 async fn discover_routed_target(
@@ -584,26 +676,28 @@ pub(crate) async fn generate_subscription_output(
         .filter(AgentLifecycle::accepts_prompt)
         .and_then(|_| registry.target(&conversation_id));
     registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Starting);
-    let target = match preflight_target {
-        Some(target) => target,
-        None => discover_routed_target(
-            &candidates,
-            &preferences,
-            &registry,
-            &conversation_id,
-            &working_directory,
-        )
-        .await
-        .map_err(api::ConvertToAPITypeError::Other)?,
-    };
+    if let Some(target) = preflight_target {
+        checked_target_location(&target, &candidates, &registry, &conversation_id)
+            .map_err(api::ConvertToAPITypeError::Other)?;
+    }
+    registry.invalidate_target(&conversation_id);
+    // Revalidate the CLI version, account and exact model before every turn. A
+    // daemon restart changes the transport, not the native provider session.
+    let target = discover_routed_target(
+        &candidates,
+        &preferences,
+        &registry,
+        &conversation_id,
+        &working_directory,
+    )
+    .await
+    .map_err(api::ConvertToAPITypeError::Other)?;
+    let location = checked_target_location(&target, &candidates, &registry, &conversation_id)
+        .map_err(api::ConvertToAPITypeError::Other)?;
+    let resume = validated_resume_session(&registry, &conversation_id, &target)
+        .map_err(api::ConvertToAPITypeError::Other)?;
     registry.remember_target(&conversation_id, &target);
     registry.set_target(conversation_id.clone(), target.clone());
-    let resume = registry
-        .get(&conversation_id)
-        .and_then(|stored| same_resume_target(&stored.target, &target).then_some(stored.session));
-    let location = location_for_target(&target, &candidates)
-        .context("selected subscription target lost its process location")
-        .map_err(api::ConvertToAPITypeError::Other)?;
     let mut session = match with_timeout(
         "subscription agent initialization",
         SubscriptionSession::open(target.clone(), resume, location),
@@ -1026,11 +1120,8 @@ fn remote_candidates(
     use_cached_inventory: bool,
     ctx: &AppContext,
 ) -> Result<RuntimeCandidates> {
-    let daemon = RemoteServerManager::as_ref(ctx)
-        .connected_daemons()
-        .into_iter()
-        .find(|daemon| daemon.host_id == host_id && daemon.is_current_runtime())
-        .with_context(|| format!("remote host {host_id} is not connected"))?;
+    let daemons = RemoteServerManager::as_ref(ctx).connected_daemons();
+    let daemon = selected_remote_daemon(host_id, &daemons)?;
     if !has_feature(&daemon.features, FEATURE_AGENT_ACCOUNT_ROUTING_V1) {
         bail!("remote host cannot verify subscription account identity; update its Zaplex daemon");
     }
@@ -1045,12 +1136,28 @@ fn remote_candidates(
         Ok(connection)
     })?;
     Ok(RuntimeCandidates::Remote {
-        client: daemon.client,
-        host_id: host_id.to_string(),
-        host_name: daemon.host_label,
-        ssh_argv: warp_ssh_manager::ssh_command::build_ssh_args(&connection.server),
+        client: Arc::clone(&daemon.client),
+        host_id: subscription_host_identity(daemon)
+            .context("remote host has no current SSH registry identity")?
+            .id,
+        host_name: daemon.host_label.clone(),
+        ssh_argv: managed_agent_ssh_args(&connection.server)?,
         use_cached_inventory,
     })
+}
+
+fn managed_agent_ssh_args(server: &warp_ssh_manager::SshServerInfo) -> Result<Vec<String>> {
+    #[cfg(unix)]
+    {
+        crate::remote_server::headless_connect::managed_agent_ssh_args(server)
+    }
+    #[cfg(not(unix))]
+    {
+        bail!(
+            "subscription agents on {} require a managed SSH transport on this platform",
+            server.host
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1157,6 +1264,7 @@ fn remote_candidates_for_ssh(
             ),
             location: ProcessLocation::Remote {
                 ssh_argv: ssh_argv.clone(),
+                environment_path: None,
             },
         });
     }
@@ -1216,6 +1324,48 @@ fn same_resume_target(previous: &SubscriptionTarget, current: &SubscriptionTarge
         && previous.model.id == current.model.id
         && previous.model.resolved_model == current.model.resolved_model
         && previous.effort == current.effort
+}
+
+fn validated_resume_session(
+    registry: &SubscriptionSessionRegistry,
+    conversation_id: &str,
+    target: &SubscriptionTarget,
+) -> Result<Option<SessionIdentity>> {
+    let Some(stored) = registry.get(conversation_id) else {
+        return Ok(None);
+    };
+    if same_resume_target(&stored.target, target) {
+        return Ok(Some(stored.session));
+    }
+    // A changed target needs an explicit new-session action. Keep the previous
+    // identity available if the user restores that target and resumes instead.
+    let message = crate::t!("ai-footer-subscription-target-changed");
+    registry.set_lifecycle(
+        conversation_id,
+        AgentLifecycle::RecoverableError {
+            message: message.clone(),
+            session: Some(stored.session),
+        },
+    );
+    bail!(message)
+}
+
+fn checked_target_location(
+    target: &SubscriptionTarget,
+    candidates: &[RuntimeCandidate],
+    registry: &SubscriptionSessionRegistry,
+    conversation_id: &str,
+) -> Result<ProcessLocation> {
+    if let Some(location) = location_for_target(target, candidates) {
+        return Ok(location);
+    }
+    let message = crate::t!("ai-footer-subscription-target-unavailable");
+    registry.invalidate_target(conversation_id);
+    registry.set_lifecycle(
+        conversation_id,
+        recoverable_lifecycle(registry, conversation_id, message.clone()),
+    );
+    bail!(message)
 }
 
 fn location_for_target(

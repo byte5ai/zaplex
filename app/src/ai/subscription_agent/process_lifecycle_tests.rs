@@ -11,8 +11,6 @@ use crate::ai::subscription_agent::{
 use std::os::unix::fs::PermissionsExt as _;
 #[cfg(unix)]
 use std::time::Duration;
-#[cfg(unix)]
-use warpui::r#async::FutureExt as _;
 
 #[cfg(unix)]
 fn write_executable(path: &std::path::Path, script: &str) {
@@ -87,6 +85,33 @@ fn fake_process(script: &str) -> (tempfile::TempDir, JsonLineProcess) {
     };
     let process = JsonLineProcess::spawn(&launch).unwrap();
     (directory, process)
+}
+
+#[cfg(unix)]
+#[test]
+#[serial_test::serial]
+fn nonzero_exit_preserves_buffered_frame_and_session_eof() {
+    futures_lite::future::block_on(async {
+        let (_directory, mut process) = fake_process(
+            r#"printf '%s\n' '{"session_id":"session-before-crash"}'
+printf '%s\n' 'unclassified crash diagnostic' >&2
+exit 17"#,
+        );
+        // Observe the completed exit before reading to avoid depending on process scheduling.
+        let status = process
+            .child
+            .status()
+            .with_timeout(Duration::from_secs(3))
+            .await
+            .expect("fake process must exit")
+            .unwrap();
+        assert_eq!(status.code(), Some(17));
+        assert_eq!(
+            process.receive().await.unwrap(),
+            Some(serde_json::json!({"session_id": "session-before-crash"}))
+        );
+        assert_eq!(process.receive().await.unwrap(), None);
+    });
 }
 
 #[cfg(unix)]
@@ -410,6 +435,7 @@ exec /bin/sh -c "$last"
             target,
             None,
             ProcessLocation::Remote {
+                environment_path: None,
                 ssh_argv: vec![
                     fake_ssh.to_string_lossy().into_owned(),
                     "--".to_string(),
@@ -534,6 +560,7 @@ exec /bin/sh -c "$last"
             target,
             Some(resume.clone()),
             ProcessLocation::Remote {
+                environment_path: None,
                 ssh_argv: vec![
                     fake_ssh.to_string_lossy().into_owned(),
                     "--".to_string(),

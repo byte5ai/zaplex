@@ -147,6 +147,18 @@ pub struct RemoteServerClient {
     agent_account_inventory: RwLock<Option<AgentAccountInventory>>,
 }
 
+/// Removes response routing even if a caller cancels its request future.
+struct PendingRequest<'a> {
+    client: &'a RemoteServerClient,
+    request_id: RequestId,
+}
+
+impl Drop for PendingRequest<'_> {
+    fn drop(&mut self) {
+        self.client.pending_requests.remove(&self.request_id);
+    }
+}
+
 impl fmt::Debug for RemoteServerClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RemoteServerClient").finish_non_exhaustive()
@@ -968,12 +980,22 @@ impl RemoteServerClient {
 
     /// Lists the daemon's live sessions (Stage 4: multi-session UI / adopt).
     pub async fn list_sessions(&self) -> Result<SessionList, ClientError> {
+        self.list_sessions_with_timeout(REQUEST_TIMEOUT).await
+    }
+
+    /// Bounds the complete inventory request, including outbound queueing.
+    pub async fn list_sessions_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<SessionList, ClientError> {
         let request_id = RequestId::new();
         let msg = ClientMessage {
             request_id: request_id.to_string(),
             message: Some(client_message::Message::ListSessions(ListSessions {})),
         };
-        let response = self.send_request(request_id, msg).await?;
+        let response = self
+            .send_request_with_timeout(request_id, msg, timeout)
+            .await?;
         match response.message {
             Some(server_message::Message::SessionList(resp)) => Ok(resp),
             other => {
@@ -1038,6 +1060,14 @@ impl RemoteServerClient {
     /// must be skipped entirely (treated as contributing zero agent-sessions),
     /// never erroring the whole tree.
     pub async fn list_agent_sessions(&self) -> Result<AgentSessionList, ClientError> {
+        self.list_agent_sessions_with_timeout(REQUEST_TIMEOUT).await
+    }
+
+    /// Bounds the complete inventory request, including outbound queueing.
+    pub async fn list_agent_sessions_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<AgentSessionList, ClientError> {
         let request_id = RequestId::new();
         let msg = ClientMessage {
             request_id: request_id.to_string(),
@@ -1045,7 +1075,9 @@ impl RemoteServerClient {
                 ListAgentSessions {},
             )),
         };
-        let response = self.send_request(request_id, msg).await?;
+        let response = self
+            .send_request_with_timeout(request_id, msg, timeout)
+            .await?;
         match response.message {
             Some(server_message::Message::AgentSessionList(resp)) => Ok(resp),
             other => {
@@ -1059,6 +1091,14 @@ impl RemoteServerClient {
     /// negotiate `agent-account-routing-v1`; returned account ids are valid
     /// only for launch routing on this same daemon host.
     pub async fn list_agent_accounts(&self) -> Result<AgentAccountInventory, ClientError> {
+        self.list_agent_accounts_with_timeout(REQUEST_TIMEOUT).await
+    }
+
+    /// Bounds the complete inventory request, including outbound queueing.
+    pub async fn list_agent_accounts_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<AgentAccountInventory, ClientError> {
         let request_id = RequestId::new();
         let msg = ClientMessage {
             request_id: request_id.to_string(),
@@ -1066,7 +1106,9 @@ impl RemoteServerClient {
                 ListAgentAccounts {},
             )),
         };
-        let response = self.send_request(request_id, msg).await?;
+        let response = self
+            .send_request_with_timeout(request_id, msg, timeout)
+            .await?;
         match response.message {
             Some(server_message::Message::AgentAccountInventory(response)) => {
                 *self
@@ -1407,39 +1449,45 @@ impl RemoteServerClient {
         request_id: RequestId,
         msg: ClientMessage,
     ) -> Result<ServerMessage, ClientError> {
+        self.send_request_with_timeout(request_id, msg, REQUEST_TIMEOUT)
+            .await
+    }
+
+    async fn send_request_with_timeout(
+        &self,
+        request_id: RequestId,
+        msg: ClientMessage,
+        timeout: Duration,
+    ) -> Result<ServerMessage, ClientError> {
         let (tx, rx) = oneshot::channel();
         self.pending_requests.insert(request_id.clone(), tx);
+        let _pending = PendingRequest {
+            client: self,
+            request_id: request_id.clone(),
+        };
 
-        // Check if the reader task has already marked the connection as dead.
-        // The DashMap lock from `insert` above synchronizes with the lock from
-        // `clear` in `reader_task`, so if `clear` ran before our insert the
-        // flag is guaranteed to be visible here.
+        // Synchronize with reader_task's disconnect flag and pending-map clear.
         if self.disconnected.load(Ordering::Acquire) {
             self.pending_requests.clear();
             return Err(ClientError::Disconnected);
         }
 
-        if self.outbound_tx.send(msg).await.is_err() {
-            self.pending_requests.remove(&request_id);
-            return Err(ClientError::Disconnected);
-        }
-
-        let result = match rx.with_timeout(REQUEST_TIMEOUT).await {
-            Ok(Ok(inner)) => inner,
-            Ok(Err(_)) => return Err(ClientError::ResponseChannelClosed),
+        let request = async {
+            self.outbound_tx
+                .send(msg)
+                .await
+                .map_err(|_| ClientError::Disconnected)?;
+            rx.await.map_err(|_| ClientError::ResponseChannelClosed)?
+        };
+        let response = match request.with_timeout(timeout).await {
+            Ok(result) => result?,
             Err(_) => {
-                // Timed out — clean up and send abort.
-                self.pending_requests.remove(&request_id);
                 self.send_abort(&request_id);
-                return Err(ClientError::Timeout(REQUEST_TIMEOUT));
+                return Err(ClientError::Timeout(timeout));
             }
         };
 
-        // Unwrap the inner Result (reader task may send Err for decode failures).
-        let response = result?;
-
-        // Convert server-reported ErrorResponse into ClientError so callers
-        // only need to match on success variants.
+        // Preserve server-error mapping for both default and short deadlines.
         if let Some(server_message::Message::Error(ref e)) = response.message {
             return Err(ClientError::ServerError {
                 code: e.code(),

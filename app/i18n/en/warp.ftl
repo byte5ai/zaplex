@@ -2971,10 +2971,15 @@ workspace-left-panel-ssh-manager-sessions-loading = Loading sessions…
 workspace-left-panel-ssh-manager-sessions-empty = No Zaplex sessions
 workspace-left-panel-ssh-manager-sessions-not-persistent = Set "Session persistence" to Persistent to use this
 workspace-left-panel-ssh-manager-sessions-needs-key = Zaplex sessions need key-based authentication
-workspace-left-panel-ssh-manager-session-fallback = Zaplex session · { $id }
+workspace-left-panel-ssh-manager-session-fallback = Session · { $id }
 workspace-left-panel-ssh-manager-session-host-missing = This host no longer exists in Connections
 workspace-left-panel-ssh-manager-session-open-error = Could not open this session: { $detail }
 workspace-left-panel-ssh-manager-host-ram = Host RAM: { $used } / { $cap }
+workspace-left-panel-ssh-manager-session-ram = RAM: { $used }
+workspace-left-panel-ssh-manager-sessions-refreshing = Refreshing sessions…
+workspace-left-panel-ssh-manager-sessions-timeout = The session list could not be loaded within { $seconds } seconds. Refresh sessions to try again.
+workspace-left-panel-ssh-manager-sessions-needs-install = Connect to the host first to set up the Zaplex session service. Then refresh sessions.
+terminal-daemon-initial-attach-timeout = Connection and shell initialization did not complete within { $seconds } seconds. The remote session was not stopped. Refresh Connections and open the session again.
 workspace-left-panel-ssh-manager-multiplexer-heading = Existing tmux/byobu sessions
 workspace-left-panel-ssh-manager-multiplexer-open = Open in new tab
 terminal-cli-agent-restore-title = Continue saved { $provider } session { $session }? If it is no longer available, this pane remains an ordinary shell.
@@ -3956,9 +3961,9 @@ cockpit-conductor-title = Hosts
 # Sidebar zone headers (spec v3 §S1) — the label is rendered uppercased
 cockpit-zone-connections = Connections
 cockpit-zone-connections-settings = Open SSH configuration
-cockpit-zone-sessions = Sessions
+cockpit-zone-sessions = AI sessions
 cockpit-zone-accounts = AI accounts
-cockpit-conductor-empty = No sessions yet
+cockpit-conductor-empty = No AI sessions yet
 cockpit-tt-favorite-add = Add to favorites
 cockpit-tt-favorite-remove = Remove from favorites
 cockpit-tt-manage-host = Manage host
@@ -4320,3 +4325,15 @@ connect-fallback-daemon-missing = Persistent session unavailable on { $host }: t
 connect-fallback-daemon-failed = Couldn't start a persistent session on { $host } ({ $error }). Opened a standard SSH session instead — a disconnect will lose open work.
 connect-fallback-install-failed = Couldn't install the Zaplex session daemon on { $host } ({ $error }). Opened a standard SSH session instead — a disconnect will lose open work.
 connect-fallback-handshake-failed = Couldn't start the persistent-session daemon on { $host } (handshake failed — often a daemon of a different zaplex version). Opened a standard SSH session instead — a disconnect will lose open work.
+
+workspace-left-panel-ssh-manager-sessions-expand = Show sessions
+
+workspace-left-panel-ssh-manager-sessions-collapse = Hide sessions
+
+ai-footer-subscription-target-unavailable = The selected agent target is no longer available. Check the agent, account and installation, then retry.
+
+workspace-left-panel-ssh-manager-sessions-confirm-host-key = Connect to this host and confirm the SSH key for { $host }:{ $port } ({ $fingerprint }) first.
+
+cockpit-shell-sessions-connections = Open shell sessions in Connections
+
+ai-footer-subscription-target-changed = This session's execution target has changed. Restore the previous target or start a new conversation.

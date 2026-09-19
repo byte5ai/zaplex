@@ -272,6 +272,9 @@ impl PromptRenderHelper {
     }
 
     fn bootstrapping_shell_message(&self, model: &TerminalModel, sessions: &Sessions) -> String {
+        if model.is_read_only() {
+            return String::new();
+        }
         // If remote-server setup exists for the pending session, show its stage
         // or the explicit classic-SSH fallback instead of a stale starting state.
         if let Some(pending_session_id) = model.pending_session_id() {

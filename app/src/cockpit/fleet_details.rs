@@ -267,6 +267,16 @@ impl ManagedFleetInventory {
         }
     }
 
+    pub(crate) fn replace_host(&mut self, host_id: &str, refreshed: Self) {
+        self.remove_host(host_id);
+        self.sessions.extend(
+            refreshed
+                .sessions
+                .into_iter()
+                .filter(|session| session.host_id == host_id),
+        );
+    }
+
     pub(crate) fn remove_host(&mut self, host_id: &str) -> bool {
         let before = self.sessions.len();
         self.sessions.retain(|session| session.host_id != host_id);

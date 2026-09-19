@@ -9,8 +9,8 @@ use base64::Engine as _;
 
 use super::{
     authenticate_after_host_key_check, check_known_host_key, enforce_host_key_policy,
-    host_key_fingerprint_sha256, persist_host_key, preferred_host_key_algorithms, replace_host_key,
-    HostKeyConfirmation, HostKeyPolicyAction,
+    host_key_fingerprint_sha256, load_known_hosts, matching_known_host_keys, persist_host_key,
+    preferred_host_key_algorithms, replace_host_key, HostKeyConfirmation, HostKeyPolicyAction,
 };
 use crate::SftpError;
 use ssh2::{CheckResult, HostKeyType, KnownHostFileKind, MethodType, Session};
@@ -149,8 +149,13 @@ fn trusted_ed25519_key_is_preferred_over_default_ecdsa() {
         .add("sftp.example", &key, "test", HostKeyType::Ed25519.into())
         .unwrap();
 
-    let preferred =
-        preferred_host_key_algorithms(&session, &known_hosts, "sftp.example", 22).unwrap();
+    let preferred = preferred_host_key_algorithms(
+        &session,
+        &known_hosts_text(&known_hosts),
+        "sftp.example",
+        22,
+    )
+    .unwrap();
     let ed25519 = preferred
         .iter()
         .position(|method| *method == "ssh-ed25519")
@@ -164,7 +169,14 @@ fn trusted_ed25519_key_is_preferred_over_default_ecdsa() {
         "trusted key must precede unpinned algorithms: {preferred:?}"
     );
     assert!(matches!(
-        check_known_host_key(&session, &known_hosts, "sftp.example", 22, &key).unwrap(),
+        check_known_host_key(
+            &session,
+            &known_hosts_text(&known_hosts),
+            "sftp.example",
+            22,
+            &key
+        )
+        .unwrap(),
         CheckResult::Match
     ));
 }
@@ -189,8 +201,13 @@ fn trusted_rsa_key_preserves_sha2_signature_preference() {
         .collect();
     assert_eq!(expected.first(), Some(&"rsa-sha2-512"));
 
-    let preferred =
-        preferred_host_key_algorithms(&session, &known_hosts, "sftp.example", 22).unwrap();
+    let preferred = preferred_host_key_algorithms(
+        &session,
+        &known_hosts_text(&known_hosts),
+        "sftp.example",
+        22,
+    )
+    .unwrap();
     assert_eq!(&preferred[..expected.len()], expected.as_slice());
 }
 
@@ -207,7 +224,13 @@ fn unrelated_hosts_do_not_change_algorithm_preferences() {
         )
         .unwrap();
     assert_eq!(
-        preferred_host_key_algorithms(&session, &known_hosts, "sftp.example", 22).unwrap(),
+        preferred_host_key_algorithms(
+            &session,
+            &known_hosts_text(&known_hosts),
+            "sftp.example",
+            22
+        )
+        .unwrap(),
         session.supported_algs(MethodType::HostKey).unwrap()
     );
 }
@@ -227,7 +250,7 @@ fn changed_key_of_the_same_algorithm_remains_a_mismatch() {
     assert!(matches!(
         check_known_host_key(
             &session,
-            &known_hosts,
+            &known_hosts_text(&known_hosts),
             "sftp.example",
             22,
             &synthetic_host_key("ssh-ed25519", 2),
@@ -250,8 +273,14 @@ fn unpinned_algorithm_is_unknown_and_cannot_authenticate_without_confirmation() 
         )
         .unwrap();
     let presented = synthetic_host_key("ecdsa-sha2-nistp256", 2);
-    let checked =
-        check_known_host_key(&session, &known_hosts, "sftp.example", 22, &presented).unwrap();
+    let checked = check_known_host_key(
+        &session,
+        &known_hosts_text(&known_hosts),
+        "sftp.example",
+        22,
+        &presented,
+    )
+    .unwrap();
     assert!(matches!(checked, CheckResult::NotFound));
 
     let authentication_attempts = AtomicUsize::new(0);
@@ -280,11 +309,24 @@ fn custom_port_does_not_reuse_the_default_port_key_or_preferences() {
         .add("sftp.example", &key, "test", HostKeyType::Ed25519.into())
         .unwrap();
     assert!(matches!(
-        check_known_host_key(&session, &known_hosts, "sftp.example", 2222, &key).unwrap(),
+        check_known_host_key(
+            &session,
+            &known_hosts_text(&known_hosts),
+            "sftp.example",
+            2222,
+            &key
+        )
+        .unwrap(),
         CheckResult::NotFound
     ));
     assert_eq!(
-        preferred_host_key_algorithms(&session, &known_hosts, "sftp.example", 2222).unwrap(),
+        preferred_host_key_algorithms(
+            &session,
+            &known_hosts_text(&known_hosts),
+            "sftp.example",
+            2222
+        )
+        .unwrap(),
         session.supported_algs(MethodType::HostKey).unwrap()
     );
 }
@@ -312,11 +354,25 @@ fn configured_custom_port_uses_only_its_own_pin() {
         )
         .unwrap();
     assert!(matches!(
-        check_known_host_key(&session, &known_hosts, "sftp.example", 2222, &custom_key).unwrap(),
+        check_known_host_key(
+            &session,
+            &known_hosts_text(&known_hosts),
+            "sftp.example",
+            2222,
+            &custom_key
+        )
+        .unwrap(),
         CheckResult::Match
     ));
     assert!(matches!(
-        check_known_host_key(&session, &known_hosts, "sftp.example", 2222, &default_key).unwrap(),
+        check_known_host_key(
+            &session,
+            &known_hosts_text(&known_hosts),
+            "sftp.example",
+            2222,
+            &default_key
+        )
+        .unwrap(),
         CheckResult::Mismatch
     ));
 }
@@ -335,15 +391,34 @@ fn hashed_hosts_use_only_the_requested_endpoints_algorithm() {
             .read_str(&line, KnownHostFileKind::OpenSSH)
             .unwrap();
     }
-    let preferred =
-        preferred_host_key_algorithms(&session, &known_hosts, "sftp.example", 22).unwrap();
+    let preferred = preferred_host_key_algorithms(
+        &session,
+        &known_hosts_text(&known_hosts),
+        "sftp.example",
+        22,
+    )
+    .unwrap();
     assert_eq!(preferred.first(), Some(&"ssh-ed25519"));
     assert!(matches!(
-        check_known_host_key(&session, &known_hosts, "sftp.example", 22, &target_key).unwrap(),
+        check_known_host_key(
+            &session,
+            &known_hosts_text(&known_hosts),
+            "sftp.example",
+            22,
+            &target_key
+        )
+        .unwrap(),
         CheckResult::Match
     ));
     assert!(matches!(
-        check_known_host_key(&session, &known_hosts, "sftp.example", 22, &other_key).unwrap(),
+        check_known_host_key(
+            &session,
+            &known_hosts_text(&known_hosts),
+            "sftp.example",
+            22,
+            &other_key
+        )
+        .unwrap(),
         CheckResult::NotFound
     ));
 }
@@ -906,4 +981,93 @@ fn replacement_preserves_openssh_markers_and_partial_alias_crlf() {
         replacement.check("sftp.example", &new_key),
         CheckResult::Match
     ));
+}
+
+fn known_hosts_text(hosts: &ssh2::KnownHosts) -> String {
+    hosts
+        .hosts()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            hosts
+                .write_string(entry, KnownHostFileKind::OpenSSH)
+                .unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn matching_pins_keep_hashed_endpoints_separate_even_with_identical_keys() {
+    let session = Session::new().unwrap();
+    let key = synthetic_host_key("ssh-ed25519", 1);
+    let contents = format!(
+        "{}{}",
+        known_hosts_line(HASHED_OTHER, "ssh-ed25519", &key),
+        known_hosts_line(HASHED_TARGET, "ssh-ed25519", &key)
+    );
+    assert_eq!(
+        matching_known_host_keys(&session, &contents, "sftp.example", 22).unwrap(),
+        vec![key]
+    );
+}
+
+#[test]
+fn matching_pins_ignore_unrelated_large_inventory_and_keep_aliases_and_ports() {
+    let session = Session::new().unwrap();
+    let other = synthetic_host_key("ssh-ed25519", 1);
+    let target = synthetic_host_key("ecdsa-sha2-nistp256", 2);
+    let mut contents = String::new();
+    for index in 0..2048 {
+        contents.push_str(&known_hosts_line(
+            &format!("other-{index}.example"),
+            "ssh-ed25519",
+            &other,
+        ));
+    }
+    contents.push_str(&known_hosts_line(
+        "alias.example,[sftp.example]:2222",
+        "ecdsa-sha2-nistp256",
+        &target,
+    ));
+    assert_eq!(
+        matching_known_host_keys(&session, &contents, "sftp.example", 22).unwrap(),
+        Vec::<Vec<u8>>::new()
+    );
+    assert_eq!(
+        matching_known_host_keys(&session, &contents, "sftp.example", 2222).unwrap(),
+        vec![target.clone()]
+    );
+    assert_eq!(
+        matching_known_host_keys(&session, &contents, "alias.example", 22).unwrap(),
+        vec![target]
+    );
+}
+
+#[test]
+fn marked_entries_are_not_promoted_to_positive_host_key_pins() {
+    let session = Session::new().unwrap();
+    let key = synthetic_host_key("ssh-ed25519", 1);
+    let line = known_hosts_line("sftp.example", "ssh-ed25519", &key);
+    let contents = format!("@revoked {line}@cert-authority {line}");
+    assert!(matches!(
+        check_known_host_key(&session, &contents, "sftp.example", 22, &key).unwrap(),
+        CheckResult::NotFound
+    ));
+}
+
+#[test]
+fn matching_pins_preserve_short_aliases_and_non_utf8_comments() {
+    let session = Session::new().unwrap();
+    let key = synthetic_host_key("ssh-ed25519", 1);
+    let mut contents = known_hosts_line("db,database.example", "ssh-ed25519", &key).into_bytes();
+    contents.extend_from_slice(b"# legacy Latin-1 comment: \xe4\n");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("known_hosts");
+    fs::write(&path, &contents).unwrap();
+    let loaded = load_known_hosts(&path).unwrap();
+    assert_eq!(
+        matching_known_host_keys(&session, &loaded, "db", 22).unwrap(),
+        vec![key]
+    );
+    assert_eq!(fs::read(path).unwrap(), contents);
 }
