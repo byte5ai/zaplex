@@ -296,6 +296,10 @@ jobs:
         run: rustup target add x86_64-unknown-linux-gnu
         shell: bash
 
+      - name: cargo check (app and regression test targets)
+        run: cargo check --locked -p warp --tests
+        shell: bash
+
       # Fast mechanism check (small crate, seconds to compile): proves that a
       # malformed platform-specific keybinding is rejected on ANY OS — including
       # this Linux runner — not only on the platform that actually uses it.
@@ -378,6 +382,17 @@ jobs:
       - name: cargo test (subscription agent acceptance)
         run: >
           cargo test --locked -p warp --lib ai::subscription_agent::
+        shell: bash
+
+      - name: cargo test (persistent session recovery and remote transport)
+        run: |
+          cargo test --locked -p warp --lib -- \
+            remote_server::headless_connect::tests \
+            terminal::daemon_tty::event_loop::tests \
+            listed_fresh_daemon_session_focuses_its_existing_shell_under_file_manager \
+            rejected_adopt_cleanup_does_not_poison_retry_key
+          cargo test --locked -p remote_server --lib client::tests
+          cargo test --locked -p zap_sftp --lib session::tests
         shell: bash
 
       - name: cargo test (remote-server setup)
