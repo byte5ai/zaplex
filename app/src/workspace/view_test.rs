@@ -3549,14 +3549,14 @@ fn closing_new_session_menu_restores_focus_only_when_the_menu_owned_it() {
         workspace.update(&mut app, |workspace, ctx| {
             ctx.focus(&workspace.left_panel_view);
         });
-        workspace.read(&app, |workspace, ctx| {
+        workspace.update(&mut app, |workspace, ctx| {
             assert!(workspace.left_panel_view.is_self_or_child_focused(ctx));
         });
         workspace.update(&mut app, |workspace, ctx| {
             workspace.close_new_session_dropdown_menu(ctx);
         });
 
-        workspace.read(&app, |workspace, ctx| {
+        workspace.update(&mut app, |workspace, ctx| {
             assert!(workspace.left_panel_view.is_self_or_child_focused(ctx));
         });
     });
