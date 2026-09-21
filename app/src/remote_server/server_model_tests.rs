@@ -4295,6 +4295,11 @@ mod daemon_session {
     }
 
     fn open_in(cwd: &str) -> ClientMessage {
+        let logical_open_id = format!("logical-open-{cwd}");
+        open_in_with_logical_id(cwd, &logical_open_id)
+    }
+
+    fn open_in_with_logical_id(cwd: &str, logical_open_id: &str) -> ClientMessage {
         ClientMessage {
             request_id: "open".to_string(),
             message: Some(client_message::Message::OpenSession(OpenSession {
@@ -4311,7 +4316,7 @@ mod daemon_session {
                 agent_launch_route: None,
                 managed_launch: None,
                 requested_min_available_bytes: None,
-                logical_open_id: format!("logical-open-{cwd}"),
+                logical_open_id: logical_open_id.to_string(),
                 logical_open_attempt: 0,
             })),
         }
@@ -5503,17 +5508,18 @@ mod daemon_session {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().to_string_lossy().to_string();
             model.update(&mut app, |m, ctx| {
-                m.handle_message(conn_id, open_in(&path), ctx)
+                m.handle_message(conn_id, open_in_with_logical_id(&path, "gc-session-1"), ctx)
             });
             let id1 = recv_session_opened(&conn_rx)
                 .await
                 .expect("session 1 opened");
             model.update(&mut app, |m, ctx| {
-                m.handle_message(conn_id, open_in(&path), ctx)
+                m.handle_message(conn_id, open_in_with_logical_id(&path, "gc-session-2"), ctx)
             });
             let id2 = recv_session_opened(&conn_rx)
                 .await
                 .expect("session 2 opened");
+            assert_ne!(id1, id2, "GC fixture requires two distinct sessions");
 
             // Drop the connection: both sessions detach but keep running (the
             // grace guard keeps the daemon up).

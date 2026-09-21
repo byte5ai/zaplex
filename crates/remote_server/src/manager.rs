@@ -50,6 +50,14 @@ struct ReconnectParams {
     identity_key: String,
 }
 
+/// Values produced together by a successful initialize handshake.
+#[cfg(not(target_family = "wasm"))]
+struct ConnectionHandshake {
+    host_id: HostId,
+    features: Vec<String>,
+    server_version: String,
+}
+
 /// Error from [`RemoteServerManager::run_connect_and_handshake`] that
 /// preserves which phase failed so callers can report accurate telemetry.
 #[cfg(not(target_family = "wasm"))]
@@ -1022,14 +1030,12 @@ impl RemoteServerManager {
                     )
                     .await
                     {
-                        Ok((host_id, features, server_version)) => {
+                        Ok(handshake) => {
                             let _ = spawner
                                 .spawn(move |me, ctx| {
                                     me.mark_session_connected(
                                         session_id,
-                                        host_id,
-                                        features,
-                                        server_version,
+                                        handshake,
                                         identity_key,
                                         transport,
                                         ctx,
@@ -1072,7 +1078,7 @@ impl RemoteServerManager {
     ///    event channel.
     /// 3. Runs the initialize handshake with the current auth token, if any.
     ///
-    /// Returns `Ok(host_id)` on success, or a phase-tagged error.
+    /// Returns the negotiated connection metadata on success, or a phase-tagged error.
     #[cfg(not(target_family = "wasm"))]
     async fn run_connect_and_handshake(
         session_id: SessionId,
@@ -1080,7 +1086,7 @@ impl RemoteServerManager {
         auth_context: &RemoteServerAuthContext,
         spawner: &ModelSpawner<Self>,
         executor: &Arc<warpui::r#async::executor::Background>,
-    ) -> Result<(HostId, Vec<String>, String), ConnectAndHandshakeError> {
+    ) -> Result<ConnectionHandshake, ConnectAndHandshakeError> {
         // Phase 1: Connect (establish streams, create client).
         let Connection {
             client,
@@ -1196,11 +1202,11 @@ impl RemoteServerManager {
             )));
         }
 
-        Ok((
-            HostId::new(resp.host_id),
-            resp.features,
-            resp.server_version,
-        ))
+        Ok(ConnectionHandshake {
+            host_id: HostId::new(resp.host_id),
+            features: resp.features,
+            server_version: resp.server_version,
+        })
     }
 
     /// Removes a session from the manager and tears down its connection.
@@ -1826,13 +1832,16 @@ impl RemoteServerManager {
     fn mark_session_connected(
         &mut self,
         session_id: SessionId,
-        host_id: HostId,
-        features: Vec<String>,
-        server_version: String,
+        handshake: ConnectionHandshake,
         identity_key: String,
         transport: Arc<dyn RemoteTransport>,
         ctx: &mut ModelContext<Self>,
     ) {
+        let ConnectionHandshake {
+            host_id,
+            features,
+            server_version,
+        } = handshake;
         log::info!("Remote server connected for session {session_id:?}, host {host_id}");
 
         // Only transition if the session is still in Initializing state.
@@ -2119,7 +2128,8 @@ impl RemoteServerManager {
                 )
                 .await
                 {
-                    Ok((new_host_id, features, server_version)) => {
+                    Ok(handshake) => {
+                        let new_host_id = handshake.host_id.clone();
                         let _ = spawner
                             .spawn(move |me, ctx| {
                                 // If the session was deregistered during the
@@ -2133,9 +2143,7 @@ impl RemoteServerManager {
                                 }
                                 me.mark_session_connected(
                                     session_id,
-                                    new_host_id.clone(),
-                                    features,
-                                    server_version,
+                                    handshake,
                                     identity_key,
                                     transport,
                                     ctx,

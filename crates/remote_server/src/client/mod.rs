@@ -742,6 +742,8 @@ impl RemoteServerClient {
     // ── Native session host (Stage 2 client side) ────────────────────────
 
     /// Opens a new daemon-hosted PTY session and awaits its assigned id.
+    // The arguments map one-to-one to OpenSession protocol fields at this transport boundary.
+    #[allow(clippy::too_many_arguments)]
     pub async fn open_session(
         &self,
         logical_open_id: String,

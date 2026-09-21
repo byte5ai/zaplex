@@ -483,3 +483,296 @@ fn ring_ceiling_presets_do_not_exceed_the_daemon_limit() {
         .iter()
         .all(|(megabytes, _)| *megabytes <= 256));
 }
+
+#[test]
+fn only_connection_defining_editor_fields_invalidate_runtime_diagnostics() {
+    for field in [
+        ServerFormField::Host,
+        ServerFormField::Port,
+        ServerFormField::User,
+        ServerFormField::Password,
+        ServerFormField::KeyPath,
+    ] {
+        assert!(field.defines_connection(), "{field:?}");
+    }
+    for field in [
+        ServerFormField::Name,
+        ServerFormField::OneKeyLabel,
+        ServerFormField::OneKeyUser,
+        ServerFormField::OneKeyKeyPath,
+        ServerFormField::OneKeySecret,
+        ServerFormField::RootPassword,
+        ServerFormField::StartupCommand,
+        ServerFormField::Notes,
+    ] {
+        assert!(!field.defines_connection(), "{field:?}");
+    }
+}
+
+#[test]
+fn connection_edit_clears_diagnostics_and_saved_refresh_target() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+
+        app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut view = SshServerView::new("server-1".to_string(), ctx);
+            view.baseline_snapshot = Some(view.current_form_snapshot(ctx));
+            view.runtime_diagnostics_server =
+                Some(SshServerInfo::new_default("server-1".to_string()));
+            view.runtime_diagnostics = vec![runtime_diagnostic_fixture()];
+            let refresh_button = view.runtime_diagnostics_refresh_button.clone();
+            refresh_button.update(ctx, |button, ctx| button.set_disabled(false, ctx));
+            let generation = view.runtime_diagnostics_generation;
+
+            view.handle_server_form_edit(ServerFormField::Notes, ctx);
+            assert_eq!(view.runtime_diagnostics.len(), 1);
+            assert!(view.runtime_diagnostics_server.is_some());
+            assert_eq!(view.runtime_diagnostics_generation, generation);
+            assert!(!refresh_button.as_ref(ctx).is_disabled());
+
+            view.handle_server_form_edit(ServerFormField::Host, ctx);
+            assert!(view.runtime_diagnostics.is_empty());
+            assert!(view.runtime_diagnostics_server.is_none());
+            assert_eq!(view.runtime_diagnostics_generation, generation + 1);
+            assert!(refresh_button.as_ref(ctx).is_disabled());
+            view.handle_action(&SshServerAction::RefreshRuntimeDiagnostics, ctx);
+            assert_eq!(view.runtime_diagnostics_generation, generation + 1);
+            assert!(view.runtime_diagnostics_error.is_none());
+            view
+        });
+    });
+}
+
+#[test]
+fn runtime_diagnostic_units_name_binary_measurements_truthfully() {
+    assert_eq!(format_diagnostic_bytes(0), "0 B");
+    assert_eq!(format_diagnostic_bytes(512), "512 B");
+    assert_eq!(format_diagnostic_bytes(KIB_BYTES), "1.0 KiB");
+    assert_eq!(format_diagnostic_bytes(64 * MIB_BYTES), "64.0 MiB");
+    assert_eq!(
+        format_diagnostic_bytes(3 * GIB_BYTES + GIB_BYTES / 2),
+        "3.5 GiB"
+    );
+}
+
+fn measured_memory(bytes: u64, provenance: &str) -> MemoryMeasurement {
+    MemoryMeasurement {
+        status: MemoryMeasurementStatus::Measured.into(),
+        bytes: Some(bytes),
+        provenance: provenance.to_string(),
+        diagnostic_code: String::new(),
+    }
+}
+
+fn runtime_diagnostic_fixture() -> DaemonRuntimeDiagnostics {
+    let route = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.28.sock".to_string(),
+        "v1.0.28".to_string(),
+    )
+    .unwrap();
+    DaemonRuntimeDiagnostics {
+        runtime_filename: route.runtime_filename().to_string(),
+        server_version: Some(route.server_version().to_string()),
+        route: Some(route),
+        observed_at: Some(Instant::now()),
+        status: DaemonRuntimeDiagnosticsStatus::Available(SessionList {
+            sessions: vec![SessionInfo {
+                session_id: "pty-123456789".to_string(),
+                ring_bytes: 64 * MIB_BYTES,
+                process_memory: Some(measured_memory(384 * MIB_BYTES, "linux-proc-smaps-rollup")),
+                ..Default::default()
+            }],
+            host_ring_cap_bytes: 256 * MIB_BYTES,
+            host_available_memory: Some(measured_memory(6 * GIB_BYTES, "linux-proc-memavailable")),
+            daemon_min_available_bytes: 2 * GIB_BYTES,
+            collected_at_epoch_millis: 10_000,
+            ..Default::default()
+        }),
+    }
+}
+
+#[test]
+fn runtime_diagnostics_preserve_route_and_each_measured_quantity() {
+    crate::i18n::init(Some("en"));
+    let diagnostic = runtime_diagnostic_fixture();
+    let route = diagnostic.route.as_ref().expect("historical runtime route");
+    assert_eq!(route.runtime_filename(), diagnostic.runtime_filename);
+    assert_eq!(
+        diagnostic.server_version.as_deref(),
+        Some(route.server_version())
+    );
+
+    let presentations = runtime_diagnostic_presentations(&[diagnostic], false);
+    let runtime = &presentations[0];
+    assert_eq!(runtime.state, DiagnosticValueState::Measured);
+    assert_eq!(runtime.runtime, "server-v1.0.28.sock");
+    assert_eq!(runtime.version, "v1.0.28");
+    assert_eq!(runtime.rows.len(), 5);
+    assert_eq!(runtime.rows[0].label, "Output-ring capacity");
+    assert_eq!(runtime.rows[0].value, "256.0 MiB");
+    assert_eq!(runtime.rows[1].label, "Host available memory");
+    assert_eq!(runtime.rows[1].value, "6.0 GiB");
+    assert_eq!(runtime.rows[2].value, "2.0 GiB");
+    assert_eq!(runtime.rows[3].value, "64.0 MiB");
+    assert_eq!(runtime.rows[4].value, "384.0 MiB");
+    assert_eq!(runtime.rows[4].hint, "Proportional set size (PSS) · Linux");
+}
+
+#[test]
+fn stale_runtime_diagnostics_retain_values_with_truthful_labels() {
+    crate::i18n::init(Some("en"));
+    let presentations = runtime_diagnostic_presentations(&[runtime_diagnostic_fixture()], true);
+    let runtime = &presentations[0];
+    assert_eq!(runtime.state, DiagnosticValueState::Stale);
+    assert_eq!(runtime.rows[0].value, "256.0 MiB");
+    assert_eq!(runtime.rows[1].value, "6.0 GiB");
+    assert_eq!(runtime.rows[2].value, "2.0 GiB");
+    assert_eq!(runtime.rows[3].value, "64.0 MiB");
+    assert_eq!(runtime.rows[4].value, "384.0 MiB");
+    assert!(runtime
+        .rows
+        .iter()
+        .all(|row| row.state == DiagnosticValueState::Stale && row.hint == "Measurement stale"));
+}
+
+#[test]
+fn daemon_clock_skew_does_not_change_locally_observed_freshness() {
+    crate::i18n::init(Some("en"));
+    let mut future_clock = runtime_diagnostic_fixture();
+    let DaemonRuntimeDiagnosticsStatus::Available(snapshot) = &mut future_clock.status else {
+        panic!("fixture must contain diagnostics");
+    };
+    snapshot.collected_at_epoch_millis = u64::MAX;
+
+    let presentations = runtime_diagnostic_presentations(&[future_clock], false);
+    assert_eq!(presentations[0].state, DiagnosticValueState::Measured);
+    assert!(presentations[0]
+        .rows
+        .iter()
+        .all(|row| row.state == DiagnosticValueState::Measured));
+
+    let old_local_observation =
+        Instant::now() - Duration::from_millis(DIAGNOSTIC_MAX_AGE_MILLIS + 1);
+    assert!(runtime_diagnostics_are_stale(
+        Some(old_local_observation),
+        false
+    ));
+    assert!(!runtime_diagnostics_are_stale(Some(Instant::now()), false));
+    assert!(runtime_diagnostics_are_stale(None, false));
+}
+
+#[test]
+fn each_runtime_uses_its_session_list_observation_time() {
+    crate::i18n::init(Some("en"));
+    let mut early = runtime_diagnostic_fixture();
+    early.runtime_filename = "server-v1.0.27.sock".to_string();
+    early.observed_at = Some(Instant::now() - Duration::from_millis(DIAGNOSTIC_MAX_AGE_MILLIS + 1));
+    let recent = runtime_diagnostic_fixture();
+
+    let presentations = runtime_diagnostic_presentations(&[early, recent], false);
+
+    assert_eq!(presentations[0].state, DiagnosticValueState::Stale);
+    assert!(presentations[0]
+        .rows
+        .iter()
+        .all(|row| row.state == DiagnosticValueState::Stale));
+    assert_eq!(presentations[1].state, DiagnosticValueState::Measured);
+    assert!(presentations[1]
+        .rows
+        .iter()
+        .all(|row| row.state == DiagnosticValueState::Measured));
+}
+
+#[test]
+fn diagnostic_zero_values_follow_field_semantics() {
+    crate::i18n::init(Some("en"));
+    let mut diagnostic = runtime_diagnostic_fixture();
+    let DaemonRuntimeDiagnosticsStatus::Available(snapshot) = &mut diagnostic.status else {
+        panic!("fixture must contain diagnostics");
+    };
+    snapshot.host_ring_cap_bytes = 0;
+    snapshot.daemon_min_available_bytes = 0;
+    snapshot.host_available_memory = Some(measured_memory(0, "linux-proc-memavailable"));
+    snapshot.sessions[0].ring_bytes = 0;
+    snapshot.sessions[0].process_memory = Some(measured_memory(0, "linux-proc-smaps-rollup"));
+
+    let presentations = runtime_diagnostic_presentations(&[diagnostic], false);
+    let runtime = &presentations[0];
+    assert_eq!(runtime.rows[0].value, "—");
+    assert_eq!(runtime.rows[0].state, DiagnosticValueState::Unavailable);
+    assert_eq!(runtime.rows[1].value, "0 B");
+    assert_eq!(runtime.rows[1].state, DiagnosticValueState::Measured);
+    assert_eq!(runtime.rows[2].value, "Not configured");
+    assert_eq!(runtime.rows[2].state, DiagnosticValueState::Measured);
+    assert_eq!(runtime.rows[3].value, "0 B");
+    assert_eq!(runtime.rows[3].state, DiagnosticValueState::Measured);
+    assert_eq!(runtime.rows[4].value, "0 B");
+    assert_eq!(runtime.rows[4].state, DiagnosticValueState::Measured);
+}
+
+#[test]
+fn unavailable_and_unsupported_memory_never_leak_numeric_payloads() {
+    crate::i18n::init(Some("en"));
+    let unavailable = MemoryMeasurement {
+        status: MemoryMeasurementStatus::Unavailable.into(),
+        bytes: Some(123 * MIB_BYTES),
+        provenance: "linux-proc-memavailable".to_string(),
+        diagnostic_code: "read-failed".to_string(),
+    };
+    let unsupported = MemoryMeasurement {
+        status: MemoryMeasurementStatus::Unsupported.into(),
+        bytes: None,
+        provenance: "unsupported-platform".to_string(),
+        diagnostic_code: "unsupported-platform".to_string(),
+    };
+
+    let unavailable_row = diagnostic_memory_row(
+        "Host available memory".to_string(),
+        Some(&unavailable),
+        "linux-proc-memavailable",
+        "MemAvailable · Linux".to_string(),
+        false,
+    );
+    let unsupported_row = diagnostic_memory_row(
+        "Process memory".to_string(),
+        Some(&unsupported),
+        "linux-proc-smaps-rollup",
+        "PSS · Linux".to_string(),
+        false,
+    );
+
+    assert_eq!(unavailable_row.value, "—");
+    assert_eq!(unavailable_row.state, DiagnosticValueState::Unavailable);
+    assert_eq!(unsupported_row.value, "—");
+    assert_eq!(unsupported_row.state, DiagnosticValueState::Unsupported);
+}
+
+#[test]
+fn retained_snapshot_is_explicitly_stale_during_failed_refresh() {
+    crate::i18n::init(Some("en"));
+    let presentations = runtime_diagnostic_presentations(&[runtime_diagnostic_fixture()], true);
+    assert_eq!(presentations[0].state, DiagnosticValueState::Stale);
+    assert!(presentations[0].rows.iter().all(|row| {
+        row.state == DiagnosticValueState::Stale
+            && row.value != "—"
+            && row.hint == "Measurement stale"
+    }));
+}
+
+#[test]
+fn unreachable_runtime_is_distinct_from_zero_measurements() {
+    crate::i18n::init(Some("en"));
+    let diagnostic = DaemonRuntimeDiagnostics {
+        runtime_filename: "server-v1.0.27.sock".to_string(),
+        server_version: None,
+        route: None,
+        observed_at: None,
+        status: DaemonRuntimeDiagnosticsStatus::Unavailable,
+    };
+    let presentations = runtime_diagnostic_presentations(&[diagnostic], false);
+    assert_eq!(presentations[0].state, DiagnosticValueState::Unavailable);
+    assert!(presentations[0].rows.is_empty());
+}

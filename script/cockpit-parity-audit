@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Validate and execute the GH-160/GH-169 Cockpit parity contract."""
+"""Validate and execute the GH-160/GH-169 Cockpit parity contract.
+
+The app suites deliberately run the workspace view tests and the SSH manager
+panel and server-view tests. This keeps UI #459's daemon identity, restore,
+panel, and connection-detail coverage bounded to those modules while making new
+annotated tests in their source files fail closed if Cargo does not discover or
+execute them.
+"""
 
 from __future__ import annotations
 
@@ -49,6 +56,22 @@ EXPECTED_REFERENCES = {
     "claudeplex": ("iret77/claudeplex", "main"),
     "claudeplex-desktop": ("iret77/claudeplex-desktop", "main"),
 }
+WORKSPACE_VIEW_SIDECAR_EXCLUSIONS = (
+    "test_worktree_sidecar_hover_takes_precedence_over_selection",
+    "test_worktree_sidecar_pointer_entry_does_not_select_top_repo",
+    "test_worktree_sidecar_close_via_select_item_executes_from_workspace",
+    "test_worktree_sidecar_search_editor_enter_executes_selection",
+    "test_worktree_sidecar_search_editor_proxies_navigation_and_escape",
+    "test_worktree_sidecar_hides_linked_worktrees_from_repo_list",
+)
+SSH_MANAGER_OUT_OF_SCOPE_PREFIXES = (
+    "ssh_manager::candidates::tests::",
+    "ssh_manager::password_prompt::tests::",
+    "ssh_manager::secret_injector::tests::",
+    "ssh_manager::shell_prompt::tests::",
+    "ssh_manager::startup_command_injector::tests::",
+    "ssh_manager::su_password_injector::tests::",
+)
 EXPECTED_SUITE_COMMANDS = {
     "cargo-check": ["cargo", "check", "--locked", "--bin", "zaplex"],
     "cockpit-data-spine": [
@@ -98,7 +121,13 @@ EXPECTED_SUITE_COMMANDS = {
         "warp",
         "--lib",
         "--no-fail-fast",
-        "workspace::view::tests::connections_registry_drives_favorite_launch_menu",
+        "workspace::view::tests::",
+        "--",
+        *[
+            argument
+            for name in WORKSPACE_VIEW_SIDECAR_EXCLUSIONS
+            for argument in ("--skip", name)
+        ],
     ],
     "ssh-manager-app": [
         "cargo",
@@ -108,7 +137,13 @@ EXPECTED_SUITE_COMMANDS = {
         "warp",
         "--lib",
         "--no-fail-fast",
-        "ssh_manager::panel::tests::",
+        "ssh_manager::",
+        "--",
+        *[
+            argument
+            for prefix in SSH_MANAGER_OUT_OF_SCOPE_PREFIXES
+            for argument in ("--skip", prefix)
+        ],
     ],
     "generated-read-only-code": [
         "cargo",
@@ -173,6 +208,10 @@ EXPECTED_SELF_TEST_CASES = {
     "commented-test-annotation-regression",
     "zero-test-suite-regression",
     "suite-name-filter-regression",
+    "suite-command-regression",
+    "source-suite-discovery-regression",
+    "source-suite-exclusion-regression",
+    "same-leaf-wrong-module-regression",
     "runtime-valid",
     "runtime-missing-is-not-run",
     "runtime-provider-regression",
@@ -420,11 +459,13 @@ ALLOWED_TEST_PREFIXES = (
     "app/src/control_surface_tests.rs",
     "app/src/remote_server/",
     "app/src/ssh_manager/panel_tests.rs",
+    "app/src/ssh_manager/server_view_tests.rs",
     "app/src/workspace/view_test.rs",
     "app/src/workspace/view/",
 )
 EXPECTED_SOURCE_SUITES = (
     ("app/src/ssh_manager/panel_tests.rs", "ssh-manager-app"),
+    ("app/src/ssh_manager/server_view_tests.rs", "ssh-manager-app"),
     ("app/src/workspace/view_test.rs", "workspace-view-acceptance"),
     ("app/src/workspace/view/spawn_card", "workspace-spawn-app"),
     ("app/src/control_surface", "control-surface-app"),
@@ -438,7 +479,24 @@ EXPECTED_SOURCE_SUITES = (
 )
 EXPECTED_TEST_NAME_FILTERS = {
     "generated-read-only-code": "generated_",
-    "workspace-view-acceptance": "connections_registry_drives_favorite_launch_menu",
+}
+DISCOVERED_SUITE_SOURCES = {
+    "workspace-view-acceptance": {
+        "app/src/workspace/view_test.rs": "workspace::view::tests::",
+    },
+    "ssh-manager-app": {
+        "app/src/ssh_manager/panel_tests.rs": "ssh_manager::panel::tests::",
+        "app/src/ssh_manager/server_view_tests.rs": "ssh_manager::server_view::tests::",
+    },
+}
+DISCOVERED_SUITE_EXCLUSIONS = {
+    ("workspace-view-acceptance", "app/src/workspace/view_test.rs"): frozenset(
+        WORKSPACE_VIEW_SIDECAR_EXCLUSIONS
+    ),
+}
+DISCOVERED_SUITE_PREFIXES = {
+    suite_id: tuple(source_prefixes.values())
+    for suite_id, source_prefixes in DISCOVERED_SUITE_SOURCES.items()
 }
 
 
@@ -531,6 +589,9 @@ def test_function_annotation_state(source: str, name: str) -> str:
         attributes: list[str] = []
         while lines:
             line = lines[-1].strip()
+            if line.startswith("//"):
+                lines.pop()
+                continue
             if not (line.startswith("#[") and line.endswith("]")):
                 break
             attributes.append(line)
@@ -553,6 +614,94 @@ def test_function_annotation_state(source: str, name: str) -> str:
             continue
         return "test"
     return "ignored" if found_ignored else "missing"
+
+
+def annotated_test_names(source: str) -> set[str]:
+    candidates = {
+        match.group(1)
+        for match in re.finditer(
+            r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+            source,
+        )
+    }
+    return {
+        name
+        for name in candidates
+        if test_function_annotation_state(source, name) in {"test", "ignored"}
+    }
+
+
+def expected_source_test_names(
+    suite_id: str,
+    source_path: str,
+    source: str,
+    module_prefix: str,
+    excluded_tests: frozenset[str] | None = None,
+) -> set[str]:
+    discovered = annotated_test_names(source)
+    excluded = (
+        DISCOVERED_SUITE_EXCLUSIONS.get((suite_id, source_path), frozenset())
+        if excluded_tests is None
+        else excluded_tests
+    )
+    missing_exclusions = excluded - discovered
+    if missing_exclusions:
+        raise AuditError(
+            f"suite {suite_id} exclusions are missing from {source_path}: "
+            f"{sorted(missing_exclusions)}"
+        )
+    runnable_exclusions = sorted(
+        name
+        for name in excluded
+        if test_function_annotation_state(source, name) != "ignored"
+    )
+    if runnable_exclusions:
+        raise AuditError(
+            f"suite {suite_id} exclusions are not #[ignore] tests in {source_path}: "
+            f"{runnable_exclusions}"
+        )
+    return {f"{module_prefix}{name}" for name in discovered - excluded}
+
+
+def discovered_suite_test_names(root: Path) -> dict[str, set[str]]:
+    discovered_source_scopes = {
+        (suite_id, source_path)
+        for suite_id, source_prefixes in DISCOVERED_SUITE_SOURCES.items()
+        for source_path in source_prefixes
+    }
+    unknown_exclusion_scopes = set(DISCOVERED_SUITE_EXCLUSIONS) - discovered_source_scopes
+    if unknown_exclusion_scopes:
+        raise AuditError(
+            "suite exclusions reference undiscovered sources: "
+            f"{sorted(unknown_exclusion_scopes)}"
+        )
+    names_by_suite = {suite_id: set() for suite_id in DISCOVERED_SUITE_SOURCES}
+    for suite_id, source_prefixes in DISCOVERED_SUITE_SOURCES.items():
+        for source_path, module_prefix in source_prefixes.items():
+            try:
+                source = (root / source_path).read_text(encoding="utf-8")
+            except OSError as error:
+                raise AuditError(
+                    f"cannot discover suite tests in {source_path}: {error}"
+                ) from error
+            names_by_suite[suite_id].update(
+                expected_source_test_names(
+                    suite_id,
+                    source_path,
+                    source,
+                    module_prefix,
+                )
+            )
+    return names_by_suite
+
+
+def expected_catalog_test_name(test: dict[str, Any]) -> str:
+    module_prefix = DISCOVERED_SUITE_SOURCES.get(test["suite"], {}).get(
+        test["source"]
+    )
+    if module_prefix is None:
+        return test["name"]
+    return f"{module_prefix}{test['name']}"
 
 
 def suite_filter_error(test_id: Any, suite: Any, name: Any) -> str | None:
@@ -675,6 +824,11 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, A
         timeout = suite.get("timeout_seconds")
         if not isinstance(timeout, int) or timeout < 1 or timeout > 7200:
             errors.append(f"suite {suite.get('id')}.timeout_seconds must be between 1 and 7200")
+
+    try:
+        discovered_suite_test_names(root)
+    except AuditError as error:
+        errors.append(str(error))
 
     catalog = unique_objects(manifest.get("test_catalog"), "test_catalog", errors)
     catalog_ids = {test.get("id") for test in catalog}
@@ -1106,6 +1260,7 @@ def test_execution_evidence(
     list_output: str,
     run_output: str,
     expected_names: list[str],
+    allowed_test_prefixes: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     ansi_escape = re.compile(r"\x1b\[[0-9;]*m")
     listed_tests = {
@@ -1116,10 +1271,24 @@ def test_execution_evidence(
     missing_expected = sorted(
         name
         for name in expected_names
-        if sum(test.rsplit("::", 1)[-1] == name for test in listed_tests) != 1
+        if sum(
+            test == name if "::" in name else test.rsplit("::", 1)[-1] == name
+            for test in listed_tests
+        )
+        != 1
     )
     duplicate_expected = sorted(
         name for name in set(expected_names) if expected_names.count(name) > 1
+    )
+    exact_expected_names = {name for name in expected_names if "::" in name}
+    unexpected_listed = sorted(
+        test
+        for test in listed_tests
+        if allowed_test_prefixes
+        and (
+            not any(test.startswith(prefix) for prefix in allowed_test_prefixes)
+            or test not in exact_expected_names
+        )
     )
     summaries = re.findall(
         r"test result: (?:ok|FAILED)\.\s+"
@@ -1136,6 +1305,7 @@ def test_execution_evidence(
         bool(listed_tests)
         and not missing_expected
         and not duplicate_expected
+        and not unexpected_listed
         and summary is not None
         and passed == len(listed_tests)
         and failed == 0
@@ -1150,6 +1320,7 @@ def test_execution_evidence(
         "ignored_test_count": ignored,
         "missing_listed_tests": missing_expected,
         "duplicate_expected_tests": duplicate_expected,
+        "unexpected_listed_tests": unexpected_listed,
     }
 
 
@@ -1175,10 +1346,19 @@ def execute_suite(
         "passed_test_count": None,
         "ignored_test_count": None,
         "missing_listed_tests": [],
+        "unexpected_listed_tests": [],
     }
     if suite_id != "cargo-check":
         list_log_path = log_dir / f"{suite_id}-list.log"
-        list_command = [*command, "--", "--list"]
+        if "--" in command:
+            separator = command.index("--")
+            list_command = [
+                *command[: separator + 1],
+                "--list",
+                *command[separator + 1 :],
+            ]
+        else:
+            list_command = [*command, "--", "--list"]
         list_exit_code, list_timed_out = run_logged_command(
             root,
             list_command,
@@ -1189,12 +1369,22 @@ def execute_suite(
         if list_exit_code == 0 and not list_timed_out:
             exit_code, timed_out = run_logged_command(root, command, log_path, timeout)
             run_output = log_path.read_text(encoding="utf-8", errors="replace")
-            evidence = test_execution_evidence(list_output, run_output, expected_names)
+            evidence = test_execution_evidence(
+                list_output,
+                run_output,
+                expected_names,
+                DISCOVERED_SUITE_PREFIXES.get(suite_id, ()),
+            )
         else:
             exit_code = list_exit_code
             timed_out = list_timed_out
             log_path.write_text("test listing failed; suite was not executed\n", encoding="utf-8")
-            evidence = test_execution_evidence(list_output, "", expected_names)
+            evidence = test_execution_evidence(
+                list_output,
+                "",
+                expected_names,
+                DISCOVERED_SUITE_PREFIXES.get(suite_id, ()),
+            )
     else:
         exit_code, timed_out = run_logged_command(root, command, log_path, timeout)
     duration = round(time.monotonic() - started, 3)
@@ -2003,6 +2193,30 @@ def command_self_test(args: argparse.Namespace) -> int:
         results.append({"id": mutation_id, "status": "expected-failure-observed"})
 
     mutated = copy.deepcopy(manifest)
+    workspace_suite = next(
+        suite for suite in mutated["suites"] if suite["id"] == "workspace-view-acceptance"
+    )
+    workspace_suite["command"] = [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "workspace::view::tests::connections_registry_drives_favorite_launch_menu",
+    ]
+    _, errors = validate_manifest(root, mutated)
+    if not any(
+        "suite workspace-view-acceptance.command must equal" in error for error in errors
+    ):
+        print("self-test suite-command-regression did not fail", file=sys.stderr)
+        return EXIT_CONTRACT
+    results.append(
+        {"id": "suite-command-regression", "status": "expected-failure-observed"}
+    )
+
+    mutated = copy.deepcopy(manifest)
     mutated["test_catalog"][0]["name"] = "removed_regression_test"
     _, errors = validate_manifest(root, mutated)
     if not any("removed_regression_test" in error for error in errors):
@@ -2074,6 +2288,130 @@ def command_self_test(args: argparse.Namespace) -> int:
         return EXIT_CONTRACT
     results.append(
         {"id": "suite-name-filter-regression", "status": "expected-failure-observed"}
+    )
+
+    discovery_fixture = """
+#[test]
+fn discovered_fixture() {}
+
+#[test]
+// This comment may explain why the test exists.
+/// This doc comment still belongs to the test function.
+fn documented_fixture() {}
+
+// #[test]
+fn commented_fixture() {}
+
+#[allow(dead_code)]
+// An unrelated attribute must not turn this into a test.
+fn attributed_non_test_fixture() {}
+
+#[test]
+#[ignore = "self-test"]
+fn ignored_fixture() {}
+"""
+    discovered_fixture_names = expected_source_test_names(
+        "fixture-suite",
+        "fixture.rs",
+        discovery_fixture,
+        "module::tests::",
+    )
+    discovery_evidence = test_execution_evidence(
+        "module::different_fixture: test\n",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
+        sorted(discovered_fixture_names),
+    )
+    out_of_scope_evidence = test_execution_evidence(
+        "other::discovered_fixture: test\n",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
+        ["module::tests::discovered_fixture"],
+        ("module::",),
+    )
+    if (
+        discovered_fixture_names
+        != {
+            "module::tests::discovered_fixture",
+            "module::tests::documented_fixture",
+            "module::tests::ignored_fixture",
+        }
+        or discovery_evidence["evidence_complete"]
+        or out_of_scope_evidence["evidence_complete"]
+        or out_of_scope_evidence["unexpected_listed_tests"]
+        != ["other::discovered_fixture"]
+    ):
+        print("self-test source-suite-discovery-regression did not fail", file=sys.stderr)
+        return EXIT_CONTRACT
+    results.append(
+        {
+            "id": "source-suite-discovery-regression",
+            "status": "expected-failure-observed",
+        }
+    )
+
+    excluded_fixture_names = expected_source_test_names(
+        "fixture-suite",
+        "fixture.rs",
+        discovery_fixture,
+        "module::tests::",
+        frozenset({"ignored_fixture"}),
+    )
+    exclusion_failures = 0
+    for excluded_tests in (
+        frozenset({"discovered_fixture"}),
+        frozenset({"missing_fixture"}),
+    ):
+        try:
+            expected_source_test_names(
+                "fixture-suite",
+                "fixture.rs",
+                discovery_fixture,
+                "module::tests::",
+                excluded_tests,
+            )
+        except AuditError:
+            exclusion_failures += 1
+    if (
+        excluded_fixture_names
+        != {
+            "module::tests::discovered_fixture",
+            "module::tests::documented_fixture",
+        }
+        or exclusion_failures != 2
+    ):
+        print("self-test source-suite-exclusion-regression did not fail", file=sys.stderr)
+        return EXIT_CONTRACT
+    results.append(
+        {
+            "id": "source-suite-exclusion-regression",
+            "status": "expected-failure-observed",
+        }
+    )
+
+    same_leaf_evidence = test_execution_evidence(
+        "ssh_manager::server_view::tests::shared_fixture: test\n",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
+        ["ssh_manager::panel::tests::shared_fixture"],
+        (
+            "ssh_manager::panel::tests::",
+            "ssh_manager::server_view::tests::",
+        ),
+    )
+    if (
+        same_leaf_evidence["evidence_complete"]
+        or same_leaf_evidence["missing_listed_tests"]
+        != ["ssh_manager::panel::tests::shared_fixture"]
+        or same_leaf_evidence["unexpected_listed_tests"]
+        != ["ssh_manager::server_view::tests::shared_fixture"]
+        or same_leaf_evidence["passed_test_count"] != 1
+        or same_leaf_evidence["listed_test_count"] != 1
+    ):
+        print("self-test same-leaf-wrong-module-regression did not fail", file=sys.stderr)
+        return EXIT_CONTRACT
+    results.append(
+        {
+            "id": "same-leaf-wrong-module-regression",
+            "status": "expected-failure-observed",
+        }
     )
 
     ignored_test = "#[test]\n#[ignore = \"self-test\"]\nfn ignored_fixture() {}\n"
@@ -2200,15 +2538,22 @@ def command_run_suites(args: argparse.Namespace) -> int:
         raise AuditError("manifest validation failed before suite execution")
     started_at = utc_now()
     expected_by_suite = {
-        suite["id"]: sorted(
-            test["name"]
+        suite["id"]: {
+            expected_catalog_test_name(test)
             for test in manifest["test_catalog"]
             if test["suite"] == suite["id"]
-        )
+        }
         for suite in manifest["suites"]
     }
+    for suite_id, discovered_names in discovered_suite_test_names(root).items():
+        expected_by_suite[suite_id].update(discovered_names)
     results = [
-        execute_suite(root, suite, expected_by_suite[suite["id"]], args.log_dir)
+        execute_suite(
+            root,
+            suite,
+            sorted(expected_by_suite[suite["id"]]),
+            args.log_dir,
+        )
         for suite in manifest["suites"]
     ]
     report = {
@@ -2297,17 +2642,24 @@ def command_assemble(args: argparse.Namespace) -> int:
         assembly_errors.append("reference report does not contain both required branch/SHA rows")
 
     suite_results = suites.get("results")
-    passing_suite_ids = {
-        item.get("id")
+    passing_suite_rows = [
+        item
         for item in suite_results
         if isinstance(item, dict)
         and item.get("status") == "pass"
         and item.get("exit_code") == 0
         and item.get("evidence_complete") is True
-    } if isinstance(suite_results, list) else set()
+    ] if isinstance(suite_results, list) else []
+    passing_suite_ids = {item.get("id") for item in passing_suite_rows}
+    suite_commands_ok = all(
+        item.get("command") == EXPECTED_SUITE_COMMANDS.get(item.get("id"))
+        for item in passing_suite_rows
+    )
     suites_ok = (
         suites.get("status") == "pass"
         and passing_suite_ids == set(EXPECTED_SUITE_COMMANDS)
+        and len(passing_suite_rows) == len(EXPECTED_SUITE_COMMANDS)
+        and suite_commands_ok
     )
     if not suites_ok:
         assembly_errors.append("Cargo check/Cockpit/daemon suite evidence is incomplete")

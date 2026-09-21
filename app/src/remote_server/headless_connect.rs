@@ -17,7 +17,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use futures::lock::Mutex as AsyncMutex;
@@ -37,12 +37,91 @@ use zaplex_remote_session::types::{
     has_feature, FEATURE_AGENT_INVENTORY, FEATURE_MULTIPLEXER_INVENTORY_V1, FEATURE_SESSION_HOST,
 };
 
-use super::session_inventory::{HostSessionInventory, RoutedDaemonSession};
+use super::session_inventory::{
+    DaemonRuntimeDiagnostics, DaemonRuntimeDiagnosticsStatus, HostSessionInventory,
+    RoutedDaemonSession,
+};
 use super::ssh_transport::{DaemonRuntimeRoute, InstallProgress, SshTransport};
 
 const SESSION_INVENTORY_TIMEOUT: Duration = Duration::from_secs(30);
 static CONTROL_MASTER_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>> =
     LazyLock::new(Mutex::default);
+
+#[derive(Clone, Copy)]
+struct InventoryDeadline {
+    expires_at: Instant,
+    timeout: Duration,
+}
+
+impl InventoryDeadline {
+    fn new(timeout: Duration) -> Self {
+        Self {
+            expires_at: Instant::now() + timeout,
+            timeout,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DaemonInventoryScanMode {
+    Recovery,
+    Diagnostics,
+}
+
+impl DaemonInventoryScanMode {
+    fn runtime_timeout(self) -> Option<Duration> {
+        match self {
+            Self::Recovery => None,
+            Self::Diagnostics => Some(SESSION_INVENTORY_TIMEOUT),
+        }
+    }
+
+    fn should_query_runtime(self, current_runtime: bool, app_version: Option<&str>) -> bool {
+        match self {
+            Self::Recovery => current_runtime || app_version.is_some(),
+            Self::Diagnostics => true,
+        }
+    }
+}
+
+struct DaemonInventoryQuery {
+    initialize: InitializeResponse,
+    daemon: SessionList,
+    observed_at: Instant,
+    multiplexers: std::result::Result<MultiplexerSessionList, String>,
+}
+
+impl DaemonInventoryQuery {
+    fn runtime_diagnostics(
+        &self,
+        runtime_filename: String,
+    ) -> std::result::Result<DaemonRuntimeDiagnostics, String> {
+        let route = DaemonRuntimeRoute::new(
+            runtime_filename.clone(),
+            self.initialize.server_version.clone(),
+        )?;
+        Ok(DaemonRuntimeDiagnostics {
+            runtime_filename,
+            server_version: Some(self.initialize.server_version.clone()),
+            route: Some(route),
+            observed_at: Some(self.observed_at),
+            status: if supports_session_host(&self.initialize) {
+                DaemonRuntimeDiagnosticsStatus::Available(self.daemon.clone())
+            } else {
+                DaemonRuntimeDiagnosticsStatus::Unsupported
+            },
+        })
+    }
+
+    fn into_recovery(self) -> std::result::Result<(SessionList, MultiplexerSessionList), String> {
+        Ok((self.daemon, self.multiplexers?))
+    }
+}
+
+struct DaemonInventoryScanResult {
+    inventory: std::result::Result<HostSessionInventory, String>,
+    runtime_diagnostics: Vec<DaemonRuntimeDiagnostics>,
+}
 
 fn supports_multiplexer_inventory(response: &InitializeResponse) -> bool {
     has_feature(&response.features, FEATURE_MULTIPLEXER_INVENTORY_V1)
@@ -585,10 +664,13 @@ pub async fn prepare_daemon_transport_with_progress(
 }
 
 /// Connects transiently to one prepared daemon runtime and returns its sessions
-/// plus any existing tmux/byobu sessions. The caller must establish the
-/// ControlMaster and verify that the binary is present; this query never installs.
-/// After the initialize handshake and inventory requests, the transient connection
-/// is torn down. The daemon and its sessions persist independently.
+/// plus the result of the independent tmux/byobu query. Once `SessionList` is
+/// measured, a companion inventory failure is retained separately so diagnostics
+/// remain available while recovery can reject an incomplete inventory. The caller
+/// must establish the ControlMaster and verify that the binary is present; this
+/// query never installs. After the initialize handshake and inventory requests,
+/// the transient connection is torn down. The daemon and its sessions persist
+/// independently.
 ///
 /// Request/response works without draining the client event channel — responses
 /// are routed to per-request oneshots; the event channel is unbounded so the
@@ -597,29 +679,64 @@ async fn query_daemon_inventory(
     transport: &SshTransport,
     auth_context: &RemoteServerAuthContext,
     executor: Arc<Background>,
-) -> std::result::Result<(InitializeResponse, SessionList, MultiplexerSessionList), String> {
-    let Connection { client, child, .. } = transport
-        .connect(executor)
-        .await
-        .map_err(|e| format!("daemon connect failed: {e:#}"))?;
+    runtime_timeout: Option<Duration>,
+) -> std::result::Result<DaemonInventoryQuery, String> {
+    let deadline = runtime_timeout.map(InventoryDeadline::new);
+    let Connection { client, child, .. } = inventory_before_deadline(
+        async {
+            transport
+                .connect(executor)
+                .await
+                .map_err(|e| format!("daemon connect failed: {e:#}"))
+        },
+        deadline,
+    )
+    .await?;
     // Keep the proxy/ssh child alive for the duration of the requests; it is torn
     // down when this returns. The daemon itself keeps running.
     let _child = child;
-    let auth_token = auth_context.get_auth_token().await;
-    let initialize = client
-        .initialize(auth_token.as_deref())
-        .await
-        .map_err(|e| format!("daemon handshake failed: {e:#}"))?;
-    let mut daemon = client
-        .list_sessions()
-        .await
-        .map_err(|e| format!("list_sessions failed: {e:#}"))?;
+    let auth_token = inventory_before_deadline(
+        async { Ok::<_, String>(auth_context.get_auth_token().await) },
+        deadline,
+    )
+    .await?;
+    let initialize = inventory_before_deadline(
+        async {
+            client
+                .initialize(auth_token.as_deref())
+                .await
+                .map_err(|e| format!("daemon handshake failed: {e:#}"))
+        },
+        deadline,
+    )
+    .await?;
+    let mut daemon = inventory_before_deadline(
+        async {
+            client
+                .list_sessions()
+                .await
+                .map_err(|e| format!("list_sessions failed: {e:#}"))
+        },
+        deadline,
+    )
+    .await?;
+    let observed_at = Instant::now();
     if supports_agent_inventory(&initialize) {
-        match client.list_agent_sessions().await {
+        match inventory_before_deadline(
+            async {
+                client
+                    .list_agent_sessions()
+                    .await
+                    .map_err(|e| format!("list_agent_sessions failed: {e:#}"))
+            },
+            deadline,
+        )
+        .await
+        {
             Ok(agents) => enrich_daemon_session_titles(&mut daemon, &agents),
             Err(error) => {
                 log::warn!(
-                    "list_agent_sessions failed while enriching persistent session names: {error:#}"
+                    "list_agent_sessions failed while enriching persistent session names: {error}"
                 );
                 enrich_daemon_session_titles(&mut daemon, &AgentSessionList::default());
             }
@@ -627,15 +744,39 @@ async fn query_daemon_inventory(
     } else {
         neutralize_legacy_session_titles(&mut daemon);
     }
+    Ok(finish_daemon_inventory(
+        initialize,
+        daemon,
+        observed_at,
+        async {
+            client
+                .list_multiplexer_sessions()
+                .await
+                .map_err(|e| format!("list_multiplexer_sessions failed: {e:#}"))
+        },
+        deadline,
+    )
+    .await)
+}
+
+async fn finish_daemon_inventory(
+    initialize: InitializeResponse,
+    daemon: SessionList,
+    observed_at: Instant,
+    multiplexer_query: impl Future<Output = std::result::Result<MultiplexerSessionList, String>>,
+    deadline: Option<InventoryDeadline>,
+) -> DaemonInventoryQuery {
     let multiplexers = if supports_multiplexer_inventory(&initialize) {
-        client
-            .list_multiplexer_sessions()
-            .await
-            .map_err(|e| format!("list_multiplexer_sessions failed: {e:#}"))?
+        inventory_before_deadline(multiplexer_query, deadline).await
     } else {
-        MultiplexerSessionList::default()
+        Ok(MultiplexerSessionList::default())
     };
-    Ok((initialize, daemon, multiplexers))
+    DaemonInventoryQuery {
+        initialize,
+        daemon,
+        observed_at,
+        multiplexers,
+    }
 }
 
 fn merge_daemon_inventory(
@@ -691,6 +832,39 @@ fn single_daemon_inventory(
     }
 }
 
+fn unavailable_runtime_diagnostics(runtime_filename: String) -> DaemonRuntimeDiagnostics {
+    DaemonRuntimeDiagnostics {
+        runtime_filename,
+        server_version: None,
+        route: None,
+        observed_at: None,
+        status: DaemonRuntimeDiagnosticsStatus::Unavailable,
+    }
+}
+
+fn single_daemon_scan_result(
+    query: std::result::Result<DaemonInventoryQuery, String>,
+    runtime_filename: String,
+    inventory_route: Option<DaemonRuntimeRoute>,
+) -> std::result::Result<DaemonInventoryScanResult, String> {
+    match query {
+        Ok(query) => {
+            let runtime_diagnostics = vec![query.runtime_diagnostics(runtime_filename)?];
+            let inventory = query.into_recovery().map(|(daemon, multiplexers)| {
+                single_daemon_inventory(daemon, multiplexers, inventory_route)
+            });
+            Ok(DaemonInventoryScanResult {
+                inventory,
+                runtime_diagnostics,
+            })
+        }
+        Err(error) => Ok(DaemonInventoryScanResult {
+            inventory: Err(error),
+            runtime_diagnostics: vec![unavailable_runtime_diagnostics(runtime_filename)],
+        }),
+    }
+}
+
 /// Lists sessions across discoverable runtimes without installing a daemon.
 /// One deadline covers preflight, the ControlMaster queue, and every query.
 pub async fn list_daemon_sessions(
@@ -699,23 +873,71 @@ pub async fn list_daemon_sessions(
     auth_context: Arc<RemoteServerAuthContext>,
     executor: Arc<Background>,
 ) -> std::result::Result<HostSessionInventory, String> {
-    inventory_with_timeout(
-        list_daemon_sessions_inner(server, socket_path, auth_context, executor),
+    let scan = inventory_with_timeout(
+        list_daemon_sessions_inner(
+            server,
+            socket_path,
+            auth_context,
+            executor,
+            DaemonInventoryScanMode::Recovery,
+        ),
         SESSION_INVENTORY_TIMEOUT,
     )
-    .await
+    .await?;
+    scan.inventory
 }
 
-async fn inventory_with_timeout(
-    inventory: impl Future<Output = std::result::Result<HostSessionInventory, String>>,
+/// Lists measured diagnostic snapshots without merging independent daemon
+/// runtime caps. Each runtime has an independent deadline, so an unavailable
+/// route cannot discard measurements already collected or prevent later probes.
+pub async fn list_daemon_runtime_diagnostics(
+    server: SshServerInfo,
+    socket_path: PathBuf,
+    auth_context: Arc<RemoteServerAuthContext>,
+    executor: Arc<Background>,
+) -> std::result::Result<Vec<DaemonRuntimeDiagnostics>, String> {
+    list_daemon_sessions_inner(
+        server,
+        socket_path,
+        auth_context,
+        executor,
+        DaemonInventoryScanMode::Diagnostics,
+    )
+    .await
+    .map(|scan| scan.runtime_diagnostics)
+}
+
+async fn inventory_with_timeout<T>(
+    inventory: impl Future<Output = std::result::Result<T, String>>,
     timeout: Duration,
-) -> std::result::Result<HostSessionInventory, String> {
+) -> std::result::Result<T, String> {
     // Bound the whole scan, including the ControlMaster queue and all daemon
     // runtimes. Dropping the owned future releases its lock guards and SSH child.
     inventory.with_timeout(timeout).await.map_err(|_| {
         crate::t!(
             "workspace-left-panel-ssh-manager-sessions-timeout",
             seconds = timeout.as_secs()
+        )
+    })?
+}
+
+async fn inventory_before_deadline<T>(
+    inventory: impl Future<Output = std::result::Result<T, String>>,
+    deadline: Option<InventoryDeadline>,
+) -> std::result::Result<T, String> {
+    let Some(deadline) = deadline else {
+        return inventory.await;
+    };
+    let Some(remaining) = deadline.expires_at.checked_duration_since(Instant::now()) else {
+        return Err(crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-timeout",
+            seconds = deadline.timeout.as_secs()
+        ));
+    };
+    inventory.with_timeout(remaining).await.map_err(|_| {
+        crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-timeout",
+            seconds = deadline.timeout.as_secs()
         )
     })?
 }
@@ -740,7 +962,8 @@ async fn list_daemon_sessions_inner(
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
     executor: Arc<Background>,
-) -> std::result::Result<HostSessionInventory, String> {
+    scan_mode: DaemonInventoryScanMode,
+) -> std::result::Result<DaemonInventoryScanResult, String> {
     let preflight =
         preflight_daemon_transport(server, socket_path.clone(), auth_context.clone()).await?;
     require_daemon_inventory_ready(preflight)?;
@@ -749,24 +972,44 @@ async fn list_daemon_sessions_inner(
         Ok(runtimes) => runtimes,
         Err(error) => {
             log::warn!("{error}; falling back to the current daemon runtime");
-            let (_, daemon, multiplexers) =
-                query_daemon_inventory(&base_transport, &auth_context, executor).await?;
-            return Ok(single_daemon_inventory(daemon, multiplexers, None));
+            let query = query_daemon_inventory(
+                &base_transport,
+                &auth_context,
+                executor,
+                scan_mode.runtime_timeout(),
+            )
+            .await;
+            return single_daemon_scan_result(
+                query,
+                remote_server::setup::daemon_runtime_filename("sock"),
+                None,
+            );
         }
     };
 
     if runtimes.is_empty() {
-        let (_, daemon, multiplexers) =
-            query_daemon_inventory(&base_transport, &auth_context, executor).await?;
-        return Ok(single_daemon_inventory(daemon, multiplexers, None));
+        let query = query_daemon_inventory(
+            &base_transport,
+            &auth_context,
+            executor,
+            scan_mode.runtime_timeout(),
+        )
+        .await;
+        return single_daemon_scan_result(
+            query,
+            remote_server::setup::daemon_runtime_filename("sock"),
+            None,
+        );
     }
 
     let mut inventory = HostSessionInventory::default();
+    let mut runtime_diagnostics = Vec::new();
     let mut observed_daemons = 0;
+    let mut queried_current_runtime = false;
     for runtime_filename in runtimes {
         let current_runtime =
             runtime_filename == remote_server::setup::daemon_runtime_filename("sock");
-        if !current_runtime && ChannelState::app_version().is_none() {
+        if !scan_mode.should_query_runtime(current_runtime, ChannelState::app_version()) {
             log::warn!(
                 "skipping daemon runtime {runtime_filename} from an unversioned source build"
             );
@@ -778,27 +1021,39 @@ async fn list_daemon_sessions_inner(
             let probe_route = DaemonRuntimeRoute::new(runtime_filename.clone(), String::new())?;
             base_transport.clone().with_daemon_runtime(probe_route)
         };
-        let (initialize, daemon, multiplexers) =
-            match query_daemon_inventory(&transport, &auth_context, executor.clone()).await {
-                Ok(result) => result,
-                Err(error) => {
-                    log::warn!("skipping unreachable daemon runtime {runtime_filename}: {error}");
-                    continue;
-                }
-            };
-        if !supports_session_host(&initialize) {
+        queried_current_runtime |= current_runtime;
+        let query = match query_daemon_inventory(
+            &transport,
+            &auth_context,
+            executor.clone(),
+            scan_mode.runtime_timeout(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                log::warn!("skipping unreachable daemon runtime {runtime_filename}: {error}");
+                runtime_diagnostics.push(unavailable_runtime_diagnostics(runtime_filename));
+                continue;
+            }
+        };
+        if matches!(scan_mode, DaemonInventoryScanMode::Diagnostics) {
+            runtime_diagnostics.push(query.runtime_diagnostics(runtime_filename)?);
+            continue;
+        }
+        if !supports_session_host(&query.initialize) {
             log::warn!("skipping daemon runtime {runtime_filename} without session-host support");
             continue;
         }
         if !current_runtime
             && !is_older_release_daemon(
                 ChannelState::app_version(),
-                initialize.server_version.as_str(),
+                query.initialize.server_version.as_str(),
             )
         {
             log::warn!(
                 "skipping non-older daemon runtime {runtime_filename} reporting version {:?}",
-                initialize.server_version
+                query.initialize.server_version
             );
             continue;
         }
@@ -806,9 +1061,19 @@ async fn list_daemon_sessions_inner(
             None
         } else {
             Some(DaemonRuntimeRoute::new(
-                runtime_filename,
-                initialize.server_version,
+                runtime_filename.clone(),
+                query.initialize.server_version.clone(),
             )?)
+        };
+        runtime_diagnostics.push(query.runtime_diagnostics(runtime_filename.clone())?);
+        let (daemon, multiplexers) = match query.into_recovery() {
+            Ok(inventory) => inventory,
+            Err(error) => {
+                log::warn!(
+                    "skipping incomplete recovery inventory for daemon runtime {runtime_filename}: {error}"
+                );
+                continue;
+            }
         };
         merge_daemon_inventory(
             &mut inventory,
@@ -820,12 +1085,34 @@ async fn list_daemon_sessions_inner(
         observed_daemons += 1;
     }
 
-    if observed_daemons == 0 {
-        let (_, daemon, multiplexers) =
-            query_daemon_inventory(&base_transport, &auth_context, executor).await?;
-        return Ok(single_daemon_inventory(daemon, multiplexers, None));
+    let query_current_runtime = match scan_mode {
+        DaemonInventoryScanMode::Recovery => observed_daemons == 0,
+        DaemonInventoryScanMode::Diagnostics => observed_daemons == 0 && !queried_current_runtime,
+    };
+    if query_current_runtime {
+        let current_runtime_filename = remote_server::setup::daemon_runtime_filename("sock");
+        runtime_diagnostics.retain(|runtime| runtime.runtime_filename != current_runtime_filename);
+        let query = query_daemon_inventory(
+            &base_transport,
+            &auth_context,
+            executor,
+            scan_mode.runtime_timeout(),
+        )
+        .await;
+        let DaemonInventoryScanResult {
+            inventory,
+            runtime_diagnostics: current_diagnostics,
+        } = single_daemon_scan_result(query, current_runtime_filename, None)?;
+        runtime_diagnostics.extend(current_diagnostics);
+        return Ok(DaemonInventoryScanResult {
+            inventory,
+            runtime_diagnostics,
+        });
     }
-    Ok(inventory)
+    Ok(DaemonInventoryScanResult {
+        inventory: Ok(inventory),
+        runtime_diagnostics,
+    })
 }
 
 #[cfg(test)]

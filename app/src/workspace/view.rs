@@ -13294,7 +13294,7 @@ impl Workspace {
                      discarding the duplicate surface"
                 );
                 let pane_group_id = pane_group.id();
-                let opened_new_tab = pane_group.as_ref(ctx).visible_pane_count() == 1;
+                let opened_new_tab = pane_group.as_ref(ctx).visible_pane_ids().len() == 1;
                 self.retire_competing_daemon_surface(
                     connection_session_id,
                     pane_group_id,

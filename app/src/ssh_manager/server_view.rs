@@ -11,13 +11,17 @@ use crate::editor::{
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
+use crate::remote_server::session_inventory::{
+    DaemonRuntimeDiagnostics, DaemonRuntimeDiagnosticsStatus,
+};
 use crate::ssh_manager::{
     credential_operation_message, endpoint_validation_message, SshTreeChangedEvent,
     SshTreeChangedNotifier,
 };
 use crate::ui_components::modal_frame;
-use crate::view_components::action_button::ActionButton;
+use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 use crate::view_components::dropdown::{Dropdown, DropdownItem};
+use remote_server::proto::{MemoryMeasurement, MemoryMeasurementStatus, SessionInfo, SessionList};
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
@@ -36,6 +40,7 @@ use warpui::{
 };
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use warp_ssh_manager::{
     delete_onekey_credential_and_secrets, save_onekey_credential_with_secret,
@@ -59,6 +64,10 @@ const RING_CEILING_PRESETS: [(u32, &str); 3] = [(0, "Default"), (64, "64 MB"), (
 const ONEKEY_MANAGER_WIDTH: f32 = 680.0;
 const ONEKEY_MANAGER_HEIGHT: f32 = 500.0;
 const ONEKEY_MANAGER_LIST_WIDTH: f32 = 220.0;
+const KIB_BYTES: u64 = 1024;
+const MIB_BYTES: u64 = 1024 * KIB_BYTES;
+const GIB_BYTES: u64 = 1024 * MIB_BYTES;
+const DIAGNOSTIC_MAX_AGE_MILLIS: u64 = 5_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SshServerAction {
@@ -66,6 +75,7 @@ pub enum SshServerAction {
     Connect,
     TestConnection,
     ConfirmUnknownHostKey,
+    RefreshRuntimeDiagnostics,
     SetAuthPassword,
     SetAuthKey,
     SetAuthOneKey,
@@ -136,6 +146,296 @@ enum AuthSpecificField {
     OneKeyCredential,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ServerFormField {
+    Name,
+    Host,
+    Port,
+    User,
+    Password,
+    KeyPath,
+    OneKeyLabel,
+    OneKeyUser,
+    OneKeyKeyPath,
+    OneKeySecret,
+    RootPassword,
+    StartupCommand,
+    Notes,
+}
+
+impl ServerFormField {
+    fn defines_connection(self) -> bool {
+        matches!(
+            self,
+            Self::Host | Self::Port | Self::User | Self::Password | Self::KeyPath
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiagnosticValueState {
+    Measured,
+    Unavailable,
+    Unsupported,
+    Stale,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiagnosticZeroSemantics {
+    Measured,
+    Unavailable,
+    NotConfigured,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DiagnosticRow {
+    label: String,
+    value: String,
+    hint: String,
+    state: DiagnosticValueState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeDiagnosticPresentation {
+    runtime: String,
+    version: String,
+    state: DiagnosticValueState,
+    rows: Vec<DiagnosticRow>,
+}
+
+fn format_diagnostic_bytes(bytes: u64) -> String {
+    let (unit_bytes, unit) = if bytes >= GIB_BYTES {
+        (GIB_BYTES, "GiB")
+    } else if bytes >= MIB_BYTES {
+        (MIB_BYTES, "MiB")
+    } else if bytes >= KIB_BYTES {
+        (KIB_BYTES, "KiB")
+    } else {
+        return format!("{bytes} B");
+    };
+    let tenths = bytes.saturating_mul(10) / unit_bytes;
+    format!("{}.{:01} {unit}", tenths / 10, tenths % 10)
+}
+
+fn diagnostic_unavailable_row(
+    label: String,
+    state: DiagnosticValueState,
+    hint: String,
+) -> DiagnosticRow {
+    DiagnosticRow {
+        label,
+        value: "—".to_string(),
+        hint,
+        state,
+    }
+}
+
+fn mark_diagnostic_row_stale(mut row: DiagnosticRow, stale: bool) -> DiagnosticRow {
+    if stale && row.state == DiagnosticValueState::Measured {
+        row.state = DiagnosticValueState::Stale;
+        row.hint = crate::t!("workspace-left-panel-ssh-manager-diagnostics-stale");
+    }
+    row
+}
+
+fn diagnostic_bytes_row(
+    label: String,
+    bytes: u64,
+    zero_semantics: DiagnosticZeroSemantics,
+    stale: bool,
+) -> DiagnosticRow {
+    let row = if bytes != 0 || zero_semantics == DiagnosticZeroSemantics::Measured {
+        DiagnosticRow {
+            label,
+            value: format_diagnostic_bytes(bytes),
+            hint: String::new(),
+            state: DiagnosticValueState::Measured,
+        }
+    } else if zero_semantics == DiagnosticZeroSemantics::NotConfigured {
+        DiagnosticRow {
+            label,
+            value: crate::t!("workspace-left-panel-ssh-manager-diagnostics-not-configured"),
+            hint: String::new(),
+            state: DiagnosticValueState::Measured,
+        }
+    } else {
+        diagnostic_unavailable_row(
+            label,
+            DiagnosticValueState::Unavailable,
+            crate::t!("workspace-left-panel-ssh-manager-diagnostics-unavailable"),
+        )
+    };
+    mark_diagnostic_row_stale(row, stale)
+}
+
+fn measured_diagnostic_row(label: String, bytes: u64, hint: String, stale: bool) -> DiagnosticRow {
+    mark_diagnostic_row_stale(
+        DiagnosticRow {
+            label,
+            value: format_diagnostic_bytes(bytes),
+            hint,
+            state: DiagnosticValueState::Measured,
+        },
+        stale,
+    )
+}
+
+fn diagnostic_memory_row(
+    label: String,
+    measurement: Option<&MemoryMeasurement>,
+    expected_provenance: &str,
+    measured_hint: String,
+    stale: bool,
+) -> DiagnosticRow {
+    let Some(measurement) = measurement else {
+        return diagnostic_unavailable_row(
+            label,
+            DiagnosticValueState::Unavailable,
+            crate::t!("workspace-left-panel-ssh-manager-diagnostics-unavailable"),
+        );
+    };
+    let status = MemoryMeasurementStatus::try_from(measurement.status).ok();
+    match (status, measurement.bytes) {
+        (Some(MemoryMeasurementStatus::Measured), Some(bytes))
+            if measurement.provenance == expected_provenance =>
+        {
+            measured_diagnostic_row(label, bytes, measured_hint, stale)
+        }
+        (Some(MemoryMeasurementStatus::Unsupported), None) => diagnostic_unavailable_row(
+            label,
+            DiagnosticValueState::Unsupported,
+            crate::t!("workspace-left-panel-ssh-manager-diagnostics-unsupported"),
+        ),
+        (Some(MemoryMeasurementStatus::Unspecified), None)
+        | (Some(MemoryMeasurementStatus::Unavailable), None)
+        | (Some(MemoryMeasurementStatus::Measured), None)
+        | (Some(MemoryMeasurementStatus::Measured), Some(_))
+        | (Some(MemoryMeasurementStatus::Unavailable), Some(_))
+        | (Some(MemoryMeasurementStatus::Unsupported), Some(_))
+        | (Some(MemoryMeasurementStatus::Unspecified), Some(_))
+        | (None, None)
+        | (None, Some(_)) => diagnostic_unavailable_row(
+            label,
+            DiagnosticValueState::Unavailable,
+            crate::t!("workspace-left-panel-ssh-manager-diagnostics-unavailable"),
+        ),
+    }
+}
+
+fn session_diagnostic_label(session: &SessionInfo) -> String {
+    let id: String = session.session_id.chars().take(8).collect();
+    crate::t!(
+        "workspace-left-panel-ssh-manager-diagnostics-session",
+        id = id
+    )
+}
+
+fn runtime_diagnostic_presentations(
+    diagnostics: &[DaemonRuntimeDiagnostics],
+    retained_is_stale: bool,
+) -> Vec<RuntimeDiagnosticPresentation> {
+    diagnostics
+        .iter()
+        .map(|runtime| {
+            let version = runtime
+                .server_version
+                .clone()
+                .unwrap_or_else(|| "—".to_string());
+            let DaemonRuntimeDiagnosticsStatus::Available(snapshot) = &runtime.status else {
+                return RuntimeDiagnosticPresentation {
+                    runtime: runtime.runtime_filename.clone(),
+                    version,
+                    state: DiagnosticValueState::Unavailable,
+                    rows: Vec::new(),
+                };
+            };
+            let stale = runtime_diagnostics_are_stale(runtime.observed_at, retained_is_stale);
+            let mut rows = vec![
+                diagnostic_bytes_row(
+                    crate::t!("workspace-left-panel-ssh-manager-diagnostics-output-cap"),
+                    snapshot.host_ring_cap_bytes,
+                    DiagnosticZeroSemantics::Unavailable,
+                    stale,
+                ),
+                diagnostic_memory_row(
+                    crate::t!("workspace-left-panel-ssh-manager-diagnostics-host-available"),
+                    snapshot.host_available_memory.as_ref(),
+                    "linux-proc-memavailable",
+                    crate::t!("workspace-left-panel-ssh-manager-diagnostics-memavailable"),
+                    stale,
+                ),
+                diagnostic_bytes_row(
+                    crate::t!("workspace-left-panel-ssh-manager-diagnostics-memory-floor"),
+                    snapshot.daemon_min_available_bytes,
+                    DiagnosticZeroSemantics::NotConfigured,
+                    stale,
+                ),
+            ];
+            for session in &snapshot.sessions {
+                let session_label = session_diagnostic_label(session);
+                rows.push(diagnostic_bytes_row(
+                    crate::t!(
+                        "workspace-left-panel-ssh-manager-diagnostics-session-output",
+                        session = session_label.clone()
+                    ),
+                    session.ring_bytes,
+                    DiagnosticZeroSemantics::Measured,
+                    stale,
+                ));
+                rows.push(diagnostic_memory_row(
+                    crate::t!(
+                        "workspace-left-panel-ssh-manager-diagnostics-session-process",
+                        session = session_label
+                    ),
+                    session.process_memory.as_ref(),
+                    "linux-proc-smaps-rollup",
+                    crate::t!("workspace-left-panel-ssh-manager-diagnostics-pss"),
+                    stale,
+                ));
+            }
+            RuntimeDiagnosticPresentation {
+                runtime: runtime.runtime_filename.clone(),
+                version,
+                state: if stale {
+                    DiagnosticValueState::Stale
+                } else {
+                    DiagnosticValueState::Measured
+                },
+                rows,
+            }
+        })
+        .collect()
+}
+
+fn runtime_diagnostics_are_stale(observed_at: Option<Instant>, retained_is_stale: bool) -> bool {
+    retained_is_stale
+        || match observed_at {
+            Some(observed_at) => {
+                Instant::now().saturating_duration_since(observed_at)
+                    > Duration::from_millis(DIAGNOSTIC_MAX_AGE_MILLIS)
+            }
+            None => true,
+        }
+}
+
+fn runtime_diagnostic_stale_delays(diagnostics: &[DaemonRuntimeDiagnostics]) -> Vec<Duration> {
+    let max_age = Duration::from_millis(DIAGNOSTIC_MAX_AGE_MILLIS);
+    let now = Instant::now();
+    diagnostics
+        .iter()
+        .filter(|runtime| {
+            matches!(
+                &runtime.status,
+                DaemonRuntimeDiagnosticsStatus::Available(_)
+            )
+        })
+        .filter_map(|runtime| {
+            let age = now.saturating_duration_since(runtime.observed_at?);
+            (age <= max_age).then(|| max_age.saturating_sub(age) + Duration::from_millis(1))
+        })
+        .collect()
+}
+
 /// Immutable snapshot of every value the Save button submits, used for
 /// dirty-tracking (see [`SshServerView::baseline_snapshot`]).
 #[derive(Clone, PartialEq, Eq)]
@@ -159,6 +459,7 @@ struct ServerFormSnapshot {
 struct ServerReloadSnapshot {
     node: Option<SshNode>,
     server: Option<SshServerInfo>,
+    diagnostics_server: Option<SshServerInfo>,
     folders: Vec<(String, String)>,
     onekey_credentials: Vec<SshOneKeyCredential>,
     password_saved: bool,
@@ -169,21 +470,32 @@ fn load_server_reload_snapshot(
     node_id: &str,
     secret_store: &dyn SshSecretStore,
 ) -> anyhow::Result<ServerReloadSnapshot> {
-    let (node, server, folders, onekey_credentials) = warp_ssh_manager::with_conn(|conn| {
-        let nodes = SshRepository::list_nodes(conn)?;
-        let node = nodes.iter().find(|node| node.id == node_id).cloned();
-        let server = match node.as_ref().map(|node| node.kind) {
-            Some(NodeKind::Server) => SshRepository::get_server(conn, node_id)?,
-            None | Some(NodeKind::Folder) => None,
-        };
-        let folders = nodes
-            .iter()
-            .filter(|node| matches!(node.kind, NodeKind::Folder))
-            .map(|node| (node.id.clone(), node.name.clone()))
-            .collect();
-        let onekey_credentials = SshRepository::list_onekey_credentials(conn)?;
-        Ok((node, server, folders, onekey_credentials))
-    })?;
+    let (node, server, diagnostics_server, folders, onekey_credentials) =
+        warp_ssh_manager::with_conn(|conn| {
+            let nodes = SshRepository::list_nodes(conn)?;
+            let node = nodes.iter().find(|node| node.id == node_id).cloned();
+            let server = match node.as_ref().map(|node| node.kind) {
+                Some(NodeKind::Server) => SshRepository::get_server(conn, node_id)?,
+                None | Some(NodeKind::Folder) => None,
+            };
+            let diagnostics_server = server
+                .as_ref()
+                .and_then(|server| SshRepository::resolve_server_connection(conn, server).ok())
+                .map(|connection| connection.server);
+            let folders = nodes
+                .iter()
+                .filter(|node| matches!(node.kind, NodeKind::Folder))
+                .map(|node| (node.id.clone(), node.name.clone()))
+                .collect();
+            let onekey_credentials = SshRepository::list_onekey_credentials(conn)?;
+            Ok((
+                node,
+                server,
+                diagnostics_server,
+                folders,
+                onekey_credentials,
+            ))
+        })?;
 
     let (password_saved, root_password_saved) =
         load_server_secret_presence(server.as_ref(), secret_store)?;
@@ -191,6 +503,7 @@ fn load_server_reload_snapshot(
     Ok(ServerReloadSnapshot {
         node,
         server,
+        diagnostics_server,
         folders,
         onekey_credentials,
         password_saved,
@@ -308,6 +621,7 @@ pub struct SshServerView {
     key_path_picker_btn_state: MouseStateHandle,
     onekey_manager_btn_state: MouseStateHandle,
     onekey_manager_close_button: ViewHandle<ActionButton>,
+    runtime_diagnostics_refresh_button: ViewHandle<ActionButton>,
     onekey_manager_new_btn_state: MouseStateHandle,
     onekey_manager_save_btn_state: MouseStateHandle,
     onekey_manager_save_continue_btn_state: MouseStateHandle,
@@ -345,6 +659,11 @@ pub struct SshServerView {
     latency_ms: Option<u64>,
     is_testing: bool,
     connection_test_generation: u64,
+    runtime_diagnostics_generation: u64,
+    runtime_diagnostics_loading: bool,
+    runtime_diagnostics: Vec<DaemonRuntimeDiagnostics>,
+    runtime_diagnostics_error: Option<String>,
+    runtime_diagnostics_server: Option<SshServerInfo>,
     pending_unknown_host_key: Option<UnknownHostKey>,
     scroll_state: ClippedScrollStateHandle,
     /// Snapshot of all form values as of the last DB load / successful save.
@@ -409,6 +728,14 @@ impl SshServerView {
         });
         let onekey_manager_close_button =
             ctx.add_view(|_ctx| modal_frame::close_button(SshServerAction::CloseOneKeyManager));
+        let runtime_diagnostics_refresh_button = ctx.add_typed_action_view(|_ctx| {
+            ActionButton::new(
+                crate::t!("workspace-left-panel-ssh-manager-diagnostics-refresh"),
+                SecondaryTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .on_click(|ctx| ctx.dispatch_typed_action(SshServerAction::RefreshRuntimeDiagnostics))
+        });
 
         let mut me = Self {
             node_id,
@@ -452,6 +779,7 @@ impl SshServerView {
             key_path_picker_btn_state: MouseStateHandle::default(),
             onekey_manager_btn_state: MouseStateHandle::default(),
             onekey_manager_close_button,
+            runtime_diagnostics_refresh_button,
             onekey_manager_new_btn_state: MouseStateHandle::default(),
             onekey_manager_save_btn_state: MouseStateHandle::default(),
             onekey_manager_save_continue_btn_state: MouseStateHandle::default(),
@@ -483,6 +811,11 @@ impl SshServerView {
             latency_ms: None,
             is_testing: false,
             connection_test_generation: 0,
+            runtime_diagnostics_generation: 0,
+            runtime_diagnostics_loading: false,
+            runtime_diagnostics: Vec::new(),
+            runtime_diagnostics_error: None,
+            runtime_diagnostics_server: None,
             pending_unknown_host_key: None,
             scroll_state: ClippedScrollStateHandle::default(),
             baseline_snapshot: None,
@@ -493,32 +826,39 @@ impl SshServerView {
         // clear selection on all other editors (otherwise multiple input fields highlight simultaneously when switching fields).
         // Clear selection on all other editors (otherwise multiple input fields highlight simultaneously when switching).
         let editors = [
-            me.name_editor.clone(),
-            me.host_editor.clone(),
-            me.port_editor.clone(),
-            me.user_editor.clone(),
-            me.password_editor.clone(),
-            me.key_path_editor.clone(),
-            me.onekey_label_editor.clone(),
-            me.onekey_user_editor.clone(),
-            me.onekey_key_path_editor.clone(),
-            me.onekey_secret_editor.clone(),
-            me.root_password_editor.clone(),
-            me.startup_command_editor.clone(),
-            me.notes_editor.clone(),
+            (me.name_editor.clone(), ServerFormField::Name),
+            (me.host_editor.clone(), ServerFormField::Host),
+            (me.port_editor.clone(), ServerFormField::Port),
+            (me.user_editor.clone(), ServerFormField::User),
+            (me.password_editor.clone(), ServerFormField::Password),
+            (me.key_path_editor.clone(), ServerFormField::KeyPath),
+            (me.onekey_label_editor.clone(), ServerFormField::OneKeyLabel),
+            (me.onekey_user_editor.clone(), ServerFormField::OneKeyUser),
+            (
+                me.onekey_key_path_editor.clone(),
+                ServerFormField::OneKeyKeyPath,
+            ),
+            (
+                me.onekey_secret_editor.clone(),
+                ServerFormField::OneKeySecret,
+            ),
+            (
+                me.root_password_editor.clone(),
+                ServerFormField::RootPassword,
+            ),
+            (
+                me.startup_command_editor.clone(),
+                ServerFormField::StartupCommand,
+            ),
+            (me.notes_editor.clone(), ServerFormField::Notes),
         ];
-        for editor in editors {
-            ctx.subscribe_to_view(&editor, |me, source, event, ctx| match event {
-                EditorEvent::Edited(_) | EditorEvent::Enter => {
+        for (editor, field) in editors {
+            ctx.subscribe_to_view(&editor, move |me, source, event, ctx| match event {
+                EditorEvent::Edited(_) => me.handle_server_form_edit(field, ctx),
+                EditorEvent::Enter => {
                     me.invalidate_connection_test();
-                    if me.status.is_some() {
-                        me.status = None;
-                    }
-                    if me.onekey_status.is_some() {
-                        me.onekey_status = None;
-                    }
-                    // Re-render so the Save button re-evaluates its dirty state on
-                    // every edit (not only when a status banner is cleared).
+                    me.status = None;
+                    me.onekey_status = None;
                     ctx.notify();
                 }
                 EditorEvent::Blurred => {
@@ -580,6 +920,126 @@ impl SshServerView {
         self.pending_unknown_host_key = None;
     }
 
+    fn handle_server_form_edit(&mut self, field: ServerFormField, ctx: &mut ViewContext<Self>) {
+        self.invalidate_connection_test();
+        if field.defines_connection() && self.baseline_snapshot.is_some() {
+            self.invalidate_runtime_diagnostics_for_connection_edit(ctx);
+        }
+        self.status = None;
+        self.onekey_status = None;
+        // Re-render so the Save button re-evaluates its dirty state on every edit.
+        ctx.notify();
+    }
+
+    fn clear_runtime_diagnostics(&mut self) {
+        self.runtime_diagnostics_generation = self.runtime_diagnostics_generation.wrapping_add(1);
+        self.runtime_diagnostics_loading = false;
+        self.runtime_diagnostics.clear();
+        self.runtime_diagnostics_error = None;
+    }
+
+    fn invalidate_runtime_diagnostics_for_connection_edit(&mut self, ctx: &mut ViewContext<Self>) {
+        self.runtime_diagnostics_server = None;
+        self.clear_runtime_diagnostics();
+        self.runtime_diagnostics_refresh_button
+            .update(ctx, |button, ctx| button.set_disabled(true, ctx));
+    }
+
+    fn refresh_runtime_diagnostics(
+        &mut self,
+        diagnostics_server: Option<SshServerInfo>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self
+            .server
+            .as_ref()
+            .is_some_and(|server| server.session_resilience.is_enabled())
+        {
+            self.clear_runtime_diagnostics();
+            return;
+        }
+
+        self.runtime_diagnostics_generation = self.runtime_diagnostics_generation.wrapping_add(1);
+        let generation = self.runtime_diagnostics_generation;
+        let Some(server) = diagnostics_server else {
+            self.runtime_diagnostics_loading = false;
+            self.runtime_diagnostics_error = Some(crate::t!(
+                "workspace-left-panel-ssh-manager-diagnostics-auth-unavailable"
+            ));
+            return;
+        };
+        if server.auth_type != AuthType::Key {
+            self.runtime_diagnostics_loading = false;
+            self.runtime_diagnostics_error = Some(crate::t!(
+                "workspace-left-panel-ssh-manager-diagnostics-needs-key"
+            ));
+            return;
+        }
+
+        self.runtime_diagnostics_loading = true;
+        self.runtime_diagnostics_error = None;
+        #[cfg(unix)]
+        {
+            use crate::auth::AuthStateProvider;
+            use crate::remote_server::auth_context::server_api_auth_context;
+            use crate::remote_server::headless_connect;
+
+            let auth_context = Arc::new(server_api_auth_context(
+                AuthStateProvider::as_ref(ctx).get().clone(),
+            ));
+            let socket_path = headless_connect::control_socket_path(&server);
+            let executor = ctx.background_executor().clone();
+            ctx.spawn(
+                headless_connect::list_daemon_runtime_diagnostics(
+                    server,
+                    socket_path,
+                    auth_context,
+                    executor,
+                ),
+                move |me, result, ctx| {
+                    if me.runtime_diagnostics_generation != generation {
+                        return;
+                    }
+                    me.runtime_diagnostics_loading = false;
+                    match result {
+                        Ok(diagnostics) => {
+                            let stale_delays = runtime_diagnostic_stale_delays(&diagnostics);
+                            me.runtime_diagnostics = diagnostics;
+                            me.runtime_diagnostics_error = None;
+                            for delay in stale_delays {
+                                ctx.spawn(
+                                    async move {
+                                        warpui::r#async::Timer::after(delay).await;
+                                    },
+                                    move |me, _, ctx| {
+                                        if me.runtime_diagnostics_generation == generation {
+                                            ctx.notify();
+                                        }
+                                    },
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            log::warn!("ssh_server_view: runtime diagnostics unavailable: {error}");
+                            me.runtime_diagnostics_error = Some(crate::t!(
+                                "workspace-left-panel-ssh-manager-diagnostics-unavailable"
+                            ));
+                        }
+                    }
+                    ctx.notify();
+                },
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (server, generation);
+            self.runtime_diagnostics_loading = false;
+            self.runtime_diagnostics_error = Some(crate::t!(
+                "workspace-left-panel-ssh-manager-diagnostics-platform-unavailable"
+            ));
+        }
+    }
+
     pub fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {
         self.pane_configuration.clone()
     }
@@ -614,7 +1074,9 @@ impl SshServerView {
                         me.status = Some(StatusBanner::Error(
                             error
                                 .downcast_ref::<SshSecretStoreError>()
-                                .map(|error| crate::t!("ssh-keychain-error", err = error.to_string()))
+                                .map(|error| {
+                                    crate::t!("ssh-keychain-error", err = error.to_string())
+                                })
                                 .unwrap_or_else(|| crate::t!("common-error")),
                         ));
                         ctx.notify();
@@ -633,6 +1095,8 @@ impl SshServerView {
     fn clear_reload_state(&mut self) {
         self.node = None;
         self.server = None;
+        self.runtime_diagnostics_server = None;
+        self.clear_runtime_diagnostics();
         self.folders.clear();
         self.onekey_credentials.clear();
         self.original_parent_id = None;
@@ -647,6 +1111,7 @@ impl SshServerView {
         let ServerReloadSnapshot {
             node,
             server,
+            diagnostics_server,
             folders,
             onekey_credentials,
             password_saved,
@@ -656,6 +1121,11 @@ impl SshServerView {
         self.current_group_id = self.original_parent_id.clone();
         self.node = node;
         self.server = server;
+        self.runtime_diagnostics_server = diagnostics_server.clone();
+        self.runtime_diagnostics_refresh_button
+            .update(ctx, |button, ctx| {
+                button.set_disabled(diagnostics_server.is_none(), ctx)
+            });
         self.folders = folders;
         self.onekey_credentials = onekey_credentials;
 
@@ -747,6 +1217,7 @@ impl SshServerView {
         // Re-baseline: the form now reflects the persisted state, so it is "clean"
         // (Save stays disabled until the next edit).
         self.baseline_snapshot = Some(self.current_form_snapshot(ctx));
+        self.refresh_runtime_diagnostics(diagnostics_server, ctx);
         ctx.notify();
     }
 
@@ -1386,6 +1857,9 @@ impl SshServerView {
     fn on_set_auth(&mut self, auth: AuthType, ctx: &mut ViewContext<Self>) {
         if self.auth_type != auth {
             self.invalidate_connection_test();
+            if self.baseline_snapshot.is_some() {
+                self.invalidate_runtime_diagnostics_for_connection_edit(ctx);
+            }
             self.auth_type = auth;
             // Clear password buffer when switching auth type — password and passphrase have different semantics.
             self.password_editor
@@ -1535,9 +2009,7 @@ impl SshServerView {
                         }
                     }
                     Ok(Err(error)) => {
-                        log::error!(
-                            "ssh_server_view: save OneKey credential failed: {error:?}"
-                        );
+                        log::error!("ssh_server_view: save OneKey credential failed: {error:?}");
                         me.onekey_status =
                             Some(StatusBanner::Error(credential_operation_message(&error)));
                     }
@@ -1600,9 +2072,7 @@ impl SshServerView {
                         me.sync_onekey_manager_row_states();
                     }
                     Ok(Err(error)) => {
-                        log::error!(
-                            "ssh_server_view: delete OneKey credential failed: {error:?}"
-                        );
+                        log::error!("ssh_server_view: delete OneKey credential failed: {error:?}");
                         me.onekey_status =
                             Some(StatusBanner::Error(credential_operation_message(&error)));
                     }
@@ -2033,6 +2503,213 @@ impl SshServerView {
                     appearance,
                 ))
                 .with_child(row.finish())
+                .finish(),
+        )
+        .with_margin_bottom(FIELD_BLOCK_MARGIN_BOTTOM)
+        .finish()
+    }
+
+    fn render_diagnostic_row(
+        &self,
+        row: DiagnosticRow,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let value_color = match row.state {
+            DiagnosticValueState::Measured => theme.main_text_color(theme.surface_2()),
+            DiagnosticValueState::Unavailable
+            | DiagnosticValueState::Unsupported
+            | DiagnosticValueState::Stale => theme.sub_text_color(theme.surface_2()),
+        };
+        let content = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(12.0)
+            .with_child(
+                Shrinkable::new(
+                    1.0,
+                    Text::new(
+                        row.label,
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(theme.main_text_color(theme.surface_2()).into())
+                    .finish(),
+                )
+                .finish(),
+            )
+            .with_child(
+                Text::new_inline(
+                    row.value,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(value_color.into())
+                .finish(),
+            )
+            .finish();
+        let mut column = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(content);
+        if !row.hint.is_empty() {
+            column = column.with_child(
+                Text::new(
+                    row.hint,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_body(),
+                )
+                .with_color(theme.sub_text_color(theme.surface_2()).into())
+                .finish(),
+            );
+        }
+        Container::new(column.finish())
+            .with_padding_top(4.0)
+            .with_padding_bottom(4.0)
+            .finish()
+    }
+
+    fn render_runtime_diagnostics(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let retained_is_stale = !self.runtime_diagnostics.is_empty()
+            && (self.runtime_diagnostics_loading || self.runtime_diagnostics_error.is_some());
+        let presentations =
+            runtime_diagnostic_presentations(&self.runtime_diagnostics, retained_is_stale);
+        let mut content = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        let status = if self.runtime_diagnostics_loading {
+            if self.runtime_diagnostics.is_empty() {
+                Some(crate::t!(
+                    "workspace-left-panel-ssh-manager-diagnostics-loading"
+                ))
+            } else {
+                Some(crate::t!(
+                    "workspace-left-panel-ssh-manager-diagnostics-refreshing"
+                ))
+            }
+        } else if self.runtime_diagnostics_error.is_some() && !self.runtime_diagnostics.is_empty() {
+            Some(crate::t!(
+                "workspace-left-panel-ssh-manager-diagnostics-retained-stale"
+            ))
+        } else {
+            self.runtime_diagnostics_error.clone()
+        };
+        if let Some(status) = status.as_ref() {
+            content = content.with_child(
+                Container::new(
+                    Text::new(
+                        status.clone(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_body(),
+                    )
+                    .with_color(theme.sub_text_color(theme.background()).into())
+                    .finish(),
+                )
+                .with_margin_bottom(8.0)
+                .finish(),
+            );
+        }
+        if presentations.is_empty() && status.is_none() {
+            content = content.with_child(
+                Text::new(
+                    crate::t!("workspace-left-panel-ssh-manager-diagnostics-unavailable"),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_body(),
+                )
+                .with_color(theme.sub_text_color(theme.background()).into())
+                .finish(),
+            );
+        }
+        for runtime in presentations {
+            let runtime_state = match runtime.state {
+                DiagnosticValueState::Measured => {
+                    crate::t!("workspace-left-panel-ssh-manager-diagnostics-available")
+                }
+                DiagnosticValueState::Unavailable => {
+                    crate::t!("workspace-left-panel-ssh-manager-diagnostics-unavailable")
+                }
+                DiagnosticValueState::Unsupported => {
+                    crate::t!("workspace-left-panel-ssh-manager-diagnostics-unsupported")
+                }
+                DiagnosticValueState::Stale => {
+                    crate::t!("workspace-left-panel-ssh-manager-diagnostics-stale")
+                }
+            };
+            let heading = Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(12.0)
+                .with_child(
+                    Shrinkable::new(
+                        1.0,
+                        Text::new(
+                            crate::t!(
+                                "workspace-left-panel-ssh-manager-diagnostics-runtime-identity",
+                                version = runtime.version,
+                                runtime = runtime.runtime
+                            ),
+                            appearance.ui_font_family(),
+                            appearance.ui_font_subheading(),
+                        )
+                        .with_color(theme.main_text_color(theme.surface_2()).into())
+                        .finish(),
+                    )
+                    .finish(),
+                )
+                .with_child(
+                    Text::new_inline(
+                        runtime_state,
+                        appearance.ui_font_family(),
+                        appearance.ui_font_body(),
+                    )
+                    .with_color(theme.sub_text_color(theme.surface_2()).into())
+                    .finish(),
+                )
+                .finish();
+            let mut runtime_content = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(heading);
+            for row in runtime.rows {
+                runtime_content =
+                    runtime_content.with_child(self.render_diagnostic_row(row, appearance));
+            }
+            content = content.with_child(
+                Container::new(runtime_content.finish())
+                    .with_uniform_padding(10.0)
+                    .with_margin_bottom(8.0)
+                    .with_background(theme.surface_2())
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                    .finish(),
+            );
+        }
+
+        Container::new(
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(
+                    Flex::row()
+                        .with_main_axis_size(MainAxisSize::Max)
+                        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(12.0)
+                        .with_child(
+                            Shrinkable::new(
+                                1.0,
+                                self.render_label(
+                                    &crate::t!(
+                                        "workspace-left-panel-ssh-manager-diagnostics-title"
+                                    ),
+                                    appearance,
+                                ),
+                            )
+                            .finish(),
+                        )
+                        .with_child(
+                            ChildView::new(&self.runtime_diagnostics_refresh_button).finish(),
+                        )
+                        .finish(),
+                )
+                .with_child(content.finish())
                 .finish(),
         )
         .with_margin_bottom(FIELD_BLOCK_MARGIN_BOTTOM)
@@ -2770,6 +3447,12 @@ impl TypedActionView for SshServerView {
             SshServerAction::Connect => self.on_connect(ctx),
             SshServerAction::TestConnection => self.on_test_connection(ctx),
             SshServerAction::ConfirmUnknownHostKey => self.on_confirm_unknown_host_key(ctx),
+            SshServerAction::RefreshRuntimeDiagnostics => {
+                if !self.runtime_diagnostics_loading && self.runtime_diagnostics_server.is_some() {
+                    self.refresh_runtime_diagnostics(self.runtime_diagnostics_server.clone(), ctx);
+                    ctx.notify();
+                }
+            }
             SshServerAction::SetAuthPassword => self.on_set_auth(AuthType::Password, ctx),
             SshServerAction::SetAuthKey => self.on_set_auth(AuthType::Key, ctx),
             SshServerAction::SetAuthOneKey => self.on_set_auth(AuthType::OneKey, ctx),
@@ -2845,6 +3528,9 @@ impl TypedActionView for SshServerView {
             }
             SshServerAction::SelectOneKeyCredential(index) => {
                 self.invalidate_connection_test();
+                if self.baseline_snapshot.is_some() {
+                    self.invalidate_runtime_diagnostics_for_connection_edit(ctx);
+                }
                 let selected = index.and_then(|i| self.onekey_credentials.get(i).cloned());
                 self.selected_onekey_credential_id =
                     selected.as_ref().map(|credential| credential.id.clone());
@@ -3026,6 +3712,13 @@ impl View for SshServerView {
         col.add_child(self.render_resilience_toggle(appearance));
         if self.session_resilience.is_enabled() {
             col.add_child(self.render_ring_ceiling(appearance));
+        }
+        if self
+            .server
+            .as_ref()
+            .is_some_and(|server| server.session_resilience.is_enabled())
+        {
+            col.add_child(self.render_runtime_diagnostics(appearance));
         }
 
         // Startup command
