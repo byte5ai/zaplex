@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.1.0] — 2026-09-21
+
+- **Premium-Workspace für UI #459:** Terminal- und Dateimanager-Panes bewahren ihre Host-Identität in Mehrhost-Tabs; Cockpit und Verbindungen zeigen die zugehörigen Sessions. Ein Klick auf einen Favoriten-Host öffnet die Verbindung im neuen Tab, während das separate Aktions-Flyout neue Agenten sowie Bearbeiten und Entfernen anbietet. Restore erhält Host-, Pane- und Dateimanager-Modus; Shell-Bereitschaft und Eingabeentwürfe bleiben beim Wiederverbinden sichtbar und sicher, Dateioperationen an das gewählte Ziel gebunden.
+
 ## [1.0.29] — 2026-09-11
 
 - Das Cockpit kennzeichnet KI-Sessions eindeutig, verlinkt Shell-Sessions unter Verbindungen und aktualisiert lokale sowie entfernte Inventare unabhängig. Hängende Remote-Abfragen blockieren andere Hosts nicht mehr.
