@@ -4584,6 +4584,262 @@ fn cross_window_tab_transfer_waits_for_pending_daemon_completion() {
 
 #[cfg(all(unix, feature = "local_tty"))]
 #[test]
+fn cross_window_tab_transfer_preserves_mixed_host_identity_through_preview() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = mock_workspace(&mut app);
+        let preview = transferred_tab_workspace(&mut app, false);
+        let target = mock_workspace(&mut app);
+        let daemon_session = SessionId::from(713u64);
+
+        let (transferred_tab, pane_group, classic_pane, daemon_pane, local_pane) =
+            source.update(&mut app, |workspace, ctx| {
+                workspace.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                        hide_homepage: true,
+                        ..Default::default()
+                    })),
+                    Arc::new(HashMap::new()),
+                    None,
+                    ctx,
+                );
+                let tab_index = workspace.active_tab_index;
+                let pane_group = workspace.active_tab_pane_group().clone();
+                let classic_pane = pane_group.as_ref(ctx).focused_pane_id(ctx);
+                let daemon_pane: PaneId = pane_group
+                    .update(ctx, |group, ctx| {
+                        group.add_terminal_pane_ignoring_default_session_mode(
+                            Direction::Right,
+                            None,
+                            ctx,
+                        )
+                    })
+                    .into();
+                let local_pane: PaneId = pane_group
+                    .update(ctx, |group, ctx| {
+                        group.add_terminal_pane_ignoring_default_session_mode(
+                            Direction::Down,
+                            None,
+                            ctx,
+                        )
+                    })
+                    .into();
+                pane_group
+                    .as_ref(ctx)
+                    .terminal_view_from_pane_id(daemon_pane, ctx)
+                    .unwrap()
+                    .update(ctx, |view, ctx| {
+                        view.set_remote_input_phase(
+                            crate::terminal::view::RemoteInputPhase::Ready,
+                            Some(daemon_session),
+                            ctx,
+                        );
+                    });
+
+                workspace
+                    .ssh_tab_nodes
+                    .insert(pane_group.id(), "classic-node".to_string());
+                workspace
+                    .ssh_pane_nodes
+                    .insert(classic_pane, "classic-node".to_string());
+                workspace
+                    .ssh_pane_nodes
+                    .insert(daemon_pane, "daemon-node".to_string());
+                remember_daemon_node_session(
+                    &mut workspace.daemon_node_sessions,
+                    "daemon-node".to_string(),
+                    daemon_session,
+                );
+
+                let transferred_tab = workspace
+                    .get_tab_transfer_info_for_attach(tab_index, ctx)
+                    .unwrap();
+                workspace.prepare_for_transferred_tab_attach(&transferred_tab.pane_group, ctx);
+                (
+                    transferred_tab,
+                    pane_group,
+                    classic_pane,
+                    daemon_pane,
+                    local_pane,
+                )
+            });
+
+        let source_window_id = source.read(&app, |workspace, _| workspace.window_id);
+        let preview_window_id = preview.read(&app, |workspace, _| workspace.window_id);
+        app.update(|ctx| {
+            ctx.transfer_view_tree_to_window(pane_group.id(), source_window_id, preview_window_id);
+        });
+        preview.update(&mut app, |workspace, ctx| {
+            workspace.adopt_transferred_pane_group(transferred_tab, ctx);
+            assert_eq!(
+                workspace.ssh_tab_nodes.get(&pane_group.id()),
+                Some(&"classic-node".to_string())
+            );
+            assert_eq!(
+                workspace.node_for_pane(&pane_group, classic_pane, None, ctx),
+                Some("classic-node".to_string())
+            );
+            assert_eq!(
+                workspace.node_for_pane(&pane_group, daemon_pane, None, ctx),
+                Some("daemon-node".to_string())
+            );
+            assert_eq!(
+                workspace.node_for_pane(&pane_group, local_pane, None, ctx),
+                None
+            );
+            assert_eq!(
+                workspace.node_for_session(daemon_session),
+                Some("daemon-node".to_string())
+            );
+        });
+
+        let transferred_tab = preview.update(&mut app, |workspace, ctx| {
+            let transferred_tab = workspace.get_tab_transfer_info_for_attach(0, ctx).unwrap();
+            workspace.prepare_for_transferred_tab_attach(&transferred_tab.pane_group, ctx);
+            transferred_tab
+        });
+        let target_window_id = target.read(&app, |workspace, _| workspace.window_id);
+        app.update(|ctx| {
+            ctx.transfer_view_tree_to_window(pane_group.id(), preview_window_id, target_window_id);
+        });
+        target.update(&mut app, |workspace, ctx| {
+            let insertion_index = workspace.tabs.len();
+            workspace.insert_transferred_tab_at_index(transferred_tab, insertion_index, ctx);
+            assert_eq!(
+                workspace.ssh_tab_nodes.get(&pane_group.id()),
+                Some(&"classic-node".to_string())
+            );
+            assert_eq!(
+                workspace.node_for_pane(&pane_group, classic_pane, None, ctx),
+                Some("classic-node".to_string())
+            );
+            assert_eq!(
+                workspace.node_for_pane(&pane_group, daemon_pane, None, ctx),
+                Some("daemon-node".to_string())
+            );
+            assert_eq!(
+                workspace.node_for_pane(&pane_group, local_pane, None, ctx),
+                None
+            );
+            assert_eq!(
+                workspace.node_for_session(daemon_session),
+                Some("daemon-node".to_string())
+            );
+        });
+    });
+}
+
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn cross_window_tab_transfer_cleanup_preserves_other_tabs_remote_identity() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = mock_workspace(&mut app);
+        let moved_session = SessionId::from(714u64);
+        let retained_session = SessionId::from(715u64);
+
+        source.update(&mut app, |workspace, ctx| {
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let retained_group = workspace.active_tab_pane_group().clone();
+            let retained_pane = retained_group.as_ref(ctx).focused_pane_id(ctx);
+            retained_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(retained_pane, ctx)
+                .unwrap()
+                .update(ctx, |view, ctx| {
+                    view.set_remote_input_phase(
+                        crate::terminal::view::RemoteInputPhase::Ready,
+                        Some(retained_session),
+                        ctx,
+                    );
+                });
+
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let moved_index = workspace.active_tab_index;
+            let moved_group = workspace.active_tab_pane_group().clone();
+            let moved_pane = moved_group.as_ref(ctx).focused_pane_id(ctx);
+            moved_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(moved_pane, ctx)
+                .unwrap()
+                .update(ctx, |view, ctx| {
+                    view.set_remote_input_phase(
+                        crate::terminal::view::RemoteInputPhase::Ready,
+                        Some(moved_session),
+                        ctx,
+                    );
+                });
+
+            workspace
+                .ssh_tab_nodes
+                .insert(retained_group.id(), "shared-node".to_string());
+            workspace
+                .ssh_tab_nodes
+                .insert(moved_group.id(), "shared-node".to_string());
+            workspace
+                .ssh_pane_nodes
+                .insert(retained_pane, "shared-node".to_string());
+            workspace
+                .ssh_pane_nodes
+                .insert(moved_pane, "shared-node".to_string());
+            remember_daemon_node_session(
+                &mut workspace.daemon_node_sessions,
+                "shared-node".to_string(),
+                retained_session,
+            );
+            remember_daemon_node_session(
+                &mut workspace.daemon_node_sessions,
+                "shared-node".to_string(),
+                moved_session,
+            );
+
+            workspace.remove_tab_without_undo(moved_index, ctx);
+
+            assert!(!workspace
+                .tabs
+                .iter()
+                .any(|tab| tab.pane_group.id() == moved_group.id()));
+            assert!(!workspace.ssh_tab_nodes.contains_key(&moved_group.id()));
+            assert!(!workspace.ssh_pane_nodes.contains_key(&moved_pane));
+            assert_eq!(
+                workspace.ssh_tab_nodes.get(&retained_group.id()),
+                Some(&"shared-node".to_string())
+            );
+            assert_eq!(
+                workspace.ssh_pane_nodes.get(&retained_pane),
+                Some(&"shared-node".to_string())
+            );
+            assert_eq!(
+                workspace.daemon_node_sessions.get("shared-node"),
+                Some(&vec![retained_session])
+            );
+            assert_eq!(
+                workspace.node_for_session(retained_session),
+                Some("shared-node".to_string())
+            );
+            assert_eq!(workspace.node_for_session(moved_session), None);
+        });
+    });
+}
+
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
 fn moved_stale_split_retirement_removes_only_the_provisional_daemon_surface() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

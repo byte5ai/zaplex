@@ -983,9 +983,10 @@ enum PendingSessionConfigTabConfigChipTutorial {
 
 /// Snapshot of a tab used to move it between workspaces or into a new window.
 /// Built by `Workspace::tab_transfer_info_at_index` and consumed by
-/// `insert_transferred_tab_at_index`. Captures the pane group handle, visual
-/// metadata, panel-open state, and `DraggableState` so an in-progress drag
-/// animation continues seamlessly after a handoff.
+/// `insert_transferred_tab_at_index`. Captures the pane group handle,
+/// workspace-local remote identity, visual metadata, panel-open state, and
+/// `DraggableState` so an in-progress drag animation continues seamlessly
+/// after a handoff.
 pub struct TransferredTab {
     pub pane_group: ViewHandle<PaneGroup>,
     pub color: Option<AnsiColorIdentifier>,
@@ -996,6 +997,14 @@ pub struct TransferredTab {
     pub right_panel_open: bool,
     pub is_right_panel_maximized: bool,
     pub draggable_state: DraggableState,
+    identity: TransferredTabIdentity,
+}
+
+struct TransferredTabIdentity {
+    ssh_tab_node: Option<String>,
+    ssh_pane_nodes: HashMap<PaneId, String>,
+    #[cfg(all(unix, feature = "local_tty"))]
+    daemon_node_sessions: HashMap<String, Vec<SessionId>>,
 }
 
 /// One remote file being edited over *classic* SSH (no daemon) via a local
@@ -32413,6 +32422,7 @@ impl Workspace {
         let right_panel_open = pane_group.read(ctx, |pg, _| pg.right_panel_open);
         let is_right_panel_maximized = pane_group.read(ctx, |pg, _| pg.is_right_panel_maximized);
         let vertical_tabs_panel_open = self.vertical_tabs_panel_open;
+        let identity = self.transferred_tab_identity(&pane_group, ctx);
 
         Some(TransferredTab {
             pane_group,
@@ -32424,7 +32434,124 @@ impl Workspace {
             is_right_panel_maximized,
             draggable_state,
             vertical_tabs_panel_open,
+            identity,
         })
+    }
+
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn daemon_session_ids_for_pane_group(
+        &self,
+        pane_group: &ViewHandle<PaneGroup>,
+        ctx: &AppContext,
+    ) -> HashSet<SessionId> {
+        let pane_group = pane_group.as_ref(ctx);
+        let mut session_ids = pane_group
+            .terminal_pane_ids()
+            .filter_map(|pane_id| {
+                pane_group
+                    .terminal_view_from_pane_id(pane_id, ctx)
+                    .and_then(|view| view.as_ref(ctx).remote_input_session_id())
+            })
+            .collect::<HashSet<_>>();
+        session_ids.extend(
+            self.daemon_node_sessions
+                .values()
+                .flatten()
+                .filter(|session_id| {
+                    pane_group
+                        .daemon_connection_pane(**session_id, ctx)
+                        .is_some()
+                })
+                .copied(),
+        );
+        session_ids
+    }
+
+    fn transferred_tab_identity(
+        &self,
+        pane_group: &ViewHandle<PaneGroup>,
+        ctx: &AppContext,
+    ) -> TransferredTabIdentity {
+        let pane_ids = pane_group.as_ref(ctx).pane_ids().collect::<HashSet<_>>();
+        let ssh_pane_nodes = self
+            .ssh_pane_nodes
+            .iter()
+            .filter(|(pane_id, _)| pane_ids.contains(pane_id))
+            .map(|(pane_id, node_id)| (*pane_id, node_id.clone()))
+            .collect();
+        #[cfg(all(unix, feature = "local_tty"))]
+        let daemon_session_ids = self.daemon_session_ids_for_pane_group(pane_group, ctx);
+        #[cfg(all(unix, feature = "local_tty"))]
+        let daemon_node_sessions = self
+            .daemon_node_sessions
+            .iter()
+            .filter_map(|(node_id, sessions)| {
+                let sessions = sessions
+                    .iter()
+                    .filter(|session_id| daemon_session_ids.contains(session_id))
+                    .copied()
+                    .collect::<Vec<_>>();
+                (!sessions.is_empty()).then(|| (node_id.clone(), sessions))
+            })
+            .collect();
+
+        TransferredTabIdentity {
+            ssh_tab_node: self.ssh_tab_nodes.get(&pane_group.id()).cloned(),
+            ssh_pane_nodes,
+            #[cfg(all(unix, feature = "local_tty"))]
+            daemon_node_sessions,
+        }
+    }
+
+    fn install_transferred_tab_identity(
+        &mut self,
+        pane_group_id: EntityId,
+        identity: TransferredTabIdentity,
+    ) {
+        if let Some(node_id) = identity.ssh_tab_node {
+            self.ssh_tab_nodes.insert(pane_group_id, node_id);
+        }
+        self.ssh_pane_nodes.extend(identity.ssh_pane_nodes);
+        #[cfg(all(unix, feature = "local_tty"))]
+        for (node_id, sessions) in identity.daemon_node_sessions {
+            for session_id in sessions {
+                remember_daemon_node_session(
+                    &mut self.daemon_node_sessions,
+                    node_id.clone(),
+                    session_id,
+                );
+            }
+        }
+    }
+
+    fn remove_transferred_tab_identity_at_index(&mut self, index: usize, ctx: &AppContext) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        let pane_group_id = tab.pane_group.id();
+        let pane_ids = tab
+            .pane_group
+            .as_ref(ctx)
+            .pane_ids()
+            .collect::<HashSet<_>>();
+        #[cfg(all(unix, feature = "local_tty"))]
+        let transferred_session_ids = self.daemon_session_ids_for_pane_group(&tab.pane_group, ctx);
+        #[cfg(all(unix, feature = "local_tty"))]
+        let retained_session_ids = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(candidate_index, _)| *candidate_index != index)
+            .flat_map(|(_, tab)| self.daemon_session_ids_for_pane_group(&tab.pane_group, ctx))
+            .collect::<HashSet<_>>();
+
+        self.ssh_tab_nodes.remove(&pane_group_id);
+        self.ssh_pane_nodes
+            .retain(|pane_id, _| !pane_ids.contains(pane_id));
+        #[cfg(all(unix, feature = "local_tty"))]
+        for session_id in transferred_session_ids.difference(&retained_session_ids) {
+            forget_daemon_node_session(&mut self.daemon_node_sessions, *session_id);
+        }
     }
 
     pub fn get_tab_transfer_info(&self, index: usize, ctx: &AppContext) -> Option<TransferredTab> {
@@ -32476,6 +32603,7 @@ impl Workspace {
             color,
             is_pinned,
             draggable_state,
+            identity,
             ..
         } = transferred_tab;
         ctx.subscribe_to_view(&pane_group, move |me, pane_group, event, ctx| {
@@ -32483,11 +32611,13 @@ impl Workspace {
         });
 
         let index = self.tab_insertion_index(insertion_index, is_pinned);
+        let pane_group_id = pane_group.id();
         let mut tab_data = TabData::new(pane_group);
         tab_data.selected_color = color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
         tab_data.is_pinned = is_pinned;
         tab_data.draggable_state = draggable_state;
         self.tabs.insert(index, tab_data);
+        self.install_transferred_tab_identity(pane_group_id, identity);
         self.activate_tab_internal(index, ctx);
         ctx.notify();
     }
@@ -32583,6 +32713,9 @@ impl Workspace {
     }
 
     pub fn remove_tab_without_undo(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        if self.tabs.len() > 1 && self.tabs.get(index).is_some() {
+            self.remove_transferred_tab_identity_at_index(index, ctx);
+        }
         self.remove_tab_and_sync_agent_conversations(index, false, false, ctx);
     }
 
@@ -32591,7 +32724,7 @@ impl Workspace {
     /// the source window, detaching and dropping the placeholder.
     pub fn adopt_transferred_pane_group(
         &mut self,
-        new_pane_group: ViewHandle<PaneGroup>,
+        transferred_tab: TransferredTab,
         ctx: &mut ViewContext<Self>,
     ) {
         if !self.pending_pane_group_transfer {
@@ -32606,6 +32739,11 @@ impl Workspace {
             debug_assert!(false, "adopt_transferred_pane_group called with no tabs");
             return;
         }
+        let TransferredTab {
+            pane_group: new_pane_group,
+            identity,
+            ..
+        } = transferred_tab;
         let Some(placeholder_tab) = self.tabs.last_mut() else {
             debug_assert!(
                 false,
@@ -32637,6 +32775,7 @@ impl Workspace {
         placeholder_pane_group.update(ctx, |pg, ctx| {
             pg.detach_panes_for_close(&working_directories_model, ctx);
         });
+        self.install_transferred_tab_identity(new_pane_group.id(), identity);
         self.pending_pane_group_transfer = false;
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
