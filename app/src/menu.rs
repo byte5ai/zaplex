@@ -1532,7 +1532,7 @@ impl<A: Action + Clone> MenuItem<A> {
                         fields.disabled || fields.split_submenu_primary_disabled;
 
                     let trigger_label = tooltip.clone();
-                    let mut trigger_fields = MenuItemFields::new_with_custom_label(
+                    let mut trigger_fields = MenuItemFields::<A>::new_with_custom_label(
                         Arc::new(|is_selected, is_hovered, appearance, _| {
                             let theme = appearance.theme();
                             let background = if is_selected || is_hovered {

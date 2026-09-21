@@ -718,6 +718,48 @@ fn test_sqlite_round_trips_file_manager_mode_and_path() {
 }
 
 #[test]
+fn restore_remote_pane_identity_rollback_removes_sftp_pane_leaf() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let mut window = test_terminal_window_snapshot(false);
+    let PaneNodeSnapshot::Leaf(leaf) = &mut window.tabs[0].root else {
+        panic!("test snapshot should contain a leaf");
+    };
+    leaf.contents = LeafContents::Sftp {
+        node_id: "node-production".to_string(),
+        mode: FileManagerPaneMode::Remote,
+        current_path: PathBuf::from("/srv/api/releases"),
+    };
+    let app_state = AppState {
+        windows: vec![window],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    let sftp_pane_leaves = schema::pane_leaves::table
+        .filter(schema::pane_leaves::kind.eq("sftp"))
+        .count()
+        .get_result::<i64>(&mut conn)
+        .expect("SFTP pane leaves should be countable");
+    assert_eq!(sftp_pane_leaves, 1, "test should persist one SFTP pane");
+
+    conn.batch_execute(include_str!(
+        "../../../crates/persistence/migrations/2026-09-20-000000_restore_remote_pane_identity/down.sql"
+    ))
+    .expect("migration rollback should succeed");
+
+    let sftp_pane_leaves = schema::pane_leaves::table
+        .filter(schema::pane_leaves::kind.eq("sftp"))
+        .count()
+        .get_result::<i64>(&mut conn)
+        .expect("SFTP pane leaves should be countable after rollback");
+    assert_eq!(sftp_pane_leaves, 0);
+}
+
+#[test]
 fn test_sqlite_round_trips_custom_vertical_tabs_title() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let database_path = tempdir.path().join("warp.sqlite");

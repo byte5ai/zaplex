@@ -1127,15 +1127,11 @@ impl SpawnCard {
             let mut row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(7.0)
-                // Provider tile — the same identity colour the cards carry,
-                // contrast-picked for the theme.
+                // Themed accent tile — the same shared role the account cards carry.
                 .with_child(
                     ConstrainedBox::new(
                         Rect::new()
-                            .with_background_color(crate::cockpit::style::provider_color_on(
-                                selected.provider,
-                                theme.background().into_solid(),
-                            ))
+                            .with_background_color(theme.accent().into_solid())
                             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(2.0)))
                             .finish(),
                     )

@@ -462,7 +462,7 @@ impl CockpitPanel {
         let fleet_total_button = ctx.add_typed_action_view(FleetTotalButton::new);
         ctx.subscribe_to_view(&fleet_total_button, |_, _, event, ctx| match event {
             FleetTotalButtonEvent::Activated => {
-                ctx.dispatch_typed_action(CockpitPanelAction::OpenDashboardPane)
+                ctx.dispatch_typed_action(&CockpitPanelAction::OpenDashboardPane)
             }
         });
         // Re-render on theme change and whenever the snapshot updates.

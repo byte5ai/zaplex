@@ -61,7 +61,7 @@
       "required_tests": [
         "excludes_self_and_extracts_peers",
         "fold_two_hosts_sharing_a_path_stay_isolated",
-        "host_ring_usage_uses_only_reported_ring_bytes_and_cap"
+        "list_sessions_reports_open_sessions_with_exact_ring_bytes_and_host_cap"
       ],
       "required_runtime_rows": ["M16"]
     },
@@ -336,12 +336,12 @@
       "updated_at": "2026-07-23T11:39:21Z",
       "required_tests": [
         "plus_menu_lists_only_favorite_hosts",
-        "favorite_host_submenu_offers_terminal_and_new_agent",
+        "favorite_host_label_is_the_direct_terminal_action",
         "new_agent_submenu_opens_spawn_card_without_launching",
         "automatic_host_registration_never_adds_menu_favorite",
         "favorite_store_write_is_atomic",
         "corrupt_favorite_store_is_reported_and_never_overwritten",
-        "stale_favorite_is_disabled_and_removable",
+        "unavailable_host_registry_keeps_favorite_remove_available",
         "favorite_menu_migration_preserves_non_host_favorite_data",
         "removed_favorite_host_is_disabled_and_never_routed"
       ]
@@ -362,7 +362,7 @@
     "139": {
       "updated_at": "2026-07-23T11:39:30Z",
       "required_tests": [
-        "function_bar_drops_low_priority_captions_before_overlap",
+        "function_bar_keeps_required_actions_visible_without_overlap",
         "function_bar_fits_minimum_supported_pane_width",
         "file_pane_body_consumes_remaining_height_above_footer",
         "active_pane_style_differs_from_selection_and_hover",

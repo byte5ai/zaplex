@@ -4,7 +4,9 @@ use super::{
 };
 
 use warp_core::ui::appearance::Appearance;
-use warpui::{platform::WindowStyle, App, TypedActionView};
+use warpui::{
+    accessibility::ActionAccessibilityContent, platform::WindowStyle, App, TypedActionView,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TestAction {

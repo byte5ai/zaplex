@@ -66,7 +66,8 @@ use crate::{experiments, workspace, GlobalResourceHandlesProvider};
 
 // Zaplex(localization, Phase 5): `PreferencesSyncer` has been physically deleted.
 
-use crate::terminal::shared_session::protocol::SessionId;
+use crate::terminal::model::session::SessionId;
+use crate::terminal::shared_session::protocol::SessionId as SharedSessionId;
 use ai::project_context::model::ProjectContextModel;
 use pane_group::{NotebookPane, PaneState, SplitPaneState, TerminalPaneId};
 use terminal::view::ActiveSessionState;
@@ -1340,7 +1341,7 @@ fn mock_workspace_viewing_shared_session(app: &mut App) -> ViewHandle<Workspace>
             UserUid::new("mock_user_uid"),
             ReplicaId::random(),
             Box::new(ParticipantList::default()),
-            SessionId::new(),
+            SharedSessionId::new(),
             SessionSourceType::default(),
             ctx,
         );
@@ -4229,8 +4230,8 @@ fn daemon_claim_owner_requires_the_same_connection_and_terminal_view() {
     App::test((), |mut app| async move {
         use crate::app_state::{DaemonPtyClaimOutcome, DaemonPtyClaims};
 
-        let first_view = app.add_model(|_| ());
-        let foreign_view = app.add_model(|_| ());
+        let first_view = app.add_model(|_| IgnoredSuggestionsModel::new(Vec::new()));
+        let foreign_view = app.add_model(|_| IgnoredSuggestionsModel::new(Vec::new()));
         let connection = SessionId::from(71u64);
         let owner = crate::app_state::DaemonPtyClaimOwner {
             terminal_view_id: Some(first_view.id()),
@@ -5139,10 +5140,10 @@ fn exact_daemon_claim_focuses_covered_and_undo_closed_shell() {
                     connection_session_id: conn,
                     terminal_view: Some(terminal_view.downgrade()),
                 };
-                assert_eq!(
+                assert!(matches!(
                     crate::app_state::claim_daemon_pty(binding.clone(), owner.clone(), ctx),
                     crate::app_state::DaemonPtyClaimOutcome::Claimed
-                );
+                ));
                 (
                     group,
                     shell,
@@ -5250,7 +5251,9 @@ fn exact_daemon_claim_focuses_covered_and_undo_closed_shell() {
             assert!(group.is_pane_hidden_for_close(shell));
             assert!(group.cleanup_closed_pane(shell, ctx));
         });
-        assert!(crate::app_state::daemon_pty_claim(&binding, &app).is_none());
+        workspace.read(&app, |_, ctx| {
+            assert!(crate::app_state::daemon_pty_claim(&binding, ctx).is_none());
+        });
         assert!(crate::app_state::remote_terminal_identity(&pane_uuid).is_none());
     });
 }
@@ -5357,10 +5360,10 @@ fn conflicting_remote_restore_degrades_duplicate_without_persisting_its_identity
                     connection_session_id: conn,
                     terminal_view: Some(owner_view.downgrade()),
                 };
-                assert_eq!(
+                assert!(matches!(
                     crate::app_state::claim_daemon_pty(binding.clone(), owner.clone(), ctx),
                     crate::app_state::DaemonPtyClaimOutcome::Claimed
-                );
+                ));
                 (
                     group,
                     owner_pane,

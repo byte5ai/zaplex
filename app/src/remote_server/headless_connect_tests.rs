@@ -1,7 +1,8 @@
+use super::super::DAEMON_SESSION_ID_BASE;
 use super::*;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(unix)]
 use std::sync::Mutex;
 use warp_ssh_manager::{AuthType, ResolvedSshConnection, SecretKind, SshServerInfo};

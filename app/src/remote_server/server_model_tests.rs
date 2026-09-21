@@ -3028,14 +3028,16 @@ fn create_directory_creates_nested_directories() {
 
 #[cfg(unix)]
 mod daemon_session {
-    use super::super::{normalize_pty_dimensions, HOST_RING_CAP_BYTES};
+    use super::super::{normalize_pty_dimensions, LogicalOpenReservation, HOST_RING_CAP_BYTES};
     use super::{bind_status, binding_identity, test_model};
     use crate::remote_server::proto::{
-        client_message, server_message, AttachSession, BindAgentPty, ClientMessage, CloseSession,
-        DetachSession, ListSessions, ManagedLaunch, ManagedSessionLifecycleAction,
+        client_message, server_message, Abort, AttachSession, BindAgentPty, ClientMessage,
+        CloseSession, DetachSession, ListSessions, ManagedLaunch, ManagedSessionLifecycleAction,
         ManagedSessionLifecycleRequest, ManagedSessionLifecycleStatus, OpenSession,
-        ReadAgentTranscript, ResizeSession, ServerMessage, SessionInput, SessionList, SessionSize,
+        ReadAgentTranscript, ResizeSession, ServerMessage, SessionInput, SessionList,
+        SessionOpened, SessionSize,
     };
+    use crate::remote_server::protocol::RequestId;
     use futures::future::Either;
     use std::os::fd::AsRawFd;
     use std::time::Duration;
@@ -4428,7 +4430,7 @@ mod daemon_session {
             let Some(client_message::Message::OpenSession(open)) = request.message.clone() else {
                 unreachable!()
             };
-            let accepted = super::super::proto::SessionOpened {
+            let accepted = SessionOpened {
                 session_id: "accepted-managed-pty".to_string(),
                 generation: 23,
                 requires_attach: true,
@@ -4501,7 +4503,7 @@ mod daemon_session {
                         origin_connection,
                         &RequestId::from("in-flight-capability-origin".to_string()),
                     ),
-                    super::LogicalOpenReservation::Start
+                    LogicalOpenReservation::Start
                 ));
                 model.handle_message(retry_connection, retry_message.clone(), ctx);
             });
@@ -4548,7 +4550,7 @@ mod daemon_session {
             let Some(client_message::Message::OpenSession(open)) = request.message.clone() else {
                 unreachable!()
             };
-            let accepted = super::super::proto::SessionOpened {
+            let accepted = SessionOpened {
                 session_id: "existing-managed-pty".to_string(),
                 generation: 17,
                 requires_attach: true,
@@ -5393,10 +5395,10 @@ mod daemon_session {
         });
     }
 
-    /// Stage 4: multiple sessions per daemon are listable, carry their cwd, and
-    /// the list shrinks when a session is closed.
+    /// Stage 4: multiple sessions per daemon are listable, carry their cwd and
+    /// exact ring diagnostics, and the list shrinks when a session is closed.
     #[test]
-    fn list_sessions_reports_open_sessions() {
+    fn list_sessions_reports_open_sessions_with_exact_ring_bytes_and_host_cap() {
         App::test((), |mut app| async move {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
@@ -5425,9 +5427,25 @@ mod daemon_session {
                 .expect("session B opened");
             assert_ne!(id_a, id_b);
 
-            // ListSessions reports both, each with its cwd, all alive.
-            model.update(&mut app, |m, ctx| {
-                m.handle_message(conn_id, list_msg(), ctx)
+            // Add distinct diagnostic footprints and snapshot their exact retained
+            // lengths in the same model update that creates the response.
+            let (ring_a, ring_b) = model.update(&mut app, |m, ctx| {
+                m.sessions
+                    .get_mut(&id_a)
+                    .unwrap()
+                    .ring
+                    .append(b"reported-ring-a");
+                m.sessions
+                    .get_mut(&id_b)
+                    .unwrap()
+                    .ring
+                    .append(b"reported-ring-b-longer");
+                let retained = (
+                    m.sessions[&id_a].ring.len() as u64,
+                    m.sessions[&id_b].ring.len() as u64,
+                );
+                m.handle_message(conn_id, list_msg(), ctx);
+                retained
             });
             let list = recv_session_list(&conn_rx).await.expect("SessionList");
             assert_eq!(list.sessions.len(), 2, "two sessions listed");
@@ -5443,6 +5461,13 @@ mod daemon_session {
             assert_eq!(by_id.get(id_a.as_str()), Some(&path_a.as_str()));
             assert_eq!(by_id.get(id_b.as_str()), Some(&path_b.as_str()));
             assert!(list.sessions.iter().all(|s| s.alive));
+            let reported_ring_bytes: std::collections::HashMap<&str, u64> = list
+                .sessions
+                .iter()
+                .map(|session| (session.session_id.as_str(), session.ring_bytes))
+                .collect();
+            assert_eq!(reported_ring_bytes.get(id_a.as_str()), Some(&ring_a));
+            assert_eq!(reported_ring_bytes.get(id_b.as_str()), Some(&ring_b));
 
             // Closing one shrinks the list to the survivor.
             model.update(&mut app, |m, ctx| {

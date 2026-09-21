@@ -412,8 +412,7 @@ fn complete_adopted_attach(event_loop: &ModelHandle<EventLoop>, app: &mut App) {
 fn ordinary_session_open_ack_emits_exact_surface_without_managed_launch() {
     App::test((), |mut app| async move {
         let conn = SessionId::from(36u64);
-        let terminal_surface = app.add_model(|_| ());
-        let terminal_view_id = terminal_surface.id();
+        let terminal_view_id = EntityId::new();
         let manager = app.add_singleton_model(RemoteServerManager::new);
         let (events_tx, events_rx) = async_channel::unbounded();
         app.update(|ctx| {

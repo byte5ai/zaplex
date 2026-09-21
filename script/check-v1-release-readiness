@@ -84,6 +84,8 @@ PLANNED_TEST_ALIASES = {
         "delete_onekey_credential_is_blocked_while_hosts_reference_it",
     "does_not_run_on_session_opened_or_init_shell":
         "startup_command_does_not_run_on_session_opened_or_init_shell",
+    "each_pane_owns_optional_compact_function_legend":
+        "each_pane_owns_optional_compact_function_legend_in_real_layout",
     "empty_host_is_rejected_everywhere": "empty_host_is_rejected_by_save_test_and_connect",
     "empty_path_maps_explicitly_home":
         "empty_remote_launch_directory_maps_explicitly_to_home",
@@ -135,6 +137,8 @@ PLANNED_TEST_ALIASES = {
         "pid_must_fit_the_positive_signed_process_id_range",
     "pending_buffer_never_evicts_unacknowledged_startup":
         "pending_buffer_never_evicts_unacknowledged_startup_command",
+    "pane_function_legend_drops_captions_before_overlap":
+        "pane_function_legend_keeps_required_actions_at_narrow_width",
     "project_session_and_launch_favorites_survive_menu_migration":
         "favorite_menu_migration_preserves_non_host_favorite_data",
     "pwsh_body_is_idempotent": "pwsh_bootstrap_body_is_delivered_idempotently",
@@ -169,7 +173,7 @@ PLANNED_TEST_ALIASES = {
     "startup_command_waits_for_bootstrap_and_runs_once":
         "startup_command_waits_for_bootstrap_and_runs_exactly_once",
     "submenu_offers_terminal_and_new_agent":
-        "favorite_host_submenu_offers_terminal_and_new_agent",
+        "favorite_host_label_is_the_direct_terminal_action",
     "survives_replay_then_live_bootstrap":
         "startup_command_survives_replay_then_live_bootstrap",
     "test_never_disables_host_key_verification":
