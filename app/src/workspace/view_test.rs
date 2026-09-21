@@ -2021,20 +2021,37 @@ fn setup_session_sharing_test(workspace: &ViewHandle<Workspace>, app: &mut App) 
     shared_pane_id
 }
 
+fn setup_pinned_tab_confirmation_test(workspace: &ViewHandle<Workspace>, app: &mut App) {
+    workspace.update(app, |workspace, ctx| {
+        workspace.add_terminal_tab(false, ctx);
+        workspace.add_terminal_tab(false, ctx);
+        assert_eq!(workspace.set_tab_pinned(1, true, ctx), Some(0));
+        assert!(workspace.tabs[0].is_pinned);
+    });
+
+    workspace.read(app, |workspace, _| {
+        assert!(
+            !workspace
+                .current_workspace_state
+                .is_close_session_confirmation_dialog_open
+        );
+    });
+}
+
 #[test]
-fn test_close_tab_confirmation_dialog() {
+fn test_close_pinned_tab_confirmation_dialog() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         app.update(disable_quit_warning);
 
         let workspace = mock_workspace(&mut app);
-        setup_session_sharing_test(&workspace, &mut app);
+        setup_pinned_tab_confirmation_test(&workspace, &mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            let first_tab_id = workspace.get_pane_group_view(0).unwrap().id();
+            let remaining_tab_id = workspace.get_pane_group_view(1).unwrap().id();
 
-            // Trying to close tab with a shared pane opens dialog.
-            workspace.handle_action(&WorkspaceAction::CloseTab(1), ctx);
+            // Trying to close a pinned tab opens the dialog.
+            workspace.handle_action(&WorkspaceAction::CloseTab(0), ctx);
             assert!(
                 workspace
                     .current_workspace_state
@@ -2052,7 +2069,7 @@ fn test_close_tab_confirmation_dialog() {
                     .is_close_session_confirmation_dialog_open
             );
 
-            // Trying to close tab without a shared pane goes through without dialog.
+            // Trying to close an unpinned tab goes through without the dialog.
             workspace.handle_action(&WorkspaceAction::CloseTab(2), ctx);
             assert_eq!(workspace.tab_count(), 2);
             assert!(
@@ -2061,8 +2078,8 @@ fn test_close_tab_confirmation_dialog() {
                     .is_close_session_confirmation_dialog_open
             );
 
-            // Close the tab with the shared pane.
-            workspace.handle_action(&WorkspaceAction::CloseTab(1), ctx);
+            // Close the pinned tab.
+            workspace.handle_action(&WorkspaceAction::CloseTab(0), ctx);
             assert!(
                 workspace
                     .current_workspace_state
@@ -2071,7 +2088,7 @@ fn test_close_tab_confirmation_dialog() {
             workspace.handle_close_session_confirmation_dialog_event(
                 &CloseSessionConfirmationEvent::CloseSession {
                     dont_show_again: false,
-                    open_confirmation_source: OpenDialogSource::CloseTab { tab_index: 1 },
+                    open_confirmation_source: OpenDialogSource::CloseTab { tab_index: 0 },
                 },
                 ctx,
             );
@@ -2081,13 +2098,16 @@ fn test_close_tab_confirmation_dialog() {
                     .is_close_session_confirmation_dialog_open
             );
             assert_eq!(workspace.tab_count(), 1);
-            assert_eq!(workspace.get_pane_group_view(0).unwrap().id(), first_tab_id);
+            assert_eq!(
+                workspace.get_pane_group_view(0).unwrap().id(),
+                remaining_tab_id
+            );
         });
     });
 }
 
 #[test]
-fn test_close_pane_confirmation_dialog() {
+fn test_close_shared_session_pane_skips_retired_confirmation_dialog() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
@@ -2097,28 +2117,11 @@ fn test_close_pane_confirmation_dialog() {
         workspace.update(&mut app, |workspace, ctx| {
             let shared_pane_group_id = workspace.get_pane_group_view(1).unwrap().id();
 
-            // User tries to close shared pane, dialog comes up.
+            // Session sharing has been retired, so its legacy close event closes the pane directly.
             workspace.handle_file_tree_event(
                 workspace.get_pane_group_view(1).unwrap().clone(),
                 &pane_group::Event::CloseSharedSessionPaneRequested {
                     pane_id: shared_pane_id,
-                },
-                ctx,
-            );
-            assert!(
-                workspace
-                    .current_workspace_state
-                    .is_close_session_confirmation_dialog_open
-            );
-
-            // User confirms.
-            workspace.handle_close_session_confirmation_dialog_event(
-                &CloseSessionConfirmationEvent::CloseSession {
-                    dont_show_again: false,
-                    open_confirmation_source: OpenDialogSource::ClosePane {
-                        pane_group_id: shared_pane_group_id,
-                        pane_id: shared_pane_id,
-                    },
                 },
                 ctx,
             );
@@ -2301,12 +2304,12 @@ fn test_close_other_tabs_confirmation_dialog() {
         initialize_app(&mut app);
 
         let workspace = mock_workspace(&mut app);
-        setup_session_sharing_test(&workspace, &mut app);
+        setup_pinned_tab_confirmation_test(&workspace, &mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
             let last_tab_id = workspace.get_pane_group_view(2).unwrap().id();
 
-            // User tries to close other tabs choosing non-shared tab, dialog comes up.
+            // Closing the other tabs includes the pinned tab, so the dialog comes up.
             workspace.handle_action(&WorkspaceAction::CloseOtherTabs(2), ctx);
             assert!(
                 workspace
@@ -2334,58 +2337,44 @@ fn test_close_other_tabs_confirmation_dialog() {
 }
 
 #[test]
-fn test_close_tabs_right_confirmation_dialog() {
+fn test_close_tabs_right_does_not_prompt_when_pinned_tab_is_retained() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
         let workspace = mock_workspace(&mut app);
-        setup_session_sharing_test(&workspace, &mut app);
+        setup_pinned_tab_confirmation_test(&workspace, &mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            let first_tab_id = workspace.get_pane_group_view(0).unwrap().id();
+            let pinned_tab_id = workspace.get_pane_group_view(0).unwrap().id();
 
-            // User tries to close all tabs right of the left-most tab, dialog comes up.
+            // Closing tabs to its right retains the pinned tab, so no safeguard is needed.
             workspace.handle_action(&WorkspaceAction::CloseTabsRight(0), ctx);
-            assert!(
-                workspace
-                    .current_workspace_state
-                    .is_close_session_confirmation_dialog_open
-            );
-
-            // User confirms.
-            workspace.handle_close_session_confirmation_dialog_event(
-                &CloseSessionConfirmationEvent::CloseSession {
-                    dont_show_again: false,
-                    open_confirmation_source: OpenDialogSource::CloseTabsDirection {
-                        tab_index: 0,
-                        direction: TabMovement::Right,
-                    },
-                },
-                ctx,
-            );
             assert!(
                 !workspace
                     .current_workspace_state
                     .is_close_session_confirmation_dialog_open
             );
             assert_eq!(workspace.tab_count(), 1);
-            assert_eq!(workspace.get_pane_group_view(0).unwrap().id(), first_tab_id);
+            assert_eq!(
+                workspace.get_pane_group_view(0).unwrap().id(),
+                pinned_tab_id
+            );
         });
     });
 }
 
 #[test]
-fn test_confirmation_dialog_dont_show_again() {
+fn test_confirmation_dialog_dont_show_again_keeps_pinned_tab_protection() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         app.update(disable_quit_warning);
 
         let workspace = mock_workspace(&mut app);
-        setup_session_sharing_test(&workspace, &mut app);
+        setup_pinned_tab_confirmation_test(&workspace, &mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            // Close the tab with the shared pane, dialog comes up
-            workspace.handle_action(&WorkspaceAction::CloseTab(1), ctx);
+            // Close the pinned tab; the dialog comes up.
+            workspace.handle_action(&WorkspaceAction::CloseTab(0), ctx);
             assert!(
                 workspace
                     .current_workspace_state
@@ -2396,7 +2385,7 @@ fn test_confirmation_dialog_dont_show_again() {
             workspace.handle_close_session_confirmation_dialog_event(
                 &CloseSessionConfirmationEvent::CloseSession {
                     dont_show_again: true,
-                    open_confirmation_source: OpenDialogSource::CloseTab { tab_index: 1 },
+                    open_confirmation_source: OpenDialogSource::CloseTab { tab_index: 0 },
                 },
                 ctx,
             );
@@ -2407,25 +2396,16 @@ fn test_confirmation_dialog_dont_show_again() {
             );
             assert_eq!(workspace.tab_count(), 2);
 
-            // Share the first tab
-            let tab_view = workspace.get_pane_group_view(0).unwrap();
-            tab_view.update(ctx, |view, ctx| {
-                view.terminal_manager(0, ctx)
-                    .unwrap()
-                    .as_ref(ctx)
-                    .model()
-                    .lock()
-                    .set_shared_session_status(SharedSessionStatus::ActiveSharer);
-            });
+            assert_eq!(workspace.set_tab_pinned(1, true, ctx), Some(0));
 
-            // Close the shared tab. No dialog should come up and action should go through.
-            workspace.handle_action(&WorkspaceAction::CloseActiveTab, ctx);
+            // "Don't show again" must not disable the pinned-tab safeguard.
+            workspace.handle_action(&WorkspaceAction::CloseTab(0), ctx);
             assert!(
-                !workspace
+                workspace
                     .current_workspace_state
                     .is_close_session_confirmation_dialog_open
             );
-            assert_eq!(workspace.tab_count(), 1);
+            assert_eq!(workspace.tab_count(), 2);
         });
     });
 }
@@ -3570,14 +3550,14 @@ fn closing_new_session_menu_restores_focus_only_when_the_menu_owned_it() {
             ctx.focus(&workspace.left_panel_view);
         });
         workspace.read(&app, |workspace, ctx| {
-            assert!(workspace.left_panel_view.is_focused(ctx));
+            assert!(workspace.left_panel_view.is_self_or_child_focused(ctx));
         });
         workspace.update(&mut app, |workspace, ctx| {
             workspace.close_new_session_dropdown_menu(ctx);
         });
 
         workspace.read(&app, |workspace, ctx| {
-            assert!(workspace.left_panel_view.is_focused(ctx));
+            assert!(workspace.left_panel_view.is_self_or_child_focused(ctx));
         });
     });
 }

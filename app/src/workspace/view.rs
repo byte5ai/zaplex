@@ -11592,7 +11592,7 @@ impl Workspace {
         let request = fail_closed_remote_restore_request(&identity)
             .expect("daemon restore must retain a daemon-backed surface");
         let replaced = pane_group.update(ctx, |group, ctx| {
-            group.replace_remote_terminal_surface(pane_id, Some(request), draft, true, ctx)
+            group.replace_remote_terminal_surface(pane_id, Some(request), draft, false, ctx)
         });
         crate::app_state::remove_remote_terminal_identity(pane_uuid);
         crate::app_state::clear_failed_remote_terminal_restore(pane_uuid);
