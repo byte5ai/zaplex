@@ -108,7 +108,7 @@ together with its matching Linux host daemon. Nothing needs to be installed
 manually on a remote host.
 
 Installation and recovery steps are in the
-[Zaplex 1.1.0 guide](docs/release/1.0-user-guide.md).
+[Zaplex user guide](docs/release/1.0-user-guide.md).
 
 ## Lineage & acknowledgements
 
