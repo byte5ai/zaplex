@@ -46,6 +46,11 @@ impl SafeTriangle {
         self.is_suppressing
     }
 
+    #[cfg(test)]
+    pub fn has_target_rect(&self) -> bool {
+        self.target_rect.is_some()
+    }
+
     /// Returns true if the hover should be suppressed
     /// (i.e. the mouse is moving toward the target rect through the safe triangle).
     pub fn should_suppress_hover(&mut self, new_position: Vector2F) -> bool {
@@ -53,6 +58,13 @@ impl SafeTriangle {
             self.is_suppressing = false;
             return false;
         };
+
+        // Reaching the target menu completes the protected diagonal movement. Its own hover
+        // events must remain responsive instead of being suppressed by the triangle.
+        if target.contains_point(new_position) {
+            self.is_suppressing = false;
+            return false;
+        }
 
         // Once the cursor has already entered the target panel, subsequent motion should no
         // longer count as "in transit" toward it. Without this, exiting from inside the sidecar

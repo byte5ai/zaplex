@@ -29,7 +29,7 @@ use warp_core::channel::{Channel, ChannelState};
 use warp_core::SessionId;
 #[cfg(not(target_family = "wasm"))]
 use warpui::r#async::FutureExt as _;
-use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
+use warpui::{Entity, EntityId, ModelContext, ModelSpawner, SingletonEntity};
 
 /// Maximum number of reconnection attempts after a spontaneous disconnect.
 #[cfg(not(target_family = "wasm"))]
@@ -267,7 +267,11 @@ pub enum RemoteSessionState {
 pub enum RemoteServerManagerEvent {
     // --- Session-scoped events ---
     /// A connection flow has started for this session.
-    SessionConnecting { session_id: SessionId },
+    SessionConnecting {
+        session_id: SessionId,
+        /// `true` only for the synchronous Connected → Reconnecting edge.
+        reconnecting: bool,
+    },
     /// This session's server is connected and ready. Includes the `HostId`
     /// received from the initialize handshake, for model deduplication.
     SessionConnected {
@@ -287,18 +291,21 @@ pub enum RemoteServerManagerEvent {
     /// can observe the new session, including launches without managed metadata.
     SessionOpened {
         session_id: SessionId,
+        /// Exact terminal surface that received the OpenSession acknowledgement.
+        /// `None` is reserved for tests and callers without an attached view.
+        terminal_view_id: Option<EntityId>,
         pty_session_id: String,
         generation: u64,
     },
-    /// A capability-gated managed OpenSession was acknowledged by the daemon.
-    /// The launch id is the stable client-created correlation key; PTY identity
-    /// is returned only after admission and spawn actually succeeded.
+    /// A capability-gated managed OpenSession completed its claim, validated
+    /// agent attach, and terminal-readiness gate.
+    /// The launch id is the stable client-created correlation key.
     ManagedLaunchOpened {
         launch_id: String,
         pty_session_id: String,
         generation: u64,
     },
-    /// A managed launch failed before any authoritative SessionOpened Ack.
+    /// A managed launch failed before authoritative attach-readiness completed.
     ManagedLaunchFailed { launch_id: String, error: String },
     /// This session's connection dropped. Carries `host_id` so consumers
     /// don't need to look it up from the already-transitioned state.
@@ -471,7 +478,7 @@ impl RemoteServerManagerEvent {
     /// host-scoped variants.
     pub fn session_id(&self) -> Option<SessionId> {
         match self {
-            RemoteServerManagerEvent::SessionConnecting { session_id }
+            RemoteServerManagerEvent::SessionConnecting { session_id, .. }
             | RemoteServerManagerEvent::SessionConnected { session_id, .. }
             | RemoteServerManagerEvent::SessionOpened { session_id, .. }
             | RemoteServerManagerEvent::SessionConnectionFailed { session_id, .. }
@@ -542,6 +549,21 @@ pub struct ConnectedDaemon {
     pub features: Vec<String>,
 }
 
+/// Exact data for one connected manager session. Unlike [`ConnectedDaemon`],
+/// this never folds multiple registry aliases or client handles by `HostId`;
+/// every field comes from the same connection session.
+#[derive(Clone)]
+pub struct ConnectedSessionDescriptor {
+    pub session_id: SessionId,
+    pub host_label: String,
+    pub host_id: HostId,
+    pub registry_node_id: Option<String>,
+    pub daemon_runtime: DaemonRuntimeRoute,
+    pub is_current_runtime: bool,
+    pub client: Arc<RemoteServerClient>,
+    pub features: Vec<String>,
+}
+
 impl ConnectedDaemon {
     /// Current daemon routes may accept new host-level work. Historical routes
     /// exist only to recover the PTYs they already own.
@@ -556,6 +578,17 @@ fn preferred_registry_node_id(existing: Option<&str>, candidate: Option<&str>) -
         (Some(node_id), None) | (None, Some(node_id)) => Some(node_id.to_string()),
         (Some(existing), Some(candidate)) => Some(existing.min(candidate).to_string()),
     }
+}
+
+fn effective_daemon_runtime(
+    explicit: Option<&DaemonRuntimeRoute>,
+    server_version: String,
+) -> DaemonRuntimeRoute {
+    let runtime_filename = explicit
+        .map(|route| route.runtime_filename().to_string())
+        .unwrap_or_else(|| crate::setup::daemon_runtime_filename("sock"));
+    DaemonRuntimeRoute::new(runtime_filename, server_version)
+        .expect("transport daemon runtime filename was already validated")
 }
 
 /// Singleton model that manages connections to `remote_server` processes on
@@ -598,9 +631,12 @@ pub struct RemoteServerManager {
     /// `RemoteSessionState` so it survives reconnects and can join live daemon
     /// inventory to the registry without comparing display labels.
     session_registry_node_ids: HashMap<SessionId, String>,
-    /// Exact historical daemon route per connection. Current daemon sessions
-    /// are deliberately absent so consumers can fail closed for new work.
+    /// Exact effective daemon runtime per connection, including the currently
+    /// preferred runtime after its server version is observed at handshake.
     session_daemon_runtimes: HashMap<SessionId, DaemonRuntimeRoute>,
+    /// Separates the preferred route for new work from its exact runtime
+    /// identity. Exact runtime data still lives in `session_daemon_runtimes`.
+    current_runtime_sessions: HashSet<SessionId>,
     /// Sessions backed by a persistent daemon (native remote-session layer). For
     /// these, a transport-child exit on a network blip does NOT mean the remote
     /// session died — the daemon keeps it running — so `mark_session_disconnected`
@@ -627,12 +663,14 @@ impl RemoteServerManager {
     pub fn report_session_opened(
         &mut self,
         session_id: SessionId,
+        terminal_view_id: Option<EntityId>,
         pty_session_id: String,
         generation: u64,
         ctx: &mut ModelContext<Self>,
     ) {
         ctx.emit(RemoteServerManagerEvent::SessionOpened {
             session_id,
+            terminal_view_id,
             pty_session_id,
             generation,
         });
@@ -672,6 +710,7 @@ impl RemoteServerManager {
             session_host_labels: HashMap::new(),
             session_registry_node_ids: HashMap::new(),
             session_daemon_runtimes: HashMap::new(),
+            current_runtime_sessions: HashSet::new(),
             persistent_session_ids: HashSet::new(),
         }
     }
@@ -917,10 +956,16 @@ impl RemoteServerManager {
         }
         match transport.daemon_runtime_route() {
             Some(route) => {
+                self.current_runtime_sessions.remove(&session_id);
                 self.session_daemon_runtimes
                     .insert(session_id, route.clone());
             }
+            None if self.persistent_session_ids.contains(&session_id) => {
+                self.current_runtime_sessions.insert(session_id);
+                self.session_daemon_runtimes.remove(&session_id);
+            }
             None => {
+                self.current_runtime_sessions.remove(&session_id);
                 self.session_daemon_runtimes.remove(&session_id);
             }
         }
@@ -951,7 +996,10 @@ impl RemoteServerManager {
             self.sessions
                 .insert(session_id, RemoteSessionState::Connecting);
             self.auth_context = Some(Arc::clone(&auth_context));
-            ctx.emit(RemoteServerManagerEvent::SessionConnecting { session_id });
+            ctx.emit(RemoteServerManagerEvent::SessionConnecting {
+                session_id,
+                reconnecting: false,
+            });
 
             let spawner = self.spawner.clone();
             let executor = ctx.background_executor().clone();
@@ -974,13 +1022,14 @@ impl RemoteServerManager {
                     )
                     .await
                     {
-                        Ok((host_id, features)) => {
+                        Ok((host_id, features, server_version)) => {
                             let _ = spawner
                                 .spawn(move |me, ctx| {
                                     me.mark_session_connected(
                                         session_id,
                                         host_id,
                                         features,
+                                        server_version,
                                         identity_key,
                                         transport,
                                         ctx,
@@ -1031,7 +1080,7 @@ impl RemoteServerManager {
         auth_context: &RemoteServerAuthContext,
         spawner: &ModelSpawner<Self>,
         executor: &Arc<warpui::r#async::executor::Background>,
-    ) -> Result<(HostId, Vec<String>), ConnectAndHandshakeError> {
+    ) -> Result<(HostId, Vec<String>, String), ConnectAndHandshakeError> {
         // Phase 1: Connect (establish streams, create client).
         let Connection {
             client,
@@ -1147,7 +1196,11 @@ impl RemoteServerManager {
             )));
         }
 
-        Ok((HostId::new(resp.host_id), resp.features))
+        Ok((
+            HostId::new(resp.host_id),
+            resp.features,
+            resp.server_version,
+        ))
     }
 
     /// Removes a session from the manager and tears down its connection.
@@ -1238,6 +1291,7 @@ impl RemoteServerManager {
         self.session_host_labels.remove(&session_id);
         self.session_registry_node_ids.remove(&session_id);
         self.session_daemon_runtimes.remove(&session_id);
+        self.current_runtime_sessions.remove(&session_id);
         self.persistent_session_ids.remove(&session_id);
 
         // Remove the session entry. Dropping the `RemoteSessionState`
@@ -1314,29 +1368,40 @@ impl RemoteServerManager {
             } = state
             {
                 let registry_node_id = self.session_registry_node_ids.get(session_id).cloned();
-                let daemon_runtime = self.session_daemon_runtimes.get(session_id).cloned();
+                let daemon_runtime = (!self.current_runtime_sessions.contains(session_id))
+                    .then(|| self.session_daemon_runtimes.get(session_id).cloned())
+                    .flatten();
+                let candidate = ConnectedDaemon {
+                    host_label: host_label.clone(),
+                    host_id: host_id.as_str().to_string(),
+                    registry_node_id,
+                    daemon_runtime,
+                    client: Arc::clone(client),
+                    features: features.clone(),
+                };
                 match by_host.get_mut(host_id) {
                     Some(existing) => {
-                        existing.registry_node_id = preferred_registry_node_id(
-                            existing.registry_node_id.as_deref(),
-                            registry_node_id.as_deref(),
-                        );
-                        if existing.daemon_runtime.is_none() {
-                            existing.daemon_runtime = daemon_runtime;
+                        let replace = match (
+                            existing.is_current_runtime(),
+                            candidate.is_current_runtime(),
+                        ) {
+                            (false, true) => true,
+                            (true, false) => false,
+                            (false, false) | (true, true) => {
+                                let preferred = preferred_registry_node_id(
+                                    existing.registry_node_id.as_deref(),
+                                    candidate.registry_node_id.as_deref(),
+                                );
+                                preferred == candidate.registry_node_id
+                                    && preferred != existing.registry_node_id
+                            }
+                        };
+                        if replace {
+                            *existing = candidate;
                         }
                     }
                     None => {
-                        by_host.insert(
-                            host_id,
-                            ConnectedDaemon {
-                                host_label: host_label.clone(),
-                                host_id: host_id.as_str().to_string(),
-                                registry_node_id,
-                                daemon_runtime,
-                                client: Arc::clone(client),
-                                features: features.clone(),
-                            },
-                        );
+                        by_host.insert(host_id, candidate);
                     }
                 }
             }
@@ -1344,6 +1409,41 @@ impl RemoteServerManager {
         let mut out: Vec<ConnectedDaemon> = by_host.into_values().collect();
         out.sort_by(|a, b| a.host_id.cmp(&b.host_id));
         out
+    }
+
+    /// Returns a descriptor whose routing, display, runtime and client fields
+    /// all come from one exact manager session.
+    pub fn connected_session_descriptor(
+        &self,
+        session_id: SessionId,
+    ) -> Option<ConnectedSessionDescriptor> {
+        let RemoteSessionState::Connected {
+            client,
+            host_id,
+            host_label,
+            features,
+            ..
+        } = self.sessions.get(&session_id)?
+        else {
+            return None;
+        };
+        Some(ConnectedSessionDescriptor {
+            session_id,
+            host_label: host_label.clone(),
+            host_id: host_id.clone(),
+            registry_node_id: self.session_registry_node_ids.get(&session_id).cloned(),
+            daemon_runtime: self.session_daemon_runtimes.get(&session_id)?.clone(),
+            is_current_runtime: self.current_runtime_sessions.contains(&session_id),
+            client: Arc::clone(client),
+            features: features.clone(),
+        })
+    }
+
+    pub fn connected_session_descriptors(&self) -> Vec<ConnectedSessionDescriptor> {
+        self.sessions
+            .keys()
+            .filter_map(|session_id| self.connected_session_descriptor(*session_id))
+            .collect()
     }
 
     /// Returns every connected SSH-registry node together with the stable host
@@ -1728,6 +1828,7 @@ impl RemoteServerManager {
         session_id: SessionId,
         host_id: HostId,
         features: Vec<String>,
+        server_version: String,
         identity_key: String,
         transport: Arc<dyn RemoteTransport>,
         ctx: &mut ModelContext<Self>,
@@ -1751,6 +1852,12 @@ impl RemoteServerManager {
             .get(&session_id)
             .cloned()
             .unwrap_or_else(|| host_id.to_string());
+        if self.persistent_session_ids.contains(&session_id) {
+            let daemon_runtime =
+                effective_daemon_runtime(transport.daemon_runtime_route(), server_version);
+            self.session_daemon_runtimes
+                .insert(session_id, daemon_runtime);
+        }
 
         let is_first_session = !self.host_to_sessions.contains_key(&host_id);
         self.sessions.insert(
@@ -1978,6 +2085,10 @@ impl RemoteServerManager {
                 control_path: control_path.clone(),
             },
         );
+        ctx.emit(RemoteServerManagerEvent::SessionConnecting {
+            session_id,
+            reconnecting: true,
+        });
 
         let spawner = self.spawner.clone();
         let executor = ctx.background_executor().clone();
@@ -2008,7 +2119,7 @@ impl RemoteServerManager {
                 )
                 .await
                 {
-                    Ok((new_host_id, features)) => {
+                    Ok((new_host_id, features, server_version)) => {
                         let _ = spawner
                             .spawn(move |me, ctx| {
                                 // If the session was deregistered during the
@@ -2024,6 +2135,7 @@ impl RemoteServerManager {
                                     session_id,
                                     new_host_id.clone(),
                                     features,
+                                    server_version,
                                     identity_key,
                                     transport,
                                     ctx,

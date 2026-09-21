@@ -33,6 +33,15 @@ pub enum FsNamespace {
     Remote(String),
 }
 
+/// Pane mode captured in transfer coordinates. The registry normally contains
+/// only file-manager panes, but keeping the mode explicit makes a mode switch
+/// fail closed instead of letting an older picker selection address the pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FmPaneMode {
+    FileManager,
+    Terminal,
+}
+
 /// A live snapshot of one file-manager pane, as seen by the others.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FmPaneDescriptor {
@@ -45,6 +54,10 @@ pub struct FmPaneDescriptor {
     pub fs: FsNamespace,
     /// The pane's current directory — the copy/move destination.
     pub current_path: PathBuf,
+    /// Monotonic generation of the pane's backing transport/route.
+    pub route_epoch: u64,
+    /// Mode captured with the route and path snapshots.
+    pub mode: FmPaneMode,
     /// The pane group that currently owns this pane. Panes in the source's
     /// group are visible beside it; panes in other groups remain selectable
     /// targets but must not be chosen implicitly.
@@ -122,6 +135,25 @@ impl FileManagerRegistry {
         self.backends.get(&id).cloned()
     }
 
+    /// Resolve a previously captured pane coordinate only while every routing
+    /// component still matches. This is intentionally stricter than looking up
+    /// by pane id: moving panes, changing directory/mode, reconnecting, or
+    /// closing the pane must not silently retarget a transfer.
+    pub fn resolve_snapshot(&self, snapshot: &FmPaneDescriptor) -> Option<FmPaneDescriptor> {
+        self.panes
+            .iter()
+            .find(|pane| {
+                pane.id == snapshot.id
+                    && pane.fs == snapshot.fs
+                    && pane.current_path == snapshot.current_path
+                    && pane.route_epoch == snapshot.route_epoch
+                    && pane.mode == snapshot.mode
+                    && pane.pane_group_id == snapshot.pane_group_id
+            })
+            .filter(|pane| pane.mode == FmPaneMode::FileManager)
+            .cloned()
+    }
+
     /// A live backend for *any* open pane browsing `fs`. Lets a non-file-manager
     /// caller (e.g. the workspace opening a remote file for editing over classic
     /// SSH) borrow an already-established SFTP connection for that host instead
@@ -130,7 +162,7 @@ impl FileManagerRegistry {
     pub fn backend_for_namespace(&self, fs: &FsNamespace) -> Option<Arc<dyn SftpBackend>> {
         self.panes
             .iter()
-            .filter(|p| &p.fs == fs)
+            .filter(|p| p.mode == FmPaneMode::FileManager && &p.fs == fs)
             .find_map(|p| self.backends.get(&p.id).cloned())
     }
 
@@ -147,7 +179,7 @@ impl FileManagerRegistry {
         let mut panes = self
             .panes
             .iter()
-            .filter(|p| p.id != self_id && &p.fs == fs)
+            .filter(|p| p.id != self_id && p.mode == FmPaneMode::FileManager && &p.fs == fs)
             .cloned()
             .collect::<Vec<_>>();
         panes.sort_unstable_by_key(|pane| pane.id);
@@ -160,7 +192,7 @@ impl FileManagerRegistry {
         let mut panes = self
             .panes
             .iter()
-            .filter(|p| p.id != self_id)
+            .filter(|p| p.id != self_id && p.mode == FmPaneMode::FileManager)
             .cloned()
             .collect::<Vec<_>>();
         panes.sort_unstable_by_key(|pane| pane.id);

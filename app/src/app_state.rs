@@ -1,8 +1,9 @@
+use lazy_static::lazy_static;
 use pathfinder_geometry::rect::RectF;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use warpui::platform::FullscreenState;
 
 use warpui::AppContext;
@@ -19,11 +20,12 @@ use crate::server::ids::SyncId;
 use crate::settings_view::SettingsSection;
 use crate::tab::SelectedTabColor;
 use crate::terminal::cli_agent_sessions::PersistedCLIAgentBinding;
-use crate::terminal::ShellLaunchData;
+use crate::terminal::{ShellLaunchData, TerminalView};
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::view::left_panel::ToolPanelView;
 use crate::workspace::WorkspaceRegistry;
-use warpui::SingletonEntity as _;
+use warp_core::SessionId;
+use warpui::{EntityId, SingletonEntity as _, WeakViewHandle};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppState {
@@ -35,6 +37,351 @@ pub struct AppState {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PaneUuid(pub Vec<u8>);
+
+/// Stable routing data for a remote terminal pane. This is persisted separately
+/// from the generic terminal snapshot so remote routes never have to be inferred
+/// from a tab title or working directory.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteTerminalIdentity {
+    pub registry_node_id: String,
+    pub host: String,
+    pub transport: RemoteTerminalTransport,
+    pub current_working_directory: Option<String>,
+    pub input_draft: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RemoteTerminalTransport {
+    ClassicSsh,
+    ClassicSshMultiplexer {
+        multiplexer: PersistedClassicSshMultiplexer,
+    },
+    Daemon {
+        daemon_host_id: String,
+        daemon_runtime: Option<PersistedDaemonRuntime>,
+        pty_session_id: String,
+        pty_generation: u64,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistedClassicSshMultiplexer {
+    pub mode: PersistedClassicSshMultiplexerMode,
+    pub target: String,
+    pub session_name: Option<String>,
+    pub window_count: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PersistedClassicSshMultiplexerMode {
+    Tmux,
+    ScreenAttached,
+    ScreenDetached,
+}
+
+impl From<warp_ssh_manager::MultiplexerAttachMode> for PersistedClassicSshMultiplexerMode {
+    fn from(mode: warp_ssh_manager::MultiplexerAttachMode) -> Self {
+        match mode {
+            warp_ssh_manager::MultiplexerAttachMode::Tmux => Self::Tmux,
+            warp_ssh_manager::MultiplexerAttachMode::ScreenAttached => Self::ScreenAttached,
+            warp_ssh_manager::MultiplexerAttachMode::ScreenDetached => Self::ScreenDetached,
+        }
+    }
+}
+
+impl From<PersistedClassicSshMultiplexerMode> for warp_ssh_manager::MultiplexerAttachMode {
+    fn from(mode: PersistedClassicSshMultiplexerMode) -> Self {
+        match mode {
+            PersistedClassicSshMultiplexerMode::Tmux => Self::Tmux,
+            PersistedClassicSshMultiplexerMode::ScreenAttached => Self::ScreenAttached,
+            PersistedClassicSshMultiplexerMode::ScreenDetached => Self::ScreenDetached,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistedDaemonRuntime {
+    pub runtime_filename: String,
+    pub server_version: String,
+}
+
+/// Canonical identity of one daemon-owned PTY. Registry nodes and display host
+/// labels are reconnect metadata, not PTY identity, so aliases intentionally
+/// cannot create different keys.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DaemonPtyIdentity {
+    pub daemon_host_id: String,
+    pub runtime_filename: String,
+    pub server_version: String,
+    pub pty_session_id: String,
+    pub pty_generation: u64,
+}
+
+#[derive(Clone)]
+pub(crate) struct DaemonPtyClaimOwner {
+    pub terminal_view_id: Option<EntityId>,
+    pub connection_session_id: SessionId,
+    pub terminal_view: Option<WeakViewHandle<TerminalView>>,
+}
+
+impl DaemonPtyClaimOwner {
+    pub(crate) fn owns_same_terminal_surface(&self, other: &Self) -> bool {
+        self.connection_session_id == other.connection_session_id
+            && self.terminal_view_id.is_some()
+            && self.terminal_view_id == other.terminal_view_id
+    }
+
+    pub(crate) fn shares_connection_with(&self, other: &Self) -> bool {
+        self.connection_session_id == other.connection_session_id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DaemonPtyClaimOutcome<Owner> {
+    Claimed,
+    Existing(Owner),
+}
+
+pub(crate) struct DaemonPtyClaims<Owner> {
+    owners: HashMap<DaemonPtyIdentity, Owner>,
+}
+
+impl<Owner> Default for DaemonPtyClaims<Owner> {
+    fn default() -> Self {
+        Self {
+            owners: HashMap::new(),
+        }
+    }
+}
+
+impl<Owner: Clone> DaemonPtyClaims<Owner> {
+    pub(crate) fn claim(
+        &mut self,
+        identity: DaemonPtyIdentity,
+        owner: Owner,
+        is_live: impl FnOnce(&Owner) -> bool,
+    ) -> DaemonPtyClaimOutcome<Owner> {
+        match self.owners.get(&identity) {
+            Some(existing) if is_live(existing) => {
+                DaemonPtyClaimOutcome::Existing(existing.clone())
+            }
+            Some(_) | None => {
+                self.owners.insert(identity, owner);
+                DaemonPtyClaimOutcome::Claimed
+            }
+        }
+    }
+
+    pub(crate) fn release_where(&mut self, should_release: impl Fn(&Owner) -> bool) {
+        self.owners.retain(|_, owner| !should_release(owner));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.owners.len()
+    }
+}
+
+lazy_static! {
+    /// Sidecar for route data whose lifetime follows the stable terminal UUID.
+    /// SQLite owns durability; this map only bridges snapshot construction and
+    /// restoration without changing the broadly constructed TerminalPaneSnapshot.
+    static ref REMOTE_TERMINAL_IDENTITIES: RwLock<HashMap<PaneUuid, RemoteTerminalIdentity>> =
+        RwLock::new(HashMap::new());
+    static ref FAILED_REMOTE_TERMINAL_RESTORES: RwLock<HashSet<PaneUuid>> =
+        RwLock::new(HashSet::new());
+    static ref DAEMON_PTY_CLAIMS: RwLock<DaemonPtyClaims<DaemonPtyClaimOwner>> =
+        RwLock::new(DaemonPtyClaims::default());
+}
+
+pub(crate) fn claim_daemon_pty(
+    identity: DaemonPtyIdentity,
+    owner: DaemonPtyClaimOwner,
+    app: &AppContext,
+) -> DaemonPtyClaimOutcome<DaemonPtyClaimOwner> {
+    DAEMON_PTY_CLAIMS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .claim(identity, owner, |existing| {
+            existing
+                .terminal_view
+                .as_ref()
+                .is_none_or(|terminal_view| terminal_view.upgrade(app).is_some())
+        })
+}
+
+pub(crate) fn bind_daemon_pty_claim_owner(
+    identity: &DaemonPtyIdentity,
+    connection_session_id: SessionId,
+    terminal_view: &warpui::ViewHandle<TerminalView>,
+) -> bool {
+    let mut claims = DAEMON_PTY_CLAIMS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(owner) = claims.owners.get_mut(identity) else {
+        return false;
+    };
+    if owner.connection_session_id != connection_session_id {
+        return false;
+    }
+    if owner
+        .terminal_view_id
+        .is_some_and(|terminal_view_id| terminal_view_id != terminal_view.id())
+    {
+        return false;
+    }
+    owner.terminal_view_id = Some(terminal_view.id());
+    owner.terminal_view = Some(terminal_view.downgrade());
+    true
+}
+
+pub(crate) fn daemon_pty_claim(
+    identity: &DaemonPtyIdentity,
+    app: &AppContext,
+) -> Option<DaemonPtyClaimOwner> {
+    DAEMON_PTY_CLAIMS
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .owners
+        .get(identity)
+        .filter(|owner| {
+            owner
+                .terminal_view
+                .as_ref()
+                .is_none_or(|terminal_view| terminal_view.upgrade(app).is_some())
+        })
+        .cloned()
+}
+
+pub(crate) fn release_daemon_pty_claim_reservation(
+    identity: &DaemonPtyIdentity,
+    connection_session_id: SessionId,
+) -> bool {
+    let mut claims = DAEMON_PTY_CLAIMS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let is_unbound_reservation = claims.owners.get(identity).is_some_and(|owner| {
+        owner.connection_session_id == connection_session_id && owner.terminal_view_id.is_none()
+    });
+    if is_unbound_reservation {
+        claims.owners.remove(identity);
+    }
+    is_unbound_reservation
+}
+
+pub(crate) fn release_daemon_pty_claim_for_terminal_view(terminal_view_id: EntityId) {
+    DAEMON_PTY_CLAIMS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .release_where(|owner| owner.terminal_view_id == Some(terminal_view_id));
+}
+
+pub(crate) fn release_daemon_pty_claim_for_connection(connection_session_id: SessionId) {
+    DAEMON_PTY_CLAIMS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .release_where(|owner| owner.connection_session_id == connection_session_id);
+}
+
+pub(crate) fn register_remote_terminal_identity(uuid: &[u8], identity: RemoteTerminalIdentity) {
+    REMOTE_TERMINAL_IDENTITIES
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(PaneUuid(uuid.to_vec()), identity);
+    clear_failed_remote_terminal_restore(uuid);
+}
+
+pub(crate) fn remote_terminal_identity(uuid: &[u8]) -> Option<RemoteTerminalIdentity> {
+    REMOTE_TERMINAL_IDENTITIES
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&PaneUuid(uuid.to_vec()))
+        .cloned()
+}
+
+pub(crate) fn remove_remote_terminal_identity(uuid: &[u8]) {
+    REMOTE_TERMINAL_IDENTITIES
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&PaneUuid(uuid.to_vec()));
+}
+
+pub(crate) fn mark_failed_remote_terminal_restore(uuid: &[u8]) {
+    FAILED_REMOTE_TERMINAL_RESTORES
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(PaneUuid(uuid.to_vec()));
+}
+
+pub(crate) fn clear_failed_remote_terminal_restore(uuid: &[u8]) {
+    FAILED_REMOTE_TERMINAL_RESTORES
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&PaneUuid(uuid.to_vec()));
+}
+
+pub(crate) fn failed_remote_terminal_restore(uuid: &[u8]) -> bool {
+    FAILED_REMOTE_TERMINAL_RESTORES
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(&PaneUuid(uuid.to_vec()))
+}
+
+pub(crate) fn update_remote_terminal_pane_state(
+    uuid: &[u8],
+    current_working_directory: Option<String>,
+    input_draft: String,
+) {
+    if let Some(identity) = REMOTE_TERMINAL_IDENTITIES
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get_mut(&PaneUuid(uuid.to_vec()))
+    {
+        if current_working_directory.is_some() {
+            identity.current_working_directory = current_working_directory;
+        }
+        identity.input_draft = input_draft;
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TemporaryFileManagerSnapshot {
+    pub node_id: String,
+    pub mode: FileManagerPaneMode,
+    pub current_path: PathBuf,
+}
+
+lazy_static! {
+    static ref TEMPORARY_FILE_MANAGER_REPLACEMENTS: RwLock<HashMap<PaneUuid, TemporaryFileManagerSnapshot>> =
+        RwLock::new(HashMap::new());
+}
+
+pub(crate) fn register_temporary_file_manager_replacement(
+    uuid: &[u8],
+    snapshot: TemporaryFileManagerSnapshot,
+) {
+    TEMPORARY_FILE_MANAGER_REPLACEMENTS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(PaneUuid(uuid.to_vec()), snapshot);
+}
+
+pub(crate) fn temporary_file_manager_replacement(
+    uuid: &[u8],
+) -> Option<TemporaryFileManagerSnapshot> {
+    TEMPORARY_FILE_MANAGER_REPLACEMENTS
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&PaneUuid(uuid.to_vec()))
+        .cloned()
+}
+
+pub(crate) fn remove_temporary_file_manager_replacement(uuid: &[u8]) {
+    TEMPORARY_FILE_MANAGER_REPLACEMENTS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&PaneUuid(uuid.to_vec()));
+}
 
 /// Wrapper for persisting agent management filters to restore.
 #[derive(Default, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,10 +496,13 @@ pub enum LeafContents {
     SshServer {
         node_id: String,
     },
-    /// SFTP file browser pane. Uses the `ssh_servers.node_id` primary key to reference the remote server.
-    /// **Not persisted** — after a restart the user reopens it from the left-hand SSH manager tree.
+    /// File Manager pane. Remote panes use the stable SSH registry node id;
+    /// local panes keep an empty node id. Mode and path are part of the pane
+    /// snapshot so mixed layouts restore without deriving identity from a tab.
     Sftp {
         node_id: String,
+        mode: FileManagerPaneMode,
+        current_path: PathBuf,
     },
     /// Cockpit dashboard pane (account usage/cost/heat overview). **Not
     /// persisted** — after a restart the user reopens it from the cockpit
@@ -177,8 +527,9 @@ impl LeafContents {
             // SSH server editor: the data (host/user/...) is persisted in the ssh_servers table,
             // the pane itself is just a view, so closing and reopening makes no difference.
             LeafContents::SshServer { .. } => false,
-            // SFTP browser: the remote filesystem depends on an active SSH connection, so the pane is not restorable.
-            LeafContents::Sftp { .. } => false,
+            // Directory pickers are transient modal helpers. Ordinary local and
+            // remote File Manager panes are fully restorable.
+            LeafContents::Sftp { mode, .. } => !mode.is_picker(),
             // Image viewer panes are intentionally not persisted: they render in-session but
             // are not restored after restart.
             LeafContents::Image { .. } => false,
@@ -203,6 +554,19 @@ impl LeafContents {
             | LeafContents::Welcome { .. }
             | LeafContents::GetStarted => true,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FileManagerPaneMode {
+    Local,
+    Remote,
+    RemotePicker,
+}
+
+impl FileManagerPaneMode {
+    pub fn is_picker(self) -> bool {
+        matches!(self, Self::RemotePicker)
     }
 }
 

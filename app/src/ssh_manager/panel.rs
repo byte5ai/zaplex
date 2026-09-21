@@ -46,7 +46,7 @@ use warp_ssh_manager::{
     SshServerInfo, ValidatedSshEndpoint, WorkspaceCommandFactory,
 };
 
-use remote_server::proto::{MultiplexerKind, MultiplexerSessionInfo, SessionInfo, SessionList};
+use remote_server::proto::{MultiplexerKind, MultiplexerSessionInfo, SessionInfo};
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warp_core::HostId;
 
@@ -410,6 +410,8 @@ pub enum SshManagerPanelAction {
         node_id: String,
         kind: i32,
         target: String,
+        session_name: String,
+        window_count: u32,
         attached_clients: u32,
     },
     /// Click a row; the handling depends on the node kind:
@@ -483,6 +485,8 @@ pub enum SshManagerPanelEvent {
         server: SshServerInfo,
         mode: MultiplexerAttachMode,
         target: String,
+        session_name: String,
+        window_count: u32,
     },
     PersistenceError(String),
 }
@@ -1284,22 +1288,13 @@ impl SshManagerPanel {
                                 key_path: None,
                                 credential_id: None,
                                 startup_command: None,
-                                notes: Some(format!(
-                                    "Discovered via Tailscale ({})",
-                                    candidate.os
-                                )),
+                                notes: Some(format!("Discovered via Tailscale ({})", candidate.os)),
                                 last_connected_at: None,
-                                session_resilience:
-                                    warp_ssh_manager::SessionResilience::default(),
+                                session_resilience: warp_ssh_manager::SessionResilience::default(),
                                 ring_ceiling_mb: 0,
                             };
                             let name = unique_name(conn, parent.as_deref(), &candidate.hostname)?;
-                            SshRepository::create_server(
-                                conn,
-                                parent.as_deref(),
-                                &name,
-                                &info,
-                            )?;
+                            SshRepository::create_server(conn, parent.as_deref(), &name, &info)?;
                             existing.insert(host);
                             count += 1;
                         }
@@ -1784,6 +1779,8 @@ impl SshManagerPanel {
                     node_id: node_id.to_string(),
                     kind: session.kind,
                     target: session.target.clone(),
+                    session_name: session.name.clone(),
+                    window_count: session.windows,
                     attached_clients: session.attached_clients,
                 },
             )
@@ -1872,6 +1869,8 @@ impl SshManagerPanel {
         node_id: String,
         kind: i32,
         target: String,
+        session_name: String,
+        window_count: u32,
         attached_clients: u32,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -1903,6 +1902,8 @@ impl SshManagerPanel {
             server,
             mode,
             target,
+            session_name,
+            window_count,
         });
     }
 
@@ -2992,8 +2993,8 @@ impl SshManagerPanel {
     }
 
     /// Renders one host's native daemon sessions followed by its separately
-    /// labelled existing tmux/byobu sessions. Host RAM is derived solely from
-    /// daemon-ring bytes and the daemon-reported cap.
+    /// labelled existing tmux/byobu sessions. Runtime diagnostics remain out of
+    /// this ordinary navigation list.
     fn render_session_rows(
         &self,
         node: &SshNode,
@@ -3051,27 +3052,6 @@ impl SshManagerPanel {
             );
             return rows;
         }
-        if let Some(usage) = host_inventory
-            .map(|inventory| &inventory.daemon)
-            .and_then(host_ring_usage)
-        {
-            let color = match usage.tone {
-                HostRingTone::Calm => theme.accent().into_solid(),
-                HostRingTone::Warning => theme.ui_warning_color(),
-                HostRingTone::Critical => theme.ui_error_color(),
-            };
-            let used = format_ring_bytes(usage.used_bytes).unwrap_or_else(|| "0 KB".to_string());
-            let cap = format_ring_bytes(usage.cap_bytes).unwrap_or_else(|| "0 KB".to_string());
-            rows.push(message(
-                crate::t!(
-                    "workspace-left-panel-ssh-manager-host-ram",
-                    used = used,
-                    cap = cap
-                ),
-                color,
-            ));
-        }
-
         if let Some(sessions) = host_inventory
             .map(|inventory| inventory.sessions.as_slice())
             .filter(|sessions| !sessions.is_empty())
@@ -3079,13 +3059,10 @@ impl SshManagerPanel {
             for routed_session in sessions {
                 let session = &routed_session.session;
                 let key = session_row_key(&node.id, session, routed_session.route.as_ref());
-                let metadata = format_ring_bytes(session.ring_bytes).map(|used| {
-                    crate::t!("workspace-left-panel-ssh-manager-session-ram", used = used)
-                });
                 rows.push(self.render_session_row(
                     &key,
                     daemon_session_title(session),
-                    metadata,
+                    None,
                     session_indent,
                     appearance,
                 ));
@@ -3878,11 +3855,15 @@ impl TypedActionView for SshManagerPanel {
                 node_id,
                 kind,
                 target,
+                session_name,
+                window_count,
                 attached_clients,
             } => self.on_open_multiplexer_session(
                 node_id.clone(),
                 *kind,
                 target.clone(),
+                session_name.clone(),
+                *window_count,
                 *attached_clients,
                 ctx,
             ),
@@ -4314,59 +4295,6 @@ fn unique_name(
         }
     }
     Ok(format!("{base} {}", uuid::Uuid::new_v4()))
-}
-
-/// Human-readable per-session RAM (output-ring bytes) for the session list.
-/// `None` for 0 (unknown / not reported) so no chrome shows. KB below 1 MiB,
-/// else MB with one decimal.
-fn format_ring_bytes(bytes: u64) -> Option<String> {
-    if bytes == 0 {
-        return None;
-    }
-    let b = bytes as f64;
-    if b >= 1024.0 * 1024.0 {
-        Some(format!("{:.1} MB", b / (1024.0 * 1024.0)))
-    } else {
-        Some(format!("{} KB", (b / 1024.0).ceil() as u64))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum HostRingTone {
-    Calm,
-    Warning,
-    Critical,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct HostRingUsage {
-    used_bytes: u64,
-    cap_bytes: u64,
-    tone: HostRingTone,
-}
-
-fn host_ring_usage(inventory: &SessionList) -> Option<HostRingUsage> {
-    let cap_bytes = inventory.host_ring_cap_bytes;
-    if cap_bytes == 0 {
-        return None;
-    }
-    let used_bytes = inventory
-        .sessions
-        .iter()
-        .fold(0_u64, |sum, session| sum.saturating_add(session.ring_bytes));
-    let ratio = used_bytes as u128 * 100 / cap_bytes as u128;
-    let tone = if ratio >= 100 {
-        HostRingTone::Critical
-    } else if ratio >= 80 {
-        HostRingTone::Warning
-    } else {
-        HostRingTone::Calm
-    };
-    Some(HostRingUsage {
-        used_bytes,
-        cap_bytes,
-        tone,
-    })
 }
 
 fn multiplexer_row_key(node_id: &str, session: &MultiplexerSessionInfo) -> String {

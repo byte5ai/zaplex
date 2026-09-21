@@ -14,8 +14,14 @@ use warp_core::features::FeatureFlag;
 
 use crate::{
     app_state::{
-        AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot,
-        PaneNodeSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
+        clear_failed_remote_terminal_restore, failed_remote_terminal_restore,
+        register_remote_terminal_identity, register_temporary_file_manager_replacement,
+        remote_terminal_identity, remove_remote_terminal_identity,
+        remove_temporary_file_manager_replacement, temporary_file_manager_replacement, AppState,
+        CodePaneSnapShot, CodePaneTabSnapshot, FileManagerPaneMode, LeafContents, LeafSnapshot,
+        PaneNodeSnapshot, PersistedClassicSshMultiplexer, PersistedClassicSshMultiplexerMode,
+        PersistedDaemonRuntime, RemoteTerminalIdentity, RemoteTerminalTransport, TabSnapshot,
+        TemporaryFileManagerSnapshot, TerminalPaneSnapshot, WindowSnapshot,
     },
     cloud_object::{ObjectIdType, Owner, StoredObjectPermissions},
     code::editor_management::CodeSource,
@@ -441,6 +447,274 @@ fn test_sqlite_round_trips_and_clears_cli_agent_binding() {
         panic!("restored snapshot should contain a terminal pane");
     };
     assert_eq!(terminal.cli_agent_binding, None);
+}
+
+#[test]
+fn test_sqlite_round_trips_remote_terminal_identities() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let mut app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    let PaneNodeSnapshot::Leaf(leaf) = &mut app_state.windows[0].tabs[0].root else {
+        panic!("test snapshot should contain a terminal leaf");
+    };
+    let LeafContents::Terminal(terminal) = &mut leaf.contents else {
+        panic!("test snapshot should contain a terminal pane");
+    };
+    terminal.uuid = vec![0x52; 16];
+    let terminal_uuid = terminal.uuid.clone();
+    let identity = RemoteTerminalIdentity {
+        registry_node_id: "node-production".to_string(),
+        host: "prod.example.com".to_string(),
+        transport: RemoteTerminalTransport::Daemon {
+            daemon_host_id: "daemon-host-42".to_string(),
+            daemon_runtime: Some(PersistedDaemonRuntime {
+                runtime_filename: "server-v1.0.28.sock".to_string(),
+                server_version: "v1.0.28".to_string(),
+            }),
+            pty_session_id: "pty-7".to_string(),
+            pty_generation: 9,
+        },
+        current_working_directory: Some("/srv/api".to_string()),
+        input_draft: "cargo test -p api".to_string(),
+    };
+    remove_remote_terminal_identity(&terminal_uuid);
+    register_remote_terminal_identity(&terminal_uuid, identity.clone());
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    remove_remote_terminal_identity(&terminal_uuid);
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("app state should load")
+        .app_state;
+    let PaneNodeSnapshot::Leaf(leaf) = &restored.windows[0].tabs[0].root else {
+        panic!("restored snapshot should contain a terminal leaf");
+    };
+    let LeafContents::Terminal(terminal) = &leaf.contents else {
+        panic!("restored snapshot should contain a terminal pane");
+    };
+
+    assert_eq!(terminal.uuid, terminal_uuid);
+    assert_eq!(remote_terminal_identity(&terminal_uuid), Some(identity));
+
+    let classic_identity = RemoteTerminalIdentity {
+        registry_node_id: "node-staging".to_string(),
+        host: "staging.example.com".to_string(),
+        transport: RemoteTerminalTransport::ClassicSshMultiplexer {
+            multiplexer: PersistedClassicSshMultiplexer {
+                mode: PersistedClassicSshMultiplexerMode::ScreenDetached,
+                target: "2481.byobu".to_string(),
+                session_name: Some("byobu".to_string()),
+                window_count: Some(4),
+            },
+        },
+        current_working_directory: Some("/srv/staging".to_string()),
+        input_draft: "git status".to_string(),
+    };
+    register_remote_terminal_identity(&terminal_uuid, classic_identity.clone());
+    save_app_state(&mut conn, &app_state).expect("updated app state should save");
+    remove_remote_terminal_identity(&terminal_uuid);
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("updated app state should load")
+        .app_state;
+    let PaneNodeSnapshot::Leaf(leaf) = &restored.windows[0].tabs[0].root else {
+        panic!("restored snapshot should contain a terminal leaf");
+    };
+    let LeafContents::Terminal(terminal) = &leaf.contents else {
+        panic!("restored snapshot should contain a terminal pane");
+    };
+
+    assert_eq!(terminal.uuid, terminal_uuid);
+    assert_eq!(
+        remote_terminal_identity(&terminal_uuid),
+        Some(classic_identity)
+    );
+    remove_remote_terminal_identity(&terminal_uuid);
+}
+
+#[test]
+fn test_sqlite_round_trips_temporary_file_manager_over_terminal() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let mut app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    let PaneNodeSnapshot::Leaf(leaf) = &mut app_state.windows[0].tabs[0].root else {
+        panic!("test snapshot should contain a terminal leaf");
+    };
+    let LeafContents::Terminal(terminal) = &mut leaf.contents else {
+        panic!("test snapshot should contain a terminal pane");
+    };
+    terminal.uuid = vec![0x46; 16];
+    let terminal_uuid = terminal.uuid.clone();
+    let overlay = TemporaryFileManagerSnapshot {
+        node_id: "node-production".to_string(),
+        mode: FileManagerPaneMode::Remote,
+        current_path: PathBuf::from("/srv/api/releases"),
+    };
+    remove_temporary_file_manager_replacement(&terminal_uuid);
+    register_temporary_file_manager_replacement(&terminal_uuid, overlay.clone());
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    remove_temporary_file_manager_replacement(&terminal_uuid);
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("app state should load")
+        .app_state;
+
+    assert!(matches!(
+        &restored.windows[0].tabs[0].root,
+        PaneNodeSnapshot::Leaf(LeafSnapshot {
+            contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+            ..
+        }) if uuid == &terminal_uuid
+    ));
+    assert_eq!(
+        temporary_file_manager_replacement(&terminal_uuid),
+        Some(overlay)
+    );
+    remove_temporary_file_manager_replacement(&terminal_uuid);
+}
+
+#[test]
+fn corrupt_optional_remote_metadata_keeps_the_terminal_and_tab() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let mut app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    let PaneNodeSnapshot::Leaf(leaf) = &mut app_state.windows[0].tabs[0].root else {
+        panic!("test snapshot should contain a terminal leaf");
+    };
+    let LeafContents::Terminal(terminal) = &mut leaf.contents else {
+        panic!("test snapshot should contain a terminal pane");
+    };
+    terminal.uuid = vec![0x71; 16];
+    let terminal_uuid = terminal.uuid.clone();
+    let mut sibling = app_state.windows[0].tabs[0].root.clone();
+    let PaneNodeSnapshot::Leaf(sibling_leaf) = &mut sibling else {
+        panic!("test snapshot should contain a terminal leaf");
+    };
+    let LeafContents::Terminal(sibling_terminal) = &mut sibling_leaf.contents else {
+        panic!("test snapshot should contain a terminal pane");
+    };
+    sibling_terminal.uuid = vec![0x72; 16];
+    app_state.windows[0].tabs[0].root =
+        PaneNodeSnapshot::Branch(crate::app_state::BranchSnapshot {
+            direction: crate::app_state::SplitDirection::Horizontal,
+            children: vec![
+                (
+                    crate::app_state::PaneFlex(0.5),
+                    app_state.windows[0].tabs[0].root.clone(),
+                ),
+                (crate::app_state::PaneFlex(0.5), sibling),
+            ],
+        });
+    register_remote_terminal_identity(
+        &terminal_uuid,
+        RemoteTerminalIdentity {
+            registry_node_id: "node-corrupt".to_string(),
+            host: "corrupt.example.com".to_string(),
+            transport: RemoteTerminalTransport::ClassicSsh,
+            current_working_directory: None,
+            input_draft: String::new(),
+        },
+    );
+    register_temporary_file_manager_replacement(
+        &terminal_uuid,
+        TemporaryFileManagerSnapshot {
+            node_id: "node-corrupt".to_string(),
+            mode: FileManagerPaneMode::Remote,
+            current_path: PathBuf::from("/srv"),
+        },
+    );
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    conn.batch_execute(
+        "UPDATE remote_terminal_pane_identities SET identity_json = '{';
+         UPDATE temporary_file_manager_replacements SET mode = '\"unknown-mode\"';",
+    )
+    .expect("test metadata should be corrupted");
+    remove_remote_terminal_identity(&terminal_uuid);
+    remove_temporary_file_manager_replacement(&terminal_uuid);
+
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("corrupt optional metadata should not fail app-state restore")
+        .app_state;
+
+    assert_eq!(restored.windows[0].tabs.len(), 1);
+    let PaneNodeSnapshot::Branch(branch) = &restored.windows[0].tabs[0].root else {
+        panic!("the tab and its sibling pane should remain");
+    };
+    assert_eq!(branch.children.len(), 2);
+    assert!(branch.children.iter().any(|(_, child)| matches!(
+        child,
+        PaneNodeSnapshot::Leaf(LeafSnapshot {
+            contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+            ..
+        }) if uuid == &terminal_uuid
+    )));
+    assert!(failed_remote_terminal_restore(&terminal_uuid));
+    assert_eq!(remote_terminal_identity(&terminal_uuid), None);
+    assert_eq!(temporary_file_manager_replacement(&terminal_uuid), None);
+
+    save_app_state(&mut conn, &restored).expect("failed remote marker should remain durable");
+    clear_failed_remote_terminal_restore(&terminal_uuid);
+    let restored_again = read_sqlite_data(&mut conn, None)
+        .expect("failed remote marker should restore again")
+        .app_state;
+    assert_eq!(restored_again.windows[0].tabs.len(), 1);
+    assert!(failed_remote_terminal_restore(&terminal_uuid));
+    clear_failed_remote_terminal_restore(&terminal_uuid);
+}
+
+#[test]
+fn test_sqlite_round_trips_file_manager_mode_and_path() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let mut window = test_terminal_window_snapshot(false);
+    let PaneNodeSnapshot::Leaf(leaf) = &mut window.tabs[0].root else {
+        panic!("test snapshot should contain a leaf");
+    };
+    leaf.contents = LeafContents::Sftp {
+        node_id: "node-production".to_string(),
+        mode: FileManagerPaneMode::Remote,
+        current_path: PathBuf::from("/srv/api/releases"),
+    };
+    let app_state = AppState {
+        windows: vec![window],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("app state should load")
+        .app_state;
+
+    assert!(matches!(
+        &restored.windows[0].tabs[0].root,
+        PaneNodeSnapshot::Leaf(LeafSnapshot {
+            contents: LeafContents::Sftp {
+                node_id,
+                mode: FileManagerPaneMode::Remote,
+                current_path,
+            },
+            ..
+        }) if node_id == "node-production" && current_path == &PathBuf::from("/srv/api/releases")
+    ));
 }
 
 #[test]

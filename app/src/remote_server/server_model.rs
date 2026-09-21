@@ -65,7 +65,8 @@ use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
     supported_features, FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_MODEL_DISCOVERY_V1,
     FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_PTY_BINDING_V2,
-    FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
+    FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_LOGICAL_OPEN_ATTEMPT_V1, FEATURE_LOGICAL_OPEN_ID_V1,
+    FEATURE_MANAGED_AGENT_FLEET_V1, FEATURE_MANAGED_OPEN_ATTACH_V1,
     FEATURE_SAFE_FILE_IDENTITY_BATCH_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
     FEATURE_SAFE_FILE_TRANSACTIONS_V2,
 };
@@ -121,6 +122,324 @@ const MAX_CONCURRENT_MANAGED_MEMORY_READS: usize = 1;
 const MAX_RECENT_MANAGED_EXITS: usize = 32;
 #[cfg(unix)]
 const RECENT_MANAGED_EXIT_TTL_MILLIS: u64 = 15 * 60 * 1000;
+#[cfg(unix)]
+const MAX_ACCEPTED_OPEN_IDS: usize = 1024;
+#[cfg(unix)]
+const MAX_LOGICAL_OPEN_ID_BYTES: usize = 128;
+#[cfg(unix)]
+const MAX_IN_FLIGHT_OPEN_WAITERS: usize = 64;
+
+#[cfg(unix)]
+#[derive(Clone)]
+struct AcceptedOpen {
+    request: OpenSession,
+    opened: SessionOpened,
+    session_ended: bool,
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+struct AcceptedOpenCache {
+    by_logical_id: HashMap<String, AcceptedOpen>,
+    in_flight: HashMap<String, InFlightOpen>,
+    ended_order: VecDeque<String>,
+}
+
+#[cfg(unix)]
+struct InFlightOpen {
+    request: OpenSession,
+    origin: (ConnectionId, RequestId),
+    origin_attempt: u64,
+    origin_active: bool,
+    latest_attempt: u64,
+    waiters: Vec<LogicalOpenRequester>,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LogicalOpenRequester {
+    conn_id: ConnectionId,
+    request_id: RequestId,
+    attempt: u64,
+}
+
+#[cfg(unix)]
+enum AcceptedOpenLookup {
+    Miss,
+    Accepted(SessionOpened),
+    Conflict,
+}
+
+#[cfg(unix)]
+enum LogicalOpenReservation {
+    Start,
+    Wait,
+    Accepted(SessionOpened),
+    Conflict,
+    StaleAttempt,
+    AtCapacity,
+    TooManyWaiters,
+}
+
+#[cfg(unix)]
+enum LogicalOpenAbort {
+    NotFound,
+    RequestRemoved,
+    CancelOperation(RequestId),
+}
+
+#[cfg(unix)]
+struct LogicalOpenCompletion {
+    origin_active: bool,
+    waiters: Vec<(ConnectionId, RequestId)>,
+}
+
+#[cfg(unix)]
+impl AcceptedOpenCache {
+    fn requests_match(left: &OpenSession, right: &OpenSession) -> bool {
+        let mut left = left.clone();
+        let mut right = right.clone();
+        left.logical_open_attempt = 0;
+        right.logical_open_attempt = 0;
+        left == right
+    }
+
+    fn lookup(&self, request: &OpenSession) -> AcceptedOpenLookup {
+        // Clients predating logical-open IDs send the protobuf default. Treat
+        // each such request as a non-idempotent legacy open rather than folding
+        // unrelated requests into one cache entry.
+        if request.logical_open_id.is_empty() {
+            return AcceptedOpenLookup::Miss;
+        }
+        let Some(accepted) = self.by_logical_id.get(&request.logical_open_id) else {
+            return AcceptedOpenLookup::Miss;
+        };
+        if Self::requests_match(&accepted.request, request) {
+            AcceptedOpenLookup::Accepted(accepted.opened.clone())
+        } else {
+            AcceptedOpenLookup::Conflict
+        }
+    }
+
+    fn ensure_capacity(&mut self) -> bool {
+        if self.by_logical_id.len() + self.in_flight.len() < MAX_ACCEPTED_OPEN_IDS {
+            return true;
+        }
+        while let Some(logical_open_id) = self.ended_order.pop_front() {
+            let is_tombstone = self
+                .by_logical_id
+                .get(&logical_open_id)
+                .is_some_and(|accepted| accepted.session_ended);
+            if is_tombstone {
+                self.by_logical_id.remove(&logical_open_id);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn reserve(
+        &mut self,
+        request: &OpenSession,
+        conn_id: ConnectionId,
+        request_id: &RequestId,
+    ) -> LogicalOpenReservation {
+        if request.logical_open_id.is_empty() {
+            return LogicalOpenReservation::Start;
+        }
+        match self.lookup(request) {
+            AcceptedOpenLookup::Accepted(opened) => {
+                return LogicalOpenReservation::Accepted(opened);
+            }
+            AcceptedOpenLookup::Conflict => return LogicalOpenReservation::Conflict,
+            AcceptedOpenLookup::Miss => {}
+        }
+        if let Some(in_flight) = self.in_flight.get_mut(&request.logical_open_id) {
+            if !Self::requests_match(&in_flight.request, request) {
+                return LogicalOpenReservation::Conflict;
+            }
+            let attempt = request.logical_open_attempt;
+            if attempt < in_flight.latest_attempt {
+                return LogicalOpenReservation::StaleAttempt;
+            }
+            if attempt > in_flight.latest_attempt {
+                // A later delivery attempt is the only one the client can
+                // still be awaiting. Retire every older half-open requester
+                // from liveness accounting, but keep the original request id
+                // as the key of the already-running preflight task.
+                in_flight.latest_attempt = attempt;
+                in_flight.origin_active = false;
+                in_flight.waiters.clear();
+            }
+            if (in_flight.origin == (conn_id, request_id.clone())
+                && in_flight.origin_attempt == attempt)
+                || in_flight.waiters.iter().any(|waiter| {
+                    waiter.conn_id == conn_id
+                        && waiter.request_id == *request_id
+                        && waiter.attempt == attempt
+                })
+            {
+                return LogicalOpenReservation::Wait;
+            }
+            if in_flight.waiters.len() >= MAX_IN_FLIGHT_OPEN_WAITERS {
+                return LogicalOpenReservation::TooManyWaiters;
+            }
+            in_flight.waiters.push(LogicalOpenRequester {
+                conn_id,
+                request_id: request_id.clone(),
+                attempt,
+            });
+            return LogicalOpenReservation::Wait;
+        }
+        if !self.ensure_capacity() {
+            return LogicalOpenReservation::AtCapacity;
+        }
+        self.in_flight.insert(
+            request.logical_open_id.clone(),
+            InFlightOpen {
+                request: request.clone(),
+                origin: (conn_id, request_id.clone()),
+                origin_attempt: request.logical_open_attempt,
+                origin_active: true,
+                latest_attempt: request.logical_open_attempt,
+                waiters: Vec::new(),
+            },
+        );
+        LogicalOpenReservation::Start
+    }
+
+    fn abort_request(&mut self, conn_id: ConnectionId, request_id: &RequestId) -> LogicalOpenAbort {
+        let Some(logical_open_id) = self.in_flight.iter().find_map(|(logical_open_id, open)| {
+            (open.origin == (conn_id, request_id.clone())
+                || open
+                    .waiters
+                    .iter()
+                    .any(|waiter| waiter.conn_id == conn_id && waiter.request_id == *request_id))
+            .then(|| logical_open_id.clone())
+        }) else {
+            return LogicalOpenAbort::NotFound;
+        };
+        let open = self
+            .in_flight
+            .get_mut(&logical_open_id)
+            .expect("logical open was found above");
+        if open.origin == (conn_id, request_id.clone()) {
+            open.origin_active = false;
+        } else {
+            open.waiters
+                .retain(|waiter| waiter.conn_id != conn_id || waiter.request_id != *request_id);
+        }
+        if open.has_active_requester() {
+            return LogicalOpenAbort::RequestRemoved;
+        }
+        let task_request_id = open.origin.1.clone();
+        self.in_flight.remove(&logical_open_id);
+        LogicalOpenAbort::CancelOperation(task_request_id)
+    }
+
+    fn remove_connection(&mut self, conn_id: ConnectionId) -> Vec<RequestId> {
+        let mut cancelled = Vec::new();
+        self.in_flight.retain(|_, open| {
+            if open.origin.0 == conn_id {
+                open.origin_active = false;
+            }
+            open.waiters.retain(|waiter| waiter.conn_id != conn_id);
+            let keep = open.has_active_requester();
+            if !keep {
+                cancelled.push(open.origin.1.clone());
+            }
+            keep
+        });
+        cancelled
+    }
+
+    fn complete(
+        &mut self,
+        request: &OpenSession,
+        opened: Option<SessionOpened>,
+    ) -> LogicalOpenCompletion {
+        if request.logical_open_id.is_empty() {
+            return LogicalOpenCompletion {
+                origin_active: true,
+                waiters: Vec::new(),
+            };
+        }
+        if self
+            .in_flight
+            .get(&request.logical_open_id)
+            .is_none_or(|in_flight| !Self::requests_match(&in_flight.request, request))
+        {
+            return LogicalOpenCompletion {
+                origin_active: false,
+                waiters: Vec::new(),
+            };
+        }
+        let completed = self
+            .in_flight
+            .remove(&request.logical_open_id)
+            .expect("matching logical open was checked above");
+        if let Some(opened) = opened {
+            self.insert(request.clone(), opened);
+        }
+        LogicalOpenCompletion {
+            origin_active: completed.origin_active
+                && completed.origin_attempt == completed.latest_attempt,
+            waiters: completed
+                .waiters
+                .into_iter()
+                .filter(|waiter| waiter.attempt == completed.latest_attempt)
+                .map(|waiter| (waiter.conn_id, waiter.request_id))
+                .collect(),
+        }
+    }
+
+    fn has_active_requester(&self, request: &OpenSession) -> bool {
+        request.logical_open_id.is_empty()
+            || self
+                .in_flight
+                .get(&request.logical_open_id)
+                .is_some_and(|in_flight| {
+                    Self::requests_match(&in_flight.request, request)
+                        && in_flight.has_active_requester()
+                })
+    }
+
+    fn insert(&mut self, request: OpenSession, opened: SessionOpened) {
+        // Empty IDs use the legacy non-idempotent path described in `lookup`.
+        if request.logical_open_id.is_empty() {
+            return;
+        }
+        self.in_flight.remove(&request.logical_open_id);
+        self.by_logical_id.insert(
+            request.logical_open_id.clone(),
+            AcceptedOpen {
+                request,
+                opened,
+                session_ended: false,
+            },
+        );
+    }
+
+    fn retain_session_tombstone(&mut self, session_id: &str) {
+        for (logical_open_id, accepted) in self.by_logical_id.iter_mut() {
+            if accepted.opened.session_id == session_id && !accepted.session_ended {
+                accepted.session_ended = true;
+                self.ended_order.push_back(logical_open_id.clone());
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl InFlightOpen {
+    fn has_active_requester(&self) -> bool {
+        (self.origin_active && self.origin_attempt == self.latest_attempt)
+            || self
+                .waiters
+                .iter()
+                .any(|waiter| waiter.attempt == self.latest_attempt)
+    }
+}
 
 #[cfg(unix)]
 fn normalize_pty_dimensions(rows: u32, cols: u32) -> (u16, u16) {
@@ -1082,7 +1401,9 @@ fn server_features_with_runtime_support(
     let mut features = supported_features();
     if !process_signalling_supported {
         features.retain(|feature| {
-            feature != FEATURE_AGENT_PROCESS_SIGNAL_V1 && feature != FEATURE_MANAGED_AGENT_FLEET_V1
+            feature != FEATURE_AGENT_PROCESS_SIGNAL_V1
+                && feature != FEATURE_MANAGED_AGENT_FLEET_V1
+                && feature != FEATURE_MANAGED_OPEN_ATTACH_V1
         });
     }
     if !safe_file_transactions_supported {
@@ -1226,6 +1547,11 @@ pub struct ServerModel {
     /// Monotonic generation assigned to the next PTY opened by this daemon.
     #[cfg(unix)]
     next_pty_generation: u64,
+    /// Bounded retry cache for accepted logical opens. Entries live exactly as
+    /// long as their PTY, so an acknowledgement lost across a proxy reconnect
+    /// resolves to the original PTY instead of spawning a duplicate.
+    #[cfg(unix)]
+    accepted_opens: AcceptedOpenCache,
     /// Descriptor-bound file handles and durable mutation journal used by the
     /// safe file-manager transfer protocol.
     #[cfg(unix)]
@@ -1240,6 +1566,8 @@ pub struct ServerModel {
     agent_account_routes: super::agent_account::AccountRouteCache,
     #[cfg(test)]
     fresh_agent_account_routes_for_test: Option<super::agent_account::AccountRoutes>,
+    #[cfg(all(test, unix))]
+    managed_preflight_gate_for_test: Option<Arc<(Mutex<(bool, bool)>, std::sync::Condvar)>>,
     /// Daemon-wide cap for transcript filesystem scans and parsing. The permit
     /// is owned by the abortable future, so cancellation releases it as well.
     agent_transcript_reads_in_flight: Arc<AtomicUsize>,
@@ -1295,11 +1623,15 @@ impl ServerModel {
             #[cfg(unix)]
             next_pty_generation: 1,
             #[cfg(unix)]
+            accepted_opens: AcceptedOpenCache::default(),
+            #[cfg(unix)]
             safe_files: SafeFileWorker::new(),
             agent_inventory_scan_cache: Arc::new(Mutex::new(AgentInventoryScanCache::default())),
             agent_account_routes: Default::default(),
             #[cfg(test)]
             fresh_agent_account_routes_for_test: None,
+            #[cfg(all(test, unix))]
+            managed_preflight_gate_for_test: None,
             agent_transcript_reads_in_flight: Arc::new(AtomicUsize::new(0)),
             #[cfg(unix)]
             managed_memory_reads_in_flight: Arc::new(AtomicUsize::new(0)),
@@ -1627,6 +1959,12 @@ impl ServerModel {
         if self.connection_senders.remove(&conn_id).is_none() {
             return;
         }
+        #[cfg(unix)]
+        for request_id in self.accepted_opens.remove_connection(conn_id) {
+            if let Some(handle) = self.in_progress.remove(&request_id) {
+                handle.abort();
+            }
+        }
         self.executors
             .retain(|(executor_conn_id, _), _| *executor_conn_id != conn_id);
         #[cfg(unix)]
@@ -1714,7 +2052,7 @@ impl ServerModel {
                 return;
             }
             Some(client_message::Message::Abort(abort)) => {
-                self.handle_abort(abort, &request_id);
+                self.handle_abort(conn_id, abort, &request_id);
                 return;
             }
             Some(client_message::Message::RunCommand(req)) => {
@@ -2216,6 +2554,31 @@ impl ServerModel {
         )
     }
 
+    fn spawn_blocking_request_handler_with_error<T, B, F, E>(
+        &mut self,
+        request_id: RequestId,
+        operation: B,
+        on_resolve: F,
+        on_error: E,
+        ctx: &mut ModelContext<Self>,
+    ) -> SpawnedFutureHandle
+    where
+        T: Send + 'static,
+        B: FnOnce() -> T + Send + 'static,
+        F: 'static + FnOnce(&mut Self, T, &mut ModelContext<Self>),
+        E: 'static + FnOnce(&mut Self, tokio::task::JoinError, &mut ModelContext<Self>),
+    {
+        self.spawn_request_handler(
+            request_id,
+            async move { tokio::task::spawn_blocking(operation).await },
+            move |me, result, ctx| match result {
+                Ok(output) => on_resolve(me, output, ctx),
+                Err(error) => on_error(me, error, ctx),
+            },
+            ctx,
+        )
+    }
+
     /// Handles `Initialize` by returning the server version and host id.
     ///
     /// `server_version` is the release tag the daemon was built from
@@ -2315,6 +2678,13 @@ impl ServerModel {
             .is_some_and(|features| features.contains(FEATURE_AGENT_TRANSCRIPT_READ_V1))
     }
 
+    #[cfg(unix)]
+    fn client_supports_logical_open_attempt(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_LOGICAL_OPEN_ATTEMPT_V1))
+    }
+
     fn client_supports_agent_process_signal(&self, conn_id: ConnectionId) -> bool {
         zaplex_cockpit::local_process_signalling_supported()
             && self
@@ -2342,7 +2712,13 @@ impl ServerModel {
             && self
                 .connection_features
                 .get(&conn_id)
-                .is_some_and(|features| features.contains(FEATURE_MANAGED_AGENT_FLEET_V1))
+                .is_some_and(|features| {
+                    features.contains(FEATURE_MANAGED_AGENT_FLEET_V1)
+                        && features.contains(FEATURE_MANAGED_OPEN_ATTACH_V1)
+                        && features.contains(FEATURE_LOGICAL_OPEN_ID_V1)
+                        && features.contains(FEATURE_LOGICAL_OPEN_ATTEMPT_V1)
+                        && features.contains(FEATURE_AGENT_PTY_BINDING_V2)
+                })
     }
 
     #[cfg(unix)]
@@ -2389,8 +2765,29 @@ impl ServerModel {
 
     /// Handles `Abort` by cancelling the in-progress request it targets.
     /// This is a notification — no response is sent.
-    fn handle_abort(&mut self, abort: Abort, request_id: &RequestId) {
+    fn handle_abort(&mut self, conn_id: ConnectionId, abort: Abort, request_id: &RequestId) {
         let target_id = RequestId::from(abort.request_id_to_abort);
+        #[cfg(unix)]
+        match self.accepted_opens.abort_request(conn_id, &target_id) {
+            LogicalOpenAbort::RequestRemoved => {
+                log::info!(
+                    "Removed logical OpenSession requester (request_id={target_id}, \
+                     abort_request_id={request_id})"
+                );
+                return;
+            }
+            LogicalOpenAbort::CancelOperation(task_request_id) => {
+                log::info!(
+                    "Cancelling unobserved logical OpenSession \
+                     (task_request_id={task_request_id}, abort_request_id={request_id})"
+                );
+                if let Some(handle) = self.in_progress.remove(&task_request_id) {
+                    handle.abort();
+                }
+                return;
+            }
+            LogicalOpenAbort::NotFound => {}
+        }
         if let Some(handle) = self.in_progress.remove(&target_id) {
             log::info!(
                 "Aborting in-progress request (request_id={target_id}, \
@@ -4791,6 +5188,8 @@ impl ServerModel {
             }),
             managed_launch: Some(managed_launch_to_proto(&plan)),
             requested_min_available_bytes: None,
+            logical_open_id: uuid::Uuid::new_v4().to_string(),
+            logical_open_attempt: 1,
         };
         let collected_at = now_epoch_millis();
         let provider = plan.launch_key().provider().to_string();
@@ -5177,28 +5576,132 @@ impl ServerModel {
             if !existing.project_identity_is_current() {
                 return Err("project-identity-changed");
             }
+            let opened = || {
+                let expected_agent_binding = self
+                    .agent_pty_bindings
+                    .foreground_for_pty(session_id, session.generation)
+                    .map(|binding| agent_identity_to_proto(&binding.agent))
+                    .ok_or("managed-agent-binding-unavailable")?;
+                Ok(SessionOpened {
+                    session_id: session_id.clone(),
+                    generation: session.generation,
+                    requires_attach: true,
+                    expected_agent_binding: Some(expected_agent_binding),
+                })
+            };
             if existing.launch_id() == plan.launch_id() {
                 return if existing.is_retry_of(plan) {
-                    Ok(Some(SessionOpened {
-                        session_id: session_id.clone(),
-                        generation: session.generation,
-                    }))
+                    opened().map(Some)
                 } else {
                     Err("launch-id-conflict")
                 };
             }
             if existing.launch_key() == plan.launch_key() {
                 return if existing.same_route_and_configuration(plan) {
-                    Ok(Some(SessionOpened {
-                        session_id: session_id.clone(),
-                        generation: session.generation,
-                    }))
+                    opened().map(Some)
                 } else {
                     Err("managed-route-conflict")
                 };
             }
         }
         Ok(None)
+    }
+
+    fn validate_logical_open(
+        &self,
+        conn_id: ConnectionId,
+        request: &OpenSession,
+    ) -> Option<server_message::Message> {
+        let id = request.logical_open_id.as_str();
+        if id.len() > MAX_LOGICAL_OPEN_ID_BYTES {
+            return Some(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "logical open id is too long".to_string(),
+            }));
+        }
+        if request.managed_launch.is_some() && (id.is_empty() || request.logical_open_attempt == 0)
+        {
+            return Some(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "managed open requires an attempt-aware logical identity".to_string(),
+            }));
+        }
+        let supports_attempt = self.client_supports_logical_open_attempt(conn_id);
+        if (id.is_empty() && request.logical_open_attempt != 0)
+            || (supports_attempt && !id.is_empty() && request.logical_open_attempt == 0)
+            || (!supports_attempt && request.logical_open_attempt != 0)
+        {
+            return Some(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "logical open attempt is incompatible with the negotiated capability"
+                    .to_string(),
+            }));
+        }
+        None
+    }
+
+    fn reserve_logical_open(
+        &mut self,
+        request: &OpenSession,
+        conn_id: ConnectionId,
+        request_id: &RequestId,
+    ) -> Option<HandlerOutcome> {
+        match self.accepted_opens.reserve(request, conn_id, request_id) {
+            LogicalOpenReservation::Start => None,
+            LogicalOpenReservation::Wait => Some(HandlerOutcome::Async(None)),
+            LogicalOpenReservation::Accepted(opened) => Some(HandlerOutcome::Sync(
+                server_message::Message::SessionOpened(opened),
+            )),
+            LogicalOpenReservation::Conflict => Some(HandlerOutcome::Sync(
+                server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: "logical open id was reused with different parameters".to_string(),
+                }),
+            )),
+            LogicalOpenReservation::StaleAttempt => Some(HandlerOutcome::Sync(
+                server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: "logical open attempt is stale".to_string(),
+                }),
+            )),
+            LogicalOpenReservation::AtCapacity => Some(HandlerOutcome::Sync(
+                server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::Internal.into(),
+                    message: "too many retained logical opens".to_string(),
+                }),
+            )),
+            LogicalOpenReservation::TooManyWaiters => Some(HandlerOutcome::Sync(
+                server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::Internal.into(),
+                    message: "too many requests are waiting for this logical open".to_string(),
+                }),
+            )),
+        }
+    }
+
+    fn complete_logical_open(
+        &mut self,
+        request: &OpenSession,
+        message: server_message::Message,
+    ) -> bool {
+        let opened = match &message {
+            server_message::Message::SessionOpened(opened) => Some(opened.clone()),
+            _ => None,
+        };
+        let completion = self.accepted_opens.complete(request, opened);
+        for (conn_id, request_id) in completion.waiters {
+            self.send_server_message(Some(conn_id), Some(&request_id), message.clone());
+        }
+        completion.origin_active
+    }
+
+    fn complete_logical_open_sync(
+        &mut self,
+        request: &OpenSession,
+        message: server_message::Message,
+    ) -> HandlerOutcome {
+        let _ = self.complete_logical_open(request, message.clone());
+        HandlerOutcome::Sync(message)
     }
 
     fn handle_open_session(
@@ -5208,42 +5711,61 @@ impl ServerModel {
         mut msg: OpenSession,
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
-        if msg.managed_launch.is_none() {
-            return self.open_session_ready(conn_id, msg, None, ctx);
+        if let Some(response) = self.validate_logical_open(conn_id, &msg) {
+            return HandlerOutcome::Sync(response);
         }
-        if !self.client_supports_managed_fleet(conn_id)
-            || !self.client_supports_agent_account_routing(conn_id)
+        // Capabilities belong to this requester, not to the cached logical
+        // open. Gate before Accepted/InFlight lookup so a weaker retry cannot
+        // inherit a managed result or register as a waiter.
+        if msg.managed_launch.is_some()
+            && (!self.client_supports_managed_fleet(conn_id)
+                || !self.client_supports_agent_account_routing(conn_id))
         {
             return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                 code: ErrorCode::InvalidRequest.into(),
-                message: "managed-agent-fleet-v1 capability was not negotiated".to_string(),
+                message: "verified managed-open capabilities were not negotiated".to_string(),
             }));
+        }
+        let logical_request = msg.clone();
+        if let Some(outcome) = self.reserve_logical_open(&logical_request, conn_id, request_id) {
+            return outcome;
+        }
+        if msg.managed_launch.is_none() {
+            let HandlerOutcome::Sync(message) = self.open_session_ready(conn_id, msg, None, ctx)
+            else {
+                unreachable!("ready session creation is synchronous")
+            };
+            let _ = self.complete_logical_open(&logical_request, message.clone());
+            return HandlerOutcome::Sync(message);
         }
         let plan = match managed_launch_plan(&self.host_id, &mut msg) {
             Ok(plan) => plan,
             Err(code) => {
-                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                let message = server_message::Message::Error(ErrorResponse {
                     code: ErrorCode::InvalidRequest.into(),
                     message: format!("managed launch rejected: {code}"),
-                }));
+                });
+                return self.complete_logical_open_sync(&logical_request, message);
             }
         };
         match self.existing_managed_launch(&plan, None) {
             Ok(Some(_)) | Ok(None) => {}
             Err(code) => {
-                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                let message = server_message::Message::Error(ErrorResponse {
                     code: ErrorCode::InvalidRequest.into(),
                     message: format!("managed launch rejected: {code}"),
-                }));
+                });
+                return self.complete_logical_open_sync(&logical_request, message);
             }
         }
         let daemon_floor = match self.managed_min_available_bytes {
             Ok(floor) => floor,
             Err(error) => {
-                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                let message = server_message::Message::Error(ErrorResponse {
                     code: ErrorCode::InvalidRequest.into(),
                     message: format!("managed launch rejected: {}", error.protocol_code()),
-                }));
+                });
+                return self.complete_logical_open_sync(&logical_request, message);
             }
         };
         let policy = match super::managed_fleet::HeadroomPolicy::new(
@@ -5253,21 +5775,35 @@ impl ServerModel {
         ) {
             Ok(policy) => policy,
             Err(error) => {
-                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                let message = server_message::Message::Error(ErrorResponse {
                     code: ErrorCode::InvalidRequest.into(),
                     message: format!("managed launch rejected: {}", error.protocol_code()),
-                }));
+                });
+                return self.complete_logical_open_sync(&logical_request, message);
             }
         };
         let collected_at = now_epoch_millis();
         let request_id_for_response = request_id.clone();
+        let request_id_for_error = request_id.clone();
+        let logical_request_for_error = logical_request.clone();
         let plan_for_preflight = plan.clone();
         #[cfg(test)]
         let fresh_routes_for_test = self.fresh_agent_account_routes_for_test.clone();
-        let handle = self.spawn_blocking_request_handler(
+        #[cfg(test)]
+        let preflight_gate_for_test = self.managed_preflight_gate_for_test.clone();
+        let handle = self.spawn_blocking_request_handler_with_error(
             request_id.clone(),
-            conn_id,
             move || {
+                #[cfg(test)]
+                if let Some(gate) = preflight_gate_for_test {
+                    let (state, condition) = &*gate;
+                    let mut state = state.lock().unwrap();
+                    state.0 = true;
+                    condition.notify_all();
+                    while !state.1 {
+                        state = condition.wait(state).unwrap();
+                    }
+                }
                 #[cfg(test)]
                 let routes = match fresh_routes_for_test {
                     Some(routes) => routes,
@@ -5280,6 +5816,14 @@ impl ServerModel {
                 (routes, route_identity, snapshot)
             },
             move |me, (routes, route_identity, snapshot), ctx| {
+                // `spawn_blocking` work may finish after the last client-side
+                // acknowledgement window was aborted. For retry-safe opens,
+                // check that a logical requester remains before any path can
+                // allocate a PTY or launch an agent. Legacy opens remain tied
+                // to the request task's existing abort handle.
+                if !me.accepted_opens.has_active_requester(&logical_request) {
+                    return;
+                }
                 me.agent_account_routes.replace(routes);
                 let project_current = plan.project_identity_is_current();
                 let route_current = route_identity.as_ref().is_ok_and(|expected| {
@@ -5341,7 +5885,24 @@ impl ServerModel {
                         }),
                     },
                 };
-                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+                if me.complete_logical_open(&logical_request, message.clone()) {
+                    me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+                }
+            },
+            move |me, error, _ctx| {
+                log::error!(
+                    "OpenSession blocking preflight failed (request_id={request_id_for_error}): {error}"
+                );
+                let message = server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::Internal.into(),
+                    message: "Internal blocking operation failed".to_string(),
+                });
+                if me.complete_logical_open(
+                    &logical_request_for_error,
+                    message.clone(),
+                ) {
+                    me.send_server_message(Some(conn_id), Some(&request_id_for_error), message);
+                }
             },
             ctx,
         );
@@ -5448,6 +6009,8 @@ impl ServerModel {
         let async_leader = match async_io::Async::new(std::fs::File::from(leader_fd)) {
             Ok(a) => std::sync::Arc::new(a),
             Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
                 return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                     code: ErrorCode::Internal.into(),
                     message: format!("failed to wrap session pty: {e}"),
@@ -5674,10 +6237,13 @@ impl ServerModel {
         }
 
         log::info!("Daemon: opened session {session_id} ({rows}x{cols}, shell={shell})");
-        HandlerOutcome::Sync(server_message::Message::SessionOpened(SessionOpened {
+        let opened = SessionOpened {
             session_id,
             generation,
-        }))
+            requires_attach: false,
+            expected_agent_binding: None,
+        };
+        HandlerOutcome::Sync(server_message::Message::SessionOpened(opened))
     }
 
     /// Queues input bytes for the session's ordered writer task.
@@ -5820,6 +6386,12 @@ impl ServerModel {
         let Some(expected_proto) = msg.expected_agent_binding.clone() else {
             return self.handle_attach_session(conn_id, msg);
         };
+        if managed_session && !self.client_supports_agent_pty_binding(conn_id) {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "managed attach requires agent-pty-binding-v2".to_string(),
+            }));
+        }
         if !self.client_supports_agent_pty_binding(conn_id) {
             return self.handle_attach_session(conn_id, msg);
         }
@@ -6305,6 +6877,7 @@ impl ServerModel {
         };
         for id in aged {
             if let Some(mut session) = self.sessions.remove(&id) {
+                self.accepted_opens.retain_session_tombstone(&id);
                 self.agent_pty_bindings.remove_pty(&id, session.generation);
                 let _ = session.child.kill();
                 let _ = session.child.wait();
@@ -6338,6 +6911,7 @@ impl ServerModel {
                     break;
                 }
                 if let Some(mut session) = self.sessions.remove(&id) {
+                    self.accepted_opens.retain_session_tombstone(&id);
                     self.agent_pty_bindings.remove_pty(&id, session.generation);
                     over = over.saturating_sub(session.ring.len());
                     let _ = session.child.kill();
@@ -6499,6 +7073,7 @@ impl ServerModel {
             .sessions
             .remove(session_id)
             .ok_or(super::fleet_memory::MemoryDiagnostic::ProcessIdentityChanged)?;
+        self.accepted_opens.retain_session_tombstone(session_id);
         self.agent_pty_bindings
             .remove_pty(session_id, session.generation);
         let _ = session.child.kill();
@@ -6538,6 +7113,8 @@ impl ServerModel {
         let Some(mut session) = self.sessions.remove(&msg.session_id) else {
             return;
         };
+        self.accepted_opens
+            .retain_session_tombstone(&msg.session_id);
         self.agent_pty_bindings
             .remove_pty(&msg.session_id, session.generation);
         let _ = session.child.kill();
@@ -6605,6 +7182,7 @@ impl ServerModel {
         let Some(mut session) = self.sessions.remove(session_id) else {
             return;
         };
+        self.accepted_opens.retain_session_tombstone(session_id);
         self.agent_pty_bindings
             .remove_pty(session_id, session.generation);
         let exit_code = session.child.wait().ok().and_then(|s| s.code());

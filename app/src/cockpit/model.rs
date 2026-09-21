@@ -708,8 +708,6 @@ impl CockpitModel {
             .detach();
     }
 
-    /// The user-overridden display color for an account key, if any (hex string
-    /// like `#22C55E`; the renderer parses/validates it).
     /// Set (or clear) an account's alias, persisted to `instances.json` — the
     /// one place overrides live (A1). Returns the IO error so the caller can
     /// toast it: a write that silently did nothing would be the worst outcome.
@@ -727,6 +725,9 @@ impl CockpitModel {
         zaplex_cockpit::set_label_override(&instances_path(&home), account_key, alias)
     }
 
+    /// The stored user color override for an account key, if any. Native
+    /// Cockpit surfaces resolve colors through theme roles, but the shared
+    /// override store remains the single owner of this account preference.
     pub fn override_color(&self, key: &str) -> Option<&str> {
         self.overrides.color_for(key)
     }

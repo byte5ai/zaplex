@@ -25,6 +25,21 @@ pub const FEATURE_SESSION_HOST: &str = "session-host";
 /// and duplicate execution across reconnects.
 pub const FEATURE_STARTUP_COMMAND_ACK: &str = "startup-command-ack";
 
+/// Versioned capability for idempotent `OpenSession` delivery.
+///
+/// Both peers must advertise this feature before a client may retry an
+/// unacknowledged open with the same `logical_open_id`. An older daemon ignores
+/// that field, so retrying against it could create a second PTY.
+pub const FEATURE_LOGICAL_OPEN_ID_V1: &str = "logical-open-id-v1";
+
+/// Versioned capability for attempt-aware logical-open requester lifetimes.
+///
+/// The additive `OpenSession.logical_open_attempt` lets a retry supersede an
+/// older half-open transport attempt. Clients must not retry an ambiguous open
+/// unless both peers advertise this feature; logical-open-id-v1 alone prevents
+/// duplicate PTYs but cannot prove that every real requester has gone away.
+pub const FEATURE_LOGICAL_OPEN_ATTEMPT_V1: &str = "logical-open-attempt-v1";
+
 /// Reserved capability name for the Phase B3 native UDP transport (mosh-grade
 /// roaming + low latency). **Not yet advertised** by [`supported_features`] —
 /// the transport is unimplemented; this only reserves the negotiation name so
@@ -129,6 +144,15 @@ pub const FEATURE_MULTIPLEXER_INVENTORY_V1: &str = "multiplexer-inventory-v1";
 /// generation-checked lifecycle, and explicit memory provenance.
 pub const FEATURE_MANAGED_AGENT_FLEET_V1: &str = "managed-agent-fleet-v1";
 
+/// Versioned capability for managed-open completion through authoritative
+/// generation- and foreground-agent-checked attach.
+///
+/// Peers without this feature, logical-open-id-v1,
+/// logical-open-attempt-v1, or agent-pty-binding-v2 may still decode the
+/// additive fields, but must not start a managed launch because they cannot
+/// safely complete an existing-session or lost-ack open.
+pub const FEATURE_MANAGED_OPEN_ATTACH_V1: &str = "managed-open-attach-v1";
+
 /// A persistent session identifier assigned by the daemon.
 ///
 /// Unlike the protocol's existing `session_id: uint64` (which is the client's
@@ -200,9 +224,15 @@ pub fn supported_features() -> Vec<String> {
     {
         features.push(FEATURE_SESSION_HOST.to_string());
         features.push(FEATURE_STARTUP_COMMAND_ACK.to_string());
+        features.push(FEATURE_LOGICAL_OPEN_ID_V1.to_string());
+        features.push(FEATURE_LOGICAL_OPEN_ATTEMPT_V1.to_string());
         features.push(FEATURE_AGENT_PTY_BINDING.to_string());
         features.push(FEATURE_AGENT_PTY_BINDING_V2.to_string());
         features.push(FEATURE_MULTIPLEXER_INVENTORY_V1.to_string());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        features.push(FEATURE_MANAGED_OPEN_ATTACH_V1.to_string());
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
@@ -223,6 +253,8 @@ pub fn supported_client_features() -> Vec<String> {
     vec![
         FEATURE_SESSION_HOST.to_string(),
         FEATURE_STARTUP_COMMAND_ACK.to_string(),
+        FEATURE_LOGICAL_OPEN_ID_V1.to_string(),
+        FEATURE_LOGICAL_OPEN_ATTEMPT_V1.to_string(),
         FEATURE_AGENT_INVENTORY.to_string(),
         FEATURE_AGENT_ACCOUNT_ROUTING_V1.to_string(),
         FEATURE_AGENT_MODEL_DISCOVERY_V1.to_string(),
@@ -236,6 +268,7 @@ pub fn supported_client_features() -> Vec<String> {
         FEATURE_HOST_EXEC.to_string(),
         FEATURE_MULTIPLEXER_INVENTORY_V1.to_string(),
         FEATURE_MANAGED_AGENT_FLEET_V1.to_string(),
+        FEATURE_MANAGED_OPEN_ATTACH_V1.to_string(),
     ]
 }
 

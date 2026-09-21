@@ -161,6 +161,8 @@ pub enum LeftPanelEvent {
         server: warp_ssh_manager::SshServerInfo,
         mode: warp_ssh_manager::MultiplexerAttachMode,
         target: String,
+        session_name: String,
+        window_count: u32,
     },
 }
 
@@ -379,12 +381,16 @@ impl LeftPanelView {
                     server,
                     mode,
                     target,
+                    session_name,
+                    window_count,
                 } => {
                     ctx.emit(LeftPanelEvent::OpenMultiplexerSession {
                         node_id: node_id.clone(),
                         server: server.clone(),
                         mode: *mode,
                         target: target.clone(),
+                        session_name: session_name.clone(),
+                        window_count: *window_count,
                     });
                 }
                 SshManagerPanelEvent::PersistenceError(msg) => {

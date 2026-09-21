@@ -29,6 +29,7 @@ use warpui::{
     fonts::{FamilyId, Properties},
     keymap::FixedBinding,
     platform::Cursor,
+    text_layout::ClipConfig,
     ui_components::components::UiComponent,
     Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext,
 };
@@ -50,10 +51,25 @@ const DROP_SHADOW_COLOR: ColorU = ColorU {
     a: 48,
 };
 const SECONDARY_TEXT_RATIO: f32 = 0.9;
+const SPLIT_SUBMENU_TRIGGER_WIDTH: f32 = 28.;
 static NEXT_SUBMENU_POSITION_NAMESPACE: AtomicU64 = AtomicU64::new(1);
 
 fn next_submenu_position_namespace() -> u64 {
     NEXT_SUBMENU_POSITION_NAMESPACE.fetch_add(1, Ordering::Relaxed)
+}
+
+fn should_reverse_submenu_layout(
+    origin_x: f32,
+    window_width: f32,
+    submenu_width: f32,
+    num_submenus: usize,
+) -> bool {
+    if num_submenus <= 1 {
+        return false;
+    }
+    let extra_menus_width =
+        ((num_submenus - 1) as f32 * (submenu_width - SUBMENU_OVERLAP)) + SUBMENU_OVERLAP;
+    origin_x + submenu_width + extra_menus_width >= window_width
 }
 
 #[derive(Clone, Debug)]
@@ -77,6 +93,13 @@ pub struct SubMenu<A: Action + Clone = ()> {
     last_selection_source: Option<MenuSelectionSource>,
     /// Contains variant specific state.
     menu_variant: MenuVariant,
+    /// Records whether the most recent Escape closed only a nested split submenu.
+    /// Accessibility contents are computed after action handling, so the resulting
+    /// selection state alone cannot distinguish this from a fully closed submenu.
+    last_escape_closed_submenu: bool,
+    /// Records whether the most recent Right Arrow actually opened a submenu.
+    /// Accessibility contents are computed after the action has mutated state.
+    last_open_submenu_succeeded: bool,
 }
 
 /// Menu contains the menu items and defines the logic for managing the actions and rendering of the
@@ -113,6 +136,9 @@ pub struct Menu<A: Action + Clone = ()> {
 
     /// Optional safe triangle for suppressing intermediate hovers when moving toward a sidecar.
     safe_triangle: Option<SafeTriangle>,
+
+    /// Whether the current safe-triangle target belongs to a rendered native submenu.
+    automatic_safe_triangle_target: bool,
 
     /// When true, the menu's container uses flat bottom corners (radius 0).
     /// Used when an external footer is rendered below the menu in the same visual container.
@@ -274,18 +300,22 @@ impl MenuItemLabel {
         menu_width: f32,
         is_selected: bool,
         is_hovered: bool,
+        ellipsize_label: bool,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
         match self {
-            Self::Text(label) => Shrinkable::new(
-                4.,
-                Text::new_inline(label.clone(), font_family, font_size)
-                    .with_color(primary_color.into())
-                    .autosize_text(MINIMUM_MENU_ITEM_FONT_SIZE)
-                    .finish(),
-            )
-            .finish(),
+            Self::Text(label) => {
+                let mut text = Text::new_inline(label.clone(), font_family, font_size)
+                    .with_color(primary_color.into());
+                if ellipsize_label {
+                    text = text.soft_wrap(false).with_clip(ClipConfig::ellipsis());
+                } else {
+                    text = text.autosize_text(MINIMUM_MENU_ITEM_FONT_SIZE);
+                }
+                let shrink_weight = if ellipsize_label { 1. } else { 4. };
+                Shrinkable::new(shrink_weight, text.finish()).finish()
+            }
             Self::MultilineText { label, max_lines } => {
                 let max_height_for_n_lines =
                     *max_lines as f32 * font_size * appearance.line_height_ratio();
@@ -429,6 +459,15 @@ pub struct MenuItemFields<A: Action + Clone> {
     /// Optional override for the leading icon size in logical pixels. When
     /// `None`, the icon is sized to `appearance.ui_font_size()`.
     icon_size_override: Option<f32>,
+    /// When present on a submenu, the row is split into an independently actionable
+    /// primary label and a fixed-width trailing submenu trigger.
+    split_submenu_trigger_tooltip: Option<String>,
+    /// Disables only the primary action in a split-submenu row while leaving its
+    /// trailing submenu trigger interactive.
+    split_submenu_primary_disabled: bool,
+    /// Keeps compact identity labels at the normal font size and clips them with
+    /// an ellipsis instead of shrinking the glyphs to fit.
+    ellipsize_label: bool,
 }
 
 impl<A: Action + Clone> std::fmt::Debug for MenuItemFields<A> {
@@ -467,6 +506,9 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
+            split_submenu_trigger_tooltip: None,
+            split_submenu_primary_disabled: false,
+            ellipsize_label: false,
         }
     }
 
@@ -494,6 +536,9 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
+            split_submenu_trigger_tooltip: None,
+            split_submenu_primary_disabled: false,
+            ellipsize_label: false,
         }
     }
 
@@ -524,6 +569,9 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
+            split_submenu_trigger_tooltip: None,
+            split_submenu_primary_disabled: false,
+            ellipsize_label: false,
         }
     }
 
@@ -557,6 +605,9 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
+            split_submenu_trigger_tooltip: None,
+            split_submenu_primary_disabled: false,
+            ellipsize_label: false,
         }
     }
 
@@ -588,6 +639,9 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
+            split_submenu_trigger_tooltip: None,
+            split_submenu_primary_disabled: false,
+            ellipsize_label: false,
         }
     }
 
@@ -618,6 +672,9 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
+            split_submenu_trigger_tooltip: None,
+            split_submenu_primary_disabled: false,
+            ellipsize_label: false,
         }
     }
 
@@ -645,6 +702,9 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
+            split_submenu_trigger_tooltip: None,
+            split_submenu_primary_disabled: false,
+            ellipsize_label: false,
         }
     }
 
@@ -688,6 +748,9 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: self.right_side_label,
             override_hover_background_color: self.override_hover_background_color,
             icon_size_override: self.icon_size_override,
+            split_submenu_trigger_tooltip: self.split_submenu_trigger_tooltip,
+            split_submenu_primary_disabled: self.split_submenu_primary_disabled,
+            ellipsize_label: self.ellipsize_label,
         }
     }
 
@@ -785,6 +848,21 @@ impl<A: Action + Clone> MenuItemFields<A> {
         self
     }
 
+    /// Render a submenu row as a primary action plus a fixed trailing `⋯` trigger.
+    /// The primary action and submenu trigger remain separate pointer targets.
+    pub fn with_split_submenu_trigger(mut self, tooltip: impl Into<String>) -> Self {
+        self.split_submenu_trigger_tooltip = Some(tooltip.into());
+        self.ellipsize_label = true;
+        self
+    }
+
+    /// Disable only the primary action of a split-submenu row. The fixed trailing
+    /// trigger and its child actions remain available.
+    pub fn with_split_submenu_primary_disabled(mut self, disabled: bool) -> Self {
+        self.split_submenu_primary_disabled = disabled;
+        self
+    }
+
     pub(crate) fn with_tooltip_position(mut self, position: MenuTooltipPosition) -> Self {
         self.tooltip_position = position;
         self
@@ -813,6 +891,26 @@ impl<A: Action + Clone> MenuItemFields<A> {
 
     pub fn is_disabled(&self) -> bool {
         self.disabled
+    }
+
+    #[cfg(test)]
+    pub fn has_split_submenu_trigger(&self) -> bool {
+        self.split_submenu_trigger_tooltip.is_some()
+    }
+
+    #[cfg(test)]
+    pub fn is_split_submenu_primary_disabled(&self) -> bool {
+        self.split_submenu_primary_disabled
+    }
+
+    #[cfg(test)]
+    pub fn ellipsizes_label(&self) -> bool {
+        self.ellipsize_label
+    }
+
+    #[cfg(test)]
+    pub fn tooltip(&self) -> Option<&str> {
+        self.tooltip.as_deref()
     }
 
     pub fn get_a11y_text(&self) -> &str {
@@ -1059,6 +1157,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
                 menu_width,
                 is_selected,
                 state.is_hovered(),
+                self.ellipsize_label,
                 appearance,
                 app,
             );
@@ -1121,6 +1220,10 @@ impl<A: Action + Clone> MenuItemFields<A> {
                     CrossAxisAlignment::Center
                 };
 
+            if self.ellipsize_label {
+                label_row = label_row.with_main_axis_size(MainAxisSize::Max);
+            }
+
             let container = Container::new(
                 label_row
                     .with_main_axis_alignment(MainAxisAlignment::SpaceEvenly)
@@ -1178,13 +1281,14 @@ impl<A: Action + Clone> MenuItemFields<A> {
         ret = ret.on_hover(move |is_hovered, ctx, _, position| {
             if has_submenu && is_enabled {
                 ctx.dispatch_typed_action(if is_hovered {
-                    MenuAction::HoverSubmenuWithChildren(
+                    MenuAction::HoverSubmenuWithChildren {
                         depth,
-                        SelectAction::Index {
+                        selection: SelectAction::Index {
                             row: row_index,
                             item: item_index,
                         },
-                    )
+                        position,
+                    }
                 } else {
                     MenuAction::UnhoverSubmenuParent(depth, row_index)
                 });
@@ -1219,6 +1323,12 @@ impl<A: Action + Clone> MenuItemFields<A> {
                         ctx.dispatch_typed_action(action.clone());
                     }
                     ctx.dispatch_typed_action(MenuAction::Close(true));
+                } else if has_submenu {
+                    ctx.dispatch_typed_action(MenuAction::Select(SelectAction::Index {
+                        row: row_index,
+                        item: item_index,
+                    }));
+                    ctx.dispatch_typed_action(MenuAction::OpenSubmenu);
                 }
             });
         }
@@ -1296,9 +1406,13 @@ impl<A: Action + Clone> MenuItem<A> {
             MenuItem::Item(_) => Some(1),
             MenuItem::Separator => None,
             MenuItem::ItemsRow { items } => Some(items.len()),
-            MenuItem::Submenu { menu, .. } => {
-                // This includes the label as well.
-                Some(menu.items_len() + 1)
+            MenuItem::Submenu { fields, menu } => {
+                if fields.split_submenu_trigger_tooltip.is_some() {
+                    Some(1)
+                } else {
+                    // This includes the label as well.
+                    Some(menu.items_len() + 1)
+                }
             }
             MenuItem::Header { clickable, .. } => Some(if *clickable { 1 } else { 0 }),
         }
@@ -1323,7 +1437,7 @@ impl<A: Action + Clone> MenuItem<A> {
                 .any(|i| !i.disabled && !i.no_interaction_on_hover),
             // Separator is simply a non-selectable option in the menu list.
             MenuItem::Separator => false,
-            MenuItem::Submenu { menu, .. } => !menu.items.is_empty(),
+            MenuItem::Submenu { fields, menu } => !fields.disabled && !menu.items.is_empty(),
             MenuItem::Header { clickable, .. } => *clickable,
         }
     }
@@ -1410,22 +1524,98 @@ impl<A: Action + Clone> MenuItem<A> {
             .with_padding_right(MENU_ITEM_HORIZONTAL_PADDING)
             .finish(),
             MenuItem::Submenu { fields, .. } => {
-                fields.render(
-                    menu_background_color,
-                    depth,
-                    row_index,
-                    0, // there's only 1 item
-                    dispatch_item_actions,
-                    is_row_selected,
-                    ignore_hover_when_covered,
-                    safe_zone_suppresses_hover,
-                    submenu_being_shown_for_item,
-                    appearance,
-                    MENU_ITEM_VERTICAL_PADDING,
-                    MENU_ITEM_HORIZONTAL_PADDING,
-                    menu_width,
-                    app,
-                )
+                if let Some(tooltip) = &fields.split_submenu_trigger_tooltip {
+                    let mut primary_fields = fields.clone();
+                    primary_fields.has_submenu = false;
+                    primary_fields.split_submenu_trigger_tooltip = None;
+                    primary_fields.disabled =
+                        fields.disabled || fields.split_submenu_primary_disabled;
+
+                    let trigger_label = tooltip.clone();
+                    let mut trigger_fields = MenuItemFields::new_with_custom_label(
+                        Arc::new(|is_selected, is_hovered, appearance, _| {
+                            let theme = appearance.theme();
+                            let background = if is_selected || is_hovered {
+                                theme.accent_button_color()
+                            } else {
+                                theme.surface_2()
+                            };
+                            ConstrainedBox::new(
+                                icons::Icon::DotsHorizontal
+                                    .to_warpui_icon(theme.main_text_color(background))
+                                    .finish(),
+                            )
+                            .with_width(appearance.ui_font_size())
+                            .with_height(appearance.ui_font_size())
+                            .finish()
+                        }),
+                        Some(trigger_label.clone()),
+                    )
+                    .with_tooltip(tooltip.clone())
+                    .with_padding_override(MENU_ITEM_VERTICAL_PADDING, 0.);
+                    trigger_fields.has_submenu = true;
+                    trigger_fields.disabled = fields.disabled;
+
+                    let primary_width = menu_width - SPLIT_SUBMENU_TRIGGER_WIDTH;
+                    let primary = ConstrainedBox::new(primary_fields.render(
+                        menu_background_color,
+                        depth,
+                        row_index,
+                        0,
+                        dispatch_item_actions,
+                        is_row_selected && selected_item_in_row != Some(1),
+                        ignore_hover_when_covered,
+                        safe_zone_suppresses_hover,
+                        submenu_being_shown_for_item,
+                        appearance,
+                        MENU_ITEM_VERTICAL_PADDING,
+                        MENU_ITEM_HORIZONTAL_PADDING,
+                        primary_width,
+                        app,
+                    ))
+                    .with_width(primary_width)
+                    .finish();
+                    let trigger = ConstrainedBox::new(trigger_fields.render(
+                        menu_background_color,
+                        depth,
+                        row_index,
+                        1,
+                        dispatch_item_actions,
+                        is_row_selected && selected_item_in_row == Some(1),
+                        ignore_hover_when_covered,
+                        safe_zone_suppresses_hover,
+                        submenu_being_shown_for_item,
+                        appearance,
+                        MENU_ITEM_VERTICAL_PADDING,
+                        0.,
+                        SPLIT_SUBMENU_TRIGGER_WIDTH,
+                        app,
+                    ))
+                    .with_width(SPLIT_SUBMENU_TRIGGER_WIDTH)
+                    .finish();
+
+                    Flex::row()
+                        .with_main_axis_size(MainAxisSize::Max)
+                        .with_children([primary, trigger])
+                        .finish()
+                } else {
+                    fields.render(
+                        menu_background_color,
+                        depth,
+                        row_index,
+                        0, // there's only 1 item
+                        dispatch_item_actions,
+                        is_row_selected,
+                        ignore_hover_when_covered,
+                        safe_zone_suppresses_hover,
+                        submenu_being_shown_for_item,
+                        appearance,
+                        MENU_ITEM_VERTICAL_PADDING,
+                        MENU_ITEM_HORIZONTAL_PADDING,
+                        menu_width,
+                        app,
+                    )
+                }
             }
             MenuItem::Header {
                 fields,
@@ -1528,7 +1718,11 @@ pub enum MenuAction {
     OpenSubmenu,
     /// Fires when the mouse leaves the Menu item containing a submenu.
     UnhoverSubmenuParent(usize, usize),
-    HoverSubmenuWithChildren(usize, SelectAction),
+    HoverSubmenuWithChildren {
+        depth: usize,
+        selection: SelectAction,
+        position: Vector2F,
+    },
     /// Fires when the mouse enters a submenu item with no children
     HoverSubmenuLeafNode {
         depth: usize,
@@ -1538,6 +1732,7 @@ pub enum MenuAction {
     },
     CloseSubmenu(usize),
     Close(bool),
+    Escape,
     Enter,
 }
 
@@ -1556,11 +1751,7 @@ pub fn init(app: &mut AppContext) {
             id!(Menu::<()>::ui_name()),
         ),
         FixedBinding::new("right", MenuAction::OpenSubmenu, id!(Menu::<()>::ui_name())),
-        FixedBinding::new(
-            "escape",
-            MenuAction::Close(false),
-            id!(Menu::<()>::ui_name()),
-        ),
+        FixedBinding::new("escape", MenuAction::Escape, id!(Menu::<()>::ui_name())),
         FixedBinding::new("enter", MenuAction::Enter, id!(Menu::<()>::ui_name())),
     ]);
 }
@@ -1585,6 +1776,8 @@ impl<A: Action + Clone> SubMenu<A> {
             last_selection_source: None,
             height: DEFAULT_HEIGHT,
             menu_variant: Default::default(),
+            last_escape_closed_submenu: false,
+            last_open_submenu_succeeded: false,
         };
         submenu.assign_nested_depths();
         submenu
@@ -1618,6 +1811,8 @@ impl<A: Action + Clone> SubMenu<A> {
         self.selected_item_index = None;
         self.hovered_row_index = None;
         self.last_selection_source = None;
+        self.last_escape_closed_submenu = false;
+        self.last_open_submenu_succeeded = false;
         self.clear_nested_submenu_selections();
         ctx.notify();
     }
@@ -1629,6 +1824,8 @@ impl<A: Action + Clone> SubMenu<A> {
                 menu.selected_item_index = None;
                 menu.hovered_row_index = None;
                 menu.last_selection_source = None;
+                menu.last_escape_closed_submenu = false;
+                menu.last_open_submenu_succeeded = false;
                 menu.clear_nested_submenu_selections();
             }
         }
@@ -1803,7 +2000,6 @@ impl<A: Action + Clone> SubMenu<A> {
         );
     }
 
-    #[cfg(test)]
     fn selected_submenu(&self) -> Option<&SubMenu<A>> {
         let selected_row_index = self.selected_row_index?;
         match self.items.get(selected_row_index)? {
@@ -1835,6 +2031,78 @@ impl<A: Action + Clone> SubMenu<A> {
                 menu.active_menu_mut()
             }
             _ => self,
+        }
+    }
+
+    fn active_menu(&self) -> &Self {
+        match self.selected_row_index {
+            Some(selected_row_index)
+                if matches!(
+                    self.items.get(selected_row_index),
+                    Some(MenuItem::Submenu { menu, .. }) if menu.selected_row_index.is_some()
+                ) =>
+            {
+                let Some(MenuItem::Submenu { menu, .. }) = self.items.get(selected_row_index)
+                else {
+                    unreachable!("checked selected submenu above");
+                };
+                menu.active_menu()
+            }
+            _ => self,
+        }
+    }
+
+    fn selected_accessibility_label(&self) -> String {
+        let active_menu = self.active_menu();
+        let Some(selected_row_index) = active_menu.selected_row_index else {
+            return String::new();
+        };
+        let Some(item) = active_menu.items.get(selected_row_index) else {
+            return String::new();
+        };
+
+        match item {
+            MenuItem::Item(fields) => {
+                crate::t!("menu-a11y-item-selected", item = fields.get_a11y_text()).to_string()
+            }
+            MenuItem::ItemsRow { items } => {
+                let selected_item_text = items
+                    .get(active_menu.selected_item_index.unwrap_or_default())
+                    .map_or_else(|| "", |item| item.get_a11y_text());
+                crate::t!("menu-a11y-item-selected", item = selected_item_text).to_string()
+            }
+            MenuItem::Separator => String::new(),
+            MenuItem::Submenu { fields, .. } => {
+                if active_menu.has_visible_submenu_at_depth(active_menu.depth) {
+                    crate::t!(
+                        "menu-a11y-submenu-expanded-label",
+                        item = fields.get_a11y_text()
+                    )
+                    .to_string()
+                } else {
+                    crate::t!("menu-a11y-item-selected", item = fields.get_a11y_text()).to_string()
+                }
+            }
+            MenuItem::Header { fields, .. } => {
+                crate::t!("menu-a11y-item-selected", item = fields.get_a11y_text()).to_string()
+            }
+        }
+    }
+
+    fn selected_accessibility_instructions(&self) -> String {
+        let active_menu = self.active_menu();
+        if matches!(active_menu.selected_item(), Some(MenuItem::Submenu { .. })) {
+            crate::t!("menu-a11y-select-submenu-instructions").to_string()
+        } else {
+            crate::t!("menu-a11y-select-instructions").to_string()
+        }
+    }
+
+    fn escape_accessibility_label(&self) -> String {
+        if self.last_escape_closed_submenu {
+            crate::t!("menu-a11y-submenu-closed").to_string()
+        } else {
+            crate::t!("menu-a11y-menu-closed").to_string()
         }
     }
 
@@ -1870,6 +2138,33 @@ impl<A: Action + Clone> SubMenu<A> {
         submenu.select_first_selectable(position_namespace, ctx)
     }
 
+    /// Close the deepest open split submenu while keeping its parent menu active.
+    fn close_active_split_submenu(&mut self, ctx: &mut ViewContext<Menu<A>>) -> bool {
+        let Some(selected_row_index) = self.selected_row_index else {
+            return false;
+        };
+        let selected_item_index = self.selected_item_index;
+        let Some(MenuItem::Submenu { fields, menu }) = self.items.get_mut(selected_row_index)
+        else {
+            return false;
+        };
+
+        if menu.close_active_split_submenu(ctx) {
+            return true;
+        }
+        if fields.split_submenu_trigger_tooltip.is_none()
+            || (selected_item_index != Some(1) && menu.selected_row_index.is_none())
+        {
+            return false;
+        }
+
+        menu.reset_selection(ctx);
+        self.selected_item_index = Some(0);
+        self.hovered_row_index = Some(selected_row_index);
+        ctx.notify();
+        true
+    }
+
     fn selected_action_for_enter(
         &mut self,
         position_namespace: u64,
@@ -1884,9 +2179,17 @@ impl<A: Action + Clone> SubMenu<A> {
             MenuItem::ItemsRow { items } => items
                 .get(selected_item_index)
                 .and_then(|fields| fields.on_select_action.clone()),
-            MenuItem::Submenu { menu, .. } => {
-                menu.select_first_selectable(position_namespace, ctx);
-                None
+            MenuItem::Submenu { fields, menu } => {
+                if fields.split_submenu_trigger_tooltip.is_some() && selected_item_index == 0 {
+                    if fields.disabled || fields.split_submenu_primary_disabled {
+                        None
+                    } else {
+                        fields.on_select_action.clone()
+                    }
+                } else {
+                    menu.select_first_selectable(position_namespace, ctx);
+                    None
+                }
             }
             MenuItem::Header {
                 fields, clickable, ..
@@ -1972,6 +2275,28 @@ impl<A: Action + Clone> SubMenu<A> {
         format!("submenu_{position_namespace}_{depth}_{row_index}")
     }
 
+    fn panel_position_id(position_namespace: u64, depth: usize) -> String {
+        format!("submenu_panel_{position_namespace}_{depth}")
+    }
+
+    fn has_visible_submenu_at_depth(&self, depth: usize) -> bool {
+        if self.depth == depth {
+            let Some(selected_row_index) = self.selected_row_index else {
+                return false;
+            };
+            let Some(MenuItem::Submenu { fields, menu }) = self.items.get(selected_row_index)
+            else {
+                return false;
+            };
+            return fields.split_submenu_trigger_tooltip.is_none()
+                || self.selected_item_index == Some(1)
+                || menu.selected_row_index.is_some();
+        }
+
+        self.selected_submenu()
+            .is_some_and(|submenu| submenu.has_visible_submenu_at_depth(depth))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_submenus(
         &self,
@@ -2033,9 +2358,15 @@ impl<A: Action + Clone> SubMenu<A> {
                 let Some(selected_item_row) = self.selected_item() else {
                     return menus;
                 };
-                let MenuItem::Submenu { menu, .. } = selected_item_row else {
+                let MenuItem::Submenu { fields, menu } = selected_item_row else {
                     return menus;
                 };
+                if fields.split_submenu_trigger_tooltip.is_some()
+                    && selected_item != Some(1)
+                    && menu.selected_row_index.is_none()
+                {
+                    return menus;
+                }
                 let child_anchor_position_id =
                     selected_row.map(|row| Self::save_position_id(position_namespace, depth, row));
 
@@ -2123,6 +2454,7 @@ impl<A: Action + Clone> Menu<A> {
             submenu_being_shown_for_item_index: None,
             ignore_hover_when_covered: false,
             safe_triangle: None,
+            automatic_safe_triangle_target: false,
             flatten_bottom_corners: false,
             pinned_footer_builder: None,
             pinned_header_builder: None,
@@ -2194,9 +2526,17 @@ impl<A: Action + Clone> Menu<A> {
     /// Set or clear the target rect for the safe triangle. The rect should be the
     /// bounding box of the sidecar/submenu panel that the user is moving toward.
     pub fn set_safe_zone_target(&mut self, rect: Option<RectF>) {
+        self.automatic_safe_triangle_target = false;
         if let Some(st) = &mut self.safe_triangle {
             st.set_target_rect(rect);
         }
+    }
+
+    #[cfg(test)]
+    pub fn has_safe_zone_target(&self) -> bool {
+        self.safe_triangle
+            .as_ref()
+            .is_some_and(SafeTriangle::has_target_rect)
     }
 
     /// Origin is only used to determine which direction submenus should expand in.
@@ -2290,7 +2630,13 @@ impl<A: Action + Clone> Menu<A> {
     }
 
     pub fn reset_selection(&mut self, ctx: &mut ViewContext<Self>) {
-        self.menu.reset_selection(ctx)
+        self.menu.reset_selection(ctx);
+        if self.automatic_safe_triangle_target {
+            if let Some(st) = &mut self.safe_triangle {
+                st.set_target_rect(None);
+            }
+            self.automatic_safe_triangle_target = false;
+        }
     }
 
     pub fn selected_item(&self) -> Option<MenuItem<A>> {
@@ -2418,63 +2764,40 @@ impl<A: Action + Clone> SubMenu<A> {
         use MenuAction::*;
 
         match action {
-            Select(_) => {
-                let menu_item = match self.selected_item() {
-                    Some(item) => match item {
-                        MenuItem::Item(fields) => format!("{} Selected", fields.get_a11y_text()),
-                        MenuItem::ItemsRow { items } => {
-                            let selected_item_text = items
-                                .get(self.selected_item_index.unwrap_or_default())
-                                .map_or_else(|| "", |item| item.get_a11y_text());
-                            format!("{selected_item_text} Selected")
-                        }
-                        MenuItem::Separator => String::from(""),
-                        MenuItem::Submenu { fields, .. } => {
-                            format!("{} Expanded", fields.get_a11y_text())
-                        }
-                        MenuItem::Header { fields, .. } => {
-                            format!("{} Selected", fields.get_a11y_text())
-                        }
-                    },
-                    None => String::from(""),
-                };
-
-                let instructions = if matches!(self.selected_item(), Some(MenuItem::Submenu { .. }))
-                {
-                    "Press the up key or the down key to select a menu item. Press the right key to open the submenu"
-                } else {
-                    "Press the up key or the down key to select a menu item"
-                };
-
-                Custom(AccessibilityContent::new(
-                    menu_item,
-                    instructions,
-                    WarpA11yRole::TextRole,
-                ))
-            }
-            OpenSubmenu => Custom(AccessibilityContent::new(
-                String::from("Submenu Expanded"),
-                "Press the right key to open the selected submenu",
+            Select(_) => Custom(AccessibilityContent::new(
+                self.selected_accessibility_label(),
+                self.selected_accessibility_instructions(),
                 WarpA11yRole::TextRole,
             )),
+            OpenSubmenu if self.last_open_submenu_succeeded => Custom(AccessibilityContent::new(
+                crate::t!("menu-a11y-submenu-expanded").to_string(),
+                crate::t!("menu-a11y-open-submenu-instructions").to_string(),
+                WarpA11yRole::TextRole,
+            )),
+            OpenSubmenu => ActionAccessibilityContent::Empty,
             CloseSubmenu(_) => Custom(AccessibilityContent::new(
-                String::from("Submenu Closed"),
-                "Removing focus from a submenu will close the submenu",
+                crate::t!("menu-a11y-submenu-closed").to_string(),
+                crate::t!("menu-a11y-close-submenu-instructions").to_string(),
                 WarpA11yRole::TextRole,
             )),
-            Close(_) => Custom(AccessibilityContent::new(
-                String::from("Menu Closed"),
-                "Press the escape key to close the menu",
+            Escape if self.last_escape_closed_submenu => Custom(AccessibilityContent::new(
+                self.escape_accessibility_label(),
+                crate::t!("menu-a11y-submenu-escape-instructions").to_string(),
+                WarpA11yRole::TextRole,
+            )),
+            Close(_) | Escape => Custom(AccessibilityContent::new(
+                self.escape_accessibility_label(),
+                crate::t!("menu-a11y-menu-escape-instructions").to_string(),
                 WarpA11yRole::TextRole,
             )),
             Enter => Custom(AccessibilityContent::new(
-                String::from("Action Selected"),
-                "Press the enter key to execute the selected menu item action",
+                crate::t!("menu-a11y-action-selected").to_string(),
+                crate::t!("menu-a11y-action-instructions").to_string(),
                 WarpA11yRole::TextRole,
             )),
             HoverSubmenuLeafNode { .. }
             | UnhoverSubmenuParent(_, _)
-            | HoverSubmenuWithChildren(_, _) => ActionAccessibilityContent::Empty,
+            | HoverSubmenuWithChildren { .. } => ActionAccessibilityContent::Empty,
         }
     }
 
@@ -2494,13 +2817,14 @@ impl<A: Action + Clone> SubMenu<A> {
         ctx: &mut ViewContext<Menu<A>>,
     ) -> bool {
         let event_depth = match action {
-            MenuAction::HoverSubmenuWithChildren(depth, _)
+            MenuAction::HoverSubmenuWithChildren { depth, .. }
             | MenuAction::UnhoverSubmenuParent(depth, _)
             | MenuAction::CloseSubmenu(depth) => *depth,
             MenuAction::HoverSubmenuLeafNode { depth, .. } => *depth,
             MenuAction::Select(_)
             | MenuAction::OpenSubmenu
             | MenuAction::Close(_)
+            | MenuAction::Escape
             | MenuAction::Enter => return false,
         };
         if event_depth == self.depth {
@@ -2533,7 +2857,9 @@ impl<A: Action + Clone> SubMenu<A> {
             return;
         }
         match action {
-            MenuAction::HoverSubmenuWithChildren(depth, selection) => {
+            MenuAction::HoverSubmenuWithChildren {
+                depth, selection, ..
+            } => {
                 if *depth != self.depth {
                     return;
                 }
@@ -2578,7 +2904,8 @@ impl<A: Action + Clone> SubMenu<A> {
                     .select(*selection, position_namespace, ctx);
             }
             MenuAction::OpenSubmenu => {
-                self.open_selected_submenu(position_namespace, ctx);
+                self.last_open_submenu_succeeded =
+                    self.open_selected_submenu(position_namespace, ctx);
             }
             MenuAction::CloseSubmenu(depth) => {
                 if *depth != self.depth {
@@ -2589,6 +2916,15 @@ impl<A: Action + Clone> SubMenu<A> {
             MenuAction::Close(via_select_item) => ctx.emit(Event::Close {
                 via_select_item: *via_select_item,
             }),
+            MenuAction::Escape => {
+                let closed_submenu = self.close_active_split_submenu(ctx);
+                self.last_escape_closed_submenu = closed_submenu;
+                if !closed_submenu {
+                    ctx.emit(Event::Close {
+                        via_select_item: false,
+                    });
+                }
+            }
             MenuAction::Enter => {
                 if let Some(action) = self.selected_action_for_enter(position_namespace, ctx) {
                     if dispatch_item_actions {
@@ -2617,12 +2953,43 @@ impl<A: Action + Clone> TypedActionView for Menu<A> {
     }
 
     fn handle_action(&mut self, action: &MenuAction, ctx: &mut ViewContext<Self>) {
-        if let MenuAction::HoverSubmenuLeafNode { position, .. } = action {
+        let pointer_event = match action {
+            MenuAction::HoverSubmenuLeafNode {
+                depth, position, ..
+            }
+            | MenuAction::HoverSubmenuWithChildren {
+                depth, position, ..
+            } => Some((*depth, *position)),
+            MenuAction::Select(_)
+            | MenuAction::OpenSubmenu
+            | MenuAction::UnhoverSubmenuParent(_, _)
+            | MenuAction::CloseSubmenu(_)
+            | MenuAction::Close(_)
+            | MenuAction::Escape
+            | MenuAction::Enter => None,
+        };
+        if let Some((depth, position)) = pointer_event {
+            let automatic_target = self
+                .menu
+                .has_visible_submenu_at_depth(depth)
+                .then(|| {
+                    SubMenu::<A>::panel_position_id(
+                        self.submenu_position_namespace,
+                        depth.saturating_add(1),
+                    )
+                })
+                .and_then(|position_id| {
+                    ctx.element_position_by_id_at_last_frame(ctx.window_id(), &position_id)
+                });
             if let Some(st) = &mut self.safe_triangle {
-                if st.should_suppress_hover(*position) {
+                if let Some(target) = automatic_target {
+                    st.set_target_rect(Some(target));
+                    self.automatic_safe_triangle_target = true;
+                }
+                if st.should_suppress_hover(position) {
                     return;
                 }
-                st.update_position(*position);
+                st.update_position(position);
             }
         }
 
@@ -2631,7 +2998,13 @@ impl<A: Action + Clone> TypedActionView for Menu<A> {
             self.dispatch_item_actions,
             self.submenu_position_namespace,
             ctx,
-        )
+        );
+        if self.automatic_safe_triangle_target && !self.menu.has_visible_submenu_at_depth(0) {
+            if let Some(st) = &mut self.safe_triangle {
+                st.set_target_rect(None);
+            }
+            self.automatic_safe_triangle_target = false;
+        }
     }
 }
 
@@ -2645,20 +3018,13 @@ impl<A: Action + Clone> SubMenu<A> {
         num_submenus: usize,
         app: &AppContext,
     ) -> bool {
-        if num_submenus <= 1 {
-            return false;
-        }
-        let extra_menus_width =
-            ((num_submenus - 1) as f32 * (submenu_width - SUBMENU_OVERLAP)) + SUBMENU_OVERLAP;
-        let total_width = submenu_width + extra_menus_width;
         let (Some(window), Some(origin)) = (window, origin) else {
             return false;
         };
         let Some(window) = app.windows().platform_window(window) else {
             return false;
         };
-        let full_menu_end_x = origin.x() + total_width;
-        full_menu_end_x >= window.size().x()
+        should_reverse_submenu_layout(origin.x(), window.size().x(), submenu_width, num_submenus)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2797,9 +3163,11 @@ impl<A: Action + Clone> SubMenu<A> {
                     let Some(saved_position_id) = anchor_position_id else {
                         return;
                     };
+                    let panel_position_id = Self::panel_position_id(position_namespace, depth);
+                    let menu = SavePosition::new(menu.finish(), &panel_position_id).finish();
 
                     stack.add_positioned_overlay_child(
-                        menu.finish(),
+                        menu,
                         OffsetPositioning::offset_from_save_position_element(
                             saved_position_id,
                             vec2f(

@@ -54,6 +54,7 @@ fn clearing_target_rect_clears_state() {
     )));
     tri.update_position(Vector2F::new(100.0, 150.0));
     tri.set_target_rect(None);
+    assert!(!tri.has_target_rect());
     assert!(!tri.should_suppress_hover(Vector2F::new(150.0, 140.0)));
 }
 
@@ -109,6 +110,18 @@ fn leaving_after_entering_target_is_not_suppressed() {
     tri.update_position(Vector2F::new(250.0, 140.0));
 
     assert!(!tri.should_suppress_hover(Vector2F::new(320.0, 140.0)));
+}
+
+#[test]
+fn entering_target_is_not_suppressed() {
+    let mut tri = SafeTriangle::new();
+    tri.set_target_rect(Some(RectF::new(
+        Vector2F::new(200.0, 50.0),
+        Vector2F::new(100.0, 200.0),
+    )));
+    tri.update_position(Vector2F::new(100.0, 150.0));
+
+    assert!(!tri.should_suppress_hover(Vector2F::new(225.0, 140.0)));
 }
 
 #[test]

@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
@@ -41,13 +40,7 @@ use zaplex_remote_session::types::{
 use super::session_inventory::{HostSessionInventory, RoutedDaemonSession};
 use super::ssh_transport::{DaemonRuntimeRoute, InstallProgress, SshTransport};
 
-/// Daemon sessions are allocated `SessionId`s in the **top half** of the u64
-/// space so they cannot collide with shell-bootstrap-minted ids (which are
-/// PID/timestamp-derived and stay well below `2^63`). The manager keys all
-/// sessions — interactive and daemon — by `SessionId`, so uniqueness matters.
-const DAEMON_SESSION_ID_BASE: u64 = 1 << 63;
 const SESSION_INVENTORY_TIMEOUT: Duration = Duration::from_secs(30);
-static NEXT_DAEMON_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 static CONTROL_MASTER_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>> =
     LazyLock::new(Mutex::default);
 
@@ -150,8 +143,7 @@ fn neutralize_legacy_session_titles(daemon: &mut SessionList) {
 
 /// Allocates a fresh, collision-safe `SessionId` for a daemon-hosted session.
 pub fn alloc_daemon_session_id() -> SessionId {
-    let n = NEXT_DAEMON_SESSION_ID.fetch_add(1, Ordering::Relaxed);
-    SessionId::from(DAEMON_SESSION_ID_BASE | n)
+    super::alloc_daemon_session_id()
 }
 
 /// Whether this (already auth-resolved) host can be connected headlessly.

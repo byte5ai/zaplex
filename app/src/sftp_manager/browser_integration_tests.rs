@@ -134,6 +134,27 @@ fn create_connected_view(
     (win_id, view, temp_dir)
 }
 
+fn create_local_connected_view(
+    app: &mut warpui::App,
+    files: &[(&str, &[u8])],
+) -> (
+    warpui::WindowId,
+    warpui::ViewHandle<SftpBrowserView>,
+    tempfile::TempDir,
+) {
+    let temp_dir = create_temp_dir_with_files(files);
+    let backend =
+        Arc::new(InMemorySftpBackend::new(temp_dir.path().to_path_buf())) as Arc<dyn SftpBackend>;
+    let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        SftpBrowserView::new(String::new(), None, ctx)
+    });
+    view.update(app, |view, ctx| {
+        view.set_pane_group_id(Some(warpui::EntityId::from_usize(usize::MAX - 1)), ctx);
+        view.set_backend_for_test(backend, PathBuf::from("/"), ctx);
+    });
+    (window_id, view, temp_dir)
+}
+
 fn presenter_for_window(
     app: &App,
     window_id: warpui::WindowId,
@@ -741,6 +762,7 @@ struct NavigationSnapshot {
     title: String,
     registry_path: PathBuf,
     entry_names: Vec<String>,
+    cursor: usize,
 }
 
 fn navigation_snapshot(
@@ -765,6 +787,7 @@ fn navigation_snapshot(
                 .iter()
                 .map(|entry| entry.name.clone())
                 .collect(),
+            cursor: view.cursor,
         }
     })
 }
@@ -1196,6 +1219,140 @@ fn test_go_up_from_subdirectory() {
                     || v.entries.iter().any(|e| e.name == "subdir"),
                 "GoUp should return to the parent directory"
             );
+        });
+    });
+}
+
+#[test]
+fn parent_navigation_restores_departed_directory_after_sort_filter_and_listing() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[
+                ("alpha/file.txt", b"a"),
+                ("departed/file.txt", b"d"),
+                ("zeta/file.txt", b"z"),
+            ],
+        );
+
+        let departed = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "departed")
+                .unwrap()
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::SortBy(super::browser::SortColumn::Name),
+                ctx,
+            );
+            let action = entry_action(view, departed, SftpBrowserAction::OpenEntry);
+            view.handle_action(&action, ctx);
+            view.handle_action(
+                &SftpBrowserAction::SetSearchFilter("departed".to_string()),
+                ctx,
+            );
+            view.handle_action(&SftpBrowserAction::GoUp, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            let selected = view
+                .cursor_entry_index()
+                .and_then(|index| view.entries.get(index));
+            assert_eq!(selected.map(|entry| entry.name.as_str()), Some("departed"));
+        });
+    });
+}
+
+#[test]
+fn local_parent_navigation_restores_departed_directory_identity() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) =
+            create_local_connected_view(&mut app, &[("local-dir/file.txt", b"local")]);
+        let directory = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "local-dir")
+                .unwrap()
+        });
+        view.update(&mut app, |view, ctx| {
+            let action = entry_action(view, directory, SftpBrowserAction::OpenEntry);
+            view.handle_action(&action, ctx);
+            view.handle_action(&SftpBrowserAction::GoUp, ctx);
+        });
+        view.read(&app, |view, _| {
+            let selected = view
+                .cursor_entry_index()
+                .and_then(|index| view.entries.get(index));
+            assert_eq!(selected.map(|entry| entry.name.as_str()), Some("local-dir"));
+        });
+    });
+}
+
+#[test]
+fn parent_navigation_uses_safe_fallback_when_departed_directory_is_hidden() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[(".hidden/file.txt", b"h"), ("visible/file.txt", b"v")],
+        );
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ToggleHidden, ctx);
+        });
+        let hidden = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == ".hidden")
+                .unwrap()
+        });
+        view.update(&mut app, |view, ctx| {
+            let action = entry_action(view, hidden, SftpBrowserAction::OpenEntry);
+            view.handle_action(&action, ctx);
+            view.handle_action(&SftpBrowserAction::ToggleHidden, ctx);
+            view.handle_action(&SftpBrowserAction::GoUp, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            let selected = view
+                .cursor_entry_index()
+                .and_then(|index| view.entries.get(index));
+            assert_eq!(selected.map(|entry| entry.name.as_str()), Some("visible"));
+        });
+    });
+}
+
+#[test]
+fn parent_navigation_uses_safe_fallback_when_departed_directory_was_removed() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, temp) = create_connected_view(
+            &mut app,
+            &[("gone/file.txt", b"g"), ("visible/file.txt", b"v")],
+        );
+        let gone = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "gone")
+                .unwrap()
+        });
+        view.update(&mut app, |view, ctx| {
+            let action = entry_action(view, gone, SftpBrowserAction::OpenEntry);
+            view.handle_action(&action, ctx);
+        });
+        std::fs::remove_dir_all(temp.path().join("gone")).unwrap();
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::GoUp, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            let selected = view
+                .cursor_entry_index()
+                .and_then(|index| view.entries.get(index));
+            assert_eq!(selected.map(|entry| entry.name.as_str()), Some("visible"));
         });
     });
 }
@@ -3494,7 +3651,7 @@ fn global_tab_binding_does_not_steal_file_manager_focus() {
 }
 
 #[test]
-fn function_bar_drops_low_priority_captions_before_overlap() {
+fn function_bar_keeps_required_actions_visible_without_overlap() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, _, left, right, _left_temp, _right_temp) =
@@ -3526,10 +3683,16 @@ fn function_bar_drops_low_priority_captions_before_overlap() {
         for view in [&left, &right] {
             assert!(
                 maybe_position(&narrow_presenter, &layout_id(view, &app, "legend-compact"))
-                    .is_none()
+                    .is_some()
             );
-            let hidden = position(&narrow_presenter, &layout_id(view, &app, "legend-hidden"));
-            assert_approximately_equal(hidden.height(), 0.0);
+            for key in ["F3", "F4", "F5", "F6"] {
+                let action = position(
+                    &narrow_presenter,
+                    &layout_id(view, &app, &format!("function-{key}")),
+                );
+                assert!(action.width() > 0.0);
+                assert!(action.height() > 0.0);
+            }
         }
     });
 }
@@ -3567,10 +3730,65 @@ fn function_bar_fits_minimum_supported_pane_width() {
         let right_root = position(&presenter, &layout_id(&right, &app, "pane-root"));
         assert!(left_root.max_x() <= right_root.min_x());
         for (view, root) in [(&left, left_root), (&right, right_root)] {
-            let hidden = position(&presenter, &layout_id(view, &app, "legend-hidden"));
-            assert_approximately_equal(hidden.height(), 0.0);
-            assert!(hidden.width() <= root.width());
+            let compact = position(&presenter, &layout_id(view, &app, "legend-compact"));
+            assert!(compact.height() > 0.0);
+            assert!(compact.width() <= root.width());
+            for key in ["F3", "F4", "F5", "F6"] {
+                let action = position(
+                    &presenter,
+                    &layout_id(view, &app, &format!("function-{key}")),
+                );
+                assert!(action.min_x() >= compact.min_x());
+                assert!(action.max_x() <= compact.max_x());
+            }
         }
+    });
+}
+
+#[test]
+fn inactive_function_bar_keeps_geometry_but_does_not_dispatch() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, _, left, right, _left_temp, _right_temp) =
+            create_dual_connected_view(&mut app);
+        let left_pane_id = PaneId::dummy_pane_id();
+        let right_pane_id = PaneId::dummy_pane_id();
+        let focus_state = app.add_model(|_| PaneGroupFocusState::new(left_pane_id, None, true));
+        left.update(&mut app, |view, ctx| {
+            view.set_focus_handle(PaneFocusHandle::new(left_pane_id, focus_state.clone()), ctx);
+        });
+        right.update(&mut app, |view, ctx| {
+            view.set_focus_handle(
+                PaneFocusHandle::new(right_pane_id, focus_state.clone()),
+                ctx,
+            );
+        });
+
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let left_action = position(&presenter, &layout_id(&left, &app, "function-F7"));
+        let right_action = position(&presenter, &layout_id(&right, &app, "function-F7"));
+        assert_approximately_equal(left_action.width(), right_action.width());
+        assert_approximately_equal(left_action.height(), right_action.height());
+
+        mouse_down(
+            &mut app,
+            window_id,
+            presenter.clone(),
+            right_action.center(),
+        );
+        mouse_up(
+            &mut app,
+            window_id,
+            presenter.clone(),
+            right_action.center(),
+        );
+        right.read(&app, |view, _| assert!(view.dialog.is_none()));
+
+        mouse_down(&mut app, window_id, presenter.clone(), left_action.center());
+        mouse_up(&mut app, window_id, presenter, left_action.center());
+        left.read(&app, |view, _| {
+            assert!(matches!(view.dialog, Some(Dialog::CreateFolder { .. })))
+        });
     });
 }
 
@@ -4622,6 +4840,70 @@ fn target_picker_rejects_a_pane_closed_after_opening() {
         assert!(!root.join("right/foo.txt").exists());
         assert!(!root.join("third/foo.txt").exists());
         assert!(root.join("left/foo.txt").exists());
+    });
+}
+
+#[test]
+fn target_picker_rejects_target_path_and_source_location_changes() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("left/foo.txt", b"hello"),
+            ("left-other/.keep", b""),
+            ("right/.keep", b""),
+            ("right-other/.keep", b""),
+            ("third/.keep", b""),
+        ]);
+        let root = temp.path().to_path_buf();
+
+        let (_, source) = create_view(&mut app);
+        source.update(&mut app, |view, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/left"), ctx);
+        });
+        let (_, target) = create_view(&mut app);
+        target.update(&mut app, |view, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
+        });
+        let (_, third) = create_view(&mut app);
+        third.update(&mut app, |view, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/third"), ctx);
+        });
+
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        target.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::NavigateTo(PathBuf::from("/right-other")),
+                ctx,
+            );
+        });
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::PickCopyMoveTarget(0), ctx);
+        });
+        assert!(!root.join("right/foo.txt").exists());
+        assert!(!root.join("right-other/foo.txt").exists());
+
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+            view.handle_action(
+                &SftpBrowserAction::NavigateTo(PathBuf::from("/left-other")),
+                ctx,
+            );
+            view.handle_action(&SftpBrowserAction::PickCopyMoveTarget(0), ctx);
+        });
+        assert!(!root.join("third/foo.txt").exists());
+        app.read(|ctx| {
+            assert_eq!(
+                super::transfer_queue::TransferQueue::as_ref(ctx)
+                    .activities()
+                    .count(),
+                0
+            );
+        });
     });
 }
 

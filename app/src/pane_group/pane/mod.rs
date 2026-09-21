@@ -59,7 +59,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use warp_core::HostId;
 use warpui::{
-    elements::{DispatchEventResult, EventHandler, MouseInBehavior},
+    elements::{DispatchEventResult, EventHandler, MouseInBehavior, MouseStateHandle},
     presenter::ChildView,
     Action, AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
     View, ViewContext, ViewHandle, WeakModelHandle,
@@ -723,6 +723,12 @@ where
 pub struct PaneConfiguration {
     title: String,
     title_secondary: String,
+    /// Host backing this terminal pane. `None` means the local application
+    /// host; remote panes set this from their registry node at launch time.
+    terminal_identity_host: Option<String>,
+    /// Unabridged `host · path` identity exposed by the pane header.
+    title_tooltip: Option<String>,
+    title_tooltip_mouse_state: MouseStateHandle,
     custom_vertical_tabs_title: Option<String>,
     show_active_pane_indicator: bool,
 
@@ -750,6 +756,9 @@ impl PaneConfiguration {
         Self {
             title: title.into(),
             title_secondary: String::from(""),
+            terminal_identity_host: None,
+            title_tooltip: None,
+            title_tooltip_mouse_state: MouseStateHandle::default(),
             custom_vertical_tabs_title: None,
             show_active_pane_indicator: false,
             show_accent_border: false,
@@ -765,6 +774,18 @@ impl PaneConfiguration {
 
     pub fn title_secondary(&self) -> &str {
         &self.title_secondary
+    }
+
+    pub fn terminal_identity_host(&self) -> Option<&str> {
+        self.terminal_identity_host.as_deref()
+    }
+
+    pub fn title_tooltip(&self) -> Option<&str> {
+        self.title_tooltip.as_deref()
+    }
+
+    pub fn title_tooltip_mouse_state(&self) -> MouseStateHandle {
+        self.title_tooltip_mouse_state.clone()
     }
 
     pub fn custom_vertical_tabs_title(&self) -> Option<&str> {
@@ -803,6 +824,24 @@ impl PaneConfiguration {
         if self.title_secondary != secondary {
             self.title_secondary = secondary;
             ctx.emit(PaneConfigurationEvent::TitleUpdated);
+            ctx.emit(PaneConfigurationEvent::HeaderContentChanged);
+        }
+    }
+
+    pub fn set_terminal_identity_host(
+        &mut self,
+        host: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.terminal_identity_host != host {
+            self.terminal_identity_host = host;
+            ctx.emit(PaneConfigurationEvent::HeaderContentChanged);
+        }
+    }
+
+    pub fn set_title_tooltip(&mut self, tooltip: Option<String>, ctx: &mut ModelContext<Self>) {
+        if self.title_tooltip != tooltip {
+            self.title_tooltip = tooltip;
             ctx.emit(PaneConfigurationEvent::HeaderContentChanged);
         }
     }
@@ -996,6 +1035,24 @@ impl<P: BackingView> PaneStack<P> {
         let popped = self.children.pop().ok()?;
         ctx.emit(PaneStackEvent::ViewRemoved(popped.1.clone()));
         Some(popped)
+    }
+
+    /// Replaces only the active backing view while preserving the pane's stable
+    /// identity and its exact position in the pane tree.
+    pub fn replace_active(
+        &mut self,
+        data: P::AssociatedData,
+        view: ViewHandle<P>,
+        ctx: &mut ModelContext<Self>,
+    ) -> (P::AssociatedData, ViewHandle<P>) {
+        let weak_handle = ctx.handle();
+        view.update(ctx, |view, ctx| {
+            view.set_pane_stack(weak_handle, ctx);
+        });
+        let replaced = std::mem::replace(self.children.last_mut(), (data, view.clone()));
+        ctx.emit(PaneStackEvent::ViewRemoved(replaced.1.clone()));
+        ctx.emit(PaneStackEvent::ViewAdded(view));
+        replaced
     }
 }
 

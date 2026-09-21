@@ -898,6 +898,18 @@ message OpenSession {
   ManagedLaunch managed_launch = 7;
   // A client may raise, but never lower, the daemon headroom floor.
   optional uint64 requested_min_available_bytes = 8;
+  // Stable client-generated identity for this logical open. Retries after a
+  // lost acknowledgement MUST reuse the same id so the daemon can return the
+  // original SessionOpened response without allocating a second PTY. Clients
+  // may retry only after both peers negotiated logical-open-id-v1 and
+  // logical-open-attempt-v1 during Initialize; older daemons ignore these
+  // additive fields.
+  string logical_open_id = 9;
+  // Monotonic delivery attempt for one logical_open_id. Attempt-aware peers
+  // use this to retire half-open older transports without treating them as
+  // live requesters forever. Zero preserves the legacy logical-open-id-v1
+  // behavior and must never be retried by an attempt-aware client.
+  uint64 logical_open_attempt = 10;
 }
 
 message ManagedLaunch {
@@ -919,6 +931,18 @@ message SessionOpened {
   string session_id = 1;
   // Monotonic daemon-process generation used to reject stale PTY ids.
   uint64 generation = 2;
+  // True when OpenSession resolved to an already-running managed PTY. The
+  // client must perform a generation-checked AttachSession before treating
+  // the pane as usable. Managed-open-attach-v1 clients also attach a fresh
+  // managed PTY after binding its foreground agent; SessionOpened alone never
+  // carries managed replay/readiness proof.
+  bool requires_attach = 3;
+  // Authoritative foreground agent for a managed PTY that already existed.
+  // When requires_attach is true, managed-open-attach-v1 clients must pass
+  // this exact identity to AttachSession. A fresh managed PTY may omit it
+  // until the opening client has observed and authoritatively bound the new
+  // foreground agent.
+  AgentSessionIdentity expected_agent_binding = 4;
 }
 
 // Client → daemon: attach to an existing session and start receiving live

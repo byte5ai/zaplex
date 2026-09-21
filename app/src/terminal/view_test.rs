@@ -58,6 +58,86 @@ use crate::test_util::{add_window_with_terminal, assert_eventually};
 use super::*;
 
 #[test]
+fn classic_ssh_phase_updates_are_allowed_only_while_unbound() {
+    let daemon_session = warp_core::SessionId::from(41u64);
+
+    assert!(remote_input_phase_update_matches(None, None));
+    assert!(remote_input_phase_update_matches(
+        None,
+        Some(daemon_session)
+    ));
+    assert!(remote_input_phase_update_matches(
+        Some(daemon_session),
+        Some(daemon_session)
+    ));
+    assert!(!remote_input_phase_update_matches(
+        Some(daemon_session),
+        None
+    ));
+    assert!(!remote_input_phase_update_matches(
+        Some(daemon_session),
+        Some(warp_core::SessionId::from(42u64))
+    ));
+}
+
+#[test]
+fn only_remote_terminal_draft_changes_request_a_snapshot() {
+    assert!(!remote_input_draft_change_needs_snapshot(None));
+    assert!(remote_input_draft_change_needs_snapshot(Some(
+        RemoteInputPhase::Transport
+    )));
+    assert!(remote_input_draft_change_needs_snapshot(Some(
+        RemoteInputPhase::Ready
+    )));
+    assert!(remote_input_draft_change_needs_snapshot(Some(
+        RemoteInputPhase::Failed
+    )));
+    assert!(remote_input_draft_change_needs_snapshot(Some(
+        RemoteInputPhase::Corrupt
+    )));
+}
+
+#[test]
+fn only_failed_remote_readiness_exposes_retry_actions() {
+    assert!(remote_readiness_actions_visible(RemoteInputPhase::Failed));
+    assert!(!remote_readiness_actions_visible(
+        RemoteInputPhase::Cancelled
+    ));
+    assert!(!remote_readiness_actions_visible(
+        RemoteInputPhase::Transport
+    ));
+    assert!(!remote_readiness_actions_visible(RemoteInputPhase::Corrupt));
+}
+
+#[test]
+fn corrupt_remote_restore_is_terminal_and_never_reenables_normal_input() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let connection_session_id = warp_core::SessionId::from(73u64);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.mark_corrupt_remote_restore(ctx);
+            for phase in [
+                RemoteInputPhase::Transport,
+                RemoteInputPhase::Attach,
+                RemoteInputPhase::Replay,
+                RemoteInputPhase::Ready,
+            ] {
+                view.set_remote_input_phase(phase, Some(connection_session_id), ctx);
+            }
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Corrupt));
+            assert_eq!(view.remote_input_session_id(), None);
+            assert!(!view.remote_input_is_ready());
+            assert!(!view.input.as_ref(ctx).ordinary_command_input_is_ready());
+        });
+    });
+}
+
+#[test]
 fn direct_control_hook_events_are_not_discarded_as_pty_duplicates() {
     assert!(should_apply_cli_agent_notification(
         ListenerRegistrationAction::Reuse,

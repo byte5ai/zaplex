@@ -34,6 +34,17 @@ pub mod transcript_rpc;
 #[cfg(unix)]
 pub mod unix;
 
+/// Allocates daemon-connection ids from the top half of the `SessionId` space.
+/// The allocator is platform-neutral because fail-closed remote restore panes
+/// must never select a local PTY merely because daemon transport is unavailable.
+const DAEMON_SESSION_ID_BASE: u64 = 1 << 63;
+static NEXT_DAEMON_SESSION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub fn alloc_daemon_session_id() -> warp_core::SessionId {
+    let next = NEXT_DAEMON_SESSION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    warp_core::SessionId::from(DAEMON_SESSION_ID_BASE | next)
+}
+
 /// Run the `remote-server-proxy` subcommand.
 #[cfg(unix)]
 pub fn run_proxy(

@@ -2,6 +2,13 @@ use super::*;
 use std::path::PathBuf;
 
 #[test]
+fn only_successfully_installed_navigation_commits_request_a_snapshot() {
+    assert!(navigation_commit_needs_snapshot(true, true));
+    assert!(!navigation_commit_needs_snapshot(true, false));
+    assert!(!navigation_commit_needs_snapshot(false, true));
+}
+
+#[test]
 fn dropped_directory_move_preparation_restores_quarantined_source() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("source")).unwrap();
@@ -390,26 +397,38 @@ fn shift_f5_f6_open_the_target_picker() {
 }
 
 #[test]
-fn pane_function_legend_drops_captions_before_overlap() {
+fn pane_function_legend_keeps_required_actions_at_narrow_width() {
     let full_width = FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_CAPTION_MIN_WIDTH
-        + FUNCTION_LEGEND_HORIZONTAL_PADDING;
-    let compact_width = FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_KEYCAP_MIN_WIDTH
         + FUNCTION_LEGEND_HORIZONTAL_PADDING;
     assert_eq!(function_legend_mode(full_width), FunctionLegendMode::Full);
     assert_eq!(
         function_legend_mode(full_width - 1.0),
         FunctionLegendMode::Compact
     );
-    assert_eq!(
-        function_legend_mode(compact_width - 1.0),
-        FunctionLegendMode::Hidden
-    );
+    assert_eq!(function_legend_mode(200.0), FunctionLegendMode::Compact);
+    for key in ["F3", "F4", "F5", "F6"] {
+        assert!(FunctionLegendMode::Compact.shows_caption(key));
+    }
+    for key in ["F2", "F7", "F8", "F10"] {
+        assert!(!FunctionLegendMode::Compact.shows_caption(key));
+    }
 }
 
 #[test]
-fn each_pane_owns_optional_compact_function_legend() {
+fn each_pane_owns_compact_function_legend() {
     assert_eq!(function_legend_mode(400.0), FunctionLegendMode::Compact);
-    assert_eq!(function_legend_mode(200.0), FunctionLegendMode::Hidden);
+    assert_eq!(function_legend_mode(200.0), FunctionLegendMode::Compact);
+}
+
+#[test]
+fn function_bar_actions_require_the_focused_compatible_pane() {
+    let view = SftpBrowserAction::ViewCursorDetails;
+    assert!(function_bar_action_enabled(&view, true, false));
+    assert!(!function_bar_action_enabled(&view, false, true));
+
+    let move_action = SftpBrowserAction::MoveToOtherPane;
+    assert!(!function_bar_action_enabled(&move_action, true, false));
+    assert!(function_bar_action_enabled(&move_action, true, true));
 }
 
 // ============================================================

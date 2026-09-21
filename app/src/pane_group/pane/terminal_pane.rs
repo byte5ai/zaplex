@@ -12,7 +12,11 @@ use warpui::{
 
 use crate::{
     ai::{blocklist::BlocklistAIHistoryModel, llms::LLMPreferences, skills::SkillManager},
-    app_state::{AmbientAgentPaneSnapshot, LeafContents, TerminalPaneSnapshot},
+    app_state::{
+        release_daemon_pty_claim_for_terminal_view, remove_remote_terminal_identity,
+        remove_temporary_file_manager_replacement, update_remote_terminal_pane_state,
+        AmbientAgentPaneSnapshot, LeafContents, TerminalPaneSnapshot,
+    },
     pane_group::{self, Direction, Event::OpenConversationHistory, PaneGroup},
     persistence::{BlockCompleted, ModelEvent},
     session_management::SessionNavigationData,
@@ -37,6 +41,10 @@ use super::{
 };
 
 pub type TerminalPaneView = PaneView<TerminalView>;
+
+pub(crate) fn remote_terminal_state_survives_detach(detach_type: DetachType) -> bool {
+    !matches!(detach_type, DetachType::Closed)
+}
 
 /// Data kept for terminal panes.
 pub struct TerminalPane {
@@ -121,6 +129,13 @@ impl TerminalPane {
     /// The [`TerminalView`] backing the [`PaneView`] for this terminal pane.
     pub(crate) fn terminal_view(&self, ctx: &AppContext) -> ViewHandle<TerminalView> {
         self.view.as_ref(ctx).child(ctx)
+    }
+
+    pub(in crate::pane_group) fn pane_stack(
+        &self,
+        ctx: &AppContext,
+    ) -> ModelHandle<crate::pane_group::pane::PaneStack<TerminalView>> {
+        self.view.as_ref(ctx).pane_stack().clone()
     }
 
     /// The UUID that identifies this terminal session across app restarts.
@@ -275,7 +290,10 @@ impl PaneContent for TerminalPane {
         detach_type: DetachType,
         ctx: &mut ViewContext<PaneGroup>,
     ) {
-        if matches!(detach_type, DetachType::Closed) {
+        if !remote_terminal_state_survives_detach(detach_type) {
+            remove_remote_terminal_identity(&self.uuid);
+            remove_temporary_file_manager_replacement(&self.uuid);
+            release_daemon_pty_claim_for_terminal_view(self.terminal_view(ctx).id());
             // Only immediately clear conversations and delete blocks if the session is being
             // permanently closed.
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
@@ -321,6 +339,15 @@ impl PaneContent for TerminalPane {
     fn snapshot(&self, app: &AppContext) -> LeafContents {
         let view = self.terminal_view(app).as_ref(app);
         let is_active = view.is_active_session(app);
+
+        update_remote_terminal_pane_state(
+            &self.uuid,
+            view.remote_input_is_ready()
+                .then(|| view.active_session_cwd(app))
+                .flatten()
+                .map(|path| path.to_string_lossy().into_owned()),
+            view.input().as_ref(app).buffer_text(app),
+        );
 
         // Capture the current input_config from the AI input model
         let current_input_config = view.input_config(app.as_ref());
@@ -584,6 +611,12 @@ fn handle_terminal_view_event(
             }
             Event::AppStateChanged => {
                 ctx.emit(pane_group::Event::AppStateChanged);
+            }
+            Event::RetryRemoteRestore => {
+                ctx.emit(pane_group::Event::RetryRemoteRestore { pane_id });
+            }
+            Event::CancelRemoteRestore => {
+                ctx.emit(pane_group::Event::CancelRemoteRestore { pane_id });
             }
             Event::BlockCompleted { block, is_local } => {
                 match group.terminal_session_by_id(pane_id) {
@@ -1104,3 +1137,7 @@ fn handle_ai_history_event(
         | BlocklistAIHistoryEvent::ConversationAgentIdAssigned { .. } => (),
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_pane_tests.rs"]
+mod tests;

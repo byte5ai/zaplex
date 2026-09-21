@@ -493,6 +493,9 @@ pub struct NewPane {
 /// The [`pane_leaves::kind`] value for terminal panes.
 pub const TERMINAL_PANE_KIND: &str = "terminal";
 
+/// The [`pane_leaves::kind`] value for File Manager panes.
+pub const SFTP_PANE_KIND: &str = "sftp";
+
 /// The [`pane_leaves::kind`] value for notebook panes.
 pub const NOTEBOOK_PANE_KIND: &str = "notebook";
 

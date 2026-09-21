@@ -45,7 +45,7 @@ use super::model::{
     NewWorkspace, NewWorkspaceTeam, ObjectMetadata, ObjectPermissions, Project, Tab, Window,
     AI_DOCUMENT_PANE_KIND, AI_FACT_PANE_KIND, CODE_PANE_KIND, ENV_VAR_COLLECTION_PANE_KIND,
     EXECUTION_PROFILE_EDITOR_PANE_KIND, MCP_SERVER_PANE_KIND, NOTEBOOK_PANE_KIND,
-    SETTINGS_PANE_KIND, TERMINAL_PANE_KIND, WELCOME_PANE_KIND, WORKFLOW_PANE_KIND,
+    SETTINGS_PANE_KIND, SFTP_PANE_KIND, TERMINAL_PANE_KIND, WELCOME_PANE_KIND, WORKFLOW_PANE_KIND,
 };
 use super::schema;
 use super::{
@@ -107,9 +107,11 @@ use crate::workspaces::workspace::Workspace as WorkspaceMetadata;
 use crate::workspaces::workspace::WorkspaceUid;
 use crate::{
     app_state::{
-        AppState, BranchSnapshot, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents,
-        LeafSnapshot, NotebookPaneSnapshot, PaneFlex, PaneNodeSnapshot, SplitDirection,
-        TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
+        register_remote_terminal_identity, remote_terminal_identity,
+        remove_remote_terminal_identity, AppState, BranchSnapshot, CodePaneSnapShot,
+        CodePaneTabSnapshot, FileManagerPaneMode, LeafContents, LeafSnapshot, NotebookPaneSnapshot,
+        PaneFlex, PaneNodeSnapshot, RemoteTerminalIdentity, SplitDirection, TabSnapshot,
+        TerminalPaneSnapshot, WindowSnapshot,
     },
     workspaces::user_profiles::UserProfileWithUID,
 };
@@ -988,6 +990,32 @@ struct TerminalPaneCliAgentBindingRow {
 }
 
 #[derive(diesel::QueryableByName)]
+struct RemoteTerminalIdentityRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    identity_json: String,
+}
+
+#[derive(diesel::QueryableByName)]
+struct SftpPaneRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    node_id: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    mode: String,
+    #[diesel(sql_type = diesel::sql_types::Binary)]
+    current_path: Vec<u8>,
+}
+
+#[derive(diesel::QueryableByName)]
+struct TemporaryFileManagerReplacementRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    node_id: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    mode: String,
+    #[diesel(sql_type = diesel::sql_types::Binary)]
+    current_path: Vec<u8>,
+}
+
+#[derive(diesel::QueryableByName)]
 struct TabPinRow {
     #[diesel(sql_type = diesel::sql_types::Integer)]
     tab_id: i32,
@@ -1043,6 +1071,108 @@ fn read_terminal_pane_cli_agent_binding(
     Ok(Some(binding))
 }
 
+fn save_remote_terminal_identity(
+    conn: &mut SqliteConnection,
+    terminal_pane_id: i32,
+    identity: &RemoteTerminalIdentity,
+) -> Result<(), Error> {
+    let identity_json = serde_json::to_string(identity)
+        .map_err(|error| Error::SerializationError(Box::new(error)))?;
+    diesel::sql_query(
+        "INSERT INTO remote_terminal_pane_identities (terminal_pane_id, identity_json) VALUES (?, ?)",
+    )
+    .bind::<diesel::sql_types::Integer, _>(terminal_pane_id)
+    .bind::<diesel::sql_types::Text, _>(identity_json)
+    .execute(conn)?;
+    Ok(())
+}
+
+fn save_failed_remote_terminal_identity(
+    conn: &mut SqliteConnection,
+    terminal_pane_id: i32,
+) -> Result<(), Error> {
+    diesel::sql_query(
+        "INSERT INTO remote_terminal_pane_identities (terminal_pane_id, identity_json) VALUES (?, ?)",
+    )
+    .bind::<diesel::sql_types::Integer, _>(terminal_pane_id)
+    .bind::<diesel::sql_types::Text, _>(r#"{"restore_error":"invalid remote terminal identity"}"#)
+    .execute(conn)?;
+    Ok(())
+}
+
+fn read_remote_terminal_identity(
+    conn: &mut SqliteConnection,
+    terminal_pane_id: i32,
+) -> Result<Option<RemoteTerminalIdentity>> {
+    let row = diesel::sql_query(
+        "SELECT identity_json FROM remote_terminal_pane_identities WHERE terminal_pane_id = ?",
+    )
+    .bind::<diesel::sql_types::Integer, _>(terminal_pane_id)
+    .get_result::<RemoteTerminalIdentityRow>(conn)
+    .optional()?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    match serde_json::from_str(&row.identity_json) {
+        Ok(identity) => Ok(Some(identity)),
+        Err(error) => {
+            log::warn!(
+                "Ignoring invalid remote terminal identity for terminal pane {terminal_pane_id}: {error}"
+            );
+            Ok(None)
+        }
+    }
+}
+
+fn save_temporary_file_manager_replacement(
+    conn: &mut SqliteConnection,
+    terminal_pane_id: i32,
+    snapshot: &crate::app_state::TemporaryFileManagerSnapshot,
+) -> Result<(), Error> {
+    let mode = serde_json::to_string(&snapshot.mode)
+        .map_err(|error| Error::SerializationError(Box::new(error)))?;
+    diesel::sql_query(
+        "INSERT INTO temporary_file_manager_replacements \
+         (terminal_pane_id, node_id, mode, current_path) VALUES (?, ?, ?, ?)",
+    )
+    .bind::<diesel::sql_types::Integer, _>(terminal_pane_id)
+    .bind::<diesel::sql_types::Text, _>(&snapshot.node_id)
+    .bind::<diesel::sql_types::Text, _>(mode)
+    .bind::<diesel::sql_types::Binary, _>(encode_path(snapshot.current_path.clone()))
+    .execute(conn)?;
+    Ok(())
+}
+
+fn read_temporary_file_manager_replacement(
+    conn: &mut SqliteConnection,
+    terminal_pane_id: i32,
+) -> Result<Option<crate::app_state::TemporaryFileManagerSnapshot>> {
+    let row = diesel::sql_query(
+        "SELECT node_id, mode, current_path FROM temporary_file_manager_replacements \
+         WHERE terminal_pane_id = ?",
+    )
+    .bind::<diesel::sql_types::Integer, _>(terminal_pane_id)
+    .get_result::<TemporaryFileManagerReplacementRow>(conn)
+    .optional()?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let mode = match serde_json::from_str(&row.mode) {
+        Ok(mode) => mode,
+        Err(error) => {
+            log::warn!(
+                "Ignoring invalid temporary file-manager overlay for terminal pane {terminal_pane_id}: {error}"
+            );
+            return Ok(None);
+        }
+    };
+    Ok(Some(crate::app_state::TemporaryFileManagerSnapshot {
+        node_id: row.node_id,
+        mode,
+        current_path: decode_path(row.current_path),
+    }))
+}
+
 // Saves the app state snapshot in the sqlite database. Removes any old app state.
 // Does so in a transaction so we're never in a partial state.
 fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<()> {
@@ -1051,6 +1181,9 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
         diesel::delete(schema::app::dsl::app).execute(conn)?;
         diesel::sql_query("DELETE FROM tab_pins").execute(conn)?;
         diesel::sql_query("DELETE FROM terminal_pane_cli_agent_bindings").execute(conn)?;
+        diesel::sql_query("DELETE FROM remote_terminal_pane_identities").execute(conn)?;
+        diesel::sql_query("DELETE FROM temporary_file_manager_replacements").execute(conn)?;
+        diesel::sql_query("DELETE FROM sftp_panes").execute(conn)?;
         diesel::delete(schema::terminal_panes::dsl::terminal_panes).execute(conn)?;
         diesel::delete(schema::notebook_panes::dsl::notebook_panes).execute(conn)?;
         diesel::delete(schema::code_panes::dsl::code_panes).execute(conn)?;
@@ -1290,6 +1423,7 @@ fn save_pane_state(
     // kind-specific tables.
     let kind = match &snapshot.contents {
         LeafContents::Terminal(_) => TERMINAL_PANE_KIND,
+        LeafContents::Sftp { .. } => SFTP_PANE_KIND,
         LeafContents::Notebook(_) => NOTEBOOK_PANE_KIND,
         LeafContents::EnvVarCollection(_) => ENV_VAR_COLLECTION_PANE_KIND,
         LeafContents::Code(_) => CODE_PANE_KIND,
@@ -1315,16 +1449,8 @@ fn save_pane_state(
             );
             return Ok(());
         }
-        LeafContents::Sftp { .. } => {
-            // SFTP browser pane is not persisted, logic same as SshServer.
-            debug_assert!(
-                false,
-                "save_pane_state called for non-persisted LeafContents variant"
-            );
-            return Ok(());
-        }
         LeafContents::Image { .. } => {
-            // Image viewer panes are not persisted, logic identical to SshServer/Sftp.
+            // Image viewer panes are not persisted, logic identical to SshServer.
             debug_assert!(
                 false,
                 "save_pane_state called for non-persisted LeafContents variant"
@@ -1386,6 +1512,16 @@ fn save_pane_state(
                 .execute(conn)?;
             if let Some(binding) = terminal_snapshot.cli_agent_binding.as_ref() {
                 save_terminal_pane_cli_agent_binding(conn, id, binding)?;
+            }
+            if let Some(identity) = remote_terminal_identity(&terminal_snapshot.uuid) {
+                save_remote_terminal_identity(conn, id, &identity)?;
+            } else if crate::app_state::failed_remote_terminal_restore(&terminal_snapshot.uuid) {
+                save_failed_remote_terminal_identity(conn, id)?;
+            }
+            if let Some(snapshot) =
+                crate::app_state::temporary_file_manager_replacement(&terminal_snapshot.uuid)
+            {
+                save_temporary_file_manager_replacement(conn, id, &snapshot)?;
             }
         }
         LeafContents::Notebook(notebook_snapshot) => {
@@ -1562,8 +1698,21 @@ fn save_pane_state(
         LeafContents::SshServer { .. } => {
             // Unreachable: filtered by `is_persisted` in `save_app_state`.
         }
-        LeafContents::Sftp { .. } => {
-            // Unreachable: filtered by `is_persisted` in `save_app_state`.
+        LeafContents::Sftp {
+            node_id,
+            mode,
+            current_path,
+        } => {
+            let mode = serde_json::to_string(mode)
+                .map_err(|error| Error::SerializationError(Box::new(error)))?;
+            diesel::sql_query(
+                "INSERT INTO sftp_panes (id, node_id, mode, current_path) VALUES (?, ?, ?, ?)",
+            )
+            .bind::<diesel::sql_types::Integer, _>(id)
+            .bind::<diesel::sql_types::Text, _>(node_id)
+            .bind::<diesel::sql_types::Text, _>(mode)
+            .bind::<diesel::sql_types::Binary, _>(encode_path(current_path.clone()))
+            .execute(conn)?;
         }
         LeafContents::Image { .. } => {
             // Unreachable: filtered by `is_persisted` in `save_app_state`.
@@ -2513,7 +2662,7 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                         .and_then(|id_str| AIConversationId::try_from(id_str).ok());
                     let cli_agent_binding = read_terminal_pane_cli_agent_binding(conn, node.id)?;
 
-                    LeafContents::Terminal(TerminalPaneSnapshot {
+                    let terminal_snapshot = TerminalPaneSnapshot {
                         uuid: terminal_pane.uuid,
                         cwd: terminal_pane.cwd,
                         cli_agent_binding,
@@ -2525,7 +2674,51 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                         active_profile_id,
                         conversation_ids_to_restore,
                         active_conversation_id,
-                    })
+                    };
+                    remove_remote_terminal_identity(&terminal_snapshot.uuid);
+                    crate::app_state::clear_failed_remote_terminal_restore(&terminal_snapshot.uuid);
+                    let has_remote_identity = diesel::sql_query(
+                        "SELECT identity_json FROM remote_terminal_pane_identities WHERE terminal_pane_id = ?",
+                    )
+                    .bind::<diesel::sql_types::Integer, _>(node.id)
+                    .get_result::<RemoteTerminalIdentityRow>(conn)
+                    .optional()?;
+                    match read_remote_terminal_identity(conn, node.id)? {
+                        Some(identity) => {
+                            register_remote_terminal_identity(&terminal_snapshot.uuid, identity)
+                        }
+                        None if has_remote_identity.is_some() => {
+                            crate::app_state::mark_failed_remote_terminal_restore(
+                                &terminal_snapshot.uuid,
+                            );
+                        }
+                        None => {}
+                    }
+                    crate::app_state::remove_temporary_file_manager_replacement(
+                        &terminal_snapshot.uuid,
+                    );
+                    if let Some(snapshot) = read_temporary_file_manager_replacement(conn, node.id)?
+                    {
+                        crate::app_state::register_temporary_file_manager_replacement(
+                            &terminal_snapshot.uuid,
+                            snapshot,
+                        );
+                    }
+                    LeafContents::Terminal(terminal_snapshot)
+                }
+                SFTP_PANE_KIND => {
+                    let sftp_pane = diesel::sql_query(
+                        "SELECT node_id, mode, current_path FROM sftp_panes WHERE id = ?",
+                    )
+                    .bind::<diesel::sql_types::Integer, _>(node.id)
+                    .get_result::<SftpPaneRow>(conn)?;
+                    let mode = serde_json::from_str::<FileManagerPaneMode>(&sftp_pane.mode)
+                        .map_err(|error| Error::DeserializationError(Box::new(error)))?;
+                    LeafContents::Sftp {
+                        node_id: sftp_pane.node_id,
+                        mode,
+                        current_path: decode_path(sftp_pane.current_path),
+                    }
                 }
                 NOTEBOOK_PANE_KIND => {
                     let notebook_pane = schema::notebook_panes::dsl::notebook_panes
@@ -2793,7 +2986,16 @@ fn read_sqlite_data(
             let saved_tabs: Vec<_> = tabs_for_window
                 .into_iter()
                 .filter_map(|tab| {
-                    let root = read_root_node(conn, tab.id).ok()?;
+                    let root = match read_root_node(conn, tab.id) {
+                        Ok(root) => root,
+                        Err(error) => {
+                            log::warn!(
+                                "Skipping unrestorable tab {} while reading app state: {error}",
+                                tab.id
+                            );
+                            return None;
+                        }
+                    };
                     let panel = db_panels.get(&tab.id);
 
                     let left_panel = panel

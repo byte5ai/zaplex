@@ -1491,9 +1491,18 @@ pub struct Input {
     command_x_ray_description: Option<Arc<Description>>,
     last_parsed_tokens: Option<decorations::ParsedTokensSnapshot>,
     debounce_input_background_tx: Sender<InputBackgroundJobOptions>,
-    /// If true, will submit the command in the editor to the shell upon receiving the
-    /// precmd message.
+    /// If true, will submit either the editor command or the separately captured
+    /// setup command upon receiving the precmd message.
     has_pending_command: bool,
+    /// Setup command waiting for the shell bootstrap boundary. Kept separate
+    /// from the editor so a restored user draft is never submitted in its place.
+    pending_system_command: Option<String>,
+    executing_pending_system_command: bool,
+    /// Ordinary editor submissions are disabled while a remote transport is
+    /// attaching or replaying. The editor keeps its existing draft while its
+    /// interaction state is visibly disabled; no text is queued for execution.
+    ordinary_command_input_ready: bool,
+    ordinary_command_input_previous_interaction_state: Option<InteractionState>,
     last_word_insertion: LastWordInsertion,
 
     ai_controller: ModelHandle<BlocklistAIController>,
@@ -3154,6 +3163,10 @@ impl Input {
             last_parsed_tokens: None,
             debounce_input_background_tx,
             has_pending_command: false,
+            pending_system_command: None,
+            executing_pending_system_command: false,
+            ordinary_command_input_ready: true,
+            ordinary_command_input_previous_interaction_state: None,
             last_word_insertion,
             decorations_future_handle: None,
             autosuggestions_abort_handle: None,
@@ -5028,6 +5041,38 @@ impl Input {
         self.editor.as_ref(ctx).buffer_text(ctx)
     }
 
+    pub(crate) fn set_ordinary_command_input_ready(
+        &mut self,
+        ready: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.ordinary_command_input_ready == ready {
+            return;
+        }
+        self.ordinary_command_input_ready = ready;
+        if ready {
+            let interaction_state = self
+                .ordinary_command_input_previous_interaction_state
+                .take()
+                .unwrap_or(InteractionState::Editable);
+            self.editor.update(ctx, |editor, ctx| {
+                editor.set_interaction_state(interaction_state, ctx);
+            });
+        } else {
+            self.ordinary_command_input_previous_interaction_state =
+                Some(self.editor.as_ref(ctx).interaction_state(ctx));
+            self.editor.update(ctx, |editor, ctx| {
+                editor.set_interaction_state(InteractionState::Disabled, ctx);
+            });
+        }
+        ctx.notify();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ordinary_command_input_is_ready(&self) -> bool {
+        self.ordinary_command_input_ready
+    }
+
     pub fn buffer_text_number_of_lines(&self, ctx: &AppContext) -> usize {
         self.buffer_text(ctx).lines().count()
     }
@@ -5734,16 +5779,37 @@ impl Input {
             return;
         }
 
-        let command = self.get_command(ctx);
+        let pending_system_command = self.pending_system_command.clone();
+        let command = pending_system_command
+            .clone()
+            .unwrap_or_else(|| self.get_command(ctx));
         if self.can_execute_command(ctx).is_no() {
             return;
         }
 
-        self.try_execute_command(&command, ctx);
+        self.executing_pending_system_command = pending_system_command.is_some();
+        let did_execute = self.try_execute_command(&command, ctx);
+        self.executing_pending_system_command = false;
+        if !did_execute {
+            return;
+        }
         self.has_pending_command = false;
+        self.pending_system_command = None;
+
+        if pending_system_command.is_some() {
+            let draft = self.buffer_text(ctx);
+            if !draft.is_empty() {
+                self.input_contents_before_prompt_chip_command = Some(draft);
+            }
+        }
 
         self.editor.update(ctx, |editor, ctx| {
-            editor.set_interaction_state(InteractionState::Editable, ctx);
+            let interaction_state = if self.ordinary_command_input_ready {
+                InteractionState::Editable
+            } else {
+                InteractionState::Disabled
+            };
+            editor.set_interaction_state(interaction_state, ctx);
         });
     }
 
@@ -5863,6 +5929,13 @@ impl Input {
         source: CommandExecutionSource,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
+        if matches!(&source, CommandExecutionSource::User)
+            && !self.ordinary_command_input_ready
+            && !self.executing_pending_system_command
+        {
+            log::debug!("Rejected ordinary command input before remote PTY readiness");
+            return false;
+        }
         if let CanExecuteCommand::No(reason) = self.can_execute_command(ctx) {
             if reason.is_existing_active_command() {
                 const MAX_COMMAND_LENGTH: usize = 43;
@@ -11404,7 +11477,20 @@ impl Input {
 
     pub fn set_pending_command(&mut self, exec: &str, ctx: &mut ViewContext<Self>) {
         self.has_pending_command = true;
+        self.pending_system_command = None;
         self.system_insert(exec, ctx);
+    }
+
+    pub(crate) fn set_pending_system_command(&mut self, command: String) {
+        self.has_pending_command = true;
+        self.pending_system_command = Some(command);
+    }
+
+    pub(crate) fn cancel_pending_system_command(&mut self) {
+        if self.pending_system_command.take().is_some() {
+            self.has_pending_command = false;
+            self.executing_pending_system_command = false;
+        }
     }
 
     fn should_enter_accept_completion_suggestion(&self, app: &AppContext) -> bool {

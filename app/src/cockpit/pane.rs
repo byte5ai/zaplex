@@ -29,10 +29,9 @@ use warpui::{
     ViewHandle,
 };
 use zaplex_cockpit::{
-    format_cost, format_relative, format_reset, format_tokens, heat_fill,
-    heat_pct_label_with_provenance, host_ident, host_key, session_glyph, session_key,
-    AccountStatus, AccountUsage, FleetTree, HeatLevel, PricingSource, Provider, SessionSnapshot,
-    SessionState, UsageProvenance, WindowTotals,
+    format_cost, format_relative, format_reset, format_tokens, heat_pct_label_with_provenance,
+    host_ident, host_key, session_glyph, session_key, AccountStatus, AccountUsage, FleetTree,
+    PricingSource, Provider, SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
 };
 
 use crate::cockpit::account_identity;
@@ -45,10 +44,9 @@ use crate::cockpit::session_lifecycle::{
     lifecycle_capabilities, RestartPresence, SessionAccountRoute, SessionHostRoute, SessionRoute,
 };
 use crate::cockpit::style::{
-    attention_coloru, cluster_divider, ctx_pct_element, glyph_cell, heat_coloru_on,
-    icon_verb_button_tooltip, icon_word_verb, provider_color_on, provider_label, status_dot_coloru,
-    utilisation_coloru, verb_button, verb_button_colored, zone_card, VerbKind, BLOCK_RADIUS,
-    CONTROL_RADIUS,
+    attention_coloru, cluster_divider, ctx_pct_element, glyph_cell, icon_verb_button_tooltip,
+    icon_word_verb, provider_label, status_dot_coloru, utilisation_coloru, utilisation_track,
+    verb_button, verb_button_colored, zone_card, VerbKind, BLOCK_RADIUS, CONTROL_RADIUS,
 };
 use crate::cockpit::transcript_view::TranscriptTarget;
 use crate::editor::{
@@ -121,41 +119,9 @@ const SESSION_DIALOG_WIDTH: f32 = 440.0;
 const ALIAS_EDITOR_WIDTH: f32 = 220.0;
 const CARD_PADDING: f32 = 12.0;
 const CARD_SPACING: f32 = 8.0;
-const HEAT_BAR_WIDTH: f32 = 160.0;
 const HEAT_BAR_HEIGHT: f32 = 8.0;
 /// Fixed column width for the cost/token matrix cells.
 const MATRIX_COL_WIDTH: f32 = 110.0;
-
-/// Parse a `#RRGGBB` or `#RGB` hex string into an opaque color. Returns `None`
-/// for anything malformed, so an invalid instances.json override color simply
-/// yields no tint (never a panic, never a wrong color).
-///
-/// The ASCII check is what makes that promise true. `len()` counts **bytes**
-/// while the slices below index **char boundaries**, so `#éa` measured 3 and
-/// took the shorthand branch, where `&hex[0..1]` cut the `é` in half and
-/// panicked — taking the app down while rendering an account card, from a value
-/// a user typed into a file by hand. A hex colour is ASCII by definition, so
-/// rejecting the rest up front makes every byte a boundary.
-fn parse_hex_color(s: &str) -> Option<ColorU> {
-    let hex = s.strip_prefix('#')?;
-    if !hex.is_ascii() {
-        return None;
-    }
-    let (r, g, b) = match hex.len() {
-        6 => (
-            u8::from_str_radix(&hex[0..2], 16).ok()?,
-            u8::from_str_radix(&hex[2..4], 16).ok()?,
-            u8::from_str_radix(&hex[4..6], 16).ok()?,
-        ),
-        // Shorthand #RGB → each nibble doubled (f → ff).
-        3 => {
-            let dup = |c: &str| u8::from_str_radix(c, 16).ok().map(|v| v * 17);
-            (dup(&hex[0..1])?, dup(&hex[1..2])?, dup(&hex[2..3])?)
-        }
-        _ => return None,
-    };
-    Some(ColorU::new(r, g, b, 255))
-}
 
 /// The dashboard view backing the cockpit pane.
 /// Which sessions the table lists (P3 filter chips).
@@ -1345,26 +1311,11 @@ impl CockpitPaneView {
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_body();
         let muted = theme.sub_text_color(theme.background()).into_solid();
-        // Utilisation, not attention: one shared rule (spec v3 §1.2) — calm grey,
-        // true red only at/above the single "fast voll" threshold, contrast-adapted.
-        // Same helper the sidebar meters use, so both surfaces read identically.
+        // Utilisation, not attention: one shared rule (spec v3 §1.2) — calm
+        // theme text, with the theme error role only at the "fast voll" threshold.
+        // The sidebar and pane share the same flexible track implementation.
         let bar_color = utilisation_coloru(fraction, appearance);
-        let fill_w = (heat_fill(fraction) as f32) * HEAT_BAR_WIDTH;
-
-        let fill = ConstrainedBox::new(Rect::new().with_background_color(bar_color).finish())
-            .with_width(fill_w)
-            .with_height(HEAT_BAR_HEIGHT)
-            .finish();
-
-        let track = ConstrainedBox::new(
-            Container::new(fill)
-                .with_background(internal_colors::fg_overlay_1(theme))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CONTROL_RADIUS)))
-                .finish(),
-        )
-        .with_width(HEAT_BAR_WIDTH)
-        .with_height(HEAT_BAR_HEIGHT)
-        .finish();
+        let track = utilisation_track(fraction, HEAT_BAR_HEIGHT, bar_color, appearance);
 
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -1381,7 +1332,7 @@ impl CockpitPaneView {
                 size,
                 bar_color,
             ))
-            .with_main_axis_size(MainAxisSize::Min)
+            .with_main_axis_size(MainAxisSize::Max)
             .finish()
     }
 
@@ -2559,9 +2510,9 @@ impl CockpitPaneView {
                     is_local,
                     today_cost,
                 }) => {
-                    // Session: provider dot + label. The dot is the account's
-                    // colour, contrast-picked; the row's *state* is the status
-                    // column's job, and saying it twice is what §1.3 forbids.
+                    // Session: themed accent mark + provider label. The row's
+                    // state is the status column's job, and saying it twice is
+                    // what §1.3 forbids.
                     let name = zaplex_cockpit::session_label(session);
                     let sess = Flex::row()
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -2569,10 +2520,7 @@ impl CockpitPaneView {
                         .with_child(
                             ConstrainedBox::new(
                                 Rect::new()
-                                    .with_background_color(provider_color_on(
-                                        session.provider,
-                                        bg.into_solid(),
-                                    ))
+                                    .with_background_color(theme.accent().into_solid())
                                     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(2.0)))
                                     .finish(),
                             )
@@ -2928,11 +2876,11 @@ impl CockpitPaneView {
         let now = chrono::Utc::now();
 
         let identity = account_identity(&acct.account);
-        // Provider is the explicit headline. The color tile supplements that
-        // word; it never carries provider identity on its own.
+        // Provider is the explicit headline. The theme accent tile supplements
+        // that word; it never carries provider identity on its own.
         let tile = ConstrainedBox::new(
             Rect::new()
-                .with_background_color(provider_color_on(acct.account.provider, bg.into_solid()))
+                .with_background_color(theme.accent().into_solid())
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
                 .finish(),
         )
@@ -3023,8 +2971,7 @@ impl CockpitPaneView {
             ));
         }
 
-        // The two meters. `heat_bar` carries the one utilisation rule (grey below
-        // the threshold, true red at or above it) — asked for rather than redone.
+        // The two meters. `heat_bar` carries the one theme-role utilisation rule.
         // Meter labels are the short vocabulary („5h"/„Wo"), same as the fleet
         // card — the long column titles clipped inside the label cell (audit
         // P0.3); they belong to the figures matrix below.
@@ -3094,7 +3041,6 @@ impl CockpitPaneView {
     fn render_card(
         &self,
         acct: &AccountUsage,
-        override_color: Option<ColorU>,
         is_selected: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -3109,26 +3055,16 @@ impl CockpitPaneView {
         let identity = account_identity(&acct.account);
 
         // Account activity glyph (WORKING/LIVE/OFFLINE), derived by the spine.
-        // The working hue is contrast-picked like every other themed mark; the
-        // dark-palette constant used here would sink on a light theme.
         let (status_glyph, status_color) = match acct.status {
-            AccountStatus::Working => (
-                "●",
-                heat_coloru_on(HeatLevel::Ok, theme.background().into_solid()),
-            ),
+            AccountStatus::Working => ("●", theme.ui_green_color()),
             AccountStatus::Live => ("◐", muted),
             AccountStatus::Offline => ("○", muted),
         };
-        let mut header = Flex::row()
+        let header = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(8.0);
-        // User override color (instances.json): a small leading swatch so a
-        // recolored account is recognizable at a glance.
-        if let Some(color) = override_color {
-            header = header.with_child(Self::text("▉".to_string(), family, body, color));
-        }
-        header = header
+        let header = header
             .with_child(Self::text(
                 status_glyph.to_string(),
                 family,
@@ -3732,14 +3668,8 @@ impl View for CockpitPaneView {
                 .selected_account()
                 .map(str::to_string);
             for acct in &snapshot.accounts {
-                // Per-account override color (instances.json), resolved from the
-                // model and parsed from its hex string.
-                let override_color = CockpitModel::as_ref(app)
-                    .override_color(&acct.account.key)
-                    .and_then(parse_hex_color);
                 let is_selected = selected.as_deref() == Some(acct.account.key.as_str());
-                col =
-                    col.with_child(self.render_card(acct, override_color, is_selected, appearance));
+                col = col.with_child(self.render_card(acct, is_selected, appearance));
             }
             // C3b: explain the ~ marker whenever any bar shows an estimate
             // (real numbers stay unmarked — no chrome for the good case).

@@ -680,6 +680,62 @@ fn test_original_pane_for_replacement() {
 }
 
 #[test]
+fn temporary_replacement_relation_can_move_between_pane_trees() {
+    let original = PaneId::dummy_pane_id();
+    let replacement = PaneId::dummy_pane_id();
+    let mut source = PaneData::new(original);
+
+    assert!(source.replace_pane(original, replacement, true));
+    assert_eq!(source.pane_configuration_owner(replacement), original);
+    assert_eq!(
+        source.revert_temporary_replacement(replacement),
+        Some(original)
+    );
+    assert!(source.remove(original));
+
+    let mut target = PaneData::new(replacement);
+    assert!(target.adopt_temporary_replacement(original, replacement));
+    assert_eq!(
+        target.original_pane_for_replacement(replacement),
+        Some(original)
+    );
+    assert_eq!(target.visible_pane_count(), 1);
+    assert_eq!(target.pane_configuration_owner(replacement), original);
+    assert_eq!(
+        target.revert_temporary_replacement(replacement),
+        Some(original)
+    );
+    assert_eq!(target.visible_pane_ids(), vec![original]);
+}
+
+#[test]
+fn standalone_pane_owns_its_configuration() {
+    let pane = PaneId::dummy_pane_id();
+    let tree = PaneData::new(pane);
+
+    assert_eq!(tree.pane_configuration_owner(pane), pane);
+}
+
+#[test]
+fn temporary_replacement_is_not_an_undo_close_candidate() {
+    let original = PaneId::dummy_pane_id();
+    let replacement = PaneId::dummy_pane_id();
+    let mut tree = PaneData::new(original);
+
+    assert!(tree.replace_pane(original, replacement, true));
+    assert!(!tree.is_hidden_closed_pane(&original));
+    assert!(!tree.unhide_closed_pane(original));
+    assert_eq!(
+        tree.original_pane_for_replacement(replacement),
+        Some(original)
+    );
+    assert_eq!(
+        tree.visible_pane_for_configuration_owner(original),
+        replacement
+    );
+}
+
+#[test]
 fn test_hide_multiple_child_agent_panes() {
     let panes = [
         PaneId::dummy_pane_id(),

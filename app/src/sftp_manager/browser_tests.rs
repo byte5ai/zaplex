@@ -286,6 +286,11 @@ fn test_navigate_up_from_root() {
             assert_eq!(view.current_path, PathBuf::from("/"));
         });
 
+        view.update(&mut app, |view, _| {
+            view.entries = vec![entry("a", false), entry("b", false)];
+            view.cursor = 1;
+        });
+
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::NavigateUp, ctx);
         });
@@ -296,6 +301,7 @@ fn test_navigate_up_from_root() {
                 PathBuf::from("/"),
                 "NavigateUp from root directory should not change the path"
             );
+            assert_eq!(view.cursor, 1, "root navigation must preserve selection");
         });
     });
 }

@@ -6,6 +6,8 @@ fn desc(id: u64, fs: FsNamespace, path: &str) -> FmPaneDescriptor {
         label: format!("pane{id}"),
         fs,
         current_path: PathBuf::from(path),
+        route_epoch: 1,
+        mode: FmPaneMode::FileManager,
         pane_group_id: None,
     }
 }
@@ -226,4 +228,49 @@ fn unattached_source_never_implicitly_targets_another_pane() {
     let targets = reg.transfer_targets(10);
     assert!(targets.default.is_none());
     assert_eq!(targets.selectable.len(), 1);
+}
+
+#[test]
+fn captured_target_rejects_path_epoch_mode_move_and_close_changes() {
+    let mut reg = FileManagerRegistry::new();
+    let group = EntityId::from_usize(1);
+    let captured = desc_in_group(20, FsNamespace::Remote("host".into()), "/target", group);
+    reg.upsert(captured.clone());
+    assert_eq!(reg.resolve_snapshot(&captured), Some(captured.clone()));
+
+    let mut changed = captured.clone();
+    changed.current_path = PathBuf::from("/other");
+    reg.upsert(changed);
+    assert!(reg.resolve_snapshot(&captured).is_none());
+
+    let mut changed = captured.clone();
+    changed.route_epoch += 1;
+    reg.upsert(changed);
+    assert!(reg.resolve_snapshot(&captured).is_none());
+
+    let mut changed = captured.clone();
+    changed.mode = FmPaneMode::Terminal;
+    reg.upsert(changed);
+    assert!(reg.resolve_snapshot(&captured).is_none());
+
+    let mut changed = captured.clone();
+    changed.pane_group_id = Some(EntityId::from_usize(2));
+    reg.upsert(changed);
+    assert!(reg.resolve_snapshot(&captured).is_none());
+
+    reg.remove(captured.id);
+    assert!(reg.resolve_snapshot(&captured).is_none());
+}
+
+#[test]
+fn equal_paths_on_different_hosts_are_distinct_target_coordinates() {
+    let host_a = desc(1, FsNamespace::Remote("host-a".into()), "/srv/data");
+    let host_b = desc(2, FsNamespace::Remote("host-b".into()), "/srv/data");
+    assert_ne!(host_a, host_b);
+
+    let mut reg = FileManagerRegistry::new();
+    reg.upsert(host_a.clone());
+    reg.upsert(host_b.clone());
+    assert_eq!(reg.resolve_snapshot(&host_a), Some(host_a));
+    assert_eq!(reg.resolve_snapshot(&host_b), Some(host_b));
 }

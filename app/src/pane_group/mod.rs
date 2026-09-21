@@ -74,7 +74,6 @@ use warp_cli::agent::Harness;
 use warp_core::command::ExitCode;
 use warp_core::context_flag::ContextFlag;
 use warp_core::HostId;
-#[cfg(unix)]
 use warp_core::SessionId;
 use warp_util::path::convert_wsl_to_windows_host_path;
 #[cfg(feature = "local_fs")]
@@ -98,9 +97,9 @@ use crate::ai_assistant::AskAIType;
 #[cfg(feature = "local_fs")]
 use crate::app_state::CodePaneSnapShot;
 use crate::app_state::{
-    self, AIFactPaneSnapshot, BranchSnapshot, EnvVarCollectionPaneSnapshot, LeafContents,
-    LeafSnapshot, NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid, SettingsPaneSnapshot,
-    TerminalPaneSnapshot, WorkflowPaneSnapshot,
+    self, AIFactPaneSnapshot, BranchSnapshot, EnvVarCollectionPaneSnapshot, FileManagerPaneMode,
+    LeafContents, LeafSnapshot, NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid,
+    SettingsPaneSnapshot, TerminalPaneSnapshot, WorkflowPaneSnapshot,
 };
 use crate::appearance::Appearance;
 use crate::banner::{Banner, BannerEvent, BannerState, BannerTextContent, DismissalType};
@@ -169,6 +168,7 @@ pub use pane::file_pane::FilePane;
 pub use pane::image_pane::ImagePane;
 pub use pane::notebook_pane::NotebookPane;
 pub use pane::settings_pane::SettingsPane;
+pub use pane::sftp_pane::SftpPane;
 pub use pane::terminal_pane::TerminalPane;
 pub use pane::workflow_pane::WorkflowPane;
 pub use pane::PaneHeaderAction;
@@ -450,6 +450,12 @@ pub fn init(app: &mut AppContext) {
 
 pub enum Event {
     AppStateChanged,
+    RetryRemoteRestore {
+        pane_id: PaneId,
+    },
+    CancelRemoteRestore {
+        pane_id: PaneId,
+    },
     Escape,
     Exited {
         add_to_undo_stack: bool,
@@ -657,6 +663,13 @@ pub enum Event {
     FileDeleted {
         path: PathBuf,
     },
+    /// Request a terminal split whose target remains the pane that originated
+    /// the action. Workspace owns destination selection (local or SSH host),
+    /// while PaneGroup owns validating and applying the captured tree target.
+    SplitLaunchRequested {
+        target: SplitLaunchTarget,
+        chosen_shell: Option<AvailableShell>,
+    },
     OpenAgentProfileEditor {
         profile_id: ClientProfileId,
     },
@@ -720,6 +733,36 @@ pub enum FileManagerTarget {
         node_id: String,
         start_path: Option<std::path::PathBuf>,
     },
+}
+
+/// Immutable target captured when a split action is invoked. The generation
+/// prevents an async destination choice from being applied to a pane tree that
+/// has since been rearranged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SplitLaunchTarget {
+    pane_id: PaneId,
+    direction: Direction,
+    layout_generation: u64,
+}
+
+impl SplitLaunchTarget {
+    pub fn pane_id(self) -> PaneId {
+        self.pane_id
+    }
+
+    pub fn direction(self) -> Direction {
+        self.direction
+    }
+}
+
+/// Focus token returned with a newly inserted split. A delayed launch callback
+/// may focus the result only while neither the layout nor the user's focus has
+/// changed since insertion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SplitFocusGuard {
+    source_pane_id: PaneId,
+    result_pane_id: PaneId,
+    layout_generation: u64,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -789,9 +832,31 @@ impl NewTerminalOptions {
 #[derive(Debug)]
 pub enum PanesLayout {
     SingleTerminal(Box<NewTerminalOptions>),
-    Snapshot(Box<PaneNodeSnapshot>),
+    Snapshot {
+        root: Box<PaneNodeSnapshot>,
+        daemon_requests: HashMap<PaneUuid, crate::terminal::daemon_tty::DaemonSessionRequest>,
+    },
     Template(PaneTemplateType),
     AmbientAgent,
+}
+
+impl PanesLayout {
+    pub fn snapshot(root: Box<PaneNodeSnapshot>) -> Self {
+        Self::Snapshot {
+            root,
+            daemon_requests: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn restored_snapshot(
+        root: Box<PaneNodeSnapshot>,
+        daemon_requests: HashMap<PaneUuid, crate::terminal::daemon_tty::DaemonSessionRequest>,
+    ) -> Self {
+        Self::Snapshot {
+            root,
+            daemon_requests,
+        }
+    }
 }
 
 impl Default for PanesLayout {
@@ -851,6 +916,13 @@ pub struct PaneGroup {
 
     /// Tab-level custom title set via the rename-tab flow.
     custom_title: Option<String>,
+
+    /// Incremented whenever the pane tree changes. Captured split intents use
+    /// this to fail closed instead of falling back to the currently focused pane.
+    layout_generation: u64,
+    /// Source focus captured for an in-progress pane drag. A late drag-end event
+    /// must not override a focus change that happened while dragging.
+    drag_start_focus: Option<PaneId>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -875,6 +947,26 @@ pub struct TerminalViewResources {
     pub tips_completed: ModelHandle<TipsCompleted>,
     pub model_event_sender: Option<SyncSender<ModelEvent>>,
     pub control_tab_id: String,
+}
+
+pub(crate) struct ReplacedRemoteTerminalSurface {
+    pub view: ViewHandle<TerminalView>,
+    pub previous_view_id: EntityId,
+    pub previous_connection_session_id: Option<SessionId>,
+}
+
+pub(crate) struct PaneMoveBundle {
+    visible_pane: Box<dyn AnyPaneContent>,
+    temporary_original: Option<Box<dyn AnyPaneContent>>,
+}
+
+impl PaneMoveBundle {
+    pub(crate) fn single(pane: Box<dyn AnyPaneContent>) -> Self {
+        Self {
+            visible_pane: pane,
+            temporary_original: None,
+        }
+    }
 }
 
 impl SplitPaneState {
@@ -1113,6 +1205,9 @@ impl PaneGroup {
                     target_id,
                     direction,
                 } => {
+                    if self.drag_start_focus.is_none() {
+                        self.drag_start_focus = Some(self.focused_pane_id(ctx));
+                    }
                     ctx.emit(Event::ClearHoveredTabIndex);
                     self.move_pane(pane_id, *target_id, *direction, ctx);
                 }
@@ -1128,6 +1223,9 @@ impl PaneGroup {
                     tab_hover_index,
                     hidden_pane_preview_direction,
                 } => {
+                    if self.drag_start_focus.is_none() {
+                        self.drag_start_focus = Some(self.focused_pane_id(ctx));
+                    }
                     if matches!(origin, ActionOrigin::Pane) {
                         // Clear hidden closed panes since dragging invalidates undo functionality
                         self.clear_hidden_closed_panes(ctx);
@@ -1153,6 +1251,9 @@ impl PaneGroup {
                 }
 
                 PaneViewEvent::PaneDraggedOutsideTabBarOrPaneGroup => {
+                    if self.drag_start_focus.is_none() {
+                        self.drag_start_focus = Some(self.focused_pane_id(ctx));
+                    }
                     // If we drag outside of the tab bar or pane group, ensure that there
                     // is no hidden pane
                     self.panes.clear_hidden_panes_from_move();
@@ -1164,7 +1265,13 @@ impl PaneGroup {
                     ctx.emit(Event::AppStateChanged);
                 }
                 PaneViewEvent::PaneDragEnded => {
-                    self.focus_pane_by_id(pane_id, ctx);
+                    let focus_was_unchanged = self
+                        .drag_start_focus
+                        .take()
+                        .is_some_and(|start| start == self.focused_pane_id(ctx));
+                    if focus_was_unchanged && self.panes.visible_pane_ids().contains(&pane_id) {
+                        self.focus_pane_by_id(pane_id, ctx);
+                    }
                     ctx.emit(Event::TerminalViewStateChanged);
                     ctx.notify();
                 }
@@ -1413,6 +1520,7 @@ impl PaneGroup {
     fn restore_pane_tree(
         root: PaneNodeSnapshot,
         block_lists: Arc<HashMap<PaneUuid, Vec<SerializedBlockListItem>>>,
+        daemon_requests: &mut HashMap<PaneUuid, crate::terminal::daemon_tty::DaemonSessionRequest>,
         resources: TerminalViewResources,
         ctx: &mut ViewContext<PaneGroup>,
         pane_contents: &mut HashMap<PaneId, Box<dyn AnyPaneContent>>,
@@ -1426,6 +1534,7 @@ impl PaneGroup {
             PaneNodeSnapshot::Leaf(leaf) => Self::restore_pane_leaf(
                 leaf,
                 block_lists,
+                daemon_requests,
                 resources,
                 ctx,
                 pane_contents,
@@ -1457,6 +1566,7 @@ impl PaneGroup {
                     match PaneGroup::restore_pane_tree(
                         node,
                         block_lists.clone(),
+                        daemon_requests,
                         resources.clone(),
                         ctx,
                         pane_contents,
@@ -1493,6 +1603,7 @@ impl PaneGroup {
     fn restore_pane_leaf(
         leaf: LeafSnapshot,
         block_lists: Arc<HashMap<PaneUuid, Vec<SerializedBlockListItem>>>,
+        daemon_requests: &mut HashMap<PaneUuid, crate::terminal::daemon_tty::DaemonSessionRequest>,
         resources: TerminalViewResources,
         ctx: &mut ViewContext<PaneGroup>,
         pane_contents: &mut HashMap<PaneId, Box<dyn AnyPaneContent>>,
@@ -1530,6 +1641,11 @@ impl PaneGroup {
                 let uuid = PaneUuid(terminal_snapshot.uuid.clone());
                 let block_list = block_lists.get(&uuid);
                 let cli_agent_binding = terminal_snapshot.cli_agent_binding.take();
+                let remote_identity = app_state::remote_terminal_identity(&uuid.0);
+                let corrupt_remote_restore =
+                    app_state::failed_remote_terminal_restore(&terminal_snapshot.uuid);
+                let daemon_request = daemon_requests.remove(&uuid);
+                let has_daemon_request = daemon_request.is_some();
 
                 let chosen_shell = terminal_snapshot
                     .shell_launch_data
@@ -1542,17 +1658,21 @@ impl PaneGroup {
                         }
                     });
 
-                let startup_directory = cli_agent_binding
-                    .as_ref()
-                    .map(|binding| PathBuf::from(&binding.cwd))
-                    .filter(|path| path.is_dir())
-                    .or_else(|| {
-                        terminal_snapshot
-                            .cwd
-                            .as_deref()
-                            .map(PathBuf::from)
+                let startup_directory = (remote_identity.is_none() && !corrupt_remote_restore)
+                    .then(|| {
+                        cli_agent_binding
+                            .as_ref()
+                            .map(|binding| PathBuf::from(&binding.cwd))
                             .filter(|path| path.is_dir())
-                    });
+                            .or_else(|| {
+                                terminal_snapshot
+                                    .cwd
+                                    .as_deref()
+                                    .map(PathBuf::from)
+                                    .filter(|path| path.is_dir())
+                            })
+                    })
+                    .flatten();
 
                 // Filter conversation IDs to only include those that have task messages
                 // and are not entirely passive (ignored suggestions).
@@ -1599,9 +1719,33 @@ impl PaneGroup {
                     model_event_sender.clone(),
                     chosen_shell,
                     terminal_snapshot.input_config,
-                    None, // daemon_request: restored snapshot is a local session
+                    daemon_request,
                     ctx,
                 );
+
+                if corrupt_remote_restore {
+                    terminal_view.update(ctx, |view, ctx| {
+                        view.mark_corrupt_remote_restore(ctx);
+                    });
+                } else if let Some(identity) = remote_identity {
+                    terminal_view.update(ctx, |view, ctx| {
+                        view.restore_input_draft(identity.input_draft, ctx);
+                        match identity.transport {
+                            app_state::RemoteTerminalTransport::ClassicSsh
+                            | app_state::RemoteTerminalTransport::ClassicSshMultiplexer {
+                                ..
+                            } => {
+                                view.begin_classic_ssh_readiness(ctx);
+                            }
+                            app_state::RemoteTerminalTransport::Daemon { .. }
+                                if !has_daemon_request =>
+                            {
+                                view.fail_remote_input_readiness(ctx);
+                            }
+                            app_state::RemoteTerminalTransport::Daemon { .. } => {}
+                        }
+                    });
+                }
 
                 let terminal_view_id = terminal_view.id();
 
@@ -1672,12 +1816,36 @@ impl PaneGroup {
                     }
                 }
 
+                let mut pane_data = PaneData::new(pane_id);
+                let mut visible_pane_id = pane_id;
+                if let Some(snapshot) =
+                    app_state::temporary_file_manager_replacement(&terminal_snapshot.uuid)
+                {
+                    let file_manager = match snapshot.mode {
+                        FileManagerPaneMode::Local => {
+                            Some(SftpPane::new_local(snapshot.current_path, ctx))
+                        }
+                        FileManagerPaneMode::Remote if !snapshot.node_id.is_empty() => Some(
+                            SftpPane::new(snapshot.node_id, Some(snapshot.current_path), ctx),
+                        ),
+                        FileManagerPaneMode::Remote | FileManagerPaneMode::RemotePicker => None,
+                    };
+                    if let Some(file_manager) = file_manager {
+                        visible_pane_id = file_manager.id();
+                        pane_contents.insert(visible_pane_id, Box::new(file_manager));
+                        if !pane_data.replace_pane(pane_id, visible_pane_id, true) {
+                            pane_contents.remove(&visible_pane_id);
+                            visible_pane_id = pane_id;
+                        }
+                    }
+                }
+
                 let focus = InitialFocus {
-                    focused_pane: leaf.is_focused.then_some(pane_id),
+                    focused_pane: leaf.is_focused.then_some(visible_pane_id),
                     active_session: terminal_snapshot.is_active.then_some(terminal_pane_id),
                 };
 
-                Ok((PaneData::new(pane_id), focus))
+                Ok((pane_data, focus))
             }
             LeafContents::Notebook(snapshot) => {
                 let pane: Box<dyn AnyPaneContent + 'static> = match snapshot {
@@ -1890,12 +2058,34 @@ impl PaneGroup {
                     "SSH server pane should not have been persisted, as it cannot be restored"
                 ))
             }
-            LeafContents::Sftp { .. } => {
-                // SFTP browser pane is not persisted; the remote file system depends on active SSH connections,
-                // which cannot be restored after restart.
-                Err(anyhow::anyhow!(
-                    "SFTP pane should not have been persisted, as it cannot be restored"
-                ))
+            LeafContents::Sftp {
+                node_id,
+                mode,
+                current_path,
+            } => {
+                let pane = match mode {
+                    FileManagerPaneMode::Local => SftpPane::new_local(current_path, ctx),
+                    FileManagerPaneMode::Remote if !node_id.is_empty() => {
+                        SftpPane::new(node_id, Some(current_path), ctx)
+                    }
+                    FileManagerPaneMode::Remote => {
+                        return Err(anyhow::anyhow!(
+                            "Remote File Manager pane has no registry node id"
+                        ));
+                    }
+                    FileManagerPaneMode::RemotePicker => {
+                        return Err(anyhow::anyhow!(
+                            "Transient File Manager picker should not have been persisted"
+                        ));
+                    }
+                };
+                let pane_id = pane.id();
+                pane_contents.insert(pane_id, Box::new(pane));
+                let focus = InitialFocus {
+                    focused_pane: leaf.is_focused.then_some(pane_id),
+                    active_session: None,
+                };
+                Ok((PaneData::new(pane_id), focus))
             }
             LeafContents::Image { .. } => {
                 // Image viewer panes are intentionally not persisted (see
@@ -1947,7 +2137,8 @@ impl PaneGroup {
         if let (Ok((pane_data, _)), Some(title)) = (&result, custom_vertical_tabs_title.as_deref())
         {
             if let PaneNode::Leaf(pane_id) = &pane_data.root {
-                if let Some(pane) = pane_contents.get(pane_id) {
+                let configuration_pane_id = pane_data.pane_configuration_owner(*pane_id);
+                if let Some(pane) = pane_contents.get(&configuration_pane_id) {
                     pane.as_pane()
                         .pane_configuration()
                         .update(ctx, |configuration, ctx| {
@@ -2066,35 +2257,76 @@ impl PaneGroup {
                 })
             }
             PaneNode::Leaf(pane_id) => {
-                let contents = match self.pane_contents.get(pane_id) {
-                    Some(pane) => pane.as_pane().snapshot(app),
-                    None => {
-                        // Create a new pane uuid if we have a bug where we didn't save it
-                        // properly. This approach will allow us to keep the uniqueness constraints
-                        // intact so we don't fail to save the snapshot.
-                        log::error!("Failed to get session data for pane, so used a new uuid");
-                        LeafContents::Terminal(TerminalPaneSnapshot {
-                            uuid: Uuid::new_v4().as_bytes().to_vec(),
-                            cwd: None,
-                            cli_agent_binding: None,
-                            is_active: pane_id.as_terminal_pane_id() == self.active_session_id(app),
-                            is_read_only: false,
-                            shell_launch_data: None,
-                            input_config: Some(InputConfig::new(app)),
-                            llm_model_override: None,
-                            active_profile_id: None,
-                            conversation_ids_to_restore: Vec::new(),
-                            active_conversation_id: None,
-                        })
+                let temporary_original = self.panes.original_pane_for_replacement(*pane_id);
+                let contents = match temporary_original
+                    .and_then(|original_id| self.pane_contents.get(&original_id))
+                {
+                    Some(original) => {
+                        let original = original.as_pane().snapshot(app);
+                        let replacement = self
+                            .pane_contents
+                            .get(pane_id)
+                            .map(|pane| pane.as_pane().snapshot(app));
+                        if let (
+                            LeafContents::Terminal(terminal),
+                            Some(LeafContents::Sftp {
+                                node_id,
+                                mode,
+                                current_path,
+                            }),
+                        ) = (&original, replacement)
+                        {
+                            app_state::register_temporary_file_manager_replacement(
+                                &terminal.uuid,
+                                app_state::TemporaryFileManagerSnapshot {
+                                    node_id,
+                                    mode,
+                                    current_path,
+                                },
+                            );
+                        }
+                        original
                     }
+                    None => match self.pane_contents.get(pane_id) {
+                        Some(pane) => pane.as_pane().snapshot(app),
+                        None => {
+                            // Create a new pane uuid if we have a bug where we didn't save it
+                            // properly. This approach will allow us to keep the uniqueness constraints
+                            // intact so we don't fail to save the snapshot.
+                            log::error!("Failed to get session data for pane, so used a new uuid");
+                            LeafContents::Terminal(TerminalPaneSnapshot {
+                                uuid: Uuid::new_v4().as_bytes().to_vec(),
+                                cwd: None,
+                                cli_agent_binding: None,
+                                is_active: pane_id.as_terminal_pane_id()
+                                    == self.active_session_id(app),
+                                is_read_only: false,
+                                shell_launch_data: None,
+                                input_config: Some(InputConfig::new(app)),
+                                llm_model_override: None,
+                                active_profile_id: None,
+                                conversation_ids_to_restore: Vec::new(),
+                                active_conversation_id: None,
+                            })
+                        }
+                    },
                 };
-                let custom_vertical_tabs_title = self.pane_contents.get(pane_id).and_then(|pane| {
-                    pane.as_pane()
-                        .pane_configuration()
-                        .as_ref(app)
-                        .custom_vertical_tabs_title()
-                        .map(str::to_owned)
-                });
+                if let LeafContents::Terminal(terminal) = &contents {
+                    if temporary_original.is_none() {
+                        app_state::remove_temporary_file_manager_replacement(&terminal.uuid);
+                    }
+                }
+                let configuration_pane_id = self.panes.pane_configuration_owner(*pane_id);
+                let custom_vertical_tabs_title = self
+                    .pane_contents
+                    .get(&configuration_pane_id)
+                    .and_then(|pane| {
+                        pane.as_pane()
+                            .pane_configuration()
+                            .as_ref(app)
+                            .custom_vertical_tabs_title()
+                            .map(str::to_owned)
+                    });
                 PaneNodeSnapshot::Leaf(LeafSnapshot {
                     is_focused: *pane_id == self.focused_pane_id(app),
                     custom_vertical_tabs_title,
@@ -2577,6 +2809,8 @@ impl PaneGroup {
             pending_ambient_agent_conversation_restorations: HashMap::new(),
             child_agent_panes: HashMap::new(),
             custom_title: None,
+            layout_generation: 0,
+            drag_start_focus: None,
         };
 
         // Notify any restored panes that they belong to this pane group.
@@ -3023,12 +3257,16 @@ impl PaneGroup {
                     view_bounds.size(),
                     model_event_sender_clone,
                 ),
-                PanesLayout::Snapshot(panes_snapshot) => {
+                PanesLayout::Snapshot {
+                    root: panes_snapshot,
+                    mut daemon_requests,
+                } => {
                     let mut deferred_panes = Vec::new();
                     let mut pending_restorations = Vec::new();
                     let result = Self::restore_pane_tree(
                         *panes_snapshot,
                         block_lists,
+                        &mut daemon_requests,
                         resources.clone(),
                         ctx,
                         pane_contents,
@@ -3102,20 +3340,56 @@ impl PaneGroup {
         model_event_sender: Option<SyncSender<ModelEvent>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let pane_id = pane.as_pane().id();
+        Self::new_from_moved_pane(
+            PaneMoveBundle::single(pane),
+            tips_completed,
+            user_default_shell_unsupported_banner_model_handle,
+            model_event_sender,
+            ctx,
+        )
+    }
+
+    pub(crate) fn new_from_moved_pane(
+        pane: PaneMoveBundle,
+        tips_completed: ModelHandle<TipsCompleted>,
+        user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
+        model_event_sender: Option<SyncSender<ModelEvent>>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        let PaneMoveBundle {
+            visible_pane,
+            temporary_original,
+        } = pane;
+        let visible_pane_id = visible_pane.as_pane().id();
+        let active_session = temporary_original
+            .as_ref()
+            .and_then(|pane| pane.as_pane().id().as_terminal_pane_id())
+            .or_else(|| visible_pane_id.as_terminal_pane_id());
+        let temporary_original_id = temporary_original.as_ref().map(|pane| pane.as_pane().id());
         let initial_layout = move |_,
                                    pane_contents: &mut HashMap<PaneId, Box<dyn AnyPaneContent>>,
                                    pane_history: &mut Vec<PaneId>,
                                    _: RectF,
 
                                    _: &mut ViewContext<Self>| {
-            pane_contents.insert(pane_id, pane);
-            pane_history.push(pane_id);
+            let pane_data = temporary_original_id.map_or_else(
+                || PaneData::new(visible_pane_id),
+                |original_pane_id| {
+                    PaneData::new_with_temporary_replacement(original_pane_id, visible_pane_id)
+                },
+            );
+            if let Some(original) = temporary_original {
+                let original_pane_id = original.as_pane().id();
+                pane_contents.insert(original_pane_id, original);
+                pane_history.push(original_pane_id);
+            }
+            pane_contents.insert(visible_pane_id, visible_pane);
+            pane_history.push(visible_pane_id);
             let initial_focus = InitialFocus {
-                focused_pane: Some(pane_id),
-                active_session: pane_id.as_terminal_pane_id(),
+                focused_pane: Some(visible_pane_id),
+                active_session,
             };
-            (PaneData::new(pane_id), initial_focus)
+            (pane_data, initial_focus)
         };
         Self::new_internal(
             tips_completed,
@@ -3421,6 +3695,134 @@ impl PaneGroup {
         new_pane_id
     }
 
+    fn capture_split_target(&self, pane_id: PaneId, direction: Direction) -> SplitLaunchTarget {
+        SplitLaunchTarget {
+            pane_id,
+            direction,
+            layout_generation: self.layout_generation,
+        }
+    }
+
+    pub fn split_target_is_valid(&self, target: SplitLaunchTarget) -> bool {
+        target.layout_generation == self.layout_generation
+            && self.panes.visible_pane_ids().contains(&target.pane_id)
+    }
+
+    pub fn recapture_split_target(
+        &self,
+        pane_id: PaneId,
+        direction: Direction,
+    ) -> Option<SplitLaunchTarget> {
+        self.panes
+            .visible_pane_ids()
+            .contains(&pane_id)
+            .then(|| self.capture_split_target(pane_id, direction))
+    }
+
+    /// Insert a terminal from fully specified options at an exact captured
+    /// target. This is used by local, classic-SSH, and daemon-SSH split paths.
+    /// It never substitutes the currently focused pane when the target is stale.
+    pub fn insert_terminal_for_split(
+        &mut self,
+        target: SplitLaunchTarget,
+        options: NewTerminalOptions,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<(PaneId, ViewHandle<TerminalView>, SplitFocusGuard)> {
+        if !self.split_target_is_valid(target) {
+            return None;
+        }
+
+        let (pane_data, view) = self.create_terminal_pane_data(options, ctx);
+        let terminal_pane_id = pane_data.terminal_pane_id();
+        let pane_id = terminal_pane_id.into();
+        self.add_pane_with_options(
+            Box::new(pane_data),
+            AddPaneOptions {
+                direction: target.direction,
+                base_pane_id: Some(target.pane_id),
+                focus_new_pane: false,
+                visibility: NewPaneVisibility::Visible,
+                emit_app_state_changed: true,
+            },
+            ctx,
+        )?;
+
+        Some((
+            pane_id,
+            view,
+            SplitFocusGuard {
+                source_pane_id: target.pane_id,
+                result_pane_id: pane_id,
+                layout_generation: self.layout_generation,
+            },
+        ))
+    }
+
+    /// Insert the ordinary local terminal corresponding to a captured split.
+    /// Working-directory inheritance is resolved from the captured pane only.
+    pub fn insert_local_terminal_for_split(
+        &mut self,
+        target: SplitLaunchTarget,
+        chosen_shell: Option<AvailableShell>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<(PaneId, ViewHandle<TerminalView>, SplitFocusGuard)> {
+        if !self.split_target_is_valid(target) {
+            return None;
+        }
+        let base_session_id = target.pane_id.as_terminal_pane_id();
+        let initial_directory_from_source = self.startup_path_for_new_session(base_session_id, ctx);
+        let ignore_custom_startup_directory =
+            self.should_ignore_custom_startup_directory(&chosen_shell, ctx);
+        let initial_directory = SessionSettings::handle(ctx).read(ctx, |settings, _| {
+            settings
+                .working_directory_config
+                .initial_directory_for_new_session(
+                    NewSessionSource::SplitPane,
+                    initial_directory_from_source,
+                    ignore_custom_startup_directory,
+                )
+        });
+        self.insert_terminal_for_split(
+            target,
+            NewTerminalOptions {
+                shell: chosen_shell,
+                initial_directory,
+                ..Default::default()
+            },
+            ctx,
+        )
+    }
+
+    /// Focus a split result only if the exact pane tree and source focus are
+    /// unchanged since insertion. Safe for delayed SSH/bootstrap callbacks.
+    pub fn focus_split_result_if_current(
+        &mut self,
+        guard: SplitFocusGuard,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if guard.layout_generation != self.layout_generation
+            || self.focused_pane_id(ctx) != guard.source_pane_id
+            || !self
+                .panes
+                .visible_pane_ids()
+                .contains(&guard.result_pane_id)
+        {
+            return false;
+        }
+        self.focus_pane_by_id(guard.result_pane_id, ctx);
+        true
+    }
+
+    pub fn split_result_is_current(&self, guard: SplitFocusGuard, result_pane_id: PaneId) -> bool {
+        guard.layout_generation == self.layout_generation
+            && guard.result_pane_id == result_pane_id
+            && self
+                .panes
+                .visible_pane_ids()
+                .contains(&guard.source_pane_id)
+            && self.panes.visible_pane_ids().contains(&result_pane_id)
+    }
+
     /// Creates a terminal pane that is immediately hidden as a child agent pane.
     /// Unlike `insert_terminal_pane`, the new pane is never focused and is hidden
     /// before layout notifications propagate, preventing disturbance to the
@@ -3435,8 +3837,14 @@ impl PaneGroup {
             .as_terminal_pane_id()
             .or(self.active_session_id(ctx));
         let startup_directory = self.startup_path_for_new_session(base_session_id, ctx);
-        let (pane_data, _view) =
-            self.create_terminal_pane_data(startup_directory, env_vars, None, None, ctx);
+        let (pane_data, _view) = self.create_terminal_pane_data(
+            NewTerminalOptions {
+                initial_directory: startup_directory,
+                env_vars,
+                ..Default::default()
+            },
+            ctx,
+        );
         let new_pane_id = pane_data.terminal_pane_id();
         let _ = self.add_pane_with_options(
             Box::new(pane_data),
@@ -3639,39 +4047,80 @@ impl PaneGroup {
     }
 
     /// Removes the given pane id from the pane group, focusing the previous active session
-    /// and pane and returning the Box<dyn AnyPaneContent> of the removed pane. Note that this
+    /// and pane and returning all content that must move with the visible pane. Note that this
     /// is primarily used for pane management, and should not be used if you are planning on closing
     /// the session as this does not call the needed clean up code and does not add the tab
     /// to the undo stack if it gets closed.
-    pub fn remove_pane_for_move(
+    pub(crate) fn remove_pane_for_move(
         &mut self,
         pane_id: &PaneId,
         ctx: &mut ViewContext<Self>,
-    ) -> Option<Box<dyn AnyPaneContent>> {
+    ) -> Option<PaneMoveBundle> {
+        self.remove_pane_for_move_internal(pane_id, true, ctx)
+    }
+
+    /// Discards a provisional daemon pane without running the permanent-close
+    /// hook, because the winning terminal surface may share its connection.
+    pub(crate) fn discard_competing_daemon_pane(
+        &mut self,
+        pane_id: &PaneId,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        self.remove_pane_for_move_internal(pane_id, false, ctx)
+            .is_some()
+    }
+
+    fn remove_pane_for_move_internal(
+        &mut self,
+        pane_id: &PaneId,
+        emit_exit_when_empty: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<PaneMoveBundle> {
+        let temporary_original_id = self.panes.original_pane_for_replacement(*pane_id);
+        if !self.pane_contents.contains_key(pane_id)
+            || temporary_original_id
+                .is_some_and(|original_id| !self.pane_contents.contains_key(&original_id))
+        {
+            log::error!("Could not find all pane data needed to move pane {pane_id:?}");
+            return None;
+        }
         // Clear any hidden pane entry since the pane is being permanently removed from this group.
         self.panes.remove_hidden_pane(*pane_id);
 
         let was_focused = self.focus_state.as_ref(ctx).is_pane_focused(*pane_id);
         self.focus_next_terminal_pane_and_activate_session(*pane_id, PaneRemovalReason::Move, ctx);
-        if self.pane_count() == 1 {
+        if emit_exit_when_empty && self.pane_count() == 1 {
             ctx.emit(Event::Exited {
                 add_to_undo_stack: false,
             });
         }
 
-        match self.pane_contents.get(pane_id) {
-            Some(data) => {
-                let pane = data.as_pane();
-                pane.detach(self, DetachType::Moved, ctx);
+        let pane_id_to_remove = if let Some(original_id) = temporary_original_id {
+            if self.panes.revert_temporary_replacement(*pane_id) != Some(original_id) {
+                log::error!("Could not detach temporary replacement relation for {pane_id:?}");
+                return None;
             }
-            None => log::error!("Could not find data for pane id: {pane_id:?}"),
+            original_id
+        } else {
+            *pane_id
         };
-
-        if !self.panes.remove(*pane_id) {
+        if !self.panes.remove(pane_id_to_remove) {
             log::error!("Pane not found");
         }
 
-        let pane_content = self.pane_contents.remove(pane_id);
+        for moved_pane_id in [Some(*pane_id), temporary_original_id]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(data) = self.pane_contents.get(&moved_pane_id) {
+                data.as_pane().detach(self, DetachType::Moved, ctx);
+            }
+            self.remove_from_pane_history(moved_pane_id);
+        }
+
+        let visible_pane = self.pane_contents.remove(pane_id)?;
+        let temporary_original =
+            temporary_original_id.and_then(|original_id| self.pane_contents.remove(&original_id));
 
         let in_split_pane = self.panes.visible_pane_count() > 1;
         self.focus_state.update(ctx, |focus_state, ctx| {
@@ -3685,7 +4134,10 @@ impl PaneGroup {
         ctx.notify();
         ctx.emit(Event::TerminalViewStateChanged);
         ctx.emit(Event::AppStateChanged);
-        pane_content
+        Some(PaneMoveBundle {
+            visible_pane,
+            temporary_original,
+        })
     }
 
     pub fn notebook_pane_by_pane_id(&self, pane_id: Option<PaneId>) -> Option<&NotebookPane> {
@@ -3736,6 +4188,16 @@ impl PaneGroup {
     /// The generic pane with the given pane ID, if it exists.
     pub fn pane_by_id(&self, pane_id: PaneId) -> Option<&dyn PaneContent> {
         self.content_by_pane_id(pane_id).map(|pane| pane.as_pane())
+    }
+
+    pub fn pane_configuration_owner(&self, visible_pane_id: PaneId) -> PaneId {
+        self.panes.pane_configuration_owner(visible_pane_id)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn visible_pane_for_configuration_owner(&self, owner_pane_id: PaneId) -> PaneId {
+        self.panes
+            .visible_pane_for_configuration_owner(owner_pane_id)
     }
 
     /// Get a pane's contents by ID. This returns `None` if the pane does not exist or is of the
@@ -4139,6 +4601,13 @@ impl PaneGroup {
         self.pane_contents.remove(&replacement_pane_id);
 
         if let Some(original_id) = original_pane_id {
+            if let Some(terminal) = self
+                .pane_contents
+                .get(&original_id)
+                .and_then(|pane| pane.as_any().downcast_ref::<TerminalPane>())
+            {
+                app_state::remove_temporary_file_manager_replacement(&terminal.session_uuid());
+            }
             // Focus the original pane to ensure proper user interaction
             self.focus_pane_by_id(original_id, ctx);
         }
@@ -4222,13 +4691,19 @@ impl PaneGroup {
                 self.insert_terminal_pane(Direction::Left, pane_id, chosen_shell.clone(), ctx);
             }
             PaneEvent::SplitRight(chosen_shell) => {
-                self.insert_terminal_pane(Direction::Right, pane_id, chosen_shell.clone(), ctx);
+                ctx.emit(Event::SplitLaunchRequested {
+                    target: self.capture_split_target(pane_id, Direction::Right),
+                    chosen_shell: chosen_shell.clone(),
+                });
             }
             PaneEvent::SplitUp(chosen_shell) => {
                 self.insert_terminal_pane(Direction::Up, pane_id, chosen_shell.clone(), ctx);
             }
             PaneEvent::SplitDown(chosen_shell) => {
-                self.insert_terminal_pane(Direction::Down, pane_id, chosen_shell.clone(), ctx);
+                ctx.emit(Event::SplitLaunchRequested {
+                    target: self.capture_split_target(pane_id, Direction::Down),
+                    chosen_shell: chosen_shell.clone(),
+                });
             }
             PaneEvent::ToggleMaximized => {
                 // The toggled pane might not be the active pane -- focus it first.
@@ -4351,6 +4826,61 @@ impl PaneGroup {
             },
             ctx,
         );
+    }
+
+    pub(crate) fn add_moved_pane_as_hidden(
+        &mut self,
+        pane: PaneMoveBundle,
+        direction: Direction,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let PaneMoveBundle {
+            visible_pane,
+            temporary_original,
+        } = pane;
+        let visible_pane_id = visible_pane.as_pane().id();
+        let Some(added_pane_id) = self.add_pane_with_options(
+            visible_pane,
+            AddPaneOptions {
+                direction,
+                base_pane_id: None,
+                focus_new_pane: false,
+                visibility: NewPaneVisibility::HiddenForMove,
+                emit_app_state_changed: true,
+            },
+            ctx,
+        ) else {
+            return;
+        };
+        debug_assert_eq!(added_pane_id, visible_pane_id);
+
+        let Some(original) = temporary_original else {
+            return;
+        };
+        let original_pane_id = original.as_pane().id();
+        if self.init_pane(original, ctx).is_none() {
+            log::error!("Could not attach the original pane for a moved file manager overlay");
+            self.clean_up_pane(visible_pane_id, ctx);
+            self.panes.remove_hidden_pane(visible_pane_id);
+            self.panes.remove(visible_pane_id);
+            self.pane_contents.remove(&visible_pane_id);
+            return;
+        }
+        if !self
+            .panes
+            .adopt_temporary_replacement(original_pane_id, visible_pane_id)
+        {
+            log::error!("Could not restore the moved file manager overlay relation");
+            self.clean_up_pane(original_pane_id, ctx);
+            self.pane_contents.remove(&original_pane_id);
+            self.clean_up_pane(visible_pane_id, ctx);
+            self.panes.remove_hidden_pane(visible_pane_id);
+            self.panes.remove(visible_pane_id);
+            self.pane_contents.remove(&visible_pane_id);
+            return;
+        }
+        self.pane_history.push(original_pane_id);
+        ctx.emit(Event::AppStateChanged);
     }
 
     /// We return a pane_id if the pane successfully attached
@@ -4921,6 +5451,7 @@ impl PaneGroup {
 
     /// Sync changes in the visible pane count to the [`focus_state::PaneGroupFocusState`] model.
     fn handle_pane_count_change(&mut self, ctx: &mut ViewContext<Self>) {
+        self.layout_generation = self.layout_generation.wrapping_add(1);
         let in_split_pane = self.panes.visible_pane_count() > 1;
         self.focus_state.update(ctx, |focus_state, ctx| {
             focus_state.set_in_split_pane(in_split_pane, ctx);
@@ -4966,6 +5497,7 @@ impl PaneGroup {
                     request.open_params,
                     request.adopt_pty_session_id,
                     request.adopt_pty_generation,
+                    request.expected_host_id,
                     request.expected_agent_binding,
                     request.install_progress_rx,
                     request.host_label,
@@ -5337,10 +5869,7 @@ impl PaneGroup {
     /// `add_session_in_directory` and `insert_terminal_pane_hidden_for_child_agent`.
     fn create_terminal_pane_data(
         &self,
-        startup_directory: Option<PathBuf>,
-        env_vars: HashMap<OsString, OsString>,
-        chosen_shell: Option<AvailableShell>,
-        conversation_restoration: Option<ConversationRestorationInNewPaneType>,
+        options: NewTerminalOptions,
         ctx: &mut ViewContext<Self>,
     ) -> (TerminalPane, ViewHandle<TerminalView>) {
         let uuid = Uuid::new_v4();
@@ -5352,19 +5881,19 @@ impl PaneGroup {
 
         let view_bounds = Self::estimated_view_bounds(ctx);
         let (view, terminal_manager) = PaneGroup::create_session(
-            startup_directory,
-            env_vars,
-            IsSharedSessionCreator::No,
+            options.initial_directory,
+            options.env_vars,
+            options.is_shared_session_creator,
             resources,
             None,
-            conversation_restoration,
+            options.conversation_restoration,
             self.user_default_shell_unsupported_banner_model_handle
                 .clone(),
             view_bounds.size(),
             self.model_event_sender.clone(),
-            chosen_shell,
+            options.shell,
             None,
-            None, // daemon_request: ordinary local terminal pane
+            options.daemon_request,
             ctx,
         );
 
@@ -5397,10 +5926,12 @@ impl PaneGroup {
             && AISettings::as_ref(ctx).default_session_mode(ctx) == DefaultSessionMode::Agent;
 
         let (pane_data, view) = self.create_terminal_pane_data(
-            startup_directory,
-            HashMap::new(),
-            chosen_shell,
-            conversation_restoration,
+            NewTerminalOptions {
+                shell: chosen_shell,
+                initial_directory: startup_directory,
+                conversation_restoration,
+                ..Default::default()
+            },
             ctx,
         );
         let new_pane_id = pane_data.terminal_pane_id();
@@ -5817,6 +6348,113 @@ impl PaneGroup {
             .map(|session| session.terminal_view(ctx))
     }
 
+    pub(crate) fn replace_remote_terminal_surface(
+        &mut self,
+        pane_id: PaneId,
+        daemon_request: Option<crate::terminal::daemon_tty::DaemonSessionRequest>,
+        draft: String,
+        cancelled: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<ReplacedRemoteTerminalSurface> {
+        let terminal_pane = self.terminal_session_by_id(pane_id)?;
+        let pane_stack = terminal_pane.pane_stack(ctx);
+        let previous_view = terminal_pane.terminal_view(ctx);
+        let previous_view_id = previous_view.id();
+        let previous_connection_session_id = previous_view.as_ref(ctx).remote_input_session_id();
+        let input_config = previous_view.as_ref(ctx).input_config(ctx);
+        let resources = TerminalViewResources {
+            tips_completed: self.tips_completed.clone(),
+            model_event_sender: self.model_event_sender.clone(),
+            control_tab_id: ctx.view_id().to_string(),
+        };
+        let (view, terminal_manager) = Self::create_session(
+            None,
+            HashMap::new(),
+            IsSharedSessionCreator::No,
+            resources,
+            None,
+            None,
+            self.user_default_shell_unsupported_banner_model_handle
+                .clone(),
+            Self::estimated_view_bounds(ctx).size(),
+            self.model_event_sender.clone(),
+            None,
+            Some(input_config),
+            daemon_request,
+            ctx,
+        );
+        view.update(ctx, |view, ctx| {
+            view.restore_input_draft(draft, ctx);
+            if cancelled {
+                view.cancel_remote_input_readiness(ctx);
+            }
+        });
+        pane_stack.update(ctx, |stack, ctx| {
+            let _ = stack.replace_active(terminal_manager, view.clone(), ctx);
+        });
+        Some(ReplacedRemoteTerminalSurface {
+            view,
+            previous_view_id,
+            previous_connection_session_id,
+        })
+    }
+
+    pub(crate) fn terminal_pane_id_for_uuid(&self, uuid: &[u8]) -> Option<PaneId> {
+        self.pane_contents.iter().find_map(|(pane_id, contents)| {
+            contents
+                .as_any()
+                .downcast_ref::<TerminalPane>()
+                .is_some_and(|pane| pane.session_uuid() == uuid)
+                .then_some(*pane_id)
+        })
+    }
+
+    pub(crate) fn remote_terminal_restore_state(
+        &self,
+        pane_id: PaneId,
+        ctx: &AppContext,
+    ) -> Option<(Vec<u8>, app_state::RemoteTerminalIdentity, String)> {
+        let terminal_pane = self.terminal_session_by_id(pane_id)?;
+        let uuid = terminal_pane.session_uuid();
+        let identity = app_state::remote_terminal_identity(&uuid)?;
+        let draft = terminal_pane
+            .terminal_view(ctx)
+            .as_ref(ctx)
+            .input_draft(ctx);
+        Some((uuid, identity, draft))
+    }
+
+    pub(crate) fn set_terminal_remote_identity(
+        &self,
+        pane_id: PaneId,
+        identity: app_state::RemoteTerminalIdentity,
+    ) -> bool {
+        let Some(terminal_pane) = self.terminal_session_by_id(pane_id) else {
+            return false;
+        };
+        app_state::register_remote_terminal_identity(&terminal_pane.session_uuid(), identity);
+        true
+    }
+
+    /// Attach a stable host label to a terminal pane and refresh its automatic
+    /// `host · cwd` identity. The pane id remains the key if the pane is moved.
+    pub fn set_terminal_identity_host(
+        &mut self,
+        pane_id: PaneId,
+        host: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) else {
+            return false;
+        };
+        let pane_configuration = terminal_view.as_ref(ctx).pane_configuration().clone();
+        pane_configuration.update(ctx, |configuration, ctx| {
+            configuration.set_terminal_identity_host(host, ctx);
+        });
+        terminal_view.update(ctx, |view, ctx| view.update_pane_configuration(ctx));
+        true
+    }
+
     /// Given a pane ID, retrieve its backing code view, if the pane is a code pane.
     pub fn code_view_from_pane_id(
         &self,
@@ -5934,6 +6572,70 @@ impl PaneGroup {
         })
     }
 
+    /// Resolves a daemon pane by both its connection and its exact terminal
+    /// surface. A connection may temporarily have more than one surface while
+    /// a duplicate OpenSession acknowledgement is being rejected.
+    #[cfg(unix)]
+    pub(crate) fn daemon_connection_pane_for_terminal_view(
+        &self,
+        connection_session_id: SessionId,
+        terminal_view_id: EntityId,
+        ctx: &AppContext,
+    ) -> Option<PaneId> {
+        let pane_id = self.find_pane_id_for_terminal_view(terminal_view_id, ctx)?;
+        let visible_panes = self.visible_pane_ids();
+        if !visible_panes.contains(&pane_id)
+            && !visible_panes.iter().any(|replacement| {
+                self.original_pane_for_replacement(*replacement) == Some(pane_id)
+            })
+        {
+            return None;
+        }
+        self.daemon_pane_matches_connection(pane_id, connection_session_id, ctx)
+            .then_some(pane_id)
+    }
+
+    /// A whole-tab cross-window transfer cannot move the workspace-owned
+    /// callbacks for an in-flight daemon start. Include hidden terminals so a
+    /// temporary replacement or undo-close entry cannot bypass that boundary;
+    /// reconnect phases after initial readiness are no longer workspace-owned starts.
+    #[cfg(unix)]
+    pub(crate) fn has_pending_daemon_start(&self, ctx: &AppContext) -> bool {
+        self.panes_of::<TerminalPane>().any(|pane| {
+            let manager = pane.terminal_manager(ctx);
+            let is_daemon = manager
+                .as_ref(ctx)
+                .as_any()
+                .downcast_ref::<DaemonTerminalManager>()
+                .is_some();
+            if !is_daemon {
+                return false;
+            }
+            pane.terminal_view(ctx)
+                .as_ref(ctx)
+                .remote_input_initial_start_is_pending()
+        })
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn daemon_pane_matches_connection(
+        &self,
+        pane_id: PaneId,
+        connection_session_id: SessionId,
+        ctx: &AppContext,
+    ) -> bool {
+        self.terminal_session_by_id(pane_id)
+            .map(|pane| pane.terminal_manager(ctx))
+            .and_then(|manager| {
+                manager
+                    .as_ref(ctx)
+                    .as_any()
+                    .downcast_ref::<DaemonTerminalManager>()
+                    .map(DaemonTerminalManager::connection_session_id)
+            })
+            == Some(connection_session_id)
+    }
+
     #[cfg(unix)]
     pub(crate) fn focus_daemon_connection(
         &mut self,
@@ -5943,14 +6645,29 @@ impl PaneGroup {
         let Some(pane_id) = self.daemon_connection_pane(connection_session_id, ctx) else {
             return;
         };
-        let replacement = self
-            .visible_pane_ids()
-            .into_iter()
-            .find(|candidate| self.original_pane_for_replacement(*candidate) == Some(pane_id));
-        if let Some(replacement) = replacement {
-            self.close_temporary_replacement_pane(replacement, ctx);
-        }
-        self.focus_pane_by_id(pane_id, ctx);
+        let focus_target = self.panes.visible_pane_for_configuration_owner(pane_id);
+        self.focus_pane_by_id(focus_target, ctx);
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn relinquish_daemon_managed_launch(
+        &self,
+        pane_id: PaneId,
+        launch_id: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(manager) = self
+            .terminal_session_by_id(pane_id)
+            .map(|pane| pane.terminal_manager(ctx))
+        else {
+            return false;
+        };
+        manager.update(ctx, |manager, ctx| {
+            manager
+                .as_any()
+                .downcast_ref::<DaemonTerminalManager>()
+                .is_some_and(|daemon| daemon.relinquish_managed_launch(launch_id, ctx))
+        })
     }
 
     pub fn terminal_manager(
@@ -6390,7 +7107,18 @@ impl TypedActionView for PaneGroup {
                         None
                     }
                 };
-                self.add_terminal_pane(*direction, chosen_shell, ctx);
+                match direction {
+                    Direction::Right | Direction::Down => {
+                        let pane_id = self.focused_pane_id(ctx);
+                        ctx.emit(Event::SplitLaunchRequested {
+                            target: self.capture_split_target(pane_id, *direction),
+                            chosen_shell,
+                        });
+                    }
+                    Direction::Left | Direction::Up => {
+                        self.add_terminal_pane(*direction, chosen_shell, ctx);
+                    }
+                }
             }
             Remove(view_id) => self.close_pane_with_confirmation(*view_id, ctx),
             RemoveActive => self.close_active_pane_with_confirmation(ctx),

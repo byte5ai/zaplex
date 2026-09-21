@@ -2873,7 +2873,7 @@ cockpit-card-reset-week = wk ↻ { $reset }
 cockpit-card-reset-both = 5h ↻ { $reset5h } · wk ↻ { $resetwk }
 cockpit-conductor-needs-me-badge = ● { $count }
 cockpit-header-cost-summary = today { $today } · { $week } wk
-cockpit-header-today-total = today { $today }
+cockpit-header-today-total = All accounts · today { $today }
 # Review cluster. "reviewed" is deliberately not "approved": the mark is a
 # private note to yourself — it tells the agent nothing and approves nothing.
 cockpit-session-review = Review
@@ -2974,8 +2974,6 @@ workspace-left-panel-ssh-manager-sessions-needs-key = Zaplex sessions need key-b
 workspace-left-panel-ssh-manager-session-fallback = Session · { $id }
 workspace-left-panel-ssh-manager-session-host-missing = This host no longer exists in Connections
 workspace-left-panel-ssh-manager-session-open-error = Could not open this session: { $detail }
-workspace-left-panel-ssh-manager-host-ram = Host RAM: { $used } / { $cap }
-workspace-left-panel-ssh-manager-session-ram = RAM: { $used }
 workspace-left-panel-ssh-manager-sessions-refreshing = Refreshing sessions…
 workspace-left-panel-ssh-manager-sessions-timeout = The session list could not be loaded within { $seconds } seconds. Refresh sessions to try again.
 workspace-left-panel-ssh-manager-sessions-needs-install = Connect to the host first to set up the Zaplex session service. Then refresh sessions.
@@ -3409,6 +3407,14 @@ cli-agent-plugin-opencode-restart-update-note = Restart OpenCode to load the upd
 ai-ask-user-questions-unavailable = Questions unavailable
 ai-ask-user-questions-skipped-auto-approve = Questions skipped due to auto-approve
 terminal-bootstrapping-checking = Checking...
+terminal-remote-readiness-transport = Connecting remote transport…
+terminal-remote-readiness-attach = Attaching the remote PTY…
+terminal-remote-readiness-replay = Replaying remote output…
+terminal-remote-readiness-failed = Remote session unavailable. Retry the connection or cancel this restore.
+terminal-remote-readiness-corrupt = This remote session could not be restored because its saved identity is damaged. The pane was kept safely and no local shell was started.
+terminal-remote-readiness-cancelled = Remote session restore cancelled.
+terminal-remote-readiness-retry = Retry
+terminal-remote-readiness-cancel = Cancel
 terminal-bootstrapping-installing-progress = Installing... ({ $p }%)
 terminal-bootstrapping-installing = Installing...
 terminal-bootstrapping-updating = Updating...
@@ -4036,6 +4042,9 @@ workspace-favorites-empty = No favorite hosts yet — ★ a host in the sidebar
 workspace-favorites-store-protected = Favorites could not be read or saved — changes are disabled to protect the existing file
 workspace-favorites-add-header = Add to favorites
 workspace-favorite-unavailable = host no longer exists — this favorite cannot be started
+workspace-favorite-more-actions = More actions for { $host }
+workspace-favorite-manage-host-missing = This host no longer exists. Remove it from Favorites.
+workspace-favorite-manage-host-error = Host settings couldn't be opened. Try again.
 
 # Cockpit — session table (spec v3 §4.3)
 cockpit-table-empty = No sessions match this filter.
@@ -4337,3 +4346,94 @@ workspace-left-panel-ssh-manager-sessions-confirm-host-key = Connect to this hos
 cockpit-shell-sessions-connections = Open shell sessions in Connections
 
 ai-footer-subscription-target-changed = This session's execution target has changed. Restore the previous target or start a new conversation.
+
+# =============================================================================
+# SECTION: menu accessibility
+# =============================================================================
+menu-a11y-item-selected = { $item } Selected
+menu-a11y-submenu-expanded-label = { $item } Expanded
+menu-a11y-select-instructions = Press the up key or the down key to select a menu item
+menu-a11y-select-submenu-instructions = Press the up key or the down key to select a menu item. Press the right key to open the submenu
+menu-a11y-submenu-expanded = Submenu Expanded
+menu-a11y-open-submenu-instructions = Press the right key to open the selected submenu
+menu-a11y-submenu-closed = Submenu Closed
+menu-a11y-close-submenu-instructions = Removing focus from a submenu will close the submenu
+menu-a11y-submenu-escape-instructions = Press the escape key again to close the menu
+menu-a11y-menu-closed = Menu Closed
+menu-a11y-menu-escape-instructions = Press the escape key to close the menu
+menu-a11y-action-selected = Action Selected
+menu-a11y-action-instructions = Press the enter key to execute the selected menu item action
+
+# =============================================================================
+# SECTION: workspace remote routing
+# =============================================================================
+workspace-remote-pty-already-open = This remote PTY is already open in another window.
+workspace-remote-fallback-split-target-changed = Remote fallback was cancelled because its original split target changed.
+workspace-remote-agent-route-validation-unavailable = The daemon cannot validate this agent-to-PTY route.
+workspace-remote-daemon-connection-unavailable = The daemon connection is unavailable; refresh Agent Sessions.
+workspace-remote-pty-agent-changed = This PTY's foreground agent changed. Refresh Agent Sessions before attaching again.
+workspace-remote-session-generation-missing = The selected remote session has no verifiable generation.
+workspace-remote-daemon-route-disconnected = The selected daemon route is no longer connected.
+workspace-remote-daemon-route-ambiguous = The selected daemon route is ambiguous; refresh the session list.
+terminal-daemon-restore-host-identity-mismatch = Could not restore session: daemon identity mismatch.
+terminal-daemon-attach-pty-identity-mismatch = Could not re-attach session: daemon PTY identity mismatch.
+terminal-daemon-open-failed = Could not start session: { $detail }
+terminal-daemon-open-ack-unknown-upgrade-required = The host could not confirm whether this session was opened safely. Update the host daemon and reconnect; the session will not be retried automatically.
+terminal-daemon-managed-open-unconfirmed = The remote open result could not be confirmed safely.
+terminal-daemon-managed-launch-failed = The managed agent could not be started safely.
+terminal-daemon-managed-account-route-unsupported = This host does not support verified remote account routing. Update it and reconnect.
+terminal-daemon-managed-host-unsupported = This host does not support verified managed agents. Update it and reconnect.
+terminal-daemon-managed-route-incomplete = Select an exact remote account and project before starting a managed agent.
+terminal-daemon-managed-open-rejected = The host rejected the managed agent launch.
+terminal-daemon-managed-connection-failed = The managed agent connection could not be established.
+terminal-daemon-managed-claim-conflict = This managed agent is already open in another pane.
+terminal-daemon-managed-claim-unavailable = The remote session could not be claimed safely. Retry from the original host action.
+terminal-daemon-managed-generation-invalid = The host returned an unverifiable managed session identity.
+terminal-daemon-startup-ack-unconfirmed = The requested startup command could not be confirmed after { $attempts } attempts and will not be retried automatically.
+terminal-daemon-attach-identity-invalid = Could not re-attach session: the saved remote PTY identity is invalid.
+terminal-daemon-multiplexer-nested = This session is running inside { $detail } (auto-attached by the host's login profile). Zaplex already keeps this session alive natively, so two persistence layers are nested.
+terminal-daemon-attach-generation-invalid = Could not re-attach session: the daemon returned an invalid PTY generation.
+terminal-daemon-attach-agent-routing-unsupported = Could not re-attach agent: the host does not support validated agent routing.
+terminal-daemon-attach-failed = Could not re-attach session: { $detail }
+terminal-daemon-attach-generation-mismatch = Could not re-attach session: daemon generation mismatch.
+terminal-daemon-scrollback-truncated = Scrollback was truncated during a long disconnect.
+terminal-daemon-final-output-truncated = Some final session output was truncated before the exit notification.
+terminal-daemon-reconnected = Reconnected to { $host } — session restored, nothing lost.
+terminal-daemon-reattached = Re-attached to your running session on { $host } — right where you left off.
+terminal-daemon-connection-failed = Connection failed ({ $phase }): { $detail }
+terminal-daemon-persistent-session-active = Zaplexify active — persistent session on { $host }. Disconnects won't lose your work.
+terminal-daemon-session-ended-with-code = Session ended (exit code { $code }).
+terminal-daemon-session-ended = Session ended.
+terminal-daemon-connection-lost = Connection to { $host } was lost. Your persistent session may still be running there — reopen the host to reattach.
+terminal-daemon-startup-helper-upgrade-required = This host needs a newer Zaplex helper before it can start the requested command safely. Update the host helper and reconnect.
+terminal-daemon-startup-command-rejected = The requested startup command was not accepted and remains pending. Reconnect after the session helper recovers to retry it safely.
+terminal-daemon-startup-ack-invalid = The host returned an invalid startup confirmation; the requested command remains pending.
+terminal-remote-session-label = Remote session
+workspace-managed-launch-provider-defaults-required = Managed launches use the remote account route and provider defaults.
+workspace-managed-launch-remote-host-required = Managed agents are available only on a connected remote host.
+workspace-managed-launch-project-required = Choose an absolute project directory for this host.
+workspace-managed-launch-account-required = Choose an account discovered on this host before starting a managed agent.
+workspace-managed-launch-provider-unsupported = This provider has no managed entrypoint.
+workspace-managed-launch-account-provider-mismatch = The selected account belongs to another provider.
+workspace-managed-launch-identity-missing = The managed launch identity is missing. Retry from the spawn card.
+workspace-managed-launch-claude-required = Claude Remote Control requires Claude.
+workspace-managed-launch-host-not-found = The host “{ $host }” is no longer available.
+workspace-managed-launch-daemon-route-failed = The managed daemon route could not be opened.
+workspace-managed-launch-identity-changed = The managed launch identity changed before acknowledgement.
+workspace-managed-launch-tracking-failed = The managed launch could not be tracked safely.
+workspace-managed-launch-host-unsupported = Managed agents require a connected, up-to-date persistent host.
+workspace-managed-launch-credential-resolution-failed = The SSH credential could not be resolved: { $detail }
+workspace-managed-launch-headless-auth-required = Managed agents require headless key authentication.
+workspace-managed-launch-native-required = Managed agents require the native daemon transport.
+workspace-managed-launch-ack-mismatch = The managed launch acknowledgement did not match { $launch_id }.
+workspace-remote-account-preflight-failed = The remote account session on { $host } could not start: { $detail }
+workspace-managed-launch-preflight-failed = The managed agent on { $host } could not start: { $detail }
+workspace-remote-account-install-failed = The remote account session on { $host } could not install the required session service: { $detail }
+workspace-managed-launch-install-failed = The managed agent on { $host } could not install the required session service: { $detail }
+workspace-remote-account-connection-failed = The remote account session on { $host } could not connect: { $detail }
+workspace-managed-launch-connection-failed = The managed agent on { $host } could not connect: { $detail }
+workspace-remote-account-handshake-failed = The remote account session on { $host } could not initialize the session service: { $detail }
+workspace-managed-launch-handshake-failed = The managed agent on { $host } could not initialize the session service: { $detail }
+workspace-remote-account-readiness-failed = The remote account session on { $host } ended before it became ready.
+workspace-managed-launch-readiness-failed = The managed agent on { $host } ended before it became ready.
+workspace-remote-routed-split-target-changed = The remote account or managed session could not resume because its original split target changed.

@@ -1,14 +1,13 @@
 //! SFTP file browser pane (a central pane, opened via the SSH manager tree).
 //!
-//! Mirrors the minimal structure of `ssh_server_pane.rs`. The pane is not persisted (
-//! `LeafContents::Sftp { .. }` returns false from `is_persisted()`);
-//! its data flows through SFTP connection operations.
+//! Mirrors the minimal structure of `ssh_server_pane.rs`. Its stable registry
+//! node, mode, and current directory are persisted with the pane tree.
 //! author: logic
 //! date: 2026-05-26
 
 use warpui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
 
-use crate::app_state::LeafContents;
+use crate::app_state::{FileManagerPaneMode, LeafContents};
 use crate::pane_group::{BackingView, PaneConfiguration, PaneContent, PaneGroup, PaneView};
 use crate::sftp_manager::browser::SftpBrowserView;
 
@@ -20,6 +19,7 @@ pub struct SftpPane {
     pane_configuration: ModelHandle<PaneConfiguration>,
     /// Business node id (not the pane view id), used for snapshot serialization.
     node_id: String,
+    mode: FileManagerPaneMode,
 }
 
 impl SftpPane {
@@ -48,6 +48,7 @@ impl SftpPane {
             view: pane_view,
             pane_configuration,
             node_id,
+            mode: FileManagerPaneMode::Remote,
         }
     }
 
@@ -72,13 +73,13 @@ impl SftpPane {
             view: pane_view,
             pane_configuration,
             node_id,
+            mode: FileManagerPaneMode::RemotePicker,
         }
     }
 
     /// Creates a file-manager pane over the **local** filesystem (FM pane-mode
     /// P1), rooted at `start_path`. Snapshots as `LeafContents::Sftp` with an
-    /// empty node id — irrelevant in practice since SFTP/FM panes are not
-    /// persisted (`is_persisted()` is false).
+    /// empty node id and explicit local mode.
     pub fn new_local<V: View>(start_path: std::path::PathBuf, ctx: &mut ViewContext<V>) -> Self {
         let browser_view =
             ctx.add_typed_action_view(move |ctx| SftpBrowserView::new_local(start_path, ctx));
@@ -91,6 +92,7 @@ impl SftpPane {
             view: pane_view,
             pane_configuration,
             node_id: String::new(),
+            mode: FileManagerPaneMode::Local,
         }
     }
 }
@@ -131,9 +133,18 @@ impl PaneContent for SftpPane {
         ctx.unsubscribe_to_view(&child);
     }
 
-    fn snapshot(&self, _ctx: &AppContext) -> LeafContents {
+    fn snapshot(&self, ctx: &AppContext) -> LeafContents {
+        let current_path = self
+            .view
+            .as_ref(ctx)
+            .child(ctx)
+            .as_ref(ctx)
+            .current_path
+            .clone();
         LeafContents::Sftp {
             node_id: self.node_id.clone(),
+            mode: self.mode,
+            current_path,
         }
     }
 
