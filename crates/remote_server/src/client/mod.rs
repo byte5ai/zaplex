@@ -36,6 +36,9 @@ use warpui::r#async::TransportStream;
 
 /// Default request timeout (2 minutes).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// Leaves enough of the initial-attach budget for one idempotent retry and
+/// recovery UI when an `OpenSession` acknowledgement is lost.
+const OPEN_SESSION_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Errors from the `RemoteServerClient`.
 #[derive(thiserror::Error, Debug)]
@@ -739,8 +742,12 @@ impl RemoteServerClient {
     // ── Native session host (Stage 2 client side) ────────────────────────
 
     /// Opens a new daemon-hosted PTY session and awaits its assigned id.
+    // The arguments map one-to-one to OpenSession protocol fields at this transport boundary.
+    #[allow(clippy::too_many_arguments)]
     pub async fn open_session(
         &self,
+        logical_open_id: String,
+        logical_open_attempt: u64,
         cwd: Option<String>,
         shell: Option<String>,
         env: std::collections::HashMap<String, String>,
@@ -749,6 +756,8 @@ impl RemoteServerClient {
         ring_ceiling_bytes: Option<u64>,
     ) -> Result<SessionOpened, ClientError> {
         self.open_session_with_account_route(
+            logical_open_id,
+            logical_open_attempt,
             cwd,
             shell,
             env,
@@ -770,6 +779,8 @@ impl RemoteServerClient {
     #[allow(clippy::too_many_arguments)]
     pub async fn open_session_for_agent_account(
         &self,
+        logical_open_id: String,
+        logical_open_attempt: u64,
         cwd: Option<String>,
         shell: Option<String>,
         env: std::collections::HashMap<String, String>,
@@ -779,6 +790,8 @@ impl RemoteServerClient {
         route: AgentLaunchRoute,
     ) -> Result<SessionOpened, ClientError> {
         self.open_session_with_account_route(
+            logical_open_id,
+            logical_open_attempt,
             cwd,
             shell,
             env,
@@ -798,6 +811,8 @@ impl RemoteServerClient {
     #[allow(clippy::too_many_arguments)]
     pub async fn open_managed_agent_session(
         &self,
+        logical_open_id: String,
+        logical_open_attempt: u64,
         cwd: String,
         shell: Option<String>,
         env: std::collections::HashMap<String, String>,
@@ -809,6 +824,8 @@ impl RemoteServerClient {
         requested_min_available_bytes: Option<u64>,
     ) -> Result<SessionOpened, ClientError> {
         self.open_session_with_account_route(
+            logical_open_id,
+            logical_open_attempt,
             Some(cwd),
             shell,
             env,
@@ -826,6 +843,8 @@ impl RemoteServerClient {
     #[allow(clippy::too_many_arguments)]
     async fn open_session_with_account_route(
         &self,
+        logical_open_id: String,
+        logical_open_attempt: u64,
         cwd: Option<String>,
         shell: Option<String>,
         env: std::collections::HashMap<String, String>,
@@ -835,6 +854,39 @@ impl RemoteServerClient {
         agent_launch_route: Option<AgentLaunchRoute>,
         managed_launch: Option<ManagedLaunch>,
         requested_min_available_bytes: Option<u64>,
+    ) -> Result<SessionOpened, ClientError> {
+        self.open_session_with_account_route_and_timeout(
+            logical_open_id,
+            logical_open_attempt,
+            cwd,
+            shell,
+            env,
+            rows,
+            cols,
+            ring_ceiling_bytes,
+            agent_launch_route,
+            managed_launch,
+            requested_min_available_bytes,
+            OPEN_SESSION_ACK_TIMEOUT,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn open_session_with_account_route_and_timeout(
+        &self,
+        logical_open_id: String,
+        logical_open_attempt: u64,
+        cwd: Option<String>,
+        shell: Option<String>,
+        env: std::collections::HashMap<String, String>,
+        rows: u32,
+        cols: u32,
+        ring_ceiling_bytes: Option<u64>,
+        agent_launch_route: Option<AgentLaunchRoute>,
+        managed_launch: Option<ManagedLaunch>,
+        requested_min_available_bytes: Option<u64>,
+        timeout: Duration,
     ) -> Result<SessionOpened, ClientError> {
         let request_id = RequestId::new();
         let msg = ClientMessage {
@@ -853,9 +905,13 @@ impl RemoteServerClient {
                 agent_launch_route,
                 managed_launch,
                 requested_min_available_bytes,
+                logical_open_id,
+                logical_open_attempt,
             })),
         };
-        let response = self.send_request(request_id, msg).await?;
+        let response = self
+            .send_request_with_timeout(request_id, msg, timeout)
+            .await?;
         match response.message {
             Some(server_message::Message::SessionOpened(resp)) => Ok(resp),
             other => {

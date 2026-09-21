@@ -66,7 +66,9 @@ pub use crate::terminal::view::rich_content::{
     RichContentMetadata,
 };
 use crate::terminal::view::zero_state_block::TerminalViewZeroStateBlock;
-use crate::view_components::action_button::{ActionButton, ButtonSize, KeystrokeSource};
+use crate::view_components::action_button::{
+    ActionButton, ButtonSize, KeystrokeSource, NakedTheme, SecondaryTheme,
+};
 
 use use_agent_footer::UseAgentToolbar;
 
@@ -1758,6 +1760,18 @@ pub enum Event {
     PendingCommandCompleted,
     SessionBootstrapped,
     SshSessionBootstrapped,
+    /// Ordinary input for this daemon connection became usable after its exact
+    /// PTY generation was attached and replay completed.
+    RemoteInputReady {
+        connection_session_id: warp_core::SessionId,
+    },
+    /// The bounded remote-input attempt reached a terminal failure. Classic SSH
+    /// uses no manager session id; daemon failures retain their exact one.
+    RemoteInputFailed {
+        connection_session_id: Option<warp_core::SessionId>,
+    },
+    RetryRemoteRestore,
+    CancelRemoteRestore,
     ShellSpawned(ShellType),
 
     /// This terminal pane has initiated a file upload to a remote host.
@@ -1858,6 +1872,37 @@ pub enum Event {
         conversation_id: AIConversationId,
     },
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RemoteInputPhase {
+    Transport,
+    Attach,
+    Replay,
+    Ready,
+    Failed,
+    Corrupt,
+    Cancelled,
+}
+
+fn remote_input_phase_update_matches(
+    bound_session_id: Option<warp_core::SessionId>,
+    update_session_id: Option<warp_core::SessionId>,
+) -> bool {
+    match bound_session_id {
+        Some(bound_session_id) => update_session_id == Some(bound_session_id),
+        None => true,
+    }
+}
+
+fn remote_readiness_actions_visible(phase: RemoteInputPhase) -> bool {
+    phase == RemoteInputPhase::Failed
+}
+
+fn remote_input_draft_change_needs_snapshot(phase: Option<RemoteInputPhase>) -> bool {
+    phase.is_some()
+}
+
+const CLASSIC_SSH_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug)]
 pub enum LongRunningCommandAgentInteractionState {
@@ -2706,6 +2751,15 @@ pub struct TerminalView {
     /// State handle for the shimmering text animation in the remote server loading footer.
     /// Persisted across renders so the animation doesn't restart.
     remote_server_shimmer_handle: ShimmeringTextStateHandle,
+    /// Explicit readiness for a remote pane. The input editor keeps its draft,
+    /// while normal submissions stay blocked until this reaches Ready.
+    remote_input_phase: Option<RemoteInputPhase>,
+    /// Remains true after initial input readiness so transient reconnect phases
+    /// cannot make an established daemon pane look like a new pending start.
+    remote_input_has_reached_initial_ready: bool,
+    remote_input_session_id: Option<warp_core::SessionId>,
+    remote_restore_retry_button: ViewHandle<ActionButton>,
+    remote_restore_cancel_button: ViewHandle<ActionButton>,
 }
 
 /// Parameters stashed when a code review pane open is requested with
@@ -3806,6 +3860,30 @@ impl TerminalView {
                 )
             })
         });
+        let remote_restore_retry_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::t!("terminal-remote-readiness-retry"), SecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .with_keybinding(
+                    KeystrokeSource::Fixed(Keystroke {
+                        key: "enter".to_string(),
+                        ..Default::default()
+                    }),
+                    ctx,
+                )
+                .on_click(|ctx| ctx.dispatch_typed_action(TerminalAction::RetryRemoteRestore))
+        });
+        let remote_restore_cancel_button = ctx.add_typed_action_view(|ctx| {
+            ActionButton::new(crate::t!("terminal-remote-readiness-cancel"), NakedTheme)
+                .with_size(ButtonSize::Small)
+                .with_keybinding(
+                    KeystrokeSource::Fixed(Keystroke {
+                        key: "escape".to_string(),
+                        ..Default::default()
+                    }),
+                    ctx,
+                )
+                .on_click(|ctx| ctx.dispatch_typed_action(TerminalAction::CancelRemoteRestore))
+        });
 
         let window_id = ctx.window_id();
         let mut terminal_view = Self {
@@ -3867,6 +3945,11 @@ impl TerminalView {
             focus_handle: None,
             sessions,
             remote_server_shimmer_handle: ShimmeringTextStateHandle::new(),
+            remote_input_phase: None,
+            remote_input_has_reached_initial_ready: false,
+            remote_input_session_id: None,
+            remote_restore_retry_button,
+            remote_restore_cancel_button,
             active_block_metadata: None,
             block_text_selection_start_position: None,
             inline_banners_state: Default::default(),
@@ -6306,6 +6389,143 @@ impl TerminalView {
         &self.input
     }
 
+    pub(crate) fn input_draft(&self, ctx: &AppContext) -> String {
+        self.input.as_ref(ctx).buffer_text(ctx)
+    }
+
+    pub(crate) fn remote_input_is_ready(&self) -> bool {
+        self.remote_input_phase == Some(RemoteInputPhase::Ready)
+    }
+
+    pub(crate) fn remote_input_has_failed(&self) -> bool {
+        matches!(
+            self.remote_input_phase,
+            Some(
+                RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
+            )
+        )
+    }
+
+    pub(crate) fn remote_input_initial_start_is_pending(&self) -> bool {
+        !self.remote_input_has_reached_initial_ready && !self.remote_input_has_failed()
+    }
+
+    pub(crate) fn remote_input_session_id(&self) -> Option<warp_core::SessionId> {
+        self.remote_input_session_id
+    }
+
+    pub(crate) fn restore_input_draft(&mut self, draft: String, ctx: &mut ViewContext<Self>) {
+        if draft.is_empty() {
+            return;
+        }
+        self.input.update(ctx, |input, ctx| {
+            input.send_input_buffer_to_terminal_editor(Arc::new(draft), ctx);
+        });
+    }
+
+    pub(crate) fn begin_classic_ssh_readiness(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.remote_input_phase.is_some() {
+            return;
+        }
+        self.set_remote_input_phase(RemoteInputPhase::Transport, None, ctx);
+        let _ = ctx.spawn(
+            async {
+                Timer::after(CLASSIC_SSH_READY_TIMEOUT).await;
+            },
+            |view, (), ctx| {
+                if view.remote_input_session_id.is_none()
+                    && view.remote_input_phase == Some(RemoteInputPhase::Transport)
+                {
+                    view.set_remote_input_phase(RemoteInputPhase::Failed, None, ctx);
+                }
+            },
+        );
+    }
+
+    pub(crate) fn fail_remote_input_readiness(&mut self, ctx: &mut ViewContext<Self>) {
+        self.set_remote_input_phase(RemoteInputPhase::Failed, None, ctx);
+    }
+
+    pub(crate) fn mark_corrupt_remote_restore(&mut self, ctx: &mut ViewContext<Self>) {
+        self.remote_input_phase = Some(RemoteInputPhase::Corrupt);
+        self.remote_input_session_id = None;
+        self.input.update(ctx, |input, ctx| {
+            input.cancel_pending_system_command();
+            input.set_ordinary_command_input_ready(false, ctx);
+        });
+        ctx.notify();
+    }
+
+    pub(crate) fn cancel_remote_input_readiness(&mut self, ctx: &mut ViewContext<Self>) {
+        self.remote_input_phase = Some(RemoteInputPhase::Cancelled);
+        self.remote_input_session_id = None;
+        self.input.update(ctx, |input, ctx| {
+            input.cancel_pending_system_command();
+            input.set_ordinary_command_input_ready(false, ctx);
+        });
+        ctx.notify();
+    }
+
+    pub(crate) fn set_remote_input_phase(
+        &mut self,
+        phase: RemoteInputPhase,
+        connection_session_id: Option<warp_core::SessionId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if matches!(
+            self.remote_input_phase,
+            Some(
+                RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
+            )
+        ) && self.remote_input_phase != Some(phase)
+        {
+            return;
+        }
+        if !remote_input_phase_update_matches(self.remote_input_session_id, connection_session_id) {
+            log::warn!("Ignored unbound or stale remote input phase for a daemon-bound terminal");
+            return;
+        }
+        let became_ready = phase == RemoteInputPhase::Ready
+            && self.remote_input_phase != Some(RemoteInputPhase::Ready);
+        let became_failed = phase == RemoteInputPhase::Failed
+            && self.remote_input_phase != Some(RemoteInputPhase::Failed);
+        if phase == RemoteInputPhase::Ready {
+            self.remote_input_has_reached_initial_ready = true;
+        }
+        self.remote_input_phase = Some(phase);
+        if connection_session_id.is_some() {
+            self.remote_input_session_id = connection_session_id;
+        }
+        self.input.update(ctx, |input, ctx| {
+            if matches!(
+                phase,
+                RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
+            ) {
+                input.cancel_pending_system_command();
+            }
+            input.set_ordinary_command_input_ready(phase == RemoteInputPhase::Ready, ctx);
+        });
+        if phase != RemoteInputPhase::Ready && ctx.is_self_or_child_focused() {
+            self.focus_terminal(ctx);
+        }
+        if became_ready {
+            if ctx.is_self_or_child_focused() {
+                self.redetermine_global_focus(ctx);
+            }
+            if let Some(connection_session_id) = self.remote_input_session_id {
+                ctx.emit(Event::RemoteInputReady {
+                    connection_session_id,
+                });
+            }
+        }
+        if became_failed {
+            ctx.emit(Event::RemoteInputFailed {
+                connection_session_id: self.remote_input_session_id,
+            });
+        }
+        ctx.notify();
+    }
+
     pub(crate) fn control_context(&self) -> Option<&crate::control_surface::ControlPtyContext> {
         self.control_context.as_ref()
     }
@@ -7345,6 +7565,23 @@ impl TerminalView {
         data: B,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Daemon PTYs accept no ordinary bytes before their exact attach is
+        // ready. Classic SSH keeps raw terminal input available only while the
+        // detected SSH command is active (for host-key/password prompts);
+        // command-editor submission remains gated throughout.
+        if self.remote_input_phase.is_some_and(|phase| {
+            phase != RemoteInputPhase::Ready
+                && (self.remote_input_session_id.is_some()
+                    || matches!(
+                        phase,
+                        RemoteInputPhase::Failed
+                            | RemoteInputPhase::Corrupt
+                            | RemoteInputPhase::Cancelled
+                    )
+                    || self.zaplexify_state.get_pending_ssh_host().is_none())
+        }) {
+            return;
+        }
         {
             let mut terminal_model = self.model.lock();
             let active_block = terminal_model.block_list().active_block();
@@ -9352,6 +9589,13 @@ impl TerminalView {
                 ctx.request_user_attention();
             }
             ModelEvent::Exit { reason } => {
+                if self.remote_input_phase.is_some() {
+                    self.set_remote_input_phase(
+                        RemoteInputPhase::Failed,
+                        self.remote_input_session_id,
+                        ctx,
+                    );
+                }
                 if !self.manual_pty_shutdown_requested {
                     self.maybe_send_agent_exited_shell_telemetry(ctx);
                 }
@@ -9822,6 +10066,11 @@ impl TerminalView {
                 if self.awaiting_pending_command_completion {
                     self.awaiting_pending_command_completion = false;
                     ctx.emit(Event::PendingCommandCompleted);
+                    if self.remote_input_session_id.is_none()
+                        && self.remote_input_phase == Some(RemoteInputPhase::Transport)
+                    {
+                        self.set_remote_input_phase(RemoteInputPhase::Failed, None, ctx);
+                    }
 
                     // If agent view entry was deferred until setup commands
                     // finished, enter it now (unless suppressed by onboarding).
@@ -10720,6 +10969,66 @@ impl TerminalView {
             .finish()
     }
 
+    fn render_remote_input_readiness_footer(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        let phase = self.remote_input_phase?;
+        let message = match phase {
+            RemoteInputPhase::Transport => crate::t!("terminal-remote-readiness-transport"),
+            RemoteInputPhase::Attach => crate::t!("terminal-remote-readiness-attach"),
+            RemoteInputPhase::Replay => crate::t!("terminal-remote-readiness-replay"),
+            RemoteInputPhase::Ready => return None,
+            RemoteInputPhase::Failed => crate::t!("terminal-remote-readiness-failed"),
+            RemoteInputPhase::Corrupt => crate::t!("terminal-remote-readiness-corrupt"),
+            RemoteInputPhase::Cancelled => crate::t!("terminal-remote-readiness-cancelled"),
+        };
+        let content = if matches!(
+            phase,
+            RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
+        ) {
+            Text::new(
+                message.clone(),
+                appearance.monospace_font_family(),
+                appearance.monospace_font_size() - 2.,
+            )
+            .with_color(appearance.theme().ui_error_color())
+            .finish()
+        } else {
+            shimmering_warp_loading_text(
+                message,
+                appearance.monospace_font_size() - 2.,
+                self.remote_server_shimmer_handle.clone(),
+                app,
+            )
+        };
+        let content = if remote_readiness_actions_visible(phase) {
+            let message = Flex::row()
+                .with_child(Shrinkable::new(1., content).finish())
+                .finish();
+            let actions = Flex::row()
+                .with_spacing(8.)
+                .with_child(ChildView::new(&self.remote_restore_retry_button).finish())
+                .with_child(ChildView::new(&self.remote_restore_cancel_button).finish())
+                .finish();
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_spacing(8.)
+                .with_child(message)
+                .with_child(actions)
+                .finish()
+        } else {
+            content
+        };
+        Some(
+            Container::new(content)
+                .with_padding_left(*PADDING_LEFT)
+                .with_vertical_padding(8.)
+                .finish(),
+        )
+    }
+
     /// Creates and inserts the install-failed banner as rich content.
     fn show_ssh_remote_server_failed_banner(
         &mut self,
@@ -11313,6 +11622,9 @@ impl TerminalView {
         self.refresh_warp_prompt(ctx);
         ctx.emit(Event::SessionBootstrapped);
         if is_ssh_session {
+            if self.remote_input_phase.is_some() && self.remote_input_session_id.is_none() {
+                self.set_remote_input_phase(RemoteInputPhase::Ready, None, ctx);
+            }
             ctx.emit(Event::SshSessionBootstrapped);
         }
     }
@@ -13217,6 +13529,28 @@ impl TerminalView {
     // `execute_pending_command` (either from a `BlockCompleted` or `BootstrapPrecmdDone` event)
     pub fn execute_command_or_set_pending(&mut self, command: &str, ctx: &mut ViewContext<Self>) {
         self.set_pending_command(command, ctx);
+        self.execute_pending_command((), ctx);
+    }
+
+    /// Queue a connection/setup command without putting it in the editor. This
+    /// preserves a restored draft while the local shell reaches bootstrap and
+    /// guarantees that later execution still uses the captured setup command.
+    pub(crate) fn execute_system_command_or_set_pending(
+        &mut self,
+        command: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if matches!(
+            self.remote_input_phase,
+            Some(
+                RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
+            )
+        ) {
+            return;
+        }
+        self.input.update(ctx, |input, _| {
+            input.set_pending_system_command(command);
+        });
         self.execute_pending_command((), ctx);
     }
 
@@ -18053,6 +18387,13 @@ impl TerminalView {
     }
 
     fn focus_input_box(&mut self, ctx: &mut ViewContext<Self>) {
+        if self
+            .remote_input_phase
+            .is_some_and(|phase| phase != RemoteInputPhase::Ready)
+        {
+            self.focus_terminal(ctx);
+            return;
+        }
         // Only clear selected blocks and text if we're not in AI mode since in AI mode we don't want to clear
         // the selected blocks or text (context) when we focus the input.
         //
@@ -19312,6 +19653,9 @@ impl TerminalView {
                 block_id,
                 operations,
             } => {
+                if remote_input_draft_change_needs_snapshot(self.remote_input_phase) {
+                    ctx.emit(Event::AppStateChanged);
+                }
                 ctx.emit(Event::InputEditorUpdated {
                     block_id: block_id.clone(),
                     operations: operations.clone(),
@@ -23390,6 +23734,14 @@ impl TypedActionView for TerminalView {
                 "Opened file search palette",
                 WarpA11yRole::ButtonRole,
             )),
+            RetryRemoteRestore => Custom(AccessibilityContent::new_without_help(
+                crate::t!("terminal-remote-readiness-retry"),
+                WarpA11yRole::ButtonRole,
+            )),
+            CancelRemoteRestore => Custom(AccessibilityContent::new_without_help(
+                crate::t!("terminal-remote-readiness-cancel"),
+                WarpA11yRole::ButtonRole,
+            )),
             InsertCommandCorrection { .. }
             | BlockListContextMenu(_)
             | CloseContextMenu
@@ -23790,6 +24142,8 @@ impl TypedActionView for TerminalView {
                     &crate::workspace::WorkspaceAction::OpenLocalFileManager { start_path },
                 );
             }
+            RetryRemoteRestore => ctx.emit(Event::RetryRemoteRestore),
+            CancelRemoteRestore => ctx.emit(Event::CancelRemoteRestore),
             PromptContextMenu {
                 position_offset_from_prompt,
             } => self.show_prompt_context_menu(*position_offset_from_prompt, ctx),
@@ -24599,8 +24953,15 @@ impl View for TerminalView {
                     column.add_child(ChildView::new(&self.use_agent_footer).finish());
                 }
 
-                if self.is_input_box_visible(&model, app) {
+                let remote_input_is_gated = self
+                    .remote_input_phase
+                    .is_some_and(|phase| phase != RemoteInputPhase::Ready);
+                if self.is_input_box_visible(&model, app) || remote_input_is_gated {
                     column.add_child(self.render_input());
+                    if let Some(footer) = self.render_remote_input_readiness_footer(appearance, app)
+                    {
+                        column.add_child(footer);
+                    }
                 } else if self.show_remote_server_loading_footer(&model, app) {
                     column.add_child(
                         self.render_remote_server_loading_footer(&model, appearance, app),
@@ -24952,6 +25313,26 @@ impl View for TerminalView {
                 .finish()
         } else {
             element
+        };
+
+        let final_element = if self.remote_input_phase == Some(RemoteInputPhase::Failed) {
+            EventHandler::new(final_element)
+                .on_keydown(|ctx, _, keystroke| {
+                    let unmodified =
+                        !keystroke.cmd && !keystroke.ctrl && !keystroke.alt && !keystroke.shift;
+                    if unmodified && keystroke.key == "enter" {
+                        ctx.dispatch_typed_action(TerminalAction::RetryRemoteRestore);
+                        DispatchEventResult::StopPropagation
+                    } else if unmodified && keystroke.key == "escape" {
+                        ctx.dispatch_typed_action(TerminalAction::CancelRemoteRestore);
+                        DispatchEventResult::StopPropagation
+                    } else {
+                        DispatchEventResult::PropagateToParent
+                    }
+                })
+                .finish()
+        } else {
+            final_element
         };
 
         let _ = ambient_agent_task_id_for_details_panel;

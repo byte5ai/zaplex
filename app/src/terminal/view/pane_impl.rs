@@ -94,10 +94,22 @@ impl TerminalView {
     }
 
     /// Set the pane title from agent chrome when available, falling back to the regular terminal title.
-    pub(super) fn update_pane_configuration(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn update_pane_configuration(&mut self, ctx: &mut ViewContext<Self>) {
         let is_ambient_agent = self.is_ambient_agent_session(ctx);
         let selected_conversation_title = self.selected_conversation_display_title(ctx);
         let selected_cli_agent_title = self.selected_cli_agent_title_for_chrome(ctx);
+        let identity_host = self
+            .pane_configuration
+            .as_ref(ctx)
+            .terminal_identity_host()
+            .map(str::to_owned)
+            .unwrap_or_else(|| crate::t!("cockpit-spawn-card-host-local").to_string());
+        let automatic_identity = super::tab_metadata::terminal_identity(
+            &identity_host,
+            self.display_working_directory(ctx).as_deref(),
+            &self.terminal_title,
+        );
+        let mut identity_tooltip = None;
 
         // Prefer CLI agent session text before the terminal title,
         // matching the vertical-tab behavior in terminal_primary_line_data().
@@ -117,13 +129,15 @@ impl TerminalView {
                     if is_ambient_agent {
                         default_agent_conversation_title()
                     } else {
-                        self.terminal_title.clone()
+                        identity_tooltip = Some(automatic_identity.full);
+                        automatic_identity.short
                     }
                 }
             }
         };
         self.pane_configuration.update(ctx, |pane_config, ctx| {
             pane_config.set_title(new_pane_title, ctx);
+            pane_config.set_title_tooltip(identity_tooltip, ctx);
             if FeatureFlag::AgentView.is_enabled() {
                 pane_config.refresh_pane_header_overflow_menu_items(ctx);
             }
@@ -202,6 +216,8 @@ impl TerminalView {
         let appearance = Appearance::as_ref(app);
         let pane_config = self.pane_configuration.as_ref(app);
         let title = pane_config.title().to_owned();
+        let title_tooltip = pane_config.title_tooltip().map(str::to_owned);
+        let title_tooltip_mouse_state = pane_config.title_tooltip_mouse_state();
         let clip_config = if self.is_using_conversation_for_pane_header_title {
             ClipConfig::ellipsis()
         } else {
@@ -293,7 +309,27 @@ impl TerminalView {
             center_row.add_child(title_element);
         }
 
-        center_row.finish()
+        let title_row = center_row.finish();
+        let Some(title_tooltip) = title_tooltip else {
+            return title_row;
+        };
+        let ui_builder = appearance.ui_builder().clone();
+        Hoverable::new(title_tooltip_mouse_state, move |state| {
+            let mut stack = Stack::new().with_child(title_row);
+            if state.is_hovered() {
+                stack.add_positioned_overlay_child(
+                    ui_builder.tool_tip(title_tooltip).build().finish(),
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., -4.),
+                        ParentOffsetBounds::Unbounded,
+                        ParentAnchor::TopMiddle,
+                        ChildAnchor::BottomMiddle,
+                    ),
+                );
+            }
+            stack.finish()
+        })
+        .finish()
     }
 
     /// Returns the right-column element and the estimated minimum width of
@@ -456,10 +492,22 @@ impl BackingView for TerminalView {
         // not become clearer by being listed again.
 
         // Split-pane related items.
+        if !items.is_empty() {
+            items.push(MenuItem::Separator);
+        }
+        items.push(
+            MenuItemFields::new(crate::t!("keybinding-desc-pane-group-split-right"))
+                .with_on_select_action(TerminalAction::SplitRight(None))
+                .into_item(),
+        );
+        items.push(
+            MenuItemFields::new(crate::t!("keybinding-desc-pane-group-split-down"))
+                .with_on_select_action(TerminalAction::SplitDown(None))
+                .into_item(),
+        );
+
         if self.split_pane_state(ctx).is_in_split_pane() {
-            if !items.is_empty() {
-                items.push(MenuItem::Separator);
-            }
+            items.push(MenuItem::Separator);
 
             let is_maximized = self.split_pane_state(ctx).is_maximized();
             items.push(

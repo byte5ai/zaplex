@@ -16,21 +16,23 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Border, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Point, Radius, Rect, ScrollbarWidth, Shrinkable, Stack,
-    Text,
+    Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Element, EventHandler,
+    Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds, Point, Radius,
+    Rect, ScrollbarWidth, Shrinkable, Stack, Text,
 };
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
 use warpui::windowing::{StateEvent, WindowManager};
 use warpui::{
-    AfterLayoutContext, AppContext, Entity, EventContext, LayoutContext, PaintContext,
-    SingletonEntity, SizeConstraint, TypedActionView, View, ViewContext, WindowId,
+    accessibility::{AccessibilityContent, WarpA11yRole},
+    AfterLayoutContext, AppContext, BlurContext, Entity, EventContext, FocusContext, LayoutContext,
+    PaintContext, SingletonEntity, SizeConstraint, TypedActionView, View, ViewContext, ViewHandle,
+    WindowId,
 };
 use zaplex_cockpit::{
-    fleet_conductor_session_count, format_cost, format_relative, group_project_sessions, heat_fill,
+    fleet_conductor_session_count, format_cost, format_relative, group_project_sessions,
     heat_pct_label_with_provenance, host_conductor_session_count, host_ident, session_glyph,
     session_key, AccountUsage, AgentInventoryStatus, ConductorSession, FleetTree, HostAvailability,
     HostNode, Provider, SessionSnapshot, SessionState, TaskState, TaskStatus, UsageProvenance,
@@ -40,17 +42,17 @@ use crate::cockpit::account_identity;
 use crate::cockpit::fleet_details::ManagedFleetInventory;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    attention_coloru, glyph_cell, hover_row, provider_color_on, provider_label, status_dot_coloru,
-    utilisation_coloru, verb_button_colored, zone_card, BLOCK_RADIUS, GLYPH_COL_WIDTH,
+    attention_coloru, glyph_cell, hover_row, provider_label, status_dot_coloru, utilisation_coloru,
+    utilisation_track, zone_card, BLOCK_RADIUS, GLYPH_COL_WIDTH,
 };
 use crate::settings::AccessibilitySettings;
 use crate::ui_components::icons;
 use crate::ui_components::window_focus_dimming::WindowFocusDimming;
+use crate::view_components::action_button::{ActionButton, ButtonSize, PaneHeaderTheme};
 use crate::WorkspaceAction;
 
 const CARD_PADDING: f32 = 8.0;
 const CARD_SPACING: f32 = 4.0;
-const HEAT_BAR_WIDTH: f32 = 90.0;
 const HEAT_BAR_HEIGHT: f32 = 6.0;
 const TASK_PEEK_WIDTH: f32 = 390.0;
 pub(super) const TASK_PEEK_DELAY: Duration = Duration::from_millis(350);
@@ -236,6 +238,115 @@ pub enum CockpitPanelEvent {
     OpenCockpitPane(Option<String>),
 }
 
+enum FleetTotalButtonEvent {
+    Activated,
+}
+
+#[derive(Clone, Debug)]
+enum FleetTotalButtonAction {
+    Activate,
+}
+
+fn is_fleet_total_activation_keystroke(keystroke: &warpui::keymap::Keystroke) -> bool {
+    !keystroke.cmd
+        && !keystroke.ctrl
+        && !keystroke.alt
+        && !keystroke.shift
+        && !keystroke.meta
+        && matches!(keystroke.key.as_str(), "enter" | "numpadenter" | " ")
+}
+
+struct FleetTotalButton {
+    button: ViewHandle<ActionButton>,
+    label: String,
+    #[cfg(test)]
+    activation_count: usize,
+}
+
+impl FleetTotalButton {
+    fn new(ctx: &mut ViewContext<Self>) -> Self {
+        let button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("", PaneHeaderTheme)
+                .with_size(ButtonSize::XSmall)
+                .on_click(|ctx| ctx.dispatch_typed_action(FleetTotalButtonAction::Activate))
+        });
+        Self {
+            button,
+            label: String::new(),
+            #[cfg(test)]
+            activation_count: 0,
+        }
+    }
+
+    fn set_label(&mut self, label: String, ctx: &mut ViewContext<Self>) {
+        self.label.clone_from(&label);
+        self.button
+            .update(ctx, |button, ctx| button.set_label(label, ctx));
+        ctx.notify();
+    }
+}
+
+impl Entity for FleetTotalButton {
+    type Event = FleetTotalButtonEvent;
+}
+
+impl View for FleetTotalButton {
+    fn ui_name() -> &'static str {
+        "FleetTotalButton"
+    }
+
+    fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {
+        Some(AccessibilityContent::new_without_help(
+            self.label.clone(),
+            WarpA11yRole::ButtonRole,
+        ))
+    }
+
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() {
+            self.button
+                .update(ctx, |button, ctx| button.set_active(true, ctx));
+        }
+    }
+
+    fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
+        if blur_ctx.is_self_blurred() {
+            self.button
+                .update(ctx, |button, ctx| button.set_active(false, ctx));
+        }
+    }
+
+    fn render(&self, _app: &AppContext) -> Box<dyn Element> {
+        EventHandler::new(ChildView::new(&self.button).finish())
+            .on_keydown(|ctx, _, keystroke| {
+                if is_fleet_total_activation_keystroke(keystroke) {
+                    ctx.dispatch_typed_action(FleetTotalButtonAction::Activate);
+                    DispatchEventResult::StopPropagation
+                } else {
+                    DispatchEventResult::PropagateToParent
+                }
+            })
+            .finish()
+    }
+}
+
+impl TypedActionView for FleetTotalButton {
+    type Action = FleetTotalButtonAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            FleetTotalButtonAction::Activate => {
+                #[cfg(test)]
+                {
+                    self.activation_count += 1;
+                }
+                ctx.focus_self();
+                ctx.emit(FleetTotalButtonEvent::Activated);
+            }
+        }
+    }
+}
+
 pub struct CockpitPanel {
     window_id: WindowId,
     scroll_state: ClippedScrollStateHandle,
@@ -256,9 +367,9 @@ pub struct CockpitPanel {
     conductor_host_glyph_states: HashMap<String, MouseStateHandle>,
     /// Explicit host expansion overrides. Absent means expanded.
     expanded_hosts: HashMap<String, bool>,
-    /// Hover state of the „KI-KONTEN" header's fleet total — the cross-account
+    /// Semantic button for the „KI-KONTEN" header's fleet total — the cross-account
     /// spend figure doubles as the entry point to the fleet pane (spec v3 §S1).
-    fleet_total_btn: MouseStateHandle,
+    fleet_total_button: ViewHandle<FleetTotalButton>,
     connections_btn: MouseStateHandle,
     /// Stable hover state for the waiting-summary glyph in the Sessions header.
     conductor_attention_state: MouseStateHandle,
@@ -348,6 +459,12 @@ pub(super) fn task_activity_label(task_state: Option<&TaskState>, relative: &str
 
 impl CockpitPanel {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
+        let fleet_total_button = ctx.add_typed_action_view(FleetTotalButton::new);
+        ctx.subscribe_to_view(&fleet_total_button, |_, _, event, ctx| match event {
+            FleetTotalButtonEvent::Activated => {
+                ctx.dispatch_typed_action(&CockpitPanelAction::OpenDashboardPane)
+            }
+        });
         // Re-render on theme change and whenever the snapshot updates.
         ctx.subscribe_to_model(&Appearance::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&AccessibilitySettings::handle(ctx), |_, _, _, ctx| {
@@ -356,6 +473,7 @@ impl CockpitPanel {
         ctx.subscribe_to_model(&CockpitModel::handle(ctx), |me, _, event, ctx| {
             if matches!(event, CockpitEvent::Updated) {
                 me.sync_conductor_states(ctx);
+                me.sync_fleet_total_button(ctx);
                 ctx.notify();
             }
         });
@@ -377,7 +495,7 @@ impl CockpitPanel {
             conductor_host_states: HashMap::new(),
             conductor_host_glyph_states: HashMap::new(),
             expanded_hosts: HashMap::new(),
-            fleet_total_btn: MouseStateHandle::default(),
+            fleet_total_button,
             connections_btn: MouseStateHandle::default(),
             conductor_attention_state: MouseStateHandle::default(),
             rescan_btn: MouseStateHandle::default(),
@@ -387,7 +505,23 @@ impl CockpitPanel {
             expanded_sessions: HashMap::new(),
         };
         me.sync_conductor_states(ctx);
+        me.sync_fleet_total_button(ctx);
         me
+    }
+
+    fn sync_fleet_total_button(&self, ctx: &mut ViewContext<Self>) {
+        let fleet_today = CockpitModel::as_ref(ctx)
+            .snapshot()
+            .accounts
+            .iter()
+            .map(|account| account.today.cost_usd)
+            .sum::<f64>();
+        let label = crate::t!(
+            "cockpit-header-today-total",
+            today = format_cost(fleet_today)
+        );
+        self.fleet_total_button
+            .update(ctx, |button, ctx| button.set_label(label.to_string(), ctx));
     }
 
     /// Keep one stable row handle per live fleet session (hover needs a stable
@@ -621,26 +755,11 @@ impl CockpitPanel {
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_body();
         let muted = theme.sub_text_color(theme.background()).into_solid();
-        // Utilisation is not attention: one shared rule (spec v3 §1.2) — calm grey,
-        // true red only at/above the single "fast voll" threshold, contrast-adapted.
-        // The bar's WIDTH carries the level; the colour only flags "nearly full".
+        // Utilisation is not attention: one shared rule (spec v3 §1.2) — calm
+        // theme text, with the theme error role only at the "fast voll" threshold.
+        // The bar's fill carries the level; color only flags "nearly full".
         let bar_color = utilisation_coloru(fraction, appearance);
-        let fill_w = (heat_fill(fraction) as f32) * HEAT_BAR_WIDTH;
-
-        let fill = ConstrainedBox::new(Rect::new().with_background_color(bar_color).finish())
-            .with_width(fill_w)
-            .with_height(HEAT_BAR_HEIGHT)
-            .finish();
-
-        let track = ConstrainedBox::new(
-            Container::new(fill)
-                .with_background(internal_colors::fg_overlay_1(theme))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
-                .finish(),
-        )
-        .with_width(HEAT_BAR_WIDTH)
-        .with_height(HEAT_BAR_HEIGHT)
-        .finish();
+        let track = utilisation_track(fraction, HEAT_BAR_HEIGHT, bar_color, appearance);
 
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -653,7 +772,7 @@ impl CockpitPanel {
                 size,
                 bar_color,
             ))
-            .with_main_axis_size(MainAxisSize::Min)
+            .with_main_axis_size(MainAxisSize::Max)
             .finish()
     }
 
@@ -671,8 +790,8 @@ impl CockpitPanel {
         let muted = theme.sub_text_color(theme.background()).into_solid();
         let identity = account_identity(&acct.account);
 
-        // Provider is the stable headline on every account surface. The colour
-        // mark is supplementary; the provider name remains visible in text.
+        // Provider is the stable headline on every account surface. The themed
+        // accent mark is supplementary; the provider name remains visible.
         let header = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
@@ -680,10 +799,7 @@ impl CockpitPanel {
             .with_child(
                 ConstrainedBox::new(
                     Rect::new()
-                        .with_background_color(provider_color_on(
-                            acct.account.provider,
-                            theme.background().into_solid(),
-                        ))
+                        .with_background_color(theme.accent().into_solid())
                         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
                         .finish(),
                 )
@@ -1479,28 +1595,11 @@ impl CockpitPanel {
     /// a regression, not a decluttering. The total therefore stays visible and
     /// **is itself the affordance**: clicking it opens the fleet pane. One
     /// element, two jobs, no extra chrome.
-    fn render_header(
-        &self,
-        snapshot_len: usize,
-        fleet_today: f64,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let total = verb_button_colored(
-            self.fleet_total_btn.clone(),
-            crate::t!(
-                "cockpit-header-today-total",
-                today = format_cost(fleet_today)
-            ),
-            theme.sub_text_color(theme.background()).into_solid(),
-            theme.accent().into_solid(),
-            appearance,
-            CockpitPanelAction::OpenDashboardPane,
-        );
+    fn render_header(&self, snapshot_len: usize, appearance: &Appearance) -> Box<dyn Element> {
         Self::render_zone_header(
             crate::t!("cockpit-zone-accounts").to_string(),
             Some(snapshot_len),
-            Some(total),
+            Some(ChildView::new(&self.fleet_total_button).finish()),
             appearance,
         )
     }
@@ -1516,6 +1615,13 @@ impl CockpitPanel {
 impl View for CockpitPanel {
     fn ui_name() -> &'static str {
         "CockpitPanel"
+    }
+
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() && !CockpitModel::as_ref(ctx).snapshot().accounts.is_empty()
+        {
+            ctx.focus(&self.fleet_total_button);
+        }
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
@@ -1592,7 +1698,6 @@ impl View for CockpitPanel {
                     .finish(),
             );
         } else {
-            let fleet_today: f64 = snapshot.accounts.iter().map(|a| a.today.cost_usd).sum();
             let selected = CockpitModel::as_ref(app)
                 .selected_account()
                 .map(str::to_string);
@@ -1600,13 +1705,9 @@ impl View for CockpitPanel {
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_child(
-                    Container::new(self.render_header(
-                        snapshot.accounts.len(),
-                        fleet_today,
-                        appearance,
-                    ))
-                    .with_margin_bottom(CARD_SPACING * 2.0)
-                    .finish(),
+                    Container::new(self.render_header(snapshot.accounts.len(), appearance))
+                        .with_margin_bottom(CARD_SPACING * 2.0)
+                        .finish(),
                 );
             for acct in &snapshot.accounts {
                 let is_selected = selected.as_deref() == Some(acct.account.key.as_str());

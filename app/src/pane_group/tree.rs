@@ -169,7 +169,7 @@ trait FindPaneByDirection {
     ) -> FindPaneByDirectionResult;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Left,
     Right,
@@ -216,10 +216,22 @@ impl PaneData {
         }
     }
 
+    pub fn new_with_temporary_replacement(
+        original_pane_id: PaneId,
+        replacement_pane_id: PaneId,
+    ) -> Self {
+        Self {
+            root: PaneNode::Leaf(replacement_pane_id),
+            len: 1,
+            hidden_panes: vec![HiddenPane::from_temporary_replacement(
+                original_pane_id,
+                replacement_pane_id,
+            )],
+        }
+    }
+
     pub fn visible_pane_count(&self) -> usize {
-        let total_panes = self.pane_ids().len();
-        let hidden_count = self.num_hidden_panes();
-        total_panes.saturating_sub(hidden_count)
+        self.visible_pane_ids().len()
     }
 
     pub fn has_horizontal_split(&self) -> bool {
@@ -343,7 +355,11 @@ impl PaneData {
     }
 
     pub fn unhide_closed_pane(&mut self, id: PaneId) -> bool {
-        if let Some(pos) = self.hidden_panes.iter().position(|pane| pane.pane_id == id) {
+        if let Some(pos) = self
+            .hidden_panes
+            .iter()
+            .position(|pane| pane.pane_id == id && matches!(pane.reason, HiddenPaneReason::Closed))
+        {
             self.hidden_panes.remove(pos);
             true
         } else {
@@ -379,10 +395,55 @@ impl PaneData {
         })
     }
 
-    pub fn is_hidden_closed_pane(&self, pane_id: &PaneId) -> bool {
+    pub fn pane_configuration_owner(&self, visible_pane_id: PaneId) -> PaneId {
+        self.original_pane_for_replacement(visible_pane_id)
+            .unwrap_or(visible_pane_id)
+    }
+
+    pub fn visible_pane_for_configuration_owner(&self, owner_pane_id: PaneId) -> PaneId {
         self.hidden_panes
             .iter()
-            .any(|hidden_pane| hidden_pane.pane_id == *pane_id)
+            .find_map(|hidden_pane| {
+                (hidden_pane.pane_id == owner_pane_id).then_some(match hidden_pane.reason {
+                    HiddenPaneReason::TemporaryReplacement(replacement_pane_id) => {
+                        Some(replacement_pane_id)
+                    }
+                    HiddenPaneReason::FromMove
+                    | HiddenPaneReason::FromJob
+                    | HiddenPaneReason::Closed
+                    | HiddenPaneReason::ChildAgent => None,
+                })?
+            })
+            .unwrap_or(owner_pane_id)
+    }
+
+    pub fn adopt_temporary_replacement(
+        &mut self,
+        original_pane_id: PaneId,
+        replacement_pane_id: PaneId,
+    ) -> bool {
+        if original_pane_id == replacement_pane_id
+            || !self.root.contains_pane(replacement_pane_id)
+            || self.root.contains_pane(original_pane_id)
+            || self
+                .original_pane_for_replacement(replacement_pane_id)
+                .is_some()
+        {
+            return false;
+        }
+        self.hidden_panes
+            .push(HiddenPane::from_temporary_replacement(
+                original_pane_id,
+                replacement_pane_id,
+            ));
+        true
+    }
+
+    pub fn is_hidden_closed_pane(&self, pane_id: &PaneId) -> bool {
+        self.hidden_panes.iter().any(|hidden_pane| {
+            hidden_pane.pane_id == *pane_id
+                && matches!(hidden_pane.reason, HiddenPaneReason::Closed)
+        })
     }
 
     pub fn replace_pane(

@@ -29,11 +29,12 @@ use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Element,
     EventHandler, Expanded, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
-    SavePosition, ScrollbarWidth, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack,
-    Text,
+    SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable,
+    SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
 use warpui::platform::{Cursor, FilePickerConfiguration, SaveFilePickerConfiguration};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::text_layout::ClipConfig;
 use warpui::{
     AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
@@ -45,7 +46,7 @@ use zaplex_remote_session::types::{
 
 use super::context_menu::ContextMenuState;
 use super::fm_registry::{
-    plan_transfer, FileManagerRegistry, FmPaneDescriptor, FsNamespace, TransferKind,
+    plan_transfer, FileManagerRegistry, FmPaneDescriptor, FmPaneMode, FsNamespace, TransferKind,
 };
 use super::keynav::{apply_cursor_move, clamp_cursor, CursorMove};
 use super::sftp_backend::{LiveSftpBackend, SafeFileClientSlot, SftpBackend};
@@ -115,12 +116,25 @@ fn function_bar_caption(key: &str) -> String {
     }
 }
 
+fn function_bar_action_enabled(
+    action: &SftpBrowserAction,
+    pane_actions_active: bool,
+    identity_bound_mutations_available: bool,
+) -> bool {
+    pane_actions_active
+        && (!matches!(
+            action,
+            SftpBrowserAction::RenameCursor
+                | SftpBrowserAction::MoveToOtherPane
+                | SftpBrowserAction::DeleteSelected
+        ) || identity_bound_mutations_available)
+}
+
 /// A pane-local legend must never compete with file rows for horizontal space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FunctionLegendMode {
     Full,
     Compact,
-    Hidden,
 }
 
 impl FunctionLegendMode {
@@ -128,33 +142,34 @@ impl FunctionLegendMode {
         match self {
             Self::Full => "legend-full",
             Self::Compact => "legend-compact",
-            Self::Hidden => "legend-hidden",
         }
+    }
+
+    fn shows_caption(self, key: &str) -> bool {
+        self == Self::Full || matches!(key, "F3" | "F4" | "F5" | "F6")
     }
 }
 
-const FUNCTION_LEGEND_KEYCAP_MIN_WIDTH: f32 = 44.0;
-// The widest localized caption is German "Verschieben". Reserve the keycap,
-// cell padding, caption, and inter-cell spacing before showing captions.
+// The widest localized caption is German "Verschieben". Full mode reserves
+// room for every caption; compact mode keeps the required F3-F6 captions and
+// reduces the remaining commands to their established keycaps.
+const FUNCTION_LEGEND_COMPACT_MIN_WIDTH: f32 = 280.0;
 const FUNCTION_LEGEND_CAPTION_MIN_WIDTH: f32 = 128.0;
 const FUNCTION_LEGEND_HORIZONTAL_PADDING: f32 = PANEL_PADDING * 2.0;
 
 fn function_legend_mode(pane_width: f32) -> FunctionLegendMode {
-    let (compact_width, full_width) = function_legend_widths();
+    let (_, full_width) = function_legend_widths();
 
     if pane_width >= full_width {
         FunctionLegendMode::Full
-    } else if pane_width >= compact_width {
-        FunctionLegendMode::Compact
     } else {
-        FunctionLegendMode::Hidden
+        FunctionLegendMode::Compact
     }
 }
 
 fn function_legend_widths() -> (f32, f32) {
     (
-        FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_KEYCAP_MIN_WIDTH
-            + FUNCTION_LEGEND_HORIZONTAL_PADDING,
+        FUNCTION_LEGEND_COMPACT_MIN_WIDTH,
         FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_CAPTION_MIN_WIDTH
             + FUNCTION_LEGEND_HORIZONTAL_PADDING,
     )
@@ -429,6 +444,7 @@ struct PendingCopyMove {
     ops: std::collections::VecDeque<CopyMoveOp>,
     backend: Arc<dyn SftpBackend>,
     target_label: String,
+    guard: TransferRouteGuard,
     is_move: bool,
     /// `None` = ask on each conflict; `Some` applies that policy to the rest.
     conflict_default: Option<super::transfer_job::ConflictDecision>,
@@ -595,8 +611,21 @@ impl Drop for QuarantinedDirSource {
 /// user's choice can be routed once they pick one.
 struct PendingTargetPick {
     sources: Vec<PathBuf>,
+    source: TransferSourceSnapshot,
     is_move: bool,
     candidates: Vec<FmPaneDescriptor>,
+}
+
+#[derive(Clone)]
+struct TransferSourceSnapshot {
+    pane: FmPaneDescriptor,
+    entries: Vec<EntryIdentity>,
+}
+
+#[derive(Clone)]
+struct TransferRouteGuard {
+    source: TransferSourceSnapshot,
+    target: FmPaneDescriptor,
 }
 
 /// One conflicting cross-connection file transfer, held (with the paths already
@@ -630,6 +659,7 @@ struct PendingCrossConn {
     source_backend: Option<Arc<dyn SftpBackend>>,
     /// Destination label for the summary toast.
     target_label: String,
+    guard: TransferRouteGuard,
 }
 
 struct PreparedSftpConnection {
@@ -650,6 +680,11 @@ struct NavigationCommit {
     path: PathBuf,
     history: Vec<PathBuf>,
     history_index: usize,
+    departed_directory: Option<PathBuf>,
+}
+
+fn navigation_commit_needs_snapshot(commits_navigation: bool, installed: bool) -> bool {
+    commits_navigation && installed
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -818,12 +853,18 @@ pub struct SftpBrowserView {
     /// on `..`. MC starts on `..`; here the first thing under the cursor
     /// should be something F3/F5/F8 can act on, and `..` stays one Up away.
     cursor_reset_pending: bool,
+    /// Directory to select after a successful upward navigation. Stored as a
+    /// path identity, never as a row index, because sort/filter/load timing can
+    /// change row positions before the parent listing is installed.
+    pending_departed_directory: Option<PathBuf>,
     /// Hover/click state for each cell of the F-key function bar (mouse parity
     /// with the keyboard function keys). One per [`FUNCTION_BAR`] entry.
     fn_bar_handles: Vec<MouseStateHandle>,
     /// Process-unique id for the cross-pane file-manager registry (F5/F6
     /// copy/move target discovery).
     fm_id: u64,
+    /// Changes whenever the backing transport/daemon route is replaced.
+    route_epoch: u64,
     /// Owning pane group. Peers in this group are visible beside this pane;
     /// panes in other groups are explicit-only transfer destinations.
     pane_group_id: Option<warpui::EntityId>,
@@ -1020,11 +1061,13 @@ impl SftpBrowserView {
                 .collect(),
             hidden_btn: MouseStateHandle::default(),
             cursor_reset_pending: true,
+            pending_departed_directory: None,
             fn_bar_handles: FUNCTION_BAR
                 .iter()
                 .map(|_| MouseStateHandle::default())
                 .collect(),
             fm_id: super::fm_registry::next_fm_id(),
+            route_epoch: 1,
             pane_group_id: None,
             pending_copy_move: None,
             pending_target_pick: None,
@@ -1171,6 +1214,7 @@ impl SftpBrowserView {
         )) as Arc<dyn SftpBackend>;
         me.connection = ConnectionState::Connected;
         me.sftp = Some(backend);
+        me.route_epoch = me.route_epoch.wrapping_add(1);
         me.current_path = start_path.clone();
         me.path_history = vec![start_path];
         me.history_index = 0;
@@ -1189,6 +1233,7 @@ impl SftpBrowserView {
     ) {
         self.connection = ConnectionState::Connected;
         self.sftp = Some(backend);
+        self.route_epoch = self.route_epoch.wrapping_add(1);
         self.current_path = start_path.clone();
         self.path_history = vec![start_path];
         self.history_index = 0;
@@ -1206,6 +1251,7 @@ impl SftpBrowserView {
     ) {
         self.connection = ConnectionState::Connected;
         self.sftp = Some(backend);
+        self.route_epoch = self.route_epoch.wrapping_add(1);
         self.current_path = start_path.clone();
         self.path_history = vec![start_path];
         self.history_index = 0;
@@ -1484,6 +1530,8 @@ impl SftpBrowserView {
             .safe_file_client
             .set_with_capabilities(client, identity_batch, transactions_v2)
         {
+            self.route_epoch = self.route_epoch.wrapping_add(1);
+            self.publish_to_registry(ctx);
             ctx.notify();
             if became_available {
                 self.dialog = None;
@@ -1553,6 +1601,7 @@ impl SftpBrowserView {
         self.cursor_reset_pending = true;
         self.connection = ConnectionState::Connected;
         self.sftp = Some(backend);
+        self.route_epoch = self.route_epoch.wrapping_add(1);
         self.refresh_dir(ctx);
     }
 
@@ -1671,6 +1720,7 @@ impl SftpBrowserView {
         if generation != self.refresh_generation {
             return;
         }
+        let commits_navigation = navigation.is_some();
         self.is_loading = false;
         let installed = match result {
             Ok(Ok(mut entries)) => {
@@ -1699,11 +1749,13 @@ impl SftpBrowserView {
                     HashSet::new()
                 };
                 if let Some(navigation) = navigation {
+                    let departed_directory = navigation.departed_directory;
                     self.current_path = navigation.path;
                     self.sync_breadcrumb_mouse_handles();
                     self.path_history = navigation.history;
                     self.history_index = navigation.history_index;
-                    self.cursor_reset_pending = true;
+                    self.cursor_reset_pending = departed_directory.is_none();
+                    self.pending_departed_directory = departed_directory;
                 }
                 self.entries = entries;
                 let listed_identities: HashSet<EntryIdentity> =
@@ -1718,6 +1770,7 @@ impl SftpBrowserView {
                 self.sync_row_mouse_handles();
                 // A refresh may have shrunk the listing (files removed); keep the
                 // cursor in range rather than pointing past it.
+                self.restore_departed_directory_cursor();
                 self.clamp_cursor_to_visible();
                 true
             }
@@ -1738,6 +1791,9 @@ impl SftpBrowserView {
                 config.set_title(title, ctx);
             });
             self.publish_to_registry(ctx);
+        }
+        if navigation_commit_needs_snapshot(commits_navigation, installed) {
+            ctx.emit(PaneEvent::AppStateChanged);
         }
         ctx.notify();
     }
@@ -1928,6 +1984,30 @@ impl SftpBrowserView {
             };
         }
         self.cursor = clamp_cursor(self.cursor, self.row_count());
+    }
+
+    fn restore_departed_directory_cursor(&mut self) {
+        let Some(departed) = self.pending_departed_directory.take() else {
+            return;
+        };
+        let visible = self.visible_indices();
+        let Some((visible_position, entry_index)) =
+            visible.iter().copied().enumerate().find(|(_, index)| {
+                self.entries.get(*index).is_some_and(|entry| {
+                    entry.file_type == FileEntryType::Directory && entry.path == departed
+                })
+            })
+        else {
+            self.cursor_reset_pending = true;
+            return;
+        };
+
+        self.cursor_reset_pending = false;
+        self.cursor = visible_position + usize::from(self.has_parent_row());
+        self.scroll_state.scroll_to_position(ScrollTarget {
+            position_id: format!("{}:{entry_index}", self.layout_position_id("row")),
+            mode: ScrollToPositionMode::FullyIntoView,
+        });
     }
 
     /// True while the post-`NavigateUp` stray-click window is open. Row-level
@@ -2178,12 +2258,25 @@ impl SftpBrowserView {
         format!("{where_}:{}", self.current_path.display())
     }
 
+    fn fm_descriptor(&self) -> Option<FmPaneDescriptor> {
+        let pane_group_id = self.pane_group_id?;
+        if self.sftp.is_none() || !matches!(&self.connection, ConnectionState::Connected) {
+            return None;
+        }
+        Some(FmPaneDescriptor {
+            id: self.fm_id,
+            label: self.fm_label(),
+            fs: self.fs_namespace(),
+            current_path: self.current_path.clone(),
+            route_epoch: self.route_epoch,
+            mode: FmPaneMode::FileManager,
+            pane_group_id: Some(pane_group_id),
+        })
+    }
+
     /// Publish this pane's live descriptor (and backend handle) into the
     /// cross-pane registry, so others can target — and transfer through — it.
     fn publish_to_registry(&self, ctx: &mut ViewContext<Self>) {
-        let Some(pane_group_id) = self.pane_group_id else {
-            return;
-        };
         let Some(backend) = self.sftp.clone() else {
             self.deregister_from_registry(ctx);
             return;
@@ -2192,12 +2285,9 @@ impl SftpBrowserView {
             self.deregister_from_registry(ctx);
             return;
         }
-        let descriptor = FmPaneDescriptor {
-            id: self.fm_id,
-            label: self.fm_label(),
-            fs: self.fs_namespace(),
-            current_path: self.current_path.clone(),
-            pane_group_id: Some(pane_group_id),
+        let Some(descriptor) = self.fm_descriptor() else {
+            self.deregister_from_registry(ctx);
+            return;
         };
         let id = self.fm_id;
         FileManagerRegistry::handle(ctx).update(ctx, move |reg, _| {
@@ -2245,6 +2335,49 @@ impl SftpBrowserView {
         }
     }
 
+    fn capture_transfer_source(&self, sources: &[PathBuf]) -> Option<TransferSourceSnapshot> {
+        let pane = self.fm_descriptor()?;
+        let entries = sources
+            .iter()
+            .map(|path| {
+                self.entries
+                    .iter()
+                    .find(|entry| &entry.path == path)
+                    .map(FileEntry::entry_identity)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(TransferSourceSnapshot { pane, entries })
+    }
+
+    fn transfer_guard_is_current(&self, guard: &TransferRouteGuard, ctx: &AppContext) -> bool {
+        let Some(current_source) = self.fm_descriptor() else {
+            return false;
+        };
+        if current_source != guard.source.pane {
+            return false;
+        }
+        let registry = FileManagerRegistry::as_ref(ctx);
+        if registry.resolve_snapshot(&guard.source.pane).is_none()
+            || registry.resolve_snapshot(&guard.target).is_none()
+            || registry.backend_for(guard.target.id).is_none()
+        {
+            return false;
+        }
+        guard.source.entries.iter().all(|identity| {
+            self.entries
+                .iter()
+                .any(|entry| entry.entry_identity() == *identity)
+        })
+    }
+
+    fn reject_stale_transfer(&mut self, ctx: &mut ViewContext<Self>) {
+        self.pending_copy_move = None;
+        self.pending_cross_conn = None;
+        self.dialog = None;
+        self.show_error_toast(crate::t!("fm-toast-other-pane-disconnected"), ctx);
+        ctx.notify();
+    }
+
     /// F5/F6: copy (or move) the operation's sources into another file-manager
     /// pane. Chooses the sole visible peer automatically (the MC two-panel
     /// case), unless the caller explicitly requests the complete target picker.
@@ -2268,12 +2401,16 @@ impl SftpBrowserView {
             self.show_error_toast(msg, ctx);
             return;
         }
+        let Some(source) = self.capture_transfer_source(&sources) else {
+            self.show_error_toast(crate::t!("fm-toast-not-connected"), ctx);
+            return;
+        };
 
         let self_id = self.fm_id;
         let targets = FileManagerRegistry::as_ref(ctx).transfer_targets(self_id);
         if !choose_target {
             if let Some(target) = targets.default {
-                self.route_copy_move(&sources, &target, is_move, ctx);
+                self.route_copy_move(&sources, source, &target, is_move, ctx);
                 return;
             }
         }
@@ -2286,7 +2423,7 @@ impl SftpBrowserView {
                 };
                 self.show_error_toast(msg, ctx);
             }
-            _ => self.open_target_picker(sources, targets.selectable, is_move, ctx),
+            _ => self.open_target_picker(sources, source, targets.selectable, is_move, ctx),
         }
     }
 
@@ -2296,6 +2433,7 @@ impl SftpBrowserView {
     fn open_target_picker(
         &mut self,
         sources: Vec<PathBuf>,
+        source: TransferSourceSnapshot,
         candidates: Vec<FmPaneDescriptor>,
         is_move: bool,
         ctx: &mut ViewContext<Self>,
@@ -2307,6 +2445,7 @@ impl SftpBrowserView {
             .collect();
         self.pending_target_pick = Some(PendingTargetPick {
             sources,
+            source,
             is_move,
             candidates,
         });
@@ -2321,17 +2460,29 @@ impl SftpBrowserView {
     fn route_copy_move(
         &mut self,
         sources: &[PathBuf],
-        target: &FmPaneDescriptor,
+        source: TransferSourceSnapshot,
+        target_snapshot: &FmPaneDescriptor,
         is_move: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        match plan_transfer(&self.fs_namespace(), &target.fs) {
-            TransferKind::DirectSameFs => self.copy_move_same_fs(sources, target, is_move, ctx),
+        let Some(target) = FileManagerRegistry::as_ref(ctx).resolve_snapshot(target_snapshot)
+        else {
+            self.reject_stale_transfer(ctx);
+            return;
+        };
+        let guard = TransferRouteGuard { source, target };
+        if !self.transfer_guard_is_current(&guard, ctx) {
+            self.reject_stale_transfer(ctx);
+            return;
+        }
+        let transfer_kind = plan_transfer(&self.fs_namespace(), &guard.target.fs);
+        match transfer_kind {
+            TransferKind::DirectSameFs => self.copy_move_same_fs(sources, guard, is_move, ctx),
             TransferKind::Upload | TransferKind::Download => {
-                self.transfer_cross_connection(sources, target, is_move, ctx)
+                self.transfer_cross_connection(sources, guard, is_move, ctx)
             }
             TransferKind::RemoteToRemote => {
-                self.relay_remote_to_remote(sources, target, is_move, ctx)
+                self.relay_remote_to_remote(sources, &guard.target, is_move, ctx)
             }
         }
     }
@@ -2600,7 +2751,7 @@ impl SftpBrowserView {
     fn copy_move_same_fs(
         &mut self,
         sources: &[PathBuf],
-        target: &FmPaneDescriptor,
+        guard: TransferRouteGuard,
         is_move: bool,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -2611,7 +2762,7 @@ impl SftpBrowserView {
                 return;
             }
         };
-        let target_dir = target.current_path.clone();
+        let target_dir = guard.target.current_path.clone();
 
         // Copying into our own current directory would collide name-for-name.
         if target_dir == self.current_path {
@@ -2643,7 +2794,7 @@ impl SftpBrowserView {
         }
 
         let probe_backend = backend.clone();
-        let target_label = target.label.clone();
+        let target_label = guard.target.label.clone();
         let _ = self.run_blocking(
             ctx,
             move || {
@@ -2658,6 +2809,7 @@ impl SftpBrowserView {
                         ops,
                         backend,
                         target_label,
+                        guard,
                         is_move,
                         conflict_default: None,
                         queued: 0,
@@ -2692,6 +2844,14 @@ impl SftpBrowserView {
             ProbeError(String),
         }
         loop {
+            let current = self
+                .pending_copy_move
+                .as_ref()
+                .is_some_and(|pending| self.transfer_guard_is_current(&pending.guard, ctx));
+            if !current {
+                self.reject_stale_transfer(ctx);
+                return;
+            }
             // Decide the next step under a short immutable borrow.
             let step = {
                 let Some(pending) = self.pending_copy_move.as_ref() else {
@@ -2879,20 +3039,20 @@ impl SftpBrowserView {
     fn transfer_cross_connection(
         &mut self,
         sources: &[PathBuf],
-        target: &FmPaneDescriptor,
+        guard: TransferRouteGuard,
         is_move: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         // Upload (local source → remote target) transfers through the target's
         // session; download (remote source → local target) through ours.
-        let direction = match plan_transfer(&self.fs_namespace(), &target.fs) {
+        let direction = match plan_transfer(&self.fs_namespace(), &guard.target.fs) {
             TransferKind::Upload => TransferDirection::Upload,
             TransferKind::Download => TransferDirection::Download,
             _ => return, // dispatcher only routes Upload/Download here
         };
         let backend = match direction {
             TransferDirection::Upload => {
-                match FileManagerRegistry::as_ref(ctx).backend_for(target.id) {
+                match FileManagerRegistry::as_ref(ctx).backend_for(guard.target.id) {
                     Some(b) => b,
                     None => {
                         self.show_error_toast(crate::t!("fm-toast-other-pane-disconnected"), ctx);
@@ -2915,7 +3075,7 @@ impl SftpBrowserView {
         // *source* pane's own backend (ours) — a cross-connection copy-then-delete.
         let source_backend = self.sftp.clone();
 
-        let target_dir = target.current_path.clone();
+        let target_dir = guard.target.current_path.clone();
         let mut started_dirs = 0usize;
         let mut file_plans = Vec::new();
         for source in sources {
@@ -2938,7 +3098,7 @@ impl SftpBrowserView {
                 // Recursively copy/move the directory across the connection: the
                 // tree is enumerated + created off-thread, then a transfer is
                 // spawned per file (move deletes the source once all files land).
-                let label = format!("{} → {}", name.to_string_lossy(), target.label);
+                let label = format!("{} → {}", name.to_string_lossy(), guard.target.label);
                 self.spawn_dir_transfer(
                     source.clone(),
                     dest,
@@ -2967,7 +3127,7 @@ impl SftpBrowserView {
         }
         self.selected.clear();
 
-        let target_label = target.label.clone();
+        let target_label = guard.target.label.clone();
         if file_plans.is_empty() {
             self.finish_cross_connection_preparation(
                 Vec::new(),
@@ -2977,6 +3137,7 @@ impl SftpBrowserView {
                 backend,
                 source_backend,
                 target_label,
+                guard,
                 ctx,
             );
             return;
@@ -3011,6 +3172,7 @@ impl SftpBrowserView {
                     backend,
                     source_backend,
                     target_label,
+                    guard,
                     ctx,
                 ),
                 Err(_) => {
@@ -3031,8 +3193,13 @@ impl SftpBrowserView {
         backend: Arc<dyn SftpBackend>,
         source_backend: Option<Arc<dyn SftpBackend>>,
         target_label: String,
+        guard: TransferRouteGuard,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !self.transfer_guard_is_current(&guard, ctx) {
+            self.reject_stale_transfer(ctx);
+            return;
+        }
         let mut started_files = 0usize;
         let mut probe_errors = 0usize;
         let mut conflicts = Vec::new();
@@ -3126,6 +3293,7 @@ impl SftpBrowserView {
                 backend,
                 source_backend,
                 target_label,
+                guard,
             });
             self.dialog = Some(Dialog::CrossConnConflict { existing, is_move });
         }
@@ -3140,6 +3308,10 @@ impl SftpBrowserView {
         let Some(pending) = self.pending_cross_conn.take() else {
             return;
         };
+        if !self.transfer_guard_is_current(&pending.guard, ctx) {
+            self.reject_stale_transfer(ctx);
+            return;
+        }
         if !overwrite {
             self.show_info_toast(
                 crate::t!(
@@ -3741,6 +3913,7 @@ impl SftpBrowserView {
                 path,
                 history,
                 history_index,
+                departed_directory: None,
             }),
             ctx,
         );
@@ -3751,7 +3924,21 @@ impl SftpBrowserView {
         if let Some(parent) = self.current_path.parent() {
             let parent = normalize_remote_path(parent);
             if parent != self.current_path {
-                self.navigate_to(parent, ctx);
+                let departed_directory = self.current_path.clone();
+                let mut history = self.path_history.clone();
+                history.truncate(self.history_index + 1);
+                history.push(parent.clone());
+                let history_index = history.len() - 1;
+                self.load_directory(
+                    parent.clone(),
+                    Some(NavigationCommit {
+                        path: parent,
+                        history,
+                        history_index,
+                        departed_directory: Some(departed_directory),
+                    }),
+                    ctx,
+                );
             }
         }
     }
@@ -3767,6 +3954,7 @@ impl SftpBrowserView {
                     path,
                     history: self.path_history.clone(),
                     history_index,
+                    departed_directory: None,
                 }),
                 ctx,
             );
@@ -3784,6 +3972,7 @@ impl SftpBrowserView {
                     path,
                     history: self.path_history.clone(),
                     history_index,
+                    departed_directory: None,
                 }),
                 ctx,
             );
@@ -4184,20 +4373,22 @@ impl SftpBrowserView {
             .finish()
     }
 
-    fn render_responsive_function_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let (compact_width, full_width) = function_legend_widths();
+    fn render_responsive_function_bar(
+        &self,
+        appearance: &Appearance,
+        pane_actions_active: bool,
+    ) -> Box<dyn Element> {
+        let (_, full_width) = function_legend_widths();
         SizeConstraintSwitch::new(
-            self.render_function_bar(appearance, FunctionLegendMode::Full),
-            vec![
-                (
-                    SizeConstraintCondition::WidthLessThan(compact_width),
-                    self.render_function_bar(appearance, FunctionLegendMode::Hidden),
+            self.render_function_bar(appearance, FunctionLegendMode::Full, pane_actions_active),
+            vec![(
+                SizeConstraintCondition::WidthLessThan(full_width),
+                self.render_function_bar(
+                    appearance,
+                    FunctionLegendMode::Compact,
+                    pane_actions_active,
                 ),
-                (
-                    SizeConstraintCondition::WidthLessThan(full_width),
-                    self.render_function_bar(appearance, FunctionLegendMode::Compact),
-                ),
-            ],
+            )],
         )
         .finish()
     }
@@ -4300,19 +4491,15 @@ impl SftpBrowserView {
             .finish()
     }
 
-    /// Render the MC-style function-key bar footer. Each cell shows `F<n>` in
-    /// the accent colour followed by its caption, and clicking it dispatches
-    /// the same action as the physical function key.
+    /// Render the MC-style function-key bar footer. Required F3-F6 captions
+    /// survive compact mode; the remaining established commands keep their
+    /// keycaps. Clicking dispatches only while this compatible pane is focused.
     fn render_function_bar(
         &self,
         appearance: &Appearance,
         mode: FunctionLegendMode,
+        pane_actions_active: bool,
     ) -> Box<dyn Element> {
-        if mode == FunctionLegendMode::Hidden {
-            let position_id = self.layout_position_id(mode.position_suffix());
-            return save_layout_position(Flex::row().finish(), &position_id);
-        }
-
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_size();
@@ -4322,19 +4509,22 @@ impl SftpBrowserView {
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
-            .with_spacing(4.0);
+            .with_spacing(if mode == FunctionLegendMode::Compact {
+                2.0
+            } else {
+                4.0
+            });
 
         for (i, (key, make_action)) in FUNCTION_BAR.iter().enumerate() {
             let handle = self.fn_bar_handles.get(i).cloned().unwrap_or_default();
             let key = *key;
             let make_action = *make_action;
             let action = make_action();
-            let enabled = !matches!(
+            let enabled = function_bar_action_enabled(
                 &action,
-                SftpBrowserAction::RenameCursor
-                    | SftpBrowserAction::MoveToOtherPane
-                    | SftpBrowserAction::DeleteSelected
-            ) || self.identity_bound_mutations_available();
+                pane_actions_active,
+                self.identity_bound_mutations_available(),
+            );
             let item_key_color = if enabled {
                 key_color
             } else {
@@ -4351,13 +4541,14 @@ impl SftpBrowserView {
                 // DOS at the bottom of the pane (polish audit FM.4). Muted at
                 // rest, the shared hover fill on approach; the VERBS stay
                 // captions.
+                let compact = mode == FunctionLegendMode::Compact;
                 let keycap = Container::new(
                     Text::new_inline(key.to_string(), family, size)
                         .with_color(item_key_color.into())
                         .finish(),
                 )
-                .with_padding_left(4.0)
-                .with_padding_right(4.0)
+                .with_padding_left(if compact { 1.0 } else { 4.0 })
+                .with_padding_right(if compact { 1.0 } else { 4.0 })
                 .with_padding_top(1.0)
                 .with_padding_bottom(1.0)
                 .with_background(theme.surface_2())
@@ -4366,18 +4557,23 @@ impl SftpBrowserView {
                 .finish();
                 let mut content = Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(4.0)
+                    .with_spacing(if compact { 2.0 } else { 4.0 })
                     .with_child(keycap);
-                if mode == FunctionLegendMode::Full {
+                if mode.shows_caption(key) {
                     content.add_child(
-                        Text::new_inline(function_bar_caption(key), family, size)
-                            .with_color(item_caption_color.into())
-                            .finish(),
+                        Shrinkable::new(
+                            1.0,
+                            Text::new_inline(function_bar_caption(key), family, size)
+                                .with_color(item_caption_color.into())
+                                .with_clip(ClipConfig::ellipsis())
+                                .finish(),
+                        )
+                        .finish(),
                     );
                 }
                 let mut container = Container::new(content.finish())
-                    .with_padding_left(6.0)
-                    .with_padding_right(6.0)
+                    .with_padding_left(if compact { 1.0 } else { 6.0 })
+                    .with_padding_right(if compact { 1.0 } else { 6.0 })
                     .with_padding_top(2.0)
                     .with_padding_bottom(2.0)
                     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
@@ -4397,7 +4593,15 @@ impl SftpBrowserView {
             } else {
                 cell.finish()
             };
-            row.add_child(Expanded::new(1.0, cell).finish());
+            let weight = if mode == FunctionLegendMode::Compact
+                && !matches!(key, "F3" | "F4" | "F5" | "F6")
+            {
+                0.8
+            } else {
+                1.0
+            };
+            let position_id = self.layout_position_id(&format!("function-{key}"));
+            row.add_child(Expanded::new(weight, save_layout_position(cell, &position_id)).finish());
         }
 
         // A hairline seats the bar against the list above it — footer chrome,
@@ -5906,20 +6110,14 @@ impl TypedActionView for SftpBrowserView {
                 let index = *index;
                 self.dialog = None;
                 if let Some(pick) = self.pending_target_pick.take() {
-                    if let Some(candidate) = pick.candidates.get(index) {
-                        let target = FileManagerRegistry::as_ref(ctx)
-                            .panes()
-                            .iter()
-                            .find(|pane| pane.id == candidate.id)
-                            .cloned();
-                        if let Some(target) = target {
-                            self.route_copy_move(&pick.sources, &target, pick.is_move, ctx);
-                        } else {
-                            self.show_error_toast(
-                                crate::t!("fm-toast-other-pane-disconnected"),
-                                ctx,
-                            );
-                        }
+                    if let Some(candidate) = pick.candidates.get(index).cloned() {
+                        self.route_copy_move(
+                            &pick.sources,
+                            pick.source,
+                            &candidate,
+                            pick.is_move,
+                            ctx,
+                        );
                     }
                 }
                 ctx.notify();
@@ -6119,6 +6317,12 @@ impl View for SftpBrowserView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
+        let pane_is_focused = self
+            .focus_handle
+            .as_ref()
+            .is_some_and(|handle| handle.is_focused(app));
+        let pane_actions_active =
+            pane_is_focused && self.dialog.is_none() && self.context_menu.is_none();
 
         // 1. When not connected, show the connection state.
         //
@@ -6138,11 +6342,7 @@ impl View for SftpBrowserView {
                     .finish(),
             )
             .finish();
-            if self
-                .focus_handle
-                .as_ref()
-                .is_some_and(|handle| handle.is_focused(app))
-            {
+            if pane_is_focused {
                 content = Container::new(content)
                     .with_border(Border::all(2.0).with_border_fill(theme.accent()))
                     .finish();
@@ -6215,9 +6415,9 @@ impl View for SftpBrowserView {
         }
 
         // 6. MC-style function-key footer. It belongs to this browser view,
-        // never to a shared pane-group container. Captions are dropped before
-        // a narrow split could overlap them.
-        col.add_child(self.render_responsive_function_bar(appearance));
+        // never to a shared pane-group container. Compact mode preserves the
+        // F3-F6 verbs and ellipsizes them before a narrow split can overlap.
+        col.add_child(self.render_responsive_function_bar(appearance, pane_actions_active));
 
         // 7. Transfer panel (floating at the bottom)
         // Wrap the `Flex(Max)` body in a tight `Container` before it becomes the
@@ -6225,11 +6425,7 @@ impl View for SftpBrowserView {
         // mounts this as a `Shrinkable` flex child, and a bare `Flex(Max)` root
         // would be measured with an infinite main axis and crash.
         let mut main_content = Container::new(col.finish()).finish();
-        if self
-            .focus_handle
-            .as_ref()
-            .is_some_and(|handle| handle.is_focused(app))
-        {
+        if pane_is_focused {
             main_content = Container::new(main_content)
                 .with_border(Border::all(2.0).with_border_fill(theme.accent()))
                 .finish();
@@ -6330,9 +6526,10 @@ impl View for SftpBrowserView {
         let focus_handle = self.focus_handle.clone();
         let key_handler =
             EventHandler::new(positioned_content).on_keydown(move |ctx, app, keystroke| {
-                if focus_handle
-                    .as_ref()
-                    .is_some_and(|handle| !handle.is_focused(app))
+                if !pane_actions_active
+                    || focus_handle
+                        .as_ref()
+                        .is_none_or(|handle| !handle.is_focused(app))
                 {
                     return DispatchEventResult::PropagateToParent;
                 }

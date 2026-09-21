@@ -24,7 +24,8 @@ use warp_core::SessionId;
 use warpui::r#async::executor;
 use zaplex_remote_session::types::{
     FEATURE_AGENT_MODEL_DISCOVERY_V1, FEATURE_AGENT_PROCESS_SIGNAL_V1,
-    FEATURE_AGENT_TRANSCRIPT_READ_V1,
+    FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_LOGICAL_OPEN_ATTEMPT_V1, FEATURE_LOGICAL_OPEN_ID_V1,
+    FEATURE_MANAGED_OPEN_ATTACH_V1,
 };
 
 use super::*;
@@ -117,6 +118,18 @@ async fn initialize_sends_empty_auth_token_when_none() {
                     .features
                     .iter()
                     .any(|feature| feature == FEATURE_AGENT_MODEL_DISCOVERY_V1));
+                assert!(init
+                    .features
+                    .iter()
+                    .any(|feature| feature == FEATURE_LOGICAL_OPEN_ID_V1));
+                assert!(init
+                    .features
+                    .iter()
+                    .any(|feature| feature == FEATURE_LOGICAL_OPEN_ATTEMPT_V1));
+                assert!(init
+                    .features
+                    .iter()
+                    .any(|feature| feature == FEATURE_MANAGED_OPEN_ATTACH_V1));
                 #[cfg(unix)]
                 assert!(init
                     .features
@@ -157,6 +170,98 @@ async fn initialize_sends_auth_token_when_provided() {
     });
 
     client.initialize(Some("secret-token")).await.unwrap();
+}
+
+#[tokio::test]
+async fn lost_open_ack_can_retry_same_logical_open_on_live_transport() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let (observed_tx, observed_rx) = async_channel::bounded(2);
+    tokio::spawn(async move {
+        let mut reader = server_read.compat();
+        let mut writer = server_write.compat_write();
+        let mut opens = 0;
+        loop {
+            let message = protocol::read_client_message(&mut reader).await.unwrap();
+            match message.message {
+                Some(client_message::Message::OpenSession(open)) => {
+                    observed_tx
+                        .send((open.logical_open_id, open.logical_open_attempt))
+                        .await
+                        .unwrap();
+                    opens += 1;
+                    if opens == 2 {
+                        protocol::write_server_message(
+                            &mut writer,
+                            &ServerMessage {
+                                request_id: message.request_id,
+                                message: Some(server_message::Message::SessionOpened(
+                                    SessionOpened {
+                                        session_id: "pty-one".to_string(),
+                                        generation: 1,
+                                        requires_attach: false,
+                                        expected_agent_binding: None,
+                                    },
+                                )),
+                            },
+                        )
+                        .await
+                        .unwrap();
+                        break;
+                    }
+                }
+                Some(client_message::Message::Abort(_)) => {}
+                other => panic!("expected OpenSession or Abort, got {other:?}"),
+            }
+        }
+    });
+
+    let executor = executor::Background::default();
+    let (client, _event_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+    let logical_open_id = "logical-open-one".to_string();
+    let first = client
+        .open_session_with_account_route_and_timeout(
+            logical_open_id.clone(),
+            1,
+            None,
+            None,
+            Default::default(),
+            24,
+            80,
+            None,
+            None,
+            None,
+            None,
+            Duration::from_millis(10),
+        )
+        .await;
+    assert!(matches!(first, Err(ClientError::Timeout(_))));
+    let second = client
+        .open_session_with_account_route_and_timeout(
+            logical_open_id.clone(),
+            2,
+            None,
+            None,
+            Default::default(),
+            24,
+            80,
+            None,
+            None,
+            None,
+            None,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.session_id, "pty-one");
+    assert_eq!(
+        observed_rx.recv().await.unwrap(),
+        (logical_open_id.clone(), 1)
+    );
+    assert_eq!(observed_rx.recv().await.unwrap(), (logical_open_id, 2));
 }
 
 #[tokio::test]
@@ -561,12 +666,16 @@ async fn open_session_round_trip() {
                 assert_eq!(open.env.get("FOO").map(String::as_str), Some("bar"));
                 assert_eq!(open.ring_ceiling_bytes, Some(8 * 1024 * 1024));
                 assert!(open.agent_launch_route.is_none());
+                assert_eq!(open.logical_open_id, "logical-open-1");
+                assert_eq!(open.logical_open_attempt, 1);
             }
             other => panic!("expected OpenSession, got {other:?}"),
         }
         server_message::Message::SessionOpened(SessionOpened {
             session_id: "sess-1".to_string(),
             generation: 7,
+            requires_attach: false,
+            expected_agent_binding: None,
         })
     });
 
@@ -574,6 +683,8 @@ async fn open_session_round_trip() {
     env.insert("FOO".to_string(), "bar".to_string());
     let resp = client
         .open_session(
+            "logical-open-1".to_string(),
+            1,
             Some("/home/me".to_string()),
             Some("/bin/zsh".to_string()),
             env,
@@ -600,7 +711,16 @@ async fn open_session_preserves_a_typed_server_error() {
     });
 
     let result = client
-        .open_session(None, None, std::collections::HashMap::new(), 24, 80, None)
+        .open_session(
+            "logical-open-error".to_string(),
+            1,
+            None,
+            None,
+            std::collections::HashMap::new(),
+            24,
+            80,
+            None,
+        )
         .await;
 
     assert!(matches!(
@@ -628,14 +748,20 @@ async fn open_session_for_agent_account_carries_only_the_opaque_route() {
         );
         assert!(!open.env.contains_key("CLAUDE_CONFIG_DIR"));
         assert!(!open.env.contains_key("CODEX_HOME"));
+        assert_eq!(open.logical_open_id, "logical-open-account");
+        assert_eq!(open.logical_open_attempt, 1);
         server_message::Message::SessionOpened(SessionOpened {
             session_id: "sess-account".to_string(),
             generation: 8,
+            requires_attach: false,
+            expected_agent_binding: None,
         })
     });
 
     let response = client
         .open_session_for_agent_account(
+            "logical-open-account".to_string(),
+            1,
             None,
             None,
             std::collections::HashMap::new(),
@@ -1095,14 +1221,25 @@ async fn managed_open_keeps_account_and_launch_identity_typed() {
         assert_eq!(launch.launch_id, "launch-1");
         assert_eq!(launch.project_root, "/srv/project");
         assert_eq!(open.requested_min_available_bytes, Some(3_000));
+        assert_eq!(open.logical_open_id, "logical-open-managed");
+        assert_eq!(open.logical_open_attempt, 1);
         server_message::Message::SessionOpened(SessionOpened {
             session_id: "managed-pty".into(),
             generation: 9,
+            requires_attach: true,
+            expected_agent_binding: Some(crate::proto::AgentSessionIdentity {
+                session_id: "agent-managed".to_string(),
+                provider: "claude".to_string(),
+                account_id: "opaque-account".to_string(),
+                ..Default::default()
+            }),
         })
     });
 
     let opened = client
         .open_managed_agent_session(
+            "logical-open-managed".to_string(),
+            1,
             "/srv/project".into(),
             None,
             Default::default(),
@@ -1131,6 +1268,7 @@ async fn managed_open_keeps_account_and_launch_identity_typed() {
         .unwrap();
     assert_eq!(opened.session_id, "managed-pty");
     assert_eq!(opened.generation, 9);
+    assert!(opened.requires_attach);
 }
 
 #[tokio::test]

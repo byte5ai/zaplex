@@ -73,11 +73,77 @@ fn classic_connection_finishes_only_with_its_terminal_lifecycle() {
         &crate::terminal::Event::PendingCommandCompleted
     ));
     assert!(ssh_connect_terminal_event_finishes_attempt(
+        &crate::terminal::Event::RemoteInputFailed {
+            connection_session_id: None,
+        }
+    ));
+    assert!(ssh_connect_terminal_event_finishes_attempt(
         &crate::terminal::Event::Exited
     ));
     assert!(!ssh_connect_terminal_event_finishes_attempt(
         &crate::terminal::Event::SessionBootstrapped
     ));
+}
+
+#[test]
+fn classic_fallback_holds_its_generation_until_shell_readiness() {
+    let mut registry = SshConnectRegistry::default();
+    let attempt = registry
+        .begin("host-a".to_string(), "a.example.com".to_string())
+        .unwrap();
+    let pane_group_id = EntityId::new();
+    let mut classic_attempts = ClassicSshConnectAttempts::default();
+    classic_attempts.bind(pane_group_id, attempt.clone());
+
+    assert!(registry.contains(&attempt));
+    assert!(registry
+        .begin("host-a".to_string(), "a.example.com".to_string())
+        .is_none());
+    assert!(!ssh_connect_terminal_event_finishes_attempt(
+        &crate::terminal::Event::SessionBootstrapped
+    ));
+    assert!(registry.contains(&attempt));
+
+    assert!(ssh_connect_terminal_event_finishes_attempt(
+        &crate::terminal::Event::SshSessionBootstrapped
+    ));
+    classic_attempts.finish(&attempt);
+    assert!(registry.finish(&attempt));
+    assert!(classic_attempts.take_for_tab(pane_group_id).is_none());
+    assert!(registry
+        .begin("host-a".to_string(), "a.example.com".to_string())
+        .is_some());
+}
+
+#[test]
+fn managed_attempt_remains_parallel_to_a_pending_classic_fallback() {
+    let mut registry = SshConnectRegistry::default();
+    let classic = registry
+        .begin("host-a".to_string(), "a.example.com".to_string())
+        .unwrap();
+    let pane_group_id = EntityId::new();
+    let mut classic_attempts = ClassicSshConnectAttempts::default();
+    classic_attempts.bind(pane_group_id, classic.clone());
+
+    let managed = registry.begin_parallel("host-a".to_string(), "a.example.com".to_string());
+    assert_ne!(classic.generation, managed.generation);
+    assert!(registry.contains(&classic));
+    assert!(registry.contains(&managed));
+    assert!(registry.finish(&managed));
+    assert!(registry.contains(&classic));
+    assert!(registry
+        .begin("host-a".to_string(), "a.example.com".to_string())
+        .is_none());
+
+    assert!(ssh_connect_terminal_event_finishes_attempt(
+        &crate::terminal::Event::PendingCommandCompleted
+    ));
+    classic_attempts.finish(&classic);
+    assert!(registry.finish(&classic));
+    assert!(classic_attempts.take_for_tab(pane_group_id).is_none());
+    assert!(registry
+        .begin("host-a".to_string(), "a.example.com".to_string())
+        .is_some());
 }
 
 #[test]

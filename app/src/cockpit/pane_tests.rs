@@ -7,10 +7,10 @@ use zaplex_cockpit::{Provider, SessionSnapshot, SessionState, WindowTotals};
 use zaplex_remote_session::types::FEATURE_AGENT_TRANSCRIPT_READ_V1;
 
 use super::{
-    matching_session_row, parse_hex_color, restart_presence_for_menu, session_key,
-    session_table_viewport_height, session_today_cost, table_row_needs_attention,
-    transcript_action_target, TableRow, TranscriptActionTarget, SESSION_TABLE_HEADER_HEIGHT,
-    SESSION_TABLE_MAX_VISIBLE_ROWS, SESSION_TABLE_ROW_HEIGHT,
+    matching_session_row, restart_presence_for_menu, session_key, session_table_viewport_height,
+    session_today_cost, table_row_needs_attention, transcript_action_target, TableRow,
+    TranscriptActionTarget, SESSION_TABLE_HEADER_HEIGHT, SESSION_TABLE_MAX_VISIBLE_ROWS,
+    SESSION_TABLE_ROW_HEIGHT,
 };
 #[cfg(not(target_family = "wasm"))]
 use super::{remote_transcript_route, remote_transcript_route_is_current, RemoteTranscriptRoute};
@@ -181,62 +181,6 @@ fn row_menu_refuses_duplicate_unknown_account_identity() {
         matching_session_row(&rows, &ambiguous_key).is_none(),
         "ambiguous legacy rows must fail closed instead of selecting the first account"
     );
-}
-
-#[test]
-fn parses_six_digit_hex() {
-    let c = parse_hex_color("#22C55E").expect("valid 6-digit hex");
-    assert_eq!((c.r, c.g, c.b, c.a), (0x22, 0xC5, 0x5E, 255));
-}
-
-#[test]
-fn parses_three_digit_shorthand() {
-    // #f0a → ff 00 aa (each nibble doubled).
-    let c = parse_hex_color("#f0a").expect("valid 3-digit hex");
-    assert_eq!((c.r, c.g, c.b, c.a), (0xff, 0x00, 0xaa, 255));
-}
-
-#[test]
-fn rejects_malformed_returns_none() {
-    for bad in [
-        "", "22C55E", "#", "#12", "#1234", "#12345", "#GGGGGG", "#12345Z",
-    ] {
-        assert!(parse_hex_color(bad).is_none(), "{bad:?} must not parse");
-    }
-}
-
-/// The doc promised "never a panic" and did not deliver. `len()` counts
-/// bytes; the slices index char boundaries. `#éa` measures 3 bytes, takes
-/// the shorthand branch, and `&hex[0..1]` cuts the `é` in half — aborting
-/// the app while it renders an account card, over a value someone typed into
-/// instances.json by hand.
-#[test]
-fn a_non_ascii_colour_yields_no_tint_rather_than_taking_the_app_down() {
-    // 3 bytes, 2 chars: exactly the shorthand branch's length check.
-    assert_eq!(parse_hex_color("#éa"), None);
-    // 6 bytes, 3 chars: the same trap on the long branch.
-    assert_eq!(parse_hex_color("#ééé"), None);
-    assert_eq!(parse_hex_color("#22C55é"), None);
-    assert_eq!(parse_hex_color("#🎨🎨"), None);
-}
-
-/// Malformed-but-ASCII stays malformed — the guard must not start accepting
-/// things it used to reject.
-#[test]
-fn ascii_rubbish_is_still_rejected() {
-    for bad in [
-        "#", "#12", "#1234", "#12345", "#1234567", "#GGGGGG", "22C55E", "",
-    ] {
-        assert_eq!(parse_hex_color(bad), None, "{bad:?} must not parse");
-    }
-}
-
-/// …and the valid cases still work.
-#[test]
-fn the_guard_does_not_reject_real_colours() {
-    assert!(parse_hex_color("#22C55E").is_some());
-    assert!(parse_hex_color("#f0a").is_some());
-    assert!(parse_hex_color("#FFFFFF").is_some());
 }
 
 #[test]

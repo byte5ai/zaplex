@@ -558,8 +558,8 @@ pub fn create_transferred_window(
     ctx.transfer_view_tree_to_window(pane_group_id, source_window_id, new_window_id);
 
     if let Some(new_workspace) = WorkspaceRegistry::as_ref(ctx).get(new_window_id, ctx) {
-        new_workspace.update(ctx, |workspace, ctx| {
-            workspace.adopt_transferred_pane_group(transferred_tab.pane_group.clone(), ctx);
+        new_workspace.update(ctx, move |workspace, ctx| {
+            workspace.adopt_transferred_pane_group(transferred_tab, ctx);
         });
     } else {
         log::warn!("Failed to find workspace in newly created window {new_window_id:?}");

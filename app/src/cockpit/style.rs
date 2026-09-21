@@ -12,8 +12,8 @@
 //! - **Calm by default**: verbs rest in the muted sub-text color and only take
 //!   their accent on hover; destructive verbs hover into the single attention
 //!   color instead of shouting at rest.
-//! - **Exactly one attention accent**: [`attention_coloru`] — the Critical
-//!   amber every `✋` and every destructive hover shares, everywhere.
+//! - **Exactly one attention role**: [`attention_coloru`] — the theme warning
+//!   color every `✋` and every destructive hover shares, everywhere.
 //! - **Aligned columns**: [`glyph_cell`] gives every status glyph the same
 //!   fixed-width leading cell so row labels line up across pane and sidebar.
 //!
@@ -26,14 +26,14 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element,
-    Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Radius, Rect, Stack, Text,
+    Empty, Expanded, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, Rect, Stack, Text,
 };
 use warpui::geometry::vector::vec2f;
 use warpui::platform::Cursor;
 use warpui::ui_components::components::UiComponent;
 use warpui::Action;
-use zaplex_cockpit::{HeatLevel, Provider, SessionState};
+use zaplex_cockpit::{heat_fill, Provider, SessionState};
 
 use crate::ui_components::icons;
 
@@ -115,93 +115,6 @@ pub fn zone_card(child: Box<dyn Element>, appearance: &Appearance) -> Container 
 // modals, `Modal<T>` and `Dialog` alike. The cockpit's Spawn-Karte and inbox
 // consume them from there directly.
 
-/// Heat band index into the two palettes (green→red order).
-fn heat_index(level: HeatLevel) -> usize {
-    match level {
-        HeatLevel::Ok => 0,
-        HeatLevel::Elevated => 1,
-        HeatLevel::High => 2,
-        HeatLevel::Critical => 3,
-        HeatLevel::Over => 4,
-    }
-}
-
-/// Heat palette tuned for a **dark** background — the bright Tailwind 400/500
-/// tones that read on near-black (the shipped default theme).
-const HEAT_ON_DARK: [u32; 5] = [
-    0x22C55EFF, // Ok       — green-500
-    0xEAB308FF, // Elevated — yellow-500
-    0xFB923CFF, // High     — orange-400
-    0xF97316FF, // Critical — orange-500
-    0xEF4444FF, // Over     — red-500
-];
-
-/// Heat palette tuned for a **light** background — darker Tailwind 700/800
-/// tones, because the bright dark-theme hues (yellow especially) wash out on
-/// white. Same green→red semantics, kept legible (L1: a contrast-tested palette).
-const HEAT_ON_LIGHT: [u32; 5] = [
-    0x15803DFF, // Ok       — green-700
-    0xA16207FF, // Elevated — yellow-700
-    0xC2410CFF, // High     — orange-700
-    0x9A3412FF, // Critical — orange-800
-    0xB91C1CFF, // Over     — red-700
-];
-
-/// Heat band → the **dark-theme** hue, flat.
-///
-/// Private on purpose. Every themed surface must go through
-/// [`heat_coloru_on`], which picks the variant that actually contrasts with the
-/// background; this one is the raw dark palette and sinks on a light theme.
-/// Four call sites reached past the helpers for it and put the attention amber —
-/// the one mark meant to be unmissable — at the mercy of the theme (spec v3 E6).
-/// Keeping it unreachable from outside makes that a structural fact rather than
-/// a rule someone has to remember.
-fn heat_coloru(level: HeatLevel) -> ColorU {
-    ColorU::from_u32(HEAT_ON_DARK[heat_index(level)])
-}
-
-/// Heat band → display color **chosen for the given background** (L1 semantic
-/// palette): of the two tuned variants (bright dark-theme hue / darker
-/// light-theme hue) it returns whichever has the **higher actual contrast**
-/// against `bg`, so a status dot / meter fill stays as legible as possible on
-/// either theme — and even on a mid-tone surface it never picks the worse of
-/// the two (a naive luminance split could). `bg` is the surface the color
-/// renders against (usually `theme.background().into_solid()`).
-pub fn heat_coloru_on(level: HeatLevel, bg: ColorU) -> ColorU {
-    let i = heat_index(level);
-    let dark = ColorU::from_u32(HEAT_ON_DARK[i]);
-    let light = ColorU::from_u32(HEAT_ON_LIGHT[i]);
-    if contrast_ratio(dark, bg) >= contrast_ratio(light, bg) {
-        dark
-    } else {
-        light
-    }
-}
-
-/// WCAG relative luminance of a color (alpha ignored), `0.0` (black)..`1.0`
-/// (white). The basis of the [`contrast_ratio`] contrast test that keeps the
-/// heat palette legible on both themes.
-pub fn relative_luminance(c: ColorU) -> f64 {
-    fn chan(v: u8) -> f64 {
-        let s = v as f64 / 255.0;
-        if s <= 0.039_28 {
-            s / 12.92
-        } else {
-            ((s + 0.055) / 1.055).powf(2.4)
-        }
-    }
-    0.2126 * chan(c.r) + 0.7152 * chan(c.g) + 0.0722 * chan(c.b)
-}
-
-/// WCAG contrast ratio between two colors (`>= 1.0`). `3.0` is the AA threshold
-/// for graphical objects (status dots, meter fills) — what the palette test
-/// asserts the heat colors clear against each theme's background.
-pub fn contrast_ratio(a: ColorU, b: ColorU) -> f64 {
-    let (la, lb) = (relative_luminance(a), relative_luminance(b));
-    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
-    (hi + 0.05) / (lo + 0.05)
-}
-
 /// The leading **provider icon** for a session / account row (spec §2.3, §2.5:
 /// the provider icon leads). The icon font carries no brand marks, so this maps
 /// each provider to a distinct bundled glyph. Rendered muted (it identifies, it
@@ -224,67 +137,18 @@ pub fn provider_label(provider: Provider) -> &'static str {
     }
 }
 
-/// Provider identity colours for a **dark** background — our own marks, never the
-/// vendors' trademarked logos: Claude = clay, Codex = blue, Antigravity =
-/// purple.
-const PROVIDER_ON_DARK: [u32; 3] = [
-    0xC8724AFF, // Claude — clay
-    0x3D9BF0FF, // Codex  — blue
-    0x8B5CF6FF, // Antigravity — purple
-];
-
-/// The same identities tuned for a **light** background: the dark-theme clay and
-/// blue wash out on white, so a light theme gets the deeper tones. Same hues, so
-/// the provider stays recognisable — only the lightness moves.
-const PROVIDER_ON_LIGHT: [u32; 3] = [
-    0x9A4F2BFF, // Claude — deeper clay
-    0x1D6FBFFF, // Codex  — deeper blue
-    0x6D28D9FF, // Antigravity — deeper purple
-];
-
-fn provider_index(provider: Provider) -> usize {
-    match provider {
-        Provider::Claude => 0,
-        Provider::Codex => 1,
-        Provider::Antigravity => 2,
-    }
-}
-
-/// The provider identity colour for the account-card swatch, **contrast-adapted**
-/// to the surface it sits on — the same picker the heat palette uses
-/// ([`heat_coloru_on`]). Provider colour lives ONLY here (spec v3 §1.3): never in
-/// the tree.
-///
-/// The first implementation hard-coded a single dark-theme hex with no light
-/// path, which would have sunk the swatch on a light theme — the exact footgun
-/// `heat_coloru_on` exists to prevent.
-pub fn provider_color_on(provider: Provider, bg: ColorU) -> ColorU {
-    let i = provider_index(provider);
-    let dark = ColorU::from_u32(PROVIDER_ON_DARK[i]);
-    let light = ColorU::from_u32(PROVIDER_ON_LIGHT[i]);
-    if contrast_ratio(dark, bg) >= contrast_ratio(light, bg) {
-        dark
-    } else {
-        light
-    }
-}
-
 /// The status-dot color for a session state on the given surface (spec §2.3:
-/// status is carried by **color**, not a chrome glyph). Waiting is the one
-/// attention band (amber), working rests in the calm "ok" green, idle fades to
-/// the theme's muted sub-text. Uses [`heat_coloru_on`] so the dot stays legible
-/// on a light theme.
+/// shape carries the state and the existing semantic theme roles reinforce it.
 pub fn status_dot_coloru(state: SessionState, appearance: &Appearance) -> ColorU {
     let theme = appearance.theme();
-    let bg = theme.background().into_solid();
     match state {
-        SessionState::Waiting => heat_coloru_on(HeatLevel::Critical, bg),
-        SessionState::Active | SessionState::Monitor => heat_coloru_on(HeatLevel::Ok, bg),
+        SessionState::Waiting => theme.ui_warning_color(),
+        SessionState::Active | SessionState::Monitor => theme.ui_green_color(),
         SessionState::Idle => theme.sub_text_color(theme.background()).into_solid(),
     }
 }
 
-/// The **one** attention accent — the Critical amber. Every waiting mark
+/// The **one** attention accent — the theme warning role. Every waiting mark
 /// (conductor rows, host badges, inbox rows, titlebar pulse) and every
 /// destructive hover uses exactly this color; everything else stays quiet so
 /// this is the only thing that draws the eye.
@@ -292,13 +156,8 @@ pub fn status_dot_coloru(state: SessionState, appearance: &Appearance) -> ColorU
 /// **Never use this for utilisation** — see [`utilisation_coloru`]. Amber is
 /// reserved for "needs you" (spec v3 §1.3).
 ///
-/// Contrast-adapted, like every other colour that lands on a themed surface:
-/// this used to hand back the dark-theme hue flat, so the **one** thing meant to
-/// draw the eye was the one thing that faded on a light theme — the mark that
-/// says "an agent is waiting for you" being the worst possible thing to lose.
 pub fn attention_coloru(appearance: &Appearance) -> ColorU {
-    let theme = appearance.theme();
-    heat_coloru_on(HeatLevel::Critical, theme.background().into_solid())
+    appearance.theme().ui_warning_color()
 }
 
 /// The translucent companion of [`attention_coloru`] used for the static
@@ -310,32 +169,67 @@ pub fn attention_halo_coloru(appearance: &Appearance) -> ColorU {
     color
 }
 
-/// The **one** utilisation threshold — "fast voll" (spec v3 §1.2). Deliberately
-/// identical to the `HeatLevel::Critical` band boundary (`HeatLevel::from_fraction`),
-/// so what the data model calls critical and what the eye sees fall together.
+/// The **one** utilisation threshold — "fast voll" (spec v3 §1.2).
 /// This is a *visual* threshold: the plexing router (`zaplex_cockpit::routing`)
 /// deprioritises fuller/working accounts by its own binding-window score rather
 /// than hard-skipping at this number — the UI shows "fast voll" here; routing is
 /// its own contract (spec v3 §5/X1).
 pub const NEARLY_FULL: f64 = 0.85;
 
-/// Colour for a **utilisation** readout (context fill, 5h/week meters): calm
-/// muted grey below [`NEARLY_FULL`], **true red** at/above it.
-///
-/// Two rules are encoded here, both of which the first implementation got wrong:
-/// 1. The full band is `HeatLevel::Over` (**red**, `#EF4444`), never
-///    `HeatLevel::Critical` — `Critical` is `#F97316`, the *exact* colour
-///    [`attention_coloru`] returns, so using it would make a nearly-full context
-///    look identical to a waiting agent and break amber-exclusivity.
-/// 2. It resolves through [`heat_coloru_on`], so it stays legible on light
-///    themes — the raw [`heat_coloru`] palette is tuned for dark backgrounds only.
+/// Colour for a **utilisation** readout (context fill, 5h/week meters): the
+/// theme's muted text below [`NEARLY_FULL`] and its semantic error role at or
+/// above it. No product-specific palette is introduced.
 pub fn utilisation_coloru(fraction: f64, appearance: &Appearance) -> ColorU {
     let theme = appearance.theme();
     if fraction >= NEARLY_FULL {
-        heat_coloru_on(HeatLevel::Over, theme.background().into_solid())
+        theme.ui_error_color()
     } else {
         theme.sub_text_color(theme.background()).into_solid()
     }
+}
+
+/// A full-width utilisation track for account cards. The track is the flexible
+/// slot between its label and percentage; only its painted fill is proportional.
+/// This keeps both stacked windows aligned at every panel width without a fixed
+/// 90/160 px meter contract.
+pub fn utilisation_track(
+    fraction: f64,
+    height: f32,
+    color: ColorU,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let fill = heat_fill(fraction) as f32;
+    let inner: Box<dyn Element> = if fill <= 0.0 {
+        Empty::new().finish()
+    } else if fill >= 1.0 {
+        Rect::new().with_background_color(color).finish()
+    } else {
+        Flex::row()
+            .with_child(
+                Expanded::new(
+                    fill,
+                    Rect::new()
+                        .with_background_color(color)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(height * 0.5)))
+                        .finish(),
+                )
+                .finish(),
+            )
+            .with_child(Expanded::new(1.0 - fill, Empty::new().finish()).finish())
+            .finish()
+    };
+    Expanded::new(
+        1.0,
+        ConstrainedBox::new(
+            Container::new(inner)
+                .with_background(internal_colors::fg_overlay_1(appearance.theme()))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(height * 0.5)))
+                .finish(),
+        )
+        .with_height(height)
+        .finish(),
+    )
+    .finish()
 }
 
 /// How a verb colors on hover. At rest every verb is equally muted — the

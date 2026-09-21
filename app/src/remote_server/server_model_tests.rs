@@ -31,8 +31,9 @@ use super::{
 };
 #[cfg(unix)]
 use super::{
-    push_recent_managed_exit, ManagedExitRecord, ManagedMemoryReadPermit,
-    MAX_CONCURRENT_MANAGED_MEMORY_READS, MAX_RECENT_MANAGED_EXITS, RECENT_MANAGED_EXIT_TTL_MILLIS,
+    push_recent_managed_exit, AcceptedOpenCache, AcceptedOpenLookup, ManagedExitRecord,
+    ManagedMemoryReadPermit, MAX_ACCEPTED_OPEN_IDS, MAX_CONCURRENT_MANAGED_MEMORY_READS,
+    MAX_RECENT_MANAGED_EXITS, RECENT_MANAGED_EXIT_TTL_MILLIS,
 };
 #[cfg(feature = "local_fs")]
 use super::{
@@ -44,9 +45,11 @@ use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
 use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
     FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_MODEL_DISCOVERY_V1,
-    FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_TRANSCRIPT_READ_V1,
-    FEATURE_MANAGED_AGENT_FLEET_V1, FEATURE_SAFE_FILE_IDENTITY_BATCH_V1,
-    FEATURE_SAFE_FILE_TRANSACTIONS_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V2,
+    FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_PTY_BINDING_V2,
+    FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_LOGICAL_OPEN_ATTEMPT_V1, FEATURE_LOGICAL_OPEN_ID_V1,
+    FEATURE_MANAGED_AGENT_FLEET_V1, FEATURE_MANAGED_OPEN_ATTACH_V1,
+    FEATURE_SAFE_FILE_IDENTITY_BATCH_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
+    FEATURE_SAFE_FILE_TRANSACTIONS_V2,
 };
 
 fn test_model() -> ServerModel {
@@ -73,12 +76,16 @@ fn test_model() -> ServerModel {
         #[cfg(unix)]
         next_pty_generation: 1,
         #[cfg(unix)]
+        accepted_opens: Default::default(),
+        #[cfg(unix)]
         safe_files: super::SafeFileWorker::unavailable_for_test(),
         agent_inventory_scan_cache: std::sync::Arc::new(std::sync::Mutex::new(
             super::AgentInventoryScanCache::default(),
         )),
         agent_account_routes: Default::default(),
         fresh_agent_account_routes_for_test: None,
+        #[cfg(unix)]
+        managed_preflight_gate_for_test: None,
         agent_transcript_reads_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(
             0,
         )),
@@ -89,6 +96,405 @@ fn test_model() -> ServerModel {
         #[cfg(unix)]
         managed_min_available_bytes: Ok(super::super::managed_fleet::DEFAULT_MIN_AVAILABLE_BYTES),
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn accepted_open_cache_replays_only_the_exact_logical_request() {
+    let mut cache = AcceptedOpenCache::default();
+    let request = super::super::proto::OpenSession {
+        logical_open_id: "open-1".to_string(),
+        cwd: Some("/srv/one".to_string()),
+        ..Default::default()
+    };
+    let opened = super::super::proto::SessionOpened {
+        session_id: "pty-1".to_string(),
+        generation: 7,
+        requires_attach: false,
+        expected_agent_binding: None,
+    };
+    cache.insert(request.clone(), opened.clone());
+
+    assert!(matches!(
+        cache.lookup(&request),
+        AcceptedOpenLookup::Accepted(ref cached) if cached == &opened
+    ));
+    assert!(matches!(
+        cache.lookup(&super::super::proto::OpenSession {
+            cwd: Some("/srv/two".to_string()),
+            ..request.clone()
+        }),
+        AcceptedOpenLookup::Conflict
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn every_existing_managed_launch_response_requires_attach() {
+    let source = include_str!("server_model.rs");
+    let start = source.find("fn existing_managed_launch(").unwrap();
+    let end = source[start..]
+        .find("fn validate_logical_open(")
+        .map(|offset| start + offset)
+        .unwrap();
+    let body = &source[start..end];
+
+    assert_eq!(body.matches("requires_attach: true").count(), 1);
+    assert_eq!(body.matches("opened().map(Some)").count(), 2);
+    assert!(body.contains("foreground_for_pty(session_id, session.generation)"));
+    assert!(body.contains("expected_agent_binding: Some(expected_agent_binding)"));
+    assert!(!body.contains("requires_attach: false"));
+}
+
+#[cfg(unix)]
+#[test]
+fn in_flight_logical_open_queues_duplicates_before_any_pty_is_accepted() {
+    let mut cache = AcceptedOpenCache::default();
+    let request = super::super::proto::OpenSession {
+        logical_open_id: "open-in-flight".to_string(),
+        cwd: Some("/srv/project".to_string()),
+        ..Default::default()
+    };
+    let origin = crate::remote_server::protocol::RequestId::new();
+    let retry = crate::remote_server::protocol::RequestId::new();
+    let origin_connection = uuid::Uuid::new_v4();
+    let retry_connection = uuid::Uuid::new_v4();
+
+    assert!(matches!(
+        cache.reserve(&request, origin_connection, &origin),
+        super::LogicalOpenReservation::Start
+    ));
+    assert!(matches!(
+        cache.reserve(&request, retry_connection, &retry),
+        super::LogicalOpenReservation::Wait
+    ));
+    assert_eq!(cache.in_flight.len(), 1);
+
+    let completion = cache.complete(
+        &request,
+        Some(super::super::proto::SessionOpened {
+            session_id: "pty-one".to_string(),
+            generation: 1,
+            requires_attach: false,
+            expected_agent_binding: None,
+        }),
+    );
+    assert!(completion.origin_active);
+    assert_eq!(completion.waiters, vec![(retry_connection, retry)]);
+    assert!(cache.in_flight.is_empty());
+    assert_eq!(cache.by_logical_id.len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn in_flight_logical_open_deduplicates_and_bounds_waiters() {
+    let mut cache = AcceptedOpenCache::default();
+    let request = super::super::proto::OpenSession {
+        logical_open_id: "bounded-open".to_string(),
+        ..Default::default()
+    };
+    let origin_connection = uuid::Uuid::new_v4();
+    let origin = RequestId::from("bounded-origin".to_string());
+    assert!(matches!(
+        cache.reserve(&request, origin_connection, &origin),
+        super::LogicalOpenReservation::Start
+    ));
+
+    let duplicate_connection = uuid::Uuid::new_v4();
+    let duplicate = RequestId::from("bounded-duplicate".to_string());
+    assert!(matches!(
+        cache.reserve(&request, duplicate_connection, &duplicate),
+        super::LogicalOpenReservation::Wait
+    ));
+    assert!(matches!(
+        cache.reserve(&request, duplicate_connection, &duplicate),
+        super::LogicalOpenReservation::Wait
+    ));
+    assert_eq!(cache.in_flight["bounded-open"].waiters.len(), 1);
+
+    for index in 1..super::MAX_IN_FLIGHT_OPEN_WAITERS {
+        assert!(matches!(
+            cache.reserve(
+                &request,
+                uuid::Uuid::new_v4(),
+                &RequestId::from(format!("bounded-waiter-{index}")),
+            ),
+            super::LogicalOpenReservation::Wait
+        ));
+    }
+    assert!(matches!(
+        cache.reserve(
+            &request,
+            uuid::Uuid::new_v4(),
+            &RequestId::from("bounded-overflow".to_string()),
+        ),
+        super::LogicalOpenReservation::TooManyWaiters
+    ));
+    assert_eq!(
+        cache.in_flight["bounded-open"].waiters.len(),
+        super::MAX_IN_FLIGHT_OPEN_WAITERS
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn logical_open_aborts_after_both_ack_windows_before_delayed_preflight_can_complete() {
+    let mut cache = AcceptedOpenCache::default();
+    let request = super::super::proto::OpenSession {
+        logical_open_id: "slow-preflight".to_string(),
+        ..Default::default()
+    };
+    let connection = uuid::Uuid::new_v4();
+    let first_ack_window = RequestId::from("slow-preflight-first".to_string());
+    let second_ack_window = RequestId::from("slow-preflight-second".to_string());
+    assert!(matches!(
+        cache.reserve(&request, connection, &first_ack_window),
+        super::LogicalOpenReservation::Start
+    ));
+    assert!(matches!(
+        cache.reserve(&request, connection, &second_ack_window),
+        super::LogicalOpenReservation::Wait
+    ));
+
+    assert!(matches!(
+        cache.abort_request(connection, &first_ack_window),
+        super::LogicalOpenAbort::RequestRemoved
+    ));
+    assert!(matches!(
+        cache.abort_request(connection, &second_ack_window),
+        super::LogicalOpenAbort::CancelOperation(ref task) if task == &first_ack_window
+    ));
+    assert!(cache.in_flight.is_empty());
+    assert!(!cache.has_active_requester(&request));
+
+    let completion = cache.complete(
+        &request,
+        Some(super::super::proto::SessionOpened {
+            session_id: "must-not-exist".to_string(),
+            generation: 1,
+            requires_attach: false,
+            expected_agent_binding: None,
+        }),
+    );
+    assert!(!completion.origin_active);
+    assert!(completion.waiters.is_empty());
+    assert!(cache.by_logical_id.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn later_attempt_retires_a_half_open_origin_before_its_own_abort() {
+    let mut cache = AcceptedOpenCache::default();
+    let origin_connection = uuid::Uuid::new_v4();
+    let retry_connection = uuid::Uuid::new_v4();
+    let origin = RequestId::from("half-open-origin".to_string());
+    let retry = RequestId::from("live-retry".to_string());
+    let first = super::super::proto::OpenSession {
+        logical_open_id: "half-open-logical".to_string(),
+        logical_open_attempt: 1,
+        ..Default::default()
+    };
+    let second = super::super::proto::OpenSession {
+        logical_open_attempt: 2,
+        ..first.clone()
+    };
+
+    assert!(matches!(
+        cache.reserve(&first, origin_connection, &origin),
+        super::LogicalOpenReservation::Start
+    ));
+    assert!(matches!(
+        cache.reserve(&second, retry_connection, &retry),
+        super::LogicalOpenReservation::Wait
+    ));
+    assert!(
+        !cache.in_flight["half-open-logical"].origin_active,
+        "the newer attempt must retire a transport that can remain half-open daemon-side"
+    );
+    assert!(matches!(
+        cache.abort_request(retry_connection, &retry),
+        super::LogicalOpenAbort::CancelOperation(ref task) if task == &origin
+    ));
+    assert!(!cache.has_active_requester(&second));
+
+    let completion = cache.complete(
+        &second,
+        Some(super::super::proto::SessionOpened {
+            session_id: "must-not-be-created".to_string(),
+            generation: 1,
+            requires_attach: false,
+            expected_agent_binding: None,
+        }),
+    );
+    assert!(!completion.origin_active);
+    assert!(completion.waiters.is_empty());
+    assert!(cache.by_logical_id.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn older_attempt_is_rejected_without_becoming_a_hidden_waiter() {
+    let mut cache = AcceptedOpenCache::default();
+    let connection = uuid::Uuid::new_v4();
+    let first = super::super::proto::OpenSession {
+        logical_open_id: "reordered-logical-open".to_string(),
+        logical_open_attempt: 2,
+        ..Default::default()
+    };
+    let stale = super::super::proto::OpenSession {
+        logical_open_attempt: 1,
+        ..first.clone()
+    };
+
+    assert!(matches!(
+        cache.reserve(
+            &first,
+            connection,
+            &RequestId::from("current-attempt".to_string()),
+        ),
+        super::LogicalOpenReservation::Start
+    ));
+    assert!(matches!(
+        cache.reserve(
+            &stale,
+            connection,
+            &RequestId::from("stale-attempt".to_string()),
+        ),
+        super::LogicalOpenReservation::StaleAttempt
+    ));
+    assert!(cache.in_flight["reordered-logical-open"].waiters.is_empty());
+    assert!(cache.has_active_requester(&first));
+}
+
+#[cfg(unix)]
+#[test]
+fn logical_open_disconnect_cleanup_removes_only_dead_requesters_and_last_task() {
+    let mut cache = AcceptedOpenCache::default();
+    let request = super::super::proto::OpenSession {
+        logical_open_id: "disconnect-cleanup".to_string(),
+        ..Default::default()
+    };
+    let origin_connection = uuid::Uuid::new_v4();
+    let waiter_connection = uuid::Uuid::new_v4();
+    let survivor_connection = uuid::Uuid::new_v4();
+    let origin = RequestId::from("disconnect-origin".to_string());
+    assert!(matches!(
+        cache.reserve(&request, origin_connection, &origin),
+        super::LogicalOpenReservation::Start
+    ));
+    for (connection, request_id) in [
+        (waiter_connection, "disconnect-waiter"),
+        (survivor_connection, "disconnect-survivor"),
+    ] {
+        assert!(matches!(
+            cache.reserve(
+                &request,
+                connection,
+                &RequestId::from(request_id.to_string()),
+            ),
+            super::LogicalOpenReservation::Wait
+        ));
+    }
+
+    assert!(cache.remove_connection(waiter_connection).is_empty());
+    assert!(cache.remove_connection(origin_connection).is_empty());
+    assert_eq!(cache.in_flight["disconnect-cleanup"].waiters.len(), 1);
+    assert_eq!(cache.remove_connection(survivor_connection), vec![origin]);
+    assert!(cache.in_flight.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_open_requests_without_logical_ids_are_never_deduplicated() {
+    let mut cache = AcceptedOpenCache::default();
+    let legacy_request = super::super::proto::OpenSession {
+        cwd: Some("/srv/legacy".to_string()),
+        ..Default::default()
+    };
+    cache.insert(
+        legacy_request.clone(),
+        super::super::proto::SessionOpened {
+            session_id: "legacy-pty-1".to_string(),
+            generation: 1,
+            requires_attach: false,
+            expected_agent_binding: None,
+        },
+    );
+
+    assert!(matches!(
+        cache.lookup(&legacy_request),
+        AcceptedOpenLookup::Miss
+    ));
+    assert!(cache.has_active_requester(&legacy_request));
+    assert!(cache.by_logical_id.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn fast_exit_retains_the_original_logical_open_response() {
+    let mut cache = AcceptedOpenCache::default();
+    let request = super::super::proto::OpenSession {
+        logical_open_id: "fast-exit-open".to_string(),
+        ..Default::default()
+    };
+    let opened = super::super::proto::SessionOpened {
+        session_id: "fast-exit-pty".to_string(),
+        generation: 9,
+        requires_attach: false,
+        expected_agent_binding: None,
+    };
+    cache.insert(request.clone(), opened.clone());
+
+    cache.retain_session_tombstone(&opened.session_id);
+
+    assert!(matches!(
+        cache.lookup(&request),
+        AcceptedOpenLookup::Accepted(ref cached) if cached == &opened
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn accepted_open_tombstones_are_bounded_and_evicted_oldest_first() {
+    let mut cache = AcceptedOpenCache::default();
+    for index in 0..MAX_ACCEPTED_OPEN_IDS {
+        cache.insert(
+            super::super::proto::OpenSession {
+                logical_open_id: format!("open-{index}"),
+                ..Default::default()
+            },
+            super::super::proto::SessionOpened {
+                session_id: format!("pty-{index}"),
+                generation: index as u64 + 1,
+                requires_attach: false,
+                expected_agent_binding: None,
+            },
+        );
+    }
+    assert!(!cache.ensure_capacity());
+
+    cache.retain_session_tombstone("pty-0");
+    assert!(cache.ensure_capacity());
+    assert!(matches!(
+        cache.lookup(&super::super::proto::OpenSession {
+            logical_open_id: "open-0".to_string(),
+            ..Default::default()
+        }),
+        AcceptedOpenLookup::Miss
+    ));
+    cache.insert(
+        super::super::proto::OpenSession {
+            logical_open_id: "open-new".to_string(),
+            ..Default::default()
+        },
+        super::super::proto::SessionOpened {
+            session_id: "pty-new".to_string(),
+            generation: 2000,
+            requires_attach: false,
+            expected_agent_binding: None,
+        },
+    );
+    assert_eq!(cache.by_logical_id.len(), MAX_ACCEPTED_OPEN_IDS);
 }
 
 #[cfg(feature = "local_fs")]
@@ -944,6 +1350,7 @@ fn abort_detaches_blocking_result_and_cleans_up_in_progress() {
 
         model.update(&mut app, |model, _ctx| {
             model.handle_abort(
+                conn_id,
                 Abort {
                     request_id_to_abort: "aborted-inventory".to_string(),
                 },
@@ -1394,6 +1801,9 @@ fn daemon_signal_advertisement_requires_runtime_backend_support() {
     assert!(!unsupported
         .iter()
         .any(|feature| feature == FEATURE_MANAGED_AGENT_FLEET_V1));
+    assert!(!unsupported
+        .iter()
+        .any(|feature| feature == FEATURE_MANAGED_OPEN_ATTACH_V1));
 
     let supported = server_features_with_runtime_support(true, true);
     assert_eq!(
@@ -1409,6 +1819,12 @@ fn daemon_signal_advertisement_requires_runtime_backend_support() {
         supported
             .iter()
             .any(|feature| feature == FEATURE_MANAGED_AGENT_FLEET_V1),
+        cfg!(target_os = "linux")
+    );
+    assert_eq!(
+        supported
+            .iter()
+            .any(|feature| feature == FEATURE_MANAGED_OPEN_ATTACH_V1),
         cfg!(target_os = "linux")
     );
 }
@@ -1442,10 +1858,31 @@ fn managed_fleet_negotiation_is_usable_only_on_linux_daemons() {
     let conn = uuid::Uuid::new_v4();
     model.connection_features.insert(
         conn,
-        HashSet::from([FEATURE_MANAGED_AGENT_FLEET_V1.to_string()]),
+        HashSet::from([
+            FEATURE_MANAGED_AGENT_FLEET_V1.to_string(),
+            FEATURE_MANAGED_OPEN_ATTACH_V1.to_string(),
+        ]),
     );
 
     assert!(!model.client_supports_managed_fleet_with_runtime(conn, false));
+    assert!(!model.client_supports_managed_fleet_with_runtime(conn, true));
+    model
+        .connection_features
+        .get_mut(&conn)
+        .unwrap()
+        .insert(FEATURE_LOGICAL_OPEN_ID_V1.to_string());
+    assert!(!model.client_supports_managed_fleet_with_runtime(conn, true));
+    model
+        .connection_features
+        .get_mut(&conn)
+        .unwrap()
+        .insert(FEATURE_LOGICAL_OPEN_ATTEMPT_V1.to_string());
+    assert!(!model.client_supports_managed_fleet_with_runtime(conn, true));
+    model
+        .connection_features
+        .get_mut(&conn)
+        .unwrap()
+        .insert(FEATURE_AGENT_PTY_BINDING_V2.to_string());
     assert_eq!(
         model.client_supports_managed_fleet_with_runtime(conn, true),
         cfg!(target_os = "linux")
@@ -2267,6 +2704,7 @@ fn file_chunk_scheduler_bounds_work_and_cleans_up_aborts() {
         model.update(&mut app, |model, _ctx| {
             for request_id in &request_ids {
                 model.handle_abort(
+                    conn_id,
                     Abort {
                         request_id_to_abort: request_id.clone(),
                     },
@@ -2590,21 +3028,24 @@ fn create_directory_creates_nested_directories() {
 
 #[cfg(unix)]
 mod daemon_session {
-    use super::super::{normalize_pty_dimensions, HOST_RING_CAP_BYTES};
+    use super::super::{normalize_pty_dimensions, LogicalOpenReservation, HOST_RING_CAP_BYTES};
     use super::{bind_status, binding_identity, test_model};
     use crate::remote_server::proto::{
-        client_message, server_message, AttachSession, BindAgentPty, ClientMessage, CloseSession,
-        DetachSession, ListSessions, ManagedLaunch, ManagedSessionLifecycleAction,
+        client_message, server_message, Abort, AttachSession, BindAgentPty, ClientMessage,
+        CloseSession, DetachSession, ListSessions, ManagedLaunch, ManagedSessionLifecycleAction,
         ManagedSessionLifecycleRequest, ManagedSessionLifecycleStatus, OpenSession,
-        ReadAgentTranscript, ResizeSession, ServerMessage, SessionInput, SessionList, SessionSize,
+        ReadAgentTranscript, ResizeSession, ServerMessage, SessionInput, SessionList,
+        SessionOpened, SessionSize,
     };
+    use crate::remote_server::protocol::RequestId;
     use futures::future::Either;
     use std::os::fd::AsRawFd;
     use std::time::Duration;
     use warpui::App;
     use zaplex_remote_session::types::{
-        FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_TRANSCRIPT_READ_V1,
-        FEATURE_MANAGED_AGENT_FLEET_V1,
+        FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PTY_BINDING_V2,
+        FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_LOGICAL_OPEN_ATTEMPT_V1,
+        FEATURE_LOGICAL_OPEN_ID_V1, FEATURE_MANAGED_AGENT_FLEET_V1, FEATURE_MANAGED_OPEN_ATTACH_V1,
     };
 
     /// Awaits `rx.recv()` but gives up after `dur` so a stuck test fails instead
@@ -2717,8 +3158,155 @@ mod daemon_session {
                 agent_launch_route: None,
                 managed_launch: None,
                 requested_min_available_bytes: None,
+                logical_open_id: "logical-open-1".to_string(),
+                logical_open_attempt: 0,
             })),
         }
+    }
+
+    #[test]
+    fn retrying_a_lost_open_ack_reuses_exactly_one_pty() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let first_conn = uuid::Uuid::new_v4();
+            let (first_tx, first_rx) = async_channel::unbounded::<ServerMessage>();
+            model.update(&mut app, |model, ctx| {
+                model.register_connection(first_conn, first_tx, ctx)
+            });
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(first_conn, open_session_msg(), ctx)
+            });
+            let first_opened = recv_deadline(&first_rx, Duration::from_secs(10))
+                .await
+                .and_then(|message| match message.message {
+                    Some(server_message::Message::SessionOpened(opened)) => Some(opened),
+                    _ => None,
+                })
+                .expect("expected the first logical open acknowledgement");
+
+            model.update(&mut app, |model, ctx| {
+                model.deregister_connection(first_conn, ctx)
+            });
+            let retry_conn = uuid::Uuid::new_v4();
+            let (retry_tx, retry_rx) = async_channel::unbounded::<ServerMessage>();
+            model.update(&mut app, |model, ctx| {
+                model.register_connection(retry_conn, retry_tx, ctx)
+            });
+            let mut retry = open_session_msg();
+            retry.request_id = "open-retry".to_string();
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(retry_conn, retry, ctx)
+            });
+            let retried_opened = recv_deadline(&retry_rx, Duration::from_secs(10))
+                .await
+                .and_then(|message| match message.message {
+                    Some(server_message::Message::SessionOpened(opened)) => Some(opened),
+                    _ => None,
+                })
+                .expect("expected the cached logical open acknowledgement");
+
+            assert_eq!(retried_opened, first_opened);
+            model.read(&app, |model, _| assert_eq!(model.sessions.len(), 1));
+
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(
+                    retry_conn,
+                    ClientMessage {
+                        request_id: String::new(),
+                        message: Some(client_message::Message::CloseSession(CloseSession {
+                            session_id: first_opened.session_id,
+                        })),
+                    },
+                    ctx,
+                )
+            });
+        });
+    }
+
+    #[test]
+    fn legacy_clients_without_logical_open_ids_start_distinct_sessions() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let conn = uuid::Uuid::new_v4();
+            let (tx, rx) = async_channel::unbounded::<ServerMessage>();
+            model.update(&mut app, |model, ctx| {
+                model.register_connection(conn, tx, ctx)
+            });
+
+            let mut first = open_session_msg();
+            let Some(client_message::Message::OpenSession(first_open)) = first.message.as_mut()
+            else {
+                unreachable!()
+            };
+            first_open.logical_open_id.clear();
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(conn, first, ctx)
+            });
+            let first_session = recv_session_opened(&rx)
+                .await
+                .expect("legacy OpenSession should remain accepted");
+
+            let mut second = open_session_msg();
+            second.request_id = "legacy-open-2".to_string();
+            let Some(client_message::Message::OpenSession(second_open)) = second.message.as_mut()
+            else {
+                unreachable!()
+            };
+            second_open.logical_open_id.clear();
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(conn, second, ctx)
+            });
+            let second_session = recv_session_opened(&rx)
+                .await
+                .expect("a separate legacy OpenSession should start separately");
+
+            assert_ne!(first_session, second_session);
+            model.read(&app, |model, _| assert_eq!(model.sessions.len(), 2));
+            for session_id in [first_session, second_session] {
+                model.update(&mut app, |model, ctx| {
+                    model.handle_message(conn, close_msg(&session_id), ctx)
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn delayed_duplicate_after_fast_exit_does_not_launch_a_second_pty() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let conn = uuid::Uuid::new_v4();
+            let (tx, rx) = async_channel::unbounded::<ServerMessage>();
+            model.update(&mut app, |model, ctx| {
+                model.register_connection(conn, tx, ctx)
+            });
+
+            let mut request = open_session_msg();
+            let Some(client_message::Message::OpenSession(open)) = request.message.as_mut() else {
+                unreachable!()
+            };
+            open.shell = Some("/bin/true".to_string());
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(conn, request.clone(), ctx)
+            });
+            let first_session = recv_session_opened(&rx)
+                .await
+                .expect("fast session should still acknowledge its accepted open");
+            assert!(
+                wait_for_exit(&rx, &first_session, Duration::from_secs(10)).await,
+                "the test shell should exit before the delayed retry"
+            );
+
+            request.request_id = "fast-open-retry".to_string();
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(conn, request, ctx)
+            });
+            let retried_session = recv_session_opened(&rx)
+                .await
+                .expect("the delayed retry should receive the authoritative response");
+
+            assert_eq!(retried_session, first_session);
+            model.read(&app, |model, _| assert!(model.sessions.is_empty()));
+        });
     }
 
     #[test]
@@ -3707,6 +4295,11 @@ mod daemon_session {
     }
 
     fn open_in(cwd: &str) -> ClientMessage {
+        let logical_open_id = format!("logical-open-{cwd}");
+        open_in_with_logical_id(cwd, &logical_open_id)
+    }
+
+    fn open_in_with_logical_id(cwd: &str, logical_open_id: &str) -> ClientMessage {
         ClientMessage {
             request_id: "open".to_string(),
             message: Some(client_message::Message::OpenSession(OpenSession {
@@ -3723,6 +4316,8 @@ mod daemon_session {
                 agent_launch_route: None,
                 managed_launch: None,
                 requested_min_available_bytes: None,
+                logical_open_id: logical_open_id.to_string(),
+                logical_open_attempt: 0,
             })),
         }
     }
@@ -3795,6 +4390,8 @@ mod daemon_session {
                     display_name: String::new(),
                 }),
                 requested_min_available_bytes: None,
+                logical_open_id: format!("logical-open-{launch_id}"),
+                logical_open_attempt: 1,
             })),
         }
     }
@@ -3804,7 +4401,11 @@ mod daemon_session {
             conn_id,
             std::collections::HashSet::from([
                 FEATURE_AGENT_ACCOUNT_ROUTING_V1.to_string(),
+                FEATURE_AGENT_PTY_BINDING_V2.to_string(),
+                FEATURE_LOGICAL_OPEN_ID_V1.to_string(),
+                FEATURE_LOGICAL_OPEN_ATTEMPT_V1.to_string(),
                 FEATURE_MANAGED_AGENT_FLEET_V1.to_string(),
+                FEATURE_MANAGED_OPEN_ATTACH_V1.to_string(),
             ]),
         );
         model
@@ -3812,6 +4413,366 @@ mod daemon_session {
             .replace_for_test("claude", "opaque-account", None);
         model.fresh_agent_account_routes_for_test =
             Some(model.agent_account_routes.routes_for_test().clone());
+    }
+
+    fn enable_attempt_aware_open_only(model: &mut super::super::ServerModel, conn_id: uuid::Uuid) {
+        model.connection_features.insert(
+            conn_id,
+            std::collections::HashSet::from([
+                FEATURE_LOGICAL_OPEN_ID_V1.to_string(),
+                FEATURE_LOGICAL_OPEN_ATTEMPT_V1.to_string(),
+            ]),
+        );
+    }
+
+    #[test]
+    fn managed_capability_gate_precedes_accepted_open_cache() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let connection = uuid::Uuid::new_v4();
+            let (tx, rx) = async_channel::unbounded::<ServerMessage>();
+            let request = managed_open("/path/no-longer-needed", "accepted-capability-gate");
+            let Some(client_message::Message::OpenSession(open)) = request.message.clone() else {
+                unreachable!()
+            };
+            let accepted = SessionOpened {
+                session_id: "accepted-managed-pty".to_string(),
+                generation: 23,
+                requires_attach: true,
+                expected_agent_binding: Some(binding_identity("accepted-managed-agent")),
+            };
+
+            model.update(&mut app, |model, ctx| {
+                model.register_connection(connection, tx, ctx);
+                enable_attempt_aware_open_only(model, connection);
+                model.accepted_opens.insert(open.clone(), accepted.clone());
+                model.handle_message(connection, request.clone(), ctx);
+            });
+            let response = recv_deadline(&rx, Duration::from_secs(1))
+                .await
+                .expect("attempt-only retry must be rejected synchronously");
+            let Some(server_message::Message::Error(error)) = response.message else {
+                panic!("attempt-only retry must not receive the cached managed SessionOpened");
+            };
+            assert_eq!(
+                error.message,
+                "verified managed-open capabilities were not negotiated"
+            );
+            model.read(&app, |model, _| {
+                assert!(matches!(
+                    model.accepted_opens.lookup(&open),
+                    super::AcceptedOpenLookup::Accepted(ref cached) if cached == &accepted
+                ));
+            });
+
+            model.update(&mut app, |model, ctx| {
+                enable_managed_fleet(model, connection);
+                model.handle_message(connection, request, ctx);
+            });
+            let response = recv_deadline(&rx, Duration::from_secs(1))
+                .await
+                .expect("fully capable retry should retain accepted-cache semantics");
+            assert_eq!(
+                response.message,
+                Some(server_message::Message::SessionOpened(accepted))
+            );
+        });
+    }
+
+    #[test]
+    fn managed_capability_gate_does_not_register_attempt_only_in_flight_waiter() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let origin_connection = uuid::Uuid::new_v4();
+            let retry_connection = uuid::Uuid::new_v4();
+            let (tx, rx) = async_channel::unbounded::<ServerMessage>();
+            let first_message = managed_open("/srv/project", "in-flight-capability-gate");
+            let Some(client_message::Message::OpenSession(first)) = first_message.message.clone()
+            else {
+                unreachable!()
+            };
+            let mut retry_message = first_message;
+            retry_message.request_id = "open-in-flight-capability-retry".to_string();
+            let Some(client_message::Message::OpenSession(retry)) = retry_message.message.as_mut()
+            else {
+                unreachable!()
+            };
+            retry.logical_open_attempt = 2;
+
+            model.update(&mut app, |model, ctx| {
+                model.register_connection(retry_connection, tx, ctx);
+                enable_attempt_aware_open_only(model, retry_connection);
+                assert!(matches!(
+                    model.accepted_opens.reserve(
+                        &first,
+                        origin_connection,
+                        &RequestId::from("in-flight-capability-origin".to_string()),
+                    ),
+                    LogicalOpenReservation::Start
+                ));
+                model.handle_message(retry_connection, retry_message.clone(), ctx);
+            });
+            let response = recv_deadline(&rx, Duration::from_secs(1))
+                .await
+                .expect("attempt-only in-flight retry must fail synchronously");
+            assert!(matches!(
+                response.message,
+                Some(server_message::Message::Error(ref error))
+                    if error.message == "verified managed-open capabilities were not negotiated"
+            ));
+            model.read(&app, |model, _| {
+                let in_flight =
+                    &model.accepted_opens.in_flight["logical-open-in-flight-capability-gate"];
+                assert!(in_flight.origin_active);
+                assert!(in_flight.waiters.is_empty());
+            });
+
+            model.update(&mut app, |model, ctx| {
+                enable_managed_fleet(model, retry_connection);
+                retry_message.request_id = "open-in-flight-capability-capable".to_string();
+                model.handle_message(retry_connection, retry_message, ctx);
+                let in_flight =
+                    &model.accepted_opens.in_flight["logical-open-in-flight-capability-gate"];
+                assert!(!in_flight.origin_active);
+                assert_eq!(in_flight.waiters.len(), 1);
+            });
+            assert!(
+                rx.is_empty(),
+                "a fully capable identical retry must retain in-flight waiter semantics"
+            );
+        });
+    }
+
+    #[test]
+    fn accepted_managed_open_retry_precedes_mutated_project_validation() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let connection = uuid::Uuid::new_v4();
+            let (tx, rx) = async_channel::unbounded::<ServerMessage>();
+            let project = tempfile::tempdir().expect("project directory should exist initially");
+            let project_root = project.path().to_string_lossy().into_owned();
+            let request = managed_open(&project_root, "mutation-retry");
+            let Some(client_message::Message::OpenSession(open)) = request.message.clone() else {
+                unreachable!()
+            };
+            let accepted = SessionOpened {
+                session_id: "existing-managed-pty".to_string(),
+                generation: 17,
+                requires_attach: true,
+                expected_agent_binding: Some(binding_identity("managed-agent")),
+            };
+            project
+                .close()
+                .expect("project mutation should remove the original directory");
+
+            model.update(&mut app, |model, ctx| {
+                model.register_connection(connection, tx, ctx);
+                enable_managed_fleet(model, connection);
+                model.accepted_opens.insert(open, accepted.clone());
+                model.handle_message(connection, request, ctx);
+            });
+
+            let response = recv_deadline(&rx, Duration::from_secs(1))
+                .await
+                .expect("accepted retry should bypass mutable project validation");
+            assert_eq!(response.request_id, "open-mutation-retry");
+            assert_eq!(
+                response.message,
+                Some(server_message::Message::SessionOpened(accepted))
+            );
+            model.read(&app, |model, _| assert!(model.sessions.is_empty()));
+
+            let conflict = managed_open("/path/that/no-longer-exists", "mutation-retry");
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(connection, conflict, ctx);
+            });
+            let response = recv_deadline(&rx, Duration::from_secs(1))
+                .await
+                .expect("conflicting retry should bypass mutable project validation");
+            let Some(server_message::Message::Error(error)) = response.message else {
+                panic!("mutated accepted logical id must be rejected as a conflict");
+            };
+            assert_eq!(
+                error.message,
+                "logical open id was reused with different parameters"
+            );
+            model.read(&app, |model, _| assert!(model.sessions.is_empty()));
+        });
+    }
+
+    #[test]
+    fn in_flight_retry_and_conflict_bypass_mutated_project_validation() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let connection = uuid::Uuid::new_v4();
+            let (tx, rx) = async_channel::unbounded::<ServerMessage>();
+            let project = tempfile::tempdir().expect("managed project");
+            let cwd = project.path().to_string_lossy().into_owned();
+            let mut first = managed_open(&cwd, "in-flight-mutation");
+            let Some(client_message::Message::OpenSession(first_open)) = first.message.as_mut()
+            else {
+                unreachable!()
+            };
+            first_open.logical_open_attempt = 1;
+            let mut retry = first.clone();
+            retry.request_id = "open-in-flight-mutation-retry".to_string();
+            let Some(client_message::Message::OpenSession(retry_open)) = retry.message.as_mut()
+            else {
+                unreachable!()
+            };
+            retry_open.logical_open_attempt = 2;
+            let gate = std::sync::Arc::new((
+                std::sync::Mutex::new((false, false)),
+                std::sync::Condvar::new(),
+            ));
+
+            model.update(&mut app, |model, ctx| {
+                model.register_connection(connection, tx, ctx);
+                enable_managed_fleet(model, connection);
+                model.managed_min_available_bytes = Ok(1);
+                model.managed_preflight_gate_for_test = Some(gate.clone());
+                model.handle_message(connection, first, ctx);
+            });
+            for _ in 0..100 {
+                if gate.0.lock().unwrap().0 {
+                    break;
+                }
+                async_io::Timer::after(Duration::from_millis(10)).await;
+            }
+            assert!(gate.0.lock().unwrap().0, "managed preflight must start");
+            project
+                .close()
+                .expect("project mutation should remove the original directory");
+
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(connection, retry, ctx);
+            });
+            assert!(
+                rx.is_empty(),
+                "an identical in-flight retry must wait without revalidating the removed project"
+            );
+
+            let mut conflict = managed_open(
+                "/path/removed-before-in-flight-conflict",
+                "in-flight-mutation",
+            );
+            conflict.request_id = "open-in-flight-mutation-conflict".to_string();
+            let Some(client_message::Message::OpenSession(conflict_open)) =
+                conflict.message.as_mut()
+            else {
+                unreachable!()
+            };
+            conflict_open.logical_open_attempt = 3;
+            model.update(&mut app, |model, ctx| {
+                model.handle_message(connection, conflict, ctx);
+            });
+            let response = recv_deadline(&rx, Duration::from_secs(1))
+                .await
+                .expect("an in-flight parameter conflict must fail synchronously");
+            let Some(server_message::Message::Error(error)) = response.message else {
+                panic!("in-flight logical-id reuse must be rejected as a conflict");
+            };
+            assert_eq!(
+                error.message,
+                "logical open id was reused with different parameters"
+            );
+
+            model.update(&mut app, |model, _| {
+                model.handle_abort(
+                    connection,
+                    Abort {
+                        request_id_to_abort: "open-in-flight-mutation-retry".to_string(),
+                    },
+                    &RequestId::from("abort-in-flight-mutation-retry".to_string()),
+                );
+                assert!(model.in_progress.is_empty());
+                assert!(model.accepted_opens.in_flight.is_empty());
+            });
+            {
+                let mut state = gate.0.lock().unwrap();
+                state.1 = true;
+                gate.1.notify_all();
+            }
+            async_io::Timer::after(Duration::from_millis(100)).await;
+            model.read(&app, |model, _| {
+                assert!(model.sessions.is_empty());
+                assert!(model.accepted_opens.by_logical_id.is_empty());
+            });
+        });
+    }
+
+    #[test]
+    fn managed_preflight_outliving_both_ack_windows_is_cancelled_before_spawn() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let connection = uuid::Uuid::new_v4();
+            let (tx, rx) = async_channel::unbounded::<ServerMessage>();
+            let project = tempfile::tempdir().expect("managed project");
+            let cwd = project.path().to_string_lossy().into_owned();
+            let first = managed_open(&cwd, "slow-preflight");
+            let mut second = first.clone();
+            second.request_id = "open-slow-preflight-second-window".to_string();
+            let Some(client_message::Message::OpenSession(second_open)) = second.message.as_mut()
+            else {
+                unreachable!()
+            };
+            second_open.logical_open_attempt = 2;
+            let gate = std::sync::Arc::new((
+                std::sync::Mutex::new((false, false)),
+                std::sync::Condvar::new(),
+            ));
+
+            model.update(&mut app, |model, ctx| {
+                model.register_connection(connection, tx, ctx);
+                enable_managed_fleet(model, connection);
+                model.managed_min_available_bytes = Ok(1);
+                model.managed_preflight_gate_for_test = Some(gate.clone());
+                model.handle_message(connection, first, ctx);
+                model.handle_message(connection, second, ctx);
+            });
+
+            for _ in 0..100 {
+                if gate.0.lock().unwrap().0 {
+                    break;
+                }
+                async_io::Timer::after(Duration::from_millis(10)).await;
+            }
+            assert!(gate.0.lock().unwrap().0, "managed preflight must start");
+
+            model.update(&mut app, |model, _| {
+                model.handle_abort(
+                    connection,
+                    Abort {
+                        request_id_to_abort: "open-slow-preflight".to_string(),
+                    },
+                    &RequestId::from("abort-first-ack-window".to_string()),
+                );
+                assert!(model.sessions.is_empty());
+                assert_eq!(model.accepted_opens.in_flight.len(), 1);
+                model.handle_abort(
+                    connection,
+                    Abort {
+                        request_id_to_abort: "open-slow-preflight-second-window".to_string(),
+                    },
+                    &RequestId::from("abort-final-ack-window".to_string()),
+                );
+                assert!(model.in_progress.is_empty());
+                assert!(model.accepted_opens.in_flight.is_empty());
+            });
+
+            {
+                let mut state = gate.0.lock().unwrap();
+                state.1 = true;
+                gate.1.notify_all();
+            }
+            async_io::Timer::after(Duration::from_millis(100)).await;
+            model.read(&app, |model, _| {
+                assert!(model.sessions.is_empty());
+                assert!(model.accepted_opens.in_flight.is_empty());
+                assert!(model.accepted_opens.by_logical_id.is_empty());
+            });
+            assert!(rx.is_empty());
+        });
     }
 
     #[test]
@@ -4439,10 +5400,10 @@ mod daemon_session {
         });
     }
 
-    /// Stage 4: multiple sessions per daemon are listable, carry their cwd, and
-    /// the list shrinks when a session is closed.
+    /// Stage 4: multiple sessions per daemon are listable, carry their cwd and
+    /// exact ring diagnostics, and the list shrinks when a session is closed.
     #[test]
-    fn list_sessions_reports_open_sessions() {
+    fn list_sessions_reports_open_sessions_with_exact_ring_bytes_and_host_cap() {
         App::test((), |mut app| async move {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
@@ -4471,9 +5432,25 @@ mod daemon_session {
                 .expect("session B opened");
             assert_ne!(id_a, id_b);
 
-            // ListSessions reports both, each with its cwd, all alive.
-            model.update(&mut app, |m, ctx| {
-                m.handle_message(conn_id, list_msg(), ctx)
+            // Add distinct diagnostic footprints and snapshot their exact retained
+            // lengths in the same model update that creates the response.
+            let (ring_a, ring_b) = model.update(&mut app, |m, ctx| {
+                m.sessions
+                    .get_mut(&id_a)
+                    .unwrap()
+                    .ring
+                    .append(b"reported-ring-a");
+                m.sessions
+                    .get_mut(&id_b)
+                    .unwrap()
+                    .ring
+                    .append(b"reported-ring-b-longer");
+                let retained = (
+                    m.sessions[&id_a].ring.len() as u64,
+                    m.sessions[&id_b].ring.len() as u64,
+                );
+                m.handle_message(conn_id, list_msg(), ctx);
+                retained
             });
             let list = recv_session_list(&conn_rx).await.expect("SessionList");
             assert_eq!(list.sessions.len(), 2, "two sessions listed");
@@ -4489,6 +5466,13 @@ mod daemon_session {
             assert_eq!(by_id.get(id_a.as_str()), Some(&path_a.as_str()));
             assert_eq!(by_id.get(id_b.as_str()), Some(&path_b.as_str()));
             assert!(list.sessions.iter().all(|s| s.alive));
+            let reported_ring_bytes: std::collections::HashMap<&str, u64> = list
+                .sessions
+                .iter()
+                .map(|session| (session.session_id.as_str(), session.ring_bytes))
+                .collect();
+            assert_eq!(reported_ring_bytes.get(id_a.as_str()), Some(&ring_a));
+            assert_eq!(reported_ring_bytes.get(id_b.as_str()), Some(&ring_b));
 
             // Closing one shrinks the list to the survivor.
             model.update(&mut app, |m, ctx| {
@@ -4524,17 +5508,18 @@ mod daemon_session {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().to_string_lossy().to_string();
             model.update(&mut app, |m, ctx| {
-                m.handle_message(conn_id, open_in(&path), ctx)
+                m.handle_message(conn_id, open_in_with_logical_id(&path, "gc-session-1"), ctx)
             });
             let id1 = recv_session_opened(&conn_rx)
                 .await
                 .expect("session 1 opened");
             model.update(&mut app, |m, ctx| {
-                m.handle_message(conn_id, open_in(&path), ctx)
+                m.handle_message(conn_id, open_in_with_logical_id(&path, "gc-session-2"), ctx)
             });
             let id2 = recv_session_opened(&conn_rx)
                 .await
                 .expect("session 2 opened");
+            assert_ne!(id1, id2, "GC fixture requires two distinct sessions");
 
             // Drop the connection: both sessions detach but keep running (the
             // grace guard keeps the daemon up).

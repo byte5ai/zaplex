@@ -459,5 +459,7 @@ jobs:
           ui_copy_has_no_space_before_ellipsis
           spaced_ellipsis_detection_covers_catalog_whitespace_and_punctuation
           spaced_ellipsis_detection_ignores_comments_and_leading_ellipses
+          cross_window_tab_transfer_preserves_mixed_host_identity_through_preview
+          cross_window_tab_transfer_cleanup_preserves_other_tabs_remote_identity
           test_boot_registers_all_keybindings_without_panicking
         shell: bash

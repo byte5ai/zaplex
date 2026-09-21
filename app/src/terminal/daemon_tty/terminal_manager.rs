@@ -57,7 +57,7 @@ pub struct OpenSessionParams {
 #[derive(Clone, Debug)]
 pub struct DaemonSessionRequest {
     /// The manager/connection session id the daemon session lives on. Allocated
-    /// up front (see `headless_connect::alloc_daemon_session_id`); the terminal
+    /// up front (see `remote_server::alloc_daemon_session_id`); the terminal
     /// waits for it to reach `Connected` before issuing `OpenSession`.
     pub connection_session_id: SessionId,
     pub open_params: OpenSessionParams,
@@ -69,6 +69,9 @@ pub struct DaemonSessionRequest {
     /// Zero/`None` preserves the id-only attach required by legacy daemons;
     /// capability-gated agent inventory always supplies a nonzero value.
     pub adopt_pty_generation: Option<u64>,
+    /// Exact daemon identity required by a restored pane. New sessions leave
+    /// this unset because their identity is learned from the first handshake.
+    pub expected_host_id: Option<String>,
     /// Exact foreground agent captured from the same inventory row. `None` for
     /// generic PTY sidebar adopts; agent-row adopts fail if a handoff changed it.
     pub expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
@@ -108,6 +111,12 @@ impl TerminalManager {
         self.connection_session_id
     }
 
+    pub(crate) fn relinquish_managed_launch(&self, launch_id: &str, ctx: &mut AppContext) -> bool {
+        self._event_loop.update(ctx, |event_loop, _ctx| {
+            event_loop.relinquish_managed_launch(launch_id)
+        })
+    }
+
     /// Creates a terminal manager backed by a daemon-hosted PTY session.
     ///
     /// `connection_session_id` identifies an already-connected remote-server
@@ -124,6 +133,7 @@ impl TerminalManager {
         open_params: OpenSessionParams,
         adopt_pty_session_id: Option<String>,
         adopt_pty_generation: Option<u64>,
+        expected_host_id: Option<String>,
         expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         install_progress_rx: Option<Receiver<String>>,
         host_label: String,
@@ -178,6 +188,7 @@ impl TerminalManager {
             open_params,
             adopt_pty_session_id,
             adopt_pty_generation,
+            expected_host_id,
             expected_agent_binding,
             install_progress_rx,
             host_label,
@@ -224,9 +235,8 @@ impl TerminalManager {
             model_event_sender,
             ctx,
         );
-        let terminal_view_id = view.as_ref(ctx).view_id();
         event_loop.update(ctx, |event_loop, ctx| {
-            event_loop.bind_terminal_view(terminal_view_id, ctx);
+            event_loop.bind_terminal_view(&view, ctx);
         });
 
         // Create the terminal manager itself.
@@ -254,6 +264,7 @@ impl TerminalManager {
         open_params: OpenSessionParams,
         adopt_pty_session_id: Option<String>,
         adopt_pty_generation: Option<u64>,
+        expected_host_id: Option<String>,
         expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         install_progress_rx: Option<Receiver<String>>,
         host_label: String,
@@ -269,6 +280,7 @@ impl TerminalManager {
                 open_params,
                 adopt_pty_session_id,
                 adopt_pty_generation,
+                expected_host_id,
                 expected_agent_binding,
                 install_progress_rx,
                 host_label,

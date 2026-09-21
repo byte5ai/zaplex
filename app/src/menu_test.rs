@@ -1,7 +1,12 @@
-use super::{Menu, MenuAction, MenuItem, MenuItemFields, SelectAction, SubMenu};
+use super::{
+    should_reverse_submenu_layout, Menu, MenuAction, MenuItem, MenuItemFields, SelectAction,
+    SubMenu, SPLIT_SUBMENU_TRIGGER_WIDTH,
+};
 
 use warp_core::ui::appearance::Appearance;
-use warpui::{platform::WindowStyle, App, TypedActionView};
+use warpui::{
+    accessibility::ActionAccessibilityContent, platform::WindowStyle, App, TypedActionView,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TestAction {
@@ -44,6 +49,34 @@ fn two_submenu_items() -> Vec<MenuItem<TestAction>> {
                 .into_item()]),
         },
     ]
+}
+
+fn split_submenu_items() -> Vec<MenuItem<TestAction>> {
+    vec![MenuItem::Submenu {
+        fields: MenuItemFields::new_submenu("host")
+            .with_on_select_action(TestAction::Root)
+            .with_split_submenu_trigger("More actions for host"),
+        menu: SubMenu::new(vec![
+            MenuItemFields::new("child one")
+                .with_on_select_action(TestAction::ChildOne)
+                .into_item(),
+            MenuItemFields::new("child two")
+                .with_on_select_action(TestAction::ChildTwo)
+                .into_item(),
+        ]),
+    }]
+}
+
+fn primary_disabled_split_submenu_items() -> Vec<MenuItem<TestAction>> {
+    vec![MenuItem::Submenu {
+        fields: MenuItemFields::new_submenu("removed host")
+            .with_on_select_action(TestAction::Root)
+            .with_split_submenu_trigger("More actions for removed host")
+            .with_split_submenu_primary_disabled(true),
+        menu: SubMenu::new(vec![MenuItemFields::new("remove")
+            .with_on_select_action(TestAction::ChildOne)
+            .into_item()]),
+    }]
 }
 
 #[test]
@@ -227,6 +260,207 @@ fn test_enter_uses_the_active_submenu_selection() {
 }
 
 #[test]
+fn test_split_submenu_enter_runs_primary_action_without_opening_child() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+
+        let (_, menu) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut menu = Menu::<TestAction>::new();
+            menu.set_items(split_submenu_items(), ctx);
+            menu
+        });
+
+        menu.update(&mut app, |menu, ctx| {
+            menu.set_selected_by_index(0, ctx);
+            let action = menu
+                .menu
+                .selected_action_for_enter(menu.submenu_position_namespace, ctx);
+
+            assert_eq!(action, Some(TestAction::Root));
+            assert!(!menu.menu.has_visible_submenu_at_depth(0));
+            assert!(menu
+                .menu
+                .selected_submenu()
+                .unwrap()
+                .selected_item()
+                .is_none());
+        });
+    })
+}
+
+#[test]
+fn test_split_submenu_preserves_identity_width_and_full_text_metadata() {
+    let items = split_submenu_items();
+    let MenuItem::Submenu { fields, .. } = &items[0] else {
+        panic!("expected split submenu");
+    };
+
+    assert_eq!(SPLIT_SUBMENU_TRIGGER_WIDTH, 28.);
+    assert!(fields.ellipsizes_label());
+    assert_eq!(fields.get_a11y_text(), "host");
+}
+
+#[test]
+fn test_primary_disabled_split_submenu_keeps_child_keyboard_accessible() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+
+        let (_, menu) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut menu = Menu::<TestAction>::new();
+            menu.set_items(primary_disabled_split_submenu_items(), ctx);
+            menu
+        });
+
+        menu.update(&mut app, |menu, ctx| {
+            let MenuItem::Submenu { fields, .. } = &menu.items()[0] else {
+                panic!("expected split submenu");
+            };
+            assert!(!fields.is_disabled());
+            assert!(fields.is_split_submenu_primary_disabled());
+            assert!(menu.items()[0].selectable());
+
+            menu.set_selected_by_index(0, ctx);
+            assert_eq!(
+                menu.menu
+                    .selected_action_for_enter(menu.submenu_position_namespace, ctx),
+                None
+            );
+
+            menu.handle_action(&MenuAction::OpenSubmenu, ctx);
+            assert!(menu.menu.last_open_submenu_succeeded);
+            assert_eq!(
+                menu.menu.selected_submenu().unwrap().selected_index(),
+                Some(0)
+            );
+        });
+    })
+}
+
+#[test]
+fn test_split_submenu_accessibility_tracks_primary_trigger_and_nested_selection() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+
+        let (_, menu) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut menu = Menu::<TestAction>::new();
+            menu.set_items(split_submenu_items(), ctx);
+            menu
+        });
+
+        menu.update(&mut app, |menu, ctx| {
+            menu.set_selected_by_index(0, ctx);
+            assert_eq!(menu.menu.selected_accessibility_label(), "host Selected");
+
+            menu.handle_action(
+                &MenuAction::HoverSubmenuWithChildren {
+                    depth: 0,
+                    selection: SelectAction::Index { row: 0, item: 1 },
+                    position: Default::default(),
+                },
+                ctx,
+            );
+            assert_eq!(menu.menu.selected_accessibility_label(), "host Expanded");
+
+            menu.handle_action(&MenuAction::OpenSubmenu, ctx);
+            assert_eq!(
+                menu.menu.selected_accessibility_label(),
+                "child one Selected"
+            );
+
+            menu.handle_action(&MenuAction::Escape, ctx);
+            assert_eq!(menu.menu.escape_accessibility_label(), "Submenu Closed");
+            assert_eq!(menu.menu.selected_accessibility_label(), "host Selected");
+        });
+    })
+}
+
+#[test]
+fn test_split_submenu_right_opens_child_and_escape_returns_to_parent() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+
+        let (_, menu) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut menu = Menu::<TestAction>::new();
+            menu.set_items(split_submenu_items(), ctx);
+            menu
+        });
+
+        menu.update(&mut app, |menu, ctx| {
+            menu.set_selected_by_index(0, ctx);
+            menu.handle_action(&MenuAction::OpenSubmenu, ctx);
+
+            assert!(menu.menu.has_visible_submenu_at_depth(0));
+            assert_eq!(
+                menu.menu.selected_submenu().unwrap().selected_index(),
+                Some(0)
+            );
+
+            menu.handle_action(&MenuAction::Escape, ctx);
+
+            assert_eq!(menu.selected_index(), Some(0));
+            assert_eq!(menu.menu.selected_item_index, Some(0));
+            assert!(!menu.menu.has_visible_submenu_at_depth(0));
+            assert!(menu
+                .menu
+                .selected_submenu()
+                .unwrap()
+                .selected_item()
+                .is_none());
+        });
+    })
+}
+
+#[test]
+fn test_split_submenu_trailing_target_opens_without_selecting_primary_action() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+
+        let (_, menu) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut menu = Menu::<TestAction>::new();
+            menu.set_items(split_submenu_items(), ctx);
+            menu
+        });
+
+        menu.update(&mut app, |menu, ctx| {
+            menu.handle_action(
+                &MenuAction::HoverSubmenuWithChildren {
+                    depth: 0,
+                    selection: SelectAction::Index { row: 0, item: 1 },
+                    position: Default::default(),
+                },
+                ctx,
+            );
+
+            assert_eq!(menu.selected_index(), Some(0));
+            assert_eq!(menu.menu.selected_item_index, Some(1));
+            assert!(menu.menu.has_visible_submenu_at_depth(0));
+            assert!(menu
+                .menu
+                .selected_submenu()
+                .unwrap()
+                .selected_item()
+                .is_none());
+
+            let action = menu
+                .menu
+                .selected_action_for_enter(menu.submenu_position_namespace, ctx);
+            assert_eq!(action, None);
+            assert_eq!(
+                menu.menu.selected_submenu().unwrap().selected_index(),
+                Some(0)
+            );
+        });
+    })
+}
+
+#[test]
+fn test_submenu_edge_placement_reverses_only_when_right_side_overflows() {
+    assert!(!should_reverse_submenu_layout(100., 800., 200., 2));
+    assert!(should_reverse_submenu_layout(550., 800., 200., 2));
+    assert!(!should_reverse_submenu_layout(790., 800., 200., 1));
+}
+
+#[test]
 fn test_right_is_a_noop_for_leaf_items() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -242,6 +476,11 @@ fn test_right_is_a_noop_for_leaf_items() {
             menu.handle_action(&MenuAction::OpenSubmenu, ctx);
 
             assert_eq!(menu.selected_index(), Some(1));
+            assert!(!menu.menu.last_open_submenu_succeeded);
+            assert!(matches!(
+                menu.action_accessibility_contents(&MenuAction::OpenSubmenu, ctx),
+                ActionAccessibilityContent::Empty
+            ));
             assert!(menu.menu.selected_submenu().is_none());
             assert_eq!(
                 menu.selected_item().unwrap().fields().unwrap().label(),
@@ -249,6 +488,38 @@ fn test_right_is_a_noop_for_leaf_items() {
             );
         });
     })
+}
+
+#[test]
+fn menu_accessibility_copy_uses_fluent_keys() {
+    let source = include_str!("menu.rs");
+    for literal in [
+        "{item} Selected",
+        "Submenu Expanded",
+        "Submenu Closed",
+        "Menu Closed",
+        "Action Selected",
+        "Press the right key",
+    ] {
+        assert!(!source.contains(literal), "hard-coded a11y text: {literal}");
+    }
+    for key in [
+        "menu-a11y-item-selected",
+        "menu-a11y-submenu-expanded-label",
+        "menu-a11y-select-instructions",
+        "menu-a11y-select-submenu-instructions",
+        "menu-a11y-submenu-expanded",
+        "menu-a11y-open-submenu-instructions",
+        "menu-a11y-submenu-closed",
+        "menu-a11y-close-submenu-instructions",
+        "menu-a11y-submenu-escape-instructions",
+        "menu-a11y-menu-closed",
+        "menu-a11y-menu-escape-instructions",
+        "menu-a11y-action-selected",
+        "menu-a11y-action-instructions",
+    ] {
+        assert!(source.contains(key), "missing Fluent use: {key}");
+    }
 }
 
 #[test]
@@ -264,11 +535,19 @@ fn test_stale_submenu_parent_unhover_does_not_clear_new_hover_selection() {
 
         menu.update(&mut app, |menu, ctx| {
             menu.handle_action(
-                &MenuAction::HoverSubmenuWithChildren(0, SelectAction::Index { row: 0, item: 0 }),
+                &MenuAction::HoverSubmenuWithChildren {
+                    depth: 0,
+                    selection: SelectAction::Index { row: 0, item: 0 },
+                    position: Default::default(),
+                },
                 ctx,
             );
             menu.handle_action(
-                &MenuAction::HoverSubmenuWithChildren(0, SelectAction::Index { row: 1, item: 0 }),
+                &MenuAction::HoverSubmenuWithChildren {
+                    depth: 0,
+                    selection: SelectAction::Index { row: 1, item: 0 },
+                    position: Default::default(),
+                },
                 ctx,
             );
             menu.handle_action(&MenuAction::UnhoverSubmenuParent(0, 0), ctx);
@@ -299,7 +578,11 @@ fn test_submenu_parent_unhover_keeps_submenu_open() {
 
         menu.update(&mut app, |menu, ctx| {
             menu.handle_action(
-                &MenuAction::HoverSubmenuWithChildren(0, SelectAction::Index { row: 0, item: 0 }),
+                &MenuAction::HoverSubmenuWithChildren {
+                    depth: 0,
+                    selection: SelectAction::Index { row: 0, item: 0 },
+                    position: Default::default(),
+                },
                 ctx,
             );
             menu.handle_action(&MenuAction::UnhoverSubmenuParent(0, 0), ctx);
@@ -323,7 +606,11 @@ fn test_leaf_hover_clears_previously_selected_submenu_parent() {
 
         menu.update(&mut app, |menu, ctx| {
             menu.handle_action(
-                &MenuAction::HoverSubmenuWithChildren(0, SelectAction::Index { row: 0, item: 0 }),
+                &MenuAction::HoverSubmenuWithChildren {
+                    depth: 0,
+                    selection: SelectAction::Index { row: 0, item: 0 },
+                    position: Default::default(),
+                },
                 ctx,
             );
             assert!(menu.menu.selected_submenu().is_some());
@@ -361,7 +648,11 @@ fn test_leaf_mouse_in_tracking_does_not_clear_open_submenu() {
 
         menu.update(&mut app, |menu, ctx| {
             menu.handle_action(
-                &MenuAction::HoverSubmenuWithChildren(0, SelectAction::Index { row: 0, item: 0 }),
+                &MenuAction::HoverSubmenuWithChildren {
+                    depth: 0,
+                    selection: SelectAction::Index { row: 0, item: 0 },
+                    position: Default::default(),
+                },
                 ctx,
             );
             menu.handle_action(
@@ -415,7 +706,11 @@ fn test_switching_submenu_parent_clears_nested_selection() {
 
         menu.update(&mut app, |menu, ctx| {
             menu.handle_action(
-                &MenuAction::HoverSubmenuWithChildren(0, SelectAction::Index { row: 1, item: 0 }),
+                &MenuAction::HoverSubmenuWithChildren {
+                    depth: 0,
+                    selection: SelectAction::Index { row: 1, item: 0 },
+                    position: Default::default(),
+                },
                 ctx,
             );
             menu.handle_action(
@@ -435,11 +730,19 @@ fn test_switching_submenu_parent_clears_nested_selection() {
             );
 
             menu.handle_action(
-                &MenuAction::HoverSubmenuWithChildren(0, SelectAction::Index { row: 0, item: 0 }),
+                &MenuAction::HoverSubmenuWithChildren {
+                    depth: 0,
+                    selection: SelectAction::Index { row: 0, item: 0 },
+                    position: Default::default(),
+                },
                 ctx,
             );
             menu.handle_action(
-                &MenuAction::HoverSubmenuWithChildren(0, SelectAction::Index { row: 1, item: 0 }),
+                &MenuAction::HoverSubmenuWithChildren {
+                    depth: 0,
+                    selection: SelectAction::Index { row: 1, item: 0 },
+                    position: Default::default(),
+                },
                 ctx,
             );
 
@@ -466,7 +769,11 @@ fn test_nested_submenu_leaf_hover_is_handled_at_child_depth() {
 
         menu.update(&mut app, |menu, ctx| {
             menu.handle_action(
-                &MenuAction::HoverSubmenuWithChildren(0, SelectAction::Index { row: 0, item: 0 }),
+                &MenuAction::HoverSubmenuWithChildren {
+                    depth: 0,
+                    selection: SelectAction::Index { row: 0, item: 0 },
+                    position: Default::default(),
+                },
                 ctx,
             );
             assert!(menu.menu.selected_submenu().is_some());

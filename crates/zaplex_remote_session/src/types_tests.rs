@@ -54,6 +54,19 @@ fn supported_features_advertises_retry_safe_startup_delivery_on_unix() {
 
 #[cfg(unix)]
 #[test]
+fn supported_features_advertises_idempotent_open_delivery_on_unix() {
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_LOGICAL_OPEN_ID_V1
+    ));
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_LOGICAL_OPEN_ATTEMPT_V1
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn supported_features_advertises_typed_multiplexer_inventory_on_unix() {
     assert!(has_feature(
         &supported_features(),
@@ -68,6 +81,10 @@ fn supported_features_advertises_managed_agent_fleet_on_linux() {
         &supported_features(),
         FEATURE_MANAGED_AGENT_FLEET_V1
     ));
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_MANAGED_OPEN_ATTACH_V1
+    ));
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -76,6 +93,10 @@ fn supported_features_omits_managed_agent_fleet_when_unsupported() {
     assert!(!has_feature(
         &supported_features(),
         FEATURE_MANAGED_AGENT_FLEET_V1
+    ));
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_MANAGED_OPEN_ATTACH_V1
     ));
 }
 
@@ -175,6 +196,8 @@ fn supported_client_features_are_explicit_and_platform_independent() {
     for feature in [
         FEATURE_SESSION_HOST,
         FEATURE_STARTUP_COMMAND_ACK,
+        FEATURE_LOGICAL_OPEN_ID_V1,
+        FEATURE_LOGICAL_OPEN_ATTEMPT_V1,
         FEATURE_AGENT_INVENTORY,
         FEATURE_AGENT_ACCOUNT_ROUTING_V1,
         FEATURE_AGENT_MODEL_DISCOVERY_V1,
@@ -188,6 +211,7 @@ fn supported_client_features_are_explicit_and_platform_independent() {
         FEATURE_HOST_EXEC,
         FEATURE_MULTIPLEXER_INVENTORY_V1,
         FEATURE_MANAGED_AGENT_FLEET_V1,
+        FEATURE_MANAGED_OPEN_ATTACH_V1,
     ] {
         assert!(has_feature(&features, feature), "missing {feature}");
     }
@@ -203,6 +227,14 @@ fn supported_features_omits_session_host_on_non_unix() {
     assert!(!has_feature(
         &supported_features(),
         FEATURE_STARTUP_COMMAND_ACK
+    ));
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_LOGICAL_OPEN_ID_V1
+    ));
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_LOGICAL_OPEN_ATTEMPT_V1
     ));
     assert!(!has_feature(
         &supported_features(),

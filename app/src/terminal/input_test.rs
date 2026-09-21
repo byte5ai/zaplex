@@ -6686,6 +6686,82 @@ fn test_remove_ignored_suggestion_on_command_execution() {
 }
 
 #[test]
+fn remote_readiness_gate_preserves_draft_without_executing_it() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let submitted = input.update(&mut app, |input, ctx| {
+            input.user_insert("echo keep-this-draft", ctx);
+            input.set_ordinary_command_input_ready(false, ctx);
+            input.try_execute_command("echo keep-this-draft", ctx)
+        });
+
+        assert!(!submitted);
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "echo keep-this-draft");
+            assert_eq!(
+                input.editor().as_ref(ctx).interaction_state(ctx),
+                InteractionState::Disabled
+            );
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.set_ordinary_command_input_ready(true, ctx);
+        });
+        input.read(&app, |input, ctx| {
+            assert_eq!(
+                input.editor().as_ref(ctx).interaction_state(ctx),
+                InteractionState::Editable
+            );
+        });
+    });
+}
+
+#[test]
+fn pending_remote_setup_command_does_not_replace_the_user_draft() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("echo keep-this-draft", ctx);
+            input.set_ordinary_command_input_ready(false, ctx);
+            input.set_pending_system_command("ssh production".to_string());
+            input.execute_pending_command(ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "echo keep-this-draft");
+            assert!(!input.has_pending_command());
+        });
+    });
+}
+
+#[test]
+fn failed_remote_setup_command_cannot_execute_later() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("echo keep-this-draft", ctx);
+            input.set_pending_system_command("ssh production".to_string());
+            input.cancel_pending_system_command();
+            input.execute_pending_command(ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "echo keep-this-draft");
+            assert!(!input.has_pending_command());
+        });
+    });
+}
+
+#[test]
 fn test_remove_ignored_suggestion_on_ai_query_execution() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

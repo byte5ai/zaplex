@@ -22,6 +22,30 @@ fn connected_daemon_registry_identity_is_deterministic() {
     );
 }
 
+#[test]
+fn preferred_runtime_is_materialized_as_an_exact_route() {
+    let route = effective_daemon_runtime(None, "v1.0.29".to_string());
+
+    assert_eq!(
+        route.runtime_filename(),
+        crate::setup::daemon_runtime_filename("sock")
+    );
+    assert_eq!(route.server_version(), "v1.0.29");
+}
+
+#[test]
+fn explicit_runtime_keeps_its_filename_and_observed_version() {
+    let explicit = DaemonRuntimeRoute::new(
+        "server-v1.0.28.sock".to_string(),
+        "stale-value-is-not-reused".to_string(),
+    )
+    .unwrap();
+    let route = effective_daemon_runtime(Some(&explicit), "v1.0.28".to_string());
+
+    assert_eq!(route.runtime_filename(), "server-v1.0.28.sock");
+    assert_eq!(route.server_version(), "v1.0.28");
+}
+
 // ---------------------------------------------------------------------------
 // version_is_compatible
 // ---------------------------------------------------------------------------

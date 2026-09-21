@@ -3,6 +3,36 @@ use crate::context_chips::{git_line_changes_from_chips, ContextChipKind};
 use crate::terminal::TerminalView;
 use warpui::AppContext;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TerminalIdentity {
+    pub short: String,
+    pub full: String,
+}
+
+/// Build a compact terminal identity for pane chrome while retaining the full
+/// path for the existing header tooltip/accessibility surface.
+pub(crate) fn terminal_identity(host: &str, cwd: Option<&str>, fallback: &str) -> TerminalIdentity {
+    let cwd = cwd.map(str::trim).filter(|cwd| !cwd.is_empty());
+    let fallback = fallback.trim();
+    let fallback = if fallback.is_empty() {
+        "Terminal"
+    } else {
+        fallback
+    };
+    let short_path = cwd
+        .map(|cwd| cwd.trim_end_matches(['/', '\\']))
+        .filter(|cwd| !cwd.is_empty())
+        .and_then(|cwd| cwd.rsplit(['/', '\\']).next())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| cwd.unwrap_or(fallback));
+    let full_path = cwd.unwrap_or(fallback);
+
+    TerminalIdentity {
+        short: format!("{host} · {short_path}"),
+        full: format!("{host} · {full_path}"),
+    }
+}
+
 impl TerminalView {
     fn prompt_chip_value(&self, chip_kind: &ContextChipKind, ctx: &AppContext) -> Option<String> {
         self.current_prompt
@@ -108,3 +138,7 @@ impl TerminalView {
             })
     }
 }
+
+#[cfg(test)]
+#[path = "tab_metadata_tests.rs"]
+mod tests;

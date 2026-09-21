@@ -47,7 +47,7 @@ use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 use crate::terminal::local_tty::spawner::PtySpawner;
-use crate::terminal::shared_session::{SharedSessionScrollbackType, SharedSessionStatus};
+use crate::terminal::shared_session::SharedSessionStatus;
 
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
@@ -66,12 +66,530 @@ use crate::{experiments, workspace, GlobalResourceHandlesProvider};
 
 // Zaplex(localization, Phase 5): `PreferencesSyncer` has been physically deleted.
 
-use crate::terminal::shared_session::protocol::SessionId;
+use crate::terminal::model::session::SessionId;
+use crate::terminal::shared_session::protocol::SessionId as SharedSessionId;
 use ai::project_context::model::ProjectContextModel;
 use pane_group::{NotebookPane, PaneState, SplitPaneState, TerminalPaneId};
 use terminal::view::ActiveSessionState;
 use warpui::AddSingletonModel;
 use warpui::{platform::WindowStyle, App, ViewHandle};
+
+fn terminal_snapshot_leaf(uuid: Vec<u8>) -> PaneNodeSnapshot {
+    PaneNodeSnapshot::Leaf(LeafSnapshot {
+        is_focused: false,
+        custom_vertical_tabs_title: None,
+        contents: LeafContents::Terminal(TerminalPaneSnapshot {
+            uuid,
+            cwd: Some("/tmp".to_string()),
+            cli_agent_binding: None,
+            shell_launch_data: None,
+            is_active: true,
+            is_read_only: false,
+            input_config: None,
+            llm_model_override: None,
+            active_profile_id: None,
+            conversation_ids_to_restore: Vec::new(),
+            active_conversation_id: None,
+        }),
+    })
+}
+
+#[test]
+fn managed_connect_registry_tracks_multiple_accounts_on_one_host_independently() {
+    let mut registry = SshConnectRegistry::default();
+    let mut pending = PendingManagedSpawns::default();
+    let first_account = registry.begin_parallel("node-a".to_string(), "host-a".to_string());
+    let second_account = registry.begin_parallel("node-a".to_string(), "host-a".to_string());
+    pending.insert("launch-a".to_string(), PendingManagedSpawn::Standalone);
+    pending.insert("launch-b".to_string(), PendingManagedSpawn::Standalone);
+
+    assert_ne!(first_account.generation, second_account.generation);
+    assert!(registry.contains(&first_account));
+    assert!(registry.contains(&second_account));
+    assert!(
+        registry
+            .begin("node-a".to_string(), "host-a".to_string())
+            .is_none(),
+        "ordinary host opens must remain deduplicated while managed attempts run"
+    );
+
+    assert!(registry.finish(&first_account));
+    assert!(pending.remove("launch-a").is_some());
+    assert!(!registry.contains(&first_account));
+    assert!(registry.contains(&second_account));
+    assert!(pending.contains("launch-b"));
+    assert!(registry.node_is_active("node-a"));
+
+    assert!(registry.finish(&second_account));
+    assert!(!registry.node_is_active("node-a"));
+}
+
+#[cfg(unix)]
+fn assert_routed_daemon_failure_transition_is_exact(failure: RoutedDaemonStartFailure) {
+    let mut registry = SshConnectRegistry::default();
+    let mut pending = PendingManagedSpawns::default();
+    let failed_session = SessionId::from(801u64);
+    let sibling_session = SessionId::from(802u64);
+    let failed_pane_group_id = warpui::EntityId::new();
+    let sibling_pane_group_id = warpui::EntityId::new();
+    let failed_pane_id: PaneId = TerminalPaneId::dummy_terminal_pane_id().into();
+    let sibling_pane_id: PaneId = TerminalPaneId::dummy_terminal_pane_id().into();
+    let failed_terminal_view_id = warpui::EntityId::new();
+    let sibling_terminal_view_id = warpui::EntityId::new();
+    let mut routes = HashMap::from([
+        (
+            failed_session,
+            PendingRoutedDaemonStart {
+                host: "same-host".to_string(),
+                surface: PendingDaemonSurface {
+                    origin_pane_group_id: failed_pane_group_id,
+                    pane_id: failed_pane_id,
+                    terminal_view_id: failed_terminal_view_id,
+                    opened_new_tab: false,
+                },
+                managed_launch_id: Some("failed-launch".to_string()),
+            },
+        ),
+        (
+            sibling_session,
+            PendingRoutedDaemonStart {
+                host: "same-host".to_string(),
+                surface: PendingDaemonSurface {
+                    origin_pane_group_id: sibling_pane_group_id,
+                    pane_id: sibling_pane_id,
+                    terminal_view_id: sibling_terminal_view_id,
+                    opened_new_tab: true,
+                },
+                managed_launch_id: Some("sibling-launch".to_string()),
+            },
+        ),
+    ]);
+    let failed = registry.begin_parallel("same-node".to_string(), "same-host".to_string());
+    let sibling = registry.begin_parallel("same-node".to_string(), "same-host".to_string());
+    pending.insert("failed-launch".to_string(), PendingManagedSpawn::Standalone);
+    pending.insert(
+        "sibling-launch".to_string(),
+        PendingManagedSpawn::Standalone,
+    );
+
+    match failure {
+        RoutedDaemonStartFailure::Preflight
+        | RoutedDaemonStartFailure::Install
+        | RoutedDaemonStartFailure::Connect
+        | RoutedDaemonStartFailure::Handshake
+        | RoutedDaemonStartFailure::Readiness => {
+            let retired = routes
+                .remove(&failed_session)
+                .expect("the exact failed route must be retired");
+            assert_eq!(retired.surface.origin_pane_group_id, failed_pane_group_id);
+            assert_eq!(retired.surface.pane_id, failed_pane_id);
+            assert_eq!(retired.surface.terminal_view_id, failed_terminal_view_id);
+            assert!(!retired.surface.opened_new_tab);
+            assert!(registry.finish(&failed));
+            assert!(pending.remove("failed-launch").is_some());
+        }
+    }
+
+    assert!(!registry.contains(&failed));
+    assert!(registry.contains(&sibling));
+    assert!(!pending.contains("failed-launch"));
+    assert!(pending.contains("sibling-launch"));
+    let sibling_route = routes
+        .get(&sibling_session)
+        .expect("the same-host sibling route must remain pending");
+    assert_eq!(
+        sibling_route.surface.origin_pane_group_id,
+        sibling_pane_group_id
+    );
+    assert_eq!(sibling_route.surface.pane_id, sibling_pane_id);
+    assert_eq!(
+        sibling_route.surface.terminal_view_id,
+        sibling_terminal_view_id
+    );
+    assert!(sibling_route.surface.opened_new_tab);
+}
+
+#[test]
+#[cfg(unix)]
+fn managed_preflight_failure_retires_only_its_same_host_target() {
+    assert_routed_daemon_failure_transition_is_exact(RoutedDaemonStartFailure::Preflight);
+}
+
+#[test]
+#[cfg(unix)]
+fn managed_install_failure_retires_only_its_same_host_target() {
+    assert_routed_daemon_failure_transition_is_exact(RoutedDaemonStartFailure::Install);
+}
+
+#[test]
+#[cfg(unix)]
+fn managed_connect_failure_retires_only_its_same_host_target() {
+    assert_routed_daemon_failure_transition_is_exact(RoutedDaemonStartFailure::Connect);
+}
+
+#[test]
+#[cfg(unix)]
+fn managed_handshake_failure_retires_only_its_same_host_target() {
+    assert_routed_daemon_failure_transition_is_exact(RoutedDaemonStartFailure::Handshake);
+}
+
+#[test]
+#[cfg(unix)]
+fn managed_readiness_failure_retires_only_its_same_host_target() {
+    assert_routed_daemon_failure_transition_is_exact(RoutedDaemonStartFailure::Readiness);
+}
+
+#[test]
+fn managed_account_launch_and_host_key_retry_use_parallel_connect_attempts() {
+    let source = include_str!("view.rs");
+    let launch_start = source
+        .find("fn open_managed_ssh_terminal_for_agent_account(")
+        .unwrap();
+    let launch_end = source[launch_start..]
+        .find("#[cfg(not(all(unix, feature = \"local_tty\")))]")
+        .map(|offset| launch_start + offset)
+        .unwrap();
+    let launch = &source[launch_start..launch_end];
+    assert!(launch.contains("begin_parallel_managed_ssh_connect("));
+    assert!(!launch.contains("begin_ssh_connect("));
+
+    let retry_start = source
+        .find("if managed_launch_for_retry.is_some()")
+        .unwrap();
+    let retry_end = source[retry_start..]
+        .find("workspace.open_resolved_ssh_terminal_command(")
+        .map(|offset| retry_start + offset)
+        .unwrap();
+    let retry = &source[retry_start..retry_end];
+    assert!(retry.contains("begin_parallel_managed_ssh_connect("));
+    assert!(retry.contains("begin_ssh_connect("));
+}
+
+#[test]
+fn restore_collision_removes_only_the_duplicate_terminal_leaf() {
+    let duplicate = terminal_snapshot_leaf(vec![1; 16]);
+    let sibling = terminal_snapshot_leaf(vec![2; 16]);
+    let root = PaneNodeSnapshot::Branch(crate::app_state::BranchSnapshot {
+        direction: crate::app_state::SplitDirection::Horizontal,
+        children: vec![
+            (crate::app_state::PaneFlex(0.5), duplicate),
+            (crate::app_state::PaneFlex(0.5), sibling),
+        ],
+    });
+
+    let restored = without_terminal_panes(root, &HashSet::from([vec![1; 16]]))
+        .expect("the unrelated sibling should remain");
+
+    assert!(matches!(
+        restored,
+        PaneNodeSnapshot::Leaf(LeafSnapshot {
+            contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+            ..
+        }) if uuid == vec![2; 16]
+    ));
+}
+
+#[test]
+fn corrupt_remote_restore_is_daemon_backed_on_every_platform_and_keeps_siblings() {
+    let corrupt_uuid = vec![201; 16];
+    let sibling_uuid = vec![202; 16];
+    crate::app_state::remove_remote_terminal_identity(&corrupt_uuid);
+    crate::app_state::mark_failed_remote_terminal_restore(&corrupt_uuid);
+    assert!(crate::app_state::remote_terminal_identity(&corrupt_uuid).is_none());
+    let root = PaneNodeSnapshot::Branch(crate::app_state::BranchSnapshot {
+        direction: crate::app_state::SplitDirection::Horizontal,
+        children: vec![
+            (
+                crate::app_state::PaneFlex(0.5),
+                terminal_snapshot_leaf(corrupt_uuid.clone()),
+            ),
+            (
+                crate::app_state::PaneFlex(0.5),
+                terminal_snapshot_leaf(sibling_uuid.clone()),
+            ),
+        ],
+    });
+    let mut requests = HashMap::new();
+
+    collect_failed_remote_terminal_restores(&root, &mut requests);
+    crate::app_state::clear_failed_remote_terminal_restore(&corrupt_uuid);
+
+    assert_eq!(requests.len(), 1);
+    let request = requests
+        .get(&PaneUuid(corrupt_uuid.clone()))
+        .expect("corrupt remote terminal must use a fail-closed daemon surface");
+    assert_eq!(request.adopt_pty_session_id.as_deref(), Some(""));
+    assert_eq!(request.adopt_pty_generation, None);
+    assert_eq!(request.expected_host_id, None);
+    let PaneNodeSnapshot::Branch(branch) = root else {
+        unreachable!()
+    };
+    assert_eq!(branch.children.len(), 2);
+    assert!(branch.children.iter().any(|(_, child)| matches!(
+        child,
+        PaneNodeSnapshot::Leaf(LeafSnapshot {
+            contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+            ..
+        }) if uuid == &sibling_uuid
+    )));
+}
+
+#[test]
+fn unsupported_platform_restore_uses_inert_daemon_requests_for_valid_remote_panes() {
+    let daemon_uuid = vec![203; 16];
+    let classic_uuid = vec![204; 16];
+    let daemon_identity = RemoteTerminalIdentity {
+        registry_node_id: "registry-node".to_string(),
+        host: "managed.example".to_string(),
+        transport: RemoteTerminalTransport::Daemon {
+            daemon_host_id: "daemon-host".to_string(),
+            daemon_runtime: None,
+            pty_session_id: "pty-session".to_string(),
+            pty_generation: 7,
+        },
+        current_working_directory: Some("/srv/project".to_string()),
+        input_draft: "preserved draft".to_string(),
+    };
+    let classic_identity = RemoteTerminalIdentity {
+        registry_node_id: "classic-node".to_string(),
+        host: "classic.example".to_string(),
+        transport: RemoteTerminalTransport::ClassicSsh,
+        current_working_directory: None,
+        input_draft: String::new(),
+    };
+    let mut requests = HashMap::new();
+
+    insert_failed_daemon_restore_requests(
+        &[
+            (daemon_uuid.clone(), daemon_identity),
+            (classic_uuid.clone(), classic_identity),
+        ],
+        &mut requests,
+    );
+
+    assert_eq!(requests.len(), 1);
+    let request = requests
+        .get(&PaneUuid(daemon_uuid))
+        .expect("valid daemon identity must still receive an inert manager request");
+    assert_eq!(request.adopt_pty_session_id.as_deref(), Some(""));
+    assert_eq!(request.adopt_pty_generation, None);
+    assert_eq!(request.expected_host_id.as_deref(), Some("daemon-host"));
+    assert_eq!(request.host_label, "managed.example");
+    assert!(!requests.contains_key(&PaneUuid(classic_uuid)));
+}
+
+#[test]
+fn daemon_restore_action_replacement_never_selects_a_local_terminal() {
+    let daemon_identity = RemoteTerminalIdentity {
+        registry_node_id: "registry-node".to_string(),
+        host: "managed.example".to_string(),
+        transport: RemoteTerminalTransport::Daemon {
+            daemon_host_id: "daemon-host".to_string(),
+            daemon_runtime: None,
+            pty_session_id: "pty-session".to_string(),
+            pty_generation: 7,
+        },
+        current_working_directory: Some("/srv/project".to_string()),
+        input_draft: "preserved draft".to_string(),
+    };
+    let classic_identity = RemoteTerminalIdentity {
+        registry_node_id: "classic-node".to_string(),
+        host: "classic.example".to_string(),
+        transport: RemoteTerminalTransport::ClassicSsh,
+        current_working_directory: None,
+        input_draft: String::new(),
+    };
+
+    let request = fail_closed_remote_restore_request(&daemon_identity)
+        .expect("a daemon restore action must keep a daemon terminal manager");
+    assert_eq!(request.adopt_pty_session_id.as_deref(), Some(""));
+    assert_eq!(request.expected_host_id.as_deref(), Some("daemon-host"));
+    assert!(fail_closed_remote_restore_request(&classic_identity).is_none());
+}
+
+#[test]
+fn non_unix_daemon_retry_branch_is_statically_fail_closed() {
+    let source = include_str!("view.rs");
+    let start = source.find("fn retry_remote_restore(").unwrap();
+    let end = source[start..]
+        .find("fn degrade_conflicting_remote_restore(")
+        .map(|offset| start + offset)
+        .unwrap();
+    let retry = &source[start..end];
+    let non_unix = retry.find("#[cfg(not(unix))]").unwrap();
+    let non_unix = &retry[non_unix..];
+
+    assert!(non_unix.contains("fail_closed_remote_restore_request(&identity)"));
+    assert!(non_unix.contains("Some(request)"));
+    assert!(!non_unix.contains("let _ = (pane_group, pane_id, draft)"));
+
+    let cancel_start = source.find("fn cancel_remote_restore(").unwrap();
+    let cancel_end = source[cancel_start..]
+        .find("fn open_resolved_ssh_terminal_command(")
+        .map(|offset| cancel_start + offset)
+        .unwrap();
+    let cancel = &source[cancel_start..cancel_end];
+    assert!(cancel.contains("fail_closed_remote_restore_request(&identity)"));
+    assert!(cancel.contains("daemon_request"));
+}
+
+#[test]
+fn managed_launch_user_errors_are_localized_in_english_and_german() {
+    let source = include_str!("view.rs");
+    let english = include_str!("../../i18n/en/warp.ftl");
+    let german = include_str!("../../i18n/de/warp.ftl");
+    let keys = [
+        "workspace-managed-launch-provider-defaults-required",
+        "workspace-managed-launch-remote-host-required",
+        "workspace-managed-launch-project-required",
+        "workspace-managed-launch-account-required",
+        "workspace-managed-launch-provider-unsupported",
+        "workspace-managed-launch-account-provider-mismatch",
+        "workspace-managed-launch-identity-missing",
+        "workspace-managed-launch-claude-required",
+        "workspace-managed-launch-host-not-found",
+        "workspace-managed-launch-daemon-route-failed",
+        "workspace-managed-launch-identity-changed",
+        "workspace-managed-launch-tracking-failed",
+        "workspace-managed-launch-host-unsupported",
+        "workspace-managed-launch-credential-resolution-failed",
+        "workspace-managed-launch-headless-auth-required",
+        "workspace-managed-launch-native-required",
+        "workspace-managed-launch-ack-mismatch",
+        "workspace-remote-account-preflight-failed",
+        "workspace-managed-launch-preflight-failed",
+        "workspace-remote-account-install-failed",
+        "workspace-managed-launch-install-failed",
+        "workspace-remote-account-connection-failed",
+        "workspace-managed-launch-connection-failed",
+        "workspace-remote-account-handshake-failed",
+        "workspace-managed-launch-handshake-failed",
+        "workspace-remote-account-readiness-failed",
+        "workspace-managed-launch-readiness-failed",
+        "workspace-remote-routed-split-target-changed",
+    ];
+
+    for key in keys {
+        assert!(
+            source.contains(key),
+            "managed launch path does not use {key}"
+        );
+        assert!(
+            english.contains(&format!("\n{key} =")),
+            "English catalog is missing {key}"
+        );
+        assert!(
+            german.contains(&format!("\n{key} =")),
+            "German catalog is missing {key}"
+        );
+    }
+}
+
+#[test]
+fn routed_daemon_failures_finish_before_classic_fallback_copy_is_selected() {
+    let source = include_str!("view.rs");
+    let preflight_start = source.find("let preflight = match result {").unwrap();
+    let preflight_end = source[preflight_start..]
+        .find("match preflight {")
+        .map(|offset| preflight_start + offset)
+        .unwrap();
+    let preflight = &source[preflight_start..preflight_end];
+    assert!(preflight.contains("RoutedDaemonStartFailure::Preflight"));
+    let routed_cleanup = preflight.find("fail_pending_routed_daemon_start(").unwrap();
+    let fallback_copy = preflight.find("connect-fallback-daemon-missing").unwrap();
+    assert!(routed_cleanup < fallback_copy);
+
+    let install_start = source.find("DaemonPreflight::NeedsInstall =>").unwrap();
+    let install_end = source[install_start..]
+        .find("/// Connects a daemon-hosted session")
+        .map(|offset| install_start + offset)
+        .unwrap();
+    let install = &source[install_start..install_end];
+    assert!(install.contains("RoutedDaemonStartFailure::Install"));
+    let routed_cleanup = install.find("fail_pending_routed_daemon_start(").unwrap();
+    let fallback_copy = install.find("connect-fallback-install-failed").unwrap();
+    assert!(routed_cleanup < fallback_copy);
+
+    let cancel_start = source.find("connect-host-key-cancelled").unwrap();
+    let cancel_end = source[cancel_start..]
+        .find("DaemonPreflight::Ready")
+        .map(|offset| cancel_start + offset)
+        .unwrap();
+    assert!(source[cancel_start..cancel_end].contains("fail_pending_routed_daemon_start("));
+
+    let host_key_start = source
+        .find("DaemonPreflight::HostKeyConfirmationRequired(host_key)")
+        .unwrap();
+    let host_key = &source[host_key_start..cancel_end];
+    let relinquish = host_key.find("relinquish_daemon_managed_launch(").unwrap();
+    assert!(host_key[relinquish..].contains("retire_pending_daemon_surface("));
+
+    let manager_failure_start = source
+        .find("RemoteServerManagerEvent::SessionConnectionFailed {")
+        .unwrap();
+    let manager_failure_end = source[manager_failure_start..]
+        .find("RemoteServerManagerEvent::ManagedLaunchOpened {")
+        .map(|offset| manager_failure_start + offset)
+        .unwrap();
+    let manager_failure = &source[manager_failure_start..manager_failure_end];
+    assert!(manager_failure.contains("pending_routed_daemon_starts.remove(session_id)"));
+    assert!(manager_failure.contains("RoutedDaemonStartFailure::Connect"));
+    assert!(manager_failure.contains("RoutedDaemonStartFailure::Handshake"));
+    assert!(manager_failure.contains("fail_pending_routed_daemon_start("));
+}
+
+#[test]
+fn managed_open_requires_every_identity_and_retry_capability() {
+    let required = [
+        zaplex_remote_session::types::FEATURE_MANAGED_AGENT_FLEET_V1,
+        zaplex_remote_session::types::FEATURE_MANAGED_OPEN_ATTACH_V1,
+        zaplex_remote_session::types::FEATURE_AGENT_ACCOUNT_ROUTING_V1,
+        zaplex_remote_session::types::FEATURE_AGENT_PTY_BINDING_V2,
+        zaplex_remote_session::types::FEATURE_LOGICAL_OPEN_ID_V1,
+        zaplex_remote_session::types::FEATURE_LOGICAL_OPEN_ATTEMPT_V1,
+    ];
+    let all = required
+        .iter()
+        .map(|feature| (*feature).to_string())
+        .collect::<Vec<_>>();
+    assert!(supports_verified_managed_open(&all));
+
+    for missing in required {
+        let features = all
+            .iter()
+            .filter(|feature| feature.as_str() != missing)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            !supports_verified_managed_open(&features),
+            "managed open must fail closed without {missing}"
+        );
+    }
+}
+
+#[test]
+fn classic_ssh_restore_plan_preserves_exact_multiplexer_target() {
+    let transport = crate::app_state::RemoteTerminalTransport::ClassicSshMultiplexer {
+        multiplexer: crate::app_state::PersistedClassicSshMultiplexer {
+            mode: crate::app_state::PersistedClassicSshMultiplexerMode::ScreenAttached,
+            target: "2481.byobu".to_string(),
+            session_name: Some("byobu".to_string()),
+            window_count: Some(4),
+        },
+    };
+
+    assert_eq!(
+        classic_ssh_restore_plan(&transport),
+        Some(ClassicSshRestorePlan::Multiplexer {
+            mode: warp_ssh_manager::MultiplexerAttachMode::ScreenAttached,
+            target: "2481.byobu",
+        })
+    );
+    assert_eq!(
+        classic_ssh_restore_plan(&crate::app_state::RemoteTerminalTransport::ClassicSsh),
+        Some(ClassicSshRestorePlan::Plain)
+    );
+}
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
@@ -213,6 +731,17 @@ fn launch_request_never_interpolates_remote_path_into_shell_source() {
 }
 
 fn initialize_app(app: &mut App) {
+    initialize_app_with_transfer_queue(app, |_| {
+        crate::sftp_manager::transfer_queue::TransferQueue::new()
+    });
+}
+
+fn initialize_app_with_transfer_queue(
+    app: &mut App,
+    transfer_queue: impl FnOnce(
+        &mut warpui::ModelContext<crate::sftp_manager::transfer_queue::TransferQueue>,
+    ) -> crate::sftp_manager::transfer_queue::TransferQueue,
+) {
     // Load the bundled localization so `t!` returns real strings (not keys) —
     // mirrors prod (`lib.rs` `i18n::init`). Force English so the label-based menu
     // tests are locale-deterministic. Without it `t!` returns raw fluent keys and
@@ -338,6 +867,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(crate::code::global_buffer_model::GlobalBufferModel::new);
     app.add_singleton_model(crate::cockpit::CockpitModel::new);
     app.add_singleton_model(crate::cockpit::AttentionDriver::new);
+    app.add_singleton_model(transfer_queue);
 
     // Make sure to initialize the keybindings so that they are available for subviews
     app.update(workspace::init);
@@ -347,7 +877,6 @@ fn assert_review21_skip_toast_is_neutral(directory: bool) {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
-        app.add_singleton_model(|_| crate::sftp_manager::transfer_queue::TransferQueue::new());
         let source_root = tempfile::tempdir().unwrap();
         let target_root = tempfile::tempdir().unwrap();
         if directory {
@@ -492,7 +1021,6 @@ fn test_boot_registers_all_keybindings_without_panicking() {
 fn transfer_recovery_retry_allocation_failure_is_visible_and_non_destructive() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        app.add_singleton_model(|_| crate::sftp_manager::transfer_queue::TransferQueue::new());
         let workspace = mock_workspace(&mut app);
         let transfer_id = crate::sftp_manager::transfer_queue::TransferQueue::handle(&app).update(
             &mut app,
@@ -564,8 +1092,7 @@ fn startup_directory_recovery_is_visible_and_retryable_without_sftp_browser() {
     assert_eq!(restarted.startup_recovery_paths().len(), 1);
 
     App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        app.add_singleton_model(move |ctx| {
+        initialize_app_with_transfer_queue(&mut app, move |ctx| {
             TransferQueue::new_with_startup_backend_for_test(restarted, ctx)
         });
         let workspace = mock_workspace(&mut app);
@@ -776,15 +1303,10 @@ fn mock_workspace_with_shared_session(app: &mut App) -> ViewHandle<Workspace> {
             .unwrap()
     });
 
-    terminal_view.update(app, |view, ctx| {
-        view.model.lock().block_list_mut().set_bootstrapped();
-        view.attempt_to_share_session(
-            SharedSessionScrollbackType::All,
-            None,
-            SessionSourceType::default(),
-            false,
-            ctx,
-        );
+    terminal_view.update(app, |view, _| {
+        let mut model = view.model.lock();
+        model.block_list_mut().set_bootstrapped();
+        model.set_shared_session_status(SharedSessionStatus::ActiveSharer);
     });
 
     workspace
@@ -818,12 +1340,15 @@ fn mock_workspace_viewing_shared_session(app: &mut App) -> ViewHandle<Workspace>
     });
 
     terminal_view.update(app, |view, ctx| {
+        view.model
+            .lock()
+            .set_shared_session_status(SharedSessionStatus::ViewPending);
         view.on_session_share_joined(
             ParticipantId::new(),
             UserUid::new("mock_user_uid"),
             ReplicaId::random(),
             Box::new(ParticipantList::default()),
-            SessionId::new(),
+            SharedSessionId::new(),
             SessionSourceType::default(),
             ctx,
         );
@@ -904,8 +1429,8 @@ fn reopen_closed_session_menu_item(
 
 fn favorite_host_submenu() -> MenuItem<WorkspaceAction> {
     super::favorite_host_menu_item(
-        &zaplex_cockpit::Favorite::new(zaplex_cockpit::FavoriteKind::Host, "node-dev", "devhost"),
-        &[("node-dev".to_string(), "devhost".to_string())],
+        &zaplex_cockpit::Favorite::new(zaplex_cockpit::FavoriteKind::Host, "node-dev", "example-host"),
+        &[("node-dev".to_string(), "example-host".to_string())],
         false,
     )
 }
@@ -971,7 +1496,7 @@ fn connections_registry_drives_favorite_launch_menu() {
             assert_eq!(store.items().len(), 1);
             assert_eq!(store.items()[0].label, "stale-display-name");
             assert!(store.contains(zaplex_cockpit::FavoriteKind::Host, &favorite_server.id));
-            super::favorites_menu_items_from_sources(store, registered_hosts, false)
+            super::favorites_menu_items_from_sources(store, registered_hosts)
         });
 
         let favorite_submenus = menu_items
@@ -996,12 +1521,12 @@ fn connections_registry_drives_favorite_launch_menu() {
             "the connection registry owns the current host label"
         );
         assert!(matches!(
-            menu.items()[0].item_on_select_action(),
+            fields.on_select_action(),
             Some(WorkspaceAction::OpenSshTerminalByNode { node_id })
                 if node_id == &favorite_server.id
         ));
         assert!(matches!(
-            menu.items()[1].item_on_select_action(),
+            menu.items()[0].item_on_select_action(),
             Some(WorkspaceAction::OpenSpawnCard {
                 registry_node_id: Some(node_id),
                 host_id: None,
@@ -1013,18 +1538,42 @@ fn connections_registry_drives_favorite_launch_menu() {
 }
 
 #[test]
-fn favorite_host_submenu_offers_terminal_and_new_agent() {
+fn favorite_host_label_is_the_direct_terminal_action() {
+    let MenuItem::Submenu { fields, menu } = favorite_host_submenu() else {
+        panic!("a favorite host must open a right-hand submenu");
+    };
+    assert!(matches!(
+        fields.on_select_action(),
+        Some(WorkspaceAction::OpenSshTerminalByNode { node_id }) if node_id == "node-dev"
+    ));
+    assert!(fields.has_split_submenu_trigger());
+    assert!(fields.ellipsizes_label());
+    assert_eq!(fields.tooltip(), Some("example-host"));
+    assert_eq!(fields.get_a11y_text(), "example-host");
+    assert_eq!(menu.items().len(), 3);
+    assert!(menu.items().iter().all(|item| !matches!(
+        item.item_on_select_action(),
+        Some(WorkspaceAction::OpenSshTerminalByNode { .. })
+    )));
+}
+
+#[test]
+fn favorite_host_flyout_offers_new_agent_edit_and_remove() {
     let MenuItem::Submenu { menu, .. } = favorite_host_submenu() else {
         panic!("a favorite host must open a right-hand submenu");
     };
-    assert_eq!(menu.items().len(), 2);
     assert!(matches!(
         menu.items()[0].item_on_select_action(),
-        Some(WorkspaceAction::OpenSshTerminalByNode { node_id }) if node_id == "node-dev"
+        Some(WorkspaceAction::OpenSpawnCard { .. })
     ));
     assert!(matches!(
         menu.items()[1].item_on_select_action(),
-        Some(WorkspaceAction::OpenSpawnCard { .. })
+        Some(WorkspaceAction::ManageSshHost { node_id }) if node_id == "node-dev"
+    ));
+    assert!(matches!(
+        menu.items()[2].item_on_select_action(),
+        Some(WorkspaceAction::RemoveFavorite { kind, target })
+            if *kind == zaplex_cockpit::FavoriteKind::Host && target == "node-dev"
     ));
 }
 
@@ -1034,30 +1583,37 @@ fn new_agent_submenu_opens_spawn_card_without_launching() {
         panic!("a favorite host must open a right-hand submenu");
     };
     assert!(matches!(
-        menu.items()[1].item_on_select_action(),
+        menu.items()[0].item_on_select_action(),
         Some(WorkspaceAction::OpenSpawnCard {
             registry_node_id: Some(node_id),
             host_id: None,
             host: Some(host),
             project: None,
-        }) if node_id == "node-dev" && host == "devhost"
+        }) if node_id == "node-dev" && host == "example-host"
     ));
 }
 
 #[test]
-fn stale_favorite_is_disabled_and_removable() {
+fn unavailable_host_registry_keeps_favorite_remove_available() {
     let favorite = zaplex_cockpit::Favorite::new(
         zaplex_cockpit::FavoriteKind::Host,
         "deleted-node",
-        "old-devhost",
+        "old-example-host",
     );
     let mut items = super::favorite_host_menu_items(std::slice::from_ref(&favorite), &[], false);
     assert_eq!(items.len(), 1);
     let MenuItem::Submenu { fields, menu } = items.pop().unwrap() else {
         panic!("a stale favorite must remain visible as a submenu");
     };
-    assert!(fields.label().contains("old-devhost"));
-    assert_ne!(fields.label(), "old-devhost");
+    assert!(fields.label().contains("old-example-host"));
+    assert_ne!(fields.label(), "old-example-host");
+    assert!(!fields.is_disabled());
+    assert!(fields.is_split_submenu_primary_disabled());
+    assert!(fields.on_select_action().is_none());
+    assert!(fields.has_split_submenu_trigger());
+    assert!(fields.ellipsizes_label());
+    assert_eq!(fields.tooltip(), Some(fields.label()));
+    assert!(items.is_empty());
     assert_eq!(menu.items().len(), 2);
     let MenuItem::Item(unavailable) = &menu.items()[0] else {
         panic!("the stale target state must be a menu item");
@@ -1080,7 +1636,7 @@ fn protected_favorite_store_disables_stale_removal() {
     let favorite = zaplex_cockpit::Favorite::new(
         zaplex_cockpit::FavoriteKind::Host,
         "deleted-node",
-        "old-devhost",
+        "old-example-host",
     );
     let MenuItem::Submenu { menu, .. } = super::favorite_host_menu_item(&favorite, &[], true)
     else {
@@ -1112,7 +1668,7 @@ fn removed_favorite_host_is_disabled_and_never_routed() {
 
 #[test]
 fn automatic_host_registration_never_adds_menu_favorite() {
-    let registered_hosts = vec![("node-dev".to_string(), "devhost".to_string())];
+    let registered_hosts = vec![("node-dev".to_string(), "example-host".to_string())];
     assert!(super::favorite_host_menu_items(&[], &registered_hosts, false).is_empty());
 }
 
@@ -1396,17 +1952,18 @@ fn test_workspace_sessions_retrieves_panes() {
         let workspace = mock_workspace(&mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            // Add a new split pane to the right.
-            if let Some(tab_view) = workspace.get_pane_group_view(0) {
-                tab_view.update(ctx, |view, ctx| {
-                    view.handle_action(&PaneGroupAction::Add(Direction::Right), ctx);
-                })
-            }
-
-            // Get the EntityId of the new pane added to the current tab.
-            let new_pane_id = workspace
+            let new_pane_id: PaneId = workspace
                 .get_pane_group_view(0)
-                .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(1).unwrap()))
+                .map(|tab| {
+                    tab.update(ctx, |tab, ctx| {
+                        tab.add_terminal_pane_ignoring_default_session_mode(
+                            Direction::Right,
+                            None,
+                            ctx,
+                        )
+                        .into()
+                    })
+                })
                 .expect("WindowId was not retrieved.");
             assert!(workspace
                 .workspace_sessions(ctx.window_id(), ctx)
@@ -1435,22 +1992,18 @@ fn setup_session_sharing_test(workspace: &ViewHandle<Workspace>, app: &mut App) 
 
         tab_view.update(ctx, |view, ctx| {
             assert_eq!(view.pane_count(), 1);
-            view.focused_session_view(ctx)
-                .unwrap()
-                .update(ctx, |terminal, ctx| {
-                    terminal.attempt_to_share_session(
-                        SharedSessionScrollbackType::None,
-                        None,
-                        SessionSourceType::default(),
-                        false,
-                        ctx,
-                    );
-                });
-
-            view.handle_action(&PaneGroupAction::Add(Direction::Right), ctx);
+            let shared_pane_id = view.pane_id_by_index(0).unwrap();
+            let shared_terminal = view.focused_session_view(ctx).unwrap();
+            view.add_terminal_pane_ignoring_default_session_mode(Direction::Right, None, ctx);
+            shared_terminal.update(ctx, |terminal, _| {
+                terminal
+                    .model
+                    .lock()
+                    .set_shared_session_status(SharedSessionStatus::ActiveSharer);
+            });
             assert_eq!(view.pane_count(), 2);
 
-            view.pane_id_by_index(0).unwrap()
+            shared_pane_id
         })
     });
 
@@ -1468,20 +2021,37 @@ fn setup_session_sharing_test(workspace: &ViewHandle<Workspace>, app: &mut App) 
     shared_pane_id
 }
 
+fn setup_pinned_tab_confirmation_test(workspace: &ViewHandle<Workspace>, app: &mut App) {
+    workspace.update(app, |workspace, ctx| {
+        workspace.add_terminal_tab(false, ctx);
+        workspace.add_terminal_tab(false, ctx);
+        assert_eq!(workspace.set_tab_pinned(1, true, ctx), Some(0));
+        assert!(workspace.tabs[0].is_pinned);
+    });
+
+    workspace.read(app, |workspace, _| {
+        assert!(
+            !workspace
+                .current_workspace_state
+                .is_close_session_confirmation_dialog_open
+        );
+    });
+}
+
 #[test]
-fn test_close_tab_confirmation_dialog() {
+fn test_close_pinned_tab_confirmation_dialog() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         app.update(disable_quit_warning);
 
         let workspace = mock_workspace(&mut app);
-        setup_session_sharing_test(&workspace, &mut app);
+        setup_pinned_tab_confirmation_test(&workspace, &mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            let first_tab_id = workspace.get_pane_group_view(0).unwrap().id();
+            let remaining_tab_id = workspace.get_pane_group_view(1).unwrap().id();
 
-            // Trying to close tab with a shared pane opens dialog.
-            workspace.handle_action(&WorkspaceAction::CloseTab(1), ctx);
+            // Trying to close a pinned tab opens the dialog.
+            workspace.handle_action(&WorkspaceAction::CloseTab(0), ctx);
             assert!(
                 workspace
                     .current_workspace_state
@@ -1499,7 +2069,7 @@ fn test_close_tab_confirmation_dialog() {
                     .is_close_session_confirmation_dialog_open
             );
 
-            // Trying to close tab without a shared pane goes through without dialog.
+            // Trying to close an unpinned tab goes through without the dialog.
             workspace.handle_action(&WorkspaceAction::CloseTab(2), ctx);
             assert_eq!(workspace.tab_count(), 2);
             assert!(
@@ -1508,8 +2078,8 @@ fn test_close_tab_confirmation_dialog() {
                     .is_close_session_confirmation_dialog_open
             );
 
-            // Close the tab with the shared pane.
-            workspace.handle_action(&WorkspaceAction::CloseTab(1), ctx);
+            // Close the pinned tab.
+            workspace.handle_action(&WorkspaceAction::CloseTab(0), ctx);
             assert!(
                 workspace
                     .current_workspace_state
@@ -1518,7 +2088,7 @@ fn test_close_tab_confirmation_dialog() {
             workspace.handle_close_session_confirmation_dialog_event(
                 &CloseSessionConfirmationEvent::CloseSession {
                     dont_show_again: false,
-                    open_confirmation_source: OpenDialogSource::CloseTab { tab_index: 1 },
+                    open_confirmation_source: OpenDialogSource::CloseTab { tab_index: 0 },
                 },
                 ctx,
             );
@@ -1528,13 +2098,16 @@ fn test_close_tab_confirmation_dialog() {
                     .is_close_session_confirmation_dialog_open
             );
             assert_eq!(workspace.tab_count(), 1);
-            assert_eq!(workspace.get_pane_group_view(0).unwrap().id(), first_tab_id);
+            assert_eq!(
+                workspace.get_pane_group_view(0).unwrap().id(),
+                remaining_tab_id
+            );
         });
     });
 }
 
 #[test]
-fn test_close_pane_confirmation_dialog() {
+fn test_close_shared_session_pane_skips_retired_confirmation_dialog() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
@@ -1544,28 +2117,11 @@ fn test_close_pane_confirmation_dialog() {
         workspace.update(&mut app, |workspace, ctx| {
             let shared_pane_group_id = workspace.get_pane_group_view(1).unwrap().id();
 
-            // User tries to close shared pane, dialog comes up.
+            // Session sharing has been retired, so its legacy close event closes the pane directly.
             workspace.handle_file_tree_event(
                 workspace.get_pane_group_view(1).unwrap().clone(),
                 &pane_group::Event::CloseSharedSessionPaneRequested {
                     pane_id: shared_pane_id,
-                },
-                ctx,
-            );
-            assert!(
-                workspace
-                    .current_workspace_state
-                    .is_close_session_confirmation_dialog_open
-            );
-
-            // User confirms.
-            workspace.handle_close_session_confirmation_dialog_event(
-                &CloseSessionConfirmationEvent::CloseSession {
-                    dont_show_again: false,
-                    open_confirmation_source: OpenDialogSource::ClosePane {
-                        pane_group_id: shared_pane_group_id,
-                        pane_id: shared_pane_id,
-                    },
                 },
                 ctx,
             );
@@ -1748,12 +2304,12 @@ fn test_close_other_tabs_confirmation_dialog() {
         initialize_app(&mut app);
 
         let workspace = mock_workspace(&mut app);
-        setup_session_sharing_test(&workspace, &mut app);
+        setup_pinned_tab_confirmation_test(&workspace, &mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
             let last_tab_id = workspace.get_pane_group_view(2).unwrap().id();
 
-            // User tries to close other tabs choosing non-shared tab, dialog comes up.
+            // Closing the other tabs includes the pinned tab, so the dialog comes up.
             workspace.handle_action(&WorkspaceAction::CloseOtherTabs(2), ctx);
             assert!(
                 workspace
@@ -1781,58 +2337,44 @@ fn test_close_other_tabs_confirmation_dialog() {
 }
 
 #[test]
-fn test_close_tabs_right_confirmation_dialog() {
+fn test_close_tabs_right_does_not_prompt_when_pinned_tab_is_retained() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
         let workspace = mock_workspace(&mut app);
-        setup_session_sharing_test(&workspace, &mut app);
+        setup_pinned_tab_confirmation_test(&workspace, &mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            let first_tab_id = workspace.get_pane_group_view(0).unwrap().id();
+            let pinned_tab_id = workspace.get_pane_group_view(0).unwrap().id();
 
-            // User tries to close all tabs right of the left-most tab, dialog comes up.
+            // Closing tabs to its right retains the pinned tab, so no safeguard is needed.
             workspace.handle_action(&WorkspaceAction::CloseTabsRight(0), ctx);
-            assert!(
-                workspace
-                    .current_workspace_state
-                    .is_close_session_confirmation_dialog_open
-            );
-
-            // User confirms.
-            workspace.handle_close_session_confirmation_dialog_event(
-                &CloseSessionConfirmationEvent::CloseSession {
-                    dont_show_again: false,
-                    open_confirmation_source: OpenDialogSource::CloseTabsDirection {
-                        tab_index: 0,
-                        direction: TabMovement::Right,
-                    },
-                },
-                ctx,
-            );
             assert!(
                 !workspace
                     .current_workspace_state
                     .is_close_session_confirmation_dialog_open
             );
             assert_eq!(workspace.tab_count(), 1);
-            assert_eq!(workspace.get_pane_group_view(0).unwrap().id(), first_tab_id);
+            assert_eq!(
+                workspace.get_pane_group_view(0).unwrap().id(),
+                pinned_tab_id
+            );
         });
     });
 }
 
 #[test]
-fn test_confirmation_dialog_dont_show_again() {
+fn test_confirmation_dialog_dont_show_again_keeps_pinned_tab_protection() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         app.update(disable_quit_warning);
 
         let workspace = mock_workspace(&mut app);
-        setup_session_sharing_test(&workspace, &mut app);
+        setup_pinned_tab_confirmation_test(&workspace, &mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            // Close the tab with the shared pane, dialog comes up
-            workspace.handle_action(&WorkspaceAction::CloseTab(1), ctx);
+            // Close the pinned tab; the dialog comes up.
+            workspace.handle_action(&WorkspaceAction::CloseTab(0), ctx);
             assert!(
                 workspace
                     .current_workspace_state
@@ -1843,7 +2385,7 @@ fn test_confirmation_dialog_dont_show_again() {
             workspace.handle_close_session_confirmation_dialog_event(
                 &CloseSessionConfirmationEvent::CloseSession {
                     dont_show_again: true,
-                    open_confirmation_source: OpenDialogSource::CloseTab { tab_index: 1 },
+                    open_confirmation_source: OpenDialogSource::CloseTab { tab_index: 0 },
                 },
                 ctx,
             );
@@ -1854,25 +2396,16 @@ fn test_confirmation_dialog_dont_show_again() {
             );
             assert_eq!(workspace.tab_count(), 2);
 
-            // Share the first tab
-            let tab_view = workspace.get_pane_group_view(0).unwrap();
-            tab_view.update(ctx, |view, ctx| {
-                view.terminal_manager(0, ctx)
-                    .unwrap()
-                    .as_ref(ctx)
-                    .model()
-                    .lock()
-                    .set_shared_session_status(SharedSessionStatus::ActiveSharer);
-            });
+            assert_eq!(workspace.set_tab_pinned(1, true, ctx), Some(0));
 
-            // Close the shared tab. No dialog should come up and action should go through.
-            workspace.handle_action(&WorkspaceAction::CloseActiveTab, ctx);
+            // "Don't show again" must not disable the pinned-tab safeguard.
+            workspace.handle_action(&WorkspaceAction::CloseTab(0), ctx);
             assert!(
-                !workspace
+                workspace
                     .current_workspace_state
                     .is_close_session_confirmation_dialog_open
             );
-            assert_eq!(workspace.tab_count(), 1);
+            assert_eq!(workspace.tab_count(), 2);
         });
     });
 }
@@ -2501,7 +3034,7 @@ fn markdown_viewer_window_starts_without_vertical_tabs_sidebar() {
 
 fn add_get_started_tab(workspace: &mut Workspace, ctx: &mut ViewContext<Workspace>) {
     workspace.add_tab_with_pane_layout(
-        PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
+        PanesLayout::snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
             is_focused: true,
             custom_vertical_tabs_title: None,
             contents: LeafContents::GetStarted,
@@ -2943,6 +3476,93 @@ fn test_pointer_opened_tab_configs_menu_does_not_select_top_item() {
 }
 
 #[test]
+fn native_favorite_submenu_clears_external_sidecar_and_restores_menu_focus() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace
+                .new_session_dropdown_menu
+                .update(ctx, |menu, ctx| {
+                    menu.set_items(vec![favorite_host_submenu()], ctx);
+                    menu.set_selected_by_index(0, ctx);
+                    menu.set_safe_zone_target(Some(RectF::new(
+                        Vector2F::new(200., 50.),
+                        Vector2F::new(100., 200.),
+                    )));
+                });
+            workspace.show_new_session_dropdown_menu = Some(Vector2F::zero());
+            workspace.show_new_session_sidecar = true;
+            workspace.worktree_sidecar_active = true;
+            workspace.worktree_sidecar_search_query = "repo".to_string();
+            ctx.focus(&workspace.worktree_sidecar_search_editor);
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.worktree_sidecar_search_editor.is_focused(ctx));
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.update_new_session_sidecar(ctx);
+
+            assert!(!workspace.show_new_session_sidecar);
+            assert!(!workspace.worktree_sidecar_active);
+            assert!(workspace.worktree_sidecar_search_query.is_empty());
+            assert!(workspace.tab_config_action_sidecar_item.is_none());
+            assert!(!workspace
+                .new_session_dropdown_menu
+                .read(ctx, |menu, _| menu.has_safe_zone_target()));
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.new_session_dropdown_menu.is_focused(ctx));
+        });
+    });
+}
+
+#[test]
+fn closing_new_session_menu_restores_focus_only_when_the_menu_owned_it() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_new_session_dropdown_menu(Vector2F::zero(), ctx);
+        });
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.new_session_dropdown_menu.is_focused(ctx));
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.close_new_session_dropdown_menu(ctx);
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(!workspace.new_session_dropdown_menu.is_focused(ctx));
+            assert!(!workspace.worktree_sidecar_search_editor.is_focused(ctx));
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_new_session_dropdown_menu(Vector2F::zero(), ctx);
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            ctx.focus(&workspace.left_panel_view);
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(workspace.left_panel_view.is_self_or_child_focused(ctx));
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.close_new_session_dropdown_menu(ctx);
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(workspace.left_panel_view.is_self_or_child_focused(ctx));
+        });
+    });
+}
+
+#[test]
 fn test_open_tab_config_with_params_does_not_use_worktree_branch_as_implicit_title() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -3324,6 +3944,10 @@ fn review_temp_files_are_private_unique_and_owned() {
                 & 0o077,
             0
         );
+        assert_eq!(
+            std::fs::metadata(&first_path).unwrap().permissions().mode() & 0o077,
+            0
+        );
     }
 
     drop(first_dir);
@@ -3335,12 +3959,37 @@ fn review_temp_files_are_private_unique_and_owned() {
 #[cfg(unix)]
 #[test]
 fn adopted_pty_deduplication_is_host_scoped() {
-    let first = super::daemon_adoption_key("node-a", None, "pty-1", 7);
-    let second = super::daemon_adoption_key("node-b", None, "pty-1", 7);
+    let route = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.29.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap();
+    let first = super::daemon_adoption_key("daemon-a", &route, "pty-1", 7);
+    let second = super::daemon_adoption_key("daemon-b", &route, "pty-1", 7);
 
     assert_ne!(
         first, second,
         "matching daemon-local PTY ids and generations on different hosts must open different tabs"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn adopted_pty_deduplication_ignores_registry_aliases() {
+    let route = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.29.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap();
+    let first_registry_alias = "node-a";
+    let second_registry_alias = "node-a-alias";
+    let first = super::daemon_adoption_key("daemon-a", &route, "pty-1", 7);
+    let second = super::daemon_adoption_key("daemon-a", &route, "pty-1", 7);
+
+    assert_ne!(first_registry_alias, second_registry_alias);
+    assert_eq!(
+        first, second,
+        "registry aliases are reconnect metadata and must not change PTY identity"
     );
 }
 
@@ -3359,9 +4008,63 @@ fn adopted_pty_deduplication_is_daemon_runtime_scoped() {
     .unwrap();
 
     assert_ne!(
-        super::daemon_adoption_key("node-a", Some(&old_route), "pty-1", 7),
-        super::daemon_adoption_key("node-a", Some(&current_route), "pty-1", 7)
+        super::daemon_adoption_key("daemon-a", &old_route, "pty-1", 7),
+        super::daemon_adoption_key("daemon-a", &current_route, "pty-1", 7)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn adopted_pty_deduplication_is_pty_and_generation_scoped() {
+    let route = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.29.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap();
+    let identity = super::daemon_adoption_key("daemon-a", &route, "pty-1", 7);
+
+    assert_ne!(
+        identity,
+        super::daemon_adoption_key("daemon-a", &route, "pty-2", 7)
+    );
+    assert_ne!(
+        identity,
+        super::daemon_adoption_key("daemon-a", &route, "pty-1", 8)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn adopted_pty_deduplication_includes_daemon_runtime_version() {
+    let first_route = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.28.sock".to_string(),
+        "v1.0.28".to_string(),
+    )
+    .unwrap();
+    let mismatched_route = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.28.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap();
+
+    assert_ne!(
+        super::daemon_adoption_key("daemon-a", &first_route, "pty-1", 7),
+        super::daemon_adoption_key("daemon-a", &mismatched_route, "pty-1", 7)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_restore_requires_and_preserves_exact_runtime_identity() {
+    assert!(super::persisted_daemon_runtime_route(None).is_err());
+
+    let persisted = crate::app_state::PersistedDaemonRuntime {
+        runtime_filename: "server-v1.0.29.sock".to_string(),
+        server_version: "v1.0.29".to_string(),
+    };
+    let route = super::persisted_daemon_runtime_route(Some(&persisted)).unwrap();
+    assert_eq!(route.runtime_filename(), persisted.runtime_filename);
+    assert_eq!(route.server_version(), persisted.server_version);
 }
 
 #[cfg(unix)]
@@ -3478,38 +4181,1011 @@ fn managed_lifecycle_rejects_malformed_success_and_accepts_typed_failure() {
 
 #[cfg(unix)]
 #[test]
-fn rejected_adopt_cleanup_does_not_poison_retry_key() {
-    let rejected_connection = warp_core::SessionId::from(41u64);
-    let live_connection = warp_core::SessionId::from(42u64);
-    let rejected_key = super::daemon_adoption_key("node-a", None, "pty-1", 7);
-    let live_key = super::daemon_adoption_key("node-a", None, "pty-2", 8);
-    let mut adopted = std::collections::HashMap::from([
-        (
-            rejected_key.clone(),
-            super::AdoptedDaemonSession {
-                pane_group_id: warpui::EntityId::new(),
-                connection_session_id: rejected_connection,
-            },
-        ),
-        (
-            live_key.clone(),
-            super::AdoptedDaemonSession {
-                pane_group_id: warpui::EntityId::new(),
-                connection_session_id: live_connection,
-            },
-        ),
-    ]);
+fn app_wide_claim_is_atomic_across_windows_and_reusable_after_release() {
+    use crate::app_state::{DaemonPtyClaimOutcome, DaemonPtyClaims};
 
-    super::remove_adopted_daemon_session(&mut adopted, rejected_connection);
+    let route = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.29.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap();
+    let key = super::daemon_adoption_key("daemon-a", &route, "pty-1", 7);
+    let mut claims = DaemonPtyClaims::default();
 
-    assert!(
-        !adopted.contains_key(&rejected_key),
-        "a rejected provisional tab must not intercept the next atomic attach attempt"
+    assert_eq!(
+        claims.claim(key.clone(), "window-a", |_| true),
+        DaemonPtyClaimOutcome::Claimed
     );
-    assert!(
-        adopted.contains_key(&live_key),
-        "cleaning one rejected connection must preserve unrelated live adopts"
+    assert_eq!(
+        claims.claim(key.clone(), "window-b", |_| true),
+        DaemonPtyClaimOutcome::Existing("window-a")
     );
+
+    claims.release_where(|owner| *owner == "window-a");
+    assert_eq!(
+        claims.claim(key, "window-b", |_| true),
+        DaemonPtyClaimOutcome::Claimed
+    );
+    assert_eq!(claims.len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn late_open_claim_collision_cannot_replace_or_release_the_existing_owner() {
+    use crate::app_state::{DaemonPtyClaimOutcome, DaemonPtyClaims};
+
+    let route = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.29.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap();
+    let key = super::daemon_adoption_key("daemon-a", &route, "pty-1", 7);
+    let mut claims = DaemonPtyClaims::default();
+
+    assert_eq!(
+        claims.claim(key.clone(), "existing-owner", |_| true),
+        DaemonPtyClaimOutcome::Claimed
+    );
+    assert_eq!(
+        claims.claim(key.clone(), "provisional-owner", |_| true),
+        DaemonPtyClaimOutcome::Existing("existing-owner")
+    );
+    claims.release_where(|owner| *owner == "provisional-owner");
+    assert_eq!(
+        claims.claim(key, "later-retry", |_| true),
+        DaemonPtyClaimOutcome::Existing("existing-owner")
+    );
+    assert_eq!(claims.len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_claim_owner_requires_the_same_connection_and_terminal_view() {
+    App::test((), |mut app| async move {
+        use crate::app_state::{DaemonPtyClaimOutcome, DaemonPtyClaims};
+
+        let first_view = app.add_model(|_| IgnoredSuggestionsModel::new(Vec::new()));
+        let foreign_view = app.add_model(|_| IgnoredSuggestionsModel::new(Vec::new()));
+        let connection = SessionId::from(71u64);
+        let owner = crate::app_state::DaemonPtyClaimOwner {
+            terminal_view_id: Some(first_view.id()),
+            connection_session_id: connection,
+            terminal_view: None,
+        };
+        let same_owner = owner.clone();
+        let same_connection_foreign_view = crate::app_state::DaemonPtyClaimOwner {
+            terminal_view_id: Some(foreign_view.id()),
+            connection_session_id: connection,
+            terminal_view: None,
+        };
+        let same_view_foreign_connection = crate::app_state::DaemonPtyClaimOwner {
+            terminal_view_id: Some(first_view.id()),
+            connection_session_id: SessionId::from(72u64),
+            terminal_view: None,
+        };
+        let reservation_without_view = crate::app_state::DaemonPtyClaimOwner {
+            terminal_view_id: None,
+            connection_session_id: connection,
+            terminal_view: None,
+        };
+
+        assert!(owner.owns_same_terminal_surface(&same_owner));
+        assert!(!owner.owns_same_terminal_surface(&same_connection_foreign_view));
+        assert!(owner.shares_connection_with(&same_connection_foreign_view));
+        assert!(!owner.owns_same_terminal_surface(&same_view_foreign_connection));
+        assert!(!owner.shares_connection_with(&same_view_foreign_connection));
+        assert!(!owner.owns_same_terminal_surface(&reservation_without_view));
+
+        let route = remote_server::transport::DaemonRuntimeRoute::new(
+            "server-v1.0.29.sock".to_string(),
+            "v1.0.29".to_string(),
+        )
+        .unwrap();
+        let key = super::daemon_adoption_key("daemon-a", &route, "pty-1", 7);
+        let mut claims = DaemonPtyClaims::default();
+        assert!(matches!(
+            claims.claim(key.clone(), owner.clone(), |_| true),
+            DaemonPtyClaimOutcome::Claimed
+        ));
+
+        let exact_existing = match claims.claim(key.clone(), same_owner, |_| true) {
+            DaemonPtyClaimOutcome::Existing(existing) => existing,
+            DaemonPtyClaimOutcome::Claimed => panic!("the exact owner must be idempotent"),
+        };
+        assert!(exact_existing.owns_same_terminal_surface(&owner));
+
+        let foreign_existing =
+            match claims.claim(key.clone(), same_connection_foreign_view.clone(), |_| true) {
+                DaemonPtyClaimOutcome::Existing(existing) => existing,
+                DaemonPtyClaimOutcome::Claimed => {
+                    panic!("a foreign view must not replace the existing owner")
+                }
+            };
+        assert!(!foreign_existing.owns_same_terminal_surface(&same_connection_foreign_view));
+        assert!(foreign_existing.shares_connection_with(&same_connection_foreign_view));
+        if !foreign_existing.shares_connection_with(&same_connection_foreign_view) {
+            claims.release_where(|claimed| {
+                claimed.connection_session_id == same_connection_foreign_view.connection_session_id
+            });
+        }
+
+        let preserved = match claims.claim(key, owner.clone(), |_| true) {
+            DaemonPtyClaimOutcome::Existing(existing) => existing,
+            DaemonPtyClaimOutcome::Claimed => {
+                panic!("the shared connection collision must preserve the original owner")
+            }
+        };
+        assert!(preserved.owns_same_terminal_surface(&owner));
+        assert_eq!(claims.len(), 1);
+    });
+}
+
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn daemon_claim_binding_is_one_way_and_idempotent() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let connection = SessionId::from(711u64);
+        let binding = crate::app_state::DaemonPtyIdentity {
+            daemon_host_id: "daemon-bind-owner".to_string(),
+            runtime_filename: "server-v1.0.29.sock".to_string(),
+            server_version: "v1.0.29".to_string(),
+            pty_session_id: "pty-bind-owner".to_string(),
+            pty_generation: 7,
+        };
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            let first_pane = pane_group.as_ref(ctx).focused_pane_id(ctx);
+            let first_view = pane_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(first_pane, ctx)
+                .unwrap();
+            let second_pane: PaneId = pane_group
+                .update(ctx, |group, ctx| {
+                    group.add_terminal_pane_ignoring_default_session_mode(
+                        Direction::Right,
+                        None,
+                        ctx,
+                    )
+                })
+                .into();
+            let second_view = pane_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(second_pane, ctx)
+                .unwrap();
+            let reservation = crate::app_state::DaemonPtyClaimOwner {
+                terminal_view_id: None,
+                connection_session_id: connection,
+                terminal_view: None,
+            };
+            assert!(matches!(
+                crate::app_state::claim_daemon_pty(binding.clone(), reservation, ctx),
+                crate::app_state::DaemonPtyClaimOutcome::Claimed
+            ));
+            assert_eq!(
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .unwrap()
+                    .terminal_view_id,
+                None
+            );
+
+            assert!(crate::app_state::bind_daemon_pty_claim_owner(
+                &binding,
+                connection,
+                &first_view,
+            ));
+            assert_eq!(
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .unwrap()
+                    .terminal_view_id,
+                Some(first_view.id())
+            );
+
+            assert!(!crate::app_state::bind_daemon_pty_claim_owner(
+                &binding,
+                connection,
+                &second_view,
+            ));
+            assert!(!crate::app_state::release_daemon_pty_claim_reservation(
+                &binding, connection,
+            ));
+            assert_eq!(
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .unwrap()
+                    .terminal_view_id,
+                Some(first_view.id()),
+                "a second view on the same connection must not steal or release the owner"
+            );
+
+            assert!(crate::app_state::bind_daemon_pty_claim_owner(
+                &binding,
+                connection,
+                &first_view,
+            ));
+            let mut other_generation = binding.clone();
+            other_generation.pty_generation += 1;
+            assert!(!crate::app_state::bind_daemon_pty_claim_owner(
+                &other_generation,
+                connection,
+                &first_view,
+            ));
+        });
+        crate::app_state::release_daemon_pty_claim_for_connection(connection);
+    });
+}
+
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn cross_window_tab_transfer_waits_for_pending_daemon_completion() {
+    let _undo_closed_panes_guard = FeatureFlag::UndoClosedPanes.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let managed_session = SessionId::from(711u64);
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    daemon_request: Some(crate::terminal::daemon_tty::DaemonSessionRequest {
+                        connection_session_id: managed_session,
+                        open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+                        adopt_pty_session_id: None,
+                        adopt_pty_generation: None,
+                        expected_host_id: None,
+                        expected_agent_binding: None,
+                        install_progress_rx: None,
+                        host_label: "managed.example.test".to_string(),
+                    }),
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let managed_tab_index = workspace.active_tab_index;
+            let managed_group = workspace.active_tab_pane_group().clone();
+            let managed_pane = managed_group
+                .as_ref(ctx)
+                .daemon_connection_pane(managed_session, ctx)
+                .unwrap();
+            let managed_view = managed_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(managed_pane, ctx)
+                .unwrap();
+            let managed_attempt = workspace.ssh_connect_registry.begin_parallel(
+                "managed-node".to_string(),
+                "managed.example.test".to_string(),
+            );
+            workspace
+                .daemon_connect_attempts
+                .insert(managed_session, managed_attempt);
+            workspace.pending_routed_daemon_starts.insert(
+                managed_session,
+                PendingRoutedDaemonStart {
+                    host: "managed.example.test".to_string(),
+                    surface: PendingDaemonSurface {
+                        origin_pane_group_id: managed_group.id(),
+                        pane_id: managed_pane,
+                        terminal_view_id: managed_view.id(),
+                        opened_new_tab: true,
+                    },
+                    managed_launch_id: Some("managed-launch".to_string()),
+                },
+            );
+
+            managed_view.update(ctx, |view, ctx| {
+                view.set_remote_input_phase(
+                    crate::terminal::view::RemoteInputPhase::Transport,
+                    Some(managed_session),
+                    ctx,
+                );
+            });
+            assert!(managed_group.as_ref(ctx).has_pending_daemon_start(ctx));
+            assert!(workspace
+                .get_tab_transfer_info_for_attach(managed_tab_index, ctx)
+                .is_none());
+
+            workspace.finish_daemon_ssh_connect(managed_session, ctx);
+            managed_view.update(ctx, |view, ctx| {
+                view.set_remote_input_phase(
+                    crate::terminal::view::RemoteInputPhase::Ready,
+                    Some(managed_session),
+                    ctx,
+                );
+            });
+            workspace.complete_pending_routed_daemon_input_ready(managed_session);
+            managed_view.update(ctx, |view, ctx| {
+                view.set_remote_input_phase(
+                    crate::terminal::view::RemoteInputPhase::Transport,
+                    Some(managed_session),
+                    ctx,
+                );
+            });
+            managed_group.update(ctx, |group, ctx| {
+                group.add_terminal_pane_ignoring_default_session_mode(
+                    Direction::Right,
+                    None,
+                    ctx,
+                );
+                group.close_pane(managed_pane, ctx);
+                assert!(group.is_pane_hidden_for_close(managed_pane));
+            });
+            assert!(!managed_group.as_ref(ctx).has_pending_daemon_start(ctx));
+            assert!(workspace
+                .pending_routed_daemon_starts
+                .contains_key(&managed_session));
+            assert!(workspace
+                .get_tab_transfer_info_for_attach(managed_tab_index, ctx)
+                .is_none(),
+                "a reconnecting hidden pane must remain guarded until its managed acknowledgement"
+            );
+
+            workspace.complete_pending_managed_daemon_start("managed-launch");
+            assert!(!workspace
+                .pending_routed_daemon_starts
+                .contains_key(&managed_session));
+            assert!(workspace
+                .get_tab_transfer_info_for_attach(managed_tab_index, ctx)
+                .is_some(),
+                "an initially ready managed pane becomes movable after acknowledgement even during reconnect"
+            );
+
+            let failed_session = SessionId::from(712u64);
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    daemon_request: Some(crate::terminal::daemon_tty::DaemonSessionRequest {
+                        connection_session_id: failed_session,
+                        open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+                        adopt_pty_session_id: None,
+                        adopt_pty_generation: None,
+                        expected_host_id: None,
+                        expected_agent_binding: None,
+                        install_progress_rx: None,
+                        host_label: "failed.example.test".to_string(),
+                    }),
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let failed_tab_index = workspace.active_tab_index;
+            let failed_group = workspace.active_tab_pane_group().clone();
+            let failed_pane = failed_group
+                .as_ref(ctx)
+                .daemon_connection_pane(failed_session, ctx)
+                .unwrap();
+            let failed_view = failed_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(failed_pane, ctx)
+                .unwrap();
+
+            assert!(workspace
+                .get_tab_transfer_info_for_attach(failed_tab_index, ctx)
+                .is_none());
+            failed_view.update(ctx, |view, ctx| {
+                view.set_remote_input_phase(
+                    crate::terminal::view::RemoteInputPhase::Failed,
+                    Some(failed_session),
+                    ctx,
+                );
+            });
+            assert!(!failed_group.as_ref(ctx).has_pending_daemon_start(ctx));
+            assert!(workspace
+                .get_tab_transfer_info_for_attach(failed_tab_index, ctx)
+                .is_some());
+        });
+    });
+}
+
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn cross_window_tab_transfer_preserves_mixed_host_identity_through_preview() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = mock_workspace(&mut app);
+        let preview = transferred_tab_workspace(&mut app, false);
+        let target = mock_workspace(&mut app);
+        let daemon_session = SessionId::from(713u64);
+
+        let (transferred_tab, pane_group, classic_pane, daemon_pane, local_pane) =
+            source.update(&mut app, |workspace, ctx| {
+                workspace.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                        hide_homepage: true,
+                        ..Default::default()
+                    })),
+                    Arc::new(HashMap::new()),
+                    None,
+                    ctx,
+                );
+                let tab_index = workspace.active_tab_index;
+                let pane_group = workspace.active_tab_pane_group().clone();
+                let classic_pane = pane_group.as_ref(ctx).focused_pane_id(ctx);
+                let daemon_pane: PaneId = pane_group
+                    .update(ctx, |group, ctx| {
+                        group.add_terminal_pane_ignoring_default_session_mode(
+                            Direction::Right,
+                            None,
+                            ctx,
+                        )
+                    })
+                    .into();
+                let local_pane: PaneId = pane_group
+                    .update(ctx, |group, ctx| {
+                        group.add_terminal_pane_ignoring_default_session_mode(
+                            Direction::Down,
+                            None,
+                            ctx,
+                        )
+                    })
+                    .into();
+                pane_group
+                    .as_ref(ctx)
+                    .terminal_view_from_pane_id(daemon_pane, ctx)
+                    .unwrap()
+                    .update(ctx, |view, ctx| {
+                        view.set_remote_input_phase(
+                            crate::terminal::view::RemoteInputPhase::Ready,
+                            Some(daemon_session),
+                            ctx,
+                        );
+                    });
+
+                workspace
+                    .ssh_tab_nodes
+                    .insert(pane_group.id(), "classic-node".to_string());
+                workspace
+                    .ssh_pane_nodes
+                    .insert(classic_pane, "classic-node".to_string());
+                workspace
+                    .ssh_pane_nodes
+                    .insert(daemon_pane, "daemon-node".to_string());
+                remember_daemon_node_session(
+                    &mut workspace.daemon_node_sessions,
+                    "daemon-node".to_string(),
+                    daemon_session,
+                );
+
+                let transferred_tab = workspace
+                    .get_tab_transfer_info_for_attach(tab_index, ctx)
+                    .unwrap();
+                workspace.prepare_for_transferred_tab_attach(&transferred_tab.pane_group, ctx);
+                (
+                    transferred_tab,
+                    pane_group,
+                    classic_pane,
+                    daemon_pane,
+                    local_pane,
+                )
+            });
+
+        let source_window_id = source.read(&app, |workspace, _| workspace.window_id);
+        let preview_window_id = preview.read(&app, |workspace, _| workspace.window_id);
+        app.update(|ctx| {
+            ctx.transfer_view_tree_to_window(pane_group.id(), source_window_id, preview_window_id);
+        });
+        preview.update(&mut app, |workspace, ctx| {
+            workspace.adopt_transferred_pane_group(transferred_tab, ctx);
+            assert_eq!(
+                workspace.ssh_tab_nodes.get(&pane_group.id()),
+                Some(&"classic-node".to_string())
+            );
+            assert_eq!(
+                workspace.node_for_pane(&pane_group, classic_pane, None, ctx),
+                Some("classic-node".to_string())
+            );
+            assert_eq!(
+                workspace.node_for_pane(&pane_group, daemon_pane, None, ctx),
+                Some("daemon-node".to_string())
+            );
+            assert_eq!(
+                workspace.node_for_pane(&pane_group, local_pane, None, ctx),
+                None
+            );
+            assert_eq!(
+                workspace.node_for_session(daemon_session),
+                Some("daemon-node".to_string())
+            );
+        });
+
+        let transferred_tab = preview.update(&mut app, |workspace, ctx| {
+            let transferred_tab = workspace.get_tab_transfer_info_for_attach(0, ctx).unwrap();
+            workspace.prepare_for_transferred_tab_attach(&transferred_tab.pane_group, ctx);
+            transferred_tab
+        });
+        let target_window_id = target.read(&app, |workspace, _| workspace.window_id);
+        app.update(|ctx| {
+            ctx.transfer_view_tree_to_window(pane_group.id(), preview_window_id, target_window_id);
+        });
+        target.update(&mut app, |workspace, ctx| {
+            let insertion_index = workspace.tabs.len();
+            workspace.insert_transferred_tab_at_index(transferred_tab, insertion_index, ctx);
+            assert_eq!(
+                workspace.ssh_tab_nodes.get(&pane_group.id()),
+                Some(&"classic-node".to_string())
+            );
+            assert_eq!(
+                workspace.node_for_pane(&pane_group, classic_pane, None, ctx),
+                Some("classic-node".to_string())
+            );
+            assert_eq!(
+                workspace.node_for_pane(&pane_group, daemon_pane, None, ctx),
+                Some("daemon-node".to_string())
+            );
+            assert_eq!(
+                workspace.node_for_pane(&pane_group, local_pane, None, ctx),
+                None
+            );
+            assert_eq!(
+                workspace.node_for_session(daemon_session),
+                Some("daemon-node".to_string())
+            );
+        });
+    });
+}
+
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn cross_window_tab_transfer_cleanup_preserves_other_tabs_remote_identity() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = mock_workspace(&mut app);
+        let moved_session = SessionId::from(714u64);
+        let retained_session = SessionId::from(715u64);
+
+        source.update(&mut app, |workspace, ctx| {
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let retained_group = workspace.active_tab_pane_group().clone();
+            let retained_pane = retained_group.as_ref(ctx).focused_pane_id(ctx);
+            retained_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(retained_pane, ctx)
+                .unwrap()
+                .update(ctx, |view, ctx| {
+                    view.set_remote_input_phase(
+                        crate::terminal::view::RemoteInputPhase::Ready,
+                        Some(retained_session),
+                        ctx,
+                    );
+                });
+
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let moved_index = workspace.active_tab_index;
+            let moved_group = workspace.active_tab_pane_group().clone();
+            let moved_pane = moved_group.as_ref(ctx).focused_pane_id(ctx);
+            moved_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(moved_pane, ctx)
+                .unwrap()
+                .update(ctx, |view, ctx| {
+                    view.set_remote_input_phase(
+                        crate::terminal::view::RemoteInputPhase::Ready,
+                        Some(moved_session),
+                        ctx,
+                    );
+                });
+
+            workspace
+                .ssh_tab_nodes
+                .insert(retained_group.id(), "shared-node".to_string());
+            workspace
+                .ssh_tab_nodes
+                .insert(moved_group.id(), "shared-node".to_string());
+            workspace
+                .ssh_pane_nodes
+                .insert(retained_pane, "shared-node".to_string());
+            workspace
+                .ssh_pane_nodes
+                .insert(moved_pane, "shared-node".to_string());
+            remember_daemon_node_session(
+                &mut workspace.daemon_node_sessions,
+                "shared-node".to_string(),
+                retained_session,
+            );
+            remember_daemon_node_session(
+                &mut workspace.daemon_node_sessions,
+                "shared-node".to_string(),
+                moved_session,
+            );
+
+            workspace.remove_tab_without_undo(moved_index, ctx);
+
+            assert!(!workspace
+                .tabs
+                .iter()
+                .any(|tab| tab.pane_group.id() == moved_group.id()));
+            assert!(!workspace.ssh_tab_nodes.contains_key(&moved_group.id()));
+            assert!(!workspace.ssh_pane_nodes.contains_key(&moved_pane));
+            assert_eq!(
+                workspace.ssh_tab_nodes.get(&retained_group.id()),
+                Some(&"shared-node".to_string())
+            );
+            assert_eq!(
+                workspace.ssh_pane_nodes.get(&retained_pane),
+                Some(&"shared-node".to_string())
+            );
+            assert_eq!(
+                workspace.daemon_node_sessions.get("shared-node"),
+                Some(&vec![retained_session])
+            );
+            assert_eq!(
+                workspace.node_for_session(retained_session),
+                Some("shared-node".to_string())
+            );
+            assert_eq!(workspace.node_for_session(moved_session), None);
+        });
+    });
+}
+
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn moved_stale_split_retirement_removes_only_the_provisional_daemon_surface() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let failed_session = SessionId::from(721u64);
+        let sibling_session = SessionId::from(722u64);
+        let preserved_claim_connection = SessionId::from(723u64);
+        let preserved_binding = crate::app_state::DaemonPtyIdentity {
+            daemon_host_id: "daemon-preserved-owner".to_string(),
+            runtime_filename: "server-v1.0.29.sock".to_string(),
+            server_version: "v1.0.29".to_string(),
+            pty_session_id: "pty-preserved-owner".to_string(),
+            pty_generation: 3,
+        };
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            let source_pane = pane_group.as_ref(ctx).focused_pane_id(ctx);
+            let sibling_pane: PaneId = pane_group
+                .update(ctx, |group, ctx| {
+                    group.add_terminal_pane_ignoring_default_session_mode(
+                        Direction::Right,
+                        None,
+                        ctx,
+                    )
+                })
+                .into();
+            let target = pane_group
+                .as_ref(ctx)
+                .recapture_split_target(source_pane, Direction::Down)
+                .unwrap();
+            let split_launch = PendingSplitLaunch {
+                pane_group: pane_group.clone(),
+                target,
+                chosen_shell: None,
+                inherited_remote_cwd: None,
+            };
+            let request = crate::terminal::daemon_tty::DaemonSessionRequest {
+                connection_session_id: failed_session,
+                open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+                adopt_pty_session_id: None,
+                adopt_pty_generation: None,
+                expected_host_id: None,
+                expected_agent_binding: None,
+                install_progress_rx: None,
+                host_label: "failed.example.test".to_string(),
+            };
+            let (provisional_pane, _, focus_guard) = pane_group
+                .update(ctx, |group, ctx| {
+                    group.insert_terminal_for_split(
+                        target,
+                        NewTerminalOptions {
+                            hide_homepage: true,
+                            daemon_request: Some(request),
+                            ..Default::default()
+                        },
+                        ctx,
+                    )
+                })
+                .unwrap();
+            assert_eq!(
+                pane_group
+                    .as_ref(ctx)
+                    .daemon_connection_pane(failed_session, ctx),
+                Some(provisional_pane)
+            );
+            let provisional_view_id = pane_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(provisional_pane, ctx)
+                .unwrap()
+                .id();
+            let provisional_surface = PendingDaemonSurface {
+                origin_pane_group_id: pane_group.id(),
+                pane_id: provisional_pane,
+                terminal_view_id: provisional_view_id,
+                opened_new_tab: false,
+            };
+            workspace
+                .pending_daemon_split_focus
+                .insert(failed_session, (pane_group.clone(), focus_guard));
+            workspace.pending_routed_daemon_starts.insert(
+                failed_session,
+                PendingRoutedDaemonStart {
+                    host: "failed.example.test".to_string(),
+                    surface: provisional_surface,
+                    managed_launch_id: Some("failed-launch".to_string()),
+                },
+            );
+            workspace.pending_routed_daemon_starts.insert(
+                sibling_session,
+                PendingRoutedDaemonStart {
+                    host: "sibling.example.test".to_string(),
+                    surface: PendingDaemonSurface {
+                        origin_pane_group_id: pane_group.id(),
+                        pane_id: sibling_pane,
+                        terminal_view_id: pane_group
+                            .as_ref(ctx)
+                            .terminal_view_from_pane_id(sibling_pane, ctx)
+                            .unwrap()
+                            .id(),
+                        opened_new_tab: false,
+                    },
+                    managed_launch_id: Some("sibling-launch".to_string()),
+                },
+            );
+            workspace
+                .ssh_pane_nodes
+                .insert(provisional_pane, "failed-node".to_string());
+            workspace
+                .ssh_pane_nodes
+                .insert(sibling_pane, "sibling-node".to_string());
+            workspace
+                .daemon_session_hosts
+                .insert(failed_session, "failed.example.test".to_string());
+            workspace
+                .daemon_session_hosts
+                .insert(sibling_session, "sibling.example.test".to_string());
+            workspace
+                .sftp_file_service_sessions
+                .insert("failed-node".to_string(), failed_session);
+            workspace
+                .sftp_file_service_sessions
+                .insert("sibling-node".to_string(), sibling_session);
+
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    daemon_request: Some(crate::terminal::daemon_tty::DaemonSessionRequest {
+                        connection_session_id: preserved_claim_connection,
+                        open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+                        adopt_pty_session_id: None,
+                        adopt_pty_generation: None,
+                        expected_host_id: None,
+                        expected_agent_binding: None,
+                        install_progress_rx: None,
+                        host_label: "owner.example.test".to_string(),
+                    }),
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let destination_group = workspace.active_tab_pane_group().clone();
+            let owner_pane = destination_group
+                .as_ref(ctx)
+                .daemon_connection_pane(preserved_claim_connection, ctx)
+                .unwrap();
+            let owner_view = destination_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(owner_pane, ctx)
+                .unwrap();
+            let preserved_owner = crate::app_state::DaemonPtyClaimOwner {
+                terminal_view_id: Some(owner_view.id()),
+                connection_session_id: preserved_claim_connection,
+                terminal_view: Some(owner_view.downgrade()),
+            };
+            assert!(matches!(
+                crate::app_state::claim_daemon_pty(
+                    preserved_binding.clone(),
+                    preserved_owner.clone(),
+                    ctx,
+                ),
+                crate::app_state::DaemonPtyClaimOutcome::Claimed
+            ));
+
+            assert!(pane_group
+                .as_ref(ctx)
+                .split_result_is_current(focus_guard, provisional_pane));
+            let moved_pane = pane_group
+                .update(ctx, |group, ctx| {
+                    group.remove_pane_for_move(&provisional_pane, ctx)
+                })
+                .unwrap();
+            destination_group.update(ctx, |group, ctx| {
+                group.add_moved_pane_as_hidden(moved_pane, Direction::Right, ctx);
+                group.move_pane(provisional_pane, owner_pane, Direction::Right, ctx);
+            });
+            assert!(!pane_group
+                .as_ref(ctx)
+                .split_result_is_current(focus_guard, provisional_pane));
+            assert!(workspace.daemon_session_surface_is_active(
+                failed_session,
+                Some(provisional_surface),
+                ctx,
+            ));
+            assert_eq!(
+                workspace
+                    .locate_pending_daemon_surface(failed_session, provisional_surface, ctx)
+                    .map(|(_, group)| group.id()),
+                Some(destination_group.id())
+            );
+            let stale_owner_surface = PendingDaemonSurface {
+                pane_id: owner_pane,
+                terminal_view_id: owner_view.id(),
+                ..provisional_surface
+            };
+            assert!(workspace
+                .locate_pending_daemon_surface(failed_session, stale_owner_surface, ctx)
+                .is_none());
+
+            assert!(workspace
+                .retire_pending_daemon_surface(
+                    failed_session,
+                    provisional_surface,
+                    Some(split_launch),
+                    ctx,
+                )
+                .is_none());
+
+            let visible = pane_group.as_ref(ctx).visible_pane_ids();
+            assert!(!visible.contains(&provisional_pane));
+            assert!(visible.contains(&source_pane));
+            assert!(visible.contains(&sibling_pane));
+            let destination_visible = destination_group.as_ref(ctx).visible_pane_ids();
+            assert!(!destination_visible.contains(&provisional_pane));
+            assert!(destination_visible.contains(&owner_pane));
+            assert_eq!(
+                pane_group
+                    .as_ref(ctx)
+                    .daemon_connection_pane(failed_session, ctx),
+                None
+            );
+            assert_eq!(
+                destination_group
+                    .as_ref(ctx)
+                    .daemon_connection_pane(failed_session, ctx),
+                None
+            );
+            assert_eq!(
+                destination_group
+                    .as_ref(ctx)
+                    .daemon_connection_pane(preserved_claim_connection, ctx),
+                Some(owner_pane)
+            );
+            assert!(!workspace
+                .pending_daemon_split_focus
+                .contains_key(&failed_session));
+            assert!(!workspace
+                .pending_routed_daemon_starts
+                .contains_key(&failed_session));
+            assert!(workspace
+                .pending_routed_daemon_starts
+                .contains_key(&sibling_session));
+            assert!(!workspace.ssh_pane_nodes.contains_key(&provisional_pane));
+            assert_eq!(
+                workspace
+                    .ssh_pane_nodes
+                    .get(&sibling_pane)
+                    .map(String::as_str),
+                Some("sibling-node")
+            );
+            assert!(!workspace.daemon_session_hosts.contains_key(&failed_session));
+            assert_eq!(
+                workspace
+                    .daemon_session_hosts
+                    .get(&sibling_session)
+                    .map(String::as_str),
+                Some("sibling.example.test")
+            );
+            assert!(!workspace
+                .sftp_file_service_sessions
+                .contains_key("failed-node"));
+            assert_eq!(
+                workspace.sftp_file_service_sessions.get("sibling-node"),
+                Some(&sibling_session)
+            );
+            let owner_after_retirement =
+                crate::app_state::daemon_pty_claim(&preserved_binding, ctx).unwrap();
+            assert!(owner_after_retirement.owns_same_terminal_surface(&preserved_owner));
+        });
+        crate::app_state::release_daemon_pty_claim_for_connection(preserved_claim_connection);
+    });
+}
+
+#[test]
+fn daemon_identity_indexing_requests_the_coalesced_app_state_save_last() {
+    let source = include_str!("view.rs");
+    let start = source.find("fn index_opened_daemon_session(").unwrap();
+    let end = source[start..]
+        .find("pub fn adopt_daemon_session(")
+        .map(|offset| start + offset)
+        .unwrap();
+    let body = &source[start..end];
+    let claim = body.find("claim_daemon_pty(").unwrap();
+    let identity = body.find("set_terminal_remote_identity(").unwrap();
+    let save = body
+        .rfind("ctx.dispatch_global_action(\"workspace:save_app\", ());")
+        .unwrap();
+    let collision_cleanup = &body[claim..identity];
+
+    assert!(claim < identity);
+    assert!(save > identity);
+    assert!(body.contains("daemon_connection_pane_for_terminal_view("));
+    assert!(collision_cleanup.contains("retire_competing_daemon_surface("));
+    assert!(collision_cleanup.contains("if !existing.shares_connection_with(&owner)"));
+    assert!(collision_cleanup.contains("deregister_session(connection_session_id, false, ctx)"));
+    assert!(collision_cleanup.contains("focus_daemon_claim_owner(&existing, ctx)"));
+    assert!(collision_cleanup.contains("owns_same_terminal_surface(&owner)"));
+    assert!(collision_cleanup.contains("return;"));
+}
+
+#[test]
+fn provisional_daemon_adoption_cleanup_covers_connection_and_tab() {
+    let source = include_str!("view.rs");
+    let start = source
+        .find("fn discard_provisional_daemon_adoption(")
+        .unwrap();
+    let end = source[start..]
+        .find("fn focus_daemon_claim_owner(")
+        .map(|offset| start + offset)
+        .unwrap();
+    let body = &source[start..end];
+
+    assert!(body.contains("manager.deregister_session(connection_session_id, false, ctx)"));
+    assert!(body.contains("pane_group.clean_up_panes(ctx)"));
+    assert!(body.contains("remove_tab_and_sync_agent_conversations"));
+}
+
+#[test]
+fn new_workspace_remote_routing_errors_use_fluent_keys() {
+    let source = include_str!("view.rs");
+    for literal in [
+        "This remote PTY is already open in another window.",
+        "Remote fallback was cancelled because its original split target changed.",
+        "The daemon cannot validate this agent-to-PTY route.",
+        "The daemon connection is unavailable; refresh Agent Sessions.",
+        "This PTY's foreground agent changed.",
+        "The selected remote session has no verifiable generation.",
+        "The selected daemon route is no longer connected.",
+        "The selected daemon route is ambiguous; refresh the session list.",
+    ] {
+        assert!(!source.contains(literal), "hard-coded UI text: {literal}");
+    }
+    for key in [
+        "workspace-remote-pty-already-open",
+        "workspace-remote-fallback-split-target-changed",
+        "workspace-remote-agent-route-validation-unavailable",
+        "workspace-remote-daemon-connection-unavailable",
+        "workspace-remote-pty-agent-changed",
+        "workspace-remote-session-generation-missing",
+        "workspace-remote-daemon-route-disconnected",
+        "workspace-remote-daemon-route-ambiguous",
+    ] {
+        assert!(source.contains(key), "missing Fluent use: {key}");
+    }
 }
 
 #[cfg(unix)]
@@ -3627,100 +5303,186 @@ fn matching_process_identity_reaches_signal_backend_once() {
 
 #[cfg(all(unix, feature = "local_tty"))]
 #[test]
-fn listed_fresh_daemon_session_focuses_its_existing_shell_under_file_manager() {
+fn exact_daemon_claim_focuses_covered_and_undo_closed_shell() {
     let _undo_closed_panes_guard = FeatureFlag::UndoClosedPanes.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
-        app.add_singleton_model(|_| crate::sftp_manager::transfer_queue::TransferQueue::new());
         let workspace = mock_workspace(&mut app);
         let conn = warp_core::SessionId::from(901u64);
+        let route = remote_server::transport::DaemonRuntimeRoute::new(
+            "server-v1.0.29.sock".to_string(),
+            "v1.0.29".to_string(),
+        )
+        .unwrap();
+        let binding = daemon_adoption_key("daemon-lifecycle-test", &route, "pty-fresh", 7);
         let directory = tempfile::tempdir().unwrap();
-        let (group, shell, tab_count) = workspace.update(&mut app, |workspace, ctx| {
-            workspace.add_tab_with_pane_layout(
-                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
-                    hide_homepage: true,
-                    daemon_request: Some(crate::terminal::daemon_tty::DaemonSessionRequest {
-                        connection_session_id: conn,
-                        open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
-                        adopt_pty_session_id: None,
-                        adopt_pty_generation: None,
-                        expected_agent_binding: None,
-                        install_progress_rx: None,
-                        host_label: "example.test".to_string(),
-                    }),
-                    ..Default::default()
-                })),
-                Arc::new(HashMap::new()),
-                None,
-                ctx,
-            );
-            let group = workspace.active_tab_pane_group().clone();
-            let shell = group.as_ref(ctx).daemon_connection_pane(conn, ctx).unwrap();
-            workspace
-                .ssh_tab_nodes
-                .insert(group.id(), "unrelated-tab-host".to_string());
-            remember_daemon_node_session(
-                &mut workspace.daemon_node_sessions,
-                "node-a".to_string(),
-                conn,
-            );
-            group.update(ctx, |group, ctx| {
-                group.open_file_manager_in_place(
-                    shell,
-                    crate::pane_group::FileManagerTarget::Local {
-                        start_path: directory.path().to_path_buf(),
-                    },
+        let (group, shell, replacement, owner, pane_uuid, tab_count) =
+            workspace.update(&mut app, |workspace, ctx| {
+                workspace.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                        hide_homepage: true,
+                        daemon_request: Some(crate::terminal::daemon_tty::DaemonSessionRequest {
+                            connection_session_id: conn,
+                            open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+                            adopt_pty_session_id: None,
+                            adopt_pty_generation: None,
+                            expected_host_id: None,
+                            expected_agent_binding: None,
+                            install_progress_rx: None,
+                            host_label: "example.test".to_string(),
+                        }),
+                        ..Default::default()
+                    })),
+                    Arc::new(HashMap::new()),
+                    None,
                     ctx,
                 );
-                let replacement = group.focused_pane_id(ctx);
-                assert_ne!(replacement, shell);
-                assert!(!group.visible_pane_ids().contains(&shell));
-                assert_eq!(
-                    group.original_pane_for_replacement(replacement),
-                    Some(shell)
+                let group = workspace.active_tab_pane_group().clone();
+                let shell = group.as_ref(ctx).daemon_connection_pane(conn, ctx).unwrap();
+                let pane_uuid = match group.as_ref(ctx).snapshot(ctx) {
+                    crate::app_state::PaneNodeSnapshot::Leaf(crate::app_state::LeafSnapshot {
+                        contents:
+                            crate::app_state::LeafContents::Terminal(
+                                crate::app_state::TerminalPaneSnapshot { uuid, .. },
+                            ),
+                        ..
+                    }) => uuid,
+                    _ => panic!("expected one terminal leaf"),
+                };
+                assert!(group.as_ref(ctx).set_terminal_remote_identity(
+                    shell,
+                    crate::app_state::RemoteTerminalIdentity {
+                        registry_node_id: "node-a".to_string(),
+                        host: "example.test".to_string(),
+                        transport: crate::app_state::RemoteTerminalTransport::Daemon {
+                            daemon_host_id: "daemon-lifecycle-test".to_string(),
+                            daemon_runtime: Some(crate::app_state::PersistedDaemonRuntime {
+                                runtime_filename: route.runtime_filename().to_string(),
+                                server_version: route.server_version().to_string(),
+                            }),
+                            pty_session_id: "pty-fresh".to_string(),
+                            pty_generation: 7,
+                        },
+                        current_working_directory: Some("/srv/project".to_string()),
+                        input_draft: "retain me".to_string(),
+                    },
+                ));
+                workspace
+                    .ssh_tab_nodes
+                    .insert(group.id(), "unrelated-tab-host".to_string());
+                remember_daemon_node_session(
+                    &mut workspace.daemon_node_sessions,
+                    "node-a".to_string(),
+                    conn,
                 );
-                assert_eq!(
-                    group.daemon_connection_pane(conn, ctx),
-                    Some(shell),
-                    "a temporarily covered shell remains an open connection"
-                );
+                let replacement = group.update(ctx, |group, ctx| {
+                    group.open_file_manager_in_place(
+                        shell,
+                        crate::pane_group::FileManagerTarget::Local {
+                            start_path: directory.path().to_path_buf(),
+                        },
+                        ctx,
+                    );
+                    let replacement = group.focused_pane_id(ctx);
+                    assert_ne!(replacement, shell);
+                    assert!(!group.visible_pane_ids().contains(&shell));
+                    assert_eq!(
+                        group.original_pane_for_replacement(replacement),
+                        Some(shell)
+                    );
+                    assert_eq!(
+                        group.daemon_connection_pane(conn, ctx),
+                        Some(shell),
+                        "a temporarily covered shell remains an open connection"
+                    );
+                    replacement
+                });
+                // The claim must find the owning pane even when another tab is active.
+                workspace.activate_tab(0, ctx);
+                let terminal_view = group
+                    .as_ref(ctx)
+                    .terminal_view_from_pane_id(shell, ctx)
+                    .unwrap();
+                let owner = crate::app_state::DaemonPtyClaimOwner {
+                    terminal_view_id: Some(terminal_view.id()),
+                    connection_session_id: conn,
+                    terminal_view: Some(terminal_view.downgrade()),
+                };
+                assert!(matches!(
+                    crate::app_state::claim_daemon_pty(binding.clone(), owner.clone(), ctx),
+                    crate::app_state::DaemonPtyClaimOutcome::Claimed
+                ));
+                (
+                    group,
+                    shell,
+                    replacement,
+                    owner,
+                    pane_uuid,
+                    workspace.tabs.len(),
+                )
             });
-            // The acknowledgement must find the owning pane even when another tab is active.
-            workspace.activate_tab(0, ctx);
-            (group, shell, workspace.tabs.len())
-        });
-        RemoteServerManager::handle(&app).update(&mut app, |manager, ctx| {
-            manager.report_session_opened(conn, "pty-fresh".to_string(), 7, ctx);
-        });
         workspace.update(&mut app, |workspace, ctx| {
-            let binding = daemon_adoption_key("node-a", None, "pty-fresh", 7);
+            let group_tab_index = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == group.id())
+                .unwrap();
+            assert!(group.as_ref(ctx).has_pending_daemon_start(ctx));
+            assert!(workspace
+                .get_tab_transfer_info_for_attach(group_tab_index, ctx)
+                .is_none(),
+                "a temporary replacement must not hide its pending daemon owner from the transfer gate"
+            );
+            assert!(workspace.focus_daemon_claim_owner(&owner, ctx));
             assert_eq!(
-                workspace.adopted_daemon_sessions[&binding].connection_session_id,
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .unwrap()
+                    .connection_session_id,
                 conn
             );
-            let mut server = warp_ssh_manager::SshServerInfo::new_default("node-a".to_string());
-            server.host = "example.test".to_string();
-            workspace.adopt_daemon_session(
-                warp_ssh_manager::ResolvedSshConnection {
-                    server,
-                    secret_lookup_id: "node-a".to_string(),
-                    secret_kind: warp_ssh_manager::SecretKind::Password,
-                },
-                "pty-fresh".to_string(),
-                7,
-                None,
-                None,
-                ctx,
+            assert_eq!(workspace.tabs.len(), tab_count);
+            assert_eq!(workspace.active_tab_pane_group().id(), group.id());
+            assert_eq!(group.as_ref(ctx).focused_pane_id(ctx), replacement);
+            assert!(group.as_ref(ctx).visible_pane_ids().contains(&replacement));
+            assert!(!group.as_ref(ctx).visible_pane_ids().contains(&shell));
+            assert_eq!(
+                group.as_ref(ctx).original_pane_for_replacement(replacement),
+                Some(shell)
             );
             assert_eq!(
-                workspace.tabs.len(),
-                tab_count,
-                "must not open a duplicate connection"
+                group.as_ref(ctx).daemon_connection_pane(conn, ctx),
+                Some(shell)
             );
-            assert_eq!(workspace.active_tab_pane_group().id(), group.id());
-            assert_eq!(group.as_ref(ctx).focused_pane_id(ctx), shell);
-            assert!(group.as_ref(ctx).visible_pane_ids().contains(&shell));
+            let terminal_view = group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(shell, ctx)
+                .unwrap();
+            terminal_view.update(ctx, |view, ctx| {
+                view.set_remote_input_phase(
+                    crate::terminal::view::RemoteInputPhase::Ready,
+                    Some(conn),
+                    ctx,
+                );
+                view.set_remote_input_phase(
+                    crate::terminal::view::RemoteInputPhase::Transport,
+                    Some(conn),
+                    ctx,
+                );
+            });
+            assert!(!group.as_ref(ctx).has_pending_daemon_start(ctx));
+            assert!(
+                workspace
+                    .get_tab_transfer_info_for_attach(group_tab_index, ctx)
+                    .is_some(),
+                "a covered established pane stays movable during transport reconnect"
+            );
+        });
+        group.update(&mut app, |group, ctx| {
+            group.close_pane(replacement, ctx);
+            assert!(group.visible_pane_ids().contains(&shell));
+            assert_eq!(group.focused_pane_id(ctx), shell);
+            assert_eq!(group.original_pane_for_replacement(replacement), None);
         });
         group.update(&mut app, |group, ctx| {
             group.add_terminal_pane_ignoring_default_session_mode(Direction::Right, None, ctx);
@@ -3732,17 +5494,201 @@ fn listed_fresh_daemon_session_focuses_its_existing_shell_under_file_manager() {
             assert_eq!(
                 group.daemon_connection_pane(conn, ctx),
                 None,
-                "a shell retained only for Undo Close must not be reused"
+                "a shell retained for Undo Close is not input-capable while hidden"
             );
+            assert!(crate::app_state::remote_terminal_identity(&pane_uuid).is_some());
         });
-        RemoteServerManager::handle(&app).update(&mut app, |manager, ctx| {
-            manager.report_session_opened(conn, "pty-fresh".to_string(), 8, ctx);
+        workspace.update(&mut app, |workspace, ctx| {
+            let group_tab_index = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == group.id())
+                .unwrap();
+            assert!(!group.as_ref(ctx).has_pending_daemon_start(ctx));
+            assert!(
+                workspace
+                    .get_tab_transfer_info_for_attach(group_tab_index, ctx)
+                    .is_some(),
+                "an undo-closed established pane stays movable during transport reconnect"
+            );
+            assert!(workspace.focus_daemon_claim_owner(&owner, ctx));
+            assert!(group.as_ref(ctx).visible_pane_ids().contains(&shell));
+            assert_eq!(group.as_ref(ctx).focused_pane_id(ctx), shell);
         });
-        workspace.read(&app, |workspace, _| {
-            assert!(!workspace
-                .adopted_daemon_sessions
-                .contains_key(&daemon_adoption_key("node-a", None, "pty-fresh", 8)));
-            assert_eq!(workspace.tabs.len(), tab_count);
+        group.update(&mut app, |group, ctx| {
+            group.close_pane(shell, ctx);
+            assert!(group.is_pane_hidden_for_close(shell));
+            assert!(group.cleanup_closed_pane(shell, ctx));
         });
+        workspace.read(&app, |_, ctx| {
+            assert!(crate::app_state::daemon_pty_claim(&binding, ctx).is_none());
+        });
+        assert!(crate::app_state::remote_terminal_identity(&pane_uuid).is_none());
+    });
+}
+
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn conflicting_remote_restore_degrades_duplicate_without_persisting_its_identity() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let conn = warp_core::SessionId::from(902u64);
+        let route = remote_server::transport::DaemonRuntimeRoute::new(
+            "server-v1.0.29.sock".to_string(),
+            "v1.0.29".to_string(),
+        )
+        .unwrap();
+        let binding = daemon_adoption_key("daemon-restore-collision", &route, "pty-shared", 8);
+        let (group, owner_pane, duplicate, duplicate_uuid, previous_duplicate_view, owner) =
+            workspace.update(&mut app, |workspace, ctx| {
+                workspace.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                        hide_homepage: true,
+                        daemon_request: Some(crate::terminal::daemon_tty::DaemonSessionRequest {
+                            connection_session_id: conn,
+                            open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+                            adopt_pty_session_id: None,
+                            adopt_pty_generation: None,
+                            expected_host_id: None,
+                            expected_agent_binding: None,
+                            install_progress_rx: None,
+                            host_label: "example.test".to_string(),
+                        }),
+                        ..Default::default()
+                    })),
+                    Arc::new(HashMap::new()),
+                    None,
+                    ctx,
+                );
+                let group = workspace.active_tab_pane_group().clone();
+                let owner_pane = group.as_ref(ctx).daemon_connection_pane(conn, ctx).unwrap();
+                let owner_uuid = match group.as_ref(ctx).snapshot(ctx) {
+                    PaneNodeSnapshot::Leaf(LeafSnapshot {
+                        contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+                        ..
+                    }) => uuid,
+                    _ => panic!("expected one terminal leaf"),
+                };
+                let duplicate: PaneId = group
+                    .update(ctx, |group, ctx| {
+                        group.add_terminal_pane_ignoring_default_session_mode(
+                            Direction::Right,
+                            None,
+                            ctx,
+                        )
+                    })
+                    .into();
+                let duplicate_uuid = match group.as_ref(ctx).snapshot(ctx) {
+                    PaneNodeSnapshot::Branch(branch) => branch
+                        .children
+                        .into_iter()
+                        .find_map(|(_, child)| match child {
+                            PaneNodeSnapshot::Leaf(LeafSnapshot {
+                                contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+                                ..
+                            }) if uuid != owner_uuid => Some(uuid),
+                            PaneNodeSnapshot::Leaf(_) | PaneNodeSnapshot::Branch(_) => None,
+                        })
+                        .expect("the split should contain the duplicate terminal"),
+                    _ => panic!("expected a split terminal layout"),
+                };
+                let identity = crate::app_state::RemoteTerminalIdentity {
+                    registry_node_id: "node-a".to_string(),
+                    host: "example.test".to_string(),
+                    transport: crate::app_state::RemoteTerminalTransport::Daemon {
+                        daemon_host_id: "daemon-restore-collision".to_string(),
+                        daemon_runtime: Some(crate::app_state::PersistedDaemonRuntime {
+                            runtime_filename: route.runtime_filename().to_string(),
+                            server_version: route.server_version().to_string(),
+                        }),
+                        pty_session_id: "pty-shared".to_string(),
+                        pty_generation: 8,
+                    },
+                    current_working_directory: Some("/srv/project".to_string()),
+                    input_draft: "retain me".to_string(),
+                };
+                assert!(group
+                    .as_ref(ctx)
+                    .set_terminal_remote_identity(duplicate, identity));
+                crate::app_state::mark_failed_remote_terminal_restore(&duplicate_uuid);
+                workspace
+                    .ssh_pane_nodes
+                    .insert(duplicate, "node-a".to_string());
+                let previous_duplicate_view = group
+                    .as_ref(ctx)
+                    .terminal_view_from_pane_id(duplicate, ctx)
+                    .unwrap()
+                    .id();
+                let owner_view = group
+                    .as_ref(ctx)
+                    .terminal_view_from_pane_id(owner_pane, ctx)
+                    .unwrap();
+                let owner = crate::app_state::DaemonPtyClaimOwner {
+                    terminal_view_id: Some(owner_view.id()),
+                    connection_session_id: conn,
+                    terminal_view: Some(owner_view.downgrade()),
+                };
+                assert!(matches!(
+                    crate::app_state::claim_daemon_pty(binding.clone(), owner.clone(), ctx),
+                    crate::app_state::DaemonPtyClaimOutcome::Claimed
+                ));
+                (
+                    group,
+                    owner_pane,
+                    duplicate,
+                    duplicate_uuid,
+                    previous_duplicate_view,
+                    owner,
+                )
+            });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.degrade_conflicting_remote_restore(
+                &group,
+                duplicate,
+                &duplicate_uuid,
+                "retain me".to_string(),
+                &owner,
+                ctx,
+            );
+            assert!(crate::app_state::remote_terminal_identity(&duplicate_uuid).is_none());
+            assert!(!crate::app_state::failed_remote_terminal_restore(
+                &duplicate_uuid
+            ));
+            assert!(!workspace.ssh_pane_nodes.contains_key(&duplicate));
+            assert!(group.as_ref(ctx).visible_pane_ids().contains(&duplicate));
+            let replacement_view = group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(duplicate, ctx)
+                .unwrap();
+            assert_ne!(replacement_view.id(), previous_duplicate_view);
+            assert!(
+                replacement_view
+                    .as_ref(ctx)
+                    .remote_input_session_id()
+                    .is_some(),
+                "a duplicate daemon restore must remain daemon-backed while failing closed"
+            );
+            assert!(replacement_view.as_ref(ctx).remote_input_has_failed());
+            let mut snapshot_identities = Vec::new();
+            collect_remote_terminal_identities(
+                &group.as_ref(ctx).snapshot(ctx),
+                &mut snapshot_identities,
+            );
+            assert!(snapshot_identities.is_empty());
+            assert_eq!(
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .unwrap()
+                    .terminal_view_id,
+                owner.terminal_view_id
+            );
+            assert_eq!(
+                group.as_ref(ctx).daemon_connection_pane(conn, ctx),
+                Some(owner_pane)
+            );
+            assert_eq!(group.as_ref(ctx).focused_pane_id(ctx), owner_pane);
+        });
+        crate::app_state::release_daemon_pty_claim_for_connection(conn);
     });
 }

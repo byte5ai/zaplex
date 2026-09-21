@@ -9,6 +9,255 @@ const OUR_PTY: &str = "pty-ours";
 const HOST: &str = "test-host";
 
 #[test]
+fn first_ack_for_existing_managed_session_requires_generation_checked_attach() {
+    let existing = remote_server::proto::SessionOpened {
+        session_id: "managed-existing".to_string(),
+        generation: 17,
+        requires_attach: true,
+        expected_agent_binding: Some(AgentSessionIdentity {
+            session_id: "agent-existing".to_string(),
+            provider: "claude".to_string(),
+            account_id: "account-existing".to_string(),
+            ..Default::default()
+        }),
+    };
+    let fresh = remote_server::proto::SessionOpened {
+        requires_attach: false,
+        expected_agent_binding: None,
+        ..existing.clone()
+    };
+
+    assert!(open_ack_requires_authoritative_attach(1, &existing));
+    assert!(!open_ack_requires_authoritative_attach(1, &fresh));
+    assert!(open_ack_requires_authoritative_attach(2, &fresh));
+}
+
+#[test]
+fn terminal_daemon_visible_errors_use_localized_messages() {
+    let source = include_str!("event_loop.rs");
+    let english = include_str!("../../../i18n/en/warp.ftl");
+    let german = include_str!("../../../i18n/de/warp.ftl");
+    let keys = [
+        "terminal-daemon-multiplexer-nested",
+        "terminal-daemon-attach-generation-invalid",
+        "terminal-daemon-attach-agent-routing-unsupported",
+        "terminal-daemon-attach-failed",
+        "terminal-daemon-attach-generation-mismatch",
+        "terminal-daemon-scrollback-truncated",
+        "terminal-daemon-final-output-truncated",
+        "terminal-daemon-reconnected",
+        "terminal-daemon-reattached",
+        "terminal-daemon-managed-open-unconfirmed",
+        "terminal-daemon-managed-launch-failed",
+        "terminal-daemon-managed-account-route-unsupported",
+        "terminal-daemon-managed-host-unsupported",
+        "terminal-daemon-managed-route-incomplete",
+        "terminal-daemon-managed-open-rejected",
+        "terminal-daemon-managed-connection-failed",
+        "terminal-daemon-managed-claim-conflict",
+        "terminal-daemon-managed-claim-unavailable",
+        "terminal-daemon-managed-generation-invalid",
+        "terminal-daemon-connection-failed",
+        "terminal-daemon-persistent-session-active",
+        "terminal-daemon-session-ended-with-code",
+        "terminal-daemon-session-ended",
+        "terminal-daemon-connection-lost",
+        "terminal-daemon-startup-helper-upgrade-required",
+        "terminal-daemon-startup-command-rejected",
+        "terminal-daemon-startup-ack-invalid",
+    ];
+
+    for key in keys {
+        assert!(
+            source.contains(key),
+            "managed launch path does not use {key}"
+        );
+        assert!(
+            english.contains(&format!("\n{key} =")),
+            "English catalog is missing {key}"
+        );
+        assert!(
+            german.contains(&format!("\n{key} =")),
+            "German catalog is missing {key}"
+        );
+    }
+    assert!(!source.contains("The remote open result could not be confirmed safely."));
+    for stale_literal in [
+        "could not re-attach session: the daemon returned an invalid PTY generation",
+        "could not re-attach agent: the host does not support validated agent routing",
+        "this host daemon does not support managed agents; update it and reconnect",
+        "managed agents require an exact remote account and project",
+        "the requested startup command was not accepted and remains pending",
+    ] {
+        assert!(
+            !source.contains(stale_literal),
+            "visible terminal copy is still hard-coded: {stale_literal}"
+        );
+    }
+}
+
+#[test]
+fn opened_pty_claim_is_resolved_before_any_authoritative_attach() {
+    let source = include_str!("event_loop.rs");
+    let start = source.find("fn on_session_opened(").unwrap();
+    let end = source[start..]
+        .find("fn on_session_opened_with_claim(")
+        .map(|offset| start + offset)
+        .unwrap();
+    let wrapper = &source[start..end];
+    let claim = wrapper.find("claim_opened_daemon_session(").unwrap();
+    let continue_after_claim = wrapper.find("on_session_opened_with_claim(").unwrap();
+    assert!(claim < continue_after_claim);
+
+    let start = end;
+    let end = source[start..]
+        .find("fn buffer_pending_output(")
+        .map(|offset| start + offset)
+        .unwrap();
+    let body = &source[start..end];
+
+    let unavailable = body.find("OpenedDaemonClaim::Unavailable").unwrap();
+    let unavailable_return = body[unavailable..]
+        .find("return;")
+        .map(|offset| unavailable + offset)
+        .unwrap();
+    let publish = body.find("report_session_opened(").unwrap();
+    let collision_return = body.find("if claim_conflicted {").unwrap();
+    let collision_failure = body.find("terminal-daemon-managed-claim-conflict").unwrap();
+    let failed_startup = body[collision_failure..]
+        .find("self.finish_failed_startup(ctx);")
+        .map(|offset| collision_failure + offset)
+        .unwrap();
+    let attach = body.find("self.reattach(ctx);").unwrap();
+    assert!(unavailable < unavailable_return);
+    assert!(unavailable_return < publish);
+    assert!(publish < collision_return);
+    assert!(collision_return < collision_failure);
+    assert!(collision_failure < failed_startup);
+    assert!(failed_startup < attach);
+}
+
+#[test]
+fn remote_phase_notification_upgrades_the_view_with_its_app_context() {
+    let source = include_str!("event_loop.rs");
+    assert!(source.contains(".and_then(|terminal_view| terminal_view.upgrade(ctx))"));
+    assert!(!source.contains(".and_then(WeakViewHandle::upgrade)"));
+}
+
+#[test]
+fn logical_open_retry_retains_parameters_and_rejects_stale_callbacks() {
+    let mut pending = PendingOpen::new(
+        OpenSessionParams {
+            cwd: Some("/srv/project".to_string()),
+            ..Default::default()
+        },
+        SizeInfo::new_without_font_metrics(24, 80),
+    );
+    let (first_id, first_params, _, first_attempt) = pending.begin_attempt().unwrap();
+    assert!(pending.finish_attempt(&first_id, first_attempt));
+    let (retry_id, retry_params, _, retry_attempt) = pending.begin_attempt().unwrap();
+
+    assert_eq!(retry_id, first_id);
+    assert_eq!(retry_params.cwd, first_params.cwd);
+    assert!(!pending.finish_attempt(&first_id, first_attempt));
+    assert!(pending.finish_attempt(&retry_id, retry_attempt));
+    assert!(!pending.can_retry());
+    assert!(pending.begin_attempt().is_none());
+}
+
+#[test]
+fn ambiguous_open_retry_requires_negotiated_logical_open_capability_and_is_bounded() {
+    let mut pending = PendingOpen::new(
+        OpenSessionParams::default(),
+        SizeInfo::new_without_font_metrics(24, 80),
+    );
+    let (logical_open_id, _, _, first_attempt) = pending.begin_attempt().unwrap();
+    assert!(pending.finish_attempt(&logical_open_id, first_attempt));
+
+    assert!(!pending.can_retry_ambiguous_open(false));
+    assert!(pending.can_retry_ambiguous_open(true));
+
+    let (retry_id, _, _, retry_attempt) = pending.begin_attempt().unwrap();
+    assert_eq!(retry_id, logical_open_id);
+    assert!(pending.finish_attempt(&retry_id, retry_attempt));
+    assert!(!pending.can_retry_ambiguous_open(true));
+    assert!(pending.begin_attempt().is_none());
+}
+
+#[test]
+fn connected_and_reconnected_events_share_one_attach_phase() {
+    let mut guard = AttachPhaseGuard::default();
+    let first_transport = Arc::new(());
+
+    assert!(guard.begin(&first_transport, OUR_PTY, Some(7)));
+    assert!(
+        !guard.begin(&first_transport, OUR_PTY, Some(7)),
+        "SessionReconnected must not start a second attach after SessionConnected"
+    );
+}
+
+#[test]
+fn later_reconnect_starts_one_new_attach_phase() {
+    let mut guard = AttachPhaseGuard::default();
+    let first_transport = Arc::new(());
+    let second_transport = Arc::new(());
+
+    assert!(guard.begin(&first_transport, OUR_PTY, Some(7)));
+    assert!(!guard.begin(&first_transport, OUR_PTY, Some(7)));
+    assert!(
+        guard.begin(&second_transport, OUR_PTY, Some(7)),
+        "a replacement transport must start one new attach"
+    );
+    assert!(!guard.begin(&second_transport, OUR_PTY, Some(7)));
+}
+
+#[test]
+fn reconnect_transition_closes_input_before_replay() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(44u64);
+        let (manager, event_loop, _model, _wakeups) = start_adopted_loop(&mut app, conn);
+        event_loop.update(&mut app, |me, _| {
+            me.awaiting_attach_snapshot = false;
+            me.user_input_ready = true;
+            me.input_phase = RemoteInputPhase::Ready;
+        });
+
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(RemoteServerManagerEvent::SessionConnecting {
+                session_id: conn,
+                reconnecting: true,
+            });
+        });
+
+        event_loop.read(&app, |me, _| {
+            assert_eq!(me.input_phase(), RemoteInputPhase::Transport);
+            assert!(!me.is_user_input_ready());
+            assert!(me.awaiting_attach_snapshot);
+        });
+
+        event_loop.update(&mut app, |me, ctx| me.on_transport_connected(ctx));
+        event_loop.read(&app, |me, _| {
+            assert_eq!(
+                me.input_phase(),
+                RemoteInputPhase::Transport,
+                "without a registered replacement client, reconnect must remain transport-gated"
+            );
+            assert!(!me.is_user_input_ready());
+        });
+    });
+}
+
+#[test]
+fn attach_phase_identity_includes_pty_and_generation() {
+    let mut guard = AttachPhaseGuard::default();
+    let transport = Arc::new(());
+
+    assert!(guard.begin(&transport, OUR_PTY, Some(7)));
+    assert!(guard.begin(&transport, "pty-other", Some(7)));
+    assert!(guard.begin(&transport, "pty-other", Some(8)));
+}
+
+#[test]
 fn account_route_requires_the_negotiated_capability() {
     let route = AgentLaunchRoute {
         schema_version: 1,
@@ -116,6 +365,7 @@ fn start_adopted_loop_impl(
             generation,
             None,
             None,
+            None,
             "test-host".to_string(),
             ctx,
         )
@@ -133,7 +383,10 @@ async fn wait_for_attach_replay(
 ) {
     async {
         while event_loop.read(app, |me, _| me.pending_attach_replay.is_some()) {
-            wakeups.recv().await.expect("terminal wakeup channel closed");
+            wakeups
+                .recv()
+                .await
+                .expect("terminal wakeup channel closed");
         }
     }
     .with_timeout(Duration::from_secs(5))
@@ -160,9 +413,10 @@ fn complete_adopted_attach(event_loop: &ModelHandle<EventLoop>, app: &mut App) {
 }
 
 #[test]
-fn ordinary_session_open_ack_emits_inventory_refresh_event_without_managed_launch() {
+fn ordinary_session_open_ack_emits_exact_surface_without_managed_launch() {
     App::test((), |mut app| async move {
         let conn = SessionId::from(36u64);
+        let terminal_view_id = EntityId::new();
         let manager = app.add_singleton_model(RemoteServerManager::new);
         let (events_tx, events_rx) = async_channel::unbounded();
         app.update(|ctx| {
@@ -188,16 +442,27 @@ fn ordinary_session_open_ack_emits_inventory_refresh_event_without_managed_launc
                 None,
                 None,
                 None,
+                None,
                 HOST.to_string(),
                 ctx,
             )
         });
         assert!(events_rx.is_empty());
+        assert!(event_loop.read(&app, |me, _| me.initial_attach_pending));
 
         event_loop.update(&mut app, |me, ctx| {
             assert!(me.managed_launch_id.is_none());
             assert!(me.pty_session_id.is_none());
-            me.on_session_opened("pty-new".to_string(), 9, ctx);
+            me.terminal_view_id = Some(terminal_view_id);
+            me.on_session_opened_with_claim(
+                "pty-new".to_string(),
+                9,
+                false,
+                None,
+                OpenedDaemonClaim::Owned,
+                ctx,
+            );
+            assert!(!me.initial_attach_pending);
         });
 
         let event = events_rx
@@ -208,11 +473,358 @@ fn ordinary_session_open_ack_emits_inventory_refresh_event_without_managed_launc
             event,
             RemoteServerManagerEvent::SessionOpened {
                 session_id,
+                terminal_view_id: Some(event_terminal_view_id),
                 pty_session_id,
                 generation: 9,
-            } if session_id == conn && pty_session_id == "pty-new"
+            } if session_id == conn
+                && event_terminal_view_id == terminal_view_id
+                && pty_session_id == "pty-new"
         ));
         assert!(events_rx.is_empty());
+    });
+}
+
+#[test]
+fn managed_launch_success_waits_for_authoritative_attach_readiness() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(37u64);
+        let manager = app.add_singleton_model(RemoteServerManager::new);
+        let (events_tx, events_rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&manager, move |_manager, event, _ctx| {
+                events_tx.try_send(event.clone()).unwrap();
+            });
+        });
+        let (listener, _wakeups_rx) = test_listener();
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(
+            None,
+            Some(listener.clone()),
+        )));
+        let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::start(
+                model,
+                event_loop_rx,
+                listener,
+                SizeInfo::new_without_font_metrics(24, 80),
+                conn,
+                OpenSessionParams {
+                    managed_launch: Some(remote_server::proto::ManagedLaunch {
+                        schema_version: 1,
+                        launch_id: "launch-ready".to_string(),
+                        provider: "claude".to_string(),
+                        project_root: "/srv/project".to_string(),
+                        kind: "interactive-agent".to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                None,
+                None,
+                None,
+                None,
+                None,
+                HOST.to_string(),
+                ctx,
+            )
+        });
+
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_opened_with_claim(
+                "managed-pty".to_string(),
+                11,
+                false,
+                None,
+                OpenedDaemonClaim::Owned,
+                ctx,
+            );
+        });
+        assert!(matches!(
+            events_rx.try_recv(),
+            Ok(RemoteServerManagerEvent::SessionOpened {
+                pty_session_id,
+                generation: 11,
+                ..
+            }) if pty_session_id == "managed-pty"
+        ));
+        assert!(
+            events_rx.is_empty(),
+            "the OpenSession Ack is not launch success"
+        );
+        event_loop.read(&app, |me, _| {
+            assert!(me.awaiting_attach_snapshot);
+            assert!(me.awaiting_managed_agent_binding);
+            assert_eq!(me.managed_launch_id.as_deref(), Some("launch-ready"));
+        });
+
+        let binding = AgentSessionIdentity {
+            session_id: "agent-ready".to_string(),
+            provider: "claude".to_string(),
+            account_id: "account-ready".to_string(),
+            ..Default::default()
+        };
+        event_loop.update(&mut app, |me, ctx| {
+            // This is the state established by a successful BindAgentPty Ack
+            // immediately before the generation- and agent-checked attach.
+            me.expected_attach_agent_binding = Some(binding.clone());
+            me.awaiting_managed_agent_binding = false;
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: "managed-pty".to_string(),
+                    size: None,
+                    base_seq: 0,
+                    replay: Vec::new(),
+                    bootstrap_preamble: Vec::new(),
+                    generation: 11,
+                    agent_binding: Some(binding),
+                },
+                true,
+                ctx,
+            );
+        });
+
+        assert!(matches!(
+            events_rx.try_recv(),
+            Ok(RemoteServerManagerEvent::ManagedLaunchOpened {
+                launch_id,
+                pty_session_id,
+                generation: 11,
+            }) if launch_id == "launch-ready" && pty_session_id == "managed-pty"
+        ));
+        assert!(
+            events_rx.is_empty(),
+            "managed success must be reported once"
+        );
+        event_loop.read(&app, |me, _| {
+            assert_eq!(me.input_phase(), RemoteInputPhase::Ready);
+            assert!(me.managed_launch_id.is_none());
+            assert!(me.managed_open_identity.is_none());
+        });
+    });
+}
+
+#[test]
+fn managed_launch_without_claim_context_fails_before_open_or_attach_success() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(371u64);
+        let manager = app.add_singleton_model(RemoteServerManager::new);
+        let (events_tx, events_rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&manager, move |_manager, event, _ctx| {
+                events_tx.try_send(event.clone()).unwrap();
+            });
+        });
+        let (listener, _wakeups_rx) = test_listener();
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(
+            None,
+            Some(listener.clone()),
+        )));
+        let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::start(
+                model,
+                event_loop_rx,
+                listener,
+                SizeInfo::new_without_font_metrics(24, 80),
+                conn,
+                OpenSessionParams {
+                    managed_launch: Some(remote_server::proto::ManagedLaunch {
+                        schema_version: 1,
+                        launch_id: "launch-without-claim".to_string(),
+                        provider: "claude".to_string(),
+                        project_root: "/srv/project".to_string(),
+                        kind: "interactive-agent".to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                None,
+                None,
+                None,
+                None,
+                None,
+                "test-host".to_string(),
+                ctx,
+            )
+        });
+
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_opened("unclaimed-pty".to_string(), 11, false, None, ctx);
+        });
+
+        event_loop.read(&app, |me, _| {
+            assert!(me.terminated);
+            assert_eq!(me.input_phase(), RemoteInputPhase::Failed);
+            assert!(me.pty_session_id.is_none());
+            assert!(me.managed_open_identity.is_none());
+        });
+        let events = std::iter::from_fn(|| events_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RemoteServerManagerEvent::ManagedLaunchFailed { launch_id, .. }
+                if launch_id == "launch-without-claim"
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            RemoteServerManagerEvent::SessionOpened { .. }
+                | RemoteServerManagerEvent::ManagedLaunchOpened { .. }
+        )));
+    });
+}
+
+#[test]
+fn managed_launch_failure_is_reported_exactly_once() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(38u64);
+        let manager = app.add_singleton_model(RemoteServerManager::new);
+        let (events_tx, events_rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&manager, move |_manager, event, _ctx| {
+                if matches!(event, RemoteServerManagerEvent::ManagedLaunchFailed { .. }) {
+                    events_tx.try_send(event.clone()).unwrap();
+                }
+            });
+        });
+        let (listener, _wakeups_rx) = test_listener();
+        let model = Arc::new(FairMutex::new(TerminalModel::mock_not_bootstrapped(Some(
+            listener.clone(),
+        ))));
+        let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::start(
+                model,
+                event_loop_rx,
+                listener,
+                SizeInfo::new_without_font_metrics(24, 80),
+                conn,
+                OpenSessionParams {
+                    managed_launch: Some(remote_server::proto::ManagedLaunch {
+                        schema_version: 1,
+                        launch_id: "launch-failed".to_string(),
+                        provider: "claude".to_string(),
+                        project_root: "/srv/project".to_string(),
+                        kind: "interactive-agent".to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                None,
+                None,
+                None,
+                None,
+                None,
+                HOST.to_string(),
+                ctx,
+            )
+        });
+
+        event_loop.update(&mut app, |me, ctx| {
+            assert!(me.initial_attach_pending);
+            me.on_initial_attach_timeout(ctx);
+        });
+
+        assert!(matches!(
+            events_rx.try_recv(),
+            Ok(RemoteServerManagerEvent::ManagedLaunchFailed { launch_id, .. })
+                if launch_id == "launch-failed"
+        ));
+        assert!(
+            events_rx.is_empty(),
+            "failure must consume the launch exactly once"
+        );
+        event_loop.read(&app, |me, _| {
+            assert!(me.terminated);
+            assert_eq!(me.input_phase(), RemoteInputPhase::Failed);
+            assert!(me.managed_launch_id.is_none());
+        });
+    });
+}
+
+#[test]
+fn managed_launch_relinquish_is_exact_and_one_shot() {
+    let mut event_loop = ready_event_loop_with_startup("");
+    event_loop.managed_launch_id = Some("launch-transfer".to_string());
+    event_loop.managed_open_identity = Some(("pty-transfer".to_string(), 9));
+
+    assert!(!event_loop.relinquish_managed_launch("foreign-launch"));
+    assert_eq!(
+        event_loop.managed_launch_id.as_deref(),
+        Some("launch-transfer")
+    );
+    assert!(event_loop.relinquish_managed_launch("launch-transfer"));
+    assert!(event_loop.managed_launch_id.is_none());
+    assert!(event_loop.managed_open_identity.is_none());
+    assert!(!event_loop.relinquish_managed_launch("launch-transfer"));
+}
+
+#[test]
+fn managed_install_handshake_failure_finishes_without_open_success() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(39u64);
+        let manager = app.add_singleton_model(RemoteServerManager::new);
+        let (events_tx, events_rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&manager, move |_manager, event, _ctx| {
+                events_tx.try_send(event.clone()).unwrap();
+            });
+        });
+        let (listener, _wakeups_rx) = test_listener();
+        let model = Arc::new(FairMutex::new(TerminalModel::mock_not_bootstrapped(Some(
+            listener.clone(),
+        ))));
+        let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::start(
+                model,
+                event_loop_rx,
+                listener,
+                SizeInfo::new_without_font_metrics(24, 80),
+                conn,
+                OpenSessionParams {
+                    managed_launch: Some(remote_server::proto::ManagedLaunch {
+                        schema_version: 1,
+                        launch_id: "launch-install-handshake".to_string(),
+                        provider: "claude".to_string(),
+                        project_root: "/srv/project".to_string(),
+                        kind: "interactive-agent".to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                None,
+                None,
+                None,
+                None,
+                None,
+                HOST.to_string(),
+                ctx,
+            )
+        });
+
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(RemoteServerManagerEvent::SessionConnectionFailed {
+                session_id: conn,
+                phase: crate::remote_server::manager::RemoteServerInitPhase::Initialize,
+                error: "initialize rejected".to_string(),
+            });
+        });
+
+        event_loop.read(&app, |me, _| {
+            assert!(me.terminated);
+            assert_eq!(me.input_phase(), RemoteInputPhase::Failed);
+            assert!(me.managed_launch_id.is_none());
+        });
+        let events = std::iter::from_fn(|| events_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RemoteServerManagerEvent::ManagedLaunchFailed { launch_id, .. }
+                if launch_id == "launch-install-handshake"
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            RemoteServerManagerEvent::SessionOpened { .. }
+                | RemoteServerManagerEvent::ManagedLaunchOpened { .. }
+        )));
     });
 }
 
@@ -245,6 +857,66 @@ fn capability_aware_generation_zero_fails_closed() {
         "only a legacy daemon retains id-only attach compatibility"
     );
     assert!(EventLoop::attach_generation_is_valid(Some(7), true));
+}
+
+#[test]
+fn attach_response_with_wrong_pty_fails_closed() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(61u64);
+        let (_manager, event_loop, _model, _wakeups) =
+            start_adopted_loop_unbootstrapped(&mut app, conn);
+
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: "pty-from-another-route".to_string(),
+                    size: None,
+                    base_seq: 0,
+                    replay: Vec::new(),
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+
+        event_loop.read(&app, |me, _| {
+            assert!(me.terminated);
+            assert_eq!(me.input_phase(), RemoteInputPhase::Failed);
+        });
+    });
+}
+
+#[test]
+fn attach_response_with_wrong_generation_fails_closed() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(62u64);
+        let (_manager, event_loop, _model, _wakeups) =
+            start_adopted_loop_unbootstrapped(&mut app, conn);
+
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: 0,
+                    replay: Vec::new(),
+                    bootstrap_preamble: Vec::new(),
+                    generation: 8,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+
+        event_loop.read(&app, |me, _| {
+            assert!(me.terminated);
+            assert_eq!(me.input_phase(), RemoteInputPhase::Failed);
+        });
+    });
 }
 
 #[test]
@@ -517,12 +1189,11 @@ fn live_cursor_query_is_routed_back_as_session_input() {
     });
 }
 
-/// Keystrokes that arrive before `OpenSession` resolves are buffered in order
-/// so nothing typed during the connect window is lost. On open we attempt to
-/// flush; with no live client the input is *retained* (re-buffered), never
-/// dropped — it flushes for real once a client is available.
+/// Keystrokes that arrive before `OpenSession` resolves are rejected at the
+/// daemon boundary. They must never execute later merely because the open Ack
+/// arrived; the visible editor owns draft preservation.
 #[test]
-fn input_before_session_open_is_buffered_and_not_lost() {
+fn input_before_session_open_is_not_flushed_later() {
     App::test((), |mut app| async move {
         // Held for the duration so the singleton stays registered.
         let _manager = app.add_singleton_model(RemoteServerManager::new);
@@ -536,7 +1207,7 @@ fn input_before_session_open_is_buffered_and_not_lost() {
         let size = SizeInfo::new_without_font_metrics(24, 80);
         let model_for_loop = model.clone();
         // `None` = open a fresh session; with no connected client it never
-        // resolves, so `pty_session_id` stays `None` and input must buffer.
+        // resolves, so `pty_session_id` stays `None` and input must be rejected.
         let event_loop = app.add_model(|ctx| {
             EventLoop::start(
                 model_for_loop,
@@ -545,6 +1216,7 @@ fn input_before_session_open_is_buffered_and_not_lost() {
                 size,
                 conn,
                 OpenSessionParams::default(),
+                None,
                 None,
                 None,
                 None,
@@ -560,37 +1232,37 @@ fn input_before_session_open_is_buffered_and_not_lost() {
         });
         event_loop.read(&app, |me, _| {
             assert!(me.pty_session_id.is_none(), "session not opened yet");
-            assert_eq!(
-                me.pending_input.len(),
-                2,
-                "input must be buffered before open"
+            assert!(
+                me.pending_input.is_empty(),
+                "ordinary input must not enter the later-flushed control queue"
             );
         });
 
-        // Opening records the id and attempts to flush. With no live client
-        // the input can't be sent yet, so it must be *retained* (re-buffered),
-        // not dropped — preserving the no-loss guarantee until a client exists.
+        // Opening records the id, but cannot resurrect the rejected bytes.
         event_loop.update(&mut app, |me, ctx| {
-            me.on_session_opened("pty-late".to_string(), 7, ctx);
+            me.on_session_opened_with_claim(
+                "pty-late".to_string(),
+                7,
+                false,
+                None,
+                OpenedDaemonClaim::Owned,
+                ctx,
+            );
         });
         event_loop.read(&app, |me, _| {
             assert_eq!(me.pty_session_id.as_deref(), Some("pty-late"));
-            assert_eq!(
-                me.pending_input.len(),
-                2,
-                "without a live client the flushed input must be retained, not lost"
+            assert!(
+                me.pending_input.is_empty(),
+                "the OpenSession acknowledgement must not execute earlier user bytes"
             );
         });
     });
 }
 
-/// Regression (§9 resilience): once a session is open, input that arrives
-/// while the transport is down (the reconnect window) must be buffered, not
-/// dropped — otherwise keystrokes typed during an SSH blip are lost. The
-/// adopted loop has a `pty_session_id` but no registered client, which is
-/// exactly the "session open, transport down" state.
+/// During an outage ordinary input is rejected, while resize control state is
+/// retained for the eventual exact reattach.
 #[test]
-fn input_during_transport_outage_is_buffered_not_dropped() {
+fn input_during_transport_outage_is_not_flushed_later_but_resize_is_preserved() {
     App::test((), |mut app| async move {
         let conn = SessionId::from(13u64);
         let (_manager, event_loop, _model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
@@ -603,7 +1275,8 @@ fn input_during_transport_outage_is_buffered_not_dropped() {
             );
         });
 
-        // Session is open, transport is down (no client): input must buffer.
+        // Session is open, transport is down (no client): user bytes must not
+        // enter the queue, but the last resize remains useful after reattach.
         event_loop.update(&mut app, |me, ctx| {
             me.on_event_loop_message(EventLoopMessage::Input(Cow::Owned(b"x".to_vec())), ctx);
             me.on_event_loop_message(
@@ -614,11 +1287,86 @@ fn input_during_transport_outage_is_buffered_not_dropped() {
         event_loop.read(&app, |me, _| {
             assert_eq!(
                 me.pending_input.len(),
-                2,
-                "input during the outage must be buffered (flushed on reattach), not dropped"
+                1,
+                "only resize/control state may survive the outage"
             );
+            assert!(matches!(me.pending_input[0], EventLoopMessage::Resize(_)));
         });
     });
+}
+
+#[test]
+fn input_after_attach_and_shell_readiness_is_delivered() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(63u64);
+        let (_manager, event_loop, _model, wakeups) = start_adopted_loop(&mut app, conn);
+        assert_eq!(
+            event_loop.read(&app, |me, _| me.input_phase()),
+            RemoteInputPhase::Transport
+        );
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: 0,
+                    replay: vec![b'x'; ATTACH_PARSE_CHUNK_BYTES + 1],
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+        event_loop.update(&mut app, |me, _ctx| {
+            assert_eq!(me.input_phase(), RemoteInputPhase::Replay);
+            assert!(!me.is_user_input_ready());
+            let accepted = me
+                .try_deliver_user_input_with(Cow::Borrowed(b"must-wait\r"), |_pty, _bytes| {
+                    Ok::<(), ()>(())
+                })
+                .expect("rejection is not a transport error");
+            assert!(!accepted, "user input must remain closed during replay");
+        });
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+
+        let mut delivered = None;
+        event_loop.update(&mut app, |me, _ctx| {
+            assert!(me.is_user_input_ready());
+            assert_eq!(me.input_phase(), RemoteInputPhase::Ready);
+            let accepted = me
+                .try_deliver_user_input_with(Cow::Borrowed(b"echo ready\r"), |pty, bytes| {
+                    delivered = Some((pty.to_string(), bytes));
+                    Ok::<(), ()>(())
+                })
+                .expect("test dispatch succeeds");
+            assert!(accepted);
+        });
+
+        assert_eq!(
+            delivered,
+            Some((OUR_PTY.to_string(), b"echo ready\r".to_vec()))
+        );
+    });
+}
+
+#[test]
+fn replay_output_without_input_readiness_does_not_deliver_user_bytes() {
+    let mut event_loop = unbootstrapped_event_loop_with_startup("");
+    event_loop.apply_attach(&[], 0, b"historical output without a shell handshake");
+    event_loop.awaiting_attach_snapshot = false;
+    let mut dispatches = 0;
+
+    let accepted = event_loop
+        .try_deliver_user_input_with(Cow::Borrowed(b"must-not-run\r"), |_pty, _bytes| {
+            dispatches += 1;
+            Ok::<(), ()>(())
+        })
+        .expect("rejection is not a transport error");
+
+    assert!(!accepted);
+    assert_eq!(dispatches, 0);
 }
 
 /// A daemon session becoming addressable is not proof that its shell is
@@ -650,6 +1398,7 @@ fn startup_command_waits_for_bootstrap_and_runs_exactly_once() {
                 None,
                 None,
                 None,
+                None,
                 "test-host".to_string(),
                 ctx,
             )
@@ -657,7 +1406,14 @@ fn startup_command_waits_for_bootstrap_and_runs_exactly_once() {
 
         event_loop.update(&mut app, |me, ctx| {
             me.startup_command = Some("tmux attach".to_string());
-            me.on_session_opened("pty-x".to_string(), 7, ctx);
+            me.on_session_opened_with_claim(
+                "pty-x".to_string(),
+                7,
+                false,
+                None,
+                OpenedDaemonClaim::Owned,
+                ctx,
+            );
         });
 
         event_loop.read(&app, |me, _| {
@@ -871,7 +1627,7 @@ fn disconnect_before_daemon_processing_retries_same_command_id_once() {
             Ok(())
         },
     );
-    event_loop.begin_transport_reconnect();
+    event_loop.begin_transport_reconnect_for_test();
     assert!(
         event_loop.awaiting_attach_snapshot,
         "the production reconnect transition must require a fresh attach snapshot"
@@ -923,7 +1679,7 @@ fn retained_startup_command_runs_exactly_once_after_reconnect() {
             Ok(())
         },
     );
-    event_loop.begin_transport_reconnect();
+    event_loop.begin_transport_reconnect_for_test();
     event_loop.try_dispatch_startup_command_with(
         |_pty_session_id, command_id, _bytes| -> Result<(), ()> {
             if accepted_ids.insert(command_id.to_string()) {
@@ -962,7 +1718,7 @@ fn second_bootstrap_after_reconnect_does_not_resend_startup_command() {
             .expect("the first bootstrap dispatches a command"),
     );
 
-    event_loop.begin_transport_reconnect();
+    event_loop.begin_transport_reconnect_for_test();
     event_loop.process_historical_pty_bytes(&bootstrapped_dcs());
     event_loop.try_dispatch_startup_command_with(
         |_pty_session_id, _id, _bytes| -> Result<(), ()> {
@@ -995,9 +1751,28 @@ fn startup_command_in_flight_suppresses_duplicate_local_attempts() {
     assert!(event_loop.startup_command_in_flight.is_some());
 }
 
-/// User keystrokes may be dropped oldest-first after a prolonged outage, but
-/// an unacknowledged startup command is control state, not disposable input.
-/// Buffer pressure must neither remove it nor mint a different delivery id.
+#[test]
+fn startup_command_delivery_attempts_are_bounded() {
+    let mut event_loop = ready_event_loop_with_startup("codex resume bounded-session");
+    let mut attempts = 0;
+
+    for _ in 0..(MAX_STARTUP_COMMAND_DELIVERY_ATTEMPTS + 2) {
+        event_loop.try_dispatch_startup_command_with(
+            |_pty_session_id, _command_id, _bytes| -> Result<(), ()> {
+                attempts += 1;
+                Err(())
+            },
+        );
+    }
+
+    assert_eq!(attempts, MAX_STARTUP_COMMAND_DELIVERY_ATTEMPTS);
+    assert!(event_loop.startup_command.is_some());
+    assert!(event_loop.startup_command_in_flight.is_none());
+}
+
+/// Internal protocol replies remain bounded during an outage, but an
+/// unacknowledged startup command is separate control state. Buffer pressure
+/// must neither remove it nor mint a different delivery id.
 #[test]
 fn pending_buffer_never_evicts_unacknowledged_startup_command() {
     let mut event_loop = ready_event_loop_with_startup("codex resume session-4");
@@ -1020,7 +1795,7 @@ fn pending_buffer_never_evicts_unacknowledged_startup_command() {
     assert_eq!(
         event_loop.startup_command.as_deref(),
         Some("codex resume session-4"),
-        "ordinary input eviction must never remove pending startup control state"
+        "protocol-reply eviction must never remove pending startup control state"
     );
 
     event_loop.allow_startup_command_retry();
@@ -1046,8 +1821,8 @@ fn pending_buffer_never_evicts_unacknowledged_startup_command() {
         })
         .sum();
     assert!(
-        buffered_input_bytes <= MAX_PENDING_INPUT_BYTES,
-        "normal input remains bounded independently of startup delivery"
+        buffered_input_bytes <= MAX_PENDING_PROTOCOL_INPUT_BYTES,
+        "protocol replies remain bounded independently of startup delivery"
     );
 }
 
@@ -1161,9 +1936,9 @@ fn lifecycle_handoff_during_attach_is_not_discarded() {
         )));
         let terminal_view_id = EntityId::new();
         let event_loop = app.add_model(|_ctx| EventLoop::new(model, listener, conn));
-        event_loop.update(&mut app, |me, ctx| {
+        event_loop.update(&mut app, |me, _ctx| {
             me.awaiting_attach_snapshot = true;
-            me.bind_terminal_view(terminal_view_id, ctx);
+            me.terminal_view_id = Some(terminal_view_id);
         });
 
         sessions.update(&mut app, |sessions, ctx| {
@@ -1201,7 +1976,10 @@ fn lifecycle_handoff_during_attach_is_not_discarded() {
             config_dir: "/home/agent/.codex-a".to_string(),
             account_id: String::new(),
         };
-        event_loop.update(&mut app, |me, _ctx| {
+        event_loop.update(&mut app, |me, ctx| {
+            // This fixture has no TerminalView to install the production model
+            // subscription, so invoke the same lifecycle refresh explicitly.
+            me.refresh_desired_agent_binding(ctx);
             me.apply_authoritative_agent_binding_state(Some(agent_a.clone()));
         });
         event_loop.read(&app, |me, _ctx| {
@@ -1446,14 +2224,13 @@ fn settled_binding_does_not_override_a_later_reconnect_snapshot() {
     assert!(event_loop.desired_agent_binding.is_none());
 }
 
-/// During a long outage the buffered input must stay bounded: consecutive
-/// resizes coalesce to the latest, and input past the byte cap drops oldest-
-/// first — so a sleeping laptop can't grow `pending_input` without limit.
+/// During a long outage consecutive resizes coalesce and ordinary user input
+/// never enters the later-flushed control queue.
 #[test]
-fn buffered_input_is_capped_and_resizes_coalesce() {
+fn user_input_is_rejected_and_resizes_coalesce_during_outage() {
     App::test((), |mut app| async move {
         let conn = SessionId::from(19u64);
-        // Adopted loop: pty id set, no live client → everything buffers.
+        // Adopted loop: pty id set, no live client → control traffic buffers.
         let (_manager, event_loop, _model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
 
         event_loop.update(&mut app, |me, ctx| {
@@ -1465,7 +2242,6 @@ fn buffered_input_is_capped_and_resizes_coalesce() {
                 EventLoopMessage::Resize(SizeInfo::new_without_font_metrics(30, 90)),
                 ctx,
             );
-            // 5 x 100 KiB = 500 KiB of input, over the 256 KiB cap.
             for _ in 0..5 {
                 me.on_event_loop_message(
                     EventLoopMessage::Input(Cow::Owned(vec![b'x'; 100 * 1024])),
@@ -1481,18 +2257,10 @@ fn buffered_input_is_capped_and_resizes_coalesce() {
                 .filter(|m| matches!(m, EventLoopMessage::Resize(_)))
                 .count();
             assert_eq!(resizes, 1, "consecutive resizes coalesce to the latest");
-            let input_bytes: usize = me
+            assert!(me
                 .pending_input
                 .iter()
-                .map(|m| match m {
-                    EventLoopMessage::Input(b) => b.len(),
-                    _ => 0,
-                })
-                .sum();
-            assert!(
-                input_bytes <= MAX_PENDING_INPUT_BYTES,
-                "buffered input must be capped (was {input_bytes})"
-            );
+                .all(|message| matches!(message, EventLoopMessage::Resize(_))));
         });
     });
 }
@@ -1527,6 +2295,7 @@ fn output_before_open_is_buffered_then_rendered() {
                 None,
                 None,
                 None,
+                None,
                 "test-host".to_string(),
                 ctx,
             )
@@ -1549,7 +2318,14 @@ fn output_before_open_is_buffered_then_rendered() {
         // advances last_seq, and clears the buffer.
         drain(&wakeups_rx);
         event_loop.update(&mut app, |me, ctx| {
-            me.on_session_opened("pty-late".to_string(), 7, ctx)
+            me.on_session_opened_with_claim(
+                "pty-late".to_string(),
+                7,
+                false,
+                None,
+                OpenedDaemonClaim::Owned,
+                ctx,
+            )
         });
         assert!(
             !wakeups_rx.is_empty(),
@@ -1981,6 +2757,7 @@ fn daemon_root_initshell_stamp(app: &mut App, conn: u64, shell: &str) -> Option<
             Some(7),
             None,
             None,
+            None,
             "test-host".to_string(),
             ctx,
         )
@@ -2031,6 +2808,7 @@ fn live_initshell_of_a_daemon_session_is_stamped_suppressed() {
                 Some(7),
                 None,
                 None,
+                None,
                 "test-host".to_string(),
                 ctx,
             )
@@ -2079,6 +2857,7 @@ fn subshell_initshell_inside_a_daemon_tab_stays_unstamped() {
                 OpenSessionParams::default(),
                 Some(OUR_PTY.to_string()),
                 Some(7),
+                None,
                 None,
                 None,
                 "test-host".to_string(),
@@ -2167,7 +2946,7 @@ fn rejected_initial_attach_finishes_the_hidden_bootstrap_block() {
             me.write_notice("could not re-attach session: already attached");
             me.abandon_failed_attach(ctx);
             me.on_transport_connected(ctx);
-            me.on_session_opened("late-open".to_string(), 7, ctx);
+            me.on_session_opened("late-open".to_string(), 7, false, None, ctx);
             me.on_event_loop_message(EventLoopMessage::Input(Cow::Borrowed(b"late input")), ctx);
             assert!(me.terminated);
             assert!(me.pending_input.is_empty());
@@ -2220,7 +2999,7 @@ fn completed_initial_attach_deadline_cannot_cancel_a_later_reconnect() {
         wait_for_attach_replay(&event_loop, &app, &wakeups).await;
         event_loop.update(&mut app, |me, ctx| {
             assert!(!me.initial_attach_pending);
-            me.begin_transport_reconnect();
+            me.begin_transport_reconnect(ctx);
             me.awaiting_attach_snapshot = true;
             me.on_initial_attach_timeout(ctx);
             assert!(!me.terminated);
@@ -2259,8 +3038,19 @@ fn initial_attach_deadline_preserves_an_interactive_shell_initialization() {
             assert!(!me.initial_attach_pending);
             me.on_initial_attach_timeout(ctx);
             assert!(!me.terminated);
-            me.on_event_loop_message(EventLoopMessage::Input(Cow::Borrowed(b"n")), ctx);
-            assert_eq!(me.pending_input.len(), 1, "raw input must remain available");
+            assert!(
+                me.user_input_ready,
+                "InitShell must enable explicit interactive initialization prompts"
+            );
+            let mut delivered = None;
+            let accepted = me
+                .try_deliver_user_input_with(Cow::Borrowed(b"n"), |pty, bytes| {
+                    delivered = Some((pty.to_string(), bytes));
+                    Ok::<(), ()>(())
+                })
+                .expect("test dispatch succeeds");
+            assert!(accepted);
+            assert_eq!(delivered, Some((OUR_PTY.to_string(), b"n".to_vec())));
         });
         assert!(!model.lock().is_read_only());
     });

@@ -189,7 +189,20 @@
         "warp",
         "--lib",
         "--no-fail-fast",
-        "workspace::view::tests::connections_registry_drives_favorite_launch_menu"
+        "workspace::view::tests::",
+        "--",
+        "--skip",
+        "test_worktree_sidecar_hover_takes_precedence_over_selection",
+        "--skip",
+        "test_worktree_sidecar_pointer_entry_does_not_select_top_repo",
+        "--skip",
+        "test_worktree_sidecar_close_via_select_item_executes_from_workspace",
+        "--skip",
+        "test_worktree_sidecar_search_editor_enter_executes_selection",
+        "--skip",
+        "test_worktree_sidecar_search_editor_proxies_navigation_and_escape",
+        "--skip",
+        "test_worktree_sidecar_hides_linked_worktrees_from_repo_list"
       ],
       "timeout_seconds": 5400
     },
@@ -203,7 +216,20 @@
         "warp",
         "--lib",
         "--no-fail-fast",
-        "ssh_manager::panel::tests::"
+        "ssh_manager::",
+        "--",
+        "--skip",
+        "ssh_manager::candidates::tests::",
+        "--skip",
+        "ssh_manager::password_prompt::tests::",
+        "--skip",
+        "ssh_manager::secret_injector::tests::",
+        "--skip",
+        "ssh_manager::shell_prompt::tests::",
+        "--skip",
+        "ssh_manager::startup_command_injector::tests::",
+        "--skip",
+        "ssh_manager::su_password_injector::tests::"
       ],
       "timeout_seconds": 5400
     },

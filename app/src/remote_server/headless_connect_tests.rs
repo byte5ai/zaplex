@@ -1,7 +1,8 @@
+use super::super::DAEMON_SESSION_ID_BASE;
 use super::*;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(unix)]
 use std::sync::Mutex;
 use warp_ssh_manager::{AuthType, ResolvedSshConnection, SecretKind, SshServerInfo};
@@ -78,6 +79,71 @@ fn historical_recovery_accepts_only_older_semantic_versions() {
     assert!(is_older_release_daemon(Some("v1.1"), "v1.0.29"));
     assert!(is_older_release_daemon(Some("v1.1.rc1"), "v1.1.dev2"));
     assert!(!is_older_release_daemon(Some("v1.1.dev2"), "v1.1.rc1"));
+}
+
+#[test]
+fn diagnostics_query_historical_runtimes_from_unversioned_builds() {
+    assert!(!DaemonInventoryScanMode::Recovery.should_query_runtime(false, None));
+    assert!(DaemonInventoryScanMode::Diagnostics.should_query_runtime(false, None));
+    assert!(DaemonInventoryScanMode::Recovery.should_query_runtime(true, None));
+}
+
+#[test]
+fn diagnostics_retain_non_older_runtime_with_exact_route() {
+    let observed_at = Instant::now();
+    let query = DaemonInventoryQuery {
+        initialize: InitializeResponse {
+            server_version: "v1.0.29".to_string(),
+            features: vec![FEATURE_SESSION_HOST.to_string()],
+            ..Default::default()
+        },
+        daemon: SessionList::default(),
+        observed_at,
+        multiplexers: Ok(MultiplexerSessionList::default()),
+    };
+
+    assert!(!is_older_release_daemon(
+        Some("v1.0.29"),
+        &query.initialize.server_version
+    ));
+    let diagnostics = query
+        .runtime_diagnostics("server-v1.0.29.sock".to_string())
+        .unwrap();
+    let route = diagnostics.route.as_ref().expect("exact runtime route");
+    assert_eq!(route.runtime_filename(), "server-v1.0.29.sock");
+    assert_eq!(route.server_version(), "v1.0.29");
+    assert_eq!(diagnostics.observed_at, Some(observed_at));
+    assert!(matches!(
+        diagnostics.status,
+        DaemonRuntimeDiagnosticsStatus::Available(_)
+    ));
+}
+
+#[test]
+fn diagnostics_mark_incompatible_runtime_unsupported_without_losing_identity() {
+    let observed_at = Instant::now();
+    let query = DaemonInventoryQuery {
+        initialize: InitializeResponse {
+            server_version: "v1.0.27".to_string(),
+            ..Default::default()
+        },
+        daemon: SessionList::default(),
+        observed_at,
+        multiplexers: Ok(MultiplexerSessionList::default()),
+    };
+
+    let diagnostics = query
+        .runtime_diagnostics("server-v1.0.27.sock".to_string())
+        .unwrap();
+    let route = diagnostics.route.as_ref().expect("exact runtime route");
+    assert_eq!(route.runtime_filename(), diagnostics.runtime_filename);
+    assert_eq!(route.server_version(), "v1.0.27");
+    assert_eq!(diagnostics.server_version.as_deref(), Some("v1.0.27"));
+    assert_eq!(diagnostics.observed_at, Some(observed_at));
+    assert!(matches!(
+        diagnostics.status,
+        DaemonRuntimeDiagnosticsStatus::Unsupported
+    ));
 }
 
 #[test]
@@ -212,11 +278,145 @@ fn merged_daemon_inventory_preserves_exact_route_per_session() {
         Some(old_route.clone()),
         1,
     );
+    let runtime_diagnostics = [&current_route, &old_route]
+        .into_iter()
+        .map(|route| {
+            DaemonInventoryQuery {
+                initialize: InitializeResponse {
+                    server_version: route.server_version().to_string(),
+                    features: vec![FEATURE_SESSION_HOST.to_string()],
+                    ..Default::default()
+                },
+                daemon: sessions(),
+                observed_at: Instant::now(),
+                multiplexers: Ok(MultiplexerSessionList::default()),
+            }
+            .runtime_diagnostics(route.runtime_filename().to_string())
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
 
     assert_eq!(inventory.sessions.len(), 2);
     assert_eq!(inventory.sessions[0].route.as_ref(), Some(&current_route));
     assert_eq!(inventory.sessions[1].route.as_ref(), Some(&old_route));
     assert_eq!(inventory.daemon.host_ring_cap_bytes, 0);
+    assert_eq!(runtime_diagnostics.len(), 2);
+    for (runtime, route) in runtime_diagnostics.iter().zip([&current_route, &old_route]) {
+        assert_eq!(runtime.route.as_ref(), Some(route));
+        assert_eq!(runtime.runtime_filename, route.runtime_filename());
+        assert_eq!(
+            runtime.server_version.as_deref(),
+            Some(route.server_version())
+        );
+        let DaemonRuntimeDiagnosticsStatus::Available(daemon) = &runtime.status else {
+            panic!("queried runtime diagnostics must remain available");
+        };
+        assert_eq!(daemon.host_ring_cap_bytes, 1024);
+    }
+}
+
+#[tokio::test]
+async fn runtime_diagnostics_deadline_preserves_partial_results_and_continues_scan() {
+    crate::i18n::init(Some("en"));
+    let query = |host_ring_cap_bytes| DaemonInventoryQuery {
+        initialize: InitializeResponse {
+            server_version: "v1.0.29".to_string(),
+            features: vec![FEATURE_SESSION_HOST.to_string()],
+            ..Default::default()
+        },
+        daemon: SessionList {
+            host_ring_cap_bytes,
+            ..Default::default()
+        },
+        observed_at: Instant::now(),
+        multiplexers: Ok(MultiplexerSessionList::default()),
+    };
+    let timeout = Duration::from_millis(10);
+    let first = inventory_before_deadline(
+        async { Ok(query(11)) },
+        Some(InventoryDeadline::new(timeout)),
+    )
+    .await;
+    let stalled = inventory_before_deadline(
+        futures::future::pending::<std::result::Result<DaemonInventoryQuery, String>>(),
+        Some(InventoryDeadline::new(timeout)),
+    )
+    .await;
+    let last = inventory_before_deadline(
+        async { Ok(query(33)) },
+        Some(InventoryDeadline::new(timeout)),
+    )
+    .await;
+
+    let diagnostics = [
+        ("server-v1.0.27.sock", first),
+        ("server-v1.0.28.sock", stalled),
+        ("server-v1.0.29.sock", last),
+    ]
+    .into_iter()
+    .map(|(runtime_filename, result)| match result {
+        Ok(query) => query
+            .runtime_diagnostics(runtime_filename.to_string())
+            .unwrap(),
+        Err(_) => unavailable_runtime_diagnostics(runtime_filename.to_string()),
+    })
+    .collect::<Vec<_>>();
+
+    assert_eq!(diagnostics.len(), 3);
+    let DaemonRuntimeDiagnosticsStatus::Available(first) = &diagnostics[0].status else {
+        panic!("the completed measurement before the timeout must be retained");
+    };
+    assert_eq!(first.host_ring_cap_bytes, 11);
+    assert!(matches!(
+        &diagnostics[1].status,
+        DaemonRuntimeDiagnosticsStatus::Unavailable
+    ));
+    assert_eq!(diagnostics[1].observed_at, None);
+    let DaemonRuntimeDiagnosticsStatus::Available(last) = &diagnostics[2].status else {
+        panic!("the runtime after the timeout must still be queried");
+    };
+    assert_eq!(last.host_ring_cap_bytes, 33);
+}
+
+#[tokio::test]
+async fn multiplexer_timeout_preserves_session_diagnostics_but_blocks_recovery() {
+    crate::i18n::init(Some("en"));
+    let timeout = Duration::from_millis(10);
+    let observed_at = Instant::now();
+    let query = finish_daemon_inventory(
+        InitializeResponse {
+            server_version: "v1.0.29".to_string(),
+            features: vec![
+                FEATURE_SESSION_HOST.to_string(),
+                FEATURE_MULTIPLEXER_INVENTORY_V1.to_string(),
+            ],
+            ..Default::default()
+        },
+        SessionList {
+            host_ring_cap_bytes: 42,
+            ..Default::default()
+        },
+        observed_at,
+        futures::future::pending::<std::result::Result<MultiplexerSessionList, String>>(),
+        Some(InventoryDeadline::new(timeout)),
+    )
+    .await;
+
+    let diagnostics = query
+        .runtime_diagnostics("server-v1.0.29.sock".to_string())
+        .unwrap();
+    assert_eq!(diagnostics.observed_at, Some(observed_at));
+    let DaemonRuntimeDiagnosticsStatus::Available(snapshot) = diagnostics.status else {
+        panic!("successful session measurements must not depend on multiplexer inventory");
+    };
+    assert_eq!(snapshot.host_ring_cap_bytes, 42);
+    assert_eq!(
+        query.into_recovery().unwrap_err(),
+        crate::t!(
+            "workspace-left-panel-ssh-manager-sessions-timeout",
+            seconds = timeout.as_secs()
+        )
+    );
 }
 
 #[test]
@@ -494,7 +694,7 @@ async fn inventory_deadline_preserves_completed_results() {
     assert_eq!(result.daemon.host_ring_cap_bytes, 42);
 
     let error = inventory_with_timeout(
-        async { Err("daemon authentication failed".to_string()) },
+        async { Err::<HostSessionInventory, _>("daemon authentication failed".to_string()) },
         Duration::from_secs(1),
     )
     .await

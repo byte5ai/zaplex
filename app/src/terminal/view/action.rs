@@ -214,6 +214,8 @@ pub enum TerminalAction {
     /// Open the local file manager pane rooted at this session's cwd (FM
     /// pane-mode P1). Pane-scoped affordance: the context is visible.
     OpenFileManagerHere,
+    RetryRemoteRestore,
+    CancelRemoteRestore,
     SplitRight(Option<AvailableShell>),
     SplitLeft(Option<AvailableShell>),
     SplitDown(Option<AvailableShell>),
@@ -501,6 +503,8 @@ impl fmt::Debug for TerminalAction {
             SplitUp(_) => f.write_str("SplitUp"),
             ToggleMaximizePane => f.write_str("ToggleMaximizeActivePane"),
             OpenFileManagerHere => f.write_str("OpenFileManagerHere"),
+            RetryRemoteRestore => f.write_str("RetryRemoteRestore"),
+            CancelRemoteRestore => f.write_str("CancelRemoteRestore"),
             PromptContextMenu {
                 position_offset_from_prompt,
             } => write!(

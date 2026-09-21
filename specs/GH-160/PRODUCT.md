@@ -7,7 +7,9 @@ GitHub: https://github.com/byte5ai/zaplex/issues/160
 Zaplex separates configured host connections from the live AI-session Cockpit while keeping both
 surfaces on one stable host identity model. The Cockpit becomes a quiet live
 `Host → Project → PTY session → Agent` tree, and the large Claude and Codex panes show provider,
-account, usage, and attention without duplicated identity or redundant status text.
+account, usage, and attention without duplicated identity or redundant status text. The later UI
+implementation contract in #459–#464 extends this surface into the existing tab/pane workspace; it
+does not introduce a new navigation model.
 
 ## Figma
 
@@ -20,6 +22,8 @@ Figma: none provided. The binding visual reference is
 - Make local and connected-remote AI work visible without mirroring offline registry hosts.
 - Restore truthful Claude history and account discovery behavior.
 - Minimize sidebar noise while preserving unambiguous provider, state, and accessibility semantics.
+- Preserve pane-local host/session identity across mixed-host splits, mode changes, drag, reconnect,
+  and restore.
 
 ## Non-goals
 
@@ -28,6 +32,8 @@ Figma: none provided. The binding visual reference is
 - No second connection registry or account-override store.
 - No runtime dependency on either reference repository.
 - No offline registry hosts in the live Cockpit tree.
+- No global File Manager, Tests, host-group, or provider navigation tabs.
+- No assumption that all panes in a tab belong to the same host.
 
 ## Behavior
 
@@ -46,11 +52,17 @@ Figma: none provided. The binding visual reference is
    daemon-owned PTYs, and the first resilient connection may reveal it once so sessions surviving
    an app restart are not undiscoverable. Its rows use agent/project identity when trustworthy and
    a neutral Zaplex-session identifier otherwise; raw shell executable names are never identities.
+   Buffer or runtime diagnostics are absent from the ordinary session list and remain available in
+   explicit connection details under their measured name; an output buffer is never labelled as
+   total host RAM.
 
 3. **Favorites project into the tab `+` menu.** The menu reads stable host references from the
-   Connections registry and shows favorite hosts only. Its first level contains only the favorite
-   mark, host label, and submenu chevron; launch actions appear in the submenu. Editing a favorite
-   never creates a second connection record.
+   Connections registry and shows favorite hosts only. Clicking the host label connects exactly
+   once in a new tab. A separate stable `⋯` action opens a real side flyout while the parent menu
+   stays visible; the flyout contains New Agent, Edit Connection, and Remove from Favorites. It
+   never expands actions between rows, and clicking `⋯` never starts a connection. Editing a
+   favorite never creates a second connection record. This rule supersedes the earlier
+   submenu-first behavior.
 
 4. **The Cockpit tree hierarchy is `Host → Project → PTY session → Agent`.** A project represents
    the detected repository/worktree grouping. A PTY session is the Zaplex terminal-session
@@ -71,8 +83,9 @@ Figma: none provided. The binding visual reference is
    stable daemon identity. The Cockpit may therefore temporarily retain one root per connected
    daemon runtime for the same registered host; each root follows that runtime's connection
    lifecycle, including the final disconnect. It must never merge their routing identities or
-   route an old session through the current daemon. The combined Connections inventory hides
-   the host-cap row when multiple runtimes contribute; per-session ring usage remains visible.
+   route an old session through the current daemon. Runtime-local diagnostics remain attributable
+   to the exact runtime and are shown only in explicit connection details, never as an aggregate
+   host-cap row in ordinary navigation.
 
 7. **Connection and inventory are different states.** A connected remote root remains visible
    while its AI inventory is honestly empty, temporarily unavailable, or unsupported by an older
@@ -189,6 +202,98 @@ Figma: none provided. The binding visual reference is
     discovery, or transcript code run the executable reference-parity matrix. The gate validates
     fresh reference revisions, targeted checks, responsive/reduced-motion screenshots, and a
     documented real two-host smoke procedure; missing or stale evidence fails closed.
+
+31. **A tab is a pane container, not a host.** Terminal panes for local and different remote hosts
+    may coexist with File Manager and account-detail panes in one tab. No automatic host group or
+    global feature tab is added. A favorite-host click still opens a new tab; a pane-local split is
+    the explicit path for adding a session to the current tab.
+
+32. **Pane-local split launch is explicit.** The initiating pane offers Right and Down followed by
+    the existing registered hosts and Local. The captured target is the initiating tab, pane,
+    direction, and stable host reference; a later focus change cannot redirect it. Cancel creates
+    nothing. A valid selection creates exactly one session at that position and focuses usable
+    input only after readiness. Same-host launch may inherit its working directory; cross-host
+    launch uses the destination profile and never reinterprets a foreign path.
+
+33. **Terminal identity is short, real, and pane-local.** The automatic pane title is
+    `Host · project-or-directory`, with full host/path available accessibly. Missing metadata uses
+    an honest host/session fallback, and only actual collisions add a restrained disambiguator.
+    The automatic tab title follows the focused pane through the existing title-priority rules;
+    an explicit title wins until removed. Account panes retain their native Cockpit identity.
+
+34. **Pane geometry preserves session identity.** A sole pane fills the available workspace.
+    Splitting affects only the chosen pane. Dragging a pane header to a target edge moves that
+    existing pane left, right, above, or below without opening a connection, PTY, or agent. Moving
+    to another tab remains supported. Invalid or cancelled drops leave the layout intact, and
+    file drag, text selection, splitter resize, and header-button clicks are not pane moves.
+
+35. **Focus and restore are exact.** Each tab retains its last valid focused pane. Closing, moving,
+    reconnecting, and restoring preserve layout, host/daemon/PTY/generation identity, working
+    directory, input draft, File Manager mode, account-pane identity, and applicable selection.
+    Delayed callbacks cannot steal focus back to a stale pane. A whole tab remains in its current
+    window while a contained provisional daemon start still owns workspace-local routes or
+    callbacks. Once a daemon pane has reached authoritative input readiness, a later transport
+    reconnect gates that pane's input without reclassifying it as a provisional start. Input
+    readiness alone does not release a managed start; its final managed acknowledgement or terminal
+    failure does.
+
+36. **An account click adds or focuses a detail pane.** It never replaces an existing terminal or
+    File Manager pane. The same account detail is not duplicated unnecessarily within one tab, but
+    may exist independently in different tabs. “All accounts” is text-labelled, not an unexplained
+    directional icon.
+
+37. **File Manager is a reversible terminal-pane mode.** Switching Terminal ↔ File Manager keeps
+    the session, host, working directory, input draft, and process. F10 or mode close returns to the
+    terminal rather than closing the session. Two File Manager panes form the familiar MC workflow,
+    but any number of panes and destinations in other tabs remain valid; no global File Manager tab
+    exists.
+
+38. **The File Manager function bar is one stable row per pane.** F3/F4/F5/F6 and their actions are
+    visible in every File Manager pane; only the focused pane enables them. Unfocused panes keep the
+    same disabled geometry. Focus in a terminal, account pane, or overlay prevents file actions from
+    firing elsewhere. Narrow widths and long translations do not wrap or overlap the command bar,
+    and existing commands/shortcuts remain available.
+
+39. **Transfers bind exact source and destination identity.** Copy and Move show source and target.
+    A single valid visible counterpart may be the default; ambiguity requires selection, including
+    File Manager panes in other tabs. Identity includes host plus stable pane/session reference and
+    path, so equal paths on different hosts are distinct. Source, target, generation, mode, path,
+    and transport are revalidated before execution. Existing conflict, symlink, streaming, cancel,
+    and overwrite protections remain unchanged.
+
+40. **Parent navigation restores semantic selection.** After a successful `..`, the directory just
+    left is selected by identity and scrolled into view, including local/remote, sorted/filtered,
+    and delayed loads. Root, cancellation, failure, removal, or invisibility uses a safe predictable
+    fallback and never mutates another pane or transfer target.
+
+41. **Start and reconnect states tell the truth.** Ordinary terminal command input is visibly gated
+    until the selected PTY generation is attached, replay is handled, and input is actually usable;
+    typed or pasted commands are not invisibly queued. Required authentication and host-key flows
+    retain their explicit secure input. Transport, attach, replay, and ready phases are distinguished
+    where known. Every start ends in ready, a concrete retryable/cancellable error, or cancellation;
+    cancellation never terminates the remote work. Reopening the same already-visible session focuses
+    it instead of creating a duplicate. Replay text alone is not proof of readiness. A restored pane
+    whose saved remote identity is corrupt remains visibly present with its siblings, names the
+    damaged restore honestly, exposes no actions that cannot work without that identity, and never
+    falls back to a local shell on any platform. Retrying or cancelling a valid daemon restore also
+    retains a daemon-backed fail-closed surface on every platform and never starts a local process.
+    Managed opens that outlive both acknowledgement windows are cancelled before they can create an
+    unowned agent or PTY. Every managed launch, including the first acknowledgement for an existing
+    PTY, must claim the exact generation and verify the foreground agent in an authoritative attach
+    before reporting success. Managed bulk targets for multiple accounts on one registered host each
+    retain an independent connection attempt and all advance to an acknowledgement or visible
+    failure; one target cannot consume the others. A late
+    duplicate-owner collision discards the new surface and connection, focuses the existing owner,
+    and neither persists a second identity nor transfers PTY ownership. Managed launch is unavailable
+    until both client and daemon advertise the compatible attempt/attach protocol; older mixed
+    versions fail closed and require an upgrade.
+
+42. **The shared UI uses one native visual language.** Cockpit and Connections use the same section,
+    hierarchy, row, indentation, and action rules while remaining a continuous sidebar surface that
+    is visually distinct from work panes. Selection, focus, and action emphasis use existing theme
+    roles only; no hard-coded colors or decorative pane borders are introduced. Both usage windows
+    are stacked across the account-card width, and large account panes preserve existing session
+    actions and cost/token provenance without repeating provider identity.
 
 ## Verbindliche Bedienungs- und Refresh-Korrekturen
 

@@ -4,6 +4,7 @@ use crate::terminal::{
     cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent},
     event_listener::ChannelEventListener,
     model::{ansi::Processor, terminal_model::ExitReason},
+    view::{RemoteInputPhase, TerminalView},
     writeable_pty::Message as EventLoopMessage,
     SizeInfo, TerminalModel,
 };
@@ -15,23 +16,24 @@ use remote_server::{
 };
 use std::borrow::Cow;
 use std::io::{self, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 use warp_core::SessionId;
-use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
+use warpui::{Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, WeakViewHandle};
 use zaplex_remote_session::types::{
-    FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PTY_BINDING_V2, FEATURE_MANAGED_AGENT_FLEET_V1,
-    FEATURE_STARTUP_COMMAND_ACK,
+    FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PTY_BINDING_V2,
+    FEATURE_LOGICAL_OPEN_ATTEMPT_V1, FEATURE_LOGICAL_OPEN_ID_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
+    FEATURE_MANAGED_OPEN_ATTACH_V1, FEATURE_STARTUP_COMMAND_ACK,
 };
 
 use super::terminal_manager::OpenSessionParams;
 
-/// Cap on input buffered while the transport is down. A reconnect window is
-/// normally seconds, but a laptop can sleep for hours — without a bound, typed
-/// input / pastes would grow this `Vec` unboundedly. 256 KiB is far more than any
-/// realistic burst of keystrokes; past it we drop the oldest input (a terminal
-/// tolerates lost keystrokes far better than unbounded memory).
-const MAX_PENDING_INPUT_BYTES: usize = 256 * 1024;
+/// Cap on protocol replies buffered while the transport is down. Ordinary user
+/// input is never placed in this buffer: executing text later would be more
+/// surprising than rejecting it while the pane is not ready.
+const MAX_PENDING_PROTOCOL_INPUT_BYTES: usize = 256 * 1024;
+const MAX_STARTUP_COMMAND_DELIVERY_ATTEMPTS: u64 = 3;
+const MAX_OPEN_SESSION_DELIVERY_ATTEMPTS: u64 = 2;
 
 /// Safety valve for output buffered before `OpenSession` resolves (the daemon
 /// auto-attaches and starts the shell/bootstrap before the response reaches us).
@@ -85,6 +87,119 @@ struct PendingAttachReplay {
     pending_exit: Option<Option<i32>>,
 }
 
+/// Deduplicates the two manager events that describe one connected transport.
+///
+/// A successful reconnect currently emits `SessionConnected` while installing
+/// the replacement client and then `SessionReconnected` as the reconnect
+/// notification. Both events carry the same client phase. Attach must run once
+/// for that `(transport, PTY, generation)` tuple, while a later replacement
+/// client must start a new attach. A `Weak` identity avoids retaining a dead
+/// transport solely for deduplication.
+struct AttachPhaseGuard<T> {
+    phase: Option<(Weak<T>, String, Option<u64>)>,
+}
+
+impl<T> Default for AttachPhaseGuard<T> {
+    fn default() -> Self {
+        Self { phase: None }
+    }
+}
+
+impl<T> AttachPhaseGuard<T> {
+    fn begin(&mut self, client: &Arc<T>, pty_session_id: &str, generation: Option<u64>) -> bool {
+        let candidate = Arc::downgrade(client);
+        if self
+            .phase
+            .as_ref()
+            .is_some_and(|(current_client, current_pty, current_generation)| {
+                Weak::ptr_eq(current_client, &candidate)
+                    && current_pty == pty_session_id
+                    && *current_generation == generation
+            })
+        {
+            return false;
+        }
+        self.phase = Some((candidate, pty_session_id.to_string(), generation));
+        true
+    }
+}
+
+struct PendingOpen {
+    logical_open_id: String,
+    open_params: OpenSessionParams,
+    size_info: SizeInfo,
+    in_flight: Option<u64>,
+    next_attempt: u64,
+}
+
+struct OpenSessionClient {
+    client: Arc<RemoteServerClient>,
+    supports_account_routing: bool,
+    supports_managed_fleet: bool,
+    supports_logical_open_id: bool,
+    supports_logical_open_attempt: bool,
+}
+
+impl PendingOpen {
+    fn new(open_params: OpenSessionParams, size_info: SizeInfo) -> Self {
+        Self {
+            logical_open_id: uuid::Uuid::new_v4().to_string(),
+            open_params,
+            size_info,
+            in_flight: None,
+            next_attempt: 0,
+        }
+    }
+
+    fn begin_attempt(&mut self) -> Option<(String, OpenSessionParams, SizeInfo, u64)> {
+        if self.in_flight.is_some() || self.next_attempt >= MAX_OPEN_SESSION_DELIVERY_ATTEMPTS {
+            return None;
+        }
+        self.next_attempt = self.next_attempt.saturating_add(1);
+        self.in_flight = Some(self.next_attempt);
+        Some((
+            self.logical_open_id.clone(),
+            self.open_params.clone(),
+            self.size_info,
+            self.next_attempt,
+        ))
+    }
+
+    fn finish_attempt(&mut self, logical_open_id: &str, attempt: u64) -> bool {
+        if self.logical_open_id != logical_open_id || self.in_flight != Some(attempt) {
+            return false;
+        }
+        self.in_flight = None;
+        true
+    }
+
+    fn can_retry(&self) -> bool {
+        self.in_flight.is_none() && self.next_attempt < MAX_OPEN_SESSION_DELIVERY_ATTEMPTS
+    }
+
+    fn can_retry_ambiguous_open(&self, supports_attempt_aware_open: bool) -> bool {
+        supports_attempt_aware_open && self.can_retry()
+    }
+
+    fn allow_retry(&mut self) {
+        self.in_flight = None;
+    }
+}
+
+fn open_ack_requires_authoritative_attach(
+    attempt: u64,
+    opened: &remote_server::proto::SessionOpened,
+) -> bool {
+    attempt > 1 || opened.requires_attach
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenedDaemonClaim {
+    Owned,
+    Conflict,
+    Unavailable,
+}
+
 /// Drives a terminal backed by a *daemon-hosted* PTY session.
 ///
 /// Unlike [`crate::terminal::remote_tty`]'s event loop, which speaks the
@@ -100,14 +215,19 @@ struct PendingAttachReplay {
 /// a bootstrap script itself. Keeping bootstrap server-side is what makes a
 /// later reattach clean: it must happen exactly once, not on every client
 /// connection.
-pub(super) struct EventLoop {
+pub(crate) struct EventLoop {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     parser: Processor,
     channel_event_listener: ChannelEventListener,
     /// The manager/connection session used to resolve the live client.
     connection_session_id: SessionId,
+    /// Persisted daemon identity expected for a restored session. A registry
+    /// node or host label is not sufficient because either may point at a
+    /// replacement daemon with a different PTY namespace.
+    expected_host_id: Option<String>,
     /// The daemon's PTY session id (from `OpenSession`). `None` until the open
-    /// request resolves; until then input is buffered in `pending_input`.
+    /// request resolves; until then user input is rejected and control traffic
+    /// may be buffered in `pending_input`.
     pty_session_id: Option<String>,
     /// Exact daemon generation paired with `pty_session_id`. Present for
     /// capability-aware sessions and required for inventory-driven adopts.
@@ -126,8 +246,21 @@ pub(super) struct EventLoop {
     /// Attach/replay request token. A reconnect invalidates an older callback.
     attach_in_flight: Option<u64>,
     next_attach_attempt: u64,
+    /// One attach per exact transport/PTY/generation phase. The manager emits
+    /// both `SessionConnected` and `SessionReconnected` for a reconnect.
+    attach_phase: AttachPhaseGuard<RemoteServerClient>,
+    /// True only after the authoritative attach/open path and terminal model
+    /// prove that user input can be delivered to this exact PTY generation.
+    ///
+    /// The event loop has no draft editor or renderable input-control state.
+    /// The TerminalView must consume this readiness as visible UI gating and
+    /// keep text in its draft; this event loop never queues rejected bytes for
+    /// later execution.
+    user_input_ready: bool,
+    input_phase: RemoteInputPhase,
     /// Terminal view whose CLI-agent lifecycle is mirrored to the daemon.
     terminal_view_id: Option<EntityId>,
+    terminal_view: Option<WeakViewHandle<TerminalView>>,
     /// Binding desired from the latest CLI-agent/account model state.
     desired_agent_binding: Option<AgentSessionIdentity>,
     /// Whether `desired_agent_binding` came from an observed local lifecycle
@@ -141,8 +274,9 @@ pub(super) struct EventLoop {
     /// overwrite a retry on the new transport.
     agent_binding_in_flight: Option<u64>,
     next_agent_binding_attempt: u64,
-    /// Input/resize messages received before the session id is known. Flushed,
-    /// in order, once `OpenSession` resolves.
+    /// Internal protocol replies and resize/lifecycle messages received while
+    /// the exact session transport is unavailable. Ordinary user input is
+    /// rejected instead of entering this later-flushed buffer.
     pending_input: Vec<EventLoopMessage>,
     /// Output `(pty_session_id, seq, bytes)` pushed for our connection before the
     /// `OpenSession` response arrives (the daemon auto-attaches and starts the
@@ -155,12 +289,19 @@ pub(super) struct EventLoop {
     /// Exit observed while an attach snapshot was in flight. It is applied
     /// after the matching replay callback, never before it.
     pending_exit: Option<Option<i32>>,
-    /// The `OpenSession` request, held until the transport is `Connected`. Taken
-    /// (once) by `try_open`. `None` after the session has been opened.
-    pending_open: Option<(OpenSessionParams, SizeInfo)>,
+    /// Stable logical `OpenSession`, retained until its exact acknowledgement.
+    /// A replacement transport retries the same id and parameters; an attempt
+    /// generation rejects callbacks from the dead transport.
+    pending_open: Option<PendingOpen>,
     /// Stable correlation id for a managed OpenSession. It is consumed only
     /// after an authoritative daemon Ack or terminal failure.
     managed_launch_id: Option<String>,
+    /// Managed PTY identity retained until shell input readiness is proven.
+    /// Only then may the spawn card report success.
+    managed_open_identity: Option<(String, u64)>,
+    /// A lost-ack retry may need to bind the newly observed foreground agent
+    /// before it can issue the required generation- and agent-checked attach.
+    awaiting_managed_agent_binding: bool,
     /// The host's startup command, captured from `OpenSessionParams` and run once
     /// (taken) only after the terminal model confirms that shell bootstrap has
     /// completed — the daemon-path analog of the local-PTY SSH startup-command
@@ -222,16 +363,28 @@ impl EventLoop {
         open_params: OpenSessionParams,
         adopt_pty_session_id: Option<String>,
         adopt_pty_generation: Option<u64>,
+        expected_host_id: Option<String>,
         expected_attach_agent_binding: Option<AgentSessionIdentity>,
         install_progress_rx: Option<Receiver<String>>,
         host_label: String,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let mut event_loop = Self::new(model, channel_event_listener, connection_session_id);
+        event_loop.expected_host_id = expected_host_id;
         event_loop.managed_launch_id = open_params
             .managed_launch
             .as_ref()
             .map(|launch| launch.launch_id.clone());
+        event_loop.startup_command = open_params
+            .managed_launch
+            .is_none()
+            .then(|| open_params.startup_command.clone())
+            .flatten()
+            .filter(|command| !command.is_empty());
+        event_loop.startup_command_id = event_loop
+            .startup_command
+            .as_ref()
+            .map(|_| uuid::Uuid::new_v4().to_string());
         // Every session this loop drives is daemon-hosted; for bash/zsh the
         // daemon delivers the root shell's complete bootstrap (bash/zsh through
         // ordered input; fish/PowerShell through guarded body files) server-side.
@@ -276,25 +429,19 @@ impl EventLoop {
                 event_loop.pty_generation = generation.filter(|generation| *generation != 0);
                 event_loop.expected_attach_agent_binding = expected_attach_agent_binding;
                 event_loop.awaiting_attach_snapshot = true;
-                event_loop.initial_attach_pending = true;
-                ctx.spawn(
-                    async {
-                        warpui::r#async::Timer::after(INITIAL_ATTACH_TIMEOUT).await;
-                    },
-                    |me, (), ctx| me.on_initial_attach_timeout(ctx),
-                );
+                event_loop.arm_initial_attach_timeout(ctx);
             }
             (Some(_), _) | (None, Some(_)) => {
-                event_loop
-                    .write_notice("could not re-attach session: a non-empty PTY id is required");
-                event_loop.finish_failed_startup();
+                event_loop.write_notice(&crate::t!("terminal-daemon-attach-identity-invalid"));
+                event_loop.finish_failed_startup(ctx);
             }
             // Open a fresh session once the transport is connected. Only a
             // fresh open witnesses the real bootstrap handshake from seq 0, so
             // only it reports the boundary the daemon freezes (T1.3).
             (None, None) => {
-                event_loop.pending_open = Some((open_params, size_info));
+                event_loop.pending_open = Some(PendingOpen::new(open_params, size_info));
                 event_loop.report_bootstrap_boundary = true;
+                event_loop.arm_initial_attach_timeout(ctx);
             }
         }
 
@@ -324,16 +471,27 @@ impl EventLoop {
                 if me.terminated {
                     return;
                 }
-                if me.is_our_session(pty_session_id) && !me.awaiting_attach_snapshot {
+                if me.is_our_session(pty_session_id)
+                    && (!me.awaiting_attach_snapshot || me.awaiting_managed_agent_binding)
+                {
                     let end_seq = seq.saturating_add(bytes.len() as u64);
                     if end_seq > me.last_seq {
+                        if *seq > me.last_seq {
+                            // Do not parse across a missing range merely to
+                            // discover the managed agent lifecycle. Preserve
+                            // the bytes for the authoritative replay instead;
+                            // the initial-attach deadline fails closed if the
+                            // binding cannot be learned safely before then.
+                            me.buffer_pending_output(pty_session_id, *seq, bytes);
+                            return;
+                        }
                         let offset =
                             me.last_seq.saturating_sub(*seq).min(bytes.len() as u64) as usize;
                         me.process_live_pty_bytes(&bytes[offset..], ctx);
                         me.last_seq = end_seq;
                         me.maybe_report_bootstrap_boundary(ctx);
                         me.maybe_dispatch_startup_command(ctx);
-                        me.complete_initial_attach_if_ready();
+                        me.complete_initial_attach_if_ready(ctx);
                     }
                 } else if (me.is_our_session(pty_session_id) && me.awaiting_attach_snapshot)
                     || (me.pty_session_id.is_none() && *session_id == me.connection_session_id)
@@ -354,7 +512,7 @@ impl EventLoop {
                 if me.awaiting_attach_snapshot {
                     me.pending_exit = Some(*exit_code);
                 } else {
-                    me.on_session_exited(*exit_code);
+                    me.on_session_exited(*exit_code, ctx);
                 }
             }
             RemoteServerManagerEvent::SessionConnected { session_id, .. }
@@ -362,16 +520,25 @@ impl EventLoop {
             {
                 me.on_transport_connected(ctx);
             }
+            RemoteServerManagerEvent::SessionConnecting {
+                session_id,
+                reconnecting,
+            } if *session_id == me.connection_session_id => {
+                if *reconnecting {
+                    me.begin_transport_reconnect(ctx);
+                } else {
+                    me.set_input_phase(RemoteInputPhase::Transport, ctx);
+                }
+            }
             // Transport reconnected (SSH blip): the daemon session kept running —
             // re-attach and replay what we missed (§9).
-            RemoteServerManagerEvent::SessionReconnected { session_id, .. }
-                if *session_id == me.connection_session_id =>
-            {
-                // The old transport cannot complete its request anymore. Keep
-                // the logical command and id, but let the reconnected client
-                // issue a new correlated attempt after attach.
-                me.begin_transport_reconnect();
-                me.reattach(ctx);
+            RemoteServerManagerEvent::SessionReconnected {
+                session_id, client, ..
+            } if *session_id == me.connection_session_id => {
+                // `mark_session_connected` emits `SessionConnected` immediately
+                // before this event. `on_transport_connected` has already
+                // started the one attach for that replacement-client phase.
+                me.on_transport_reconnected(client, ctx);
             }
             RemoteServerManagerEvent::SessionConnectionFailed {
                 session_id,
@@ -390,10 +557,9 @@ impl EventLoop {
                 detail,
                 ..
             } if me.is_our_session(pty_session_id) && kind == "multiplexer-detected" => {
-                me.write_warning(&format!(
-                    "this session is running inside {detail} (auto-attached by the host's \
-                     login profile). zaplex already keeps this session alive natively — \
-                     two persistence layers are nested."
+                me.write_warning(&crate::t!(
+                    "terminal-daemon-multiplexer-nested",
+                    detail = detail.clone()
                 ));
             }
             // The transport went away for good: a spontaneous drop with no
@@ -406,7 +572,7 @@ impl EventLoop {
             | RemoteServerManagerEvent::SessionDeregistered { session_id }
                 if *session_id == me.connection_session_id =>
             {
-                me.on_transport_lost();
+                me.on_transport_lost(ctx);
             }
             _ => {}
         });
@@ -428,11 +594,82 @@ impl EventLoop {
         if self.terminated {
             return;
         }
+        let Some(client) = self.client(ctx) else {
+            self.set_input_phase(RemoteInputPhase::Transport, ctx);
+            return;
+        };
+        if !self.validate_expected_host(ctx) {
+            return;
+        }
+        self.set_input_phase(RemoteInputPhase::Attach, ctx);
         if self.pending_open.is_some() {
             self.try_open(ctx);
-        } else if self.pty_session_id.is_some() {
-            self.reattach(ctx);
+            return;
         }
+        self.on_attached_transport_ready(&client, ctx);
+    }
+
+    fn on_transport_reconnected(
+        &mut self,
+        event_client: &Arc<RemoteServerClient>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.terminated {
+            return;
+        }
+        if !self.validate_expected_host(ctx) {
+            return;
+        }
+        let Some(current_client) = self.client(ctx) else {
+            return;
+        };
+        if !Arc::ptr_eq(event_client, &current_client) {
+            log::error!(
+                "daemon_tty: ignored reconnect event from a stale connection route for {:?}",
+                self.connection_session_id
+            );
+            return;
+        }
+        self.on_attached_transport_ready(&current_client, ctx);
+    }
+
+    fn validate_expected_host(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        let Some(expected_host_id) = self.expected_host_id.as_deref() else {
+            return true;
+        };
+        let matches_expected_host = RemoteServerManager::handle(ctx).read(ctx, |manager, _| {
+            manager
+                .host_id_for_session(self.connection_session_id)
+                .is_some_and(|host_id| host_id.as_str() == expected_host_id)
+        });
+        if matches_expected_host {
+            return true;
+        }
+        self.write_notice(&crate::t!("terminal-daemon-restore-host-identity-mismatch"));
+        self.abandon_failed_attach(ctx);
+        false
+    }
+
+    fn on_attached_transport_ready(
+        &mut self,
+        client: &Arc<RemoteServerClient>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(pty_session_id) = self.pty_session_id.clone() else {
+            return;
+        };
+        if !self
+            .attach_phase
+            .begin(client, &pty_session_id, self.pty_generation)
+        {
+            return;
+        }
+        // The old transport cannot complete its requests anymore. Keep
+        // retry-safe control state, close ordinary input, and attach once on
+        // the replacement client before accepting more user bytes.
+        self.prepare_transport_reconnect();
+        self.set_input_phase(RemoteInputPhase::Attach, ctx);
+        self.reattach(ctx);
     }
 
     fn new(
@@ -445,6 +682,7 @@ impl EventLoop {
             parser: Processor::default(),
             channel_event_listener,
             connection_session_id,
+            expected_host_id: None,
             pty_session_id: None,
             pty_generation: None,
             expected_attach_agent_binding: None,
@@ -454,7 +692,11 @@ impl EventLoop {
             reattach_after_replay: false,
             attach_in_flight: None,
             next_attach_attempt: 0,
+            attach_phase: AttachPhaseGuard::default(),
+            user_input_ready: false,
+            input_phase: RemoteInputPhase::Transport,
             terminal_view_id: None,
+            terminal_view: None,
             desired_agent_binding: None,
             desired_agent_binding_from_lifecycle: false,
             agent_binding: None,
@@ -466,6 +708,8 @@ impl EventLoop {
             pending_exit: None,
             pending_open: None,
             managed_launch_id: None,
+            managed_open_identity: None,
+            awaiting_managed_agent_binding: false,
             startup_command: None,
             startup_command_id: None,
             startup_command_in_flight: None,
@@ -480,13 +724,50 @@ impl EventLoop {
         }
     }
 
+    /// Readiness seam for the owning TerminalView's visible input gate. The
+    /// EventLoop itself can reject unsafe writes, but only the view can retain
+    /// and present an editable draft instead of a seemingly active cursor.
+    pub(super) fn is_user_input_ready(&self) -> bool {
+        self.user_input_ready && !self.awaiting_attach_snapshot && !self.terminated
+    }
+
+    pub(crate) fn input_phase(&self) -> RemoteInputPhase {
+        self.input_phase
+    }
+
+    fn set_input_phase(&mut self, phase: RemoteInputPhase, ctx: &mut ModelContext<Self>) {
+        if self.input_phase == phase {
+            return;
+        }
+        self.input_phase = phase;
+        self.user_input_ready = phase == RemoteInputPhase::Ready;
+        if let Some(terminal_view) = self
+            .terminal_view
+            .as_ref()
+            .and_then(|terminal_view| terminal_view.upgrade(ctx))
+        {
+            let connection_session_id = self.connection_session_id;
+            terminal_view.update(ctx, |view, ctx| {
+                view.set_remote_input_phase(phase, Some(connection_session_id), ctx);
+            });
+        }
+        ctx.notify();
+    }
+
     /// Starts mirroring this terminal's CLI-agent lifecycle to the daemon PTY.
     pub(super) fn bind_terminal_view(
         &mut self,
-        terminal_view_id: EntityId,
+        terminal_view: &ViewHandle<TerminalView>,
         ctx: &mut ModelContext<Self>,
     ) {
+        let terminal_view_id = terminal_view.id();
         self.terminal_view_id = Some(terminal_view_id);
+        self.terminal_view = Some(terminal_view.downgrade());
+        let input_phase = self.input_phase;
+        let connection_session_id = self.connection_session_id;
+        terminal_view.update(ctx, |view, ctx| {
+            view.set_remote_input_phase(input_phase, Some(connection_session_id), ctx);
+        });
         let sessions = CLIAgentSessionsModel::handle(ctx);
         ctx.subscribe_to_model(&sessions, |me, event, ctx| {
             if me.terminal_view_id != Some(event.terminal_view_id()) {
@@ -607,7 +888,7 @@ impl EventLoop {
                 account_id: account.account_id.clone().unwrap_or_default(),
             })
         });
-        if !self.awaiting_attach_snapshot {
+        if !self.awaiting_attach_snapshot || self.awaiting_managed_agent_binding {
             self.drive_agent_binding(ctx);
         }
     }
@@ -711,6 +992,12 @@ impl EventLoop {
                     if accepted {
                         me.agent_binding = Some(sent.clone());
                         me.settle_agent_binding_if_converged();
+                        if me.awaiting_managed_agent_binding {
+                            me.expected_attach_agent_binding = Some(sent.clone());
+                            me.awaiting_managed_agent_binding = false;
+                            me.reattach(ctx);
+                            return;
+                        }
                     } else {
                         log::warn!("daemon_tty: agent PTY bind failed: {result:?}");
                     }
@@ -815,16 +1102,14 @@ impl EventLoop {
             .agent_binding_client(ctx)
             .is_some_and(|(_, supported, _)| supported);
         if !Self::attach_generation_is_valid(expected_generation, supports_agent_binding) {
-            self.write_notice(
-                "could not re-attach session: the daemon returned an invalid PTY generation",
-            );
+            self.write_notice(&crate::t!("terminal-daemon-attach-generation-invalid"));
             self.abandon_failed_attach(ctx);
             return;
         }
         if self.expected_attach_agent_binding.is_some() && !supports_agent_binding {
-            self.write_notice(
-                "could not re-attach agent: the host does not support validated agent routing",
-            );
+            self.write_notice(&crate::t!(
+                "terminal-daemon-attach-agent-routing-unsupported"
+            ));
             self.abandon_failed_attach(ctx);
             return;
         }
@@ -867,11 +1152,14 @@ impl EventLoop {
                     // timeout, malformed response, or authoritative rejection.
                     // Fail visibly and release the provisional dedupe route.
                     log::error!("Session attach failed: {err:?}");
-                    me.write_notice(&format!("could not re-attach session: {err}"));
+                    me.write_notice(&crate::t!(
+                        "terminal-daemon-attach-failed",
+                        detail = err.to_string()
+                    ));
                     me.abandon_failed_attach(ctx);
                     if let Some(exit_code) = me.pending_exit.take() {
                         me.awaiting_attach_snapshot = false;
-                        me.on_session_exited(exit_code);
+                        me.on_session_exited(exit_code, ctx);
                     }
                 }
             }
@@ -884,6 +1172,16 @@ impl EventLoop {
         supports_agent_binding: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.pty_session_id.as_deref() != Some(attached.session_id.as_str()) {
+            log::error!(
+                "daemon_tty: rejected attach response for PTY {} (expected {:?})",
+                attached.session_id,
+                self.pty_session_id
+            );
+            self.write_notice(&crate::t!("terminal-daemon-attach-pty-identity-mismatch"));
+            self.abandon_failed_attach(ctx);
+            return;
+        }
         if self
             .pty_generation
             .is_some_and(|expected| attached.generation != expected)
@@ -893,8 +1191,7 @@ impl EventLoop {
                 attached.generation,
                 self.pty_generation
             );
-            self.write_notice("could not re-attach session: daemon generation mismatch");
-            self.terminated = true;
+            self.write_notice(&crate::t!("terminal-daemon-attach-generation-mismatch"));
             self.abandon_failed_attach(ctx);
             return;
         }
@@ -905,6 +1202,8 @@ impl EventLoop {
             self.apply_authoritative_agent_binding(None, ctx);
         }
         self.expected_attach_agent_binding = None;
+        self.awaiting_managed_agent_binding = false;
+        self.set_input_phase(RemoteInputPhase::Replay, ctx);
         let bootstrap_preamble = if self.is_bootstrapped() {
             Vec::new()
         } else {
@@ -956,7 +1255,7 @@ impl EventLoop {
                     self.reset_parser();
                 }
                 self.process_historical_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
-                self.write_notice("scrollback truncated during a long disconnect");
+                self.write_notice(&crate::t!("terminal-daemon-scrollback-truncated"));
             }
             pending.gap_applied = true;
             pending.fed_preamble = false;
@@ -993,11 +1292,9 @@ impl EventLoop {
             self.awaiting_attach_snapshot = false;
             self.reattach_after_replay = false;
             if replay_again {
-                self.write_warning(
-                    "some final session output was truncated before the exit notification",
-                );
+                self.write_warning(&crate::t!("terminal-daemon-final-output-truncated"));
             }
-            self.on_session_exited(exit_code);
+            self.on_session_exited(exit_code, ctx);
             return;
         }
         if self.terminated {
@@ -1012,7 +1309,7 @@ impl EventLoop {
             return;
         }
         self.awaiting_attach_snapshot = false;
-        self.complete_initial_attach_if_ready();
+        self.complete_initial_attach_if_ready(ctx);
         // If bootstrap only completed now — a fresh open that dropped
         // mid-handshake and finished it from this reconnect's replay — the
         // live-output path never saw the flip, so report the boundary here
@@ -1023,33 +1320,52 @@ impl EventLoop {
         // user into their running session; a reconnect after a drop
         // states plainly that nothing was lost.
         if self.welcomed {
-            self.write_zaplexify(&format!(
-                "Reconnected to {} — session restored, nothing lost.",
-                self.host_label
+            self.write_zaplexify(&crate::t!(
+                "terminal-daemon-reconnected",
+                host = self.host_label.clone()
             ));
         } else {
-            self.write_zaplexify(&format!(
-                "Re-attached to your running session on {} — right where you left off.",
-                self.host_label
+            self.write_zaplexify(&crate::t!(
+                "terminal-daemon-reattached",
+                host = self.host_label.clone()
             ));
             self.welcomed = true;
         }
-        // Transport is back and we're re-attached — flush input buffered
-        // during the outage so keystrokes/resizes aren't lost (§9).
+        // Transport is back and we're re-attached. This buffer contains only
+        // protocol/control traffic; ordinary user bytes are never replayed.
         self.flush_pending_input(ctx);
         self.drive_agent_binding(ctx);
     }
 
-    fn complete_initial_attach_if_ready(&mut self) {
+    fn complete_initial_attach_if_ready(&mut self, ctx: &mut ModelContext<Self>) {
         if self.awaiting_attach_snapshot {
             return;
         }
         let model = self.terminal_model.lock();
         // InitShell already enables raw input to interactive rc-file prompts.
         // Such a prompt may legitimately postpone Bootstrapped indefinitely.
-        if model.block_list().is_bootstrapped() || model.pending_session_id().is_some() {
+        let ready = model.block_list().is_bootstrapped() || model.pending_session_id().is_some();
+        drop(model);
+        if ready {
             self.initial_attach_pending = false;
+            self.set_input_phase(RemoteInputPhase::Ready, ctx);
+            if let Some((pty_session_id, generation)) = self.managed_open_identity.take() {
+                self.report_managed_launch_opened(&pty_session_id, generation, ctx);
+            }
         }
+    }
+
+    fn arm_initial_attach_timeout(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.initial_attach_pending {
+            return;
+        }
+        self.initial_attach_pending = true;
+        ctx.spawn(
+            async {
+                warpui::r#async::Timer::after(INITIAL_ATTACH_TIMEOUT).await;
+            },
+            |me, (), ctx| me.on_initial_attach_timeout(ctx),
+        );
     }
 
     fn on_initial_attach_timeout(&mut self, ctx: &mut ModelContext<Self>) {
@@ -1065,7 +1381,11 @@ impl EventLoop {
 
     /// Finish a failed initial shell so its hidden bootstrap output becomes visible.
     /// An already bootstrapped session keeps its existing disconnect/reconnect UI.
-    fn finish_failed_startup(&mut self) {
+    fn finish_failed_startup(&mut self, ctx: &mut ModelContext<Self>) {
+        self.report_managed_launch_failed(
+            crate::t!("terminal-daemon-managed-launch-failed").to_string(),
+            ctx,
+        );
         self.terminated = true;
         self.initial_attach_pending = false;
         self.pending_open = None;
@@ -1073,6 +1393,9 @@ impl EventLoop {
         self.pending_output.clear();
         self.pending_attach_replay = None;
         self.attach_in_flight = None;
+        self.awaiting_managed_agent_binding = false;
+        self.managed_open_identity = None;
+        self.set_input_phase(RemoteInputPhase::Failed, ctx);
         let mut model = self.terminal_model.lock();
         if !model.block_list().is_bootstrapped() {
             model.exit(ExitReason::PtyDisconnected);
@@ -1080,7 +1403,7 @@ impl EventLoop {
     }
 
     fn abandon_failed_attach(&mut self, ctx: &mut ModelContext<Self>) {
-        self.finish_failed_startup();
+        self.finish_failed_startup(ctx);
         let session_id = self.connection_session_id;
         RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.deregister_session(session_id, false, ctx);
@@ -1100,10 +1423,7 @@ impl EventLoop {
         })
     }
 
-    fn open_client(
-        &self,
-        ctx: &mut ModelContext<Self>,
-    ) -> Option<(Arc<RemoteServerClient>, bool, bool)> {
+    fn open_client(&self, ctx: &mut ModelContext<Self>) -> Option<OpenSessionClient> {
         let session_id = self.connection_session_id;
         let manager = RemoteServerManager::handle(ctx);
         manager.read(ctx, |manager, _ctx| {
@@ -1113,9 +1433,25 @@ impl EventLoop {
                 .map(|client| {
                     let supports_account_routing = manager
                         .session_supports_feature(session_id, FEATURE_AGENT_ACCOUNT_ROUTING_V1);
+                    let supports_logical_open_id =
+                        manager.session_supports_feature(session_id, FEATURE_LOGICAL_OPEN_ID_V1);
+                    let supports_logical_open_attempt = manager
+                        .session_supports_feature(session_id, FEATURE_LOGICAL_OPEN_ATTEMPT_V1);
                     let supports_managed_fleet = manager
-                        .session_supports_feature(session_id, FEATURE_MANAGED_AGENT_FLEET_V1);
-                    (client, supports_account_routing, supports_managed_fleet)
+                        .session_supports_feature(session_id, FEATURE_MANAGED_AGENT_FLEET_V1)
+                        && manager
+                            .session_supports_feature(session_id, FEATURE_MANAGED_OPEN_ATTACH_V1)
+                        && supports_logical_open_id
+                        && supports_logical_open_attempt
+                        && manager
+                            .session_supports_feature(session_id, FEATURE_AGENT_PTY_BINDING_V2);
+                    OpenSessionClient {
+                        client,
+                        supports_account_routing,
+                        supports_managed_fleet,
+                        supports_logical_open_id,
+                        supports_logical_open_attempt,
+                    }
                 })
         })
     }
@@ -1148,19 +1484,37 @@ impl EventLoop {
         if self.pty_session_id.is_some() || self.pending_open.is_none() {
             return;
         }
-        let Some((client, supports_account_routing, supports_managed_fleet)) =
-            self.open_client(ctx)
-        else {
+        let Some(open_client) = self.open_client(ctx) else {
             return; // Not connected yet; wait for `SessionConnected`.
         };
-        let (open_params, size_info) = self
+        if !(open_client.supports_logical_open_id && open_client.supports_logical_open_attempt)
+            && self
+                .pending_open
+                .as_ref()
+                .is_some_and(|pending| pending.next_attempt > 0)
+        {
+            self.write_notice(&crate::t!(
+                "terminal-daemon-open-ack-unknown-upgrade-required"
+            ));
+            self.report_managed_launch_failed(
+                crate::t!("terminal-daemon-managed-open-unconfirmed").to_string(),
+                ctx,
+            );
+            self.finish_failed_startup(ctx);
+            return;
+        }
+        let Some((logical_open_id, open_params, size_info, attempt)) = self
             .pending_open
-            .take()
-            .expect("pending_open is Some (checked above)");
+            .as_mut()
+            .expect("pending_open is Some (checked above)")
+            .begin_attempt()
+        else {
+            return;
+        };
         self.open_session(
-            client,
-            supports_account_routing,
-            supports_managed_fleet,
+            open_client,
+            logical_open_id,
+            attempt,
             open_params,
             size_info,
             ctx,
@@ -1172,76 +1526,78 @@ impl EventLoop {
     /// what the user sees.
     fn open_session(
         &mut self,
-        client: Arc<RemoteServerClient>,
-        supports_account_routing: bool,
-        supports_managed_fleet: bool,
+        open_client: OpenSessionClient,
+        logical_open_id: String,
+        attempt: u64,
         open_params: OpenSessionParams,
         size_info: SizeInfo,
         ctx: &mut ModelContext<Self>,
     ) {
-        let OpenSessionParams {
-            cwd,
-            shell,
-            env,
-            ring_ceiling_bytes,
-            startup_command,
-            agent_launch_route,
-            managed_launch,
-            requested_min_available_bytes,
-        } = open_params;
+        let OpenSessionClient {
+            client,
+            supports_account_routing,
+            supports_managed_fleet,
+            supports_logical_open_id,
+            supports_logical_open_attempt,
+        } = open_client;
+        let cwd = open_params.cwd;
+        let shell = open_params.shell;
+        let env = open_params.env;
+        let ring_ceiling_bytes = open_params.ring_ceiling_bytes;
+        let agent_launch_route = open_params.agent_launch_route;
+        let managed_launch = open_params.managed_launch;
+        let requested_min_available_bytes = open_params.requested_min_available_bytes;
         if !account_route_is_compatible(agent_launch_route.as_ref(), supports_account_routing) {
-            self.write_notice(
-                "this host daemon is too old for remote AI-account routing; update it and reconnect",
-            );
+            self.write_notice(&crate::t!(
+                "terminal-daemon-managed-account-route-unsupported"
+            ));
             self.pending_open = None;
             self.report_managed_launch_failed(
-                "The host does not support the selected account route.".to_string(),
+                crate::t!("terminal-daemon-managed-account-route-unsupported").to_string(),
                 ctx,
             );
+            self.finish_failed_startup(ctx);
             return;
         }
         if managed_launch.is_some() && !supports_managed_fleet {
-            self.write_notice(
-                "this host daemon does not support managed agents; update it and reconnect",
-            );
+            self.write_notice(&crate::t!("terminal-daemon-managed-host-unsupported"));
             self.pending_open = None;
             self.report_managed_launch_failed(
-                "The host does not support managed agents.".to_string(),
+                crate::t!("terminal-daemon-managed-host-unsupported").to_string(),
                 ctx,
             );
+            self.finish_failed_startup(ctx);
             return;
         }
         if managed_launch.is_some()
             && (agent_launch_route.is_none()
                 || cwd.as_deref().is_none_or(|path| path.trim().is_empty()))
         {
-            self.write_notice("managed agents require an exact remote account and project");
+            self.write_notice(&crate::t!("terminal-daemon-managed-route-incomplete"));
             self.pending_open = None;
             self.report_managed_launch_failed(
-                "The managed account or project route is incomplete.".to_string(),
+                crate::t!("terminal-daemon-managed-route-incomplete").to_string(),
                 ctx,
             );
+            self.finish_failed_startup(ctx);
             return;
         }
-        // Run once after this shell reaches the real bootstrap boundary (see
-        // `maybe_dispatch_startup_command`).
-        self.startup_command = managed_launch
-            .is_none()
-            .then_some(startup_command)
-            .flatten()
-            .filter(|command| !command.is_empty());
-        self.startup_command_id = self
-            .startup_command
-            .as_ref()
-            .map(|_| uuid::Uuid::new_v4().to_string());
         let rows = size_info.rows as u32;
         let cols = size_info.columns as u32;
         log::info!("daemon_tty: issuing OpenSession (cwd={cwd:?}, shell={shell:?}, {rows}x{cols}, ring_ceiling={ring_ceiling_bytes:?})");
+        let callback_logical_open_id = logical_open_id.clone();
         let future = async move {
+            let logical_open_attempt = if supports_logical_open_attempt {
+                attempt
+            } else {
+                0
+            };
             match (agent_launch_route, managed_launch) {
                 (Some(route), Some(launch)) => {
                     client
                         .open_managed_agent_session(
+                            logical_open_id,
+                            logical_open_attempt,
                             cwd.expect("managed cwd was validated above"),
                             shell,
                             env,
@@ -1257,6 +1613,8 @@ impl EventLoop {
                 (Some(route), None) => {
                     client
                         .open_session_for_agent_account(
+                            logical_open_id,
+                            logical_open_attempt,
                             cwd,
                             shell,
                             env,
@@ -1269,23 +1627,101 @@ impl EventLoop {
                 }
                 (None, None) => {
                     client
-                        .open_session(cwd, shell, env, rows, cols, ring_ceiling_bytes)
+                        .open_session(
+                            logical_open_id,
+                            logical_open_attempt,
+                            cwd,
+                            shell,
+                            env,
+                            rows,
+                            cols,
+                            ring_ceiling_bytes,
+                        )
                         .await
                 }
                 (None, Some(_)) => unreachable!("managed route was validated above"),
             }
         };
-        ctx.spawn(future, |me, result, ctx| match result {
-            Ok(opened) => me.on_session_opened(opened.session_id, opened.generation, ctx),
-            Err(err) => {
-                // The transport is up (so the connect-failure path never fired),
-                // but the daemon refused to open the session (bad cwd, unspawnable
-                // shell, fd exhaustion, …). Surface it instead of leaving a blank,
-                // hung tab; drop the pending open so a later event can't reopen it.
-                log::error!("daemon_tty: OpenSession failed: {err:?}");
-                me.write_notice(&format!("could not start session: {err}"));
-                me.finish_failed_startup();
-                me.report_managed_launch_failed(format!("{err}"), ctx);
+        ctx.spawn(future, move |me, result, ctx| {
+            let Some(pending) = me.pending_open.as_mut() else {
+                return;
+            };
+            if !pending.finish_attempt(&callback_logical_open_id, attempt) {
+                return;
+            }
+            match result {
+                Ok(opened) => {
+                    let authoritative_attach_required =
+                        open_ack_requires_authoritative_attach(attempt, &opened);
+                    me.pending_open = None;
+                    me.on_session_opened(
+                        opened.session_id,
+                        opened.generation,
+                        authoritative_attach_required,
+                        opened.expected_agent_binding,
+                        ctx,
+                    );
+                }
+                Err(ClientError::Disconnected | ClientError::ResponseChannelClosed) => {
+                    if pending.can_retry_ambiguous_open(
+                        supports_logical_open_id && supports_logical_open_attempt,
+                    ) {
+                        log::warn!(
+                            "daemon_tty: OpenSession transport dropped; retaining logical open {} for reconnect",
+                            callback_logical_open_id
+                        );
+                        me.set_input_phase(RemoteInputPhase::Attach, ctx);
+                    } else {
+                        me.write_notice(&crate::t!(
+                            "terminal-daemon-open-ack-unknown-upgrade-required"
+                        ));
+                        me.report_managed_launch_failed(
+                            crate::t!("terminal-daemon-managed-open-unconfirmed").to_string(),
+                            ctx,
+                        );
+                        me.finish_failed_startup(ctx);
+                    }
+                }
+                Err(ClientError::Timeout(timeout)) => {
+                    if pending.can_retry_ambiguous_open(
+                        supports_logical_open_id && supports_logical_open_attempt,
+                    ) {
+                        log::warn!(
+                            "daemon_tty: OpenSession acknowledgement timed out after {timeout:?}; retrying logical open {} on the live transport",
+                            callback_logical_open_id
+                        );
+                        me.try_open(ctx);
+                    } else {
+                        log::warn!(
+                            "daemon_tty: OpenSession acknowledgement remained ambiguous for logical open {}",
+                            callback_logical_open_id
+                        );
+                        me.write_notice(&crate::t!(
+                            "terminal-daemon-open-ack-unknown-upgrade-required"
+                        ));
+                        me.report_managed_launch_failed(
+                            crate::t!("terminal-daemon-managed-open-unconfirmed").to_string(),
+                            ctx,
+                        );
+                        me.finish_failed_startup(ctx);
+                    }
+                }
+                Err(err) => {
+                    // The transport is up (so the connect-failure path never fired),
+                    // but the daemon refused to open the session (bad cwd, unspawnable
+                    // shell, fd exhaustion, …). Surface it instead of leaving a blank,
+                    // hung tab; drop the pending open so a later event can't reopen it.
+                    log::error!("daemon_tty: OpenSession failed: {err:?}");
+                    me.write_notice(&crate::t!(
+                        "terminal-daemon-open-failed",
+                        detail = err.to_string()
+                    ));
+                    me.report_managed_launch_failed(
+                        crate::t!("terminal-daemon-managed-open-rejected").to_string(),
+                        ctx,
+                    );
+                    me.finish_failed_startup(ctx);
+                }
             }
         });
     }
@@ -1297,6 +1733,15 @@ impl EventLoop {
         RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.report_managed_launch_failed(launch_id, error, ctx);
         });
+    }
+
+    pub(super) fn relinquish_managed_launch(&mut self, launch_id: &str) -> bool {
+        if self.managed_launch_id.as_deref() != Some(launch_id) {
+            return false;
+        }
+        self.managed_launch_id = None;
+        self.managed_open_identity = None;
+        true
     }
 
     fn report_managed_launch_opened(
@@ -1325,41 +1770,96 @@ impl EventLoop {
         );
         // Surface the failure in the tab so the user sees *why* instead of a
         // blank/hung view (the connection never produced any PTY output).
-        self.write_notice(&format!("connection failed ({phase}): {error}"));
+        self.write_notice(&crate::t!(
+            "terminal-daemon-connection-failed",
+            phase = phase,
+            detail = error
+        ));
         // Drop the pending open so a later spurious event can't reopen it.
-        self.finish_failed_startup();
-        self.report_managed_launch_failed(format!("connection failed ({phase}): {error}"), ctx);
+        self.report_managed_launch_failed(
+            crate::t!("terminal-daemon-managed-connection-failed").to_string(),
+            ctx,
+        );
+        self.finish_failed_startup(ctx);
     }
 
     fn on_session_opened(
         &mut self,
         pty_session_id: String,
         generation: u64,
+        authoritative_attach_required: bool,
+        expected_agent_binding: Option<AgentSessionIdentity>,
         ctx: &mut ModelContext<Self>,
     ) {
         if self.terminated {
             return;
         }
+        let claim = self.claim_opened_daemon_session(&pty_session_id, generation, ctx);
+        self.on_session_opened_with_claim(
+            pty_session_id,
+            generation,
+            authoritative_attach_required,
+            expected_agent_binding,
+            claim,
+            ctx,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn on_session_opened_with_claim(
+        &mut self,
+        pty_session_id: String,
+        generation: u64,
+        authoritative_attach_required: bool,
+        expected_agent_binding: Option<AgentSessionIdentity>,
+        claim: OpenedDaemonClaim,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if claim == OpenedDaemonClaim::Unavailable {
+            log::error!(
+                "daemon_tty: refusing opened PTY {pty_session_id} because ownership could not be claimed"
+            );
+            let error = crate::t!("terminal-daemon-managed-claim-unavailable").to_string();
+            self.write_notice(&error);
+            self.report_managed_launch_failed(error, ctx);
+            self.abandon_failed_attach(ctx);
+            return;
+        }
+        let claim_conflicted = claim == OpenedDaemonClaim::Conflict;
         log::info!("daemon_tty: session opened, pty_session_id={pty_session_id}");
         self.pty_session_id = Some(pty_session_id.clone());
         self.pty_generation = (generation != 0).then_some(generation);
         RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.report_session_opened(
                 self.connection_session_id,
+                self.terminal_view_id,
                 pty_session_id.clone(),
                 generation,
                 ctx,
             );
         });
+        if claim_conflicted {
+            // The SessionOpened event above lets the workspace discard this
+            // provisional surface and focus the existing owner. Do not attach:
+            // an attach from the losing connection could otherwise race the
+            // deferred workspace event and steal the daemon-side PTY owner.
+            self.report_managed_launch_failed(
+                crate::t!("terminal-daemon-managed-claim-conflict").to_string(),
+                ctx,
+            );
+            self.finish_failed_startup(ctx);
+            return;
+        }
         if self.managed_launch_id.is_some() {
             if generation == 0 {
                 self.report_managed_launch_failed(
-                    "The daemon returned an invalid managed session generation.".to_string(),
+                    crate::t!("terminal-daemon-managed-generation-invalid").to_string(),
                     ctx,
                 );
-            } else {
-                self.report_managed_launch_opened(&pty_session_id, generation, ctx);
+                self.finish_failed_startup(ctx);
+                return;
             }
+            self.managed_open_identity = Some((pty_session_id.clone(), generation));
         }
         if let (Some(terminal_view_id), Some(generation)) =
             (self.terminal_view_id, self.pty_generation)
@@ -1378,18 +1878,37 @@ impl EventLoop {
                 );
             }
         }
-        if self.drain_pending_output(ctx) {
+        let managed_attach_required = self.managed_launch_id.is_some();
+        if authoritative_attach_required || managed_attach_required {
             self.awaiting_attach_snapshot = true;
+            self.expected_attach_agent_binding = expected_agent_binding;
+        }
+        let replay_required = self.drain_pending_output(ctx);
+        if replay_required || authoritative_attach_required || managed_attach_required {
+            self.awaiting_attach_snapshot = true;
+            if managed_attach_required && self.expected_attach_agent_binding.is_none() {
+                // A lost first Ack can leave the new PTY attached and already
+                // streaming before the retry response arrives. The buffered
+                // lifecycle bytes reveal the exact provider session; bind that
+                // identity authoritatively before issuing the mandatory attach.
+                self.awaiting_managed_agent_binding = true;
+                self.drive_agent_binding(ctx);
+                return;
+            }
             self.reattach(ctx);
             return;
         }
         self.awaiting_attach_snapshot = false;
+        // The pre-OpenSession output burst may already have supplied InitShell
+        // or Bootstrapped. Evaluate that real model evidence now; the Ack and
+        // replay bytes alone are not readiness.
+        self.complete_initial_attach_if_ready(ctx);
         self.drive_agent_binding(ctx);
         // Stage the moment: the user should SEE they're in a persistent session
         // (the whole point of zaplex), not have to infer it. One line, once.
-        self.write_zaplexify(&format!(
-            "Zaplexify active — persistent session on {}. Disconnects won't lose your work.",
-            self.host_label
+        self.write_zaplexify(&crate::t!(
+            "terminal-daemon-persistent-session-active",
+            host = self.host_label.clone()
         ));
         self.welcomed = true;
         // Render output the daemon produced before this response arrived (it
@@ -1402,8 +1921,52 @@ impl EventLoop {
         // The pending burst can already contain the full shell handshake. If it
         // does, start now; otherwise live output will retry at the exact boundary.
         self.maybe_dispatch_startup_command(ctx);
-        // Flush any input that arrived before the session was addressable.
+        // Flush protocol/control traffic that arrived before the session was
+        // addressable. Ordinary user bytes were rejected and cannot execute
+        // later as a side effect of this acknowledgement.
         self.flush_pending_input(ctx);
+    }
+
+    fn claim_opened_daemon_session(
+        &self,
+        pty_session_id: &str,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) -> OpenedDaemonClaim {
+        let Some(terminal_view) = self
+            .terminal_view
+            .as_ref()
+            .and_then(|terminal_view| terminal_view.upgrade(ctx))
+        else {
+            return OpenedDaemonClaim::Unavailable;
+        };
+        let descriptor = RemoteServerManager::handle(ctx).read(ctx, |manager, _| {
+            manager.connected_session_descriptor(self.connection_session_id)
+        });
+        let Some(descriptor) = descriptor else {
+            return OpenedDaemonClaim::Unavailable;
+        };
+        let identity = crate::app_state::DaemonPtyIdentity {
+            daemon_host_id: descriptor.host_id.as_str().to_string(),
+            runtime_filename: descriptor.daemon_runtime.runtime_filename().to_string(),
+            server_version: descriptor.daemon_runtime.server_version().to_string(),
+            pty_session_id: pty_session_id.to_string(),
+            pty_generation: generation,
+        };
+        let owner = crate::app_state::DaemonPtyClaimOwner {
+            terminal_view_id: Some(terminal_view.id()),
+            connection_session_id: self.connection_session_id,
+            terminal_view: Some(terminal_view.downgrade()),
+        };
+        match crate::app_state::claim_daemon_pty(identity, owner.clone(), ctx) {
+            crate::app_state::DaemonPtyClaimOutcome::Claimed => OpenedDaemonClaim::Owned,
+            crate::app_state::DaemonPtyClaimOutcome::Existing(existing)
+                if existing.owns_same_terminal_surface(&owner) =>
+            {
+                OpenedDaemonClaim::Owned
+            }
+            crate::app_state::DaemonPtyClaimOutcome::Existing(_) => OpenedDaemonClaim::Conflict,
+        }
     }
 
     fn buffer_pending_output(&mut self, pty_session_id: &str, seq: u64, bytes: &[u8]) {
@@ -1449,11 +2012,8 @@ impl EventLoop {
         replay_required
     }
 
-    /// Flush input buffered while the session wasn't addressable — either before
-    /// the first open (pre-`pty_session_id`) or while the transport was down
-    /// mid-session (the reconnect window). A no-op when nothing is pending or no
-    /// session id exists yet. Any message whose client is *still* unavailable is
-    /// re-buffered by `dispatch_message`, so it survives until the next flush.
+    /// Flush buffered protocol/control traffic once the exact PTY is attached.
+    /// Ordinary user bytes never enter this queue.
     fn flush_pending_input(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(pty_session_id) = self.pty_session_id.clone() else {
             return;
@@ -1468,20 +2028,22 @@ impl EventLoop {
         if self.terminated {
             return;
         }
-        if self.awaiting_attach_snapshot {
-            self.buffer_pending(message);
-            return;
-        }
-        match self.pty_session_id.clone() {
-            Some(pty_session_id) => self.dispatch_message(&pty_session_id, message, ctx),
-            None => self.buffer_pending(message),
+        match message {
+            EventLoopMessage::Input(bytes) => self.dispatch_user_input(bytes, ctx),
+            EventLoopMessage::Resize(size) => {
+                self.dispatch_or_buffer_control(EventLoopMessage::Resize(size), ctx)
+            }
+            EventLoopMessage::Shutdown => {
+                self.dispatch_or_buffer_control(EventLoopMessage::Shutdown, ctx)
+            }
+            EventLoopMessage::ChildExited => {
+                self.dispatch_or_buffer_control(EventLoopMessage::ChildExited, ctx)
+            }
         }
     }
 
-    /// Buffer an input/resize while the session isn't addressable (pre-open or
-    /// transport down). Coalesces resizes (only the latest matters) and bounds the
-    /// buffered input bytes, dropping the oldest input past the cap so a long
-    /// outage can't grow `pending_input` without limit.
+    /// Buffer internal protocol input or control traffic while the exact session
+    /// is not addressable. Resizes coalesce; protocol replies remain bounded.
     fn buffer_pending(&mut self, message: EventLoopMessage) {
         if matches!(message, EventLoopMessage::Resize(_)) {
             // Intermediate window sizes are irrelevant — keep only the latest.
@@ -1498,13 +2060,13 @@ impl EventLoop {
                 _ => 0,
             })
             .sum();
-        if total > MAX_PENDING_INPUT_BYTES {
+        if total > MAX_PENDING_PROTOCOL_INPUT_BYTES {
             log::warn!(
-                "daemon_tty: buffered input exceeded {MAX_PENDING_INPUT_BYTES} bytes during an \
-                 outage — dropping oldest input"
+                "daemon_tty: buffered protocol replies exceeded \
+                 {MAX_PENDING_PROTOCOL_INPUT_BYTES} bytes during an outage — dropping oldest replies"
             );
             let mut i = 0;
-            while total > MAX_PENDING_INPUT_BYTES && i < self.pending_input.len() {
+            while total > MAX_PENDING_PROTOCOL_INPUT_BYTES && i < self.pending_input.len() {
                 if let EventLoopMessage::Input(b) = &self.pending_input[i] {
                     total -= b.len();
                     self.pending_input.remove(i);
@@ -1512,6 +2074,58 @@ impl EventLoop {
                     i += 1;
                 }
             }
+        }
+    }
+
+    /// Delivers user bytes only while this exact PTY generation is attached and
+    /// the shell has supplied real input-readiness evidence. This helper is the
+    /// deterministic daemon-side seam; the TerminalView still needs to project
+    /// the same state into a visibly disabled editor while preserving its draft.
+    fn try_deliver_user_input_with<E>(
+        &self,
+        bytes: Cow<'static, [u8]>,
+        dispatch: impl FnOnce(&str, Vec<u8>) -> Result<(), E>,
+    ) -> Result<bool, E> {
+        if !self.is_user_input_ready() {
+            return Ok(false);
+        }
+        let Some(pty_session_id) = self.pty_session_id.as_deref() else {
+            return Ok(false);
+        };
+        dispatch(pty_session_id, bytes.into_owned())?;
+        Ok(true)
+    }
+
+    fn dispatch_user_input(&mut self, bytes: Cow<'static, [u8]>, ctx: &mut ModelContext<Self>) {
+        let Some(client) = self.client(ctx) else {
+            log::debug!("daemon_tty: rejected user input while the transport is unavailable");
+            return;
+        };
+        match self.try_deliver_user_input_with(bytes, |pty_session_id, bytes| {
+            client.send_session_input(pty_session_id.to_string(), bytes)
+        }) {
+            Ok(true) => {}
+            Ok(false) => {
+                log::debug!("daemon_tty: rejected user input before attach/replay/input readiness");
+            }
+            Err(err) => {
+                log::error!("Failed to send user input to daemon session: {err:?}");
+            }
+        }
+    }
+
+    fn dispatch_or_buffer_control(
+        &mut self,
+        message: EventLoopMessage,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.awaiting_attach_snapshot {
+            self.buffer_pending(message);
+            return;
+        }
+        match self.pty_session_id.clone() {
+            Some(pty_session_id) => self.dispatch_message(&pty_session_id, message, ctx),
+            None => self.buffer_pending(message),
         }
     }
 
@@ -1526,38 +2140,40 @@ impl EventLoop {
             return;
         }
         let Some(client) = self.client(ctx) else {
-            // Transport is down (e.g. an SSH blip mid-session). Buffer instead of
-            // dropping so keystrokes/resizes survive the outage — `reattach`
-            // flushes them once the transport reconnects (§9 resilience). This is
-            // the whole point of the native session layer: a drop must not lose
-            // input that was typed during the gap.
-            log::debug!(
-                "daemon_tty: buffering {message:?} for {pty_session_id} (transport down, will flush on reattach)"
-            );
+            // Transport is down. Only protocol/control traffic reaches this
+            // path; ordinary user input is rejected by `dispatch_user_input`.
+            log::debug!("daemon_tty: buffering control message {message:?} for {pty_session_id}");
             self.buffer_pending(message);
             return;
         };
-        let result = match message {
-            EventLoopMessage::Input(bytes) => {
-                client.send_session_input(pty_session_id.to_string(), bytes.into_owned())
-            }
-            EventLoopMessage::Resize(size_info) => client.send_resize_session(
-                pty_session_id.to_string(),
-                size_info.rows as u32,
-                size_info.columns as u32,
+        let (result, retry_resize) = match message {
+            EventLoopMessage::Input(bytes) => (
+                client.send_session_input(pty_session_id.to_string(), bytes.into_owned()),
+                None,
+            ),
+            EventLoopMessage::Resize(size_info) => (
+                client.send_resize_session(
+                    pty_session_id.to_string(),
+                    size_info.rows as u32,
+                    size_info.columns as u32,
+                ),
+                Some(size_info),
             ),
             // The daemon owns the PTY lifecycle; a client-side shutdown simply
             // detaches this view — the session keeps running for reattachment.
             EventLoopMessage::Shutdown | EventLoopMessage::ChildExited => {
-                client.send_detach_session(pty_session_id.to_string())
+                (client.send_detach_session(pty_session_id.to_string()), None)
             }
         };
         if let Err(err) = result {
             log::error!("Failed to send message to daemon session {pty_session_id}: {err:?}");
+            if let Some(size_info) = retry_resize {
+                self.buffer_pending(EventLoopMessage::Resize(size_info));
+            }
         }
     }
 
-    fn on_session_exited(&mut self, exit_code: Option<i32>) {
+    fn on_session_exited(&mut self, exit_code: Option<i32>, ctx: &mut ModelContext<Self>) {
         log::info!(
             "Daemon session {:?} exited (code {exit_code:?})",
             self.pty_session_id
@@ -1567,11 +2183,11 @@ impl EventLoop {
         // don't append a contradictory "connection lost" line under this one.
         self.terminated = true;
         let notice = match exit_code {
-            Some(code) => format!("session ended (exit code {code})"),
-            None => "session ended".to_string(),
+            Some(code) => crate::t!("terminal-daemon-session-ended-with-code", code = code),
+            None => crate::t!("terminal-daemon-session-ended"),
         };
         self.write_notice(&notice);
-        self.finish_failed_startup();
+        self.finish_failed_startup(ctx);
     }
 
     /// A terminal transport loss with no auto-reconnect left (spontaneous drop
@@ -1580,17 +2196,16 @@ impl EventLoop {
     /// daemon owns the PTY, so a persistent session is very likely still running
     /// on the host and reopening it reattaches. No-op if a terminal state was
     /// already surfaced (a clean `SessionExited`, or a prior disconnect).
-    fn on_transport_lost(&mut self) {
+    fn on_transport_lost(&mut self, ctx: &mut ModelContext<Self>) {
         if self.terminated {
             return;
         }
         self.terminated = true;
-        self.write_notice(&format!(
-            "connection to {} lost. Your persistent session may still be running there — \
-             reopen the host to reattach.",
-            self.host_label
+        self.write_notice(&crate::t!(
+            "terminal-daemon-connection-lost",
+            host = self.host_label.clone()
         ));
-        self.finish_failed_startup();
+        self.finish_failed_startup(ctx);
     }
 
     /// Writes a Zaplex notice line (e.g. a connection error or session-ended
@@ -1647,7 +2262,7 @@ impl EventLoop {
             );
         }
         if !reply.bytes.is_empty() {
-            self.on_event_loop_message(EventLoopMessage::Input(Cow::Owned(reply.bytes)), ctx);
+            self.dispatch_or_buffer_control(EventLoopMessage::Input(Cow::Owned(reply.bytes)), ctx);
         }
     }
 
@@ -1692,7 +2307,7 @@ impl EventLoop {
                 self.reset_parser();
             }
             self.process_historical_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
-            self.write_notice("scrollback truncated during a long disconnect");
+            self.write_notice(&crate::t!("terminal-daemon-scrollback-truncated"));
         }
         if !replay.is_empty() {
             self.process_historical_pty_bytes(replay);
@@ -1722,10 +2337,9 @@ impl EventLoop {
         };
         if !supports_retry_safe_startup {
             if !self.startup_capability_notice_shown {
-                self.write_notice(
-                    "this host needs a newer Zaplex helper before it can start the requested \
-                     command safely. Update the host helper and reconnect.",
-                );
+                self.write_notice(&crate::t!(
+                    "terminal-daemon-startup-helper-upgrade-required"
+                ));
                 self.startup_capability_notice_shown = true;
             }
             return;
@@ -1767,10 +2381,7 @@ impl EventLoop {
                         ack.startup_command_id,
                         ack.session_id
                     );
-                    me.write_notice(
-                        "the requested startup command was not accepted and remains pending. \
-                         Reconnect after the session helper recovers to retry it safely.",
-                    );
+                    me.write_notice(&crate::t!("terminal-daemon-startup-command-rejected"));
                 }
                 Ok(ack) => {
                     me.startup_command_in_flight = None;
@@ -1780,10 +2391,7 @@ impl EventLoop {
                         ack.session_id,
                         ack.startup_command_id
                     );
-                    me.write_notice(
-                        "the host returned an invalid startup confirmation; the requested \
-                         command remains pending.",
-                    );
+                    me.write_notice(&crate::t!("terminal-daemon-startup-ack-invalid"));
                 }
                 Err(err) => {
                     me.startup_command_in_flight = None;
@@ -1796,8 +2404,16 @@ impl EventLoop {
                     // cached positive Ack. Disconnect errors wait for the
                     // manager's SessionReconnected event to avoid spinning on a
                     // dead client.
-                    if matches!(err, ClientError::Timeout(_)) {
+                    if matches!(err, ClientError::Timeout(_))
+                        && attempt < MAX_STARTUP_COMMAND_DELIVERY_ATTEMPTS
+                    {
                         me.maybe_dispatch_startup_command(ctx);
+                    } else if matches!(err, ClientError::Timeout(_)) {
+                        me.startup_retry_requires_reconnect = true;
+                        me.write_notice(&crate::t!(
+                            "terminal-daemon-startup-ack-unconfirmed",
+                            attempts = MAX_STARTUP_COMMAND_DELIVERY_ATTEMPTS
+                        ));
                     }
                 }
             }
@@ -1809,6 +2425,7 @@ impl EventLoop {
     fn prepare_startup_command_delivery(&mut self) -> Option<(String, String, Vec<u8>, u64)> {
         if self.startup_command_in_flight.is_some()
             || self.startup_retry_requires_reconnect
+            || self.next_startup_command_attempt >= MAX_STARTUP_COMMAND_DELIVERY_ATTEMPTS
             || !self.is_bootstrapped()
         {
             return None;
@@ -1870,7 +2487,15 @@ impl EventLoop {
 
     /// Invalidates operations owned by the dead transport before re-attaching
     /// them through the replacement connection.
-    fn begin_transport_reconnect(&mut self) {
+    fn begin_transport_reconnect(&mut self, ctx: &mut ModelContext<Self>) {
+        self.prepare_transport_reconnect();
+        self.set_input_phase(RemoteInputPhase::Transport, ctx);
+    }
+
+    fn prepare_transport_reconnect(&mut self) {
+        if let Some(pending_open) = self.pending_open.as_mut() {
+            pending_open.allow_retry();
+        }
         self.allow_startup_command_retry();
         self.allow_agent_binding_retry();
         self.allow_attach_retry();
@@ -1878,6 +2503,13 @@ impl EventLoop {
             self.reattach_after_replay = true;
         }
         self.awaiting_attach_snapshot = true;
+    }
+
+    #[cfg(test)]
+    fn begin_transport_reconnect_for_test(&mut self) {
+        self.prepare_transport_reconnect();
+        self.user_input_ready = false;
+        self.input_phase = RemoteInputPhase::Attach;
     }
 
     /// Resets the ANSI parser to its ground state without touching the terminal

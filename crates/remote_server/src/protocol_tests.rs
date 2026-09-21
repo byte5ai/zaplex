@@ -5,7 +5,7 @@ use crate::proto::{
     BindAgentPty, ClientMessage, Initialize, InitializeResponse, ManagedLaunch,
     ManagedSessionExitInfo, ManagedSessionInfo, MemoryMeasurement, MemoryMeasurementStatus,
     MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList, OpenSession, ServerMessage,
-    SessionInfo, SessionList, SessionSize,
+    SessionInfo, SessionList, SessionOpened, SessionSize,
 };
 
 use super::*;
@@ -73,6 +73,33 @@ async fn round_trip_server_message() {
         }
         other => panic!("unexpected message variant: {other:?}"),
     }
+}
+
+#[test]
+fn session_opened_attach_requirement_is_additive_and_round_trips() {
+    let legacy =
+        SessionOpened::decode(&[0x0a, 0x05, b'p', b't', b'y', b'-', b'1', 0x10, 0x09][..]).unwrap();
+    assert_eq!(legacy.session_id, "pty-1");
+    assert_eq!(legacy.generation, 9);
+    assert!(!legacy.requires_attach);
+    assert!(legacy.expected_agent_binding.is_none());
+
+    let current = SessionOpened {
+        session_id: "pty-1".to_string(),
+        generation: 9,
+        requires_attach: true,
+        expected_agent_binding: Some(crate::proto::AgentSessionIdentity {
+            session_id: "agent-1".to_string(),
+            provider: "claude".to_string(),
+            account_id: "account-1".to_string(),
+            ..Default::default()
+        }),
+    };
+    let decoded = SessionOpened::decode(current.encode_to_vec().as_slice()).unwrap();
+    assert_eq!(decoded, current);
+    let legacy = LegacySessionOpened::decode(current.encode_to_vec().as_slice()).unwrap();
+    assert_eq!(legacy.session_id, "pty-1");
+    assert_eq!(legacy.generation, 9);
 }
 
 #[test]
@@ -177,6 +204,14 @@ struct LegacyBindAgentPty {
 struct LegacyOpenSession {
     #[prost(string, optional, tag = "1")]
     cwd: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct LegacySessionOpened {
+    #[prost(string, tag = "1")]
+    session_id: String,
+    #[prost(uint64, tag = "2")]
+    generation: u64,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -309,12 +344,27 @@ fn older_daemon_ignores_managed_open_fields() {
             display_name: String::new(),
         }),
         requested_min_available_bytes: Some(2 * 1024 * 1024 * 1024),
+        logical_open_id: "logical-open-1".to_string(),
+        logical_open_attempt: 2,
         ..Default::default()
     };
 
     let legacy = LegacyOpenSession::decode(current.encode_to_vec().as_slice()).unwrap();
 
     assert_eq!(legacy.cwd.as_deref(), Some("/srv/project"));
+}
+
+#[test]
+fn pre_logical_open_request_decodes_with_retry_disabled_identity() {
+    let legacy = LegacyOpenSession {
+        cwd: Some("/srv/legacy".to_string()),
+    };
+
+    let current = OpenSession::decode(legacy.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(current.cwd.as_deref(), Some("/srv/legacy"));
+    assert!(current.logical_open_id.is_empty());
+    assert_eq!(current.logical_open_attempt, 0);
 }
 
 #[test]

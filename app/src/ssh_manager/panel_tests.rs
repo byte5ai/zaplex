@@ -10,6 +10,7 @@ use chrono::NaiveDateTime;
 use diesel::Connection;
 use diesel_migrations::MigrationHarness;
 use pathfinder_geometry::vector::vec2f;
+use remote_server::proto::SessionList;
 use warp_core::ui::appearance::Appearance;
 use warp_ssh_manager::{NodeKind, OneKeyCredentialKind, SshNode};
 use warpui::platform::WindowStyle;
@@ -233,7 +234,7 @@ fn compact_connection_secondary_action_survives_rerender_without_triggering_prim
 }
 
 #[test]
-fn session_rows_constrain_long_titles_and_keep_metadata_and_actions_inside_the_sidebar() {
+fn session_rows_keep_flexible_identity_fixed_actions_and_only_semantic_metadata() {
     for width in [250.0, 320.0, 480.0] {
         App::test((), |mut app| async move {
             crate::i18n::init(Some("en"));
@@ -376,19 +377,26 @@ fn session_rows_constrain_long_titles_and_keep_metadata_and_actions_inside_the_s
             );
             for key in &keys {
                 let title = position(key, "title");
-                let metadata = position(key, "metadata");
                 assert!((title.min_x() - first_title.min_x()).abs() < 0.5);
-                assert!((metadata.min_x() - title.min_x()).abs() < 0.5);
                 assert!(title.width() > 100.0, "identity must retain useful width");
                 assert!(title.max_x() <= width - ITEM_PADDING_HORIZONTAL + 0.5);
-                assert!(metadata.max_x() <= width - ITEM_PADDING_HORIZONTAL + 0.5);
+            }
+            for key in &keys[..2] {
                 assert!(
-                    metadata.min_y() >= title.max_y(),
-                    "metadata must be below the title"
+                    presenter
+                        .borrow()
+                        .position_cache()
+                        .get_position(&format!("ssh-manager-session:{key}:metadata"))
+                        .is_none(),
+                    "ordinary native session rows must not expose output-buffer metrics"
                 );
             }
+            let mux_metadata = position(&mux_key, "metadata");
+            assert!((mux_metadata.min_x() - position(&mux_key, "title").min_x()).abs() < 0.5);
+            assert!(mux_metadata.max_x() <= width - ITEM_PADDING_HORIZONTAL + 0.5);
+            assert!(mux_metadata.min_y() >= position(&mux_key, "title").max_y());
             assert!(position(&mux_key, "title").max_x() <= action.min_x());
-            assert!(position(&mux_key, "metadata").max_x() <= action.min_x());
+            assert!(mux_metadata.max_x() <= action.min_x());
             assert!((action.width() - 22.0).abs() < 0.5);
             assert!(action.max_x() <= width - ITEM_PADDING_HORIZONTAL + 0.5);
 
@@ -893,7 +901,7 @@ fn keyboard_navigation_reaches_both_session_kinds_and_enter_uses_the_exact_sessi
         panel.read(&app, |panel, _| {
             assert_eq!(panel.focused_row, Some(FocusedRow::Session(mux_key.clone())));
             let rows = panel.navigation_rows();
-            assert!(matches!(&rows[2].1, SshManagerPanelAction::OpenMultiplexerSession { target, .. } if target == "exact-mux"));
+            assert!(matches!(&rows[2].1, SshManagerPanelAction::OpenMultiplexerSession { session, .. } if session.target == "exact-mux"));
         });
         assert!(key(&mut app, "up"));
         render(&mut app);
@@ -1429,74 +1437,6 @@ fn sort_keeps_orphaned_existing_nodes_visible_as_roots() {
 }
 
 #[test]
-fn format_ring_bytes_is_human_readable_and_none_at_zero() {
-    use super::format_ring_bytes;
-    assert_eq!(format_ring_bytes(0), None);
-    // < 1 MiB → KB, rounded up so a non-zero footprint never shows "0 KB".
-    assert_eq!(format_ring_bytes(1), Some("1 KB".to_string()));
-    assert_eq!(format_ring_bytes(500 * 1024), Some("500 KB".to_string()));
-    // >= 1 MiB → MB with one decimal.
-    assert_eq!(format_ring_bytes(1024 * 1024), Some("1.0 MB".to_string()));
-    assert_eq!(
-        format_ring_bytes(3 * 1024 * 1024 + 512 * 1024),
-        Some("3.5 MB".to_string())
-    );
-}
-
-#[test]
-fn host_ring_usage_uses_only_reported_ring_bytes_and_cap() {
-    let inventory = SessionList {
-        sessions: vec![
-            remote_server::proto::SessionInfo {
-                ring_bytes: 40,
-                ..Default::default()
-            },
-            remote_server::proto::SessionInfo {
-                ring_bytes: 39,
-                ..Default::default()
-            },
-        ],
-        host_ring_cap_bytes: 100,
-        ..Default::default()
-    };
-    assert_eq!(
-        host_ring_usage(&inventory),
-        Some(HostRingUsage {
-            used_bytes: 79,
-            cap_bytes: 100,
-            tone: HostRingTone::Calm,
-        })
-    );
-
-    let mut warning = inventory.clone();
-    warning.sessions[1].ring_bytes = 40;
-    assert_eq!(
-        host_ring_usage(&warning).unwrap().tone,
-        HostRingTone::Warning
-    );
-
-    let mut critical = inventory;
-    critical.sessions[1].ring_bytes = 60;
-    assert_eq!(
-        host_ring_usage(&critical).unwrap().tone,
-        HostRingTone::Critical
-    );
-}
-
-#[test]
-fn old_daemon_without_host_cap_never_gets_a_guessed_aggregate() {
-    let inventory = SessionList {
-        sessions: vec![remote_server::proto::SessionInfo {
-            ring_bytes: 64 * 1024 * 1024,
-            ..Default::default()
-        }],
-        host_ring_cap_bytes: 0,
-        ..Default::default()
-    };
-    assert_eq!(host_ring_usage(&inventory), None);
-}
-
-#[test]
 fn daemon_session_rows_keep_the_same_mouse_state_across_renders() {
     let mut states = HashMap::new();
     let inventory = vec![
@@ -1630,9 +1570,9 @@ fn inventory_refresh_preserves_control_views_and_mouse_state_but_uses_fresh_mux_
         assert!(matches!(
             panel.session_row_action(&key),
             Some(SshManagerPanelAction::OpenMultiplexerSession {
-                attached_clients: 2,
+                session,
                 ..
-            })
+            }) if session.attached_clients == 2
         ));
         panel.focused_row = Some(FocusedRow::Session(key));
         let generation = panel.begin_session_fetch("devhost").unwrap();
