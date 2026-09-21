@@ -1093,8 +1093,9 @@ fn create_review_temp_dir(project_name: &str) -> std::io::Result<tempfile::TempD
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect();
+    let prefix = format!("zaplex-review-{slug}-");
     let mut builder = tempfile::Builder::new();
-    builder.prefix(&format!("zaplex-review-{slug}-"));
+    builder.prefix(&prefix);
     #[cfg(unix)]
     builder.permissions(std::fs::Permissions::from_mode(0o700));
     builder.tempdir()

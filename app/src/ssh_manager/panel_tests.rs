@@ -901,7 +901,7 @@ fn keyboard_navigation_reaches_both_session_kinds_and_enter_uses_the_exact_sessi
         panel.read(&app, |panel, _| {
             assert_eq!(panel.focused_row, Some(FocusedRow::Session(mux_key.clone())));
             let rows = panel.navigation_rows();
-            assert!(matches!(&rows[2].1, SshManagerPanelAction::OpenMultiplexerSession { target, .. } if target == "exact-mux"));
+            assert!(matches!(&rows[2].1, SshManagerPanelAction::OpenMultiplexerSession { session, .. } if session.target == "exact-mux"));
         });
         assert!(key(&mut app, "up"));
         render(&mut app);
@@ -1570,9 +1570,9 @@ fn inventory_refresh_preserves_control_views_and_mouse_state_but_uses_fresh_mux_
         assert!(matches!(
             panel.session_row_action(&key),
             Some(SshManagerPanelAction::OpenMultiplexerSession {
-                attached_clients: 2,
+                session,
                 ..
-            })
+            }) if session.attached_clients == 2
         ));
         panel.focused_row = Some(FocusedRow::Session(key));
         let generation = panel.begin_session_fetch("devhost").unwrap();

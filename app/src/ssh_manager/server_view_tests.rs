@@ -3,6 +3,7 @@
 /// date: 2026/06/01
 use super::*;
 use pathfinder_geometry::vector::vec2f;
+use remote_server::proto::SessionList;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
