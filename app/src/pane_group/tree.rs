@@ -404,7 +404,7 @@ impl PaneData {
         self.hidden_panes
             .iter()
             .find_map(|hidden_pane| {
-                (hidden_pane.pane_id == owner_pane_id).then(|| match hidden_pane.reason {
+                (hidden_pane.pane_id == owner_pane_id).then_some(match hidden_pane.reason {
                     HiddenPaneReason::TemporaryReplacement(replacement_pane_id) => {
                         Some(replacement_pane_id)
                     }

@@ -10,6 +10,7 @@ use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{App, WindowInvalidation};
 
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::view_components::dropdown::DropdownAction;
 
@@ -340,6 +341,7 @@ fn selecting_onekey_dropdown_item_does_not_rebuild_dropdown_while_it_is_borrowed
         crate::i18n::init(Some("en"));
         initialize_settings_for_tests(&mut app);
         app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
         app.add_singleton_model(|_| SshTreeChangedNotifier::new());
 
         let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
@@ -515,6 +517,7 @@ fn connection_edit_clears_diagnostics_and_saved_refresh_target() {
         crate::i18n::init(Some("en"));
         initialize_settings_for_tests(&mut app);
         app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
         app.add_singleton_model(|_| SshTreeChangedNotifier::new());
 
         app.add_window(WindowStyle::NotStealFocus, |ctx| {

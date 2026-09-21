@@ -237,7 +237,11 @@ fn reconnect_transition_closes_input_before_replay() {
 
         event_loop.update(&mut app, |me, ctx| me.on_transport_connected(ctx));
         event_loop.read(&app, |me, _| {
-            assert_eq!(me.input_phase(), RemoteInputPhase::Attach);
+            assert_eq!(
+                me.input_phase(),
+                RemoteInputPhase::Transport,
+                "without a registered replacement client, reconnect must remain transport-gated"
+            );
             assert!(!me.is_user_input_ready());
         });
     });
@@ -1300,11 +1304,31 @@ fn input_after_attach_and_shell_readiness_is_delivered() {
             event_loop.read(&app, |me, _| me.input_phase()),
             RemoteInputPhase::Transport
         );
-        complete_adopted_attach(&event_loop, &mut app);
-        assert_eq!(
-            event_loop.read(&app, |me, _| me.input_phase()),
-            RemoteInputPhase::Replay
-        );
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: 0,
+                    replay: vec![b'x'; ATTACH_PARSE_CHUNK_BYTES + 1],
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+        event_loop.update(&mut app, |me, _ctx| {
+            assert_eq!(me.input_phase(), RemoteInputPhase::Replay);
+            assert!(!me.is_user_input_ready());
+            let accepted = me
+                .try_deliver_user_input_with(Cow::Borrowed(b"must-wait\r"), |_pty, _bytes| {
+                    Ok::<(), ()>(())
+                })
+                .expect("rejection is not a transport error");
+            assert!(!accepted, "user input must remain closed during replay");
+        });
         wait_for_attach_replay(&event_loop, &app, &wakeups).await;
 
         let mut delivered = None;
@@ -1952,7 +1976,10 @@ fn lifecycle_handoff_during_attach_is_not_discarded() {
             config_dir: "/home/agent/.codex-a".to_string(),
             account_id: String::new(),
         };
-        event_loop.update(&mut app, |me, _ctx| {
+        event_loop.update(&mut app, |me, ctx| {
+            // This fixture has no TerminalView to install the production model
+            // subscription, so invoke the same lifecycle refresh explicitly.
+            me.refresh_desired_agent_binding(ctx);
             me.apply_authoritative_agent_binding_state(Some(agent_a.clone()));
         });
         event_loop.read(&app, |me, _ctx| {

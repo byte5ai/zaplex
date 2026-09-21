@@ -10993,7 +10993,7 @@ impl TerminalView {
                 appearance.monospace_font_family(),
                 appearance.monospace_font_size() - 2.,
             )
-            .with_color(appearance.theme().ui_error_color().into())
+            .with_color(appearance.theme().ui_error_color())
             .finish()
         } else {
             shimmering_warp_loading_text(

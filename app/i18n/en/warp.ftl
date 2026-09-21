@@ -4389,7 +4389,7 @@ menu-a11y-action-instructions = Press the enter key to execute the selected menu
 # =============================================================================
 # SECTION: workspace remote routing
 # =============================================================================
-workspace-remote-pty-already-open = This remote PTY is already open in another window.
+workspace-remote-pty-already-open = This remote PTY is already open, but its existing tab could not be focused.
 workspace-remote-fallback-split-target-changed = Remote fallback was cancelled because its original split target changed.
 workspace-remote-agent-route-validation-unavailable = The daemon cannot validate this agent-to-PTY route.
 workspace-remote-daemon-connection-unavailable = The daemon connection is unavailable; refresh Agent Sessions.

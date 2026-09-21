@@ -17,10 +17,11 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use futures::lock::Mutex as AsyncMutex;
+use instant::Instant;
 use remote_server::auth::RemoteServerAuthContext;
 use remote_server::proto::{
     AgentSessionInfo, AgentSessionList, InitializeResponse, MultiplexerSessionList, SessionList,

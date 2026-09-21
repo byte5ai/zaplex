@@ -458,6 +458,9 @@ use std::env;
 use std::fmt::Write;
 #[cfg(all(target_os = "macos", feature = "crash_reporting"))]
 use std::fs;
+use std::io::Write as _;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
@@ -866,6 +869,12 @@ struct PendingDaemonClassicFallback {
 }
 
 #[cfg(unix)]
+struct DaemonLaunchRouting {
+    agent_launch_route: Option<remote_server::proto::AgentLaunchRoute>,
+    managed_launch: Option<remote_server::proto::ManagedLaunch>,
+}
+
+#[cfg(unix)]
 struct PendingRoutedDaemonStart {
     host: String,
     surface: PendingDaemonSurface,
@@ -1075,6 +1084,7 @@ fn spawn_host_scope_requires_explicit_selection(
 fn remote_sftp_edit_working_dir() -> std::io::Result<tempfile::TempDir> {
     tempfile::Builder::new()
         .prefix("zaplex-remote-edit-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
         .tempdir()
 }
 
@@ -1083,9 +1093,11 @@ fn create_review_temp_dir(project_name: &str) -> std::io::Result<tempfile::TempD
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect();
-    tempfile::Builder::new()
-        .prefix(&format!("zaplex-review-{slug}-"))
-        .tempdir()
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(&format!("zaplex-review-{slug}-"));
+    #[cfg(unix)]
+    builder.permissions(std::fs::Permissions::from_mode(0o700));
+    builder.tempdir()
 }
 
 fn write_review_temp_file(
@@ -1093,7 +1105,12 @@ fn write_review_temp_file(
     markdown: &str,
 ) -> std::io::Result<PathBuf> {
     let path = directory.path().join("review.md");
-    std::fs::write(&path, markdown)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&path)?;
+    file.write_all(markdown.as_bytes())?;
     Ok(path)
 }
 
@@ -10160,10 +10177,12 @@ impl Workspace {
                 self.open_multiplexer_ssh_terminal(
                     node_id.clone(),
                     server.clone(),
-                    *mode,
-                    target,
-                    session_name,
-                    *window_count,
+                    crate::app_state::PersistedClassicSshMultiplexer {
+                        mode: (*mode).into(),
+                        target: target.to_string(),
+                        session_name: (!session_name.is_empty()).then(|| session_name.to_string()),
+                        window_count: (*window_count != 0).then_some(*window_count),
+                    },
                     ctx,
                 );
             }
@@ -11190,10 +11209,7 @@ impl Workspace {
         &mut self,
         node_id: String,
         server: warp_ssh_manager::SshServerInfo,
-        mode: warp_ssh_manager::MultiplexerAttachMode,
-        target: &str,
-        session_name: &str,
-        window_count: u32,
+        multiplexer: crate::app_state::PersistedClassicSshMultiplexer,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(attempt) = self.begin_ssh_connect(node_id.clone(), server.host.clone(), ctx)
@@ -11204,12 +11220,7 @@ impl Workspace {
             node_id,
             server,
             true,
-            Some(crate::app_state::PersistedClassicSshMultiplexer {
-                mode: mode.into(),
-                target: target.to_string(),
-                session_name: (!session_name.is_empty()).then(|| session_name.to_string()),
-                window_count: (window_count != 0).then_some(window_count),
-            }),
+            Some(multiplexer),
             None,
             None,
             Some(attempt),
@@ -11644,8 +11655,10 @@ impl Workspace {
             && self.try_open_daemon_ssh_terminal(
                 &node_id,
                 &connection,
-                agent_launch_route.clone(),
-                managed_launch.clone(),
+                DaemonLaunchRouting {
+                    agent_launch_route: agent_launch_route.clone(),
+                    managed_launch: managed_launch.clone(),
+                },
                 attempt.clone(),
                 split_launch.clone(),
                 ctx,
@@ -12002,8 +12015,7 @@ impl Workspace {
         &mut self,
         node_id: &str,
         connection: &warp_ssh_manager::ResolvedSshConnection,
-        agent_launch_route: Option<remote_server::proto::AgentLaunchRoute>,
-        managed_launch: Option<remote_server::proto::ManagedLaunch>,
+        routing: DaemonLaunchRouting,
         attempt: Option<SshConnectAttempt>,
         split_launch: Option<PendingSplitLaunch>,
         ctx: &mut ViewContext<Self>,
@@ -12014,6 +12026,10 @@ impl Workspace {
         };
         use crate::remote_server::ssh_transport::{InstallProgress, SshTransport};
 
+        let DaemonLaunchRouting {
+            agent_launch_route,
+            managed_launch,
+        } = routing;
         let server = &connection.server;
 
         if !server.session_resilience.is_enabled() {
@@ -12704,14 +12720,19 @@ impl Workspace {
                             "daemon connect [{host}]: ready — opening daemon session {session_id:?}"
                         );
                         drop(progress_tx);
+                        let classic_fallback = agent_launch_route.is_none().then(|| {
+                            PendingDaemonClassicFallback {
+                                connection: connection_owned.clone(),
+                                surface: pending_surface,
+                                split_launch: split_launch.clone(),
+                            }
+                        });
                         workspace.connect_daemon_session(
                             connection_owned,
                             session_id,
                             socket_path,
                             auth_context,
-                            agent_launch_route.is_none(),
-                            pending_surface,
-                            split_launch.clone(),
+                            classic_fallback,
                             ctx,
                         );
                     }
@@ -12777,14 +12798,19 @@ impl Workspace {
                                     let _ = progress_tx.try_send(
                                         crate::t!("connect-progress-setup-complete").to_string(),
                                     );
+                                    let classic_fallback = agent_launch_route.is_none().then(|| {
+                                        PendingDaemonClassicFallback {
+                                            connection: connection_owned.clone(),
+                                            surface: pending_surface,
+                                            split_launch: install_split_launch.clone(),
+                                        }
+                                    });
                                     workspace.connect_daemon_session(
                                         connection_owned,
                                         session_id,
                                         socket_path,
                                         auth_context,
-                                        agent_launch_route.is_none(),
-                                        pending_surface,
-                                        install_split_launch.clone(),
+                                        classic_fallback,
                                         ctx,
                                     );
                                 }
@@ -12873,9 +12899,7 @@ impl Workspace {
         session_id: SessionId,
         socket_path: std::path::PathBuf,
         auth_context: std::sync::Arc<remote_server::auth::RemoteServerAuthContext>,
-        allow_classic_fallback: bool,
-        surface: PendingDaemonSurface,
-        split_launch: Option<PendingSplitLaunch>,
+        classic_fallback: Option<PendingDaemonClassicFallback>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::remote_server::manager::RemoteServerManager;
@@ -12886,15 +12910,8 @@ impl Workspace {
             .insert(session_id, server.host.clone());
         // Remembered so a handshake failure (e.g. version mismatch) can fall back
         // to classic SSH instead of leaving a dead daemon tab.
-        if allow_classic_fallback {
-            self.daemon_session_servers.insert(
-                session_id,
-                PendingDaemonClassicFallback {
-                    connection: connection.clone(),
-                    surface,
-                    split_launch,
-                },
-            );
+        if let Some(fallback) = classic_fallback {
+            self.daemon_session_servers.insert(session_id, fallback);
         }
         let host_label = server.host.clone();
         let registry_node_id = server.node_id.clone();
@@ -13115,10 +13132,10 @@ impl Workspace {
             };
             workspace.activate_tab(index, ctx);
             pane_group.update(ctx, |group, ctx| {
-                if group.is_pane_hidden_for_close(pane_id) {
-                    if !group.restore_closed_pane(pane_id, ctx) {
-                        return false;
-                    }
+                if group.is_pane_hidden_for_close(pane_id)
+                    && !group.restore_closed_pane(pane_id, ctx)
+                {
+                    return false;
                 }
                 group.focus_daemon_connection(owner.connection_session_id, ctx);
                 group
@@ -13143,6 +13160,12 @@ impl Workspace {
                 return true;
             }
         }
+        self.toast_stack.update(ctx, |stack, ctx| {
+            stack.add_persistent_toast(
+                DismissibleToast::error(crate::t!("workspace-remote-pty-already-open").to_string()),
+                ctx,
+            );
+        });
         false
     }
 
@@ -13358,7 +13381,10 @@ impl Workspace {
     /// `pty_session_id` (replay + live) instead of opening a fresh one. This is
     /// the entry point the multi-session sidebar calls when the user picks a
     /// listed session (the listing comes from `RemoteServerClient::list_sessions`).
+    /// This public protocol boundary keeps its independently validated routing and identity fields
+    /// explicit.
     #[cfg(unix)]
+    #[allow(clippy::too_many_arguments)]
     pub fn adopt_daemon_session(
         &mut self,
         connection: warp_ssh_manager::ResolvedSshConnection,

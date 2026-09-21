@@ -47,7 +47,7 @@ use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 use crate::terminal::local_tty::spawner::PtySpawner;
-use crate::terminal::shared_session::{SharedSessionScrollbackType, SharedSessionStatus};
+use crate::terminal::shared_session::SharedSessionStatus;
 
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
@@ -731,6 +731,17 @@ fn launch_request_never_interpolates_remote_path_into_shell_source() {
 }
 
 fn initialize_app(app: &mut App) {
+    initialize_app_with_transfer_queue(app, |_| {
+        crate::sftp_manager::transfer_queue::TransferQueue::new()
+    });
+}
+
+fn initialize_app_with_transfer_queue(
+    app: &mut App,
+    transfer_queue: impl FnOnce(
+        &mut warpui::ModelContext<crate::sftp_manager::transfer_queue::TransferQueue>,
+    ) -> crate::sftp_manager::transfer_queue::TransferQueue,
+) {
     // Load the bundled localization so `t!` returns real strings (not keys) —
     // mirrors prod (`lib.rs` `i18n::init`). Force English so the label-based menu
     // tests are locale-deterministic. Without it `t!` returns raw fluent keys and
@@ -856,6 +867,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(crate::code::global_buffer_model::GlobalBufferModel::new);
     app.add_singleton_model(crate::cockpit::CockpitModel::new);
     app.add_singleton_model(crate::cockpit::AttentionDriver::new);
+    app.add_singleton_model(transfer_queue);
 
     // Make sure to initialize the keybindings so that they are available for subviews
     app.update(workspace::init);
@@ -865,7 +877,6 @@ fn assert_review21_skip_toast_is_neutral(directory: bool) {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
-        app.add_singleton_model(|_| crate::sftp_manager::transfer_queue::TransferQueue::new());
         let source_root = tempfile::tempdir().unwrap();
         let target_root = tempfile::tempdir().unwrap();
         if directory {
@@ -1010,7 +1021,6 @@ fn test_boot_registers_all_keybindings_without_panicking() {
 fn transfer_recovery_retry_allocation_failure_is_visible_and_non_destructive() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        app.add_singleton_model(|_| crate::sftp_manager::transfer_queue::TransferQueue::new());
         let workspace = mock_workspace(&mut app);
         let transfer_id = crate::sftp_manager::transfer_queue::TransferQueue::handle(&app).update(
             &mut app,
@@ -1082,8 +1092,7 @@ fn startup_directory_recovery_is_visible_and_retryable_without_sftp_browser() {
     assert_eq!(restarted.startup_recovery_paths().len(), 1);
 
     App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        app.add_singleton_model(move |ctx| {
+        initialize_app_with_transfer_queue(&mut app, move |ctx| {
             TransferQueue::new_with_startup_backend_for_test(restarted, ctx)
         });
         let workspace = mock_workspace(&mut app);
@@ -1294,15 +1303,10 @@ fn mock_workspace_with_shared_session(app: &mut App) -> ViewHandle<Workspace> {
             .unwrap()
     });
 
-    terminal_view.update(app, |view, ctx| {
-        view.model.lock().block_list_mut().set_bootstrapped();
-        view.attempt_to_share_session(
-            SharedSessionScrollbackType::All,
-            None,
-            SessionSourceType::default(),
-            false,
-            ctx,
-        );
+    terminal_view.update(app, |view, _| {
+        let mut model = view.model.lock();
+        model.block_list_mut().set_bootstrapped();
+        model.set_shared_session_status(SharedSessionStatus::ActiveSharer);
     });
 
     workspace
@@ -1336,6 +1340,9 @@ fn mock_workspace_viewing_shared_session(app: &mut App) -> ViewHandle<Workspace>
     });
 
     terminal_view.update(app, |view, ctx| {
+        view.model
+            .lock()
+            .set_shared_session_status(SharedSessionStatus::ViewPending);
         view.on_session_share_joined(
             ParticipantId::new(),
             UserUid::new("mock_user_uid"),
@@ -1945,17 +1952,18 @@ fn test_workspace_sessions_retrieves_panes() {
         let workspace = mock_workspace(&mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            // Add a new split pane to the right.
-            if let Some(tab_view) = workspace.get_pane_group_view(0) {
-                tab_view.update(ctx, |view, ctx| {
-                    view.handle_action(&PaneGroupAction::Add(Direction::Right), ctx);
-                })
-            }
-
-            // Get the EntityId of the new pane added to the current tab.
-            let new_pane_id = workspace
+            let new_pane_id: PaneId = workspace
                 .get_pane_group_view(0)
-                .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(1).unwrap()))
+                .map(|tab| {
+                    tab.update(ctx, |tab, ctx| {
+                        tab.add_terminal_pane_ignoring_default_session_mode(
+                            Direction::Right,
+                            None,
+                            ctx,
+                        )
+                        .into()
+                    })
+                })
                 .expect("WindowId was not retrieved.");
             assert!(workspace
                 .workspace_sessions(ctx.window_id(), ctx)
@@ -1984,22 +1992,18 @@ fn setup_session_sharing_test(workspace: &ViewHandle<Workspace>, app: &mut App) 
 
         tab_view.update(ctx, |view, ctx| {
             assert_eq!(view.pane_count(), 1);
-            view.focused_session_view(ctx)
-                .unwrap()
-                .update(ctx, |terminal, ctx| {
-                    terminal.attempt_to_share_session(
-                        SharedSessionScrollbackType::None,
-                        None,
-                        SessionSourceType::default(),
-                        false,
-                        ctx,
-                    );
-                });
-
-            view.handle_action(&PaneGroupAction::Add(Direction::Right), ctx);
+            let shared_pane_id = view.pane_id_by_index(0).unwrap();
+            let shared_terminal = view.focused_session_view(ctx).unwrap();
+            view.add_terminal_pane_ignoring_default_session_mode(Direction::Right, None, ctx);
+            shared_terminal.update(ctx, |terminal, _| {
+                terminal
+                    .model
+                    .lock()
+                    .set_shared_session_status(SharedSessionStatus::ActiveSharer);
+            });
             assert_eq!(view.pane_count(), 2);
 
-            view.pane_id_by_index(0).unwrap()
+            shared_pane_id
         })
     });
 
@@ -3513,7 +3517,13 @@ fn native_favorite_submenu_clears_external_sidecar_and_restores_menu_focus() {
             workspace.worktree_sidecar_active = true;
             workspace.worktree_sidecar_search_query = "repo".to_string();
             ctx.focus(&workspace.worktree_sidecar_search_editor);
+        });
 
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.worktree_sidecar_search_editor.is_focused(ctx));
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
             workspace.update_new_session_sidecar(ctx);
 
             assert!(!workspace.show_new_session_sidecar);
@@ -3523,6 +3533,9 @@ fn native_favorite_submenu_clears_external_sidecar_and_restores_menu_focus() {
             assert!(!workspace
                 .new_session_dropdown_menu
                 .read(ctx, |menu, _| menu.has_safe_zone_target()));
+        });
+
+        workspace.read(&app, |workspace, ctx| {
             assert!(workspace.new_session_dropdown_menu.is_focused(ctx));
         });
     });
@@ -3536,17 +3549,34 @@ fn closing_new_session_menu_restores_focus_only_when_the_menu_owned_it() {
 
         workspace.update(&mut app, |workspace, ctx| {
             workspace.open_new_session_dropdown_menu(Vector2F::zero(), ctx);
+        });
+        workspace.read(&app, |workspace, ctx| {
             assert!(workspace.new_session_dropdown_menu.is_focused(ctx));
+        });
 
+        workspace.update(&mut app, |workspace, ctx| {
             workspace.close_new_session_dropdown_menu(ctx);
+        });
 
+        workspace.read(&app, |workspace, ctx| {
             assert!(!workspace.new_session_dropdown_menu.is_focused(ctx));
             assert!(!workspace.worktree_sidecar_search_editor.is_focused(ctx));
+        });
 
+        workspace.update(&mut app, |workspace, ctx| {
             workspace.open_new_session_dropdown_menu(Vector2F::zero(), ctx);
+        });
+        workspace.update(&mut app, |workspace, ctx| {
             ctx.focus(&workspace.left_panel_view);
+        });
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.left_panel_view.is_focused(ctx));
+        });
+        workspace.update(&mut app, |workspace, ctx| {
             workspace.close_new_session_dropdown_menu(ctx);
+        });
 
+        workspace.read(&app, |workspace, ctx| {
             assert!(workspace.left_panel_view.is_focused(ctx));
         });
     });
@@ -3932,6 +3962,10 @@ fn review_temp_files_are_private_unique_and_owned() {
                 .permissions()
                 .mode()
                 & 0o077,
+            0
+        );
+        assert_eq!(
+            std::fs::metadata(&first_path).unwrap().permissions().mode() & 0o077,
             0
         );
     }
@@ -5038,7 +5072,6 @@ fn exact_daemon_claim_focuses_covered_and_undo_closed_shell() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
-        app.add_singleton_model(|_| crate::sftp_manager::transfer_queue::TransferQueue::new());
         let workspace = mock_workspace(&mut app);
         let conn = warp_core::SessionId::from(901u64);
         let route = remote_server::transport::DaemonRuntimeRoute::new(

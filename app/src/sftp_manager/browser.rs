@@ -6524,7 +6524,6 @@ impl View for SftpBrowserView {
         // (other than Shift, used for range operations later) means the
         // keystroke belongs to a shortcut elsewhere; let it propagate.
         let focus_handle = self.focus_handle.clone();
-        let pane_actions_active = pane_actions_active;
         let key_handler =
             EventHandler::new(positioned_content).on_keydown(move |ctx, app, keystroke| {
                 if !pane_actions_active

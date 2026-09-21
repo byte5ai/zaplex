@@ -1,7 +1,6 @@
 //! Platform-independent session inventory and owning daemon routes.
 
-use std::time::Instant;
-
+use instant::Instant;
 use remote_server::proto::{MultiplexerSessionList, SessionList};
 use remote_server::transport::DaemonRuntimeRoute;
 

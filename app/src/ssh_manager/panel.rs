@@ -408,11 +408,7 @@ pub enum SshManagerPanelAction {
     /// Open one exact existing tmux/byobu session in a new classic SSH tab.
     OpenMultiplexerSession {
         node_id: String,
-        kind: i32,
-        target: String,
-        session_name: String,
-        window_count: u32,
-        attached_clients: u32,
+        session: MultiplexerSessionInfo,
     },
     /// Click a row; the handling depends on the node kind:
     /// - server: select only (the trailing plug owns connect/disconnect)
@@ -1777,11 +1773,7 @@ impl SshManagerPanel {
                 FocusedRow::Session(multiplexer_row_key(node_id, session)),
                 SshManagerPanelAction::OpenMultiplexerSession {
                     node_id: node_id.to_string(),
-                    kind: session.kind,
-                    target: session.target.clone(),
-                    session_name: session.name.clone(),
-                    window_count: session.windows,
-                    attached_clients: session.attached_clients,
+                    session: session.clone(),
                 },
             )
         }));
@@ -1867,14 +1859,10 @@ impl SshManagerPanel {
     fn on_open_multiplexer_session(
         &mut self,
         node_id: String,
-        kind: i32,
-        target: String,
-        session_name: String,
-        window_count: u32,
-        attached_clients: u32,
+        session: MultiplexerSessionInfo,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some(mode) = multiplexer_attach_mode(kind, attached_clients) else {
+        let Some(mode) = multiplexer_attach_mode(session.kind, session.attached_clients) else {
             ctx.emit(SshManagerPanelEvent::PersistenceError(crate::t!(
                 "workspace-left-panel-ssh-manager-multiplexer-invalid"
             )));
@@ -1901,9 +1889,9 @@ impl SshManagerPanel {
             node_id,
             server,
             mode,
-            target,
-            session_name,
-            window_count,
+            target: session.target,
+            session_name: session.name,
+            window_count: session.windows,
         });
     }
 
@@ -3851,22 +3839,9 @@ impl TypedActionView for SshManagerPanel {
                 daemon_route.clone(),
                 ctx,
             ),
-            SshManagerPanelAction::OpenMultiplexerSession {
-                node_id,
-                kind,
-                target,
-                session_name,
-                window_count,
-                attached_clients,
-            } => self.on_open_multiplexer_session(
-                node_id.clone(),
-                *kind,
-                target.clone(),
-                session_name.clone(),
-                *window_count,
-                *attached_clients,
-                ctx,
-            ),
+            SshManagerPanelAction::OpenMultiplexerSession { node_id, session } => {
+                self.on_open_multiplexer_session(node_id.clone(), session.clone(), ctx)
+            }
             SshManagerPanelAction::Click(id) => self.on_click(id.clone(), ctx),
             SshManagerPanelAction::StartRename(id) => self.enter_rename(id.clone(), false, ctx),
             SshManagerPanelAction::CommitRename => self.commit_rename(ctx),

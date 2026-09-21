@@ -21,7 +21,8 @@ use crate::ssh_manager::{
 use crate::ui_components::modal_frame;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 use crate::view_components::dropdown::{Dropdown, DropdownItem};
-use remote_server::proto::{MemoryMeasurement, MemoryMeasurementStatus, SessionInfo, SessionList};
+use instant::Instant;
+use remote_server::proto::{MemoryMeasurement, MemoryMeasurementStatus, SessionInfo};
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
@@ -40,7 +41,7 @@ use warpui::{
 };
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use warp_ssh_manager::{
     delete_onekey_credential_and_secrets, save_onekey_credential_with_secret,

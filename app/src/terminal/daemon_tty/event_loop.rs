@@ -132,6 +132,14 @@ struct PendingOpen {
     next_attempt: u64,
 }
 
+struct OpenSessionClient {
+    client: Arc<RemoteServerClient>,
+    supports_account_routing: bool,
+    supports_managed_fleet: bool,
+    supports_logical_open_id: bool,
+    supports_logical_open_attempt: bool,
+}
+
 impl PendingOpen {
     fn new(open_params: OpenSessionParams, size_info: SizeInfo) -> Self {
         Self {
@@ -1415,10 +1423,7 @@ impl EventLoop {
         })
     }
 
-    fn open_client(
-        &self,
-        ctx: &mut ModelContext<Self>,
-    ) -> Option<(Arc<RemoteServerClient>, bool, bool, bool, bool)> {
+    fn open_client(&self, ctx: &mut ModelContext<Self>) -> Option<OpenSessionClient> {
         let session_id = self.connection_session_id;
         let manager = RemoteServerManager::handle(ctx);
         manager.read(ctx, |manager, _ctx| {
@@ -1440,13 +1445,13 @@ impl EventLoop {
                         && supports_logical_open_attempt
                         && manager
                             .session_supports_feature(session_id, FEATURE_AGENT_PTY_BINDING_V2);
-                    (
+                    OpenSessionClient {
                         client,
                         supports_account_routing,
                         supports_managed_fleet,
                         supports_logical_open_id,
                         supports_logical_open_attempt,
-                    )
+                    }
                 })
         })
     }
@@ -1479,17 +1484,10 @@ impl EventLoop {
         if self.pty_session_id.is_some() || self.pending_open.is_none() {
             return;
         }
-        let Some((
-            client,
-            supports_account_routing,
-            supports_managed_fleet,
-            supports_logical_open_id,
-            supports_logical_open_attempt,
-        )) = self.open_client(ctx)
-        else {
+        let Some(open_client) = self.open_client(ctx) else {
             return; // Not connected yet; wait for `SessionConnected`.
         };
-        if !(supports_logical_open_id && supports_logical_open_attempt)
+        if !(open_client.supports_logical_open_id && open_client.supports_logical_open_attempt)
             && self
                 .pending_open
                 .as_ref()
@@ -1514,11 +1512,7 @@ impl EventLoop {
             return;
         };
         self.open_session(
-            client,
-            supports_account_routing,
-            supports_managed_fleet,
-            supports_logical_open_id,
-            supports_logical_open_attempt,
+            open_client,
             logical_open_id,
             attempt,
             open_params,
@@ -1532,17 +1526,20 @@ impl EventLoop {
     /// what the user sees.
     fn open_session(
         &mut self,
-        client: Arc<RemoteServerClient>,
-        supports_account_routing: bool,
-        supports_managed_fleet: bool,
-        supports_logical_open_id: bool,
-        supports_logical_open_attempt: bool,
+        open_client: OpenSessionClient,
         logical_open_id: String,
         attempt: u64,
         open_params: OpenSessionParams,
         size_info: SizeInfo,
         ctx: &mut ModelContext<Self>,
     ) {
+        let OpenSessionClient {
+            client,
+            supports_account_routing,
+            supports_managed_fleet,
+            supports_logical_open_id,
+            supports_logical_open_attempt,
+        } = open_client;
         let cwd = open_params.cwd;
         let shell = open_params.shell;
         let env = open_params.env;
