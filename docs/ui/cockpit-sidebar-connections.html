@@ -4,407 +4,42 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="ui-spec-status" content="approved-2026-09-20">
+  <meta name="ui-spec-reference-updated" content="2026-09-23">
   <meta name="ui-spec-route" content="/native/cockpit-sidebar-connections">
-  <meta name="ui-spec-viewports" content="1440x900,1280x900,760x760">
+  <meta name="ui-spec-viewports" content="1440x1000,1024x1200,760x900">
   <meta name="ui-spec-issue" content="160,455,456,458,459,460,461,462,463,464">
-  <title>UI-Spezifikation — Cockpit-Sidebar und Verbindungen</title>
+  <title>Zaplex — verbindliche UI-Referenz</title>
   <style>
-    :root {
-      color-scheme: light dark;
-      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --canvas: Canvas;
-      --app: Canvas;
-      --sidebar: color-mix(in srgb, Field 82%, Canvas);
-      --surface: Field;
-      --surface-raised: color-mix(in srgb, Highlight 9%, Field);
-      --surface-soft: color-mix(in srgb, Highlight 14%, Field);
-      --border: color-mix(in srgb, CanvasText 22%, Canvas);
-      --hairline: color-mix(in srgb, CanvasText 15%, transparent);
-      --text: CanvasText;
-      --muted: color-mix(in srgb, CanvasText 68%, Canvas);
-      --faint: GrayText;
-      --accent: AccentColor;
-      --provider: AccentColor;
-      --working: LinkText;
-      --waiting: MarkText;
-      --idle: GrayText;
-      --waiting-row: color-mix(in srgb, Mark 18%, transparent);
-      --radius-card: 11px;
-      --radius-control: 6px;
-      --sidebar-width: 304px;
-      color: var(--text);
-      background: var(--canvas);
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; padding: 20px; }
-    button { font: inherit; }
-    #spec,
-    #mockups { width: min(1180px, 100%); margin: 0 auto 24px; }
-    #spec {
-      padding: 17px 19px;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      background: var(--surface);
-    }
-    #spec h1 { margin: 0 0 13px; font-size: 18px; }
-    .spec-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
-    .spec-block h2 {
-      margin: 0 0 5px;
-      color: var(--muted);
-      font-size: 10px;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-    }
-    .spec-block ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 11px; }
-    .spec-block li + li { margin-top: 3px; }
-    .spec-block code { color: var(--text); font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .state-matrix {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-      margin-top: 15px;
-      padding-top: 14px;
-      border-top: 1px solid var(--hairline);
-    }
-    .state-card { min-width: 0; color: var(--muted); font-size: 11px; }
-    .state-card strong { display: block; margin-bottom: 3px; color: var(--text); font-size: 11px; }
-    .state-card code { color: var(--text); }
-    #mockups { display: grid; gap: 24px; }
-    .viewport {
-      overflow: hidden;
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: var(--app);
-      box-shadow: 0 18px 60px color-mix(in srgb, CanvasText 25%, transparent);
-    }
-    .viewport-label {
-      padding: 7px 11px;
-      border-bottom: 1px solid var(--border);
-      color: var(--faint);
-      font-size: 10px;
-    }
-    .window-bar {
-      display: grid;
-      grid-template-columns: var(--sidebar-width) 1fr auto;
-      height: 38px;
-      border-bottom: 1px solid var(--border);
-      background: color-mix(in srgb, Field 78%, Canvas);
-    }
-    .traffic-lights { display: flex; align-items: center; gap: 7px; padding-left: 13px; }
-    .traffic-lights span { width: 9px; height: 9px; border-radius: 50%; background: ButtonBorder; }
-    .traffic-lights span:nth-child(2) { background: Mark; }
-    .traffic-lights span:nth-child(3) { background: AccentColor; }
-    .tab-title {
-      display: grid;
-      place-items: center;
-      border-left: 1px solid var(--border);
-      border-right: 1px solid var(--border);
-      color: var(--muted);
-      font-size: 11px;
-    }
-    .window-actions { display: flex; align-items: center; gap: 13px; padding: 0 13px; color: var(--faint); }
-    .app { min-height: 650px; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
-    .sidebar {
-      min-width: 0;
-      padding: 11px 10px;
-      border-right: 1px solid var(--border);
-      background: var(--sidebar);
-    }
-    .sidebar-toolbar {
-      display: flex;
-      min-height: 29px;
-      align-items: center;
-      gap: 13px;
-      padding: 0 3px 8px;
-      color: var(--faint);
-    }
-    .sidebar-toolbar .active { color: var(--text); }
-    .sidebar-toolbar .close { margin-left: auto; }
-    .sidebar-toolbar svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-    .zone {
-      overflow: hidden;
-      border: .5px solid var(--border);
-      border-radius: var(--radius-card);
-      background: var(--surface);
-    }
-    .zone + .zone { margin-top: 9px; }
-    .zone-head {
-      display: flex;
-      min-height: 34px;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 10px 6px;
-      color: var(--muted);
-      font-size: 10px;
-      font-weight: 650;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-    }
-    .shell-sessions-link { display: block; margin: 0 10px 8px; color: var(--muted); text-decoration: none; overflow-wrap: anywhere; }
-    .shell-sessions-link:hover, .shell-sessions-link:focus-visible { color: var(--accent); }
-    .zone-head .count { color: var(--faint); font-weight: 500; }
-    .zone-head .head-end { display: flex; align-items: center; gap: 7px; margin-left: auto; }
-    .attention-count { display: inline-flex; align-items: center; gap: 5px; color: var(--waiting); font-variant-numeric: tabular-nums; }
-    .tree { margin: 0; padding: 0 5px 7px; list-style: none; }
-    .tree-row {
-      display: grid;
-      grid-template-columns: 12px minmax(0, 1fr);
-      min-height: 27px;
-      align-items: center;
-      gap: 4px;
-      padding: 2px 5px;
-      border-radius: 5px;
-    }
-    .tree-row:hover { background: var(--surface-raised); }
-    .tree-row.level-1 { padding-left: 20px; color: var(--muted); }
-    .tree-row.level-2 { padding-left: 36px; color: var(--muted); }
-    .tree-row.level-3 { grid-template-columns: 9px minmax(0, 1fr); padding-left: 55px; }
-    .chevron { color: var(--faint); font-size: 9px; text-align: center; }
-    .tree-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .tree-row.level-0 .tree-label { font-weight: 620; }
-    .agent-name { color: var(--text); }
-    .agent-model { color: var(--faint); font-size: 11px; }
-    .state-dot {
-      position: relative;
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      color: var(--idle);
-      background: var(--idle);
-    }
-    .state-dot.working { color: var(--working); background: var(--working); }
-    .state-dot.waiting { color: var(--waiting); background: var(--waiting); }
-    .state-dot.idle { border: 1px solid var(--idle); background: transparent; }
-    .tree .state-dot.waiting::after,
-    .attention-count .state-dot.waiting::after {
-      position: absolute;
-      inset: 0;
-      border: 1px solid currentColor;
-      border-radius: 50%;
-      content: "";
-      animation: wait-pulse 1.6s ease-out infinite;
-      transform-origin: center;
-    }
-    @keyframes wait-pulse {
-      0% { opacity: .68; transform: scale(1); }
-      72%, 100% { opacity: 0; transform: scale(2); }
-    }
-    .account-list { display: grid; gap: 3px; padding: 0 6px 7px; }
-    .account-tile {
-      display: grid;
-      grid-template-columns: 10px minmax(0, 1fr);
-      gap: 8px;
-      align-items: start;
-      padding: 8px 7px;
-      border-radius: 6px;
-    }
-    .account-tile.selected { background: var(--surface-soft); }
-    .provider-mark { width: 9px; height: 9px; margin-top: 3px; border-radius: 3px; background: var(--provider); }
-    .provider-mark.codex { outline: 1px solid var(--provider); outline-offset: 1px; background: transparent; }
-    .account-copy { min-width: 0; }
-    .account-copy strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
-    .account-copy small { display: block; margin-top: 1px; color: var(--muted); font-size: 10px; }
-    .account-meters { grid-column: 2; display: grid; gap: 3px; margin-top: 2px; }
-    .account-meter { display: grid; grid-template-columns: 34px minmax(38px, 1fr) 28px; align-items: center; gap: 5px; color: var(--faint); font-size: 9px; font-variant-numeric: tabular-nums; }
-    .account-meter .track { overflow: hidden; height: 4px; border-radius: 2px; background: color-mix(in srgb, CanvasText 18%, Canvas); }
-    .account-meter .fill { display: block; height: 100%; border-radius: inherit; background: var(--muted); }
-    .account-meter.warning .fill { background: var(--waiting); }
-    .main-pane { min-width: 0; padding: 14px 15px 18px; background: var(--app); }
-    .provider-pane + .provider-pane { margin-top: 17px; padding-top: 16px; border-top: 1px solid var(--border); }
-    .identity-card {
-      display: grid;
-      grid-template-columns: minmax(150px, 1.4fr) repeat(3, minmax(88px, .7fr));
-      gap: 12px;
-      align-items: center;
-      min-height: 66px;
-      padding: 10px 12px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-card);
-      background: var(--surface);
-    }
-    .identity-copy strong { display: flex; align-items: center; gap: 7px; font-size: 14px; }
-    .identity-copy strong .provider-mark { flex: 0 0 auto; margin-top: 0; }
-    .identity-copy small { color: var(--muted); font-size: 10px; }
-    .usage-metric small { display: block; color: var(--faint); font-size: 9px; }
-    .usage-metric strong { font-size: 13px; font-variant-numeric: tabular-nums; }
-    .usage-metric.warning strong { color: var(--waiting); }
-    .sessions-card {
-      overflow: hidden;
-      margin-top: 9px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-card);
-      background: var(--surface);
-    }
-    .sessions-head { display: flex; align-items: center; padding: 8px 10px 5px; color: var(--muted); font-size: 9px; }
-    .sessions-head .summary { margin-left: auto; color: var(--faint); }
-    .table-row {
-      display: grid;
-      grid-template-columns: minmax(120px, 1.15fr) minmax(90px, .95fr) 90px minmax(92px, .85fr) 60px 72px;
-      align-items: center;
-      min-height: 30px;
-      padding: 0 9px;
-      border-top: 1px solid var(--hairline);
-      color: var(--muted);
-      font-size: 10px;
-    }
-    .table-row.header { min-height: 26px; color: var(--faint); font-size: 9px; }
-    .table-row.waiting-row {
-      background: var(--waiting-row);
-    }
-    .table-cell { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .table-cell.status { display: inline-flex; align-items: center; gap: 6px; }
-    .table-cell.status .state-dot { flex: 0 0 auto; }
-    .connections-layout { min-height: 430px; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
-    .connections-list { padding: 0 5px 7px; }
-    .connection-row {
-      display: grid;
-      grid-template-columns: 20px minmax(0, 1fr) 20px 20px 20px;
-      min-height: 31px;
-      align-items: center;
-      gap: 3px;
-      padding: 2px 5px 2px 8px;
-      border-radius: 5px;
-    }
-    .connection-row:hover { background: var(--surface-raised); }
-    .connection-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .icon-action {
-      display: grid;
-      width: 20px;
-      height: 20px;
-      place-items: center;
-      padding: 0;
-      border: 0;
-      border-radius: 4px;
-      color: var(--faint);
-      background: transparent;
-    }
-    .icon-action:hover { color: var(--text); background: color-mix(in srgb, CanvasText 8%, transparent); }
-    .icon-action.favorite { color: var(--accent); }
-    .icon-action svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-    .icon-action.plugged { color: var(--working); }
-    .connection-main { position: relative; display: grid; place-items: start center; padding: 44px 20px; background: var(--app); }
-    .favorite-menu { position: relative; width: min(470px, 100%); padding: 7px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
-    .favorite-menu-title { padding: 7px 9px; color: var(--faint); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
-    .favorite-menu-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) 24px; align-items: center; gap: 7px; min-height: 35px; padding: 0 5px 0 9px; border-radius: 6px; color: var(--muted); }
-    .favorite-menu-row:hover { color: var(--text); background: var(--surface-raised); }
-    .favorite-menu-row .star { color: var(--accent); }
-    .favorite-menu-row small { color: var(--faint); }
-    .favorite-connect,
-    .favorite-more,
-    .flyout-action {
-      min-width: 0;
-      border: 0;
-      color: inherit;
-      background: transparent;
-    }
-    .favorite-connect { align-self: stretch; overflow: hidden; padding: 0; text-align: left; white-space: nowrap; text-overflow: ellipsis; }
-    .favorite-more { width: 24px; height: 24px; padding: 0; border-radius: 4px; }
-    .favorite-more:hover,
-    .favorite-more:focus-visible { color: var(--text); background: color-mix(in srgb, CanvasText 8%, transparent); }
-    .favorite-flyout {
-      position: absolute;
-      z-index: 2;
-      top: 42px;
-      left: calc(100% - 12px);
-      width: 188px;
-      padding: 6px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--surface-raised);
-      box-shadow: 0 14px 34px color-mix(in srgb, CanvasText 20%, transparent);
-    }
-    .favorite-flyout strong { display: block; overflow: hidden; padding: 5px 7px 6px; color: var(--muted); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
-    .flyout-action { display: block; width: 100%; padding: 7px; border-radius: 5px; text-align: left; }
-    .flyout-action:hover,
-    .flyout-action:focus-visible { background: var(--surface-soft); }
-    .workspace-stage {
-      min-height: 560px;
-      display: grid;
-      grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
-      gap: 6px;
-      padding: 8px;
-      background: var(--app);
-    }
-    .pane-stack { min-width: 0; display: grid; grid-template-rows: 1fr 1fr; gap: 6px; }
-    .work-pane {
-      min-width: 0;
-      overflow: hidden;
-      display: grid;
-      grid-template-rows: 31px minmax(0, 1fr);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      background: var(--surface);
-    }
-    .pane-header {
-      min-width: 0;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) repeat(3, 24px);
-      align-items: center;
-      border-bottom: 1px solid var(--hairline);
-      color: var(--muted);
-    }
-    .work-pane.focused .pane-header { color: var(--text); background: var(--surface-soft); }
-    .pane-identity { min-width: 0; overflow: hidden; padding: 0 8px; font-size: 11px; font-weight: 620; white-space: nowrap; text-overflow: ellipsis; }
-    .pane-action { display: grid; width: 24px; height: 24px; place-items: center; padding: 0; border: 0; border-radius: 4px; color: var(--faint); background: transparent; }
-    .pane-action:hover,
-    .pane-action:focus-visible { color: var(--text); background: var(--surface-raised); }
-    .pane-body { position: relative; min-width: 0; overflow: hidden; padding: 11px; color: var(--muted); }
-    .terminal-lines { margin: 0; color: var(--muted); font: 11px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
-    .terminal-ready { position: absolute; right: 9px; bottom: 8px; color: var(--working); font-size: 10px; }
-    .split-picker { position: absolute; top: 10px; right: 10px; width: 190px; padding: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); box-shadow: 0 12px 30px color-mix(in srgb, CanvasText 18%, transparent); }
-    .split-picker strong { display: block; padding: 5px 7px; color: var(--muted); font-size: 10px; }
-    .split-directions { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 4px; }
-    .split-option { padding: 6px; border: 0; border-radius: 5px; color: var(--text); background: var(--surface-soft); }
-    .split-host { display: block; width: 100%; overflow: hidden; padding: 6px 7px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; text-align: left; white-space: nowrap; text-overflow: ellipsis; }
-    .split-host:hover { color: var(--text); background: var(--surface-soft); }
-    .file-list { display: grid; gap: 2px; margin-bottom: 34px; }
-    .file-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 4px 6px; border-radius: 4px; }
-    .file-row.selected { color: HighlightText; background: Highlight; }
-    .file-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .fm-function-row { position: absolute; right: 7px; bottom: 7px; left: 7px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px; white-space: nowrap; }
-    .fm-command { min-width: 0; overflow: hidden; padding: 5px 4px; border: 1px solid var(--border); border-radius: 4px; color: var(--text); background: var(--surface-soft); font-size: 9px; text-overflow: ellipsis; }
-    .fm-command:disabled { color: var(--faint); background: transparent; }
-    .transfer-target { margin: 0 0 7px; overflow: hidden; color: var(--faint); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
-    .narrow-viewport { width: min(760px, 100%); margin: 0 auto; }
-    .narrow-viewport .window-bar { grid-template-columns: 258px 1fr auto; }
-    .narrow-viewport .app { grid-template-columns: 258px minmax(0, 1fr); min-height: 520px; }
-    .narrow-viewport .main-pane { padding: 11px; }
-    .narrow-viewport .identity-card { grid-template-columns: minmax(120px, 1.2fr) repeat(2, 72px); }
-    .narrow-viewport .identity-card .usage-metric:nth-child(4) { display: none; }
-    .narrow-viewport .table-row { grid-template-columns: minmax(105px, 1fr) 58px 72px; }
-    .narrow-viewport .table-row > :nth-child(2),
-    .narrow-viewport .table-row > :nth-child(3),
-    .narrow-viewport .table-row > :nth-child(4) { display: none; }
-    .narrow-viewport .provider-pane + .provider-pane { display: none; }
-    .narrow-viewport .tree-row.level-3 { padding-left: 49px; }
-    body:has(.viewport:target) #spec,
-    body:has(.viewport:target) .viewport:not(:target) { display: none; }
-    .viewport:target { width: 100%; margin: 0; }
-    @media (max-width: 800px) {
-      body { padding: 10px; }
-      .spec-grid { grid-template-columns: 1fr 1fr; }
-      .state-matrix { grid-template-columns: 1fr; }
-    }
-    @media (max-width: 560px) {
-      .spec-grid { grid-template-columns: 1fr; }
-      .narrow-viewport .window-bar { grid-template-columns: 1fr auto; }
-      .narrow-viewport .traffic-lights { display: none; }
-      .narrow-viewport .app { grid-template-columns: 1fr; }
-      .narrow-viewport .main-pane { display: none; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .tree .state-dot.waiting::after,
-      .attention-count .state-dot.waiting::after {
-        opacity: .36;
-        animation: none;
-        transform: scale(1.45);
-      }
-    }
+    :root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; color: CanvasText; background: Canvas; }
+    body { margin: 0; padding: 24px; }
+    #spec, #mockups { max-width: 1440px; margin: 0 auto 32px; }
+    .spec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 24px; }
+    h1 { font-size: 24px; } h2 { font-size: 18px; }
+    li { margin-bottom: 8px; } a { color: LinkText; }
+    .state-matrix { display: grid; gap: 12px; margin-top: 24px; }
+    .state-card strong { display: block; }
+    .viewport { margin: 24px 0; } .viewport h2 { margin-bottom: 8px; }
+    .viewport iframe { display: block; width: 100%; height: 1200px; border: 0; }
+    .narrow-viewport { max-width: 760px; }
+    .narrow-viewport iframe { height: 1900px; }
+    @media (max-width: 800px) { body { padding: 12px; } }
   </style>
 </head>
 <body>
   <section id="spec">
     <h1>UI-Spezifikation — Cockpit, Verbindungen und Mehrhost-Panes (#160, #459–#464)</h1>
+    <p>Visuelle Referenz: der anonymisierte interaktive Entwurf vom 20.09.2026, versioniert am 23.09.2026.
+      <a href="premium-workspace.html">Mockup in voller Breite öffnen</a> · <a href="README.md">Abgleich und Grenzen</a>.
+      Die frühere statische Darstellung auf dieser Seite ist ersetzt, nicht eine zweite gültige Variante.</p>
+    <p>Dies ist eine Referenz für die bereits integrierte Umsetzung aus PR #465, keine erneute Implementierungsfreigabe
+      und kein Nachweis nativer Abnahme. Explizite Regeln in diesem Abschnitt und PRODUCT/TECH gelten auch für
+      Zustände, die der Entwurf nur simuliert oder nicht abbildet.</p>
+    <ul>
+      <li>Einheitliche Typografie und Einrückung, durchgehende optisch abgesetzte Sidebar, keine dekorativen Farbränder.</li>
+      <li>5-h- und Wochenverbrauch stehen untereinander; Konto-Klick fügt Details hinzu oder fokussiert sie.</li>
+      <li>Keine zusätzlichen Navigationslinks, kein unbezeichneter Konto-Pfeil, kein redundantes Pane-Schließen-Menü.</li>
+      <li>Theme-Rollen sind verbindlich; konkrete Browser-Demofarben und Beispieldaten sind nicht normativ.</li>
+    </ul>
     <div class="spec-grid">
       <div class="spec-block">
         <h2>Flächen und Quellen</h2>
@@ -413,7 +48,7 @@
           <li><code>#spec C2</code> Das Tab-Menü projiziert ausschließlich favorisierte Hosts; der Hostname verbindet einmal direkt in einem neuen Tab, ein separates stabiles <code>⋯</code> öffnet ein echtes seitliches Flyout mit sichtbar bleibendem Parent. Es speichert keine zweite Konfiguration.</li>
           <li><code>#spec C3</code> Es entsteht keine neue vertikale Symbolleiste. Die vorhandene Sidebar-Navigation bleibt unverändert.</li>
           <li><code>#spec C4</code> Resiliente Hosts haben dauerhaft sichtbare Aufklapp- und Refresh-Aktionen in festen Slots. Refresh öffnet bei Bedarf den Recovery-Bereich. Darunter liegt die „Zaplex-Sessions“-Recovery; Shellnamen sind keine Sessionidentität. Puffer-/RAM-Diagnostik gehört nur in explizite Verbindungsdetails und wird nach der tatsächlichen Messgröße benannt.</li>
-          <li><code>#spec C5</code> Recovery-Abschnitte und Host-RAM beginnen auf der Textachse des Hosts. Zaplex- und tmux/byobu-Sessions stehen eine Einrückung (16 px) darunter; ihre Metadaten beginnen auf derselben Achse wie der Sessiontitel.</li>
+          <li><code>#spec C5</code> Recovery-Abschnitte beginnen auf der Textachse des Hosts. Zaplex- und tmux/byobu-Sessions stehen eine Einrückung (16 px) darunter; ihre Metadaten beginnen auf derselben Achse wie der Sessiontitel.</li>
         </ul>
       </div>
       <div class="spec-block">
@@ -468,268 +103,22 @@
     <div class="state-matrix" aria-label="Verbindliche Zustände">
       <div class="state-card"><strong>Verbindung</strong><code>verbunden</code> = grüner intakter Stecker; <code>getrennt</code> = gedämpfter Stecker mit Diagonale. Der Hostname bleibt neutral.</div>
       <div class="state-card"><strong>Agent im Baum</strong><code>wartet</code> = orange, pulsierend; <code>arbeitet</code> = grün, gefüllt; <code>idle</code> = neutraler Ring. Kein sichtbarer Statustext.</div>
-      <div class="state-card"><strong>Inventar</strong>„KI-Sessions“ zählt Agent-Container, keine reinen Shell-Sessions. Ein Link öffnet deren Liste in Verbindungen. Lokale Daten erscheinen vor Remote-Abfragen; Hosts werden unabhängig mit maximal zehn Sekunden RPC-Wartezeit aktualisiert. Lokale und verbundene Remote-Hosts erscheinen sofort, auch während ihr KI-Inventar noch geladen wird. Ein verbundener Host bleibt auch bei leerem, nicht unterstütztem oder temporär nicht verfügbarem KI-Inventar sichtbar; ein kurzer Inline-Hinweis erklärt den Sonderzustand. Solange die erste Abfrage läuft, steht dort „KI-Sessions werden geladen…“ statt einer leeren Session-Liste.</div>
+      <div class="state-card"><strong>Inventar</strong>„KI-Sessions“ zählt Agent-Container, keine reinen Shell-Sessions. Die vorhandene Sidebar-Navigation öffnet Verbindungen; kein zusätzlicher Link dupliziert diesen Wechsel. Lokale Daten erscheinen vor Remote-Abfragen; Hosts werden unabhängig mit maximal zehn Sekunden RPC-Wartezeit aktualisiert. Lokale und verbundene Remote-Hosts erscheinen sofort, auch während ihr KI-Inventar noch geladen wird. Ein verbundener Host bleibt auch bei leerem, nicht unterstütztem oder temporär nicht verfügbarem KI-Inventar sichtbar; ein kurzer Inline-Hinweis erklärt den Sonderzustand. Solange die erste Abfrage läuft, steht dort „KI-Sessions werden geladen…“ statt einer leeren Session-Liste.</div>
       <div class="state-card"><strong>Recovery-Inventar</strong>Unter Verbindungen bleibt vorhandenes Inventar während einer erneuten Abfrage sichtbar; das Refresh-Symbol zeigt die laufende Aktualisierung ohne zusätzliche Zeile an. Ein Fehler ersetzt die alten Zeilen durch eine sichtbare Meldung. Fehlende Titel erscheinen innerhalb der Gruppe „Zaplex-Sessions“ als „Session ·“ mit acht ID-Zeichen.</div>
       <div class="state-card"><strong>Pane-Bereitschaft</strong><code>Transport</code>, <code>Attach</code>, <code>Replay</code> und <code>Ready</code> sind getrennte Evidenz. Vor Ready gibt es keine scheinbar nutzbare normale Eingabe und kein unsichtbares Kommando-Puffern; Retry und Abbruch bleiben erreichbar. <code>Corrupt</code> ist die Ausnahme: Der Restore bleibt gesperrt und bietet ohne funktionsfähiges Wiederherstellungsziel weder Retry noch Abbruch an.</div>
       <div class="state-card"><strong>Transfer</strong>Quelle und Ziel nennen Host · Verzeichnis. Gleiche Pfade verschiedener Hosts bleiben unterscheidbar. Ein stale Ziel stoppt sichtbar statt auf eine andere Pane auszuweichen.</div>
     </div>
   </section>
 
+
   <main id="mockups">
     <article class="viewport" id="cockpit-desktop">
-      <div class="viewport-label">Desktop · Cockpit mit Live-Baum und entdoppelten Konten</div>
-      <div class="window-bar">
-        <div class="traffic-lights" aria-hidden="true"><span></span><span></span><span></span></div>
-        <div class="tab-title">Cockpit</div>
-        <div class="window-actions" aria-hidden="true"><span>＋</span><span>⌘</span><span>⚙</span></div>
-      </div>
-      <div class="app">
-        <aside class="sidebar" aria-label="Cockpit-Sidebar">
-          <div class="sidebar-toolbar" aria-label="Bestehende Sidebar-Werkzeuge">
-            <span class="active">▦</span>
-            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="m10.5 10.5 3 3"></path></svg>
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"></path></svg>
-            <span class="close">×</span>
-          </div>
-          <section class="zone">
-            <div class="zone-head">
-              <span>KI-Sessions</span><span class="count">4</span>
-              <span class="head-end"><span class="attention-count" title="1 Session wartet auf Dich"><span class="state-dot waiting" role="img" aria-label="Wartet auf Dich"></span><span>1</span></span></span>
-            </div>
-            <ul class="tree">
-              <li>
-                <div class="tree-row level-0"><span class="chevron">⌄</span><span class="tree-label">Dieser Mac</span></div>
-                <div class="tree-row level-1"><span class="chevron">⌄</span><span class="tree-label">atlas-console</span></div>
-                <div class="tree-row level-2"><span class="chevron">⌄</span><span class="tree-label">Terminal 2</span></div>
-                <div class="tree-row level-3" title="Claude · Opus 4.1 · wartet auf Dich"><span class="state-dot waiting" role="img" aria-label="Wartet auf Dich"></span><span class="tree-label agent-name">Claude <span class="agent-model">· Opus 4.1</span></span></div>
-                <div class="tree-row level-3" title="Codex · gpt-5.6 · arbeitet"><span class="state-dot working" role="img" aria-label="Arbeitet"></span><span class="tree-label agent-name">Codex <span class="agent-model">· gpt-5.6</span></span></div>
-              </li>
-              <li>
-                <div class="tree-row level-0"><span class="chevron">⌄</span><span class="tree-label">build-node</span></div>
-                <div class="tree-row level-1"><span class="chevron">⌄</span><span class="tree-label">payment-api</span></div>
-                <div class="tree-row level-2"><span class="chevron">⌄</span><span class="tree-label">Terminal 1</span></div>
-                <div class="tree-row level-3" title="Claude · Sonnet 4.6 · arbeitet"><span class="state-dot working" role="img" aria-label="Arbeitet"></span><span class="tree-label agent-name">Claude <span class="agent-model">· Sonnet 4.6</span></span></div>
-                <div class="tree-row level-1"><span class="chevron">⌄</span><span class="tree-label">docs-site</span></div>
-                <div class="tree-row level-2"><span class="chevron">⌄</span><span class="tree-label">Terminal 3</span></div>
-                <div class="tree-row level-3" title="Codex · gpt-5.6 · idle"><span class="state-dot idle" role="img" aria-label="Idle"></span><span class="tree-label agent-name">Codex <span class="agent-model">· gpt-5.6</span></span></div>
-              </li>
-            </ul>
-            <a class="shell-sessions-link" href="#connections-desktop">Shell-Sessions in Verbindungen öffnen</a>
-          </section>
-          <section class="zone">
-            <div class="zone-head"><span>KI-Konten</span><span class="count">2</span></div>
-            <div class="account-list">
-              <div class="account-tile selected"><span class="provider-mark"></span><span class="account-copy"><strong>Claude</strong><small>team@example.invalid · Max</small></span><span class="account-meters"><span class="account-meter"><span>5 h</span><span class="track"><span class="fill" style="width:23%"></span></span><span>23 %</span></span><span class="account-meter warning"><span>Woche</span><span class="track"><span class="fill" style="width:95%"></span></span><span>95 %</span></span></span></div>
-              <div class="account-tile"><span class="provider-mark codex"></span><span class="account-copy"><strong>Codex</strong><small>studio@example.invalid · Team</small></span><span class="account-meters"><span class="account-meter"><span>5 h</span><span class="track"><span class="fill" style="width:8%"></span></span><span>8 %</span></span><span class="account-meter"><span>Woche</span><span class="track"><span class="fill" style="width:21%"></span></span><span>21 %</span></span></span></div>
-            </div>
-          </section>
-        </aside>
-
-        <section class="main-pane" aria-label="Konten-Details">
-          <section class="provider-pane">
-            <div class="identity-card">
-              <div class="identity-copy"><strong><span class="provider-mark"></span>Claude</strong><small>team@example.invalid · Max</small></div>
-              <div class="usage-metric"><small>5 Stunden</small><strong>23 %</strong></div>
-              <div class="usage-metric warning"><small>Woche</small><strong>95 %</strong></div>
-              <div class="usage-metric"><small>Heute</small><strong>~$42.80</strong></div>
-            </div>
-            <div class="sessions-card">
-              <div class="sessions-head"><span>Sessions</span><span class="summary">Alle 3 · wartet 1 · aktiv 1 · idle 1</span></div>
-              <div class="table-row header"><span class="table-cell">Session</span><span class="table-cell">Projekt</span><span class="table-cell">Host</span><span class="table-cell">Modell</span><span class="table-cell">Kontext</span><span class="table-cell">Status</span></div>
-              <div class="table-row waiting-row"><span class="table-cell">Navigation prüfen</span><span class="table-cell">atlas-console</span><span class="table-cell">Dieser Mac</span><span class="table-cell">Opus 4.1</span><span class="table-cell">42 %</span><span class="table-cell status"><span class="state-dot waiting"></span>wartet</span></div>
-              <div class="table-row"><span class="table-cell">API-Verträge</span><span class="table-cell">payment-api</span><span class="table-cell">build-node</span><span class="table-cell">Sonnet 4.6</span><span class="table-cell">18 %</span><span class="table-cell status"><span class="state-dot working"></span>aktiv</span></div>
-              <div class="table-row"><span class="table-cell">Release-Notizen</span><span class="table-cell">docs-site</span><span class="table-cell">build-node</span><span class="table-cell">Sonnet 4.6</span><span class="table-cell">—</span><span class="table-cell status"><span class="state-dot idle"></span>idle</span></div>
-            </div>
-          </section>
-          <section class="provider-pane">
-            <div class="identity-card">
-              <div class="identity-copy"><strong><span class="provider-mark codex"></span>Codex</strong><small>studio@example.invalid · Team</small></div>
-              <div class="usage-metric"><small>5 Stunden</small><strong>8 %</strong></div>
-              <div class="usage-metric"><small>Woche</small><strong>21 %</strong></div>
-              <div class="usage-metric"><small>Heute</small><strong>~$0.00</strong></div>
-            </div>
-            <div class="sessions-card">
-              <div class="sessions-head"><span>Sessions</span><span class="summary">Alle 2 · aktiv 1 · idle 1</span></div>
-              <div class="table-row header"><span class="table-cell">Session</span><span class="table-cell">Projekt</span><span class="table-cell">Host</span><span class="table-cell">Modell</span><span class="table-cell">Kontext</span><span class="table-cell">Status</span></div>
-              <div class="table-row"><span class="table-cell">Layout verfeinern</span><span class="table-cell">atlas-console</span><span class="table-cell">Dieser Mac</span><span class="table-cell">gpt-5.6</span><span class="table-cell">27 %</span><span class="table-cell status"><span class="state-dot working"></span>aktiv</span></div>
-              <div class="table-row"><span class="table-cell">Doku-Audit</span><span class="table-cell">docs-site</span><span class="table-cell">build-node</span><span class="table-cell">gpt-5.6</span><span class="table-cell">9 %</span><span class="table-cell status"><span class="state-dot idle"></span>idle</span></div>
-            </div>
-          </section>
-        </section>
-      </div>
+      <h2>Interaktive Referenz</h2>
+      <iframe src="premium-workspace.html" title="Zaplex Premium-Workspace — interaktive Referenz"></iframe>
     </article>
-
-    <article class="viewport" id="connections-desktop">
-      <div class="viewport-label">Desktop · eigenständiges Element „Verbindungen“ und Favoriten-Projektion im Tab-Menü</div>
-      <div class="window-bar">
-        <div class="traffic-lights" aria-hidden="true"><span></span><span></span><span></span></div>
-        <div class="tab-title">Neue Session</div>
-        <div class="window-actions" aria-hidden="true"><span>＋</span><span>⌘</span><span>⚙</span></div>
-      </div>
-      <div class="connections-layout">
-        <aside class="sidebar" aria-label="Verbindungen">
-          <div class="sidebar-toolbar" aria-label="Bestehende Sidebar-Werkzeuge">
-            <span>▦</span>
-            <svg class="active" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v3M10.5 3.5v3M4 6.5h8v2a4 4 0 0 1-4 4 4 4 0 0 1-4-4z"></path><path d="M8 12.5v2"></path></svg>
-            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="m10.5 10.5 3 3"></path></svg>
-            <span class="close">×</span>
-          </div>
-          <section class="zone">
-            <div class="zone-head"><span>Verbindungen</span><span class="count">3</span><span class="head-end"><span title="Host hinzufügen">＋</span><span title="Verbindungen verwalten">⚙</span></span></div>
-            <div class="connections-list">
-              <div class="connection-row">
-                <button class="icon-action" title="Sessions anzeigen" aria-label="Sessions von build-node anzeigen" aria-expanded="false">›</button>
-                <span class="connection-name">build-node</span>
-                <button class="icon-action" title="Sessions aktualisieren" aria-label="Sessions von build-node aktualisieren">↻</button>
-                <button class="icon-action favorite" title="Aus Favoriten entfernen" aria-label="build-node aus Favoriten entfernen">★</button>
-                <button class="icon-action plugged" title="Verbunden" aria-label="build-node ist verbunden"><svg viewBox="0 0 16 16"><path d="M5.5 2.5v4M10.5 2.5v4M4 6.5h8v2a4 4 0 0 1-8 0zM8 12.5v2"></path></svg></button>
-              </div>
-              <div class="connection-row">
-                <button class="icon-action" title="Sessions anzeigen" aria-label="Sessions von staging-box anzeigen" aria-expanded="false">›</button>
-                <span class="connection-name">staging-box</span>
-                <button class="icon-action" title="Sessions aktualisieren" aria-label="Sessions von staging-box aktualisieren">↻</button>
-                <button class="icon-action favorite" title="Aus Favoriten entfernen" aria-label="staging-box aus Favoriten entfernen">★</button>
-                <button class="icon-action" title="Nicht verbunden" aria-label="staging-box ist nicht verbunden"><svg viewBox="0 0 16 16"><path d="M5.5 2.5v4M10.5 2.5v4M4 6.5h8v2a4 4 0 0 1-8 0zM8 12.5v2M2.5 2.5l11 11"></path></svg></button>
-              </div>
-              <div class="connection-row">
-                <button class="icon-action" title="Sessions anzeigen" aria-label="Sessions von review-node anzeigen" aria-expanded="false">›</button>
-                <span class="connection-name">review-node</span>
-                <button class="icon-action" title="Sessions aktualisieren" aria-label="Sessions von review-node aktualisieren">↻</button>
-                <button class="icon-action" title="Zu Favoriten hinzufügen" aria-label="review-node zu Favoriten hinzufügen">☆</button>
-                <button class="icon-action plugged" title="Verbunden" aria-label="review-node ist verbunden"><svg viewBox="0 0 16 16"><path d="M5.5 2.5v4M10.5 2.5v4M4 6.5h8v2a4 4 0 0 1-8 0zM8 12.5v2"></path></svg></button>
-              </div>
-            </div>
-          </section>
-        </aside>
-        <section class="connection-main">
-          <div class="favorite-menu" aria-label="Favorisierte Hosts im Tab-Menü">
-            <div class="favorite-menu-title">Neue Session · Favorisierte Hosts</div>
-            <div class="favorite-menu-row"><span class="star">★</span><button class="favorite-connect" title="Neue Verbindung zu build-node in neuem Tab">build-node</button><button class="favorite-more" aria-label="Weitere Aktionen für build-node" aria-expanded="true">⋯</button></div>
-            <div class="favorite-menu-row"><span class="star">★</span><button class="favorite-connect" title="Neue Verbindung zu staging-box in neuem Tab">staging-box</button><button class="favorite-more" aria-label="Weitere Aktionen für staging-box" aria-expanded="false">⋯</button></div>
-            <aside class="favorite-flyout" aria-label="Weitere Aktionen für build-node">
-              <strong>build-node</strong>
-              <button class="flyout-action">Neuer Agent</button>
-              <button class="flyout-action">Verbindung bearbeiten</button>
-              <button class="flyout-action">Aus Favoriten entfernen</button>
-            </aside>
-          </div>
-        </section>
-      </div>
-    </article>
-
-    <article class="viewport" id="workspace-multihost">
-      <div class="viewport-label">Mehrhost-Workspace · ein Tab als Pane-Container; links/rechts/unten, pane-eigene Identität und reversibler Dateimanager-Modus</div>
-      <div class="window-bar">
-        <div class="traffic-lights" aria-hidden="true"><span></span><span></span><span></span></div>
-        <div class="tab-title">host-c · artifacts</div>
-        <div class="window-actions" aria-hidden="true"><span>＋</span><span>⌘</span><span>⚙</span></div>
-      </div>
-      <section class="workspace-stage" aria-label="Tab mit drei Panes auf drei Hosts">
-        <section class="work-pane" aria-label="Dateimanager host-a">
-          <header class="pane-header">
-            <span class="pane-identity" title="host-a · /workspace/zaplex">host-a · zaplex</span>
-            <button class="pane-action" aria-label="Pane teilen">⊞</button>
-            <button class="pane-action" aria-label="Weitere Pane-Aktionen">⋯</button>
-            <button class="pane-action" aria-label="Pane schließen">×</button>
-          </header>
-          <div class="pane-body">
-            <p class="transfer-target">Quelle · host-a · /workspace/zaplex</p>
-            <div class="file-list">
-              <div class="file-row"><span class="file-name">..</span><span>Verzeichnis</span></div>
-              <div class="file-row selected"><span class="file-name">crates</span><span>Verzeichnis</span></div>
-              <div class="file-row"><span class="file-name">Cargo.toml</span><span>Datei</span></div>
-            </div>
-            <div class="fm-function-row" aria-label="Inaktive Dateimanager-Aktionen">
-              <button class="fm-command" disabled>F3 Anzeigen</button><button class="fm-command" disabled>F4 Bearbeiten</button><button class="fm-command" disabled>F5 Kopieren</button><button class="fm-command" disabled>F6 Verschieben</button>
-            </div>
-          </div>
-        </section>
-        <div class="pane-stack">
-          <section class="work-pane" aria-label="Terminal host-b">
-            <header class="pane-header">
-              <span class="pane-identity" title="host-b · /srv/api">host-b · api</span>
-              <button class="pane-action" aria-label="Pane teilen">⊞</button>
-              <button class="pane-action" aria-label="Weitere Pane-Aktionen">⋯</button>
-              <button class="pane-action" aria-label="Pane schließen">×</button>
-            </header>
-            <div class="pane-body"><pre class="terminal-lines">$ cargo check
-Checking api…
-Finished.</pre><span class="terminal-ready">Ready · PTY verbunden</span></div>
-          </section>
-          <section class="work-pane focused" aria-label="Fokussierter Dateimanager host-c">
-            <header class="pane-header">
-              <span class="pane-identity" title="host-c · /data/artifacts">host-c · artifacts</span>
-              <button class="pane-action" aria-label="Pane teilen">⊞</button>
-              <button class="pane-action" aria-label="Weitere Pane-Aktionen">⋯</button>
-              <button class="pane-action" aria-label="Pane schließen">×</button>
-            </header>
-            <div class="pane-body">
-              <p class="transfer-target">Ziel · host-c · /data/artifacts</p>
-              <div class="file-list">
-                <div class="file-row"><span class="file-name">..</span><span>Verzeichnis</span></div>
-                <div class="file-row selected"><span class="file-name">release-build-with-a-long-name</span><span>Verzeichnis</span></div>
-              </div>
-              <div class="fm-function-row" aria-label="Aktive Dateimanager-Aktionen">
-                <button class="fm-command">F3 Anzeigen</button><button class="fm-command">F4 Bearbeiten</button><button class="fm-command">F5 Kopieren</button><button class="fm-command">F6 Verschieben</button>
-              </div>
-            </div>
-          </section>
-        </div>
-      </section>
-    </article>
-
     <article class="viewport narrow-viewport" id="cockpit-narrow">
-      <div class="viewport-label">Schmale Breite · gleiche Hierarchie, weniger Tabellenspalten, keine zusätzliche Icon-Leiste</div>
-      <div class="window-bar">
-        <div class="traffic-lights" aria-hidden="true"><span></span><span></span><span></span></div>
-        <div class="tab-title">Cockpit</div>
-        <div class="window-actions" aria-hidden="true"><span>＋</span><span>⚙</span></div>
-      </div>
-      <div class="app">
-        <aside class="sidebar" aria-label="Schmale Cockpit-Sidebar">
-          <div class="sidebar-toolbar" aria-label="Bestehende Sidebar-Werkzeuge"><span class="active">▦</span><span>⌕</span><span>▱</span><span class="close">×</span></div>
-          <section class="zone">
-            <div class="zone-head"><span>KI-Sessions</span><span class="count">3</span><span class="head-end"><span class="attention-count" title="1 Session wartet auf Dich"><span class="state-dot waiting" role="img" aria-label="Wartet auf Dich"></span><span>1</span></span></span></div>
-            <ul class="tree">
-              <li>
-                <div class="tree-row level-0"><span class="chevron">⌄</span><span class="tree-label">Dieser Mac</span></div>
-                <div class="tree-row level-1"><span class="chevron">⌄</span><span class="tree-label">atlas-console</span></div>
-                <div class="tree-row level-2"><span class="chevron">⌄</span><span class="tree-label">Terminal 2</span></div>
-                <div class="tree-row level-3" title="Claude · Opus 4.1 · wartet auf Dich"><span class="state-dot waiting" role="img" aria-label="Wartet auf Dich"></span><span class="tree-label agent-name">Claude <span class="agent-model">· Opus 4.1</span></span></div>
-                <div class="tree-row level-3" title="Codex · gpt-5.6 · arbeitet"><span class="state-dot working" role="img" aria-label="Arbeitet"></span><span class="tree-label agent-name">Codex <span class="agent-model">· gpt-5.6</span></span></div>
-              </li>
-              <li>
-                <div class="tree-row level-0"><span class="chevron">⌄</span><span class="tree-label">build-node</span></div>
-                <div class="tree-row level-1"><span class="chevron">›</span><span class="tree-label">payment-api</span></div>
-              </li>
-            </ul>
-            <a class="shell-sessions-link" href="#connections-desktop">Shell-Sessions in Verbindungen öffnen</a>
-          </section>
-          <section class="zone">
-            <div class="zone-head"><span>KI-Konten</span><span class="count">2</span></div>
-            <div class="account-list">
-              <div class="account-tile selected"><span class="provider-mark"></span><span class="account-copy"><strong>Claude</strong><small>team@example.invalid · Max</small></span><span class="account-meters"><span class="account-meter"><span>5 h</span><span class="track"><span class="fill" style="width:23%"></span></span><span>23 %</span></span><span class="account-meter warning"><span>Woche</span><span class="track"><span class="fill" style="width:95%"></span></span><span>95 %</span></span></span></div>
-              <div class="account-tile"><span class="provider-mark codex"></span><span class="account-copy"><strong>Codex</strong><small>studio@example.invalid · Team</small></span><span class="account-meters"><span class="account-meter"><span>5 h</span><span class="track"><span class="fill" style="width:8%"></span></span><span>8 %</span></span><span class="account-meter"><span>Woche</span><span class="track"><span class="fill" style="width:21%"></span></span><span>21 %</span></span></span></div>
-            </div>
-          </section>
-        </aside>
-        <section class="main-pane" aria-label="Schmale Konten-Details">
-          <section class="provider-pane">
-            <div class="identity-card">
-              <div class="identity-copy"><strong><span class="provider-mark"></span>Claude</strong><small>team@example.invalid · Max</small></div>
-              <div class="usage-metric"><small>5 Stunden</small><strong>23 %</strong></div>
-              <div class="usage-metric warning"><small>Woche</small><strong>95 %</strong></div>
-              <div class="usage-metric"><small>Heute</small><strong>~$42.80</strong></div>
-            </div>
-            <div class="sessions-card">
-              <div class="sessions-head"><span>Sessions</span><span class="summary">wartet 1 · aktiv 1</span></div>
-              <div class="table-row header"><span class="table-cell">Session</span><span class="table-cell">Projekt</span><span class="table-cell">Host</span><span class="table-cell">Modell</span><span class="table-cell">Kontext</span><span class="table-cell">Status</span></div>
-              <div class="table-row waiting-row"><span class="table-cell">Navigation prüfen</span><span class="table-cell">atlas-console</span><span class="table-cell">Dieser Mac</span><span class="table-cell">Opus 4.1</span><span class="table-cell">42 %</span><span class="table-cell status"><span class="state-dot waiting"></span>wartet</span></div>
-              <div class="table-row"><span class="table-cell">API-Verträge</span><span class="table-cell">payment-api</span><span class="table-cell">build-node</span><span class="table-cell">Sonnet 4.6</span><span class="table-cell">18 %</span><span class="table-cell status"><span class="state-dot working"></span>aktiv</span></div>
-            </div>
-          </section>
-        </section>
-      </div>
+      <h2>Dieselbe Referenz bei schmaler Breite</h2>
+      <iframe src="premium-workspace.html" title="Zaplex Premium-Workspace — schmale Darstellung"></iframe>
     </article>
   </main>
 </body>

@@ -417,6 +417,10 @@ a loading/error substitute.
 
 The binding visual contract is
 [`docs/ui/cockpit-sidebar-connections.html`](../../docs/ui/cockpit-sidebar-connections.html).
+Its desktop and narrow examples embed the same versioned
+[`premium-workspace.html`](../../docs/ui/premium-workspace.html), not independently maintained
+layouts. The [comparison guide](../../docs/ui/README.md) documents anonymization, simulated
+interactions, runtime limits, and the native verification still needed after PR #465.
 Historical Cockpit documents are amended only where needed to mark the old combined registry/live
 tree and three-level hierarchy as superseded by GH-160.
 
@@ -503,6 +507,6 @@ the owning task finishes.
 
 Der Remote-Client bietet zeitschrankenfähige Listenmethoden. Die Frist umfasst Ausgangsqueue und Antwort, und eine RAII-Korrelation entfernt Pending-Einträge auch bei Abbruch. Ein Timeout sendet best-effort Abort; spätere Antworten können keine neue Anfrage erfüllen. Die übrigen Aufrufer behalten ihre bisherige Standardfrist.
 
-`ssh_manager::panel::init` registriert ausschließlich im fokussierten Verbindungsbaum aktive Keybindings. Der gemeinsame Session-Renderer hält primäre Identität flexibel und Öffnen-Aktion fest; Statuswechsel erzeugen keine Zusatzzeile. Der Cockpit-Link öffnet die vorhandene Verbindungen-Ansicht. `adopt_daemon_session` reicht denselben echten Installationsfortschrittskanal wie eine neue Verbindung durch.
+`ssh_manager::panel::init` registriert ausschließlich im fokussierten Verbindungsbaum aktive Keybindings. Der gemeinsame Session-Renderer hält primäre Identität flexibel und Öffnen-Aktion fest; Statuswechsel erzeugen keine Zusatzzeile. Der normative Entwurf nutzt ausschließlich die vorhandene Sidebar-Navigation zum Wechsel nach Verbindungen, keinen zusätzlichen Cockpit-Link. Diese Referenzkorrektur ist kein Nachweis, dass die native Oberfläche den redundanten Link bereits entfernt hat. `adopt_daemon_session` reicht denselben echten Installationsfortschrittskanal wie eine neue Verbindung durch.
 
 SFTP lädt bekannte Schlüssel zeilenweise in voneinander getrennte libssh2-Sammlungen. Aliasaufteilung und Hash-/Port-Matching bleiben bei libssh2; Verifikationsansichten schreiben keine normalisierten oder verlustbehafteten Daten zurück. Tests enthalten identische Schlüssel gehashter Endpunkte, kurze Aliase, große fremde Inventare, Ports, Marker und nicht-UTF8-Kommentare.

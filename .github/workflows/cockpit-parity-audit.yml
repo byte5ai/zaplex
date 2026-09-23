@@ -38,6 +38,7 @@ on:
       - 'crates/zaplex_cockpit/**'
       - 'crates/zaplex_remote_session/**'
       - 'docs/ui/cockpit-sidebar-connections.html'
+      - 'docs/ui/premium-workspace.html'
       - 'script/cockpit-parity-audit'
       - 'script/upload-cockpit-runtime-evidence'
       - 'specs/GH-160/**'
@@ -227,6 +228,7 @@ jobs:
             printf '{"schema_version":1,"status":"fail","errors":["step did not complete"]}\n' > "artifacts/${report}.json"
           done
           cp docs/ui/cockpit-sidebar-connections.html artifacts/cockpit-sidebar-connections.html
+          cp docs/ui/premium-workspace.html artifacts/premium-workspace.html
         shell: bash
 
       - name: Validate runtime evidence source inputs

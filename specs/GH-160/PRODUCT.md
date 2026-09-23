@@ -15,6 +15,11 @@ does not introduce a new navigation model.
 
 Figma: none provided. The binding visual reference is
 [`docs/ui/cockpit-sidebar-connections.html`](../../docs/ui/cockpit-sidebar-connections.html).
+It embeds the anonymized [interactive workspace reference](../../docs/ui/premium-workspace.html)
+from the 2026-09-20 design iteration, versioned on 2026-09-23. Use the
+[comparison guide](../../docs/ui/README.md) to compare the already integrated implementation
+with that artifact; neither the mockup nor this synchronization proves native acceptance.
+The previous static illustrations are superseded, not alternative approved layouts.
 
 ## Goals
 
@@ -297,7 +302,7 @@ Figma: none provided. The binding visual reference is
 
 ## Verbindliche Bedienungs- und Refresh-Korrekturen
 
-- Die Cockpit-Überschrift lautet „KI-Sessions“. Gezählt werden die angezeigten Agent-Container; reine Shell-Sessions liegen unter Verbindungen und sind von hier aus direkt erreichbar. Exakte bekannte Modell-IDs bleiben sichtbar.
+- Die Cockpit-Überschrift lautet „KI-Sessions“. Gezählt werden die angezeigten Agent-Container; reine Shell-Sessions liegen unter Verbindungen, erreichbar über die vorhandene Sidebar-Navigation. Kein zusätzlicher Cockpit-Link dupliziert diesen Wechsel. Exakte bekannte Modell-IDs bleiben sichtbar.
 - Die Hostzeile unter Verbindungen zeigt bei resilienten Hosts dauerhaft sichtbare Aufklapp- und Refresh-Aktionen. Refresh öffnet den Recovery-Bereich bei Bedarf. Hostnamen erhalten die gesamte verbleibende Breite mit Ellipse. Verbindungs- und Refresh-Status nutzen feste Symbolplätze; laufende Aktualisierungen schieben vorhandene Sessionzeilen nicht nach unten.
 - Zaplex- und tmux/byobu-Sessions haben denselben primären Klickbereich und dieselbe Öffnen-Aktion. Pfeiltasten navigieren sichtbare Zeilen; Enter öffnet/aktiviert, Links/Rechts klappen auf oder zu, Cmd/Ctrl-R aktualisiert den ausgewählten Host. Eingabefelder und geöffnete Menüs behalten ihre eigene Tastaturbedienung.
 - Übernommene Sessions zeigen tatsächlichen Verbindungs-/Installationsfortschritt. Die bestehende Startfrist von 60 Sekunden bleibt erhalten und beendet keine entfernte Session.
