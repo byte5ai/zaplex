@@ -9,11 +9,12 @@ use std::path::{Path, PathBuf};
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warpui::elements::{
-    Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Align, Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Dismiss, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
-    Radius, SavePosition, Shrinkable, Text,
+    Radius, SavePosition, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Text,
 };
 use warpui::platform::Cursor;
+use warpui::ui_components::{button::ButtonVariant, components::UiComponent};
 use warpui::Element;
 use warpui::ViewHandle;
 
@@ -23,6 +24,8 @@ use crate::sftp_manager::types::{format_size, Dialog, FileEntry, TransferDirecti
 
 /// Maximum dialog width.
 const DIALOG_MAX_WIDTH: f32 = 360.0;
+/// Host-key explanations and fingerprints need additional readable line width.
+const HOST_KEY_DIALOG_MAX_WIDTH: f32 = 480.0;
 /// Maximum dialog height.
 const DIALOG_MAX_HEIGHT: f32 = 500.0;
 /// Dialog inner padding.
@@ -31,6 +34,10 @@ const DIALOG_PADDING: f32 = 16.0;
 const BUTTON_MIN_WIDTH: f32 = 80.0;
 /// Button height.
 const BUTTON_HEIGHT: f32 = 32.0;
+/// Stack ordinary confirmation actions when the dialog becomes narrow.
+const BUTTON_STACK_BREAKPOINT: f32 = 280.0;
+/// The German changed-host-key action needs more room than ordinary actions.
+const HOST_KEY_BUTTON_STACK_BREAKPOINT: f32 = 400.0;
 
 /// Dialog shell container.
 ///
@@ -105,8 +112,8 @@ fn render_icon_close_button(
 
 /// Render action button component.
 ///
-/// When is_accent is true, use accent color background; otherwise use surface_2 background.
-fn render_button(
+/// Uses the existing accent or secondary button role and grows with its translated label.
+pub(super) fn render_button(
     label: &str,
     is_accent: bool,
     appearance: &Appearance,
@@ -114,46 +121,65 @@ fn render_button(
     mouse_state: MouseStateHandle,
     position_id: Option<&str>,
 ) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let ui_font = appearance.ui_font_family();
-    let ui_font_size = appearance.ui_font_size();
-    let bg = if is_accent {
-        theme.accent()
-    } else {
-        theme.surface_2()
-    };
-    let text_color = if is_accent {
-        theme.background()
-    } else {
-        theme.active_ui_text_color()
-    };
-    let label_owned = label.to_string();
+    render_button_with_wrap(
+        label,
+        is_accent,
+        false,
+        appearance,
+        action,
+        mouse_state,
+        position_id,
+    )
+}
 
-    let btn_el = Hoverable::new(mouse_state, move |_| {
-        let text_el = Text::new(label_owned.clone(), ui_font, ui_font_size)
-            .with_color(text_color.into())
-            .finish();
-        let centered = Flex::row()
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_child(text_el)
-            .finish();
-        Container::new(
-            ConstrainedBox::new(centered)
-                .with_width(BUTTON_MIN_WIDTH)
-                .with_height(BUTTON_HEIGHT)
-                .finish(),
+#[allow(clippy::too_many_arguments)]
+fn render_button_with_wrap(
+    label: &str,
+    is_accent: bool,
+    wrap_label: bool,
+    appearance: &Appearance,
+    action: SftpBrowserAction,
+    mouse_state: MouseStateHandle,
+    position_id: Option<&str>,
+) -> Box<dyn Element> {
+    let variant = if is_accent {
+        ButtonVariant::Accent
+    } else {
+        ButtonVariant::Secondary
+    };
+    let button = appearance.ui_builder().button(variant, mouse_state);
+    let button = if wrap_label {
+        let theme = appearance.theme();
+        let background = if is_accent {
+            theme.accent()
+        } else {
+            theme.background()
+        };
+        let label = Align::new(
+            Text::new(
+                label.to_string(),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(theme.font_color(background).into_solid())
+            .with_selectable(false)
+            .finish(),
         )
-        .with_background(bg)
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-        .finish()
-    })
-    .with_cursor(Cursor::PointingHand)
-    .on_click(move |ctx, _, _| {
-        ctx.dispatch_typed_action(action.clone());
-    })
-    .finish();
+        .finish();
+        button.with_custom_label(label)
+    } else {
+        button.with_centered_text_label(label.to_string())
+    };
+    let button = button
+        .build()
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(action.clone());
+        })
+        .finish();
+    let btn_el = ConstrainedBox::new(button)
+        .with_min_width(BUTTON_MIN_WIDTH)
+        .with_min_height(BUTTON_HEIGHT)
+        .finish();
 
     match position_id {
         Some(id) => SavePosition::new(btn_el, id).finish(),
@@ -185,6 +211,8 @@ fn render_confirm_dialog(
     description: &str,
     confirm_label: &str,
     confirm_action: SftpBrowserAction,
+    max_width: f32,
+    button_stack_breakpoint: f32,
     appearance: &Appearance,
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
@@ -209,19 +237,51 @@ fn render_confirm_dialog(
         confirm_label,
         true,
         appearance,
-        confirm_action,
-        confirm_btn_state,
+        confirm_action.clone(),
+        confirm_btn_state.clone(),
         Some("sftp_btn:dialog_confirm"),
     );
-    let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
+    let cancel_btn = render_cancel_button(appearance, cancel_btn_state.clone());
 
-    let buttons = Flex::row()
+    let button_row = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_alignment(MainAxisAlignment::End)
         .with_spacing(8.0)
         .with_child(confirm_btn)
         .with_child(cancel_btn)
         .finish();
+
+    let button_stack = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_spacing(8.0)
+        .with_child(render_button_with_wrap(
+            confirm_label,
+            true,
+            true,
+            appearance,
+            confirm_action,
+            confirm_btn_state,
+            Some("sftp_btn:dialog_confirm"),
+        ))
+        .with_child(render_button_with_wrap(
+            &crate::t!("fm-dlg-cancel"),
+            false,
+            true,
+            appearance,
+            SftpBrowserAction::CloseDialog,
+            cancel_btn_state,
+            Some("sftp_btn:dialog_cancel"),
+        ))
+        .finish();
+
+    let buttons = SizeConstraintSwitch::new(
+        button_row,
+        vec![(
+            SizeConstraintCondition::WidthLessThan(button_stack_breakpoint),
+            button_stack,
+        )],
+    )
+    .finish();
 
     let content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -232,7 +292,7 @@ fn render_confirm_dialog(
         .finish();
 
     let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
-        .with_max_width(DIALOG_MAX_WIDTH)
+        .with_max_width(max_width)
         .with_max_height(DIALOG_MAX_HEIGHT)
         .finish();
 
@@ -621,6 +681,8 @@ fn render_delete_confirm(
         &desc,
         &crate::t!("fm-dlg-delete"),
         SftpBrowserAction::ConfirmDelete,
+        DIALOG_MAX_WIDTH,
+        BUTTON_STACK_BREAKPOINT,
         appearance,
         confirm_btn_state,
         cancel_btn_state,
@@ -906,6 +968,8 @@ fn render_move_dialog(
         &desc,
         &crate::t!("fm-verb-move"),
         SftpBrowserAction::ConfirmMove,
+        DIALOG_MAX_WIDTH,
+        BUTTON_STACK_BREAKPOINT,
         appearance,
         confirm_btn_state,
         cancel_btn_state,
@@ -944,6 +1008,8 @@ fn render_overwrite_confirm(
         &desc,
         &crate::t!("fm-dlg-overwrite"),
         SftpBrowserAction::ConfirmOverwrite,
+        DIALOG_MAX_WIDTH,
+        BUTTON_STACK_BREAKPOINT,
         appearance,
         confirm_btn_state,
         cancel_btn_state,
@@ -973,6 +1039,8 @@ fn render_unknown_host_key_confirm(
         ),
         &crate::t!("fm-dlg-host-key-confirm"),
         SftpBrowserAction::ConfirmUnknownHostKey,
+        HOST_KEY_DIALOG_MAX_WIDTH,
+        HOST_KEY_BUTTON_STACK_BREAKPOINT,
         appearance,
         confirm_btn_state,
         cancel_btn_state,
@@ -1002,6 +1070,8 @@ fn render_changed_host_key_confirm(
         ),
         &crate::t!("fm-dlg-host-key-changed-confirm"),
         SftpBrowserAction::ConfirmChangedHostKey,
+        HOST_KEY_DIALOG_MAX_WIDTH,
+        HOST_KEY_BUTTON_STACK_BREAKPOINT,
         appearance,
         confirm_btn_state,
         cancel_btn_state,
@@ -1148,6 +1218,8 @@ pub fn render_dialog(
             &crate::t!("fm-dlg-close-transfer-body"),
             &crate::t!("fm-dlg-close"),
             SftpBrowserAction::ConfirmCloseTransferPanel,
+            DIALOG_MAX_WIDTH,
+            BUTTON_STACK_BREAKPOINT,
             appearance,
             confirm_btn_state,
             cancel_btn_state,

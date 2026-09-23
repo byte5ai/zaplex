@@ -58,6 +58,89 @@ use crate::test_util::{add_window_with_terminal, assert_eventually};
 use super::*;
 
 #[test]
+fn running_command_keeps_host_identity_in_pane_chrome() {
+    crate::i18n::init(Some("en"));
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "running");
+            view.terminal_title = "sleep 10".to_string();
+            for host in ["buildnode", "worknode"] {
+                view.pane_configuration.update(ctx, |config, ctx| {
+                    config.set_terminal_identity_host(Some(host.to_string()), ctx);
+                });
+                view.update_pane_configuration(ctx);
+                let config = view.pane_configuration.as_ref(ctx);
+                assert!(config.title().starts_with(&format!("{host} · ")));
+                assert!(!config.title().contains("sleep 10"));
+                if view.display_working_directory(ctx).is_none() {
+                    assert_eq!(
+                        config.title(),
+                        format!("{host} · {}", crate::t!("workspace-new-session-terminal"))
+                    );
+                }
+                assert!(config
+                    .title_tooltip()
+                    .is_some_and(|title| title.starts_with(&format!("{host} · "))));
+                assert!(!view.is_using_conversation_for_pane_header_title);
+            }
+        });
+    });
+}
+
+#[test]
+fn cli_agent_summary_does_not_replace_terminal_host_identity() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let listener = ctx.add_model(|ctx| {
+                CLIAgentSessionListener::new(
+                    view.view_id,
+                    CLIAgent::Claude,
+                    &view.model_events_handle,
+                    ctx,
+                )
+            });
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.set_session(
+                    view.view_id,
+                    CLIAgentSession {
+                        agent: CLIAgent::Claude,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext {
+                            summary: Some("Account setup".to_string()),
+                            ..Default::default()
+                        },
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input: false,
+                        listener: Some(listener),
+                        remote_host: Some("buildnode".to_string()),
+                        plugin_version: None,
+                        draft_text: None,
+                        custom_command_prefix: None,
+                    },
+                    ctx,
+                );
+            });
+            view.pane_configuration.update(ctx, |config, ctx| {
+                config.set_terminal_identity_host(Some("buildnode".to_string()), ctx);
+            });
+            view.update_pane_configuration(ctx);
+            assert!(view
+                .pane_configuration
+                .as_ref(ctx)
+                .title()
+                .starts_with("buildnode · "));
+        });
+    });
+}
+
+#[test]
 fn classic_ssh_phase_updates_are_allowed_only_while_unbound() {
     let daemon_session = warp_core::SessionId::from(41u64);
 

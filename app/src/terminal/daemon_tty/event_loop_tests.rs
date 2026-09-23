@@ -299,6 +299,29 @@ fn drain<T>(rx: &async_channel::Receiver<T>) {
     while rx.try_recv().is_ok() {}
 }
 
+fn terminal_contents(model: &Arc<FairMutex<TerminalModel>>) -> String {
+    model
+        .lock()
+        .block_list()
+        .blocks()
+        .iter()
+        .map(|block| block.contents_to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn terminal_message_count(model: &Arc<FairMutex<TerminalModel>>, message: &str) -> usize {
+    let contents = terminal_contents(model)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let message = message
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    contents.matches(message.as_str()).count()
+}
+
 /// Starts an EventLoop that has *adopted* `OUR_PTY` (so it is immediately
 /// addressable without a connected client to open) on a real
 /// `RemoteServerManager` singleton. The manager is what the loop subscribes
@@ -481,6 +504,144 @@ fn ordinary_session_open_ack_emits_exact_surface_without_managed_launch() {
                 && pty_session_id == "pty-new"
         ));
         assert!(events_rx.is_empty());
+    });
+}
+
+#[test]
+fn fresh_open_success_notice_waits_for_input_readiness_and_is_emitted_once() {
+    assert_fresh_open_notice_after_readiness(false);
+}
+
+#[test]
+fn fresh_open_transport_drop_before_ready_preserves_first_welcome() {
+    assert_fresh_open_notice_after_readiness(true);
+}
+
+fn assert_fresh_open_notice_after_readiness(reconnect_before_ready: bool) {
+    crate::i18n::init(Some("en"));
+    App::test((), move |mut app| async move {
+        let conn = SessionId::from(360u64);
+        let manager = app.add_singleton_model(RemoteServerManager::new);
+        let (listener, _wakeups_rx) = test_listener();
+        let model = Arc::new(FairMutex::new(TerminalModel::mock_not_bootstrapped(Some(
+            listener.clone(),
+        ))));
+        let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+        let model_for_loop = model.clone();
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::start(
+                model_for_loop,
+                event_loop_rx,
+                listener,
+                SizeInfo::new_without_font_metrics(24, 80),
+                conn,
+                OpenSessionParams::default(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                "test-host".to_string(),
+                ctx,
+            )
+        });
+        let success = crate::t!(
+            "terminal-daemon-persistent-session-active",
+            host = "test-host"
+        );
+
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_opened_with_claim(
+                "pty-new".to_string(),
+                9,
+                false,
+                None,
+                OpenedDaemonClaim::Owned,
+                ctx,
+            );
+        });
+        event_loop.read(&app, |me, _| {
+            let pending = me
+                .pending_ready_notice
+                .as_ref()
+                .expect("the exact open route remains pending until Ready");
+            assert_eq!(pending.connection_session_id, conn);
+            assert_eq!(pending.pty_session_id, "pty-new");
+            assert_eq!(pending.generation, Some(9));
+            assert_eq!(pending.kind, ReadyNoticeKind::PersistentSessionActive);
+            assert!(!me.welcomed);
+            assert_ne!(me.input_phase(), RemoteInputPhase::Ready);
+        });
+        assert_eq!(terminal_message_count(&model, success.as_ref()), 0);
+
+        let pending_output = b"shell is still starting";
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(output_event(conn, "pty-new", 0, pending_output));
+        });
+        event_loop.read(&app, |me, _| {
+            assert!(me.pending_ready_notice.is_some());
+            assert!(!me.welcomed);
+            assert_ne!(me.input_phase(), RemoteInputPhase::Ready);
+        });
+        assert_eq!(terminal_message_count(&model, success.as_ref()), 0);
+
+        if reconnect_before_ready {
+            event_loop.update(&mut app, |me, ctx| {
+                me.begin_transport_reconnect_for_test();
+                assert!(me.pending_ready_notice.is_none());
+                me.on_session_attached(
+                    SessionAttached {
+                        session_id: "pty-new".to_string(),
+                        size: None,
+                        base_seq: pending_output.len() as u64,
+                        replay: Vec::new(),
+                        bootstrap_preamble: Vec::new(),
+                        generation: 9,
+                        agent_binding: None,
+                    },
+                    true,
+                    ctx,
+                );
+                assert_eq!(
+                    me.pending_ready_notice.as_ref().unwrap().kind,
+                    ReadyNoticeKind::PersistentSessionActive,
+                );
+                assert_ne!(me.input_phase(), RemoteInputPhase::Ready);
+            });
+            assert_eq!(terminal_message_count(&model, success.as_ref()), 0);
+        }
+
+        let ready = init_shell_dcs();
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(output_event(
+                conn,
+                "pty-new",
+                pending_output.len() as u64,
+                &ready,
+            ));
+        });
+        event_loop.read(&app, |me, _| {
+            assert!(me.pending_ready_notice.is_none());
+            assert!(me.welcomed);
+            assert_eq!(me.input_phase(), RemoteInputPhase::Ready);
+        });
+        assert_eq!(terminal_message_count(&model, success.as_ref()), 1);
+
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(output_event(
+                conn,
+                "pty-new",
+                (pending_output.len() + ready.len()) as u64,
+                b"later output chunk",
+            ));
+        });
+        assert_eq!(terminal_message_count(&model, success.as_ref()), 1);
+        for wrong_notice in [
+            crate::t!("terminal-daemon-reattached", host = "test-host"),
+            crate::t!("terminal-daemon-reconnected", host = "test-host"),
+        ] {
+            assert_eq!(terminal_message_count(&model, wrong_notice.as_ref()), 0);
+        }
     });
 }
 
@@ -885,6 +1046,8 @@ fn attach_response_with_wrong_pty_fails_closed() {
         event_loop.read(&app, |me, _| {
             assert!(me.terminated);
             assert_eq!(me.input_phase(), RemoteInputPhase::Failed);
+            assert!(me.pending_ready_notice.is_none());
+            assert!(!me.welcomed);
         });
     });
 }
@@ -915,7 +1078,121 @@ fn attach_response_with_wrong_generation_fails_closed() {
         event_loop.read(&app, |me, _| {
             assert!(me.terminated);
             assert_eq!(me.input_phase(), RemoteInputPhase::Failed);
+            assert!(me.pending_ready_notice.is_none());
+            assert!(!me.welcomed);
         });
+    });
+}
+
+#[test]
+fn attach_success_notices_follow_real_ready_transitions_once_per_attach() {
+    crate::i18n::init(Some("en"));
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(620u64);
+        let (manager, event_loop, model, wakeups) =
+            start_adopted_loop_unbootstrapped(&mut app, conn);
+        let replay = b"historical output";
+        let reattached = crate::t!("terminal-daemon-reattached", host = "test-host");
+        let reconnected = crate::t!("terminal-daemon-reconnected", host = "test-host");
+
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: 0,
+                    replay: replay.to_vec(),
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+        event_loop.read(&app, |me, _| {
+            let pending = me
+                .pending_ready_notice
+                .as_ref()
+                .expect("the exact attach route remains pending until Ready");
+            assert_eq!(pending.connection_session_id, conn);
+            assert_eq!(pending.pty_session_id, OUR_PTY);
+            assert_eq!(pending.generation, Some(7));
+            assert_eq!(pending.kind, ReadyNoticeKind::Attached);
+            assert!(!me.welcomed);
+            assert_eq!(me.input_phase(), RemoteInputPhase::Replay);
+        });
+        assert_eq!(terminal_message_count(&model, reattached.as_ref()), 0);
+        assert_eq!(terminal_message_count(&model, reconnected.as_ref()), 0);
+
+        let pending_output = b"shell still not ready";
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(output_event(
+                conn,
+                OUR_PTY,
+                replay.len() as u64,
+                pending_output,
+            ));
+        });
+        event_loop.read(&app, |me, _| {
+            assert!(me.pending_ready_notice.is_some());
+            assert!(!me.welcomed);
+            assert_eq!(me.input_phase(), RemoteInputPhase::Replay);
+        });
+        assert_eq!(terminal_message_count(&model, reattached.as_ref()), 0);
+
+        let ready = init_shell_dcs();
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(output_event(
+                conn,
+                OUR_PTY,
+                (replay.len() + pending_output.len()) as u64,
+                &ready,
+            ));
+        });
+        event_loop.read(&app, |me, _| {
+            assert!(me.pending_ready_notice.is_none());
+            assert!(me.welcomed);
+            assert_eq!(me.input_phase(), RemoteInputPhase::Ready);
+        });
+        assert_eq!(terminal_message_count(&model, reattached.as_ref()), 1);
+        assert_eq!(terminal_message_count(&model, reconnected.as_ref()), 0);
+
+        let reconnect_base_seq = event_loop.read(&app, |me, _| me.last_seq);
+        event_loop.update(&mut app, |me, _| me.begin_transport_reconnect_for_test());
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: reconnect_base_seq,
+                    replay: Vec::new(),
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+        event_loop.read(&app, |me, _| {
+            assert!(me.pending_ready_notice.is_none());
+            assert_eq!(me.input_phase(), RemoteInputPhase::Ready);
+        });
+        assert_eq!(terminal_message_count(&model, reattached.as_ref()), 1);
+        assert_eq!(terminal_message_count(&model, reconnected.as_ref()), 1);
+
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(output_event(
+                conn,
+                OUR_PTY,
+                reconnect_base_seq,
+                b"post-reconnect output chunk",
+            ));
+        });
+        assert_eq!(terminal_message_count(&model, reattached.as_ref()), 1);
+        assert_eq!(terminal_message_count(&model, reconnected.as_ref()), 1);
     });
 }
 

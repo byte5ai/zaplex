@@ -5205,11 +5205,8 @@ impl TerminalView {
                         );
                     });
                 }
-                // When the active conversation is invalidated, fall back to the original pane title
-                self.pane_configuration.update(ctx, |pane_config, ctx| {
-                    pane_config.set_title(self.terminal_title.clone(), ctx);
-                });
-                self.is_using_conversation_for_pane_header_title = false;
+                // Recompute pane identity after clearing conversation metadata.
+                self.update_pane_configuration(ctx);
             }
             BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. } => {
                 self.update_pane_configuration(ctx);

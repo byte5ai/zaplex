@@ -61,6 +61,65 @@ fn review9_partial_transfer_toast_is_not_a_full_skip_or_success_message() {
     );
 }
 
+#[test]
+fn retry_after_host_key_dialog_cancel_starts_a_fresh_connection_attempt() {
+    crate::i18n::init(Some("en"));
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        let cancelled_error = "host key confirmation cancelled";
+
+        view.update(&mut app, |view, ctx| {
+            view.connection = ConnectionState::Failed(cancelled_error.to_string());
+            view.dialog = Some(Dialog::ConfirmUnknownHostKey {
+                host: "test.invalid".to_string(),
+                port: 22,
+                fingerprint_sha256: "SHA256:test".to_string(),
+                key_type: "ssh-ed25519".to_string(),
+            });
+            view.handle_action(&SftpBrowserAction::CloseDialog, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+            assert!(matches!(
+                &view.connection,
+                ConnectionState::Failed(message) if message == cancelled_error
+            ));
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::RetryConnection, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(
+                !matches!(
+                    &view.connection,
+                    ConnectionState::Failed(message) if message == cancelled_error
+                ),
+                "retry must run the connection path instead of leaving the cancelled failure untouched"
+            );
+        });
+    });
+}
+
+#[test]
+fn stale_connection_retry_does_not_restart_an_in_flight_or_connected_browser() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.connection = ConnectionState::Connecting;
+            view.handle_action(&SftpBrowserAction::RetryConnection, ctx);
+            assert!(matches!(view.connection, ConnectionState::Connecting));
+            view.connection = ConnectionState::Connected;
+            view.handle_action(&SftpBrowserAction::RetryConnection, ctx);
+            assert!(matches!(view.connection, ConnectionState::Connected));
+        });
+    });
+}
+
 /// Creates a SftpBrowserView and places it in a window
 ///
 /// The view starts in the Disconnected state (no SSH connection), which does not affect the UI state-logic tests.

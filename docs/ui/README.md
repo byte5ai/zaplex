@@ -59,14 +59,17 @@ bereits vorhandene Implementierung. Sie erklärt diese **nicht** nachträglich f
 - Browserprüfungen belegen nur die Funktionsfähigkeit dieser Referenz. Sie belegen weder native
   UI-Parität noch erfolgreiche echte Verbindungen oder die Abnahme von PR #465.
 
-## Bereits belegte Abweichung der Implementierung
+## Abgleich mit der nativen Implementierung
 
-Im integrierten Stand von PR #465 enthält
-[`app/src/cockpit/panel.rs`](../../app/src/cockpit/panel.rs) weiterhin den zusätzlichen Link
-`cockpit-shell-sessions-connections` mit `WorkspaceAction::OpenSshManager`. Der Referenzentwurf
-verwendet ausschließlich die vorhandene Sidebar-Navigation. Diese Dokumentationsänderung
-entfernt den Link aus der Vorgabe, **nicht aus dem Produktcode**. Das bleibt als Abweichung für
-#459/#160 offen; eine umfassende native Prüfung ist damit nicht durchgeführt.
+Der ursprüngliche Stand von PR #465 enthielt noch den redundanten Link
+`cockpit-shell-sessions-connections`. Die Korrektur entfernt ihn aus dem Produktcode;
+Verbindungen bleiben über die vorhandene Sidebar-Navigation erreichbar. Sessionbaum und
+Konten behalten ihre beiden Bereiche und scrollen unabhängig, damit ein großes Inventar
+die Kontenübersicht nicht aus dem sichtbaren Bereich verdrängt.
+
+Der Referenz-Commit `bea818ce95f71fc103eebe2a7a5c687d9a55c361` bleibt der Ausgangspunkt.
+Die Entfernung einzelner Abweichungen ist keine native Gesamtabnahme. Den aktuellen
+Prüfstand und noch fehlende Nachweise führt #459 beziehungsweise der Korrektur-PR.
 
 Gefundene Abweichungen der bestehenden App in #459 beziehungsweise dem zuständigen Teilissue
 mit Referenzzustand und nativer Evidenz dokumentieren. Nicht den Mockup stillschweigend an die

@@ -299,6 +299,8 @@ The previous static illustrations are superseded, not alternative approved layou
     roles only; no hard-coded colors or decorative pane borders are introduced. Both usage windows
     are stacked across the account-card width, and large account panes preserve existing session
     actions and cost/token provenance without repeating provider identity.
+    The live tree and account area scroll independently inside the existing Cockpit sidebar;
+    large session inventories must not push the account section out of view.
 
 ## Verbindliche Bedienungs- und Refresh-Korrekturen
 

@@ -283,6 +283,8 @@ pub enum SftpBrowserAction {
     GoForward,
     /// Refresh the current directory
     Refresh,
+    /// Retry the SSH/SFTP connection from the beginning.
+    RetryConnection,
     /// Select the referenced entry if that exact object is still listed.
     SelectEntry(EntryReference),
     /// Toggle the multi-selection mark on the referenced entry — the
@@ -731,6 +733,10 @@ fn resolved_download_size(entry_size: u64, resolved_target_size: Option<u64>) ->
     resolved_target_size.unwrap_or(entry_size)
 }
 
+fn connection_retry_available(connection: &ConnectionState) -> bool {
+    matches!(connection, ConnectionState::Failed(_))
+}
+
 /// SFTP browser view
 pub struct SftpBrowserView {
     /// ID of the associated SSH server node
@@ -784,6 +790,8 @@ pub struct SftpBrowserView {
     // ---- Mouse handles ----
     /// Refresh button
     refresh_btn: MouseStateHandle,
+    /// Retry button for a failed connection attempt.
+    retry_connection_btn: MouseStateHandle,
     /// Parent directory button
     up_btn: MouseStateHandle,
     /// Back button
@@ -1032,6 +1040,7 @@ impl SftpBrowserView {
             search_filter: None,
             is_drag_hovering: false,
             refresh_btn: MouseStateHandle::default(),
+            retry_connection_btn: MouseStateHandle::default(),
             up_btn: MouseStateHandle::default(),
             back_btn: MouseStateHandle::default(),
             forward_btn: MouseStateHandle::default(),
@@ -4406,7 +4415,18 @@ impl SftpBrowserView {
             }
         };
 
-        render_centered_status(icon, &msg, 12.0, appearance)
+        let action = connection_retry_available(&self.connection).then(|| {
+            super::dialogs::render_button(
+                &crate::t!("common-try-again"),
+                false,
+                appearance,
+                SftpBrowserAction::RetryConnection,
+                self.retry_connection_btn.clone(),
+                Some("sftp_btn:retry_connection"),
+            )
+        });
+
+        render_centered_status_with_action(icon, &msg, 12.0, action, appearance)
     }
 
     fn render_dialog_overlay(
@@ -4937,6 +4957,16 @@ fn render_centered_status(
     spacing: f32,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    render_centered_status_with_action(icon, message, spacing, None, appearance)
+}
+
+fn render_centered_status_with_action(
+    icon: Icon,
+    message: &str,
+    spacing: f32,
+    action: Option<Box<dyn Element>>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.sub_text_color(theme.background());
 
@@ -4945,7 +4975,7 @@ fn render_centered_status(
         .with_height(24.0)
         .finish();
 
-    let text_el = Text::new_inline(
+    let text_el = Text::new(
         message.to_string(),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
@@ -4953,15 +4983,29 @@ fn render_centered_status(
     .with_color(text_color.into())
     .finish();
 
-    let content = Flex::row()
+    let status = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(spacing)
         .with_child(icon_el)
-        .with_child(text_el)
+        .with_child(Shrinkable::new(1.0, text_el).finish())
         .with_main_axis_size(MainAxisSize::Min)
         .finish();
 
-    Align::new(Container::new(content).with_uniform_padding(24.0).finish()).finish()
+    let mut content = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_spacing(12.0)
+        .with_child(status);
+    if let Some(action) = action {
+        content.add_child(action);
+    }
+
+    Align::new(
+        Container::new(content.finish())
+            .with_uniform_padding(24.0)
+            .finish(),
+    )
+    .finish()
 }
 
 /// The plan for a cross-connection directory transfer: the (local, remote) file
@@ -5544,6 +5588,11 @@ impl TypedActionView for SftpBrowserView {
             }
             SftpBrowserAction::Refresh => {
                 self.refresh_dir(ctx);
+            }
+            SftpBrowserAction::RetryConnection => {
+                if connection_retry_available(&self.connection) && self.dialog.is_none() {
+                    self.connect_to_server(ctx);
+                }
             }
             SftpBrowserAction::ToggleMark(entry) => {
                 if self.row_clicks_suppressed() {

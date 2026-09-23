@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.1.1] — 2026-09-23
+
+- UI-Korrekturen zu #459: Sessionbaum und Konten scrollen unabhängig; Sidebar-Typografie, Theme-Kontraste und Favoriten-Flyouts sind vereinheitlicht. Automatische Terminaltitel behalten Host und Verzeichnis auch bei laufenden Agenten. SFTP-Dialoge geben übersetzten Aktionen genügend Platz und bieten nach Verbindungsfehlern einen erneuten Versuch. Start- und Reconnect-Meldungen erscheinen erst nach tatsächlicher Shell-Bereitschaft.
+
 ## [1.1.0] — 2026-09-21
 
 - **Premium-Workspace für UI #459:** Terminal- und Dateimanager-Panes bewahren ihre Host-Identität in Mehrhost-Tabs; Cockpit und Verbindungen zeigen die zugehörigen Sessions. Ein Klick auf einen Favoriten-Host öffnet die Verbindung im neuen Tab, während das separate Aktions-Flyout neue Agenten sowie Bearbeiten und Entfernen anbietet. Restore erhält Host-, Pane- und Dateimanager-Modus; Shell-Bereitschaft und Eingabeentwürfe bleiben beim Wiederverbinden sichtbar und sicher, Dateioperationen an das gewählte Ziel gebunden.

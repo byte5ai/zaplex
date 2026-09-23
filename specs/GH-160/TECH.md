@@ -128,7 +128,10 @@ restore—resolves the pane's `HostId`/daemon/PTY/generation, never a tab-level 
 
 `app/src/pane_group/pane/terminal_pane.rs` derives the automatic terminal identity from the pane's
 actual host plus project or working-directory basename. The full host/path remains in tooltip and
-accessibility text. A missing CWD uses an honest host/session fallback. Collision handling adds a
+accessibility text. A missing CWD uses the host plus the localized Terminal label; OSC command titles and agent
+summaries never replace this identity. Horizontal tabs, pane headers, and visible vertical-tab
+labels consume the same pane configuration. Activity titles remain searchable and available in
+details or the configured command subtitle. Collision handling adds a
 stable restrained suffix only when two displayed short identities really collide; it does not make
 a row index, truncated session id, or global project value the primary identity.
 
@@ -168,7 +171,9 @@ focus callbacks so late connection/restore events cannot steal focus.
 `app/src/terminal/daemon_tty/event_loop.rs` keep transport, attach, replay, and input readiness as
 distinct evidence. A successful attach is bound to the requested daemon route, PTY id, and
 generation; arbitrary replay output or a status line is not readiness. An already-open exact
-session is focused instead of attached a second time.
+session is focused instead of attached a second time. Success notices for fresh open, attach, and
+reconnect are staged for that exact route/PTY/generation and consumed once only after actual input
+readiness. Failure, exit, and transport replacement discard a pending notice.
 
 The terminal pane exposes ordinary command input only after the event loop can deliver it to that
 attached PTY generation. Text typed or pasted before then is not invisibly queued for later
@@ -375,6 +380,10 @@ Sidebar account cards stack the five-hour and weekly meters so each meter receiv
 available text width. Unknown and estimated values retain their semantic state and never render as
 measured zero. The Cockpit and Connections panels share existing layout constants/components for
 section headers, hierarchy indentation, row heights, flexible identity, and fixed action slots.
+The two Cockpit sections retain independent scroll state and bounded flexible height so a large
+session tree cannot displace the account section. The session area receives at most three fifths
+of available height; unused account space does not expand this cap. This preserves the existing
+navigation.
 Native colors, borders, selection, hover, focus, status, and progress resolve exclusively through
 `appearance.theme()` and existing component themes; the HTML artifact defines role relationships,
 not literal color values. No provider-colored border or other decorative pane outline is added.
@@ -507,6 +516,6 @@ the owning task finishes.
 
 Der Remote-Client bietet zeitschrankenfähige Listenmethoden. Die Frist umfasst Ausgangsqueue und Antwort, und eine RAII-Korrelation entfernt Pending-Einträge auch bei Abbruch. Ein Timeout sendet best-effort Abort; spätere Antworten können keine neue Anfrage erfüllen. Die übrigen Aufrufer behalten ihre bisherige Standardfrist.
 
-`ssh_manager::panel::init` registriert ausschließlich im fokussierten Verbindungsbaum aktive Keybindings. Der gemeinsame Session-Renderer hält primäre Identität flexibel und Öffnen-Aktion fest; Statuswechsel erzeugen keine Zusatzzeile. Der normative Entwurf nutzt ausschließlich die vorhandene Sidebar-Navigation zum Wechsel nach Verbindungen, keinen zusätzlichen Cockpit-Link. Diese Referenzkorrektur ist kein Nachweis, dass die native Oberfläche den redundanten Link bereits entfernt hat. `adopt_daemon_session` reicht denselben echten Installationsfortschrittskanal wie eine neue Verbindung durch.
+`ssh_manager::panel::init` registriert ausschließlich im fokussierten Verbindungsbaum aktive Keybindings. Der gemeinsame Session-Renderer hält primäre Identität flexibel und Öffnen-Aktion fest; Statuswechsel erzeugen keine Zusatzzeile. Der normative Entwurf nutzt ausschließlich die vorhandene Sidebar-Navigation zum Wechsel nach Verbindungen, keinen zusätzlichen Cockpit-Link. Der redundante Link und sein ungenutzter Interaktionszustand sind entfernt; die native Gesamtabnahme bleibt davon unabhängig. `adopt_daemon_session` reicht denselben echten Installationsfortschrittskanal wie eine neue Verbindung durch.
 
 SFTP lädt bekannte Schlüssel zeilenweise in voneinander getrennte libssh2-Sammlungen. Aliasaufteilung und Hash-/Port-Matching bleiben bei libssh2; Verifikationsansichten schreiben keine normalisierten oder verlustbehafteten Daten zurück. Tests enthalten identische Schlüssel gehashter Endpunkte, kurze Aliase, große fremde Inventare, Ports, Marker und nicht-UTF8-Kommentare.

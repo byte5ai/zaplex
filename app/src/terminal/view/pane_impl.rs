@@ -16,7 +16,6 @@ use crate::pane_group::pane::view::header::components::{
 };
 use crate::pane_group::pane::PaneStack;
 use crate::pane_group::{pane::view, pane::view::PaneHeaderAction, BackingView, SplitPaneState};
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::shared_session::participant_avatar_view::render_participants_and_role_elements;
 use crate::terminal::shared_session::render_util::shared_session_indicator_color;
@@ -26,7 +25,6 @@ use crate::terminal::TerminalView;
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::icons;
-use crate::workspace::tab_settings::TabSettings;
 use warp_core::ui::Icon as WarpIcon;
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
@@ -93,51 +91,25 @@ impl TerminalView {
             });
     }
 
-    /// Set the pane title from agent chrome when available, falling back to the regular terminal title.
+    /// Keep automatic terminal chrome tied to its host and directory.
     pub(crate) fn update_pane_configuration(&mut self, ctx: &mut ViewContext<Self>) {
-        let is_ambient_agent = self.is_ambient_agent_session(ctx);
-        let selected_conversation_title = self.selected_conversation_display_title(ctx);
-        let selected_cli_agent_title = self.selected_cli_agent_title_for_chrome(ctx);
         let identity_host = self
             .pane_configuration
             .as_ref(ctx)
             .terminal_identity_host()
             .map(str::to_owned)
             .unwrap_or_else(|| crate::t!("cockpit-spawn-card-host-local").to_string());
-        let automatic_identity = super::tab_metadata::terminal_identity(
+        let identity = super::tab_metadata::terminal_identity(
             &identity_host,
             self.display_working_directory(ctx).as_deref(),
-            &self.terminal_title,
+            &crate::t!("workspace-new-session-terminal"),
         );
-        let mut identity_tooltip = None;
-
-        // Prefer CLI agent session text before the terminal title,
-        // matching the vertical-tab behavior in terminal_primary_line_data().
-        let new_pane_title = if let Some(cli_agent_title) = selected_cli_agent_title {
-            self.is_using_conversation_for_pane_header_title = false;
-            cli_agent_title
-        } else if self.is_long_running_and_user_controlled() && !self.terminal_title.is_empty() {
-            self.is_using_conversation_for_pane_header_title = false;
-            self.terminal_title.clone()
-        } else {
-            match selected_conversation_title {
-                Some(conversation_title) => {
-                    self.is_using_conversation_for_pane_header_title = true;
-                    conversation_title
-                }
-                None => {
-                    if is_ambient_agent {
-                        default_agent_conversation_title()
-                    } else {
-                        identity_tooltip = Some(automatic_identity.full);
-                        automatic_identity.short
-                    }
-                }
-            }
-        };
+        // OSC titles and agent summaries describe activity, not pane identity.
+        // Explicit tab titles are applied separately by PaneGroup::display_title.
+        self.is_using_conversation_for_pane_header_title = false;
         self.pane_configuration.update(ctx, |pane_config, ctx| {
-            pane_config.set_title(new_pane_title, ctx);
-            pane_config.set_title_tooltip(identity_tooltip, ctx);
+            pane_config.set_title(identity.short, ctx);
+            pane_config.set_title_tooltip(Some(identity.full), ctx);
             if FeatureFlag::AgentView.is_enabled() {
                 pane_config.refresh_pane_header_overflow_menu_items(ctx);
             }
@@ -218,11 +190,12 @@ impl TerminalView {
         let title = pane_config.title().to_owned();
         let title_tooltip = pane_config.title_tooltip().map(str::to_owned);
         let title_tooltip_mouse_state = pane_config.title_tooltip_mouse_state();
-        let clip_config = if self.is_using_conversation_for_pane_header_title {
-            ClipConfig::ellipsis()
-        } else {
-            ClipConfig::start()
-        };
+        let clip_config =
+            if self.is_using_conversation_for_pane_header_title || title_tooltip.is_some() {
+                ClipConfig::ellipsis()
+            } else {
+                ClipConfig::start()
+            };
 
         let should_render_ambient_agent_indicator = {
             let model = self.model.lock();
@@ -257,7 +230,9 @@ impl TerminalView {
                     .finish(),
                 )
             }
-        } else if self.is_using_conversation_for_pane_header_title
+        } else if self
+            .selected_conversation_for_user_facing_chrome(app)
+            .is_some()
             || (self.is_long_running()
                 && self
                     .ai_context_model
@@ -875,21 +850,6 @@ impl TerminalView {
     ) -> Option<String> {
         self.selected_conversation_for_user_facing_chrome(ctx)
             .and_then(AIConversation::latest_user_query)
-    }
-
-    fn selected_cli_agent_title_for_chrome(&self, ctx: &AppContext) -> Option<String> {
-        let session = CLIAgentSessionsModel::as_ref(ctx)
-            .session(self.view_id)
-            .filter(|session| session.listener.is_some())?;
-
-        if *TabSettings::as_ref(ctx).use_latest_user_prompt_as_conversation_title_in_tab_names {
-            session
-                .session_context
-                .latest_user_prompt()
-                .or_else(|| session.session_context.title_like_text())
-        } else {
-            session.session_context.title_like_text()
-        }
     }
 }
 

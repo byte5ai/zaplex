@@ -24,7 +24,7 @@ use warpui::{
         Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
         DispatchEventResult, Element, EventHandler, Flex, Hoverable, Icon, MainAxisAlignment,
         MainAxisSize, MouseInBehavior, MouseStateHandle, ParentElement, Radius, Rect, SavePosition,
-        Shrinkable, Text,
+        Shrinkable, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
     },
     fonts::{FamilyId, Properties},
     keymap::FixedBinding,
@@ -56,6 +56,19 @@ static NEXT_SUBMENU_POSITION_NAMESPACE: AtomicU64 = AtomicU64::new(1);
 
 fn next_submenu_position_namespace() -> u64 {
     NEXT_SUBMENU_POSITION_NAMESPACE.fetch_add(1, Ordering::Relaxed)
+}
+
+fn split_submenu_primary_width(menu_width: f32) -> f32 {
+    debug_assert!(menu_width.is_finite());
+    (menu_width - SPLIT_SUBMENU_TRIGGER_WIDTH).max(0.)
+}
+
+fn menu_item_main_axis_alignment(ellipsize_label: bool) -> MainAxisAlignment {
+    if ellipsize_label {
+        MainAxisAlignment::Start
+    } else {
+        MainAxisAlignment::SpaceEvenly
+    }
 }
 
 fn should_reverse_submenu_layout(
@@ -429,6 +442,12 @@ struct RightSideLabel {
     font_properties: Properties,
 }
 
+#[derive(Clone)]
+struct SplitSubmenuTrigger {
+    tooltip: String,
+    mouse_state: MouseStateHandle,
+}
+
 #[derive(Clone, Default)]
 pub struct MenuItemFields<A: Action + Clone> {
     element: MenuItemLabel,
@@ -461,13 +480,16 @@ pub struct MenuItemFields<A: Action + Clone> {
     icon_size_override: Option<f32>,
     /// When present on a submenu, the row is split into an independently actionable
     /// primary label and a fixed-width trailing submenu trigger.
-    split_submenu_trigger_tooltip: Option<String>,
+    split_submenu_trigger: Option<SplitSubmenuTrigger>,
     /// Disables only the primary action in a split-submenu row while leaving its
     /// trailing submenu trigger interactive.
     split_submenu_primary_disabled: bool,
     /// Keeps compact identity labels at the normal font size and clips them with
     /// an ellipsis instead of shrinking the glyphs to fit.
     ellipsize_label: bool,
+    /// Whether a submenu-capable target renders the standard trailing chevron.
+    /// Split rows suppress it only for their dedicated `⋯` target.
+    render_submenu_chevron: bool,
 }
 
 impl<A: Action + Clone> std::fmt::Debug for MenuItemFields<A> {
@@ -506,9 +528,10 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
-            split_submenu_trigger_tooltip: None,
+            split_submenu_trigger: None,
             split_submenu_primary_disabled: false,
             ellipsize_label: false,
+            render_submenu_chevron: true,
         }
     }
 
@@ -536,9 +559,10 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
-            split_submenu_trigger_tooltip: None,
+            split_submenu_trigger: None,
             split_submenu_primary_disabled: false,
             ellipsize_label: false,
+            render_submenu_chevron: true,
         }
     }
 
@@ -569,9 +593,10 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
-            split_submenu_trigger_tooltip: None,
+            split_submenu_trigger: None,
             split_submenu_primary_disabled: false,
             ellipsize_label: false,
+            render_submenu_chevron: true,
         }
     }
 
@@ -605,9 +630,10 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
-            split_submenu_trigger_tooltip: None,
+            split_submenu_trigger: None,
             split_submenu_primary_disabled: false,
             ellipsize_label: false,
+            render_submenu_chevron: true,
         }
     }
 
@@ -639,9 +665,10 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
-            split_submenu_trigger_tooltip: None,
+            split_submenu_trigger: None,
             split_submenu_primary_disabled: false,
             ellipsize_label: false,
+            render_submenu_chevron: true,
         }
     }
 
@@ -672,9 +699,10 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
-            split_submenu_trigger_tooltip: None,
+            split_submenu_trigger: None,
             split_submenu_primary_disabled: false,
             ellipsize_label: false,
+            render_submenu_chevron: true,
         }
     }
 
@@ -702,9 +730,10 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: None,
             override_hover_background_color: None,
             icon_size_override: None,
-            split_submenu_trigger_tooltip: None,
+            split_submenu_trigger: None,
             split_submenu_primary_disabled: false,
             ellipsize_label: false,
+            render_submenu_chevron: true,
         }
     }
 
@@ -748,9 +777,10 @@ impl<A: Action + Clone> MenuItemFields<A> {
             right_side_label: self.right_side_label,
             override_hover_background_color: self.override_hover_background_color,
             icon_size_override: self.icon_size_override,
-            split_submenu_trigger_tooltip: self.split_submenu_trigger_tooltip,
+            split_submenu_trigger: self.split_submenu_trigger,
             split_submenu_primary_disabled: self.split_submenu_primary_disabled,
             ellipsize_label: self.ellipsize_label,
+            render_submenu_chevron: self.render_submenu_chevron,
         }
     }
 
@@ -851,9 +881,56 @@ impl<A: Action + Clone> MenuItemFields<A> {
     /// Render a submenu row as a primary action plus a fixed trailing `⋯` trigger.
     /// The primary action and submenu trigger remain separate pointer targets.
     pub fn with_split_submenu_trigger(mut self, tooltip: impl Into<String>) -> Self {
-        self.split_submenu_trigger_tooltip = Some(tooltip.into());
+        self.split_submenu_trigger = Some(SplitSubmenuTrigger {
+            tooltip: tooltip.into(),
+            mouse_state: Default::default(),
+        });
         self.ellipsize_label = true;
         self
+    }
+
+    fn split_submenu_trigger_fields(&self) -> Option<Self> {
+        let trigger = self.split_submenu_trigger.as_ref()?;
+        let trigger_label = trigger.tooltip.clone();
+        let font_size_override = self.override_font_size;
+        let icon_size_override = self.icon_size_override;
+        let mut fields = Self::new_with_custom_label(
+            Arc::new(move |is_selected, is_hovered, appearance, _| {
+                let theme = appearance.theme();
+                let background = if is_selected || is_hovered {
+                    theme.accent_button_color()
+                } else {
+                    theme.surface_2()
+                };
+                let font_size =
+                    font_size_override.unwrap_or_else(|| appearance.ui_builder().ui_font_size());
+                let icon_size = icon_size_override.unwrap_or_else(|| appearance.ui_font_size());
+                // Match the primary text line so both hover targets fill one row.
+                ConstrainedBox::new(
+                    Align::new(
+                        ConstrainedBox::new(
+                            icons::Icon::DotsHorizontal
+                                .to_warpui_icon(theme.main_text_color(background))
+                                .finish(),
+                        )
+                        .with_width(icon_size)
+                        .with_height(icon_size)
+                        .finish(),
+                    )
+                    .finish(),
+                )
+                .with_height((font_size * DEFAULT_UI_LINE_HEIGHT_RATIO).max(icon_size))
+                .finish()
+            }),
+            Some(trigger_label.clone()),
+        )
+        .with_tooltip(trigger_label)
+        .with_padding_override(MENU_ITEM_VERTICAL_PADDING, 0.);
+        fields.has_submenu = true;
+        fields.disabled = self.disabled;
+        fields.mouse_state = trigger.mouse_state.clone();
+        fields.render_submenu_chevron = false;
+        Some(fields)
     }
 
     /// Disable only the primary action of a split-submenu row. The fixed trailing
@@ -895,7 +972,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
 
     #[cfg(test)]
     pub fn has_split_submenu_trigger(&self) -> bool {
-        self.split_submenu_trigger_tooltip.is_some()
+        self.split_submenu_trigger.is_some()
     }
 
     #[cfg(test)]
@@ -1184,7 +1261,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
             } else {
                 label_row.add_child(label_element);
 
-                if self.has_submenu {
+                if self.has_submenu && self.render_submenu_chevron {
                     label_row
                         .add_child(self.render_right_aligned_chevron(appearance, primary_color));
                 } else if let Some(right_label) =
@@ -1226,7 +1303,7 @@ impl<A: Action + Clone> MenuItemFields<A> {
 
             let container = Container::new(
                 label_row
-                    .with_main_axis_alignment(MainAxisAlignment::SpaceEvenly)
+                    .with_main_axis_alignment(menu_item_main_axis_alignment(self.ellipsize_label))
                     .with_cross_axis_alignment(horizontal_alignment)
                     .finish(),
             )
@@ -1407,7 +1484,7 @@ impl<A: Action + Clone> MenuItem<A> {
             MenuItem::Separator => None,
             MenuItem::ItemsRow { items } => Some(items.len()),
             MenuItem::Submenu { fields, menu } => {
-                if fields.split_submenu_trigger_tooltip.is_some() {
+                if fields.split_submenu_trigger.is_some() {
                     Some(1)
                 } else {
                     // This includes the label as well.
@@ -1524,39 +1601,14 @@ impl<A: Action + Clone> MenuItem<A> {
             .with_padding_right(MENU_ITEM_HORIZONTAL_PADDING)
             .finish(),
             MenuItem::Submenu { fields, .. } => {
-                if let Some(tooltip) = &fields.split_submenu_trigger_tooltip {
+                if let Some(trigger_fields) = fields.split_submenu_trigger_fields() {
                     let mut primary_fields = fields.clone();
                     primary_fields.has_submenu = false;
-                    primary_fields.split_submenu_trigger_tooltip = None;
+                    primary_fields.split_submenu_trigger = None;
                     primary_fields.disabled =
                         fields.disabled || fields.split_submenu_primary_disabled;
 
-                    let trigger_label = tooltip.clone();
-                    let mut trigger_fields = MenuItemFields::<A>::new_with_custom_label(
-                        Arc::new(|is_selected, is_hovered, appearance, _| {
-                            let theme = appearance.theme();
-                            let background = if is_selected || is_hovered {
-                                theme.accent_button_color()
-                            } else {
-                                theme.surface_2()
-                            };
-                            ConstrainedBox::new(
-                                icons::Icon::DotsHorizontal
-                                    .to_warpui_icon(theme.main_text_color(background))
-                                    .finish(),
-                            )
-                            .with_width(appearance.ui_font_size())
-                            .with_height(appearance.ui_font_size())
-                            .finish()
-                        }),
-                        Some(trigger_label.clone()),
-                    )
-                    .with_tooltip(tooltip.clone())
-                    .with_padding_override(MENU_ITEM_VERTICAL_PADDING, 0.);
-                    trigger_fields.has_submenu = true;
-                    trigger_fields.disabled = fields.disabled;
-
-                    let primary_width = menu_width - SPLIT_SUBMENU_TRIGGER_WIDTH;
+                    let primary_width = split_submenu_primary_width(menu_width);
                     let primary = ConstrainedBox::new(primary_fields.render(
                         menu_background_color,
                         depth,
@@ -2152,7 +2204,7 @@ impl<A: Action + Clone> SubMenu<A> {
         if menu.close_active_split_submenu(ctx) {
             return true;
         }
-        if fields.split_submenu_trigger_tooltip.is_none()
+        if fields.split_submenu_trigger.is_none()
             || (selected_item_index != Some(1) && menu.selected_row_index.is_none())
         {
             return false;
@@ -2180,7 +2232,7 @@ impl<A: Action + Clone> SubMenu<A> {
                 .get(selected_item_index)
                 .and_then(|fields| fields.on_select_action.clone()),
             MenuItem::Submenu { fields, menu } => {
-                if fields.split_submenu_trigger_tooltip.is_some() && selected_item_index == 0 {
+                if fields.split_submenu_trigger.is_some() && selected_item_index == 0 {
                     if fields.disabled || fields.split_submenu_primary_disabled {
                         None
                     } else {
@@ -2288,7 +2340,7 @@ impl<A: Action + Clone> SubMenu<A> {
             else {
                 return false;
             };
-            return fields.split_submenu_trigger_tooltip.is_none()
+            return fields.split_submenu_trigger.is_none()
                 || self.selected_item_index == Some(1)
                 || menu.selected_row_index.is_some();
         }
@@ -2361,7 +2413,7 @@ impl<A: Action + Clone> SubMenu<A> {
                 let MenuItem::Submenu { fields, menu } = selected_item_row else {
                     return menus;
                 };
-                if fields.split_submenu_trigger_tooltip.is_some()
+                if fields.split_submenu_trigger.is_some()
                     && selected_item != Some(1)
                     && menu.selected_row_index.is_none()
                 {
