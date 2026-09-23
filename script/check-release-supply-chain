@@ -90,7 +90,7 @@ def validate_prepare_environment_token_scope() -> list[str]:
 
 
 def strip_yaml_comment(line: str) -> str:
-    return re.sub(r"\s+#.*$", "", line).rstrip()
+    return re.sub(r"(?:^|\s+)#.*$", "", line).rstrip()
 
 
 def unquote_yaml_value(value: str) -> str:
@@ -149,14 +149,14 @@ def release_permission_errors(text: str, source: str) -> list[str]:
     blocks, errors = permission_blocks(text, source)
     lines = text.splitlines()
     publisher_start = next(
-        (index for index, line in enumerate(lines) if line == "  publish_release:"),
+        (index for index, line in enumerate(lines) if strip_yaml_comment(line) == "  publish_release:"),
         len(lines),
     )
     publisher_end = next(
         (
             index
             for index in range(publisher_start + 1, len(lines))
-            if re.fullmatch(r"  [a-zA-Z0-9_-]+:", lines[index])
+            if re.fullmatch(r"  [a-zA-Z0-9_-]+:", strip_yaml_comment(lines[index]))
         ),
         len(lines),
     )
@@ -480,6 +480,19 @@ jobs:
         errors.append("release permission self-test accepted commented or quoted write access")
     if not release_permission_errors(unsafe_publisher_extra, "fixture.yml"):
         errors.append("release permission self-test accepted extra publisher permissions")
+
+    column_zero_comment_permissions = unsafe_build_permissions.replace(
+        "    permissions:\n      contents: write", "    permissions:\n# upload\n      contents: write", 1
+    )
+    if not release_permission_errors(column_zero_comment_permissions, "fixture.yml"):
+        errors.append("permission self-test stopped at a column-zero comment")
+    column_zero_comment_env = unsafe_global_token.replace("env:\n", "env:\n# shared\n")
+    if not workflow_token_scope_errors(column_zero_comment_env, "fixture.yml"):
+        errors.append("token self-test stopped at a column-zero comment")
+    for job_key in ("  notify:  # post-release", "  notify: "):
+        following_writer = safe_permissions + job_key + "\n    permissions:\n      contents: write\n    steps: []\n"
+        if not release_permission_errors(following_writer, "fixture.yml"):
+            errors.append("permission self-test extended publisher rights to a following job")
 
     readonly_permissions = "permissions:\n  contents: read\njobs: {}\n"
     if readonly_permission_errors(readonly_permissions, "fixture.yml"):
