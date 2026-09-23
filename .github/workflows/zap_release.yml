@@ -34,12 +34,11 @@ on:
         default: v1.1.1
         required: true
 
-# Creating a release + uploading assets requires write permissions. Default GITHUB_TOKEN is read-only on forks/restricted repos,
-# explicitly declare contents: write here to avoid 403 "Resource not accessible by integration".
-# actions: write is used by publish_release at the end to delete this run's workflow artifacts (free up Actions storage).
+# Build and metadata jobs only need repository read access. The publisher job
+# receives the write permissions required to create the Release and clean up
+# this run's temporary workflow artifacts.
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -66,6 +65,7 @@ jobs:
       # the previous published release.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Resolve immutable release commit
@@ -274,6 +274,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
+          persist-credentials: false
           ref: ${{ needs.prepare_metadata.outputs.release_sha }}
 
       - name: Validate Developer ID signing inputs
@@ -299,6 +300,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           ref: ${{ needs.prepare_metadata.outputs.release_sha }}
 
       - name: Restore cached remote-server tarball
@@ -392,6 +394,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
+          persist-credentials: false
           ref: ${{ needs.prepare_metadata.outputs.release_sha }}
 
       - name: Fetch bundled remote-server tarball
@@ -519,6 +522,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
+          persist-credentials: false
           ref: ${{ needs.prepare_metadata.outputs.release_sha }}
 
       - uses: ./.github/actions/prepare_environment
@@ -565,6 +569,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
+          persist-credentials: false
           ref: ${{ needs.prepare_metadata.outputs.release_sha }}
 
       - name: Fetch bundled Linux remote-server archive
@@ -735,6 +740,9 @@ jobs:
     # ci-lint: allow-CI005  This Linux job only publishes already-built artifacts.
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: write
     # Gate the release on the supported platforms only (macOS arm64 + Linux); if either fails
     # → this job is skipped → no half-published Release. Windows is unsupported for now and is
     # deliberately NOT in `needs`, so a Windows failure can never block a macOS/Linux release.
@@ -769,6 +777,7 @@ jobs:
         with:
           name: ${{ needs.prepare_metadata.outputs.release_name }}
           tag_name: ${{ needs.prepare_metadata.outputs.release_tag }}
+          target_commitish: ${{ needs.prepare_metadata.outputs.release_sha }}
           body_path: ./release-body.md
           draft: false
           prerelease: ${{ needs.prepare_metadata.outputs.prerelease }}

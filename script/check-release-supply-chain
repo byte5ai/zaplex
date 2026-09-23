@@ -17,9 +17,13 @@ INPUT_SHELL_FILES = (
     REPO_ROOT / ".github" / "workflows" / "build-remote-server.yml",
     REPO_ROOT / ".github" / "actions" / "prepare_environment" / "action.yml",
 )
-ACTION_USE = re.compile(r"^\s*uses:\s*([^\s#]+)@([^\s#]+)")
+ACTION_USE = re.compile(r"^\s*(?:-\s+)?uses:\s*([^\s#]+)@([^\s#]+)")
 IMMUTABLE_ACTION_REF = re.compile(r"^[0-9a-f]{40}$")
 INPUT_EXPRESSION = "${{ inputs."
+CHECKOUT_USE = re.compile(r"^(?P<indent>\s*)(?:-\s+)?uses:\s*actions/checkout@")
+REPOSITORY_TOKEN = re.compile(
+    r"\b(?:GH_TOKEN|GITHUB_TOKEN)\b|\$\{\{\s*(?:github\.token|secrets\.GITHUB_TOKEN)\s*\}\}"
+)
 
 
 def label(path: Path) -> str:
@@ -32,6 +36,213 @@ def workflow_files() -> list[Path]:
         files.extend(root.glob("**/*.yml"))
         files.extend(root.glob("**/*.yaml"))
     return sorted(set(files))
+
+
+def checkout_credential_errors(text: str, source: str) -> list[str]:
+    errors = []
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        match = CHECKOUT_USE.match(line)
+        if match is None:
+            continue
+        step_indent = len(match.group("indent"))
+        end = index + 1
+        while end < len(lines):
+            stripped = lines[end].lstrip()
+            child_indent = len(lines[end]) - len(stripped)
+            if stripped and (
+                child_indent < step_indent
+                or (child_indent == step_indent and stripped.startswith("- "))
+            ):
+                break
+            end += 1
+        step = "\n".join(lines[index:end])
+        if re.search(r"(?m)^\s+persist-credentials:\s*false\s*$", step) is None:
+            errors.append(
+                f"{source}:{index + 1}: checkout must set persist-credentials: false"
+            )
+    return errors
+
+
+def validate_checkout_credentials(paths: list[Path]) -> list[str]:
+    errors = []
+    for path in paths:
+        errors.extend(
+            checkout_credential_errors(path.read_text(encoding="utf-8"), label(path))
+        )
+    return errors
+
+
+def prepare_environment_token_errors(text: str, source: str) -> list[str]:
+    for line_number, line in enumerate(text.splitlines(), 1):
+        if line.lstrip().startswith("#"):
+            continue
+        if REPOSITORY_TOKEN.search(line) is not None:
+            return [
+                f"{source}:{line_number}: shared environment setup must not receive or export a repository token"
+            ]
+    return []
+
+
+def validate_prepare_environment_token_scope() -> list[str]:
+    path = REPO_ROOT / ".github" / "actions" / "prepare_environment" / "action.yml"
+    return prepare_environment_token_errors(path.read_text(encoding="utf-8"), label(path))
+
+
+def strip_yaml_comment(line: str) -> str:
+    return re.sub(r"\s+#.*$", "", line).rstrip()
+
+
+def unquote_yaml_value(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
+def permission_blocks(
+    text: str, source: str
+) -> tuple[list[tuple[int, int, dict[str, str]]], list[str]]:
+    blocks = []
+    errors = []
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        code = strip_yaml_comment(line)
+        stripped = code.lstrip()
+        match = re.fullmatch(r"permissions:\s*(.*)", stripped)
+        if match is None:
+            continue
+        indent = len(code) - len(stripped)
+        scalar = unquote_yaml_value(match.group(1))
+        if scalar:
+            if scalar not in ("read-all", "write-all"):
+                errors.append(f"{source}:{index + 1}: invalid permissions scalar")
+            blocks.append((index, indent, {"*": scalar}))
+            continue
+
+        values = {}
+        for child_index in range(index + 1, len(lines)):
+            child_code = strip_yaml_comment(lines[child_index])
+            child_stripped = child_code.lstrip()
+            child_indent = len(child_code) - len(child_stripped)
+            if child_stripped and child_indent <= indent:
+                break
+            if not child_stripped:
+                continue
+            entry = re.fullmatch(r"([a-z-]+):\s*(.+)", child_stripped)
+            if child_indent != indent + 2 or entry is None:
+                errors.append(
+                    f"{source}:{child_index + 1}: invalid permissions entry"
+                )
+                continue
+            value = unquote_yaml_value(entry.group(2))
+            if value not in ("read", "write", "none"):
+                errors.append(
+                    f"{source}:{child_index + 1}: invalid permissions value"
+                )
+            values[entry.group(1)] = value
+        blocks.append((index, indent, values))
+    return blocks, errors
+
+
+def release_permission_errors(text: str, source: str) -> list[str]:
+    blocks, errors = permission_blocks(text, source)
+    lines = text.splitlines()
+    publisher_start = next(
+        (index for index, line in enumerate(lines) if line == "  publish_release:"),
+        len(lines),
+    )
+    publisher_end = next(
+        (
+            index
+            for index in range(publisher_start + 1, len(lines))
+            if re.fullmatch(r"  [a-zA-Z0-9_-]+:", lines[index])
+        ),
+        len(lines),
+    )
+
+    top_level = next((values for _, indent, values in blocks if indent == 0), None)
+    if top_level != {"contents": "read"}:
+        errors.append(f"{source}: workflow permissions must be limited to contents: read")
+
+    publisher_permissions = next(
+        (
+            values
+            for index, indent, values in blocks
+            if publisher_start < index < publisher_end and indent == 4
+        ),
+        None,
+    )
+    if publisher_permissions != {"contents": "write", "actions": "write"}:
+        errors.append(
+            f"{source}: publish_release must exclusively declare contents/actions write"
+        )
+
+    if any(
+        any(value in ("write", "write-all") for value in values.values())
+        for index, _, values in blocks
+        if not publisher_start < index < publisher_end
+    ):
+        errors.append(f"{source}: write permissions are forbidden outside publish_release")
+    return errors
+
+
+def validate_release_permissions() -> list[str]:
+    path = REPO_ROOT / ".github" / "workflows" / "zap_release.yml"
+    return release_permission_errors(path.read_text(encoding="utf-8"), label(path))
+
+
+def readonly_permission_errors(text: str, source: str) -> list[str]:
+    blocks, errors = permission_blocks(text, source)
+    top_level = next((values for _, indent, values in blocks if indent == 0), None)
+    if top_level != {"contents": "read"}:
+        errors.append(f"{source}: workflow permissions must be limited to contents: read")
+    if any(
+        any(value in ("write", "write-all") for value in values.values())
+        for _, _, values in blocks
+    ):
+        errors.append(f"{source}: write permissions are forbidden")
+    return errors
+
+
+def validate_readonly_workflow_permissions() -> list[str]:
+    errors = []
+    for name in ("test-dmg.yml", "build-remote-server.yml"):
+        path = REPO_ROOT / ".github" / "workflows" / name
+        errors.extend(readonly_permission_errors(path.read_text(encoding="utf-8"), label(path)))
+    return errors
+
+
+def workflow_token_scope_errors(text: str, source: str) -> list[str]:
+    errors = []
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        code = strip_yaml_comment(line)
+        stripped = code.lstrip()
+        indent = len(code) - len(stripped)
+        if "GITHUB_ENV" in code and REPOSITORY_TOKEN.search(code) is not None:
+            errors.append(f"{source}:{index + 1}: repository token exported globally")
+        if stripped != "env:" or indent not in (0, 4):
+            continue
+        for child_index in range(index + 1, len(lines)):
+            child = strip_yaml_comment(lines[child_index])
+            child_stripped = child.lstrip()
+            child_indent = len(child) - len(child_stripped)
+            if child_stripped and child_indent <= indent:
+                break
+            if REPOSITORY_TOKEN.search(child) is not None:
+                errors.append(
+                    f"{source}:{child_index + 1}: repository token forbidden in workflow/job env"
+                )
+    return errors
+
+
+def validate_workflow_token_scopes() -> list[str]:
+    errors = []
+    root = REPO_ROOT / ".github" / "workflows"
+    for path in sorted((*root.glob("*.yml"), *root.glob("*.yaml"))):
+        errors.extend(workflow_token_scope_errors(path.read_text(encoding="utf-8"), label(path)))
+    return errors
 
 
 def validate_action_pins(paths: list[Path]) -> list[str]:
@@ -148,6 +359,9 @@ def validate_source_sha_contract() -> list[str]:
     if release.count("ref: ${{ needs.prepare_metadata.outputs.release_sha }}") != 5:
         errors.append("zap_release.yml: every release checkout must use the resolved release SHA")
 
+    if "target_commitish: ${{ needs.prepare_metadata.outputs.release_sha }}" not in release:
+        errors.append("zap_release.yml: new release tags must use the resolved release SHA")
+
     test_dmg = (REPO_ROOT / ".github" / "workflows" / "test-dmg.yml").read_text(
         encoding="utf-8"
     )
@@ -162,6 +376,116 @@ def self_test() -> list[str]:
         errors.append("floating action self-test was accepted")
     if IMMUTABLE_ACTION_REF.fullmatch("a" * 40) is None:
         errors.append("immutable action self-test was rejected")
+    action_match = ACTION_USE.match("  - uses: example/action@v1")
+    if action_match is None or IMMUTABLE_ACTION_REF.fullmatch(action_match.group(2)):
+        errors.append("dash-prefixed floating action self-test was accepted")
+
+    unsafe_checkout = """steps:
+  - uses: actions/checkout@abc
+  - run: cargo check
+"""
+    safe_checkout = """steps:
+  - uses: actions/checkout@abc
+    with:
+      fetch-depth: 0
+      persist-credentials: false
+"""
+    cross_job_checkout = """jobs:
+  unsafe:
+    steps:
+      - uses: actions/checkout@abc
+  safe:
+    steps:
+      - name: Checkout
+        uses: actions/checkout@abc
+        with:
+          persist-credentials: false
+"""
+    same_job_checkout = """steps:
+  - uses: actions/checkout@abc
+  - uses: actions/checkout@abc
+    with:
+      persist-credentials: false
+"""
+    if not checkout_credential_errors(unsafe_checkout, "fixture.yml"):
+        errors.append("checkout credential self-test accepted persisted credentials")
+    if checkout_credential_errors(safe_checkout, "fixture.yml"):
+        errors.append("checkout credential self-test rejected non-persisted credentials")
+    if len(checkout_credential_errors(cross_job_checkout, "fixture.yml")) != 1:
+        errors.append("checkout credential self-test crossed step or job boundaries")
+    if len(checkout_credential_errors(same_job_checkout, "fixture.yml")) != 1:
+        errors.append("checkout credential self-test crossed sibling step boundaries")
+
+    unsafe_prepare = """steps:
+  - run: echo \"GH_TOKEN=$TOKEN\" >> \"$GITHUB_ENV\"
+"""
+    if not prepare_environment_token_errors(unsafe_prepare, "fixture.yml"):
+        errors.append("environment token self-test accepted a global token export")
+    if prepare_environment_token_errors("steps:\n  - run: cargo check\n", "fixture.yml"):
+        errors.append("environment token self-test rejected a token-free action")
+
+    unsafe_global_token = """env:
+  GH_TOKEN: ${{ github.token }}
+jobs: {}
+"""
+    safe_step_token = """jobs:
+  inspect:
+    steps:
+      - run: gh api rate_limit
+        env:
+          GH_TOKEN: ${{ github.token }}
+"""
+    if not workflow_token_scope_errors(unsafe_global_token, "fixture.yml"):
+        errors.append("workflow token self-test accepted a global repository token")
+    if workflow_token_scope_errors(safe_step_token, "fixture.yml"):
+        errors.append("workflow token self-test rejected a step-scoped repository token")
+
+    safe_permissions = """permissions:
+  contents: read
+jobs:
+  build:
+    steps: []
+  publish_release:
+    permissions:
+      contents: write
+      actions: write
+    steps: []
+"""
+    unsafe_permissions = safe_permissions.replace("contents: read", "contents: write", 1)
+    unsafe_build_permissions = safe_permissions.replace(
+        "  build:\n    steps: []",
+        "  build:\n    permissions:\n      contents: write\n    steps: []",
+    )
+    unsafe_build_write_all = safe_permissions.replace(
+        "  build:\n    steps: []",
+        "  build:\n    permissions: write-all\n    steps: []",
+    )
+    unsafe_commented_write = safe_permissions.replace(
+        "  build:\n    steps: []",
+        "  build:\n    permissions:  # temporary\n      contents: \"write\"  # upload\n    steps: []",
+    )
+    unsafe_publisher_extra = safe_permissions.replace(
+        "      actions: write",
+        "      actions: write\n      id-token: write",
+    )
+    if release_permission_errors(safe_permissions, "fixture.yml"):
+        errors.append("release permission self-test rejected least-privilege permissions")
+    if not release_permission_errors(unsafe_permissions, "fixture.yml"):
+        errors.append("release permission self-test accepted workflow-wide write access")
+    if not release_permission_errors(unsafe_build_permissions, "fixture.yml"):
+        errors.append("release permission self-test accepted build-job write access")
+    if not release_permission_errors(unsafe_build_write_all, "fixture.yml"):
+        errors.append("release permission self-test accepted build-job write-all access")
+    if not release_permission_errors(unsafe_commented_write, "fixture.yml"):
+        errors.append("release permission self-test accepted commented or quoted write access")
+    if not release_permission_errors(unsafe_publisher_extra, "fixture.yml"):
+        errors.append("release permission self-test accepted extra publisher permissions")
+
+    readonly_permissions = "permissions:\n  contents: read\njobs: {}\n"
+    if readonly_permission_errors(readonly_permissions, "fixture.yml"):
+        errors.append("read-only permission self-test rejected contents read")
+    if not readonly_permission_errors("jobs: {}\n", "fixture.yml"):
+        errors.append("read-only permission self-test accepted missing permissions")
     return errors
 
 
@@ -174,6 +498,11 @@ def main() -> int:
     errors.extend(validate_action_pins(workflow_files()))
     for path in INPUT_SHELL_FILES:
         errors.extend(direct_inputs_in_run_blocks(path))
+    errors.extend(validate_checkout_credentials(workflow_files()))
+    errors.extend(validate_prepare_environment_token_scope())
+    errors.extend(validate_workflow_token_scopes())
+    errors.extend(validate_release_permissions())
+    errors.extend(validate_readonly_workflow_permissions())
     errors.extend(validate_installers())
     errors.extend(validate_source_sha_contract())
 

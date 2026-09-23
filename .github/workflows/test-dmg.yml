@@ -35,6 +35,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   CHANNEL: oss
@@ -49,6 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           # Phase A verifies ancestry from the recorded V1 base commit.
           fetch-depth: 0
 
@@ -91,6 +95,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           ref: ${{ needs.readiness.outputs.source_sha }}
 
       - name: Validate Developer ID signing inputs
@@ -122,6 +127,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           ref: ${{ needs.readiness.outputs.source_sha }}
 
       # Build the daemon ONCE and reuse it. The CLI target belongs to the `warp`
@@ -214,6 +220,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           ref: ${{ needs.readiness.outputs.source_sha }}
 
       - uses: ./.github/actions/prepare_environment
@@ -284,6 +291,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           ref: ${{ needs.readiness.outputs.source_sha }}
 
       - name: Fetch prepared app

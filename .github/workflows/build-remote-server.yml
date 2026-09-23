@@ -26,6 +26,9 @@ on:
         type: string
         default: v0.daemontest
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   CHANNEL: oss
@@ -37,6 +40,8 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Validate dispatch inputs
         shell: bash

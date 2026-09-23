@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Review-Korrekturen zu #467/#468: SQLite-Migrationen übernehmen einen konsistenten Datenstand einschließlich WAL und bleiben nach Fehlern wiederholbar. CI-Buildschritte erhalten keine unnötigen Repository-Schreibrechte; neue Release-Tags werden an den gebauten Commit gebunden.
+
 - UI-Korrekturen zu #459: Sessionbaum und Konten scrollen unabhängig; Sidebar-Typografie, Theme-Kontraste und Favoriten-Flyouts sind vereinheitlicht. Automatische Terminaltitel behalten Host und Verzeichnis auch bei laufenden Agenten. SFTP-Dialoge geben übersetzten Aktionen genügend Platz und bieten nach Verbindungsfehlern einen erneuten Versuch. Start- und Reconnect-Meldungen erscheinen erst nach tatsächlicher Shell-Bereitschaft.
 
 ## [1.1.0] — 2026-09-21

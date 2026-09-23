@@ -67,6 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Verify Docker supply-chain policy
@@ -137,6 +138,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       # Keep this inside the required cargo-check job: a regression fails the
       # required context before setup/compilation instead of failing `changes`
@@ -225,6 +228,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Verify remote-server archive installation
         run: python3 script/remote-server-install-tests
@@ -281,6 +286,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Enforce compact sidebar row actions
         run: script/check-compact-row-actions
@@ -377,6 +384,10 @@ jobs:
           cargo test --locked -p persistence --lib --
           agent_conversation_data_does_not_reserialize_retired_sidecars
           model_token_usage_does_not_reserialize_retired_byok_fields
+        shell: bash
+
+      - name: cargo test (SQLite migration regressions)
+        run: cargo test --locked -p warp --lib persistence::sqlite::tests
         shell: bash
 
       - name: cargo test (subscription agent acceptance)
