@@ -48,7 +48,7 @@ use crate::notebooks::{NotebookObject, NotebookObjectModel};
 use crate::settings::import::model::ImportedConfigModel;
 use crate::settings::{AliasExpansionSettings, AppEditorSettings, InputBoxType, PrivacySettings};
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
-#[cfg(windows)]
+#[cfg(not(target_family = "wasm"))]
 use crate::system::SystemInfo;
 use crate::system::SystemStats;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
@@ -93,6 +93,7 @@ use unindent::Unindent;
 #[cfg(feature = "voice_input")]
 use voice_input::VoiceInputToggledFrom;
 use warpui::platform::WindowStyle;
+use warpui::r#async::FutureExt;
 use warpui::{App, ReadModel, UpdateView, WindowId};
 
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
@@ -180,10 +181,8 @@ pub fn initialize_app(app: &mut App) {
         })
     });
 
-    #[cfg(windows)]
-    {
-        app.add_singleton_model(SystemInfo::new);
-    }
+    #[cfg(not(target_family = "wasm"))]
+    app.add_singleton_model(SystemInfo::new);
 
     app.update(experiments::init);
     AltScreenReporting::register(app);
@@ -7195,11 +7194,14 @@ fn file_manager_directory_retains_live_draft_through_command_completion() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let completed_id = terminal.read(&app, |view, _| {
+            view.model.lock().block_list().active_block_id().clone()
+        });
         let (tx, rx) = async_channel::bounded(1);
         app.update(|ctx| {
             ctx.subscribe_to_view(&terminal, move |_, event, _| {
                 if let crate::terminal::view::Event::BlockCompleted { block, .. } = event {
-                    if String::from_utf8_lossy(&block.stylized_output).contains("directory-done") {
+                    if block.id == completed_id {
                         tx.try_send(()).unwrap();
                     }
                 }
@@ -7216,7 +7218,13 @@ fn file_manager_directory_retains_live_draft_through_command_completion() {
                 .lock()
                 .simulate_block("cd -- /tmp", "directory-done");
         });
-        rx.recv().await.unwrap();
+        // Wait for the exact completed block, independent of grid width/output wrapping.
+        // A missing event must fail this test instead of hanging the entire CI group.
+        rx.recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("expected terminal BlockCompleted event for submitted block")
+            .expect("terminal completion channel closed");
         input.read(&app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "echo newest-draft");
             assert_eq!(input.file_manager_directory_input, None);
@@ -7272,12 +7280,14 @@ fn file_manager_directory_pending_preserves_live_draft_when_old_process_finishes
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let completed_id = terminal.read(&app, |view, _| {
+            view.model.lock().block_list().active_block_id().clone()
+        });
         let (tx, rx) = async_channel::bounded(1);
         app.update(|ctx| {
             ctx.subscribe_to_view(&terminal, move |_, event, _| {
                 if let crate::terminal::view::Event::BlockCompleted { block, .. } = event {
-                    if String::from_utf8_lossy(&block.stylized_output).contains("old-process-done")
-                    {
+                    if block.id == completed_id {
                         tx.try_send(()).unwrap();
                     }
                 }
@@ -7300,7 +7310,13 @@ fn file_manager_directory_pending_preserves_live_draft_when_old_process_finishes
             assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
         });
         terminal.update(&mut app, |view, _| view.model.lock().finish_block());
-        rx.recv().await.unwrap();
+        // Wait for the exact completed block, independent of grid width/output wrapping.
+        // A missing event must fail this test instead of hanging the entire CI group.
+        rx.recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("expected terminal BlockCompleted event for submitted block")
+            .expect("terminal completion channel closed");
         input.update(&mut app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "echo keep-after-sleep");
             assert_eq!(input.file_manager_directory_input, None);
@@ -7322,7 +7338,25 @@ fn file_manager_directory_restored_local_shell_executes_on_its_original_input() 
         other_input.update(&mut app, |input, ctx| {
             input.user_insert("echo other-draft", ctx)
         });
+        // This input fixture initializes Input metadata directly. Relay the same
+        // shell metadata to TerminalView before testing its restore binding.
+        let session_id = input.read(&app, |input, _| input.active_block_session_id().unwrap());
         terminal.update(&mut app, |view, ctx| {
+            let block_index = view.model.lock().block_list().active_block().index();
+            view.model_event_dispatcher().update(ctx, |_, ctx| {
+                ctx.emit(crate::terminal::model_events::ModelEvent::BlockMetadataReceived(
+                    crate::terminal::event::BlockMetadataReceivedEvent {
+                        block_metadata: BlockMetadata::new(Some(session_id), None),
+                        block_index,
+                        is_after_in_band_command: true,
+                        is_done_bootstrapping: true,
+                    },
+                ));
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            assert_eq!(view.active_block_session_id(), Some(session_id));
+            assert!(view.is_login_shell_bootstrapped());
             view.restore_file_manager_navigation(true, ctx);
             view.finish_file_manager_navigation(Some(PathBuf::from("/tmp")), ctx);
         });
@@ -7345,12 +7379,14 @@ fn file_manager_directory_pending_never_restores_an_already_executed_command() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let completed_id = terminal.read(&app, |view, _| {
+            view.model.lock().block_list().active_block_id().clone()
+        });
         let (tx, rx) = async_channel::bounded(1);
         app.update(|ctx| {
             ctx.subscribe_to_view(&terminal, move |_, event, _| {
                 if let crate::terminal::view::Event::BlockCompleted { block, .. } = event {
-                    if String::from_utf8_lossy(&block.stylized_output).contains("old-process-done")
-                    {
+                    if block.id == completed_id {
                         tx.try_send(()).unwrap();
                     }
                 }
@@ -7372,7 +7408,13 @@ fn file_manager_directory_pending_never_restores_an_already_executed_command() {
             assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
         });
         terminal.update(&mut app, |view, _| view.model.lock().finish_block());
-        rx.recv().await.unwrap();
+        // Wait for the exact completed block, independent of grid width/output wrapping.
+        // A missing event must fail this test instead of hanging the entire CI group.
+        rx.recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("expected terminal BlockCompleted event for submitted block")
+            .expect("terminal completion channel closed");
         input.update(&mut app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "");
             assert_eq!(input.file_manager_directory_input, None);
@@ -7439,12 +7481,14 @@ fn file_manager_directory_pending_preserves_identical_retyped_draft() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let completed_id = terminal.read(&app, |view, _| {
+            view.model.lock().block_list().active_block_id().clone()
+        });
         let (tx, rx) = async_channel::bounded(1);
         app.update(|ctx| {
             ctx.subscribe_to_view(&terminal, move |_, event, _| {
                 if let crate::terminal::view::Event::BlockCompleted { block, .. } = event {
-                    if String::from_utf8_lossy(&block.stylized_output).contains("old-process-done")
-                    {
+                    if block.id == completed_id {
                         tx.try_send(()).unwrap();
                     }
                 }
@@ -7468,7 +7512,13 @@ fn file_manager_directory_pending_preserves_identical_retyped_draft() {
             assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
         });
         terminal.update(&mut app, |view, _| view.model.lock().finish_block());
-        rx.recv().await.unwrap();
+        // Wait for the exact completed block, independent of grid width/output wrapping.
+        // A missing event must fail this test instead of hanging the entire CI group.
+        rx.recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("expected terminal BlockCompleted event for submitted block")
+            .expect("terminal completion channel closed");
         input.update(&mut app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "sleep 10");
             assert_eq!(input.file_manager_directory_input, None);

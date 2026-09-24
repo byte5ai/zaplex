@@ -444,7 +444,7 @@ jobs:
       # wiring survive construction", the thing `cargo check` cannot.
       - name: cargo test (app dependency + UI smoke gates)
         run: >
-          cargo test --locked -p warp --lib --
+          cargo test --locked -p warp --lib -- --nocapture
           maps_credentials_not_loaded_to_user_message
           newer_profile_refresh_rejects_late_success_or_error_from_older_refresh
           test_import_from_file

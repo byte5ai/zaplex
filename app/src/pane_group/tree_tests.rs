@@ -683,7 +683,9 @@ fn test_original_pane_for_replacement() {
 fn temporary_replacement_relation_can_move_between_pane_trees() {
     let original = PaneId::dummy_pane_id();
     let replacement = PaneId::dummy_pane_id();
+    let remaining = PaneId::dummy_pane_id();
     let mut source = PaneData::new(original);
+    assert!(source.split(original, remaining, Direction::Right));
 
     assert!(source.replace_pane(original, replacement, true));
     assert_eq!(source.pane_configuration_owner(replacement), original);
@@ -692,6 +694,8 @@ fn temporary_replacement_relation_can_move_between_pane_trees() {
         Some(original)
     );
     assert!(source.remove(original));
+    assert_eq!(source.visible_pane_ids(), vec![remaining]);
+    assert!(!source.is_temporary_replacement(replacement));
 
     let mut target = PaneData::new(replacement);
     assert!(target.adopt_temporary_replacement(original, replacement));

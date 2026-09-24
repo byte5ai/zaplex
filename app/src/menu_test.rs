@@ -390,7 +390,10 @@ fn test_split_submenu_accessibility_tracks_primary_trigger_and_nested_selection(
 
         menu.update(&mut app, |menu, ctx| {
             menu.set_selected_by_index(0, ctx);
-            assert_eq!(menu.menu.selected_accessibility_label(), "host Selected");
+            assert_eq!(
+                menu.menu.selected_accessibility_label(),
+                crate::t!("menu-a11y-item-selected", item = "host").to_string()
+            );
 
             menu.handle_action(
                 &MenuAction::HoverSubmenuWithChildren {
@@ -400,17 +403,26 @@ fn test_split_submenu_accessibility_tracks_primary_trigger_and_nested_selection(
                 },
                 ctx,
             );
-            assert_eq!(menu.menu.selected_accessibility_label(), "host Expanded");
+            assert_eq!(
+                menu.menu.selected_accessibility_label(),
+                crate::t!("menu-a11y-submenu-expanded-label", item = "host").to_string()
+            );
 
             menu.handle_action(&MenuAction::OpenSubmenu, ctx);
             assert_eq!(
                 menu.menu.selected_accessibility_label(),
-                "child one Selected"
+                crate::t!("menu-a11y-item-selected", item = "child one").to_string()
             );
 
             menu.handle_action(&MenuAction::Escape, ctx);
-            assert_eq!(menu.menu.escape_accessibility_label(), "Submenu Closed");
-            assert_eq!(menu.menu.selected_accessibility_label(), "host Selected");
+            assert_eq!(
+                menu.menu.escape_accessibility_label(),
+                crate::t!("menu-a11y-submenu-closed").to_string()
+            );
+            assert_eq!(
+                menu.menu.selected_accessibility_label(),
+                crate::t!("menu-a11y-item-selected", item = "host").to_string()
+            );
         });
     })
 }

@@ -11,6 +11,7 @@ use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{SingletonEntity, TypedActionView};
 
+use crate::remote_server::manager::RemoteServerManager;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 
@@ -33,6 +34,7 @@ fn initialize_app(app: &mut warpui::App) {
     app.add_singleton_model(|_| ToastStack);
     app.add_singleton_model(|_| super::fm_registry::FileManagerRegistry::new());
     app.add_singleton_model(|_| super::transfer_queue::TransferQueue::new());
+    app.add_singleton_model(RemoteServerManager::new);
 
     // The SSH manager needs a SQLite path; use a temporary file so that failed queries don't panic
     let temp_db = std::env::temp_dir().join("warp_sftp_test.sqlite");
