@@ -87,6 +87,19 @@ struct PendingAttachReplay {
     pending_exit: Option<Option<i32>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadyNoticeKind {
+    PersistentSessionActive,
+    Attached,
+}
+
+struct PendingReadyNotice {
+    connection_session_id: SessionId,
+    pty_session_id: String,
+    generation: Option<u64>,
+    kind: ReadyNoticeKind,
+}
+
 /// Deduplicates the two manager events that describe one connected transport.
 ///
 /// A successful reconnect currently emits `SessionConnected` while installing
@@ -331,6 +344,12 @@ pub(crate) struct EventLoop {
     /// adopt's first attach welcomes while later re-attaches announce the
     /// reconnect instead.
     welcomed: bool,
+    /// The first Ready message distinguishes a newly opened PTY from an adopted
+    /// session, even when its transport drops before the initial Ready event.
+    first_ready_notice_kind: ReadyNoticeKind,
+    /// Success copy staged by an exact open/attach and consumed only when the
+    /// same daemon route and PTY generation have real shell-input readiness.
+    pending_ready_notice: Option<PendingReadyNotice>,
     /// Whether a *terminal* end-state notice has already been surfaced — a clean
     /// `session ended` (`SessionExited`) or a `connection lost`
     /// (`SessionDisconnected` with no reconnect left). Guards against a second,
@@ -719,6 +738,8 @@ impl EventLoop {
             last_seq: 0,
             host_label: String::new(),
             welcomed: false,
+            first_ready_notice_kind: ReadyNoticeKind::Attached,
+            pending_ready_notice: None,
             terminated: false,
             report_bootstrap_boundary: false,
         }
@@ -1309,6 +1330,12 @@ impl EventLoop {
             return;
         }
         self.awaiting_attach_snapshot = false;
+        let notice_kind = if self.welcomed {
+            ReadyNoticeKind::Attached
+        } else {
+            self.first_ready_notice_kind
+        };
+        self.stage_ready_notice(notice_kind);
         self.complete_initial_attach_if_ready(ctx);
         // If bootstrap only completed now — a fresh open that dropped
         // mid-handshake and finished it from this reconnect's replay — the
@@ -1316,21 +1343,6 @@ impl EventLoop {
         // too (a no-op for adopted sessions and once already reported).
         self.maybe_report_bootstrap_boundary(ctx);
         self.maybe_dispatch_startup_command(ctx);
-        // Stage the payoff moment: an adopt's first attach welcomes the
-        // user into their running session; a reconnect after a drop
-        // states plainly that nothing was lost.
-        if self.welcomed {
-            self.write_zaplexify(&crate::t!(
-                "terminal-daemon-reconnected",
-                host = self.host_label.clone()
-            ));
-        } else {
-            self.write_zaplexify(&crate::t!(
-                "terminal-daemon-reattached",
-                host = self.host_label.clone()
-            ));
-            self.welcomed = true;
-        }
         // Transport is back and we're re-attached. This buffer contains only
         // protocol/control traffic; ordinary user bytes are never replayed.
         self.flush_pending_input(ctx);
@@ -1352,7 +1364,53 @@ impl EventLoop {
             if let Some((pty_session_id, generation)) = self.managed_open_identity.take() {
                 self.report_managed_launch_opened(&pty_session_id, generation, ctx);
             }
+            self.publish_ready_notice();
         }
+    }
+
+    fn stage_ready_notice(&mut self, kind: ReadyNoticeKind) {
+        let Some(pty_session_id) = self.pty_session_id.clone() else {
+            return;
+        };
+        self.pending_ready_notice = Some(PendingReadyNotice {
+            connection_session_id: self.connection_session_id,
+            pty_session_id,
+            generation: self.pty_generation,
+            kind,
+        });
+    }
+
+    fn publish_ready_notice(&mut self) {
+        let Some(pending) = self.pending_ready_notice.take() else {
+            return;
+        };
+        if pending.connection_session_id != self.connection_session_id
+            || self.pty_session_id.as_deref() != Some(pending.pty_session_id.as_str())
+            || self.pty_generation != pending.generation
+        {
+            return;
+        }
+        match pending.kind {
+            ReadyNoticeKind::PersistentSessionActive => {
+                self.write_zaplexify(&crate::t!(
+                    "terminal-daemon-persistent-session-active",
+                    host = self.host_label.clone()
+                ));
+            }
+            ReadyNoticeKind::Attached if self.welcomed => {
+                self.write_zaplexify(&crate::t!(
+                    "terminal-daemon-reconnected",
+                    host = self.host_label.clone()
+                ));
+            }
+            ReadyNoticeKind::Attached => {
+                self.write_zaplexify(&crate::t!(
+                    "terminal-daemon-reattached",
+                    host = self.host_label.clone()
+                ));
+            }
+        }
+        self.welcomed = true;
     }
 
     fn arm_initial_attach_timeout(&mut self, ctx: &mut ModelContext<Self>) {
@@ -1392,6 +1450,7 @@ impl EventLoop {
         self.pending_input.clear();
         self.pending_output.clear();
         self.pending_attach_replay = None;
+        self.pending_ready_notice = None;
         self.attach_in_flight = None;
         self.awaiting_managed_agent_binding = false;
         self.managed_open_identity = None;
@@ -1878,6 +1937,7 @@ impl EventLoop {
                 );
             }
         }
+        self.first_ready_notice_kind = ReadyNoticeKind::PersistentSessionActive;
         let managed_attach_required = self.managed_launch_id.is_some();
         if authoritative_attach_required || managed_attach_required {
             self.awaiting_attach_snapshot = true;
@@ -1899,18 +1959,12 @@ impl EventLoop {
             return;
         }
         self.awaiting_attach_snapshot = false;
+        self.stage_ready_notice(ReadyNoticeKind::PersistentSessionActive);
         // The pre-OpenSession output burst may already have supplied InitShell
         // or Bootstrapped. Evaluate that real model evidence now; the Ack and
         // replay bytes alone are not readiness.
         self.complete_initial_attach_if_ready(ctx);
         self.drive_agent_binding(ctx);
-        // Stage the moment: the user should SEE they're in a persistent session
-        // (the whole point of zaplex), not have to infer it. One line, once.
-        self.write_zaplexify(&crate::t!(
-            "terminal-daemon-persistent-session-active",
-            host = self.host_label.clone()
-        ));
-        self.welcomed = true;
         // Render output the daemon produced before this response arrived (it
         // auto-attaches and starts the shell immediately), so the initial
         // shell/bootstrap output isn't missing from a fresh tab. In seq order.
@@ -2502,6 +2556,7 @@ impl EventLoop {
         if self.pending_attach_replay.is_some() {
             self.reattach_after_replay = true;
         }
+        self.pending_ready_notice = None;
         self.awaiting_attach_snapshot = true;
     }
 

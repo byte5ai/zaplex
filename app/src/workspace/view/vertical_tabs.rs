@@ -2735,29 +2735,11 @@ fn build_vertical_tabs_summary_data(
             TypedPane::Terminal(terminal_pane) => {
                 let terminal_view = terminal_pane.terminal_view(app);
                 let terminal_view = terminal_view.as_ref(app);
-                let title_text = terminal_view.terminal_title_from_shell();
                 let working_directory = terminal_view.display_working_directory(app);
-                let working_directory_text = working_directory
-                    .clone()
-                    .filter(|wd| !wd.trim().is_empty())
-                    .unwrap_or_else(|| title_text.clone());
-                let agent_text = terminal_agent_text(terminal_view, app);
-                let (conversation_display_title, cli_agent_title) =
-                    preferred_agent_tab_titles(&agent_text, agent_tab_text_preference(app));
-
-                let primary_label = terminal_primary_line_data(
-                    terminal_view.is_long_running_and_user_controlled(),
-                    conversation_display_title,
-                    cli_agent_title,
-                    title_text.as_str(),
-                    working_directory_text.as_str(),
-                    terminal_title_fallback_font(&agent_text),
-                    terminal_view.last_completed_command_text(),
-                );
                 push_normalized_unique_summary_text(
                     &mut primary_labels,
                     &mut primary_seen,
-                    primary_label.text(),
+                    &pane_title,
                 );
 
                 if let Some(working_directory) = working_directory {
@@ -3016,14 +2998,22 @@ fn terminal_pane_search_text_fragments(
         .as_deref()
         .map(terminal_pull_request_badge_label);
 
-    terminal_search_text_fragments(
+    let mut fragments = terminal_search_text_fragments(
         primary_text,
         working_directory,
         terminal_view.current_git_branch(app),
         terminal_kind_badge_label(agent_text.is_oz_agent, agent_text.cli_agent),
         pull_request_label,
         terminal_view.current_diff_line_changes(app),
-    )
+    );
+    fragments.push(
+        terminal_view
+            .pane_configuration()
+            .as_ref(app)
+            .title()
+            .to_string(),
+    );
+    fragments
 }
 
 fn terminal_search_text_fragments(
@@ -3281,7 +3271,7 @@ fn render_terminal_row_content(
     //
     // | Setting          | Line 1 (title)       | Line 2 (description)   | Line 3 left          |
     // |------------------|----------------------|------------------------|----------------------|
-    // | Command          | command/conversation | working directory       | git branch           |
+    // | Command          | host · directory     | working directory       | git branch           |
     // | WorkingDirectory | working directory    | command/conversation    | git branch           |
     // | Branch           | git branch           | command/conversation    | working directory    |
     let (first_line, second_line, metadata_left) = match primary_info {
@@ -3327,7 +3317,7 @@ fn render_terminal_row_content(
                 appearance,
                 app,
             ),
-            render_terminal_primary_line_for_view(terminal_view, appearance, sub_text_color, app),
+            render_terminal_activity_line_for_view(terminal_view, appearance, sub_text_color, app),
             MetadataLeftContent::GitBranch(git_branch),
         ),
         VerticalTabsPrimaryInfo::Branch => {
@@ -3354,7 +3344,7 @@ fn render_terminal_row_content(
                     appearance,
                     app,
                 ),
-                render_terminal_primary_line_for_view(
+                render_terminal_activity_line_for_view(
                     terminal_view,
                     appearance,
                     sub_text_color,
@@ -3919,6 +3909,29 @@ fn render_terminal_primary_line_for_view(
     text_color: WarpThemeFill,
     app: &AppContext,
 ) -> Box<dyn Element> {
+    // Pane identity stays consistent with horizontal tabs and pane headers.
+    // Activity titles remain available in details and the command subtitle.
+    render_terminal_primary_line(
+        TerminalPrimaryLineData::Text {
+            text: terminal_view
+                .pane_configuration()
+                .as_ref(app)
+                .title()
+                .to_string(),
+            font: TerminalPrimaryLineFont::Ui,
+        },
+        terminal_view,
+        appearance,
+        text_color,
+    )
+}
+
+fn render_terminal_activity_line_for_view(
+    terminal_view: &TerminalView,
+    appearance: &Appearance,
+    text_color: WarpThemeFill,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let title_text = terminal_view.terminal_title_from_shell();
     let working_directory = terminal_view
         .display_working_directory(app)
@@ -3927,7 +3940,6 @@ fn render_terminal_primary_line_for_view(
     let agent_text = terminal_agent_text(terminal_view, app);
     let (conversation_display_title, cli_agent_title) =
         preferred_agent_tab_titles(&agent_text, agent_tab_text_preference(app));
-
     render_terminal_primary_line(
         terminal_primary_line_data(
             terminal_view.is_long_running_and_user_controlled(),
@@ -3944,10 +3956,7 @@ fn render_terminal_primary_line_for_view(
     )
 }
 
-/// Primary line for terminal pane rows. Precedence:
-/// 1. CLI agent session with plugin data (query/summary) + status
-/// 2. Oz agent conversation title + status
-/// 3. Terminal title
+/// Render a terminal identity or an activity detail using the requested font.
 fn render_terminal_primary_line(
     primary_line: TerminalPrimaryLineData,
     terminal_view: &TerminalView,

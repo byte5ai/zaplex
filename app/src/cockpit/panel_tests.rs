@@ -251,12 +251,30 @@ fn collapsed_counts_carry_hidden_attention_only() {
 }
 
 #[test]
-fn agent_leaf_contains_only_provider_and_optional_model() {
+fn agent_leaf_separates_provider_from_the_exact_optional_model() {
     assert_eq!(
-        agent_leaf_label(Provider::Claude, "Opus 4.1"),
-        "Claude · Opus 4.1"
+        agent_leaf_presentation(Provider::Claude, "claude-opus-4-8-20260901"),
+        AgentLeafPresentation {
+            provider: "Claude",
+            model: Some("claude-opus-4-8-20260901"),
+        }
     );
-    assert_eq!(agent_leaf_label(Provider::Codex, "  "), "Codex");
+    assert_eq!(
+        agent_leaf_presentation(Provider::Codex, "  "),
+        AgentLeafPresentation {
+            provider: "Codex",
+            model: None,
+        }
+    );
+}
+
+#[test]
+fn session_identity_avoids_only_exact_project_directory_duplication() {
+    assert_eq!(project_directory_label("zaplex", "/work/zaplex"), "zaplex");
+    assert_eq!(
+        project_directory_label("zaplex", "/work/Zaplex"),
+        "zaplex — Zaplex"
+    );
 }
 
 #[test]

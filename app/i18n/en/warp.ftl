@@ -2882,7 +2882,7 @@ cockpit-session-is-reviewed = ✓ Reviewed
 cockpit-session-redirect = ↻ Redirect
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
-cockpit-session-live-unavailable = “{ $session }” is still running on { $host }, but its terminal is not available in Zaplex. Stop it first, then open it here; no duplicate was started.
+cockpit-session-live-unavailable = “{ $session }” is running on { $host }. Zaplex cannot currently open its agent terminal. Use the terminal where you started this session. The session keeps running unchanged.
 cockpit-session-no-longer-available = This session is no longer available on { $host }. Nothing was started.
 workspace-left-panel-cockpit-empty = No Claude or Codex accounts found.
 cockpit-loading = Loading accounts…
@@ -4365,7 +4365,6 @@ ai-footer-subscription-target-unavailable = The selected agent target is no long
 
 workspace-left-panel-ssh-manager-sessions-confirm-host-key = Connect to this host and confirm the SSH key for { $host }:{ $port } ({ $fingerprint }) first.
 
-cockpit-shell-sessions-connections = Open shell sessions in Connections
 
 ai-footer-subscription-target-changed = This session's execution target has changed. Restore the previous target or start a new conversation.
 
@@ -4459,3 +4458,10 @@ workspace-managed-launch-handshake-failed = The managed agent on { $host } could
 workspace-remote-account-readiness-failed = The remote account session on { $host } ended before it became ready.
 workspace-managed-launch-readiness-failed = The managed agent on { $host } ended before it became ready.
 workspace-remote-routed-split-target-changed = The remote account or managed session could not resume because its original split target changed.
+
+# Persistence initialization must succeed before the workspace can open.
+persistence-startup-error-title = Zaplex could not open its saved data
+persistence-startup-error-detail = Startup was stopped to prevent working without saving. Your existing database and migration files have been kept. Close any other Zaplex instance, resolve the error below, then restart Zaplex.
+
+    { $error }
+persistence-startup-error-close = Close Zaplex

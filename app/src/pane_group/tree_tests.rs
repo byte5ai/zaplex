@@ -683,7 +683,9 @@ fn test_original_pane_for_replacement() {
 fn temporary_replacement_relation_can_move_between_pane_trees() {
     let original = PaneId::dummy_pane_id();
     let replacement = PaneId::dummy_pane_id();
+    let remaining = PaneId::dummy_pane_id();
     let mut source = PaneData::new(original);
+    assert!(source.split(original, remaining, Direction::Right));
 
     assert!(source.replace_pane(original, replacement, true));
     assert_eq!(source.pane_configuration_owner(replacement), original);
@@ -692,6 +694,8 @@ fn temporary_replacement_relation_can_move_between_pane_trees() {
         Some(original)
     );
     assert!(source.remove(original));
+    assert_eq!(source.visible_pane_ids(), vec![remaining]);
+    assert!(!source.is_temporary_replacement(replacement));
 
     let mut target = PaneData::new(replacement);
     assert!(target.adopt_temporary_replacement(original, replacement));
@@ -776,4 +780,44 @@ fn new_branch_survives_an_empty_node_list() {
         }
         other => panic!("expected an empty branch, got {other:?}"),
     }
+}
+
+#[test]
+fn move_to_missing_target_preserves_source_and_layout() {
+    let left = PaneId::dummy_pane_id();
+    let right = PaneId::dummy_pane_id();
+    let missing = PaneId::dummy_pane_id();
+    let mut tree = PaneData::new(left);
+    tree.split(left, right, Direction::Right);
+
+    for direction in [
+        Direction::Left,
+        Direction::Right,
+        Direction::Up,
+        Direction::Down,
+    ] {
+        assert!(!tree.move_pane(left, missing, direction));
+        assert_eq!(tree.pane_ids(), vec![left, right]);
+        assert_eq!(tree.len(), 2);
+        let branch = tree.root.as_branch().expect("split must remain intact");
+        assert_eq!(branch.axis(), SplitDirection::Horizontal);
+        assert_eq!(branch.direct_children(), vec![left, right]);
+    }
+}
+
+#[test]
+fn closing_nested_split_collapses_to_the_original_leaf() {
+    let left = PaneId::dummy_pane_id();
+    let top_right = PaneId::dummy_pane_id();
+    let bottom_right = PaneId::dummy_pane_id();
+    let mut tree = PaneData::new(left);
+    tree.split(left, top_right, Direction::Right);
+    tree.split(top_right, bottom_right, Direction::Down);
+
+    assert!(tree.remove(top_right));
+    assert_eq!(tree.pane_ids(), vec![left, bottom_right]);
+    assert!(tree.remove(bottom_right));
+    assert_eq!(tree.root.as_leaf(), Some(left));
+    assert_eq!(tree.visible_pane_ids(), vec![left]);
+    assert_eq!(tree.len(), 1);
 }

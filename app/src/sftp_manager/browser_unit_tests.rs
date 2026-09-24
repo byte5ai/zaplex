@@ -2,6 +2,16 @@ use super::*;
 use std::path::PathBuf;
 
 #[test]
+fn only_failed_connections_offer_a_connection_retry() {
+    assert!(connection_retry_available(&ConnectionState::Failed(
+        "connection failed".to_string()
+    )));
+    assert!(!connection_retry_available(&ConnectionState::Connecting));
+    assert!(!connection_retry_available(&ConnectionState::Connected));
+    assert!(!connection_retry_available(&ConnectionState::Disconnected));
+}
+
+#[test]
 fn only_successfully_installed_navigation_commits_request_a_snapshot() {
     assert!(navigation_commit_needs_snapshot(true, true));
     assert!(!navigation_commit_needs_snapshot(true, false));

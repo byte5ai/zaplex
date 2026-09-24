@@ -1,11 +1,15 @@
 use super::{
-    should_reverse_submenu_layout, Menu, MenuAction, MenuItem, MenuItemFields, SelectAction,
-    SubMenu, SPLIT_SUBMENU_TRIGGER_WIDTH,
+    menu_item_main_axis_alignment, should_reverse_submenu_layout, split_submenu_primary_width,
+    Menu, MenuAction, MenuItem, MenuItemFields, SelectAction, SubMenu, MENU_ITEM_VERTICAL_PADDING,
+    SPLIT_SUBMENU_TRIGGER_WIDTH,
 };
+
+use std::sync::Arc;
 
 use warp_core::ui::appearance::Appearance;
 use warpui::{
-    accessibility::ActionAccessibilityContent, platform::WindowStyle, App, TypedActionView,
+    accessibility::ActionAccessibilityContent, elements::MainAxisAlignment, platform::WindowStyle,
+    App, TypedActionView,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -296,8 +300,45 @@ fn test_split_submenu_preserves_identity_width_and_full_text_metadata() {
     };
 
     assert_eq!(SPLIT_SUBMENU_TRIGGER_WIDTH, 28.);
+    assert_eq!(split_submenu_primary_width(200.), 172.);
+    assert_eq!(split_submenu_primary_width(20.), 0.);
+    assert_eq!(
+        menu_item_main_axis_alignment(true),
+        MainAxisAlignment::Start
+    );
+    assert_eq!(
+        menu_item_main_axis_alignment(false),
+        MainAxisAlignment::SpaceEvenly
+    );
     assert!(fields.ellipsizes_label());
     assert_eq!(fields.get_a11y_text(), "host");
+}
+
+#[test]
+fn test_split_submenu_trigger_has_stable_hover_identity_without_a_chevron() {
+    let items = split_submenu_items();
+    let MenuItem::Submenu { fields, .. } = &items[0] else {
+        panic!("expected split submenu");
+    };
+
+    let first_render_fields = fields.split_submenu_trigger_fields().unwrap();
+    let second_render_fields = fields.split_submenu_trigger_fields().unwrap();
+
+    assert!(Arc::ptr_eq(
+        &first_render_fields.mouse_state,
+        &second_render_fields.mouse_state
+    ));
+    assert!(first_render_fields.has_submenu);
+    assert!(!first_render_fields.render_submenu_chevron);
+    assert_eq!(
+        first_render_fields.vertical_padding_override,
+        Some(MENU_ITEM_VERTICAL_PADDING)
+    );
+    assert_eq!(first_render_fields.horizontal_padding_override, Some(0.));
+    assert_eq!(first_render_fields.tooltip(), Some("More actions for host"));
+
+    let standard_submenu = MenuItemFields::<TestAction>::new_submenu("standard submenu");
+    assert!(standard_submenu.render_submenu_chevron);
 }
 
 #[test]
@@ -349,7 +390,10 @@ fn test_split_submenu_accessibility_tracks_primary_trigger_and_nested_selection(
 
         menu.update(&mut app, |menu, ctx| {
             menu.set_selected_by_index(0, ctx);
-            assert_eq!(menu.menu.selected_accessibility_label(), "host Selected");
+            assert_eq!(
+                menu.menu.selected_accessibility_label(),
+                crate::t!("menu-a11y-item-selected", item = "host").to_string()
+            );
 
             menu.handle_action(
                 &MenuAction::HoverSubmenuWithChildren {
@@ -359,17 +403,26 @@ fn test_split_submenu_accessibility_tracks_primary_trigger_and_nested_selection(
                 },
                 ctx,
             );
-            assert_eq!(menu.menu.selected_accessibility_label(), "host Expanded");
+            assert_eq!(
+                menu.menu.selected_accessibility_label(),
+                crate::t!("menu-a11y-submenu-expanded-label", item = "host").to_string()
+            );
 
             menu.handle_action(&MenuAction::OpenSubmenu, ctx);
             assert_eq!(
                 menu.menu.selected_accessibility_label(),
-                "child one Selected"
+                crate::t!("menu-a11y-item-selected", item = "child one").to_string()
             );
 
             menu.handle_action(&MenuAction::Escape, ctx);
-            assert_eq!(menu.menu.escape_accessibility_label(), "Submenu Closed");
-            assert_eq!(menu.menu.selected_accessibility_label(), "host Selected");
+            assert_eq!(
+                menu.menu.escape_accessibility_label(),
+                crate::t!("menu-a11y-submenu-closed").to_string()
+            );
+            assert_eq!(
+                menu.menu.selected_accessibility_label(),
+                crate::t!("menu-a11y-item-selected", item = "host").to_string()
+            );
         });
     })
 }

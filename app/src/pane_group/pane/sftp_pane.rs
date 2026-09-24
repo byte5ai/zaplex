@@ -23,7 +23,6 @@ pub struct SftpPane {
 }
 
 impl SftpPane {
-    #[cfg(test)]
     pub(crate) fn browser_view(&self, ctx: &warpui::AppContext) -> ViewHandle<SftpBrowserView> {
         self.view.as_ref(ctx).child(ctx)
     }

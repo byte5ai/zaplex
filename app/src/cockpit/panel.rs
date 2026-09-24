@@ -14,7 +14,7 @@ use pathfinder_geometry::{
 };
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::coloru_with_opacity;
-use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::{color::internal_colors, Fill};
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Element, EventHandler,
@@ -53,6 +53,7 @@ use crate::WorkspaceAction;
 
 const CARD_PADDING: f32 = 8.0;
 const CARD_SPACING: f32 = 4.0;
+const TREE_DEPTH_INDENT: f32 = 16.0;
 const HEAT_BAR_HEIGHT: f32 = 6.0;
 const TASK_PEEK_WIDTH: f32 = 390.0;
 pub(super) const TASK_PEEK_DELAY: Duration = Duration::from_millis(350);
@@ -349,7 +350,8 @@ impl TypedActionView for FleetTotalButton {
 
 pub struct CockpitPanel {
     window_id: WindowId,
-    scroll_state: ClippedScrollStateHandle,
+    session_scroll_state: ClippedScrollStateHandle,
+    account_scroll_state: ClippedScrollStateHandle,
     /// Hover/click state per Conductor session row (complete host + provider +
     /// account + conversation identity), synced against the unified inventory.
     /// Clicking a row attaches the agent.
@@ -370,7 +372,6 @@ pub struct CockpitPanel {
     /// Semantic button for the „KI-KONTEN" header's fleet total — the cross-account
     /// spend figure doubles as the entry point to the fleet pane (spec v3 §S1).
     fleet_total_button: ViewHandle<FleetTotalButton>,
-    connections_btn: MouseStateHandle,
     /// Stable hover state for the waiting-summary glyph in the Sessions header.
     conductor_attention_state: MouseStateHandle,
     /// Hover/click state for the account-zone "try again" retry (the loading /
@@ -416,23 +417,33 @@ fn session_identity_label(session: &SessionSnapshot, project_name: &str) -> Stri
     if let Some(worktree) = session.worktree.as_deref().filter(|w| !w.is_empty()) {
         return worktree.to_string();
     }
-    let dir = Path::new(&session.cwd)
+    project_directory_label(project_name, &session.cwd)
+}
+
+fn project_directory_label(project_name: &str, cwd: &str) -> String {
+    let dir = Path::new(cwd)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| session.cwd.clone());
-    if !project_name.is_empty() {
+        .unwrap_or_else(|| cwd.to_string());
+    if project_name == dir.as_str() {
+        project_name.to_string()
+    } else if !project_name.is_empty() {
         format!("{project_name} — {dir}")
     } else {
         dir
     }
 }
 
-fn agent_leaf_label(provider: Provider, model: &str) -> String {
-    let provider = provider_label(provider);
-    if model.trim().is_empty() {
-        provider.to_string()
-    } else {
-        format!("{provider} · {model}")
+#[derive(Debug, Eq, PartialEq)]
+struct AgentLeafPresentation<'a> {
+    provider: &'static str,
+    model: Option<&'a str>,
+}
+
+fn agent_leaf_presentation(provider: Provider, model: &str) -> AgentLeafPresentation<'_> {
+    AgentLeafPresentation {
+        provider: provider_label(provider),
+        model: (!model.trim().is_empty()).then_some(model),
     }
 }
 
@@ -487,7 +498,8 @@ impl CockpitPanel {
         });
         let mut me = Self {
             window_id: ctx.window_id(),
-            scroll_state: ClippedScrollStateHandle::default(),
+            session_scroll_state: ClippedScrollStateHandle::default(),
+            account_scroll_state: ClippedScrollStateHandle::default(),
             conductor_row_states: HashMap::new(),
             conductor_peek_states: HashMap::new(),
             conductor_row_glyph_states: HashMap::new(),
@@ -496,7 +508,6 @@ impl CockpitPanel {
             conductor_host_glyph_states: HashMap::new(),
             expanded_hosts: HashMap::new(),
             fleet_total_button,
-            connections_btn: MouseStateHandle::default(),
             conductor_attention_state: MouseStateHandle::default(),
             rescan_btn: MouseStateHandle::default(),
             conductor_project_states: HashMap::new(),
@@ -699,7 +710,7 @@ impl CockpitPanel {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.surface_2()).into_solid();
         let accent = theme.accent().into_solid();
         // A deliberately-disabled cockpit is neither "empty" nor "loading" — say so,
         // and offer no retry (re-scanning cannot help while it is off).
@@ -754,7 +765,7 @@ impl CockpitPanel {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_body();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.surface_1()).into_solid();
         // Utilisation is not attention: one shared rule (spec v3 §1.2) — calm
         // theme text, with the theme error role only at the "fast voll" threshold.
         // The bar's fill carries the level; color only flags "nearly full".
@@ -784,10 +795,10 @@ impl CockpitPanel {
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let sub = appearance.ui_font_subheading();
-        let main = theme.main_text_color(theme.background()).into_solid();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let provider_size = appearance.ui_font_body_large();
+        let identity_size = appearance.ui_font_footnote();
+        let main = theme.main_text_color(theme.surface_1()).into_solid();
+        let muted = theme.sub_text_color(theme.surface_1()).into_solid();
         let identity = account_identity(&acct.account);
 
         // Provider is the stable headline on every account surface. The themed
@@ -810,7 +821,7 @@ impl CockpitPanel {
             .with_child(
                 Shrinkable::new(
                     1.0,
-                    Self::text(identity.provider.to_string(), family, sub, main),
+                    Self::text(identity.provider.to_string(), family, provider_size, main),
                 )
                 .finish(),
             )
@@ -822,7 +833,12 @@ impl CockpitPanel {
             .with_spacing(CARD_SPACING)
             .with_child(header);
         if !identity.subline.is_empty() {
-            col = col.with_child(Self::identity_text(identity.subline, family, body, muted));
+            col = col.with_child(Self::identity_text(
+                identity.subline,
+                family,
+                identity_size,
+                muted,
+            ));
         }
         col = col
             .with_child(self.heat_bar(
@@ -883,26 +899,36 @@ impl CockpitPanel {
         label: String,
         count: Option<usize>,
         trailing: Option<Box<dyn Element>>,
+        background: Fill,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
-        let sub = appearance.ui_font_subheading();
+        let section_size = appearance.ui_font_footnote();
         let faint = theme
-            .sub_text_color(theme.background())
+            .sub_text_color(background)
             .with_opacity(55)
             .into_solid();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(background).into_solid();
 
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0)
             // The label is scaffolding, not content: muted + uppercase, so the eye
             // reads it as structure and skips to the rows (spec v3 §0).
-            .with_child(Self::text(label.to_uppercase(), family, sub, muted));
+            .with_child(Self::text(
+                label.to_uppercase(),
+                family,
+                section_size,
+                muted,
+            ));
         if let Some(count) = count {
             row = row.with_child(
-                Shrinkable::new(1.0, Self::text(count.to_string(), family, sub, faint)).finish(),
+                Shrinkable::new(
+                    1.0,
+                    Self::text(count.to_string(), family, section_size, faint),
+                )
+                .finish(),
             );
         }
         if let Some(trailing) = trailing {
@@ -920,10 +946,10 @@ impl CockpitPanel {
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let main = theme.main_text_color(theme.background()).into_solid();
+        let body = appearance.ui_font_body_large();
+        let main = theme.main_text_color(theme.surface_1()).into_solid();
         let faint = theme
-            .sub_text_color(theme.background())
+            .sub_text_color(theme.surface_1())
             .with_opacity(55)
             .into_solid();
         let chevron = if expanded {
@@ -943,7 +969,7 @@ impl CockpitPanel {
             .with_child(
                 ConstrainedBox::new(
                     chevron
-                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .to_warpui_icon(theme.sub_text_color(theme.surface_1()))
                         .finish(),
                 )
                 .with_width(GLYPH_COL_WIDTH)
@@ -996,9 +1022,9 @@ impl CockpitPanel {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
-        let main = theme.main_text_color(theme.background()).into_solid();
+        let main = theme.main_text_color(theme.surface_1()).into_solid();
         let faint = theme
-            .sub_text_color(theme.background())
+            .sub_text_color(theme.surface_1())
             .with_opacity(55)
             .into_solid();
         let chevron = if expanded {
@@ -1012,7 +1038,7 @@ impl CockpitPanel {
             .with_child(
                 ConstrainedBox::new(
                     chevron
-                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .to_warpui_icon(theme.sub_text_color(theme.surface_1()))
                         .finish(),
                 )
                 .with_width(GLYPH_COL_WIDTH)
@@ -1102,6 +1128,7 @@ impl CockpitPanel {
                     crate::t!("cockpit-zone-sessions").to_string(),
                     Some(fleet_conductor_session_count(tree)),
                     attention,
+                    appearance.theme().surface_1(),
                     appearance,
                 ))
                 .with_margin_bottom(2.0)
@@ -1134,10 +1161,7 @@ impl CockpitPanel {
                         expanded,
                         appearance,
                     ))
-                    // 4 + ROW_H_PADDING: the host rows above sit inside the
-                    // shared `hover_row` inset now, so every level below keeps
-                    // its old indent relative to them.
-                    .with_padding_left(10.0)
+                    .with_padding_left(TREE_DEPTH_INDENT)
                     .finish(),
                 );
                 if expanded {
@@ -1154,7 +1178,7 @@ impl CockpitPanel {
                                     appearance,
                                 ),
                             )
-                            .with_padding_left(22.0)
+                            .with_padding_left(TREE_DEPTH_INDENT * 2.0)
                             .finish(),
                         );
                         if self
@@ -1182,7 +1206,7 @@ impl CockpitPanel {
                                             appearance,
                                         ),
                                     )
-                                    .with_padding_left(34.0)
+                                    .with_padding_left(TREE_DEPTH_INDENT * 3.0)
                                     .finish(),
                                 );
                             }
@@ -1210,44 +1234,27 @@ impl CockpitPanel {
                     }
                 };
                 col = col.with_child(
-                    Container::new(Self::text(message, family, body, muted))
-                        .with_padding_left(22.0)
-                        .finish(),
+                    Container::new(hover_row(
+                        Self::text(message, family, body, muted),
+                        false,
+                        appearance,
+                    ))
+                    .with_padding_left(TREE_DEPTH_INDENT)
+                    .finish(),
                 );
             }
         }
         if tree.hosts.is_empty() {
             col = col.with_child(
-                Container::new(Self::text(
-                    crate::t!("cockpit-conductor-empty"),
-                    family,
-                    body,
-                    muted,
+                Container::new(hover_row(
+                    Self::text(crate::t!("cockpit-conductor-empty"), family, body, muted),
+                    false,
+                    appearance,
                 ))
-                .with_padding_left(10.0)
+                .with_padding_left(TREE_DEPTH_INDENT)
                 .finish(),
             );
         }
-        let accent = appearance.theme().accent().into_solid();
-        col = col.with_child(
-            Container::new(
-                Hoverable::new(self.connections_btn.clone(), move |mouse| {
-                    Text::new(
-                        crate::t!("cockpit-shell-sessions-connections"),
-                        family,
-                        body,
-                    )
-                    .with_color(if mouse.is_hovered() { accent } else { muted })
-                    .finish()
-                })
-                .with_cursor(Cursor::PointingHand)
-                .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::OpenSshManager))
-                .finish(),
-            )
-            .with_padding_left(10.0)
-            .with_padding_top(4.0)
-            .finish(),
-        );
         Some(col.finish())
     }
 
@@ -1269,10 +1276,31 @@ impl CockpitPanel {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
-        let main = theme.main_text_color(theme.background()).into_solid();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-        let label = agent_leaf_label(session.provider, &session.model);
+        let model_size = appearance.ui_font_footnote();
+        let main = theme.main_text_color(theme.surface_1()).into_solid();
+        let muted = theme.sub_text_color(theme.surface_1()).into_solid();
+        let presentation = agent_leaf_presentation(session.provider, &session.model);
         let key = session_key(is_local, host_id, session);
+
+        let mut identity = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_spacing(6.0)
+            .with_child(Self::text(
+                presentation.provider.to_string(),
+                family,
+                body,
+                main,
+            ));
+        if let Some(model) = presentation.model {
+            identity = identity.with_child(
+                Shrinkable::new(
+                    1.0,
+                    Self::identity_text(model.to_string(), family, model_size, muted),
+                )
+                .finish(),
+            );
+        }
 
         let mut glance = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -1287,9 +1315,7 @@ impl CockpitPanel {
                     .unwrap_or_default(),
                 appearance,
             ))
-            .with_child(
-                Shrinkable::new(1.0, Self::identity_text(label, family, body, main)).finish(),
-            );
+            .with_child(Shrinkable::new(1.0, identity.finish()).finish());
         if is_managed {
             glance = glance.with_child(Self::text("◆".to_string(), family, body, muted));
         }
@@ -1522,7 +1548,7 @@ impl CockpitPanel {
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
         let theme = appearance.theme();
-        let bg = theme.background();
+        let bg = theme.surface_1();
         let main_c = theme.main_text_color(bg).into_solid();
         let muted_c = theme.sub_text_color(bg).into_solid();
         let faint_c = theme.sub_text_color(bg).with_opacity(55).into_solid();
@@ -1561,6 +1587,7 @@ impl CockpitPanel {
                         1.0,
                         Text::new_inline(name_s.clone(), family, body)
                             .with_color(name_color)
+                            .with_clip(ClipConfig::ellipsis())
                             .finish(),
                     )
                     .finish(),
@@ -1577,7 +1604,11 @@ impl CockpitPanel {
                         .finish(),
                 );
             }
-            row.with_main_axis_size(MainAxisSize::Max).finish()
+            hover_row(
+                row.with_main_axis_size(MainAxisSize::Max).finish(),
+                mouse.is_hovered(),
+                appearance,
+            )
         })
         .with_cursor(warpui::platform::Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
@@ -1600,6 +1631,7 @@ impl CockpitPanel {
             crate::t!("cockpit-zone-accounts").to_string(),
             Some(snapshot_len),
             Some(ChildView::new(&self.fleet_total_button).finish()),
+            appearance.theme().surface_1(),
             appearance,
         )
     }
@@ -1639,23 +1671,22 @@ impl View for CockpitPanel {
         let snapshot = CockpitModel::as_ref(app).snapshot().clone();
         let inventory = CockpitModel::as_ref(app).inventory().clone();
         let managed_fleet = CockpitModel::as_ref(app).managed_fleet().clone();
-        let mut cards = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_main_axis_size(MainAxisSize::Min);
-
         // The live object tree remains independent of account discovery: local
         // is always supplied by the model, while remote roots exist only for
         // currently open connections. One flat surface, no registry controls.
-        if let Some(conductor) =
+        let session_content = if let Some(conductor) =
             self.render_conductor(&inventory, &managed_fleet, animate_waiting, appearance)
         {
-            cards = cards.with_child(
-                zone_card(conductor, appearance)
-                    .with_uniform_padding(CARD_PADDING)
-                    .with_margin_bottom(CARD_SPACING * 2.0)
-                    .finish(),
-            );
-        }
+            zone_card(conductor, appearance)
+                .with_uniform_padding(CARD_PADDING)
+                .finish()
+        } else {
+            Flex::column().finish()
+        };
+
+        let mut account_content = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Min);
 
         // A degraded scan with some accounts present: the list may be missing others
         // (e.g. a broken Codex sign-in). Warn above the accounts; the empty case shows
@@ -1663,7 +1694,7 @@ impl View for CockpitPanel {
         if !snapshot.accounts.is_empty()
             && matches!(snapshot.health, zaplex_cockpit::ScanHealth::Degraded(_))
         {
-            cards = cards.with_child(
+            account_content = account_content.with_child(
                 Container::new(self.render_scan_placeholder(&snapshot.health, enabled, appearance))
                     .with_uniform_padding(CARD_PADDING)
                     .with_margin_bottom(CARD_SPACING * 2.0)
@@ -1686,13 +1717,14 @@ impl View for CockpitPanel {
                         crate::t!("cockpit-zone-accounts").to_string(),
                         account_count_presentation(&snapshot.health, 0),
                         None,
+                        theme.surface_2(),
                         appearance,
                     ))
                     .with_margin_bottom(CARD_SPACING * 2.0)
                     .finish(),
                 )
                 .with_child(self.render_scan_placeholder(&snapshot.health, enabled, appearance));
-            cards = cards.with_child(
+            account_content = account_content.with_child(
                 Container::new(empty.finish())
                     .with_uniform_padding(CARD_PADDING)
                     .finish(),
@@ -1713,26 +1745,48 @@ impl View for CockpitPanel {
                 let is_selected = selected.as_deref() == Some(acct.account.key.as_str());
                 accounts = accounts.with_child(self.render_card(acct, is_selected, appearance));
             }
-            cards = cards.with_child(
+            account_content = account_content.with_child(
                 zone_card(accounts.finish(), appearance)
                     .with_uniform_padding(CARD_PADDING)
                     .finish(),
             );
         }
 
-        let body_el = ClippedScrollable::vertical(
-            self.scroll_state.clone(),
-            cards.finish(),
+        let session_scroll = ClippedScrollable::vertical(
+            self.session_scroll_state.clone(),
+            session_content,
             ScrollbarWidth::Auto,
-            theme.disabled_text_color(theme.background()).into(),
-            theme.main_text_color(theme.background()).into(),
+            theme.disabled_text_color(theme.surface_2()).into(),
+            theme.main_text_color(theme.surface_2()).into(),
+            ElementFill::None,
+        )
+        .with_overlayed_scrollbar()
+        .finish();
+        let account_scroll = ClippedScrollable::vertical(
+            self.account_scroll_state.clone(),
+            account_content.finish(),
+            ScrollbarWidth::Auto,
+            theme.disabled_text_color(theme.surface_2()).into(),
+            theme.main_text_color(theme.surface_2()).into(),
             ElementFill::None,
         )
         .with_overlayed_scrollbar()
         .finish();
 
+        // The upper and lower zones scroll independently. A long session tree
+        // receives at most three fifths of the available height, so account
+        // capacity remains visible without adding another navigation mode.
+        let body_el = Flex::column()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(CARD_SPACING * 2.0)
+            .with_child(Shrinkable::new(3.0, session_scroll).finish())
+            .with_child(Shrinkable::new(2.0, account_scroll).finish())
+            .finish();
+
         Container::new(body_el)
             .with_uniform_padding(CARD_PADDING)
+            .with_background(theme.surface_2())
             .finish()
     }
 }

@@ -1,15 +1,18 @@
-#[cfg(target_os = "macos")]
-use std::fs;
 use std::{
-    path::PathBuf,
+    fs::{self, FileTimes},
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Barrier, Mutex,
     },
     thread,
+    time::{Duration, SystemTime},
 };
 
-use diesel::{connection::SimpleConnection, ExpressionMethods, QueryDsl, RunQueryDsl};
+use diesel::{
+    connection::SimpleConnection, sql_types::Text, sqlite::SqliteConnection, Connection,
+    ExpressionMethods, QueryDsl, RunQueryDsl,
+};
 use warp_core::features::FeatureFlag;
 
 use crate::{
@@ -37,8 +40,12 @@ use crate::{
 };
 
 use super::{
-    decode_path, deduplicate_events, delete_objects, encode_path, read_sqlite_data, save_app_state,
-    save_workspaces, setup_database, take_prewarmed_result, upsert_notebooks, PrewarmState,
+    decode_path, deduplicate_events, delete_objects, encode_path,
+    migrate_legacy_state_sqlite_if_needed, migrate_zap_app_group_sqlite_if_needed,
+    read_sqlite_data, save_app_state, save_workspaces, setup_database,
+    should_copy_legacy_zap_sqlite, snapshot_sqlite_database,
+    snapshot_sqlite_database_with_page_limit, take_prewarmed_result, upsert_notebooks,
+    PrewarmState,
 };
 
 #[test]
@@ -952,48 +959,138 @@ fn test_path_encode_decode() {
     assert_encode_then_decode_preserves_original_path(PathBuf::from("/temp/cjk/狗没有耐心"));
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(not(target_family = "wasm"))]
 #[test]
-fn test_migrate_zap_app_group_sqlite_copies_newer_legacy_files() {
-    use super::migrate_zap_app_group_sqlite_if_needed;
-
+fn sqlite_migration_lock_excludes_another_start_and_releases_on_drop() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let legacy_dir = tempdir.path().join("legacy");
-    let state_dir = tempdir.path().join("state");
-    let target_db = state_dir.join("warp.sqlite");
-    fs::create_dir_all(&legacy_dir).expect("legacy dir should be created");
-    fs::create_dir_all(&state_dir).expect("state dir should be created");
-
-    fs::write(&target_db, "old-target").expect("target db should be written");
-    std::thread::sleep(std::time::Duration::from_secs(1));
-
-    let legacy_db = legacy_dir.join("warp.sqlite");
-    fs::write(&legacy_db, "legacy-db").expect("legacy db should be written");
-    fs::write(legacy_db.with_extension("sqlite-wal"), "legacy-wal")
-        .expect("legacy wal should be written");
-    fs::write(legacy_db.with_extension("sqlite-shm"), "legacy-shm")
-        .expect("legacy shm should be written");
-
-    migrate_zap_app_group_sqlite_if_needed(&target_db, &legacy_dir)
-        .expect("migration should succeed");
-
-    assert_eq!(fs::read_to_string(&target_db).unwrap(), "legacy-db");
-    assert_eq!(
-        fs::read_to_string(target_db.with_extension("sqlite-wal")).unwrap(),
-        "legacy-wal"
-    );
-    assert_eq!(
-        fs::read_to_string(target_db.with_extension("sqlite-shm")).unwrap(),
-        "legacy-shm"
-    );
-    assert!(state_dir.join(".zap-app-group-sqlite-migrated").exists());
+    let target_db = tempdir.path().join("warp.sqlite");
+    let first = super::lock_sqlite_migration(&target_db).expect("first start should acquire lock");
+    assert!(super::lock_sqlite_migration_with_timeout(&target_db, Duration::ZERO).is_err());
+    drop(first);
+    super::lock_sqlite_migration(&target_db).expect("next start should acquire released lock");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(not(target_family = "wasm"))]
 #[test]
-fn test_migrate_zap_app_group_sqlite_copies_when_legacy_wal_is_newer() {
-    use super::migrate_zap_app_group_sqlite_if_needed;
+fn sqlite_migration_lock_waits_for_a_concurrent_start_to_finish() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let target_db = tempdir.path().join("warp.sqlite");
+    let first = super::lock_sqlite_migration(&target_db).expect("first start should acquire lock");
+    let release = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        drop(first);
+    });
+    let next = super::lock_sqlite_migration_with_timeout(&target_db, Duration::from_secs(2))
+        .expect("second start should acquire the released lock within its deadline");
+    release.join().expect("first startup thread should finish");
+    drop(next);
+}
 
+#[cfg(unix)]
+#[test]
+fn sqlite_snapshot_creates_private_destination() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let source_db = tempdir.path().join("source.sqlite");
+    let target_db = tempdir.path().join("target.sqlite");
+    let _source_connection = create_migration_test_database(&source_db, &["private-data"], true);
+    fs::set_permissions(&source_db, fs::Permissions::from_mode(0o600))
+        .expect("source should be private");
+    snapshot_sqlite_database(&source_db, &target_db).expect("snapshot should succeed");
+    let permissions = fs::metadata(&target_db)
+        .expect("target should exist")
+        .permissions();
+    assert_eq!(permissions.mode() & 0o077, 0);
+    assert_eq!(migration_test_values(&target_db), vec!["private-data"]);
+}
+
+#[derive(diesel::QueryableByName)]
+struct MigrationTestRow {
+    #[diesel(sql_type = Text)]
+    value: String,
+}
+
+fn create_migration_test_database(path: &Path, values: &[&str], use_wal: bool) -> SqliteConnection {
+    let mut connection = SqliteConnection::establish(path.to_str().expect("test path is UTF-8"))
+        .expect("test database should open");
+    if use_wal {
+        connection
+            .batch_execute("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+            .expect("WAL should be enabled");
+    }
+    connection
+        .batch_execute("CREATE TABLE migration_test (value TEXT NOT NULL);")
+        .expect("test table should be created");
+    for value in values {
+        diesel::sql_query("INSERT INTO migration_test (value) VALUES (?)")
+            .bind::<Text, _>(*value)
+            .execute(&mut connection)
+            .expect("test row should be inserted");
+    }
+    connection
+}
+
+fn migration_test_values(path: &Path) -> Vec<String> {
+    let mut connection = SqliteConnection::establish(path.to_str().expect("test path is UTF-8"))
+        .expect("test database should open");
+    diesel::sql_query("SELECT value FROM migration_test ORDER BY value")
+        .load::<MigrationTestRow>(&mut connection)
+        .expect("test rows should load")
+        .into_iter()
+        .map(|row| row.value)
+        .collect()
+}
+
+#[test]
+fn sqlite_snapshot_includes_committed_wal_rows_and_replaces_existing_wal_database() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let source_db = tempdir.path().join("source.sqlite");
+    let target_db = tempdir.path().join("target.sqlite");
+    let _source_connection = create_migration_test_database(&source_db, &["from-source"], true);
+    let _target_connection = create_migration_test_database(&target_db, &["old-target"], true);
+    assert!(source_db.with_extension("sqlite-wal").exists());
+    assert!(target_db.with_extension("sqlite-wal").exists());
+
+    snapshot_sqlite_database(&source_db, &target_db).expect("snapshot should succeed");
+
+    assert_eq!(migration_test_values(&target_db), vec!["from-source"]);
+    assert_eq!(migration_test_values(&source_db), vec!["from-source"]);
+}
+
+#[test]
+fn incomplete_sqlite_snapshot_rolls_back_existing_target() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let source_db = tempdir.path().join("source.sqlite");
+    let target_db = tempdir.path().join("target.sqlite");
+    let mut source_connection =
+        SqliteConnection::establish(source_db.to_str().expect("test path is UTF-8"))
+            .expect("source database should open");
+    source_connection
+        .batch_execute(
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; \
+             CREATE TABLE migration_test (value TEXT NOT NULL);",
+        )
+        .expect("source table should be created");
+    let payload = "x".repeat(8_192);
+    for index in 0..4 {
+        diesel::sql_query("INSERT INTO migration_test (value) VALUES (?)")
+            .bind::<Text, _>(format!("{index}-{payload}"))
+            .execute(&mut source_connection)
+            .expect("large source row should be inserted");
+    }
+    let _target_connection = create_migration_test_database(&target_db, &["keep-target"], true);
+
+    let error = snapshot_sqlite_database_with_page_limit(&source_db, &target_db, 1)
+        .expect_err("one backup page should not complete the snapshot");
+
+    assert!(error.to_string().contains("did not complete"));
+    assert!(error.to_string().contains("step status 0"));
+    assert_eq!(migration_test_values(&target_db), vec!["keep-target"]);
+}
+
+#[test]
+fn app_group_pending_marker_retries_even_when_target_is_newer() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let legacy_dir = tempdir.path().join("legacy");
     let state_dir = tempdir.path().join("state");
@@ -1001,48 +1098,200 @@ fn test_migrate_zap_app_group_sqlite_copies_when_legacy_wal_is_newer() {
     let target_db = state_dir.join("warp.sqlite");
     fs::create_dir_all(&legacy_dir).expect("legacy dir should be created");
     fs::create_dir_all(&state_dir).expect("state dir should be created");
-
-    fs::write(&legacy_db, "legacy-db").expect("legacy db should be written");
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    fs::write(&target_db, "target-db").expect("target db should be written");
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    fs::write(legacy_db.with_extension("sqlite-wal"), "legacy-wal")
-        .expect("legacy wal should be written");
-
-    migrate_zap_app_group_sqlite_if_needed(&target_db, &legacy_dir)
-        .expect("migration should succeed");
-
-    assert_eq!(fs::read_to_string(&target_db).unwrap(), "legacy-db");
-    assert_eq!(
-        fs::read_to_string(target_db.with_extension("sqlite-wal")).unwrap(),
-        "legacy-wal"
+    drop(create_migration_test_database(
+        &legacy_db,
+        &["from-legacy"],
+        false,
+    ));
+    drop(create_migration_test_database(
+        &target_db,
+        &["newer-target"],
+        false,
+    ));
+    fs::File::options()
+        .write(true)
+        .open(&legacy_db)
+        .expect("legacy database should open")
+        .set_times(FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(10)))
+        .expect("legacy modified time should be set");
+    fs::File::options()
+        .write(true)
+        .open(&target_db)
+        .expect("target database should open")
+        .set_times(FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(20)))
+        .expect("target modified time should be set");
+    assert!(
+        !should_copy_legacy_zap_sqlite(&legacy_db, &target_db).expect("modified times should load")
     );
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn test_migrate_zap_app_group_sqlite_marker_skips_copy() {
-    use super::migrate_zap_app_group_sqlite_if_needed;
-
-    let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let legacy_dir = tempdir.path().join("legacy");
-    let state_dir = tempdir.path().join("state");
-    let target_db = state_dir.join("warp.sqlite");
-    fs::create_dir_all(&legacy_dir).expect("legacy dir should be created");
-    fs::create_dir_all(&state_dir).expect("state dir should be created");
-
-    fs::write(legacy_dir.join("warp.sqlite"), "legacy-db").expect("legacy db should be written");
-    fs::write(&target_db, "target-db").expect("target db should be written");
     fs::write(
-        state_dir.join(".zap-app-group-sqlite-migrated"),
-        "migrated\n",
+        state_dir.join(".zap-app-group-sqlite-migration-pending"),
+        "pending\n",
     )
-    .expect("marker should be written");
+    .expect("pending marker should be written");
+
+    migrate_zap_app_group_sqlite_if_needed(&target_db, &legacy_dir)
+        .expect("pending migration should retry");
+
+    assert_eq!(migration_test_values(&target_db), vec!["from-legacy"]);
+    assert!(state_dir.join(".zap-app-group-sqlite-migrated").exists());
+    assert!(!state_dir
+        .join(".zap-app-group-sqlite-migration-pending")
+        .exists());
+}
+
+#[test]
+fn app_group_failed_snapshot_leaves_pending_marker_and_preserves_target() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let legacy_dir = tempdir.path().join("legacy");
+    let state_dir = tempdir.path().join("state");
+    let legacy_db = legacy_dir.join("warp.sqlite");
+    let target_db = state_dir.join("warp.sqlite");
+    fs::create_dir_all(&legacy_dir).expect("legacy dir should be created");
+    fs::create_dir_all(&state_dir).expect("state dir should be created");
+    drop(create_migration_test_database(
+        &target_db,
+        &["keep-target"],
+        true,
+    ));
+    fs::write(&legacy_db, b"not a sqlite database").expect("invalid source should be written");
+    fs::File::options()
+        .write(true)
+        .open(&target_db)
+        .expect("target database should open")
+        .set_times(FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(10)))
+        .expect("target modified time should be set");
+    fs::File::options()
+        .write(true)
+        .open(&legacy_db)
+        .expect("legacy database should open")
+        .set_times(FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(20)))
+        .expect("legacy modified time should be set");
+
+    migrate_zap_app_group_sqlite_if_needed(&target_db, &legacy_dir)
+        .expect_err("invalid source should fail the migration");
+
+    assert_eq!(migration_test_values(&target_db), vec!["keep-target"]);
+    assert!(state_dir
+        .join(".zap-app-group-sqlite-migration-pending")
+        .exists());
+    assert!(!state_dir.join(".zap-app-group-sqlite-migrated").exists());
+}
+
+#[test]
+fn app_group_completed_snapshot_is_idempotent_and_keeps_source() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let legacy_dir = tempdir.path().join("legacy");
+    let state_dir = tempdir.path().join("state");
+    let legacy_db = legacy_dir.join("warp.sqlite");
+    let target_db = state_dir.join("warp.sqlite");
+    fs::create_dir_all(&legacy_dir).expect("legacy dir should be created");
+    fs::create_dir_all(&state_dir).expect("state dir should be created");
+    let mut source_connection = create_migration_test_database(&legacy_db, &["legacy-one"], true);
 
     migrate_zap_app_group_sqlite_if_needed(&target_db, &legacy_dir)
         .expect("migration should succeed");
+    assert_eq!(migration_test_values(&target_db), vec!["legacy-one"]);
+    assert_eq!(migration_test_values(&legacy_db), vec!["legacy-one"]);
 
-    assert_eq!(fs::read_to_string(&target_db).unwrap(), "target-db");
+    let mut target_connection =
+        SqliteConnection::establish(target_db.to_str().expect("test path is UTF-8"))
+            .expect("target database should open");
+    diesel::sql_query("INSERT INTO migration_test (value) VALUES ('target-local')")
+        .execute(&mut target_connection)
+        .expect("target row should be inserted");
+    diesel::sql_query("INSERT INTO migration_test (value) VALUES ('legacy-two')")
+        .execute(&mut source_connection)
+        .expect("source row should be inserted");
+
+    migrate_zap_app_group_sqlite_if_needed(&target_db, &legacy_dir)
+        .expect("completed migration should be idempotent");
+
+    assert_eq!(
+        migration_test_values(&target_db),
+        vec!["legacy-one", "target-local"]
+    );
+    assert_eq!(
+        migration_test_values(&legacy_db),
+        vec!["legacy-one", "legacy-two"]
+    );
+}
+
+#[test]
+fn app_group_pending_marker_rejects_missing_source() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let legacy_dir = tempdir.path().join("legacy");
+    let state_dir = tempdir.path().join("state");
+    let target_db = state_dir.join("warp.sqlite");
+    fs::create_dir_all(&legacy_dir).expect("legacy dir should be created");
+    fs::create_dir_all(&state_dir).expect("state dir should be created");
+    drop(create_migration_test_database(
+        &target_db,
+        &["keep-target"],
+        false,
+    ));
+    fs::write(
+        state_dir.join(".zap-app-group-sqlite-migration-pending"),
+        "pending\n",
+    )
+    .expect("pending marker should be written");
+
+    migrate_zap_app_group_sqlite_if_needed(&target_db, &legacy_dir)
+        .expect_err("a pending migration without its source should fail closed");
+
+    assert_eq!(migration_test_values(&target_db), vec!["keep-target"]);
+    assert!(!state_dir.join(".zap-app-group-sqlite-migrated").exists());
+}
+
+#[test]
+fn legacy_state_migration_retries_after_incomplete_snapshot() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let source_db = tempdir.path().join("legacy").join("warp.sqlite");
+    let target_dir = tempdir.path().join("secure-state");
+    let target_db = target_dir.join("warp.sqlite");
+    fs::create_dir_all(source_db.parent().unwrap()).expect("legacy dir should be created");
+    fs::create_dir_all(&target_dir).expect("target dir should be created");
+    let mut source_connection =
+        SqliteConnection::establish(source_db.to_str().expect("test path is UTF-8"))
+            .expect("source database should open");
+    source_connection
+        .batch_execute(
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; \
+             CREATE TABLE migration_test (value TEXT NOT NULL);",
+        )
+        .expect("source table should be created");
+    let payload = "x".repeat(8_192);
+    for index in 0..4 {
+        diesel::sql_query("INSERT INTO migration_test (value) VALUES (?)")
+            .bind::<Text, _>(format!("legacy-{index}-{payload}"))
+            .execute(&mut source_connection)
+            .expect("large source row should be inserted");
+    }
+    drop(create_migration_test_database(
+        &target_db,
+        &["old-target"],
+        true,
+    ));
+    fs::write(
+        target_dir.join(".legacy-state-sqlite-migration-pending"),
+        "pending\n",
+    )
+    .expect("pending marker should be written");
+    snapshot_sqlite_database_with_page_limit(&source_db, &target_db, 1)
+        .expect_err("injected partial snapshot should fail");
+    assert_eq!(migration_test_values(&target_db), vec!["old-target"]);
+
+    assert!(
+        migrate_legacy_state_sqlite_if_needed(&source_db, &target_db)
+            .expect("pending legacy-state migration should retry")
+    );
+
+    assert_eq!(migration_test_values(&target_db).len(), 4);
+    assert_eq!(migration_test_values(&source_db).len(), 4);
+    assert!(source_db.exists());
+    assert!(target_dir.join(".legacy-state-sqlite-migrated").exists());
+    assert!(!target_dir
+        .join(".legacy-state-sqlite-migration-pending")
+        .exists());
 }
 
 #[test]

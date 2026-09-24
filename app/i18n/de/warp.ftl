@@ -81,7 +81,7 @@ cockpit-session-is-reviewed = ✓ Geprüft
 cockpit-session-redirect = ↻ Umlenken
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
-cockpit-session-live-unavailable = „{ $session }“ läuft noch auf { $host }, aber das Terminal ist in Zaplex nicht verfügbar. Stoppe sie zuerst und öffne sie dann hier; es wurde keine zweite Sitzung gestartet.
+cockpit-session-live-unavailable = „{ $session }“ läuft auf { $host }. Zaplex kann das zugehörige Agent-Terminal derzeit nicht öffnen. Nutze das Terminal, in dem Du diese Session gestartet hast. Die Session läuft unverändert weiter.
 cockpit-session-no-longer-available = Diese Sitzung ist auf { $host } nicht mehr verfügbar. Es wurde nichts gestartet.
 
 # GitHub-Flows auf der freiesten Instanz
@@ -4020,7 +4020,6 @@ ai-footer-subscription-target-unavailable = Das ausgewählte Agent-Ziel ist nich
 
 workspace-left-panel-ssh-manager-sessions-confirm-host-key = Verbinde diesen Host und bestätige zuerst den SSH-Schlüssel für { $host }:{ $port } ({ $fingerprint }).
 
-cockpit-shell-sessions-connections = Shell-Sessions in Verbindungen öffnen
 
 ai-footer-subscription-target-changed = Das Ausführungsziel dieser Session hat sich geändert. Stelle das bisherige Ziel wieder her oder beginne eine neue Unterhaltung.
 
@@ -4114,3 +4113,10 @@ workspace-managed-launch-handshake-failed = Der Sitzungsdienst für den verwalte
 workspace-remote-account-readiness-failed = Die Remote-Kontositzung auf { $host } wurde beendet, bevor sie bereit war.
 workspace-managed-launch-readiness-failed = Der verwaltete Agent auf { $host } wurde beendet, bevor er bereit war.
 workspace-remote-routed-split-target-changed = Die Remote-Konto- oder verwaltete Sitzung konnte nicht fortgesetzt werden, weil sich ihr ursprüngliches Split-Ziel geändert hat.
+
+# Persistence initialization must succeed before the workspace can open.
+persistence-startup-error-title = Zaplex konnte die gespeicherten Daten nicht öffnen
+persistence-startup-error-detail = Der Start wurde abgebrochen, damit keine Arbeit ohne Speicherung verloren geht. Die vorhandene Datenbank und Migrationsdateien bleiben erhalten. Schließe gegebenenfalls eine andere Zaplex-Instanz, behebe den folgenden Fehler und starte Zaplex erneut.
+
+    { $error }
+persistence-startup-error-close = Zaplex schließen

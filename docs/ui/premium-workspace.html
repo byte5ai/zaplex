@@ -1,0 +1,2420 @@
+<!doctype html>
+<html lang="de" data-visualize-standalone>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Premium Workspace</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe id="codex-visualization" sandbox="allow-scripts" referrerpolicy="no-referrer" title="Premium Workspace" data-srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;de&quot; data-visualize-standalone&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Premium Workspace&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --icon-size: 16px;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --corner-shape: round;
+  --radius: var(--border-radius-lg, 10px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: var(--visualize-paint-gutter, 0px);
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans) !important;
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+.cursor-interaction {
+  cursor: var(--cursor-interaction, pointer);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: var(--cursor-interaction, pointer);
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: var(--corner-shape);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card, .progress) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+hr {
+  width: 100%;
+  height: 1px;
+  margin-block: 6px;
+  border: 0;
+  background: var(--border);
+}
+
+.nav {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.progress {
+  display: flex;
+  height: 8px;
+  margin-block: calc((var(--line-height-normal, 1.5em) - 8px) / 2);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.progress-bar:only-child {
+  border-radius: var(--radius-full);
+}
+
+.progress-bar {
+  height: 100%;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--viz-series-1);
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.nav-link,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn,
+.nav-link {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: var(--cursor-interaction, pointer);
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover,
+.nav-link:not(:disabled):not([aria-disabled=&quot;true&quot;]):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.nav-pills .nav-link {
+  min-width: 0;
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.nav-justified .nav-link {
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.nav-pills .nav-link.active {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.btn:disabled,
+.nav-link:disabled,
+.nav-link[aria-disabled=&quot;true&quot;] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: var(--corner-shape);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+  [aria-pressed=&quot;true&quot;],
+  [aria-selected=&quot;true&quot;],
+  .is-selected
+) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible,
+.nav-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .btn,
+  .nav-link,
+  .form-control,
+  .form-select {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Keep small-screen WebKit from zooming when a text field receives focus. */
+  .form-control,
+  .form-select {
+    font-size: max(16px, var(--font-size-normal));
+  }
+
+  .form-control[type=&quot;file&quot;]::file-selector-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .form-control-color[type=&quot;color&quot;] {
+    width: 44px;
+    height: 44px;
+  }
+
+  .form-control:is(
+    [type=&quot;date&quot;],
+    [type=&quot;datetime-local&quot;],
+    [type=&quot;month&quot;],
+    [type=&quot;time&quot;],
+    [type=&quot;week&quot;]
+  ) {
+    min-width: 0;
+    max-width: 100%;
+    padding-block: 8px;
+  }
+
+  .form-check {
+    min-height: 44px;
+    padding-inline: 15px;
+  }
+
+  .form-check-input {
+    position: relative;
+  }
+
+  .form-check-input::after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    content: &quot;&quot;;
+    transform: translate(-50%, -50%);
+  }
+
+  .form-check-label {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .form-range {
+    height: 44px;
+    touch-action: pan-y;
+  }
+
+  .form-range::-webkit-slider-runnable-track {
+    height: 44px;
+  }
+
+  .form-range::-moz-range-track {
+    height: 44px;
+  }
+
+  .form-range::-webkit-slider-thumb {
+    margin-top: 12px;
+  }
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: var(--icon-size) !important;
+  height: var(--icon-size) !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;script type=&quot;application/json&quot; id=&quot;codex-visualization-widget-state&quot;&gt;__CODEX_VISUALIZATION_WIDGET_STATE__&lt;/script&gt;
+&lt;script&gt;(() =&gt; {
+  const root = document.documentElement;
+  const mediaQuery = globalThis.matchMedia(&quot;(prefers-color-scheme: dark)&quot;);
+  const apply = Reflect.apply;
+  const isArray = Array.isArray;
+  const hasOwn = Object.hasOwn;
+  const parentWindow = globalThis.parent;
+  const stringify = JSON.stringify;
+  const parse = JSON.parse;
+  const encode = TextEncoder.prototype.encode.bind(new TextEncoder());
+  const initialStateElement = document.getElementById(
+    &quot;codex-visualization-widget-state&quot;,
+  );
+  const initialGlobals = parse(initialStateElement?.textContent ?? &quot;{}&quot;);
+  initialStateElement?.remove();
+  /** @type {Record&lt;string, unknown&gt; | null} */
+  let state = initialGlobals.widgetState ?? null;
+  const statePersistence = initialGlobals.statePersistence ?? &quot;none&quot;;
+  let nextStateRequestId = 0;
+  /** @type {Map&lt;number, { resolve: () =&gt; void; reject: (error: Error) =&gt; void; timeout: ReturnType&lt;typeof globalThis.setTimeout&gt;; serializedState: string }&gt;} */
+  const pendingStateWrites = new Map();
+  const persistenceError = () =&gt;
+    Object.assign(
+      new Error(&quot;The host could not persist the widget state update&quot;),
+      {
+        code: -32000,
+        data: { code: &quot;widget_state_persistence_failed&quot;, retryable: false },
+      },
+    );
+  /**
+   * @param {object} prototype
+   * @param {string} property
+   */
+  const getPrototypeGetter = (prototype, property) =&gt; {
+    // oxlint-disable-next-line typescript/unbound-method -- invoked through captured Reflect.apply
+    const getter = Object.getOwnPropertyDescriptor(prototype, property)?.get;
+    if (getter == null) {
+      throw new Error(`Missing ${property} getter`);
+    }
+    return getter;
+  };
+  const getMessageData = getPrototypeGetter(MessageEvent.prototype, &quot;data&quot;);
+  const getMessagePorts = getPrototypeGetter(MessageEvent.prototype, &quot;ports&quot;);
+  const getMessageSource = getPrototypeGetter(MessageEvent.prototype, &quot;source&quot;);
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const addHostMessageListener = MessagePort.prototype.addEventListener;
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const postHostMessage = MessagePort.prototype.postMessage;
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const startHostPort = MessagePort.prototype.start;
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const stopMessagePropagation = Event.prototype.stopImmediatePropagation;
+  /** @type {MessagePort | null} */
+  let hostPort = null;
+  const postToHost = (type, payload) =&gt; {
+    if (hostPort != null) {
+      apply(postHostMessage, hostPort, [{ type, ...payload }]);
+    }
+  };
+  const openExternal = ({ href }) =&gt; {
+    if (globalThis.navigator.userActivation?.isActive === true) {
+      postToHost(&quot;open-external&quot;, { href });
+    }
+  };
+  const sendFollowUpMessage = ({ context, prompt, title }) =&gt; {
+    if (globalThis.navigator.userActivation?.isActive === true) {
+      postToHost(&quot;follow-up&quot;, { context, prompt, title });
+    }
+    return Promise.resolve();
+  };
+  /**
+   * @param {Record&lt;string, unknown&gt; | ((previous: Record&lt;string, unknown&gt; | null) =&gt; Record&lt;string, unknown&gt;)} next
+   * @returns {Promise&lt;void&gt;}
+   */
+  const setWidgetState = async (next) =&gt; {
+    const nextState = typeof next === &quot;function&quot; ? next(state) : next;
+    if (
+      nextState == null ||
+      typeof nextState !== &quot;object&quot; ||
+      isArray(nextState)
+    ) {
+      throw new TypeError(&quot;Widget state must be a JSON object&quot;);
+    }
+    const inputState = stringify(
+      nextState,
+      (_key, /** @type {unknown} */ value) =&gt; {
+        if (
+          typeof value === &quot;undefined&quot; ||
+          typeof value === &quot;function&quot; ||
+          typeof value === &quot;symbol&quot; ||
+          (typeof value === &quot;number&quot; &amp;&amp; !Number.isFinite(value))
+        ) {
+          throw new TypeError(&quot;Widget state must be a JSON object&quot;);
+        }
+        return value;
+      },
+    );
+    const parsedState = parse(inputState);
+    if (
+      parsedState == null ||
+      typeof parsedState !== &quot;object&quot; ||
+      isArray(parsedState)
+    ) {
+      throw new TypeError(&quot;Widget state must be a JSON object&quot;);
+    }
+    const storedState = {
+      modelContent: null,
+      privateContent: null,
+      ...parsedState,
+    };
+    const serializedState = stringify(storedState);
+    if (encode(serializedState).length &gt; 16 * 1024) {
+      throw new TypeError(
+        &quot;Widget state must be a JSON object of at most 16 KiB&quot;,
+      );
+    }
+    if (
+      hasOwn(storedState, &quot;imageIds&quot;) &amp;&amp;
+      (!isArray(storedState.imageIds) ||
+        storedState.imageIds.some(
+          (/** @type {unknown} */ id) =&gt; typeof id !== &quot;string&quot;,
+        ))
+    ) {
+      throw new TypeError(&quot;Widget state imageIds must be an array of strings&quot;);
+    }
+    if (storedState.imageIds?.length &gt; 0) {
+      throw Object.assign(
+        new TypeError(&quot;Visualization state does not support image attachments&quot;),
+        { code: -32602, data: { code: &quot;images_unsupported&quot; } },
+      );
+    }
+    state = storedState;
+    globalThis.openai.widgetState = state;
+    globalThis.dispatchEvent(
+      new CustomEvent(&quot;openai:set_globals&quot;, {
+        detail: { globals: { widgetState: state } },
+      }),
+    );
+    if (statePersistence === &quot;none&quot;) {
+      throw persistenceError();
+    }
+    const id = ++nextStateRequestId;
+    return new Promise((resolve, reject) =&gt; {
+      const timeout = globalThis.setTimeout(() =&gt; {
+        pendingStateWrites.delete(id);
+        reject(persistenceError());
+      }, 30_000);
+      pendingStateWrites.set(id, { resolve, reject, timeout, serializedState });
+      postToHost(&quot;widget-state-write&quot;, { id, state: serializedState });
+    });
+  };
+  const syncTheme = () =&gt; {
+    const theme = mediaQuery.matches ? &quot;dark&quot; : &quot;light&quot;;
+    root.dataset.theme = theme;
+    globalThis.openai = {
+      ...globalThis.openai,
+      openExternal,
+      sendFollowUpMessage,
+      setWidgetState,
+      theme,
+      visualizationStyleVariables: {},
+      visualizationTheme: theme,
+      widgetState: state,
+      statePersistence,
+      stateModelContext: &quot;none&quot;,
+    };
+    globalThis.dispatchEvent(
+      new CustomEvent(&quot;openai:set_globals&quot;, {
+        detail: { globals: globalThis.openai },
+      }),
+    );
+  };
+  const sendHeight = () =&gt; {
+    postToHost(&quot;height&quot;, {
+      height: Math.ceil(
+        Math.max(
+          document.body.scrollHeight,
+          document.body.getBoundingClientRect().height,
+        ),
+      ),
+    });
+  };
+
+  globalThis.addEventListener(
+    &quot;message&quot;,
+    (event) =&gt; {
+      const data = apply(getMessageData, event, []);
+      const ports = apply(getMessagePorts, event, []);
+      const source = apply(getMessageSource, event, []);
+      if (
+        hostPort != null ||
+        source !== parentWindow ||
+        typeof data !== &quot;object&quot; ||
+        data?.type !== &quot;codex-visualization-initialize&quot; ||
+        !isArray(ports) ||
+        ports.length !== 1
+      ) {
+        return;
+      }
+      apply(stopMessagePropagation, event, []);
+      const nextHostPort = ports[0];
+      try {
+        apply(addHostMessageListener, nextHostPort, [
+          &quot;message&quot;,
+          (event) =&gt; {
+            const data = apply(getMessageData, event, []);
+            if (typeof data === &quot;object&quot; &amp;&amp; data?.type === &quot;measure&quot;) {
+              sendHeight();
+            } else if (
+              typeof data === &quot;object&quot; &amp;&amp;
+              data?.type === &quot;widget-state-result&quot;
+            ) {
+              /** @type {unknown} */
+              const id = data.id;
+              if (typeof id !== &quot;number&quot;) {
+                return;
+              }
+              const pending = pendingStateWrites.get(id);
+              if (pending != null) {
+                pendingStateWrites.delete(id);
+                globalThis.clearTimeout(pending.timeout);
+                if (data.ok === true) {
+                  pending.resolve();
+                } else {
+                  pending.reject(persistenceError());
+                }
+              }
+            }
+          },
+        ]);
+        apply(startHostPort, nextHostPort, []);
+      } catch {
+        return;
+      }
+      hostPort = nextHostPort;
+      for (const [id, { serializedState }] of pendingStateWrites) {
+        postToHost(&quot;widget-state-write&quot;, { id, state: serializedState });
+      }
+      sendHeight();
+    },
+    { capture: true },
+  );
+  document.currentScript?.remove();
+  mediaQuery.addEventListener(&quot;change&quot;, syncTheme);
+  globalThis.addEventListener(&quot;click&quot;, (event) =&gt; {
+    if (event.defaultPrevented) {
+      return;
+    }
+    let element = null;
+    if (event.target instanceof globalThis.Element) {
+      element = event.target;
+    } else if (event.target instanceof globalThis.Node) {
+      element = event.target.parentElement;
+    }
+    const link = element?.closest(&quot;a[href]&quot;);
+    const href = link?.getAttribute(&quot;href&quot;);
+    if (href == null) {
+      return;
+    }
+    if (href.startsWith(&quot;#&quot;)) {
+      let id;
+      try {
+        id = decodeURIComponent(href.slice(1));
+      } catch {
+        return;
+      }
+      const target = id.length === 0 ? root : document.getElementById(id);
+      if (
+        target == null ||
+        globalThis.navigator.userActivation?.isActive !== true
+      ) {
+        return;
+      }
+      event.preventDefault();
+      postToHost(&quot;scroll-to&quot;, {
+        top: target.getBoundingClientRect().top + globalThis.scrollY,
+      });
+      return;
+    }
+    event.preventDefault();
+    openExternal({ href });
+  });
+  new ResizeObserver(sendHeight).observe(document.body);
+  syncTheme();
+})();
+&lt;/script&gt;
+&lt;style&gt;
+/* Resolved theme fixtures for this preview only. Components consume semantic
+   roles corresponding to WarpTheme/ui_colors, never their own color literals. */
+#zaplex-panes{
+ --zp-background:light-dark(#f5f6fa,#0e1320);--zp-foreground:light-dark(#232b3c,#e6eaf3);
+ --zp-surface-1:light-dark(#edf0f6,#131823);--zp-surface-2:light-dark(#ffffff,#1b2130);--zp-surface-3:light-dark(#ffffff,#242c3c);
+ --zp-accent:light-dark(#6045d6,#6c82f2);--zp-on-accent:light-dark(#ffffff,#0e1320);
+ --zp-sub-text:light-dark(#5d687c,#a1acc0);--zp-border:light-dark(#d5dce8,#323b4e);--zp-hover:light-dark(#e8ecf4,#293246);
+ --zp-selection:color-mix(in srgb,var(--zp-accent) 15%,var(--zp-surface-2));
+ --zp-sidebar:color-mix(in srgb,var(--zp-accent) 4%,var(--zp-surface-2));
+ --zp-sidebar-zone:color-mix(in srgb,var(--zp-surface-1) 40%,var(--zp-sidebar));
+ --zp-success:light-dark(#17754b,#70cda2);--zp-warning:light-dark(#986009,#e4b35f);--zp-error:light-dark(#b72d3c,#ff7e88);
+ --zp-claude:light-dark(#9a4f2b,#d78b66);--zp-codex:light-dark(#1d6fbf,#75b3f0);--zp-shadow:light-dark(#1f294029,#0007);
+ --zp-track:color-mix(in srgb,var(--zp-foreground) 12%,var(--zp-surface-2));--zp-header-height:44px;
+ font:13px/1.45 -apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,sans-serif;color:var(--zp-foreground);
+}
+#zaplex-panes[data-accent=&quot;cyan&quot;]{--zp-accent:light-dark(#007184,#6dd7e8);}
+#zaplex-panes[data-sidebar-tone=&quot;neutral&quot;]{--zp-sidebar:var(--zp-surface-2);}
+#zaplex-panes *{box-sizing:border-box;}
+#zaplex-panes [hidden]{display:none!important;}
+#zaplex-panes button,#zaplex-panes input,#zaplex-panes textarea,#zaplex-panes select{font:inherit;color:inherit;}
+#zaplex-panes button{border:0;padding:0;background:none;text-align:left;}
+#zaplex-panes button:disabled{opacity:.4;}
+#zaplex-panes svg{width:16px;height:16px;stroke-width:1.65;flex:none;}
+#zaplex-panes .zp-window{position:relative;background:var(--zp-background);border:1px solid var(--zp-border);border-radius:12px;overflow:clip;}
+#zaplex-panes .zp-chrome{height:44px;display:flex;align-items:center;padding:0 12px;gap:12px;background:var(--zp-surface-1);border-bottom:1px solid var(--zp-border);}
+#zaplex-panes .zp-dots{display:flex;gap:6px;padding-right:4px;}
+#zaplex-panes .zp-dots span{width:10px;height:10px;border-radius:50%;background:var(--zp-sub-text);}
+#zaplex-panes .zp-existing-tab{align-self:stretch;display:flex;align-items:center;justify-content:center;min-width:140px;padding:0 20px;background:var(--zp-surface-2);border-inline:1px solid var(--zp-border);font-size:12px;}
+#zaplex-panes .zp-tab-list{display:flex;align-self:stretch;min-width:0;}
+#zaplex-panes .zp-existing-tab{min-width:0;max-width:240px;gap:12px;overflow:hidden;white-space:nowrap;padding-inline:16px;}
+#zaplex-panes .zp-tab-title{min-width:0;overflow:hidden;text-overflow:ellipsis;}
+#zaplex-panes .zp-existing-tab[aria-selected=&quot;false&quot;]{background:var(--zp-surface-1);color:var(--zp-sub-text);}
+#zaplex-panes .zp-new{display:flex;gap:2px;}
+#zaplex-panes .zp-icon{display:inline-grid;place-items:center;width:26px;height:26px;flex:none;color:var(--zp-sub-text);border-radius:5px;}
+#zaplex-panes button.zp-icon:hover{background:var(--zp-hover);color:var(--zp-foreground);}
+#zaplex-panes .zp-end{margin-left:auto;display:flex;align-items:center;gap:6px;}
+#zaplex-panes .zp-attention{display:flex;align-items:center;gap:7px;color:var(--zp-warning);font-size:12px;}
+#zaplex-panes .zp-layout{display:grid;grid-template-columns:264px minmax(0,1fr);}
+#zaplex-panes .zp-sidebar{min-width:0;background:var(--zp-sidebar);border-right:1px solid var(--zp-border);}
+#zaplex-panes .zp-nav{height:var(--zp-header-height);padding:0 12px;display:flex;align-items:center;gap:6px;}
+#zaplex-panes .zp-nav .zp-icon{width:30px;height:28px;}
+#zaplex-panes .zp-nav [aria-pressed=&quot;true&quot;]{background:var(--zp-selection);color:var(--zp-accent);}
+#zaplex-panes .zp-side-body{padding:12px;display:grid;gap:12px;}
+#zaplex-panes .zp-section{background:var(--zp-surface-2);border:1px solid var(--zp-border);border-radius:12px;min-width:0;overflow:clip;}
+#zaplex-panes .zp-sidebar .zp-section{background:var(--zp-sidebar-zone);border-color:color-mix(in srgb,var(--zp-border) 45%,var(--zp-sidebar));}
+#zaplex-panes .zp-section-head{display:flex;align-items:center;gap:8px;height:40px;padding:0 12px;margin-bottom:4px;}
+#zaplex-panes .zp-section-title{margin:0;font-size:11px;font-weight:500;letter-spacing:.07em;text-transform:uppercase;color:var(--zp-sub-text);}
+#zaplex-panes .zp-section-head .zp-button{min-height:26px;padding:3px 7px;font-size:11px;}
+#zaplex-panes .zp-count{color:var(--zp-sub-text);font-size:11px;font-weight:400;}
+#zaplex-panes .zp-tree{padding:0 4px 6px;}
+#zaplex-panes .zp-tree-row{display:flex;gap:6px;align-items:center;width:100%;min-height:26px;padding:4px 8px;border-radius:5px;}
+#zaplex-panes .zp-tree-row:hover,#zaplex-panes .zp-account:hover,#zaplex-panes .zp-recovery:hover{background:var(--zp-hover);}
+#zaplex-panes .zp-tree-row[aria-current=&quot;true&quot;]{background:var(--zp-selection);}
+#zaplex-panes .zp-count.wait{color:var(--zp-warning);}
+#zaplex-panes .zp-tree-row[data-depth=&quot;0&quot;]{font-size:13px;font-weight:500;min-height:30px;margin-top:4px;}
+#zaplex-panes .zp-tree-row[data-depth=&quot;1&quot;]{padding-left:24px;font-size:12px;color:var(--zp-sub-text);}
+#zaplex-panes .zp-tree-row[data-depth=&quot;2&quot;]{padding-left:40px;font-size:12px;}
+#zaplex-panes .zp-tree-row[data-depth=&quot;3&quot;]{padding-left:56px;font-size:12px;}
+#zaplex-panes .zp-tree-row svg{width:12px;height:12px;}
+#zaplex-panes .zp-truncate{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#zaplex-panes .zp-tree-row .zp-model{color:var(--zp-sub-text);font-size:11px;}
+#zaplex-panes .zp-empty-local{margin:2px 0 6px 32px;font-size:11px;color:var(--zp-sub-text);}
+#zaplex-panes .zp-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--zp-success);flex:none;}
+#zaplex-panes .zp-dot.wait{background:var(--zp-warning);box-shadow:0 0 0 3px color-mix(in srgb,var(--zp-warning) 20%,transparent);}
+#zaplex-panes .zp-dot.idle{background:none;border:1px solid var(--zp-sub-text);}
+#zaplex-panes .zp-link{display:inline-flex;align-items:center;gap:6px;color:var(--zp-accent);font-size:12px;}
+#zaplex-panes .zp-account-list{padding:0 4px 4px;}
+#zaplex-panes .zp-account{display:block;width:100%;padding:8px 8px 10px;border-radius:8px;}
+#zaplex-panes .zp-account+.zp-account{margin-top:4px;}
+#zaplex-panes .zp-account[aria-pressed=&quot;true&quot;]{background:var(--zp-hover);}
+#zaplex-panes .zp-provider{display:flex;align-items:center;gap:8px;font-weight:500;}
+#zaplex-panes .zp-brand{width:10px;height:10px;border-radius:3px;background:var(--zp-claude);flex:none;}
+#zaplex-panes .zp-brand.codex{background:var(--zp-codex);}
+#zaplex-panes .zp-account-id{display:flex;justify-content:space-between;gap:8px;margin:2px 0 8px 18px;color:var(--zp-sub-text);font-size:11px;}
+#zaplex-panes .zp-meter{display:grid;grid-template-columns:38px minmax(0,1fr) 34px;align-items:center;gap:8px;min-height:20px;color:var(--zp-sub-text);font-size:12px;}
+#zaplex-panes .zp-meter+.zp-meter{margin-top:4px;}
+#zaplex-panes .zp-track{height:5px;background:var(--zp-track);border-radius:4px;overflow:hidden;}
+#zaplex-panes .zp-fill{display:block;height:100%;border-radius:4px;background:var(--zp-sub-text);}
+#zaplex-panes .zp-number{white-space:nowrap;text-align:right;color:var(--zp-foreground);font-variant-numeric:tabular-nums;}
+#zaplex-panes .zp-critical .zp-fill{background:var(--zp-error);}
+#zaplex-panes .zp-critical .zp-number{color:var(--zp-error);}
+#zaplex-panes .zp-host-row{display:flex;gap:4px;align-items:center;margin:0 4px;min-height:32px;padding:3px 4px;}
+#zaplex-panes .zp-host-row .zp-icon{width:20px;height:24px;}
+#zaplex-panes .zp-host-row .zp-icon svg{width:14px;height:14px;}
+#zaplex-panes .zp-host-name{flex:1;min-width:0;font-size:13px;font-weight:500;}
+#zaplex-panes .zp-connected{color:var(--zp-success);}
+#zaplex-panes .zp-favorite{color:var(--zp-accent);}
+#zaplex-panes .zp-subhead{font-size:11px;color:var(--zp-sub-text);padding:3px 12px 5px 32px;}
+#zaplex-panes .zp-recovery{display:flex;align-items:center;gap:8px;width:calc(100% - 8px);margin:0 4px;padding:7px 8px 7px 44px;border-radius:5px;}
+#zaplex-panes .zp-recovery small{display:block;color:var(--zp-sub-text);font-size:11px;}
+#zaplex-panes .zp-recovery&gt;span{min-width:0;flex:1;}
+#zaplex-panes .zp-connection-details{font-size:11px;color:var(--zp-sub-text);padding:12px;border-top:1px solid var(--zp-border);margin-top:10px;}
+#zaplex-panes .zp-connection-details summary{list-style:none;display:flex;align-items:center;justify-content:space-between;}
+#zaplex-panes .zp-workspace{min-width:0;display:flex;flex-direction:column;}
+#zaplex-panes .zp-workspace&gt;div:empty{display:none;}
+#zaplex-panes .zp-workspace&gt;div:not(:empty){flex:1 0 auto;}
+#zaplex-panes .zp-session-grid,#zaplex-panes .zp-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-width:0;}
+#zaplex-panes .zp-session-grid.zp-arranged{display:flex;}
+#zaplex-panes .zp-pane-branch{display:flex;min-width:0;flex:1 1 0;}
+#zaplex-panes .zp-pane-branch[data-axis=&quot;down&quot;]{flex-direction:column;}
+#zaplex-panes .zp-arranged .zp-pane{flex:1 1 0;border:0;}
+#zaplex-panes .zp-pane-branch[data-axis=&quot;right&quot;]&gt;:first-child{border-right:1px solid var(--zp-border);}
+#zaplex-panes .zp-pane-branch[data-axis=&quot;down&quot;]&gt;:first-child{border-bottom:1px solid var(--zp-border);}
+#zaplex-panes .zp-root-details{display:grid;grid-template-columns:minmax(0,1fr);}
+#zaplex-panes .zp-session-grid&gt;[data-pane]:only-child,#zaplex-panes .zp-detail-grid&gt;[data-pane]:only-child{grid-column:1/-1;}
+#zaplex-panes .zp-pane{min-width:0;container-type:inline-size;display:flex;flex-direction:column;background:var(--zp-background);border-right:1px solid var(--zp-border);border-bottom:1px solid var(--zp-border);}
+#zaplex-panes .zp-pane:nth-child(even),#zaplex-panes .zp-pane:only-child{border-right:0;}
+#zaplex-panes .zp-pane-head{height:var(--zp-header-height);flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--zp-border);background:var(--zp-surface-1);}
+#zaplex-panes .zp-pane[data-focused=&quot;true&quot;]&gt;.zp-pane-head{background:var(--zp-surface-2);}
+#zaplex-panes .zp-focus-label{font-size:11px;color:var(--zp-sub-text);visibility:hidden;}
+#zaplex-panes .zp-pane[data-focused=&quot;true&quot;]&gt;.zp-pane-head .zp-focus-label{visibility:visible;}
+#zaplex-panes .zp-pane-title{font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--zp-sub-text);}
+#zaplex-panes .zp-pane[data-focused=&quot;true&quot;]&gt;.zp-pane-head .zp-pane-title{color:var(--zp-foreground);}
+#zaplex-panes .zp-pane-account{flex:1;min-width:0;}
+#zaplex-panes .zp-pane-account .zp-provider{font-size:13px;}
+#zaplex-panes .zp-pane-account .zp-account-id{justify-content:flex-start;margin:0 0 0 18px;line-height:15px;flex-wrap:nowrap;}
+#zaplex-panes .zp-pane-account .zp-account-id&gt;span:last-child{flex:none;}
+#zaplex-panes .zp-pane-head .zp-icon{width:24px;height:24px;}
+#zaplex-panes .zp-file-body{min-height:352px;display:flex;flex-direction:column;flex:1;}
+#zaplex-panes .zp-path{display:flex;align-items:center;gap:6px;padding:10px 12px;border-bottom:1px solid var(--zp-border);min-width:0;font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;}
+#zaplex-panes .zp-path .zp-path-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#zaplex-panes .zp-files{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px;}
+#zaplex-panes .zp-files th{text-align:left;font-size:11px;font-weight:400;color:var(--zp-sub-text);padding:7px 12px;background:var(--zp-surface-1);}
+#zaplex-panes .zp-files th:nth-child(2){width:67px;text-align:right;}
+#zaplex-panes .zp-files th:nth-child(3){width:67px;}
+#zaplex-panes .zp-files td{height:29px;padding:0 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+#zaplex-panes .zp-files td:nth-child(2){text-align:right;color:var(--zp-sub-text);font-size:11px;}
+#zaplex-panes .zp-files td:nth-child(3){font-size:11px;color:var(--zp-sub-text);}
+#zaplex-panes .zp-files tr[aria-selected=&quot;true&quot;]{background:var(--zp-surface-2);}
+#zaplex-panes .zp-pane[data-focused=&quot;true&quot;] .zp-files tr[aria-selected=&quot;true&quot;]{background:var(--zp-selection);}
+#zaplex-panes .zp-file-button{display:flex;align-items:center;gap:7px;min-height:29px;width:100%;min-width:0;}
+#zaplex-panes .zp-file-button svg{width:13px;height:13px;color:var(--zp-sub-text);}
+#zaplex-panes .zp-file-button span{overflow:hidden;text-overflow:ellipsis;}
+#zaplex-panes .zp-file-footer{margin-top:auto;padding:8px 12px;color:var(--zp-sub-text);font-size:11px;}
+#zaplex-panes .zp-fkeys{display:flex;flex-wrap:nowrap;align-items:center;justify-content:space-between;gap:3px;padding:4px 8px;border-top:1px solid var(--zp-border);background:var(--zp-surface-1);}
+#zaplex-panes .zp-fkeys button{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:3px 2px;font-size:11px;border-radius:4px;white-space:nowrap;flex:none;}
+#zaplex-panes .zp-fkeys button:not(:disabled):hover{background:var(--zp-selection);}
+#zaplex-panes .zp-fkeys b{display:inline-block;flex:none;color:var(--zp-accent);font-weight:500;}
+#zaplex-panes .zp-fkeys button:disabled{color:var(--zp-sub-text);opacity:.5;cursor:default;}
+#zaplex-panes .zp-fkeys button:disabled b{color:inherit;}
+#zaplex-panes .zp-fkey-short{display:none;}
+#zaplex-panes .zp-transfer-target{display:flex;align-items:center;gap:5px;max-width:100%;margin-top:3px;color:var(--zp-sub-text);font-size:11px;}
+#zaplex-panes .zp-transfer-target:hover{color:var(--zp-foreground);}
+#zaplex-panes .zp-transfer-target svg{width:12px;height:12px;}
+@container(max-width:330px){#zaplex-panes .zp-fkey-full{display:none;}#zaplex-panes .zp-fkey-short{display:inline;}}
+#zaplex-panes .zp-terminal{min-height:352px;display:flex;flex-direction:column;flex:1;padding:16px;gap:16px;}
+#zaplex-panes .zp-output{font:12px/1.8 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere;}
+#zaplex-panes .zp-output .zp-muted{color:var(--zp-sub-text);}
+#zaplex-panes .zp-terminal-input{margin-top:auto;}
+#zaplex-panes .zp-terminal-input label{display:block;font-size:11px;color:var(--zp-sub-text);margin-bottom:6px;overflow-wrap:anywhere;}
+#zaplex-panes .zp-terminal-input textarea{display:block;resize:none;width:100%;min-height:64px;padding:10px;border:1px solid var(--zp-border);border-radius:6px;background:var(--zp-surface-2);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;}
+#zaplex-panes .zp-terminal-input textarea:disabled{opacity:.45;}
+#zaplex-panes .zp-start-state{font-size:12px;}
+#zaplex-panes .zp-start-state strong{display:block;font-weight:500;margin-bottom:8px;}
+#zaplex-panes .zp-start-state small{font-size:11px;color:var(--zp-sub-text);}
+#zaplex-panes .zp-start-state .zp-steps{display:grid;gap:8px;margin-top:14px;color:var(--zp-sub-text);}
+#zaplex-panes .zp-step{display:flex;align-items:center;gap:7px;}
+#zaplex-panes .zp-step:last-child{color:var(--zp-accent);}
+#zaplex-panes .zp-detail-body{padding:16px;display:grid;gap:16px;}
+#zaplex-panes .zp-large-account{padding:16px;}
+#zaplex-panes .zp-large-account .zp-provider{font-size:18px;}
+#zaplex-panes .zp-large-account .zp-account-id{font-size:12px;margin-bottom:16px;}
+#zaplex-panes .zp-quota{display:grid;grid-template-columns:minmax(0,420px) minmax(0,1fr);align-items:center;gap:16px;}
+#zaplex-panes .zp-quota+.zp-quota{margin-top:8px;}
+#zaplex-panes .zp-reset{color:var(--zp-sub-text);font-size:11px;white-space:nowrap;}
+@container(max-width:630px){#zaplex-panes .zp-quota{grid-template-columns:minmax(0,1fr);gap:2px;}#zaplex-panes .zp-reset{margin-left:46px;}}
+#zaplex-panes .zp-finance{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;border-top:1px solid var(--zp-border);padding-top:12px;margin-top:12px;}
+#zaplex-panes .zp-finance span{display:block;color:var(--zp-sub-text);font-size:11px;}
+#zaplex-panes .zp-finance strong{display:block;font-size:14px;font-weight:500;margin:3px 0;}
+#zaplex-panes .zp-detail-head{display:flex;align-items:center;gap:12px;justify-content:space-between;}
+#zaplex-panes .zp-detail-head h2{font-size:13px;font-weight:500;margin:0;}
+#zaplex-panes .zp-button{display:inline-flex;justify-content:center;align-items:center;gap:7px;min-height:30px;padding:5px 10px;border:1px solid var(--zp-border);border-radius:6px;font-size:12px;}
+#zaplex-panes .zp-button:hover{background:var(--zp-hover);}
+#zaplex-panes .zp-button.primary{background:var(--zp-accent);border-color:var(--zp-accent);color:var(--zp-on-accent);}
+#zaplex-panes .zp-session-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;}
+#zaplex-panes .zp-session-table th{padding:9px 12px;color:var(--zp-sub-text);font-size:11px;font-weight:400;text-align:left;}
+#zaplex-panes .zp-session-table td{padding:10px 12px;border-top:1px solid var(--zp-border);overflow-wrap:anywhere;}
+#zaplex-panes .zp-session-table th:last-child{width:44px;}
+#zaplex-panes .zp-session-table th:nth-child(3){width:90px;}
+#zaplex-panes .zp-session-table th:nth-child(4){width:90px;}
+#zaplex-panes .zp-session-table td:last-child{padding:8px 10px;}
+#zaplex-panes .zp-session-table .zp-icon{width:24px;height:24px;}
+#zaplex-panes .zp-session-table small{display:block;font-size:11px;color:var(--zp-sub-text);margin-top:3px;}
+#zaplex-panes .zp-session-table tr.wait{background:color-mix(in srgb,var(--zp-warning) 7%,var(--zp-surface-2));}
+#zaplex-panes .zp-status{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;font-size:11px;}
+#zaplex-panes .zp-overview-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
+#zaplex-panes .zp-overview-cards .zp-account{padding:14px;}
+#zaplex-panes .zp-app-footer{padding:8px 12px;display:flex;gap:12px;justify-content:space-between;font-size:11px;color:var(--zp-sub-text);background:var(--zp-surface-1);border-top:1px solid var(--zp-border);min-height:32px;}
+#zaplex-panes .zp-feedback{color:var(--zp-accent);}
+#zaplex-panes .zp-popup{position:absolute;z-index:8;background:var(--zp-surface-3);padding:6px;border:1px solid var(--zp-border);border-radius:8px;box-shadow:0 12px 32px var(--zp-shadow);width:242px;}
+#zaplex-panes .zp-pane-head .zp-split-trigger{display:inline-flex;align-items:center;justify-content:center;width:34px;gap:3px;}
+#zaplex-panes .zp-split-trigger svg:last-child{width:10px;height:10px;}
+#zaplex-panes .zp-split-picker{width:268px;max-width:calc(100% - 16px);z-index:10;}
+#zaplex-panes .zp-split-heading{padding:5px 8px;font-size:12px;font-weight:500;}
+#zaplex-panes .zp-split-source{padding:0 8px 8px;font-size:11px;color:var(--zp-sub-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#zaplex-panes .zp-split-directions{display:flex;gap:3px;padding:3px;margin:0 4px 8px;border-radius:6px;background:var(--zp-surface-1);}
+#zaplex-panes .zp-split-directions button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 8px;font-size:12px;border-radius:4px;color:var(--zp-sub-text);}
+#zaplex-panes .zp-split-directions button[aria-pressed=&quot;true&quot;]{background:var(--zp-selection);color:var(--zp-foreground);}
+#zaplex-panes .zp-flyout{width:232px;z-index:9;}
+#zaplex-panes .zp-menu-label{padding:5px 8px;color:var(--zp-sub-text);font-size:11px;}
+#zaplex-panes .zp-menu-item{display:flex;align-items:center;gap:8px;min-height:32px;padding:6px 8px;width:100%;border-radius:5px;font-size:12px;white-space:nowrap;}
+#zaplex-panes .zp-menu-item:hover,#zaplex-panes .zp-menu-row.open{background:var(--zp-selection);}
+#zaplex-panes .zp-menu-row{display:flex;border-radius:5px;}
+#zaplex-panes .zp-menu-row&gt;.zp-menu-item{flex:1;min-width:0;}
+#zaplex-panes .zp-menu-row&gt;.zp-icon{width:30px;height:32px;}
+#zaplex-panes .zp-separator{height:1px;margin:6px 4px;background:var(--zp-border);}
+#zaplex-panes .zp-shortcut{margin-left:auto;font-size:11px;color:var(--zp-sub-text);}
+#zaplex-panes .zp-dialog-cover{position:absolute;inset:0;z-index:12;background:var(--zp-shadow);display:flex;align-items:flex-start;justify-content:center;padding:100px 16px 24px;}
+#zaplex-panes .zp-dialog{width:420px;max-width:100%;background:var(--zp-surface-3);border:1px solid var(--zp-border);border-radius:10px;padding:24px;box-shadow:0 16px 40px var(--zp-shadow);}
+#zaplex-panes .zp-dialog h2{font-size:18px;font-weight:500;margin:0 0 18px;}
+#zaplex-panes .zp-field{display:grid;grid-template-columns:75px minmax(0,1fr);align-items:center;gap:12px;margin:12px 0;font-size:12px;}
+#zaplex-panes .zp-field input,#zaplex-panes .zp-field select{min-width:0;width:100%;padding:8px;border:1px solid var(--zp-border);border-radius:6px;background:var(--zp-surface-2);}
+#zaplex-panes .zp-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;}
+#zaplex-panes .zp-table-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+#zaplex-panes .zp-table-search{display:flex;align-items:center;gap:6px;flex:1 1 170px;min-width:0;padding:6px 8px;border:1px solid var(--zp-border);border-radius:6px;color:var(--zp-sub-text);background:var(--zp-surface-1);}
+#zaplex-panes .zp-table-search input{width:100%;min-width:0;padding:0;border:0;background:transparent;color:var(--zp-foreground);font-size:12px;}
+#zaplex-panes .zp-table-filters{display:flex;gap:3px;flex-wrap:wrap;}
+#zaplex-panes .zp-table-filters button{padding:6px 8px;border-radius:5px;color:var(--zp-sub-text);font-size:12px;}
+#zaplex-panes .zp-table-filters button[aria-pressed=&quot;true&quot;]{color:var(--zp-foreground);background:var(--zp-hover);}
+#zaplex-panes .zp-session-link{display:block;width:100%;font-size:12px;}
+#zaplex-panes .zp-session-link:hover{color:var(--zp-accent);}
+#zaplex-panes .zp-session-menu{width:230px;max-width:calc(100% - 16px);z-index:11;}
+#zaplex-panes .zp-session-menu .zp-menu-item{white-space:normal;}
+#zaplex-panes .zp-session-menu .zp-destructive{color:var(--zp-error);}
+#zaplex-panes .zp-preview-note{padding:5px 8px;color:var(--zp-sub-text);font-size:11px;}
+@container(max-width:280px){#zaplex-panes .zp-pane-head{padding-inline:6px;gap:4px;}#zaplex-panes .zp-focus-label{display:none;}#zaplex-panes .zp-terminal{padding:8px;}#zaplex-panes .zp-terminal-input label{overflow-wrap:anywhere;}#zaplex-panes .zp-file-footer{padding-inline:6px;}#zaplex-panes .zp-files th:nth-child(2),#zaplex-panes .zp-files td:nth-child(2){display:none;}}
+@container(max-width:230px){#zaplex-panes .zp-fkeys .zp-fkey-full,#zaplex-panes .zp-fkeys .zp-fkey-short{display:none;}}
+@container(max-width:400px){#zaplex-panes .zp-files th:nth-child(3),#zaplex-panes .zp-files td:nth-child(3){display:none;}#zaplex-panes .zp-detail-body{padding:12px;}#zaplex-panes .zp-session-table th:nth-child(2),#zaplex-panes .zp-session-table td:nth-child(2){display:none;}#zaplex-panes .zp-session-table th:nth-child(3){width:60px;}#zaplex-panes .zp-session-table th:nth-child(4){width:68px;}#zaplex-panes .zp-session-table th,#zaplex-panes .zp-session-table td{padding-inline:8px;}#zaplex-panes .zp-large-account{padding:12px;}#zaplex-panes .zp-account-id{flex-wrap:wrap;}#zaplex-panes .zp-finance{gap:8px;}}
+@media(max-width:850px){#zaplex-panes .zp-layout{grid-template-columns:238px minmax(0,1fr);}#zaplex-panes .zp-session-grid,#zaplex-panes .zp-detail-grid{grid-template-columns:minmax(0,1fr);}#zaplex-panes .zp-pane{border-right:0;}#zaplex-panes .zp-tree-row[data-depth=&quot;3&quot;]{padding-left:48px;}}
+@media(max-width:600px){#zaplex-panes .zp-layout{grid-template-columns:minmax(0,1fr);}#zaplex-panes .zp-sidebar{border-right:0;border-bottom:1px solid var(--zp-border);}#zaplex-panes .zp-side-body{padding:10px;}#zaplex-panes .zp-dots{display:none;}#zaplex-panes .zp-existing-tab{min-width:0;}#zaplex-panes .zp-chrome{gap:6px;padding-inline:8px;}#zaplex-panes .zp-app-footer{flex-wrap:wrap;}#zaplex-panes .zp-overview-cards{grid-template-columns:minmax(0,1fr);}#zaplex-panes .zp-dialog-cover{padding-top:56px;}}
+@media(pointer:coarse){#zaplex-panes .zp-file-button,#zaplex-panes .zp-menu-item{min-height:40px;}#zaplex-panes .zp-icon{min-height:32px;min-width:28px;}#zaplex-panes input,#zaplex-panes textarea,#zaplex-panes select{font-size:16px;}}
+@media (prefers-reduced-motion: reduce){#zaplex-panes *,#zaplex-panes *::before,#zaplex-panes *::after{animation: none!important;transition:none!important;scroll-behavior:auto!important;}}
+&lt;/style&gt;
+&lt;div id=&quot;zaplex-panes&quot; aria-label=&quot;Zaplex: bestehendes Pane-Modell mit vereinheitlichter Sidebar und Kontodetails&quot;&gt;
+ &lt;div class=&quot;zp-window&quot;&gt;
+  &lt;header class=&quot;zp-chrome&quot;&gt;
+   &lt;div class=&quot;zp-dots&quot; aria-hidden=&quot;true&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/div&gt;
+   &lt;div class=&quot;zp-tab-list&quot; data-tabs aria-label=&quot;Bestehende Tab-Leiste&quot;&gt;&lt;/div&gt;
+   &lt;div class=&quot;zp-new&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-new-terminal aria-label=&quot;Neues Terminal&quot; data-tooltip=&quot;Neues Terminal&quot;&gt;&lt;i data-lucide=&quot;plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-menu aria-label=&quot;Neue Session&quot; aria-expanded=&quot;false&quot;&gt;&lt;i data-lucide=&quot;chevron-down&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;
+   &lt;div class=&quot;zp-end&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;zp-attention cursor-interaction&quot; data-attention aria-label=&quot;Zur wartenden Agent-Session&quot; data-tooltip=&quot;Eine Agent-Session wartet auf dich&quot;&gt;&lt;span class=&quot;zp-dot wait&quot;&gt;&lt;/span&gt;1&lt;/button&gt;&lt;/div&gt;
+  &lt;/header&gt;
+  &lt;div class=&quot;zp-layout&quot;&gt;
+   &lt;aside class=&quot;zp-sidebar&quot;&gt;
+    &lt;nav class=&quot;zp-nav&quot; aria-label=&quot;Sidebar-Navigation&quot;&gt;
+     &lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-sidebar=&quot;cockpit&quot; aria-label=&quot;Cockpit&quot; data-tooltip=&quot;Cockpit&quot;&gt;&lt;i data-lucide=&quot;layout-grid&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+     &lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-sidebar=&quot;connections&quot; aria-label=&quot;Verbindungen&quot; data-tooltip=&quot;Verbindungen&quot;&gt;&lt;i data-lucide=&quot;server&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+     &lt;button type=&quot;button&quot; class=&quot;zp-icon&quot; disabled aria-label=&quot;Projektdateien – unverändert&quot;&gt;&lt;i data-lucide=&quot;files&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+     &lt;button type=&quot;button&quot; class=&quot;zp-icon&quot; disabled aria-label=&quot;Suche – unverändert&quot;&gt;&lt;i data-lucide=&quot;search&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+     &lt;button type=&quot;button&quot; class=&quot;zp-icon&quot; disabled aria-label=&quot;Unterhaltungen – unverändert&quot;&gt;&lt;i data-lucide=&quot;message-square&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+     &lt;button type=&quot;button&quot; class=&quot;zp-icon&quot; disabled aria-label=&quot;Notebooks – unverändert&quot;&gt;&lt;i data-lucide=&quot;book-open&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+    &lt;/nav&gt;
+    &lt;div class=&quot;zp-side-body&quot; data-sidebar-body&gt;&lt;/div&gt;
+   &lt;/aside&gt;
+   &lt;main class=&quot;zp-workspace&quot; aria-label=&quot;Panes im aktuellen Tab&quot;&gt;&lt;div class=&quot;zp-root-details&quot; data-root-details&gt;&lt;/div&gt;&lt;div class=&quot;zp-session-grid&quot; data-session-grid&gt;&lt;/div&gt;&lt;div class=&quot;zp-detail-grid&quot; data-detail-grid&gt;&lt;/div&gt;&lt;/main&gt;
+  &lt;/div&gt;
+  &lt;footer class=&quot;zp-app-footer&quot;&gt;&lt;span&gt;Entwurf · Beispieldaten&lt;/span&gt;&lt;span class=&quot;zp-feedback&quot; data-feedback role=&quot;status&quot; aria-live=&quot;polite&quot;&gt;&lt;/span&gt;&lt;/footer&gt;
+  &lt;div class=&quot;zp-popup&quot; data-launch-menu hidden aria-label=&quot;Neue Session&quot;&gt;&lt;/div&gt;
+  &lt;div class=&quot;zp-popup zp-flyout&quot; data-flyout hidden aria-label=&quot;Host-Aktionen&quot;&gt;&lt;/div&gt;
+  &lt;div class=&quot;zp-dialog-cover&quot; data-dialog hidden&gt;&lt;/div&gt;
+ &lt;/div&gt;
+&lt;/div&gt;
+&lt;script&gt;
+(()=&gt;{
+ const root=document.getElementById(&#x27;zaplex-panes&#x27;);
+ const icon=n=&gt;`&lt;i data-lucide=&quot;${n}&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;`;
+ const esc=v=&gt;String(v).replace(/[&amp;&lt;&gt;&quot;&#x27;]/g,c=&gt;({&#x27;&amp;&#x27;:&#x27;&amp;amp;&#x27;,&#x27;&lt;&#x27;:&#x27;&amp;lt;&#x27;,&#x27;&gt;&#x27;:&#x27;&amp;gt;&#x27;,&#x27;&quot;&#x27;:&#x27;&amp;quot;&#x27;,&quot;&#x27;&quot;:&#x27;&amp;#39;&#x27;}[c]));
+ const accounts=[{id:&#x27;private&#x27;,provider:&#x27;Claude&#x27;,identity:&#x27;personal@example.invalid&#x27;,plan:&#x27;Max&#x27;,five:3,week:12,cost:&#x27;~3,42 $&#x27;,tokens:&#x27;12.400&#x27;},{id:&#x27;team&#x27;,provider:&#x27;Claude&#x27;,identity:&#x27;team@example.invalid&#x27;,plan:&#x27;Team&#x27;,five:44,week:62,cost:&#x27;~8,10 $&#x27;,tokens:&#x27;31.200&#x27;},{id:&#x27;pro&#x27;,provider:&#x27;Claude&#x27;,identity:&#x27;pro@example.invalid&#x27;,plan:&#x27;Pro&#x27;,five:18,week:88,cost:&#x27;—&#x27;,tokens:&#x27;—&#x27;},{id:&#x27;codex&#x27;,provider:&#x27;Codex&#x27;,identity:&#x27;team@example.invalid&#x27;,plan:&#x27;Team&#x27;,five:26,week:39,cost:&#x27;~2,15 $&#x27;,tokens:&#x27;18.100&#x27;}];
+ const initialFiles={ &#x27;/home/developer/projects/zaplex&#x27;:[[&#x27;app&#x27;,&#x27;dir&#x27;,&#x27;—&#x27;],[&#x27;crates&#x27;,&#x27;dir&#x27;,&#x27;—&#x27;],[&#x27;docs&#x27;,&#x27;dir&#x27;,&#x27;—&#x27;],[&#x27;resources&#x27;,&#x27;dir&#x27;,&#x27;—&#x27;],[&#x27;specs&#x27;,&#x27;dir&#x27;,&#x27;—&#x27;],[&#x27;Cargo.toml&#x27;,&#x27;file&#x27;,&#x27;12 KB&#x27;],[&#x27;README.md&#x27;,&#x27;file&#x27;,&#x27;8 KB&#x27;]], &#x27;/home/developer/tmp&#x27;:[[&#x27;backups&#x27;,&#x27;dir&#x27;,&#x27;—&#x27;],[&#x27;exports&#x27;,&#x27;dir&#x27;,&#x27;—&#x27;],[&#x27;notes.txt&#x27;,&#x27;file&#x27;,&#x27;2 KB&#x27;]], &#x27;/home/developer/projects&#x27;:[[&#x27;demo-tools&#x27;,&#x27;dir&#x27;,&#x27;—&#x27;],[&#x27;zaplex&#x27;,&#x27;dir&#x27;,&#x27;—&#x27;]], &#x27;/home/developer&#x27;:[[&#x27;projects&#x27;,&#x27;dir&#x27;,&#x27;—&#x27;],[&#x27;tmp&#x27;,&#x27;dir&#x27;,&#x27;—&#x27;]]};
+ const hostFiles=new Map();
+ function fileSystem(s){if(!hostFiles.has(s.host))hostFiles.set(s.host,JSON.parse(JSON.stringify(initialFiles)));return hostFiles.get(s.host);}
+ const state={sidebar:&#x27;cockpit&#x27;,focus:&#x27;account-private&#x27;,collapsed:[],openAccounts:[&#x27;private&#x27;],menu:false,flyout:null,favorites:[&#x27;buildnode&#x27;,&#x27;worknode&#x27;],next:3,sessions:[{id:&#x27;s1&#x27;,host:&#x27;buildnode&#x27;,path:&#x27;/home/developer/projects/zaplex&#x27;,mode:&#x27;files&#x27;,selection:&#x27;README.md&#x27;,account:&#x27;private&#x27;,sessionId:&#x27;demo0001&#x27;,provider:&#x27;Claude&#x27;,model:&#x27;claude-opus-4-8&#x27;,status:&#x27;wait&#x27;,connection:&#x27;ready&#x27;,draft:&#x27;&#x27;,output:[&#x27;$ pwd&#x27;,&#x27;/home/developer/projects/zaplex&#x27;,&#x27;$ ls&#x27;,&#x27;app  crates  docs  resources  specs&#x27;]},{id:&#x27;s2&#x27;,host:&#x27;buildnode&#x27;,path:&#x27;/home/developer/tmp&#x27;,mode:&#x27;files&#x27;,selection:&#x27;exports&#x27;,account:&#x27;codex&#x27;,sessionId:&#x27;demo0002&#x27;,provider:&#x27;Codex&#x27;,model:&#x27;gpt-5.5&#x27;,status:&#x27;active&#x27;,connection:&#x27;ready&#x27;,draft:&#x27;&#x27;,output:[&#x27;$ cd ~/tmp&#x27;,&#x27;$ pwd&#x27;,&#x27;/home/developer/tmp&#x27;]}]};
+ const design={appearance:&#x27;system&#x27;,accent:&#x27;theme&#x27;,sidebarTone:&#x27;tinted&#x27;,reconnect:&#x27;ready&#x27;};const timers=new Map();let lastSaved=&#x27;&#x27;;let rendering=false;
+ state.tab=&#x27;original&#x27;;state.focus=&#x27;s1&#x27;;
+ state.tabs=[{id:&#x27;original&#x27;,accounts:state.openAccounts,focusedPaneId:&#x27;s1&#x27;}];
+ state.sessions.forEach((s,index)=&gt;{s.number=index+1;s.tabId=&#x27;original&#x27;;});const hostNumbers={buildnode:2};
+ const activeTab=()=&gt;state.tabs.find(t=&gt;t.id===state.tab);
+ const visibleSessions=()=&gt;state.sessions.filter(s=&gt;s.tabId===state.tab);
+ const dot=status=&gt;`&lt;span class=&quot;zp-dot ${status===&#x27;wait&#x27;?&#x27;wait&#x27;:status===&#x27;idle&#x27;?&#x27;idle&#x27;:&#x27;&#x27;}&quot; aria-label=&quot;${status===&#x27;wait&#x27;?&#x27;Wartet auf dich&#x27;:status===&#x27;idle&#x27;?&#x27;Ruht&#x27;:&#x27;Arbeitet&#x27;}&quot;&gt;&lt;/span&gt;`;
+ const account=id=&gt;accounts.find(a=&gt;a.id===id);
+ const session=id=&gt;state.sessions.find(s=&gt;s.id===id);
+ const directoryLabel=s=&gt;s.path===&#x27;/home/developer&#x27;?&#x27;~&#x27;:s.path.split(&#x27;/&#x27;).filter(Boolean).pop()||&#x27;/&#x27;;
+ const sessionLabel=s=&gt;s.host+&#x27; · &#x27;+directoryLabel(s)+(state.sessions.filter(p=&gt;p.host===s.host&amp;&amp;directoryLabel(p)===directoryLabel(s)).length&gt;1?&#x27; &#x27;+s.number:&#x27;&#x27;);
+ function tabPaneIds(tab){return [...state.sessions.filter(s=&gt;s.tabId===tab.id).map(s=&gt;s.id),...tab.accounts.map(id=&gt;&#x27;account-&#x27;+id)];}
+ function tabFocus(tab){const ids=tabPaneIds(tab);return tab.id===state.tab&amp;&amp;ids.includes(state.focus)?state.focus:ids.includes(tab.focusedPaneId)?tab.focusedPaneId:ids[0];}
+ function tabPresentation(tab){
+  // Match PaneGroup::display_title: explicit custom title, otherwise focused pane.
+  const id=tabFocus(tab),s=session(id),a=id?.startsWith(&#x27;account-&#x27;)?account(id.slice(8)):null;
+  const automatic=s?sessionLabel(s):id?.startsWith(&#x27;account-&#x27;)?&#x27;Cockpit&#x27;:&#x27;Terminal&#x27;;
+  return {label:tab.customTitle||automatic,description:s?s.host+&#x27; · &#x27;+shortPath(s.path):a?a.provider+&#x27; · &#x27;+a.identity+&#x27; · &#x27;+a.plan:&#x27;Cockpit · Alle KI-Konten&#x27;};
+ }
+ function updateTabTitles(){root.querySelectorAll(&#x27;[data-tab]&#x27;).forEach(button=&gt;{const tab=state.tabs.find(t=&gt;t.id===button.dataset.tab);if(!tab)return;const p=tabPresentation(tab);button.querySelector(&#x27;.zp-tab-title&#x27;).textContent=p.label;button.setAttribute(&#x27;aria-label&#x27;,p.label);button.dataset.tooltip=p.description;});}
+ const shortPath=p=&gt;p.replace(&#x27;/home/developer&#x27;,&#x27;~&#x27;);
+ function meter(label,value){return `&lt;div class=&quot;zp-meter ${value&gt;=85?&#x27;zp-critical&#x27;:&#x27;&#x27;}&quot;&gt;&lt;span&gt;${label}&lt;/span&gt;&lt;span class=&quot;zp-track&quot; role=&quot;meter&quot; aria-label=&quot;${label}&quot; aria-valuemin=&quot;0&quot; aria-valuemax=&quot;100&quot; aria-valuenow=&quot;${value}&quot;&gt;&lt;span class=&quot;zp-fill&quot; style=&quot;width:${value}%&quot;&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&quot;zp-number&quot;&gt;${value} %&lt;/span&gt;&lt;/div&gt;`;}
+ function identity(a){return `&lt;div class=&quot;zp-provider&quot;&gt;&lt;span class=&quot;zp-brand ${a.provider===&#x27;Codex&#x27;?&#x27;codex&#x27;:&#x27;&#x27;}&quot;&gt;&lt;/span&gt;${a.provider}&lt;/div&gt;&lt;div class=&quot;zp-account-id&quot;&gt;&lt;span class=&quot;zp-truncate&quot; data-tooltip=&quot;${a.identity}&quot;&gt;${a.identity}&lt;/span&gt;&lt;span&gt;${a.plan}&lt;/span&gt;&lt;/div&gt;`;}
+ function meters(a){return `&lt;div class=&quot;zp-meters&quot;&gt;${meter(&#x27;5 h&#x27;,a.five)}${meter(&#x27;Woche&#x27;,a.week)}&lt;/div&gt;`;}
+ function fold(id,label,depth,body,count=1,waiting=false){const open=!state.collapsed.includes(id);return `&lt;button type=&quot;button&quot; class=&quot;zp-tree-row cursor-interaction&quot; data-fold=&quot;${id}&quot; data-depth=&quot;${depth}&quot; aria-expanded=&quot;${open}&quot; ${depth===2?&#x27;aria-current=&quot;&#x27;+(state.focus===id)+&#x27;&quot;&#x27;:&#x27;&#x27;}&gt;${icon(open?&#x27;chevron-down&#x27;:&#x27;chevron-right&#x27;)}&lt;span class=&quot;zp-truncate&quot;&gt;${label}&lt;/span&gt;${!open?`&lt;span class=&quot;zp-count ${waiting?&#x27;wait&#x27;:&#x27;&#x27;}&quot;&gt;${count}&lt;/span&gt;`:&#x27;&#x27;}&lt;/button&gt;&lt;div ${open?&#x27;&#x27;:&#x27;hidden&#x27;}&gt;${body}&lt;/div&gt;`;}
+ function cockpit(){
+  const live=state.sessions.filter(s=&gt;s.provider),waiting=live.filter(s=&gt;s.status===&#x27;wait&#x27;).length;
+  const hosts=[&#x27;Mac&#x27;,...new Set(state.sessions.map(s=&gt;s.host).filter(h=&gt;h!==&#x27;Mac&#x27;))];
+  const tree=hosts.map(host=&gt;{
+   const sessions=live.filter(s=&gt;s.host===host),groups=new Map();
+   sessions.forEach(s=&gt;{const project=s.projectRoot||s.path.match(/^(.*\/projects\/[^/]+)/)?.[1]||null;const key=project||&#x27;none&#x27;;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(s);});
+   const projects=[...groups].map(([path,rows])=&gt;fold(&#x27;project-&#x27;+host+&#x27;-&#x27;+path,path===&#x27;none&#x27;?&#x27;Ohne Projekt&#x27;:esc(path.split(&#x27;/&#x27;).pop()),1,rows.map(s=&gt;fold(s.id,esc(sessionLabel(s)),2,`&lt;button type=&quot;button&quot; class=&quot;zp-tree-row cursor-interaction&quot; data-agent=&quot;${s.id}&quot; data-depth=&quot;3&quot;&gt;${dot(s.status)}&lt;span&gt;${s.provider}&lt;/span&gt;&lt;span class=&quot;zp-model zp-truncate&quot; data-tooltip=&quot;${s.model}&quot;&gt;${s.model}&lt;/span&gt;&lt;/button&gt;`,1,s.status===&#x27;wait&#x27;)).join(&#x27;&#x27;),rows.length,rows.some(s=&gt;s.status===&#x27;wait&#x27;))).join(&#x27;&#x27;);
+   return fold(&#x27;tree-host-&#x27;+host,dot()+&#x27; &#x27;+esc(host),0,projects||&#x27;&lt;div class=&quot;zp-empty-local&quot;&gt;Keine aktiven KI-Sessions&lt;/div&gt;&#x27;,sessions.length,sessions.some(s=&gt;s.status===&#x27;wait&#x27;));
+  }).join(&#x27;&#x27;);
+  return `&lt;section class=&quot;zp-section&quot;&gt;&lt;div class=&quot;zp-section-head&quot;&gt;&lt;h2 class=&quot;zp-section-title&quot;&gt;KI-Sessions&lt;/h2&gt;&lt;span class=&quot;zp-count&quot;&gt;${live.length}&lt;/span&gt;${waiting?`&lt;span class=&quot;zp-end&quot;&gt;${dot(&#x27;wait&#x27;)}&lt;span class=&quot;zp-count&quot;&gt;${waiting}&lt;/span&gt;&lt;/span&gt;`:&#x27;&#x27;}&lt;/div&gt;&lt;div class=&quot;zp-tree&quot;&gt;${tree}&lt;/div&gt;&lt;/section&gt;&lt;section class=&quot;zp-section&quot;&gt;&lt;div class=&quot;zp-section-head&quot;&gt;&lt;h2 class=&quot;zp-section-title&quot;&gt;KI-Konten&lt;/h2&gt;&lt;span class=&quot;zp-count&quot;&gt;${accounts.length}&lt;/span&gt;&lt;span class=&quot;zp-end&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;zp-button cursor-interaction&quot; data-account=&quot;fleet&quot; data-tooltip=&quot;Gesamtübersicht als zusätzliche Pane öffnen&quot;&gt;Alle Konten&lt;/button&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;zp-account-list&quot;&gt;${accounts.map(a=&gt;`&lt;button type=&quot;button&quot; class=&quot;zp-account cursor-interaction&quot; data-account=&quot;${a.id}&quot; aria-pressed=&quot;${state.focus===&#x27;account-&#x27;+a.id}&quot;&gt;${identity(a)}${meters(a)}&lt;/button&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;&lt;/section&gt;`;
+ }
+ function hostConnection(host){return host===&#x27;buildnode&#x27;?&#x27;&lt;span class=&quot;zp-icon zp-connected&quot; role=&quot;img&quot; aria-label=&quot;Verbunden&quot; data-tooltip=&quot;Verbunden&quot;&gt;&#x27;+icon(&#x27;plug&#x27;)+&#x27;&lt;/span&gt;&#x27;:&#x27;&lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-host-connect=&quot;&#x27;+host+&#x27;&quot; aria-label=&quot;Mit &#x27;+host+&#x27; verbinden&quot; data-tooltip=&quot;Verbinden&quot;&gt;&#x27;+icon(&#x27;unplug&#x27;)+&#x27;&lt;/button&gt;&#x27;;}
+ function connections(){return `&lt;section class=&quot;zp-section&quot;&gt;&lt;div class=&quot;zp-section-head&quot;&gt;&lt;h2 class=&quot;zp-section-title&quot;&gt;Verbindungen&lt;/h2&gt; &lt;span class=&quot;zp-count&quot;&gt;3&lt;/span&gt;&lt;span class=&quot;zp-end&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-add-host aria-label=&quot;Host hinzufügen&quot; data-tooltip=&quot;Host hinzufügen&quot;&gt;${icon(&#x27;plus&#x27;)}&lt;/button&gt;&lt;/span&gt;&lt;/div&gt;${[&#x27;buildnode&#x27;,&#x27;worknode&#x27;,&#x27;testnode&#x27;].map(host=&gt;`&lt;div class=&quot;zp-host-row&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-fold=&quot;host-${host}&quot; aria-expanded=&quot;${!state.collapsed.includes(&#x27;host-&#x27;+host)}&quot; aria-label=&quot;Sessions von ${host}&quot;&gt;${icon(state.collapsed.includes(&#x27;host-&#x27;+host)?&#x27;chevron-right&#x27;:&#x27;chevron-down&#x27;)}&lt;/button&gt;&lt;span class=&quot;zp-host-name zp-truncate&quot;&gt;${host}&lt;/span&gt;&lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-edit-host=&quot;${host}&quot; aria-label=&quot;${host} bearbeiten&quot; data-tooltip=&quot;Verbindung bearbeiten&quot;&gt;${icon(&#x27;settings-2&#x27;)}&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-refresh=&quot;${host}&quot; aria-label=&quot;Sessions aktualisieren&quot; data-tooltip=&quot;Aktualisieren&quot;&gt;${icon(&#x27;refresh-cw&#x27;)}&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction ${state.favorites.includes(host)?&#x27;zp-favorite&#x27;:&#x27;&#x27;}&quot; data-star=&quot;${host}&quot; aria-label=&quot;Favorit ${host}&quot; aria-pressed=&quot;${state.favorites.includes(host)}&quot;&gt;${icon(&#x27;star&#x27;)}&lt;/button&gt;${hostConnection(host)}&lt;/div&gt;${host===&#x27;buildnode&#x27;&amp;&amp;!state.collapsed.includes(&#x27;host-&#x27;+host)?`&lt;div class=&quot;zp-subhead&quot;&gt;Zaplex-Sessions&lt;/div&gt;${[&#x27;s1&#x27;,&#x27;s2&#x27;].map((id,i)=&gt;{const s=session(id)||{host:&#x27;buildnode&#x27;,number:i+1,path:i?&#x27;/home/developer/tmp&#x27;:&#x27;/home/developer/projects/zaplex&#x27;};return `&lt;button type=&quot;button&quot; class=&quot;zp-recovery cursor-interaction&quot; data-recover=&quot;${id}&quot;&gt;&lt;span&gt;${esc(sessionLabel(s))}&lt;small&gt;${esc(shortPath(s.path))}&lt;/small&gt;&lt;/span&gt;${icon(&#x27;square-terminal&#x27;)}&lt;/button&gt;`;}).join(&#x27;&#x27;)}`:&#x27;&#x27;}`).join(&#x27;&#x27;)}&lt;details class=&quot;zp-connection-details&quot;&gt;&lt;summary class=&quot;cursor-interaction&quot;&gt;Verbindungsdetails ${icon(&#x27;chevron-down&#x27;)}&lt;/summary&gt;&lt;p&gt;buildnode · Ausgabepuffer 475 KB&lt;br&gt;Pufferlimit 256 MB&lt;/p&gt;&lt;/details&gt;&lt;/section&gt;`;}
+ function paneHead(id,title,isSession){const s=isSession?session(id):null;const a=id.startsWith(&#x27;account-&#x27;)?account(id.slice(8)):null;const closeLabel=s?.mode===&#x27;files&#x27;?&#x27;Dateimanager schließen · zurück zum Terminal&#x27;:&#x27;Pane schließen&#x27;;return `&lt;header class=&quot;zp-pane-head&quot;&gt;${a?`&lt;div class=&quot;zp-pane-account&quot;&gt;${identity(a)}&lt;/div&gt;`:`&lt;span class=&quot;zp-pane-title&quot; ${s?&#x27;data-tooltip=&quot;&#x27;+esc(s.host+&#x27;:&#x27;+s.path)+&#x27;&quot;&#x27;:&#x27;&#x27;}&gt;${esc(title)}&lt;/span&gt;`}&lt;span class=&quot;zp-focus-label&quot;&gt;Aktiv&lt;/span&gt;${s?.mode===&#x27;terminal&#x27;?`&lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-mode=&quot;${id}&quot; aria-label=&quot;Zum Dateimanager&quot; data-tooltip=&quot;Zum Dateimanager&quot;&gt;${icon(&#x27;folder&#x27;)}&lt;/button&gt;`:&#x27;&#x27;}${s?`&lt;button type=&quot;button&quot; class=&quot;zp-icon zp-split-trigger cursor-interaction&quot; data-split=&quot;${id}&quot; aria-label=&quot;Pane teilen&quot; aria-haspopup=&quot;dialog&quot; aria-expanded=&quot;${splitPicker?.pane===id}&quot; data-tooltip=&quot;Pane teilen – Host und Position wählen&quot;&gt;${icon(&#x27;columns-2&#x27;)}${icon(&#x27;chevron-down&#x27;)}&lt;/button&gt;`:&#x27;&#x27;}&lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-close=&quot;${id}&quot; aria-label=&quot;${closeLabel}&quot; data-tooltip=&quot;${closeLabel}&quot;&gt;${icon(&#x27;x&#x27;)}&lt;/button&gt;&lt;/header&gt;`;}
+ function filePane(s){const entries=fileSystem(s)[s.path]||[];const target=defaultTransferTarget(s);return `&lt;div class=&quot;zp-file-body&quot;&gt;&lt;div class=&quot;zp-path&quot;&gt;${icon(&#x27;folder&#x27;)}&lt;span class=&quot;zp-path-text&quot; data-tooltip=&quot;${s.path}&quot;&gt;${esc(shortPath(s.path))}&lt;/span&gt;&lt;button type=&quot;button&quot; class=&quot;zp-icon zp-end cursor-interaction&quot; data-up=&quot;${s.id}&quot; aria-label=&quot;Eine Ebene nach oben&quot;&gt;${icon(&#x27;arrow-up&#x27;)}&lt;/button&gt;&lt;/div&gt;&lt;table class=&quot;zp-files&quot;&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Name&lt;/th&gt;&lt;th&gt;Größe&lt;/th&gt;&lt;th&gt;Geändert&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;${[[&#x27;..&#x27;,&#x27;parent&#x27;,&#x27;&#x27;],...entries].map(([name,type,size])=&gt;`&lt;tr aria-selected=&quot;${s.selection===name}&quot;&gt;&lt;td&gt;&lt;button type=&quot;button&quot; class=&quot;zp-file-button cursor-interaction&quot; data-file-pane=&quot;${s.id}&quot; data-file=&quot;${esc(name)}&quot; data-kind=&quot;${type}&quot;&gt;${icon(type===&#x27;file&#x27;?&#x27;file&#x27;:&#x27;folder&#x27;)}&lt;span&gt;${esc(name)}&lt;/span&gt;&lt;/button&gt;&lt;/td&gt;&lt;td&gt;${size}&lt;/td&gt;&lt;td&gt;${type===&#x27;parent&#x27;?&#x27;&#x27;:&#x27;20.09.&#x27;}&lt;/td&gt;&lt;/tr&gt;`).join(&#x27;&#x27;)}&lt;/tbody&gt;&lt;/table&gt;&lt;div class=&quot;zp-file-footer&quot;&gt;&lt;span data-file-selection&gt;${entries.length} Einträge · ${esc(s.selection||&#x27;Keine Auswahl&#x27;)}&lt;/span&gt;&lt;button type=&quot;button&quot; class=&quot;zp-transfer-target cursor-interaction&quot; data-choose-target=&quot;${s.id}&quot; aria-label=&quot;Übertragungsziel wählen&quot; data-tooltip=&quot;Ziel-Pane wählen – auch aus anderen Tabs&quot;&gt;&lt;span class=&quot;zp-truncate&quot;&gt;${target?&#x27;Ziel: &#x27;+esc(target.host)+&#x27; · &#x27;+esc(shortPath(target.path)):&#x27;Ziel wählen&#x27;}&lt;/span&gt;${icon(&#x27;chevron-down&#x27;)}&lt;/button&gt;&lt;/div&gt;&lt;div class=&quot;zp-fkeys&quot; aria-label=&quot;Dateiaktionen für ${esc(sessionLabel(s))}&quot;&gt;${[[&#x27;F3&#x27;,&#x27;Ansehen&#x27;,&#x27;view&#x27;],[&#x27;F4&#x27;,&#x27;Bearbeiten&#x27;,&#x27;edit&#x27;],[&#x27;F5&#x27;,&#x27;Kopieren&#x27;,&#x27;copy&#x27;],[&#x27;F6&#x27;,&#x27;Verschieben&#x27;,&#x27;move&#x27;]].map(([key,label,op])=&gt;`&lt;button type=&quot;button&quot; class=&quot;cursor-interaction&quot; data-operation=&quot;${op}&quot; data-source=&quot;${s.id}&quot; aria-label=&quot;${key} ${label}&quot; ${state.focus===s.id?&#x27;&#x27;:&#x27;disabled&#x27;}&gt;&lt;b&gt;${key}&lt;/b&gt;&lt;span class=&quot;zp-fkey-full&quot;&gt;${label}&lt;/span&gt;&lt;span class=&quot;zp-fkey-short&quot; aria-hidden=&quot;true&quot;&gt;${{view:&#x27;Ansehen&#x27;,edit:&#x27;Bearb.&#x27;,copy:&#x27;Kopieren&#x27;,move:&#x27;Versch.&#x27;}[op]}&lt;/span&gt;&lt;/button&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;&lt;/div&gt;`;}
+ function terminalPane(s){const pending=s.connection===&#x27;connecting&#x27;;const cancelled=s.connection===&#x27;cancelled&#x27;;const failed=s.connection===&#x27;failed&#x27;||cancelled;return `&lt;div class=&quot;zp-terminal&quot;&gt;${pending?`&lt;div class=&quot;zp-start-state&quot;&gt;&lt;strong&gt;Session wird wiederverbunden …&lt;/strong&gt;&lt;small&gt;${s.host} · ${s.sessionId}&lt;/small&gt;&lt;div class=&quot;zp-steps&quot;&gt;&lt;span class=&quot;zp-step&quot;&gt;${icon(&#x27;check&#x27;)} SSH verbunden&lt;/span&gt;&lt;span class=&quot;zp-step&quot;&gt;${icon(&#x27;check&#x27;)} Session gefunden&lt;/span&gt;&lt;span class=&quot;zp-step&quot;&gt;${icon(&#x27;loader-circle&#x27;)} Shell-Bereitschaft prüfen&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;zp-actions&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;zp-button cursor-interaction&quot; data-cancel=&quot;${s.id}&quot;&gt;Abbrechen&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;`:failed?`&lt;div class=&quot;zp-start-state&quot;&gt;&lt;strong&gt;${cancelled?&#x27;Verbindungsversuch abgebrochen&#x27;:&#x27;Shell antwortet nicht&#x27;}&lt;/strong&gt;&lt;small&gt;${cancelled?&#x27;Die entfernte Session bleibt erhalten.&#x27;:&#x27;Startfrist abgelaufen. Die entfernte Session bleibt erhalten.&#x27;}&lt;/small&gt;&lt;div class=&quot;zp-actions&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;zp-button primary cursor-interaction&quot; data-recover=&quot;${s.id}&quot;&gt;Erneut versuchen&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;`:`&lt;div class=&quot;zp-output&quot;&gt;${s.output.map(line=&gt;`&lt;div class=&quot;${line.startsWith(&#x27;$&#x27;)?&#x27;&#x27;:&#x27;zp-muted&#x27;}&quot;&gt;${esc(line)}&lt;/div&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;`}&lt;div class=&quot;zp-terminal-input&quot;&gt;&lt;label for=&quot;zp-input-${s.id}&quot;&gt;${pending?&#x27;Eingabe verfügbar, sobald die Shell bereit ist&#x27;:failed?(cancelled?&#x27;Nicht verbunden&#x27;:&#x27;Shell nicht bereit&#x27;):`developer@${s.host} · ${shortPath(s.path)}`}&lt;/label&gt;&lt;textarea id=&quot;zp-input-${s.id}&quot; data-draft=&quot;${s.id}&quot; rows=&quot;2&quot; placeholder=&quot;${pending?&#x27;Verbindung wird hergestellt …&#x27;:failed?&#x27;Wiederverbinden erforderlich&#x27;:&#x27;Befehl eingeben …&#x27;}&quot; ${pending||failed?&#x27;disabled&#x27;:&#x27;&#x27;}&gt;${esc(s.draft)}&lt;/textarea&gt;&lt;/div&gt;&lt;/div&gt;`;}
+ function sessionPane(s){return `&lt;section class=&quot;zp-pane&quot; data-pane=&quot;${s.id}&quot; data-focused=&quot;${state.focus===s.id}&quot;&gt;${paneHead(s.id,sessionLabel(s),true)}${s.mode===&#x27;files&#x27;?filePane(s):terminalPane(s)}&lt;/section&gt;`;}
+ const detailViews=new Map();
+ function detailView(id){const key=state.tab+&#x27;|&#x27;+id;if(!detailViews.has(key))detailViews.set(key,{search:&#x27;&#x27;,filter:&#x27;all&#x27;});return detailViews.get(key);}
+ function accountSessions(id){return state.sessions.filter(s=&gt;s.provider&amp;&amp;(id===&#x27;fleet&#x27;||s.account===id));}
+ function filteredAccountSessions(id){const view=detailView(id),needle=view.search.trim().toLowerCase();return accountSessions(id).filter(s=&gt;(view.filter===&#x27;all&#x27;||s.status===view.filter)&amp;&amp;(!needle||[sessionLabel(s),s.host,s.path,s.sessionId,&#x27;zaplex&#x27;].join(&#x27; &#x27;).toLowerCase().includes(needle)));}
+ function detailRows(id){const rows=filteredAccountSessions(id);return rows.length?rows.map(s=&gt;`&lt;tr class=&quot;${s.status===&#x27;wait&#x27;?&#x27;wait&#x27;:&#x27;&#x27;}&quot;&gt;&lt;td&gt;&lt;button type=&quot;button&quot; class=&quot;zp-session-link cursor-interaction&quot; data-agent=&quot;${s.id}&quot; aria-label=&quot;${esc(sessionLabel(s))} öffnen&quot;&gt;${esc(sessionLabel(s))}&lt;small&gt;${esc(shortPath(s.path))}&lt;/small&gt;&lt;/button&gt;&lt;/td&gt;&lt;td&gt;${esc(s.model)}&lt;/td&gt;&lt;td&gt;31 %&lt;/td&gt;&lt;td&gt;&lt;span class=&quot;zp-status&quot;&gt;${dot(s.status)}${s.status===&#x27;wait&#x27;?&#x27;Wartet&#x27;:s.status===&#x27;idle&#x27;?&#x27;Ruht&#x27;:&#x27;Aktiv&#x27;}&lt;/span&gt;&lt;/td&gt;&lt;td&gt;&lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-session-menu=&quot;${s.id}&quot; aria-label=&quot;Aktionen für ${esc(sessionLabel(s))}&quot; data-tooltip=&quot;Session-Aktionen&quot;&gt;${icon(&#x27;ellipsis&#x27;)}&lt;/button&gt;&lt;/td&gt;&lt;/tr&gt;`).join(&#x27;&#x27;):`&lt;tr&gt;&lt;td colspan=&quot;5&quot;&gt;${accountSessions(id).length?&#x27;Keine passenden Sessions&#x27;:&#x27;Keine aktiven Sessions&#x27;}&lt;/td&gt;&lt;/tr&gt;`;}
+ function updateDetailRows(id){const pane=root.querySelector(&#x27;[data-account-table=&quot;&#x27;+id+&#x27;&quot;]&#x27;);if(!pane)return;pane.querySelector(&#x27;tbody&#x27;).innerHTML=detailRows(id);pane.querySelector(&#x27;[data-session-count]&#x27;).textContent=filteredAccountSessions(id).length;pane.querySelectorAll(&#x27;[data-session-filter]&#x27;).forEach(b=&gt;b.setAttribute(&#x27;aria-pressed&#x27;,String(b.dataset.sessionFilter===detailView(id).filter)));globalThis.lucide?.createIcons({attrs:{width:16,height:16}});}
+ function detailPane(id){
+  const a=account(id);const fleet=id===&#x27;fleet&#x27;;const sessions=filteredAccountSessions(id);const controls=detailView(id);
+  const fixtureWindows=a?.id===&#x27;pro&#x27;?[[&#x27;—&#x27;,&#x27;Nicht verfügbar&#x27;],[&#x27;—&#x27;,&#x27;Nicht verfügbar&#x27;],[&#x27;—&#x27;,&#x27;Nicht verfügbar&#x27;]]:[[a?.cost,a?.tokens+&#x27; Token&#x27;],[&#x27;~6,80 $&#x27;,&#x27;28.100 Token&#x27;],[&#x27;~28,50 $&#x27;,&#x27;140.000 Token&#x27;]];
+  return `&lt;section class=&quot;zp-pane&quot; data-pane=&quot;account-${id}&quot; data-account-table=&quot;${id}&quot; data-focused=&quot;${state.focus===&#x27;account-&#x27;+id}&quot;&gt;${paneHead(&#x27;account-&#x27;+id,&#x27;Alle KI-Konten&#x27;,false)}&lt;div class=&quot;zp-detail-body&quot;&gt;${fleet?`&lt;div class=&quot;zp-overview-cards&quot;&gt;${accounts.map(a=&gt;`&lt;section class=&quot;zp-section&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;zp-account cursor-interaction&quot; data-account=&quot;${a.id}&quot;&gt;${identity(a)}${meters(a)}&lt;/button&gt;&lt;/section&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;`:`&lt;section class=&quot;zp-section zp-large-account&quot;&gt;&lt;div class=&quot;zp-meters&quot;&gt;&lt;div class=&quot;zp-quota&quot;&gt;${meter(&#x27;5 h&#x27;,a.five)}&lt;span class=&quot;zp-reset&quot;&gt;Reset in 2 h 14 min&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;zp-quota&quot;&gt;${meter(&#x27;Woche&#x27;,a.week)}&lt;span class=&quot;zp-reset&quot;&gt;Reset am Donnerstag&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;zp-finance&quot;&gt;${[&#x27;Heute&#x27;,&#x27;5 Stunden&#x27;,&#x27;Woche&#x27;].map((label,index)=&gt;`&lt;div&gt;&lt;span&gt;${label}&lt;/span&gt;&lt;strong data-tooltip=&quot;Geschätzte Kosten aus Tokenpreisen&quot;&gt;${fixtureWindows[index][0]}&lt;/strong&gt;&lt;span&gt;${fixtureWindows[index][1]}&lt;/span&gt;&lt;/div&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;&lt;/section&gt;`}&lt;div class=&quot;zp-detail-head&quot;&gt;&lt;h2&gt;Sessions &lt;span class=&quot;zp-count&quot; data-session-count&gt;${sessions.length}&lt;/span&gt;&lt;/h2&gt;&lt;button type=&quot;button&quot; class=&quot;zp-button primary cursor-interaction&quot; data-new-agent=&quot;${id}&quot;&gt;${icon(&#x27;plus&#x27;)}Neuer Agent&lt;/button&gt;&lt;/div&gt;&lt;div class=&quot;zp-table-controls&quot;&gt;&lt;label class=&quot;zp-table-search&quot;&gt;${icon(&#x27;search&#x27;)}&lt;input type=&quot;search&quot; data-session-search=&quot;${id}&quot; value=&quot;${esc(controls.search)}&quot; placeholder=&quot;Projekt, Branch, Worktree&quot; aria-label=&quot;Sessions durchsuchen&quot;&gt;&lt;/label&gt;&lt;div class=&quot;zp-table-filters&quot; aria-label=&quot;Sessionstatus&quot;&gt;${[[&#x27;all&#x27;,&#x27;Alle&#x27;],[&#x27;wait&#x27;,&#x27;Wartet&#x27;],[&#x27;active&#x27;,&#x27;Aktiv&#x27;],[&#x27;idle&#x27;,&#x27;Ruht&#x27;]].map(([key,label])=&gt;`&lt;button type=&quot;button&quot; class=&quot;cursor-interaction&quot; data-session-filter=&quot;${key}&quot; data-filter-account=&quot;${id}&quot; aria-pressed=&quot;${controls.filter===key}&quot;&gt;${label}&lt;/button&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;&lt;/div&gt;&lt;section class=&quot;zp-section&quot;&gt;&lt;table class=&quot;zp-session-table&quot;&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Session&lt;/th&gt;&lt;th&gt;Modell&lt;/th&gt;&lt;th&gt;Kontext&lt;/th&gt;&lt;th&gt;Status&lt;/th&gt;&lt;th aria-label=&quot;Aktionen&quot;&gt;&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;${detailRows(id)}&lt;/tbody&gt;&lt;/table&gt;&lt;/section&gt;&lt;/div&gt;&lt;/section&gt;`;
+ }
+ function sessionPreviewActions(s){
+  // Resolved mock capabilities mirror the native gates. No pid/fingerprint
+  // fixture means no signal actions; remote worktrees expose no local Review.
+  const isLocal=s.isLocal===true,knownProvider=[&#x27;Claude&#x27;,&#x27;Codex&#x27;].includes(s.provider);
+  const verbs=[];const add=(key,label,allowed=true,danger=false)=&gt;{if(allowed)verbs.push({key,label,danger});};
+  add(&#x27;fork&#x27;,&#x27;Fork&#x27;,knownProvider);add(&#x27;fork-worktree&#x27;,&#x27;Fork in neuen Worktree&#x27;,knownProvider&amp;&amp;isLocal&amp;&amp;!!s.projectRoot);
+  add(&#x27;compact&#x27;,&#x27;/compact&#x27;,s.provider===&#x27;Claude&#x27;);add(&#x27;clear&#x27;,&#x27;/clear&#x27;,s.provider===&#x27;Claude&#x27;);
+  add(&#x27;history&#x27;,&#x27;Verlauf&#x27;,knownProvider);
+  add(&#x27;review&#x27;,&#x27;Review&#x27;,isLocal);add(&#x27;reviewed&#x27;,&#x27;Als geprüft markieren&#x27;,isLocal);add(&#x27;redirect&#x27;,&#x27;Agent neu ausrichten&#x27;,isLocal);add(&#x27;commit&#x27;,&#x27;Commit&#x27;,isLocal);add(&#x27;pr&#x27;,&#x27;Pull Request&#x27;,isLocal);
+  add(&#x27;restart&#x27;,&#x27;Neu starten&#x27;,s.capabilities?.restart===true);add(&#x27;rename&#x27;,&#x27;Session umbenennen&#x27;,s.capabilities?.rename===true);add(&#x27;cleanup&#x27;,&#x27;Verwaiste Session bereinigen&#x27;,s.capabilities?.cleanup===true,true);
+  const canSignal=Number(s.pid)&gt;0&amp;&amp;!!s.processFingerprint&amp;&amp;s.provider===&#x27;Claude&#x27;;add(&#x27;stop&#x27;,&#x27;Stop&#x27;,canSignal,true);add(&#x27;kill&#x27;,&#x27;Kill&#x27;,canSignal,true);return verbs;
+ }
+ function sessionActionMenu(){return root.querySelector(&#x27;[data-session-action-menu]&#x27;);}
+ function closeSessionActionMenu(restoreFocus=false){const menu=sessionActionMenu();if(!menu)return;const id=menu.dataset.sessionActionMenu;menu.remove();if(restoreFocus)root.querySelector(&#x27;[data-session-menu=&quot;&#x27;+id+&#x27;&quot;]&#x27;)?.focus({preventScroll:true});}
+ function openSessionActionMenu(s,anchor){
+  closeSessionActionMenu();closeMenus();renderMenus();
+  const menu=document.createElement(&#x27;div&#x27;);menu.className=&#x27;zp-popup zp-session-menu&#x27;;menu.dataset.sessionActionMenu=s.id;menu.setAttribute(&#x27;role&#x27;,&#x27;menu&#x27;);menu.setAttribute(&#x27;aria-label&#x27;,&#x27;Aktionen für &#x27;+sessionLabel(s));
+  const verbs=sessionPreviewActions(s);let dangerShown=false;
+  menu.innerHTML=`&lt;div class=&quot;zp-menu-label&quot;&gt;${esc(sessionLabel(s))}&lt;/div&gt;&lt;button type=&quot;button&quot; class=&quot;zp-menu-item cursor-interaction&quot; role=&quot;menuitem&quot; data-agent=&quot;${s.id}&quot;&gt;${icon(&#x27;arrow-up-right&#x27;)}Session öffnen&lt;/button&gt;&lt;div class=&quot;zp-separator&quot;&gt;&lt;/div&gt;${verbs.map(v=&gt;{const separator=v.danger&amp;&amp;!dangerShown?(dangerShown=true,&#x27;&lt;div class=&quot;zp-separator&quot;&gt;&lt;/div&gt;&#x27;):&#x27;&#x27;;return `${separator}&lt;button type=&quot;button&quot; class=&quot;zp-menu-item cursor-interaction ${v.danger?&#x27;zp-destructive&#x27;:&#x27;&#x27;}&quot; role=&quot;menuitem&quot; data-preview-session-verb=&quot;${v.key}&quot; data-verb-session=&quot;${s.id}&quot;&gt;${esc(v.label)}&lt;/button&gt;`;}).join(&#x27;&#x27;)}&lt;div class=&quot;zp-separator&quot;&gt;&lt;/div&gt;&lt;div class=&quot;zp-preview-note&quot;&gt;Aktionsvorschau · keine Ausführung&lt;/div&gt;`;
+  const windowElement=root.querySelector(&#x27;.zp-window&#x27;);windowElement.append(menu);const box=windowElement.getBoundingClientRect(),button=anchor.getBoundingClientRect();menu.style.left=Math.max(8,Math.min(button.right-box.left-menu.offsetWidth,windowElement.clientWidth-menu.offsetWidth-8))+&#x27;px&#x27;;menu.style.top=Math.max(8,Math.min(button.bottom-box.top+4,windowElement.clientHeight-menu.offsetHeight-8))+&#x27;px&#x27;;globalThis.lucide?.createIcons({attrs:{width:16,height:16}});menu.querySelector(&#x27;button&#x27;)?.focus({preventScroll:true});
+ }
+ root.addEventListener(&#x27;input&#x27;,event=&gt;{const field=event.target.closest(&#x27;[data-session-search]&#x27;);if(!field)return;detailView(field.dataset.sessionSearch).search=field.value;updateDetailRows(field.dataset.sessionSearch);});
+ root.addEventListener(&#x27;click&#x27;,event=&gt;{
+  const trigger=event.target.closest(&#x27;[data-session-menu]&#x27;);const filter=event.target.closest(&#x27;[data-session-filter]&#x27;);const verb=event.target.closest(&#x27;[data-preview-session-verb]&#x27;);
+  if(trigger){event.preventDefault();event.stopImmediatePropagation();const id=trigger.dataset.sessionMenu;if(sessionActionMenu()?.dataset.sessionActionMenu===id)closeSessionActionMenu();else{const s=session(id);if(s)openSessionActionMenu(s,trigger);}return;}
+  if(filter){event.preventDefault();event.stopImmediatePropagation();closeSessionActionMenu();detailView(filter.dataset.filterAccount).filter=filter.dataset.sessionFilter;updateDetailRows(filter.dataset.filterAccount);return;}
+  if(verb){event.preventDefault();event.stopImmediatePropagation();const s=session(verb.dataset.verbSession);const action=s&amp;&amp;sessionPreviewActions(s).find(v=&gt;v.key===verb.dataset.previewSessionVerb);closeSessionActionMenu();if(action)dialog(action.label+&#x27; · Vorschau&#x27;,`&lt;p&gt;${esc(sessionLabel(s))}&lt;/p&gt;&lt;p&gt;Keine Aktion ausgeführt. Das Menü zeigt nur die für diese Session verfügbaren Aktionen.&lt;/p&gt;`);return;}
+  if(sessionActionMenu()&amp;&amp;(!event.target.closest(&#x27;[data-session-action-menu]&#x27;)||event.target.closest(&#x27;[data-agent]&#x27;)))closeSessionActionMenu();
+ },true);
+ root.addEventListener(&#x27;keydown&#x27;,event=&gt;{const menu=sessionActionMenu();if(!menu)return;event.stopImmediatePropagation();if(event.key===&#x27;Escape&#x27;){event.preventDefault();closeSessionActionMenu(true);return;}const items=Array.from(menu.querySelectorAll(&#x27;button&#x27;));if([&#x27;ArrowDown&#x27;,&#x27;ArrowUp&#x27;,&#x27;Home&#x27;,&#x27;End&#x27;].includes(event.key)){event.preventDefault();const index=items.indexOf(document.activeElement);const next=event.key===&#x27;Home&#x27;?0:event.key===&#x27;End&#x27;?items.length-1:(index+(event.key===&#x27;ArrowDown&#x27;?1:-1)+items.length)%items.length;items[next]?.focus({preventScroll:true});}},true);
+ window.addEventListener(&#x27;resize&#x27;,()=&gt;closeSessionActionMenu());
+ function render(){
+  rendering=true;
+  const active=document.activeElement,previousPane=active?.closest(&#x27;[data-pane]&#x27;)?.dataset.pane;
+  const activeData=root.contains(active)&amp;&amp;(!previousPane||previousPane===state.focus)?Array.from(active.attributes).filter(a=&gt;a.name.startsWith(&#x27;data-&#x27;)&amp;&amp;!a.name.startsWith(&#x27;data-tooltip&#x27;)).map(a=&gt;[a.name,a.value]):[];
+  root.style.colorScheme=design.appearance===&#x27;system&#x27;?&#x27;light dark&#x27;:design.appearance;root.dataset.accent=design.accent;root.dataset.sidebarTone=design.sidebarTone;
+  activeTab().focusedPaneId=tabFocus(activeTab());state.focus=activeTab().focusedPaneId;
+  root.querySelector(&#x27;[data-tabs]&#x27;).innerHTML=state.tabs.map(t=&gt;{const p=tabPresentation(t);return `&lt;button type=&quot;button&quot; class=&quot;zp-existing-tab cursor-interaction&quot; data-tab=&quot;${t.id}&quot; aria-selected=&quot;${state.tab===t.id}&quot; aria-label=&quot;${esc(p.label)}&quot; data-tooltip=&quot;${esc(p.description)}&quot;&gt;&lt;span class=&quot;zp-tab-title&quot;&gt;${esc(p.label)}&lt;/span&gt;&lt;/button&gt;`;}).join(&#x27;&#x27;);
+  root.querySelector(&#x27;[data-sidebar-body]&#x27;).innerHTML=state.sidebar===&#x27;cockpit&#x27;?cockpit():connections();
+  root.querySelectorAll(&#x27;[data-sidebar]&#x27;).forEach(b=&gt;b.setAttribute(&#x27;aria-pressed&#x27;,String(b.dataset.sidebar===state.sidebar)));
+  const original=state.tab===&#x27;original&#x27;;
+  const arranged=!!activeTab().layout;
+  root.querySelector(&#x27;[data-session-grid]&#x27;).classList.toggle(&#x27;zp-arranged&#x27;,arranged);
+  root.querySelector(&#x27;[data-session-grid]&#x27;).innerHTML=arranged?arrangedPane(synchronizeLayout(activeTab())):visibleSessions().map(sessionPane).join(&#x27;&#x27;);
+  root.querySelector(&#x27;[data-root-details]&#x27;).innerHTML=arranged?&#x27;&#x27;:activeTab().accounts.filter(id=&gt;!original||id!==&#x27;private&#x27;).slice().reverse().map(detailPane).join(&#x27;&#x27;);
+  root.querySelector(&#x27;[data-detail-grid]&#x27;).innerHTML=!arranged&amp;&amp;original&amp;&amp;activeTab().accounts.includes(&#x27;private&#x27;)?detailPane(&#x27;private&#x27;):&#x27;&#x27;;
+  renderMenus();globalThis.lucide?.createIcons({attrs:{width:16,height:16}});
+  if(activeData.length){const replacement=Array.from(root.querySelectorAll(active.tagName.toLowerCase())).find(el=&gt;activeData.every(([name,value])=&gt;el.getAttribute(name)===value));replacement?.focus({preventScroll:true});}
+  else if(previousPane&amp;&amp;previousPane!==state.focus){const pane=root.querySelector(&#x27;[data-pane=&quot;&#x27;+CSS.escape(state.focus||&#x27;&#x27;)+&#x27;&quot;]&#x27;);pane?.querySelector(&#x27;textarea:not(:disabled),tr[aria-selected=&quot;true&quot;] [data-file-pane]&#x27;)?.focus({preventScroll:true});}
+  rendering=false;
+ }
+ function focus(id){const changed=state.focus!==id;state.focus=id;activeTab().focusedPaneId=id;updateTabTitles();root.querySelectorAll(&#x27;.zp-tree-row[data-depth=&quot;2&quot;]&#x27;).forEach(el=&gt;el.setAttribute(&#x27;aria-current&#x27;,String(el.dataset.fold===id)));root.querySelectorAll(&#x27;[data-pane]&#x27;).forEach(el=&gt;{const active=el.dataset.pane===id;el.dataset.focused=String(active);el.querySelectorAll(&#x27;.zp-fkeys button&#x27;).forEach(b=&gt;b.disabled=!active);});root.querySelectorAll(&#x27;.zp-account-list [data-account]&#x27;).forEach(el=&gt;el.setAttribute(&#x27;aria-pressed&#x27;,String(id===&#x27;account-&#x27;+el.dataset.account)));if(changed&amp;&amp;!rendering)save();}
+ function feedback(message){root.querySelector(&#x27;[data-feedback]&#x27;).textContent=message;}
+ function closeMenus(){state.menu=false;state.flyout=null;closeSplitPicker();}
+ function renderMenus(){const menu=root.querySelector(&#x27;[data-launch-menu]&#x27;);const fly=root.querySelector(&#x27;[data-flyout]&#x27;);menu.hidden=!state.menu;fly.hidden=!state.menu||!state.flyout;root.querySelector(&#x27;[data-menu]&#x27;).setAttribute(&#x27;aria-expanded&#x27;,String(state.menu));menu.innerHTML=`&lt;button type=&quot;button&quot; class=&quot;zp-menu-item cursor-interaction&quot; data-new-terminal&gt;${icon(&#x27;square-terminal&#x27;)}Terminal&lt;span class=&quot;zp-shortcut&quot;&gt;⌘T&lt;/span&gt;&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;zp-menu-item cursor-interaction&quot; data-new-agent=&quot;choose&quot;&gt;${icon(&#x27;message-square&#x27;)}Neuer Agent …&lt;/button&gt;&lt;div class=&quot;zp-separator&quot;&gt;&lt;/div&gt;&lt;div class=&quot;zp-menu-label&quot;&gt;Favoriten&lt;/div&gt;${state.favorites.map(host=&gt;`&lt;div class=&quot;zp-menu-row ${state.flyout===host?&#x27;open&#x27;:&#x27;&#x27;}&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;zp-menu-item cursor-interaction&quot; data-favorite=&quot;${host}&quot;&gt;${icon(&#x27;square-terminal&#x27;)}${host}&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;zp-icon cursor-interaction&quot; data-more=&quot;${host}&quot; aria-label=&quot;Weitere Aktionen für ${host}&quot; aria-expanded=&quot;${state.flyout===host}&quot;&gt;${icon(&#x27;ellipsis&#x27;)}&lt;/button&gt;&lt;/div&gt;`).join(&#x27;&#x27;)}&lt;div class=&quot;zp-separator&quot;&gt;&lt;/div&gt;&lt;button type=&quot;button&quot; class=&quot;zp-menu-item cursor-interaction&quot; data-config&gt;${icon(&#x27;panels-top-left&#x27;)}Tab-Konfiguration …&lt;/button&gt;`;fly.innerHTML=state.flyout?`&lt;div class=&quot;zp-menu-label&quot;&gt;${state.flyout}&lt;/div&gt;&lt;button type=&quot;button&quot; class=&quot;zp-menu-item cursor-interaction&quot; data-new-agent=&quot;choose&quot; data-agent-host=&quot;${state.flyout}&quot;&gt;${icon(&#x27;message-square&#x27;)}Neuer Agent …&lt;/button&gt;&lt;div class=&quot;zp-separator&quot;&gt;&lt;/div&gt;&lt;button type=&quot;button&quot; class=&quot;zp-menu-item cursor-interaction&quot; data-edit-host=&quot;${state.flyout}&quot;&gt;${icon(&#x27;settings-2&#x27;)}Verbindung bearbeiten …&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;zp-menu-item cursor-interaction&quot; data-unfavorite=&quot;${state.flyout}&quot;&gt;${icon(&#x27;star-off&#x27;)}Aus Favoriten entfernen&lt;/button&gt;`:&#x27;&#x27;;positionMenus();}
+ function positionMenus(){const box=root.querySelector(&#x27;.zp-window&#x27;),r=box.getBoundingClientRect();const menu=root.querySelector(&#x27;[data-launch-menu]&#x27;);if(state.menu){const b=root.querySelector(&#x27;[data-menu]&#x27;).getBoundingClientRect();menu.style.left=Math.max(8,Math.min(b.left-r.left,box.clientWidth-menu.offsetWidth-8))+&#x27;px&#x27;;menu.style.top=&#x27;43px&#x27;;if(state.flyout){const fly=root.querySelector(&#x27;[data-flyout]&#x27;);const trigger=root.querySelector(&#x27;[data-more=&quot;&#x27;+state.flyout+&#x27;&quot;]&#x27;).getBoundingClientRect();let x=menu.offsetLeft+menu.offsetWidth+6;let y=trigger.top-r.top-1;if(x+fly.offsetWidth&gt;box.clientWidth-8){x=menu.offsetLeft-fly.offsetWidth-6;if(x&lt;8){x=Math.max(8,box.clientWidth-fly.offsetWidth-8);y=menu.offsetTop+menu.offsetHeight+6;}}fly.style.left=x+&#x27;px&#x27;;fly.style.top=y+&#x27;px&#x27;;}}}
+ function up(s){const old=s.path.split(&#x27;/&#x27;).filter(Boolean).pop();s.path=s.path.split(&#x27;/&#x27;).slice(0,-1).join(&#x27;/&#x27;)||&#x27;/&#x27;;if(!fileSystem(s)[s.path])fileSystem(s)[s.path]=[[old,&#x27;dir&#x27;,&#x27;—&#x27;]];s.selection=old;focus(s.id);}
+ function openAccount(id){if(!activeTab().accounts.includes(id))activeTab().accounts.push(id);state.focus=&#x27;account-&#x27;+id;}
+ // Only explicit splits add geometry; legacy previews retain their established layout.
+ let splitPicker=null;
+ function branch(axis,children){const nodes=children.filter(Boolean);return nodes.length&gt;1?{axis,children:nodes}:nodes[0]||null;}
+ function legacyLayout(tab){
+  const sessions=state.sessions.filter(s=&gt;s.tabId===tab.id).map(s=&gt;s.id),rows=[];
+  for(let i=0;i&lt;sessions.length;i+=2)rows.push(branch(&#x27;right&#x27;,sessions.slice(i,i+2)));
+  const details=tab.accounts.filter(id=&gt;tab.id!==&#x27;original&#x27;||id!==&#x27;private&#x27;).slice().reverse().map(id=&gt;&#x27;account-&#x27;+id);
+  return branch(&#x27;down&#x27;,[...details,...rows,tab.id===&#x27;original&#x27;&amp;&amp;tab.accounts.includes(&#x27;private&#x27;)?&#x27;account-private&#x27;:null]);
+ }
+ function synchronizeLayout(tab){
+  const remaining=new Set(tabPaneIds(tab));
+  function prune(node){
+   if(typeof node===&#x27;string&#x27;){if(!remaining.delete(node))return null;return node;}
+   if(!node||![&#x27;right&#x27;,&#x27;down&#x27;].includes(node.axis)||!Array.isArray(node.children))return null;
+   return branch(node.axis,node.children.map(prune));
+  }
+  tab.layout=prune(tab.layout);
+  // Account clicks stay additive. Missing panes are inserted above the current layout.
+  tab.layout=branch(&#x27;down&#x27;,[...[...remaining].reverse(),tab.layout]);
+  return tab.layout;
+ }
+ function insertSplit(node,target,id,direction){
+  if(typeof node===&#x27;string&#x27;)return node===target?branch(direction,[target,id]):node;
+  return node?{...node,children:node.children.map(child=&gt;insertSplit(child,target,id,direction))}:id;
+ }
+ function arrangedPane(node){
+  if(typeof node===&#x27;string&#x27;){const s=session(node);return s?sessionPane(s):detailPane(node.slice(8));}
+  return node?&#x27;&lt;div class=&quot;zp-pane-branch&quot; data-axis=&quot;&#x27;+node.axis+&#x27;&quot;&gt;&#x27;+node.children.map(arrangedPane).join(&#x27;&#x27;)+&#x27;&lt;/div&gt;&#x27;:&#x27;&#x27;;
+ }
+ function closeSplitPicker(restoreFocus=false){const id=splitPicker?.pane;splitPicker=null;root.querySelector(&#x27;[data-split-picker]&#x27;)?.remove();root.querySelectorAll(&#x27;[data-split]&#x27;).forEach(b=&gt;b.setAttribute(&#x27;aria-expanded&#x27;,&#x27;false&#x27;));if(restoreFocus&amp;&amp;id)root.querySelector(&#x27;[data-split=&quot;&#x27;+id+&#x27;&quot;]&#x27;)?.focus({preventScroll:true});}
+ function renderSplitPicker(){
+  root.querySelector(&#x27;[data-split-picker]&#x27;)?.remove();if(!splitPicker)return;
+  const s=session(splitPicker.pane),anchor=root.querySelector(&#x27;[data-split=&quot;&#x27;+splitPicker.pane+&#x27;&quot;]&#x27;);if(!s||!anchor){closeSplitPicker();return;}
+  const popup=document.createElement(&#x27;div&#x27;);popup.className=&#x27;zp-popup zp-split-picker&#x27;;popup.dataset.splitPicker=&#x27;&#x27;;popup.setAttribute(&#x27;role&#x27;,&#x27;dialog&#x27;);popup.setAttribute(&#x27;aria-label&#x27;,&#x27;Session hinzufügen&#x27;);
+  const hosts=[s.host,...[&#x27;Mac&#x27;,&#x27;buildnode&#x27;,&#x27;worknode&#x27;,&#x27;testnode&#x27;].filter(h=&gt;h!==s.host)];
+  popup.innerHTML=&#x27;&lt;div class=&quot;zp-split-heading&quot;&gt;Session hinzufügen&lt;/div&gt;&lt;div class=&quot;zp-split-source&quot;&gt;Bei &#x27;+esc(sessionLabel(s))+&#x27;&lt;/div&gt;&lt;div class=&quot;zp-split-directions&quot; aria-label=&quot;Position der neuen Pane&quot;&gt;&#x27;+[[&#x27;right&#x27;,&#x27;Rechts&#x27;,&#x27;columns-2&#x27;],[&#x27;down&#x27;,&#x27;Unten&#x27;,&#x27;rows-2&#x27;]].map(([key,label,glyph])=&gt;&#x27;&lt;button type=&quot;button&quot; class=&quot;cursor-interaction&quot; data-split-direction=&quot;&#x27;+key+&#x27;&quot; aria-pressed=&quot;&#x27;+(splitPicker.direction===key)+&#x27;&quot;&gt;&#x27;+icon(glyph)+label+&#x27;&lt;/button&gt;&#x27;).join(&#x27;&#x27;)+&#x27;&lt;/div&gt;&lt;div class=&quot;zp-menu-label&quot;&gt;Host wählen&lt;/div&gt;&#x27;+hosts.map(host=&gt;&#x27;&lt;button type=&quot;button&quot; class=&quot;zp-menu-item cursor-interaction&quot; data-split-host=&quot;&#x27;+host+&#x27;&quot;&gt;&#x27;+icon(host===&#x27;Mac&#x27;?&#x27;laptop&#x27;:&#x27;server&#x27;)+esc(host)+&#x27;&lt;span class=&quot;zp-shortcut&quot;&gt;&#x27;+(host===s.host?&#x27;Dieser Host&#x27;:host===&#x27;Mac&#x27;?&#x27;Lokal&#x27;:&#x27;&#x27;)+&#x27;&lt;/span&gt;&lt;/button&gt;&#x27;).join(&#x27;&#x27;);
+  const windowElement=root.querySelector(&#x27;.zp-window&#x27;);windowElement.append(popup);anchor.setAttribute(&#x27;aria-expanded&#x27;,&#x27;true&#x27;);const box=windowElement.getBoundingClientRect(),rect=anchor.getBoundingClientRect();popup.style.left=Math.max(8,Math.min(rect.right-box.left-popup.offsetWidth,windowElement.clientWidth-popup.offsetWidth-8))+&#x27;px&#x27;;popup.style.top=Math.max(8,Math.min(rect.bottom-box.top+6,windowElement.clientHeight-popup.offsetHeight-8))+&#x27;px&#x27;;globalThis.lucide?.createIcons({attrs:{width:16,height:16}});
+ }
+ function openSplitPicker(id,direction=&#x27;right&#x27;){
+  if(splitPicker?.pane===id){closeSplitPicker(true);return;}
+  closeMenus();renderMenus();closeSessionActionMenu();splitPicker={pane:id,direction};renderSplitPicker();root.querySelector(&#x27;[data-split-direction=&quot;&#x27;+direction+&#x27;&quot;]&#x27;)?.focus({preventScroll:true});
+ }
+ function addSession(host,path,origin,direction=&#x27;right&#x27;,target=state.focus){
+  const id=&#x27;s&#x27;+state.next++,tab=activeTab();const number=hostNumbers[host]=(hostNumbers[host]||0)+1;
+  if(origin===&#x27;split&#x27;){tab.layout??=legacyLayout(tab);synchronizeLayout(tab);tab.layout=insertSplit(tab.layout,target,id,direction);}
+  const s={id,host,number,tabId:origin===&#x27;split&#x27;?state.tab:id,path,mode:&#x27;terminal&#x27;,selection:&#x27;&#x27;,account:null,sessionId:id,provider:null,model:&#x27;&#x27;,status:&#x27;idle&#x27;,connection:&#x27;ready&#x27;,draft:&#x27;&#x27;,output:[&#x27;$ pwd&#x27;,path]};state.sessions.push(s);
+  if(origin!==&#x27;split&#x27;){state.tabs.push({id,accounts:[],focusedPaneId:id});state.tab=id;}state.focus=id;closeMenus();feedback(origin===&#x27;split&#x27;?host+&#x27; &#x27;+(direction===&#x27;right&#x27;?&#x27;rechts&#x27;:&#x27;unten&#x27;)+&#x27; geöffnet · neue Session · Vorschau&#x27;:&#x27;Neue Session auf &#x27;+host+&#x27; · Vorschau&#x27;);
+ }
+
+ function recover(id){let s=session(id);if(!s){s={id,host:&#x27;buildnode&#x27;,number:id===&#x27;s1&#x27;?1:2,tabId:state.tab,path:id===&#x27;s1&#x27;?&#x27;/home/developer/projects/zaplex&#x27;:&#x27;/home/developer/tmp&#x27;,mode:&#x27;terminal&#x27;,selection:&#x27;&#x27;,account:id===&#x27;s1&#x27;?&#x27;private&#x27;:&#x27;codex&#x27;,sessionId:id===&#x27;s1&#x27;?&#x27;demo0001&#x27;:&#x27;demo0002&#x27;,provider:id===&#x27;s1&#x27;?&#x27;Claude&#x27;:&#x27;Codex&#x27;,model:id===&#x27;s1&#x27;?&#x27;claude-opus-4-8&#x27;:&#x27;gpt-5.5&#x27;,status:id===&#x27;s1&#x27;?&#x27;wait&#x27;:&#x27;active&#x27;,draft:&#x27;&#x27;,output:[&#x27;$ pwd&#x27;,id===&#x27;s1&#x27;?&#x27;/home/developer/projects/zaplex&#x27;:&#x27;/home/developer/tmp&#x27;]};state.sessions.push(s);}state.tab=s.tabId;state.focus=id;if(design.reconnect===&#x27;ready&#x27;){s.mode=&#x27;terminal&#x27;;s.connection=&#x27;ready&#x27;;feedback(&#x27;Bestehende Session fokussiert – keine zweite Session erzeugt&#x27;);return;}s.mode=&#x27;terminal&#x27;;s.connection=&#x27;connecting&#x27;;feedback(&#x27;Wiederverbinden · Beispielablauf&#x27;);clearTimeout(timers.get(id));timers.set(id,setTimeout(()=&gt;{if(!session(id))return;s.connection=design.reconnect===&#x27;timeout&#x27;?&#x27;failed&#x27;:&#x27;ready&#x27;;render();feedback(s.connection===&#x27;ready&#x27;?&#x27;Shell-Bereitschaft bestätigt · Beispielzustand&#x27;:&#x27;Startfrist abgelaufen · entfernte Session bleibt erhalten&#x27;);},2000));}
+ function dialog(title,body){closeMenus();renderMenus();const cover=root.querySelector(&#x27;[data-dialog]&#x27;);cover.hidden=false;cover.innerHTML=`&lt;section class=&quot;zp-dialog&quot; role=&quot;dialog&quot; aria-modal=&quot;true&quot; aria-label=&quot;${esc(title)}&quot;&gt;&lt;h2&gt;${title}&lt;/h2&gt;${body}&lt;div class=&quot;zp-actions&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;zp-button cursor-interaction&quot; data-close-dialog&gt;Schließen&lt;/button&gt;&lt;/div&gt;&lt;/section&gt;`;globalThis.lucide?.createIcons({attrs:{width:16,height:16}});cover.querySelector(&#x27;input,select,button&#x27;)?.focus();}
+ function transferTargets(s){return state.sessions.filter(p=&gt;p.id!==s.id&amp;&amp;p.mode===&#x27;files&#x27;);}
+ function defaultTransferTarget(s){const candidates=transferTargets(s);const chosen=candidates.find(p=&gt;p.id===s.transferTarget);if(chosen)return chosen;const visible=candidates.filter(p=&gt;p.tabId===s.tabId);return visible.length===1?visible[0]:null;}
+ function chooseTransferTarget(s,operation){
+  const candidates=transferTargets(s),selected=defaultTransferTarget(s);
+  const tabs=[activeTab(),...state.tabs.filter(t=&gt;t.id!==state.tab)];
+  const rows=tabs.map(t=&gt;{const targets=candidates.filter(p=&gt;p.tabId===t.id);return targets.length?`&lt;div class=&quot;zp-menu-label&quot;&gt;${t.id===state.tab?&#x27;Aktueller Tab&#x27;:&#x27;Tab: &#x27;+esc(tabPresentation(t).label)}&lt;/div&gt;${targets.map(p=&gt;`&lt;button type=&quot;button&quot; class=&quot;zp-menu-item cursor-interaction&quot; data-transfer-target=&quot;${p.id}&quot; data-source=&quot;${s.id}&quot; ${operation?&#x27;data-transfer-op=&quot;&#x27;+operation+&#x27;&quot;&#x27;:&#x27;&#x27;}&gt;&lt;span class=&quot;zp-truncate&quot; data-tooltip=&quot;${esc(p.host+&#x27; · &#x27;+p.path)}&quot;&gt;${esc(p.host)} · ${esc(shortPath(p.path))}&lt;/span&gt;${selected?.id===p.id?icon(&#x27;check&#x27;):&#x27;&#x27;}&lt;/button&gt;`).join(&#x27;&#x27;)}`:&#x27;&#x27;;}).join(&#x27;&#x27;);
+  dialog(operation?(operation===&#x27;copy&#x27;?&#x27;Kopieren&#x27;:&#x27;Verschieben&#x27;):&#x27;Übertragungsziel&#x27;,`${operation?&#x27;&lt;p&gt;&#x27;+esc(s.selection)+&#x27;&lt;/p&gt;&#x27;:&#x27;&#x27;}${rows||&#x27;&lt;p&gt;Keine weitere Dateimanager-Pane geöffnet.&lt;/p&gt;&#x27;}`);
+ }
+ function transfer(source,operation,choose=false){const s=session(source);if(!s||!s.selection||s.selection===&#x27;..&#x27;)return;const target=defaultTransferTarget(s);if(choose||!target){chooseTransferTarget(s,operation);return;}finishTransfer(s,target,operation);}
+ function finishTransfer(s,target,operation){const item=(fileSystem(s)[s.path]||[]).find(f=&gt;f[0]===s.selection);if(!item)return;if(s.host===target.host&amp;&amp;s.path===target.path){feedback(&#x27;Quelle und Ziel sind identisch&#x27;);return;}fileSystem(target)[target.path]??=[];if(fileSystem(target)[target.path].some(f=&gt;f[0]===item[0])){dialog(&#x27;Datei bereits vorhanden&#x27;,`&lt;p&gt;${esc(item[0])} existiert im Ziel. Die Vorschau überschreibt nichts.&lt;/p&gt;`);return;}fileSystem(target)[target.path].push([...item]);target.selection=item[0];if(operation===&#x27;move&#x27;)fileSystem(s)[s.path]=fileSystem(s)[s.path].filter(f=&gt;f[0]!==item[0]);render();feedback(`${item[0]} ${operation===&#x27;move&#x27;?&#x27;verschoben&#x27;:&#x27;kopiert&#x27;} → ${shortPath(target.path)} · nur Beispieldaten`);}
+ function save(){const saved={version:4,sidebar:state.sidebar,focus:state.focus,tab:state.tab,tabs:state.tabs,sessions:state.sessions.map(s=&gt;({...s,draft:&#x27;&#x27;,output:s.output.slice(-8)})),next:state.next,favorites:state.favorites,design:{...design}};lastSaved=JSON.stringify(saved);window.openai?.setWidgetState?.({modelContent:{mockup:&#x27;Zaplex Pane-Entwurf nach UX-Review&#x27;,sidebar:state.sidebar,panes:visibleSessions().map(s=&gt;({name:sessionLabel(s),path:s.path,mode:s.mode})),accountPanes:activeTab().accounts,theme:design.accent},privateContent:saved})?.catch(()=&gt;{});}
+ function restore(saved){if(![3,4].includes(saved?.version))return;if([&#x27;cockpit&#x27;,&#x27;connections&#x27;].includes(saved.sidebar))state.sidebar=saved.sidebar;if(Array.isArray(saved.tabs)&amp;&amp;saved.tabs.some(t=&gt;t.id===&#x27;original&#x27;)&amp;&amp;Array.isArray(saved.sessions)){state.tabs=saved.tabs.map(t=&gt;({id:t.id,accounts:t.accounts.filter(id=&gt;id===&#x27;fleet&#x27;||account(id)),focusedPaneId:typeof t.focusedPaneId===&#x27;string&#x27;?t.focusedPaneId:undefined,layout:t.layout,customTitle:saved.version===4&amp;&amp;typeof t.customTitle===&#x27;string&#x27;?t.customTitle.trim():undefined}));state.sessions=saved.sessions.filter(s=&gt;state.tabs.some(t=&gt;t.id===s.tabId)&amp;&amp;[&#x27;files&#x27;,&#x27;terminal&#x27;].includes(s.mode));state.sessions.forEach(s=&gt;{fileSystem(s)[s.path]??=[];hostNumbers[s.host]=Math.max(hostNumbers[s.host]||0,s.number);if(s.connection===&#x27;connecting&#x27;)s.connection=&#x27;failed&#x27;;});state.tab=state.tabs.some(t=&gt;t.id===saved.tab)?saved.tab:&#x27;original&#x27;;state.next=Math.max(saved.next||3,...state.sessions.map(s=&gt;Number(s.id.slice(1))+1));}if(typeof saved.focus===&#x27;string&#x27;)state.focus=saved.focus;activeTab().focusedPaneId=tabFocus(activeTab());state.focus=activeTab().focusedPaneId;if(Array.isArray(saved.favorites))state.favorites=saved.favorites.filter(h=&gt;[&#x27;buildnode&#x27;,&#x27;worknode&#x27;,&#x27;testnode&#x27;].includes(h));if(saved.design){if([&#x27;system&#x27;,&#x27;dark&#x27;,&#x27;light&#x27;].includes(saved.design.appearance))design.appearance=saved.design.appearance;if([&#x27;theme&#x27;,&#x27;cyan&#x27;].includes(saved.design.accent))design.accent=saved.design.accent;if([&#x27;tinted&#x27;,&#x27;neutral&#x27;].includes(saved.design.sidebarTone))design.sidebarTone=saved.design.sidebarTone;}}
+ root.addEventListener(&#x27;click&#x27;,event=&gt;{if(splitPicker&amp;&amp;!event.target.closest(&#x27;[data-split-picker],[data-split]&#x27;))closeSplitPicker();const button=event.target.closest(&#x27;button&#x27;);if(button?.disabled)return;const pane=event.target.closest(&#x27;[data-pane]&#x27;);if(pane)focus(pane.dataset.pane);if(!button){if(state.menu&amp;&amp;!event.target.closest(&#x27;[data-launch-menu],[data-flyout]&#x27;)){closeMenus();renderMenus();}return;}const d=button.dataset;feedback(&#x27;&#x27;);
+  if(d.sidebar){state.sidebar=d.sidebar;closeMenus();}
+  else if(d.tab){activeTab().focusedPaneId=state.focus;state.tab=d.tab;state.focus=activeTab().focusedPaneId;state.focus=tabFocus(activeTab());closeMenus();}
+  else if(d.fold){state.collapsed=state.collapsed.includes(d.fold)?state.collapsed.filter(x=&gt;x!==d.fold):[...state.collapsed,d.fold];}
+  else if(d.account){openAccount(d.account);closeMenus();}
+  else if(d.mode){const s=session(d.mode);s.mode=s.mode===&#x27;files&#x27;?&#x27;terminal&#x27;:&#x27;files&#x27;;state.focus=s.id;}
+  else if(d.agent||&#x27;attention&#x27;in d){const s=session(d.agent||&#x27;s1&#x27;);if(s){state.tab=s.tabId;s.mode=&#x27;terminal&#x27;;state.focus=s.id;}}
+  else if(d.up){up(session(d.up));}
+  else if(d.filePane){const s=session(d.filePane);if(d.file===&#x27;..&#x27;)up(s);else{s.selection=d.file;state.focus=s.id;const p=button.closest(&#x27;[data-pane]&#x27;);p.querySelectorAll(&#x27;.zp-files tr[aria-selected]&#x27;).forEach(row=&gt;row.setAttribute(&#x27;aria-selected&#x27;,String(row.querySelector(&#x27;[data-file]&#x27;)?.dataset.file===s.selection)));p.querySelector(&#x27;[data-file-selection]&#x27;).textContent=(fileSystem(s)[s.path]||[]).length+&#x27; Einträge · &#x27;+s.selection;save();return;}}
+  else if(d.operation){if([&#x27;copy&#x27;,&#x27;move&#x27;].includes(d.operation)){transfer(d.source,d.operation);save();return;}dialog(d.operation===&#x27;view&#x27;?&#x27;Datei ansehen&#x27;:&#x27;Datei bearbeiten&#x27;,`&lt;p&gt;${esc(session(d.source).selection)}&lt;/p&gt;&lt;p&gt;Vorschau – Editorinhalt nicht Teil dieses Entwurfs.&lt;/p&gt;`);return;}
+  else if(d.chooseTarget){chooseTransferTarget(session(d.chooseTarget));return;}
+  else if(d.transferTarget){root.querySelector(&#x27;[data-dialog]&#x27;).hidden=true;const s=session(d.source);s.transferTarget=d.transferTarget;if(d.transferOp)finishTransfer(s,session(d.transferTarget),d.transferOp);else render();save();return;}
+  else if(&#x27;menu&#x27;in d){state.menu=!state.menu;state.flyout=null;renderMenus();globalThis.lucide?.createIcons({attrs:{width:16,height:16}});return;}
+  else if(d.more){state.flyout=state.flyout===d.more?null:d.more;renderMenus();globalThis.lucide?.createIcons({attrs:{width:16,height:16}});return;}
+  else if(d.favorite||&#x27;newTerminal&#x27;in d){addSession(d.favorite||&#x27;Mac&#x27;,&#x27;/home/developer&#x27;,&#x27;new&#x27;);}
+  else if(d.split){openSplitPicker(d.split);return;}
+  else if(d.splitDirection){splitPicker.direction=d.splitDirection;renderSplitPicker();root.querySelector(&#x27;[data-split-direction=&quot;&#x27;+d.splitDirection+&#x27;&quot;]&#x27;)?.focus({preventScroll:true});return;}
+  else if(d.splitHost){const source=session(splitPicker.pane),direction=splitPicker.direction;addSession(d.splitHost,d.splitHost===source.host?source.path:&#x27;/home/developer&#x27;,&#x27;split&#x27;,direction,source.id);render();root.querySelector(&#x27;[data-draft=&quot;&#x27;+state.focus+&#x27;&quot;]&#x27;)?.focus({preventScroll:true});save();return;}
+  else if(d.close){const s=session(d.close);if(s?.mode===&#x27;files&#x27;){s.mode=&#x27;terminal&#x27;;state.focus=s.id;}else{if(d.close.startsWith(&#x27;account-&#x27;))activeTab().accounts=activeTab().accounts.filter(id=&gt;&#x27;account-&#x27;+id!==d.close);else{state.sessions=state.sessions.filter(s=&gt;s.id!==d.close);clearTimeout(timers.get(d.close));}if(state.tab!==&#x27;original&#x27;&amp;&amp;!visibleSessions().length&amp;&amp;!activeTab().accounts.length){state.tabs=state.tabs.filter(t=&gt;t.id!==state.tab);state.tab=&#x27;original&#x27;;}state.focus=visibleSessions()[0]?.id||&#x27;account-&#x27;+activeTab().accounts[0];}closeMenus();}
+  else if(d.recover){recover(d.recover);}
+  else if(d.cancel){clearTimeout(timers.get(d.cancel));session(d.cancel).connection=&#x27;cancelled&#x27;;feedback(&#x27;Verbindungsversuch abgebrochen; entfernte Session bleibt erhalten&#x27;);}
+  else if(d.refresh){feedback(&#x27;Sessionliste für &#x27;+d.refresh+&#x27; aktualisiert · Vorschau&#x27;);return;}
+  else if(d.star||d.unfavorite){const h=d.star||d.unfavorite;state.favorites=state.favorites.includes(h)?state.favorites.filter(x=&gt;x!==h):[...state.favorites,h];state.flyout=null;}
+  else if(d.hostConnect){if(d.hostConnect===&#x27;buildnode&#x27;){feedback(&#x27;Bereits verbunden&#x27;);return;}addSession(d.hostConnect,&#x27;/home/developer&#x27;,&#x27;new&#x27;);}
+  else if(d.newAgent){const a=account(d.newAgent)||accounts[0];dialog(&#x27;Neuer Agent&#x27;,`&lt;label class=&quot;zp-field&quot;&gt;&lt;span&gt;Host&lt;/span&gt;&lt;select&gt;${[&#x27;buildnode&#x27;,&#x27;worknode&#x27;,&#x27;testnode&#x27;,&#x27;Mac&#x27;].map(h=&gt;&#x27;&lt;option &#x27;+(h===(d.agentHost||&#x27;buildnode&#x27;)?&#x27;selected&#x27;:&#x27;&#x27;)+&#x27;&gt;&#x27;+h+&#x27;&lt;/option&gt;&#x27;).join(&#x27;&#x27;)}&lt;/select&gt;&lt;/label&gt;&lt;label class=&quot;zp-field&quot;&gt;&lt;span&gt;Ordner&lt;/span&gt;&lt;input value=&quot;~/projects/zaplex&quot;&gt;&lt;/label&gt;&lt;label class=&quot;zp-field&quot;&gt;&lt;span&gt;Provider&lt;/span&gt;&lt;select data-agent-provider&gt;${[&#x27;Claude&#x27;,&#x27;Codex&#x27;].map(p=&gt;&#x27;&lt;option &#x27;+(p===a.provider?&#x27;selected&#x27;:&#x27;&#x27;)+&#x27;&gt;&#x27;+p+&#x27;&lt;/option&gt;&#x27;).join(&#x27;&#x27;)}&lt;/select&gt;&lt;/label&gt;&lt;label class=&quot;zp-field&quot;&gt;&lt;span&gt;Konto&lt;/span&gt;&lt;select data-agent-account&gt;${accounts.filter(c=&gt;c.provider===a.provider).map(c=&gt;&#x27;&lt;option value=&quot;&#x27;+c.id+&#x27;&quot; &#x27;+(c.id===a.id?&#x27;selected&#x27;:&#x27;&#x27;)+&#x27;&gt;&#x27;+esc(c.identity+&#x27; · &#x27;+c.plan)+&#x27;&lt;/option&gt;&#x27;).join(&#x27;&#x27;)}&lt;/select&gt;&lt;/label&gt;&lt;p class=&quot;zp-count&quot;&gt;Nur Vorschau – kein Agent wird gestartet.&lt;/p&gt;`);return;}
+  else if(d.editHost||&#x27;addHost&#x27;in d){dialog(&#x27;Verbindung bearbeiten&#x27;,`&lt;label class=&quot;zp-field&quot;&gt;&lt;span&gt;Host&lt;/span&gt;&lt;input value=&quot;${d.editHost||&#x27;&#x27;}&quot; placeholder=&quot;Hostname&quot;&gt;&lt;/label&gt;&lt;p class=&quot;zp-count&quot;&gt;Nur Vorschau – keine Einstellungen werden gespeichert.&lt;/p&gt;`);return;}
+  else if(&#x27;config&#x27;in d){dialog(&#x27;Tab-Konfiguration&#x27;,&#x27;&lt;p&gt;Unveränderter Einstieg; außerhalb dieses Entwurfs.&lt;/p&gt;&#x27;);return;}
+  else if(&#x27;closeDialog&#x27;in d){root.querySelector(&#x27;[data-dialog]&#x27;).hidden=true;return;}
+  render();if(d.filePane||d.up){const id=d.filePane||d.up;root.querySelector(&#x27;[data-file-pane=&quot;&#x27;+id+&#x27;&quot;][data-file=&quot;&#x27;+CSS.escape(session(id).selection)+&#x27;&quot;]&#x27;)?.focus();}save();
+ });
+ root.addEventListener(&#x27;dblclick&#x27;,event=&gt;{const b=event.target.closest(&#x27;[data-file-pane]&#x27;);if(!b||b.dataset.kind!==&#x27;dir&#x27;)return;const s=session(b.dataset.filePane);s.path=s.path.replace(/\/$/,&#x27;&#x27;)+&#x27;/&#x27;+b.dataset.file;s.selection=&#x27;..&#x27;;fileSystem(s)[s.path]??=[];render();save();});
+ root.addEventListener(&#x27;change&#x27;,event=&gt;{if(event.target.matches(&#x27;[data-agent-provider]&#x27;))root.querySelector(&#x27;[data-agent-account]&#x27;).innerHTML=accounts.filter(a=&gt;a.provider===event.target.value).map(a=&gt;&#x27;&lt;option value=&quot;&#x27;+a.id+&#x27;&quot;&gt;&#x27;+esc(a.identity+&#x27; · &#x27;+a.plan)+&#x27;&lt;/option&gt;&#x27;).join(&#x27;&#x27;);});
+ root.addEventListener(&#x27;input&#x27;,event=&gt;{if(event.target.matches(&#x27;[data-draft]&#x27;))session(event.target.dataset.draft).draft=event.target.value;});
+ root.addEventListener(&#x27;focusin&#x27;,event=&gt;{const pane=event.target.closest(&#x27;[data-pane]&#x27;);if(pane)focus(pane.dataset.pane);});
+ root.addEventListener(&#x27;keydown&#x27;,event=&gt;{
+  if(event.key===&#x27;Escape&#x27;){if(splitPicker){event.preventDefault();closeSplitPicker(true);return;}if(!root.querySelector(&#x27;[data-dialog]&#x27;).hidden){root.querySelector(&#x27;[data-dialog]&#x27;).hidden=true;return;}if(state.flyout){state.flyout=null;renderMenus();}else{closeMenus();renderMenus();}globalThis.lucide?.createIcons({attrs:{width:16,height:16}});return;}
+  if(splitPicker){if([&#x27;ArrowDown&#x27;,&#x27;ArrowUp&#x27;,&#x27;Home&#x27;,&#x27;End&#x27;].includes(event.key)){event.preventDefault();const items=[...root.querySelectorAll(&#x27;[data-split-picker] button&#x27;)],i=items.indexOf(document.activeElement);items[event.key===&#x27;Home&#x27;?0:event.key===&#x27;End&#x27;?items.length-1:(i+(event.key===&#x27;ArrowDown&#x27;?1:-1)+items.length)%items.length]?.focus({preventScroll:true});}return;}
+  if(state.menu||!root.querySelector(&#x27;[data-dialog]&#x27;).hidden)return;
+  const s=session(state.focus);if(!s)return;
+  const modeShortcut=event.key.toLowerCase()===&#x27;e&#x27;&amp;&amp;((event.metaKey&amp;&amp;event.shiftKey)||(event.ctrlKey&amp;&amp;event.altKey));
+  if((s.mode===&#x27;files&#x27;&amp;&amp;event.key===&#x27;F10&#x27;)||modeShortcut){event.preventDefault();s.mode=s.mode===&#x27;files&#x27;?&#x27;terminal&#x27;:&#x27;files&#x27;;render();save();return;}
+  if(event.target.matches(&#x27;input,textarea,select&#x27;))return;
+  if(s.mode===&#x27;files&#x27;&amp;&amp;[&#x27;F3&#x27;,&#x27;F4&#x27;].includes(event.key)){event.preventDefault();dialog(event.key===&#x27;F3&#x27;?&#x27;Datei ansehen&#x27;:&#x27;Datei bearbeiten&#x27;,`&lt;p&gt;${esc(s.selection)}&lt;/p&gt;&lt;p&gt;Vorschau – Editorinhalt nicht Teil dieses Entwurfs.&lt;/p&gt;`);return;}
+  if(s.mode===&#x27;files&#x27;&amp;&amp;[&#x27;F5&#x27;,&#x27;F6&#x27;].includes(event.key)){event.preventDefault();transfer(s.id,event.key===&#x27;F5&#x27;?&#x27;copy&#x27;:&#x27;move&#x27;,event.shiftKey);save();return;}
+  if(s.mode===&#x27;files&#x27;&amp;&amp;event.target.closest(&#x27;[data-file-pane]&#x27;)&amp;&amp;[&#x27;ArrowDown&#x27;,&#x27;ArrowUp&#x27;,&#x27;Enter&#x27;].includes(event.key)){event.preventDefault();const entries=[[&#x27;..&#x27;,&#x27;parent&#x27;],...(fileSystem(s)[s.path]||[])];const index=entries.findIndex(e=&gt;e[0]===s.selection);if(event.key===&#x27;Enter&#x27;){const row=entries[index];if(row?.[1]===&#x27;parent&#x27;)up(s);else if(row?.[1]===&#x27;dir&#x27;){s.path+=&#x27;/&#x27;+row[0];fileSystem(s)[s.path]??=[];s.selection=&#x27;..&#x27;;}}else s.selection=entries[(index+(event.key===&#x27;ArrowDown&#x27;?1:-1)+entries.length)%entries.length][0];render();root.querySelector(&#x27;[data-file-pane=&quot;&#x27;+s.id+&#x27;&quot;][data-file=&quot;&#x27;+CSS.escape(s.selection)+&#x27;&quot;]&#x27;)?.focus();save();}
+ });
+ window.addEventListener(&#x27;resize&#x27;,()=&gt;{positionMenus();renderSplitPicker();});
+ window.addEventListener(&#x27;openai:set_globals&#x27;,event=&gt;{const saved=event.detail?.globals?.widgetState?.privateContent;if(saved&amp;&amp;JSON.stringify(saved)!==lastSaved){restore(saved);render();}});
+ restore(window.openai?.widgetState?.privateContent);render();
+ if(globalThis.Tweak){const tweak=new Tweak({container:root,onChange:()=&gt;{render();save();}});tweak.addSelect(design,&#x27;appearance&#x27;,{label:&#x27;Farbschema&#x27;,options:[{label:&#x27;System&#x27;,value:&#x27;system&#x27;},{label:&#x27;Dunkel&#x27;,value:&#x27;dark&#x27;},{label:&#x27;Hell&#x27;,value:&#x27;light&#x27;}]});tweak.addSelect(design,&#x27;accent&#x27;,{label:&#x27;Theme-Akzent&#x27;,options:[{label:&#x27;Zaplex&#x27;,value:&#x27;theme&#x27;},{label:&#x27;Cyan (Theme-Variante)&#x27;,value:&#x27;cyan&#x27;}]});tweak.addSelect(design,&#x27;sidebarTone&#x27;,{label:&#x27;Sidebar-Fläche&#x27;,options:[{label:&#x27;Dezent getönt&#x27;,value:&#x27;tinted&#x27;},{label:&#x27;Neutral abgesetzt&#x27;,value:&#x27;neutral&#x27;}]});tweak.addSelect(design,&#x27;reconnect&#x27;,{label:&#x27;Sessionzustand für Recovery-Vorschau&#x27;,options:[{label:&#x27;Bereits geöffnet → fokussieren&#x27;,value:&#x27;ready&#x27;},{label:&#x27;Erfolgreich wiederverbinden&#x27;,value:&#x27;success&#x27;},{label:&#x27;Startfrist abgelaufen&#x27;,value:&#x27;timeout&#x27;}]});}
+})();
+&lt;/script&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+  let lastPointerWasTouch = false;
+  let pinnedByTouch = false;
+
+  const getTrigger = (event) =&gt; {
+    for (const target of event.composedPath()) {
+      if (target?.nodeType === Node.ELEMENT_NODE) {
+        const trigger = target.closest(&quot;[data-tooltip]&quot;);
+        if (trigger) return trigger;
+      }
+    }
+    return null;
+  };
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    pinnedByTouch = false;
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handlePointer = (event) =&gt; {
+    lastPointerWasTouch =
+      event.type === &quot;pointerdown&quot; &amp;&amp; event.pointerType === &quot;touch&quot;;
+  };
+  const handleTouchClick = (event) =&gt; {
+    const isTouch = event.pointerType === &quot;touch&quot; || lastPointerWasTouch;
+    lastPointerWasTouch = false;
+    if (!isTouch || event.detail === 0) {
+      return;
+    }
+    const trigger = getTrigger(event);
+    if (
+      trigger == null ||
+      !trigger.isConnected ||
+      getContent(trigger).length === 0 ||
+      (pinnedByTouch &amp;&amp; activeTrigger === trigger)
+    ) {
+      if (pinnedByTouch) {
+        closeTooltip();
+      }
+      return;
+    }
+    openTooltip(trigger);
+    pinnedByTouch = activeTrigger === trigger;
+    window.setTimeout(() =&gt; {
+      if (activeTrigger === trigger &amp;&amp; !trigger.isConnected) {
+        closeTooltip(false);
+      }
+    }, 0);
+  };
+  const handleLeave = (event) =&gt; {
+    if (pinnedByTouch) {
+      return;
+    }
+    const trigger = getTrigger(event);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    lastPointerWasTouch = false;
+    const trigger = getTrigger(event);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handlers = {
+    pointerover: handlePointerOpen,
+    pointerdown: handlePointer,
+    pointercancel: handlePointer,
+    click: handleTouchClick,
+    pointerout: handleLeave,
+    focusin: handleFocusIn,
+    focusout: handleLeave,
+    keydown: handleKeyDown,
+    contextmenu: handleContextMenu,
+  };
+  const roots = new Map();
+  const handledEvents = new WeakSet();
+  const handleEvent = (event) =&gt; {
+    if (handledEvents.has(event)) return;
+    handledEvents.add(event);
+    handlers[event.type](event);
+  };
+  const discoverRoots = (node) =&gt; {
+    if (node.shadowRoot) listen(node.shadowRoot);
+    for (const element of node.querySelectorAll(&quot;*&quot;)) {
+      if (element.shadowRoot) listen(element.shadowRoot);
+    }
+  };
+  const listen = (root) =&gt; {
+    if (roots.has(root)) return;
+    for (const type of Object.keys(handlers)) root.addEventListener(type, handleEvent);
+    const observer = new window.MutationObserver((records) =&gt; {
+      for (const { addedNodes } of records) {
+        for (const node of addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) discoverRoots(node);
+        }
+      }
+      for (const [root, cleanup] of roots) {
+        if (root.host &amp;&amp; !root.host.isConnected) {
+          cleanup();
+          roots.delete(root);
+        }
+      }
+      if (activeTrigger &amp;&amp; !activeTrigger.isConnected) closeTooltip(false);
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    roots.set(root, () =&gt; {
+      observer.disconnect();
+      for (const type of Object.keys(handlers)) root.removeEventListener(type, handleEvent);
+    });
+    discoverRoots(root);
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    lastPointerWasTouch = false;
+    for (const cleanup of roots.values()) cleanup();
+    roots.clear();
+    tooltip = null;
+  };
+
+  // Events between children of one shadow root never reach the document.
+  listen(document);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-tabs&quot;&gt;
+(() =&gt; {
+  const selector = &#x27;.nav[role=&quot;tablist&quot;] [role=&quot;tab&quot;]&#x27;;
+  const disabled = &#x27;:disabled,[aria-disabled=&quot;true&quot;]&#x27;;
+  const selectTab = (selected) =&gt; {
+    const panelId = selected.getAttribute(&quot;aria-controls&quot;);
+    for (const tab of selected.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;)) {
+      const active = tab === selected;
+      tab.classList.toggle(&quot;active&quot;, active);
+      tab.setAttribute(&quot;aria-selected&quot;, String(active));
+      const id = tab.getAttribute(&quot;aria-controls&quot;);
+      const panel = id &amp;&amp; document.getElementById(id);
+      if (panel != null) {
+        panel.hidden = id !== panelId;
+        if (!panel.hidden &amp;&amp; selected.id) {
+          panel.setAttribute(&quot;aria-labelledby&quot;, selected.id);
+        }
+      }
+    }
+  };
+  const interact = (event) =&gt; {
+    const tab = event.target?.closest?.(selector);
+    if (event.defaultPrevented || tab == null || tab.matches(disabled)) {
+      return;
+    }
+    if (event.type === &quot;click&quot;) {
+      selectTab(tab);
+      return;
+    }
+    const tabs = Array.from(
+      tab.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;),
+    ).filter((candidate) =&gt; !candidate.matches(disabled));
+    const current = tabs.indexOf(tab);
+    let next;
+    if (event.key === &quot;ArrowRight&quot; || event.key === &quot;ArrowDown&quot;) {
+      next = (current + 1) % tabs.length;
+    } else if (event.key === &quot;ArrowLeft&quot; || event.key === &quot;ArrowUp&quot;) {
+      next = (current + tabs.length - 1) % tabs.length;
+    } else if (event.key === &quot;Home&quot;) {
+      next = 0;
+    } else if (event.key === &quot;End&quot;) {
+      next = tabs.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    tabs[next].focus();
+    selectTab(tabs[next]);
+  };
+
+  for (const list of document.querySelectorAll(&#x27;.nav[role=&quot;tablist&quot;]&#x27;)) {
+    const selected =
+      list.querySelector(&#x27;[role=&quot;tab&quot;][aria-selected=&quot;true&quot;]&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;].active&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;]&#x27;);
+    if (selected != null) {
+      selectTab(selected);
+    }
+  }
+  document.addEventListener(&quot;click&quot;, interact);
+  document.addEventListener(&quot;keydown&quot;, interact);
+  window.addEventListener(&quot;pagehide&quot;, () =&gt; {
+    document.removeEventListener(&quot;click&quot;, interact);
+    document.removeEventListener(&quot;keydown&quot;, interact);
+  }, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+<script>(() => {
+  const frame = document.getElementById("codex-visualization");
+  if (!(frame instanceof HTMLIFrameElement)) {
+    return;
+  }
+  let viewportHeight = globalThis.innerHeight;
+  const storageKey = `codex:visualization-widget-state-v2:${JSON.stringify([
+    globalThis.location.pathname,
+    globalThis.location.search,
+  ])}`;
+  const parseState = (serializedState) => {
+    if (
+      typeof serializedState !== "string" ||
+      new TextEncoder().encode(serializedState).length > 16 * 1024
+    ) {
+      throw new TypeError(
+        "Widget state must be a JSON object of at most 16 KiB",
+      );
+    }
+    /** @type {unknown} */
+    const state = JSON.parse(serializedState);
+    if (
+      state == null ||
+      typeof state !== "object" ||
+      Array.isArray(state) ||
+      ("imageIds" in state &&
+        (!Array.isArray(state.imageIds) || state.imageIds.length > 0))
+    ) {
+      throw new TypeError("Widget state must be a JSON object");
+    }
+    const storedState = { modelContent: null, privateContent: null, ...state };
+    const canonicalState = JSON.stringify(
+      storedState,
+      (_key, /** @type {unknown} */ value) => {
+        if (typeof value === "number" && !Number.isFinite(value)) {
+          throw new TypeError("Widget state must contain finite numbers");
+        }
+        return value;
+      },
+    );
+    if (new TextEncoder().encode(canonicalState).length > 16 * 1024) {
+      throw new TypeError(
+        "Widget state must be a JSON object of at most 16 KiB",
+      );
+    }
+    return storedState;
+  };
+  let storage = null;
+  let state = null;
+  try {
+    const localStorage = globalThis.localStorage;
+    const probeKey = `${storageKey}:probe`;
+    localStorage.setItem(probeKey, "1");
+    localStorage.removeItem(probeKey);
+    storage = localStorage;
+    const savedState = storage.getItem(storageKey);
+    if (savedState != null) {
+      try {
+        state = parseState(savedState);
+      } catch {
+        // Invalid saved state does not disable future writes.
+      }
+    }
+  } catch {
+    storage = null;
+  }
+  const initialGlobals = {
+    widgetState: state,
+    statePersistence: storage == null ? "none" : "local",
+  };
+
+  const channel = new MessageChannel();
+  channel.port1.addEventListener("message", (event) => {
+    const data = event.data;
+    if (typeof data !== "object" || data == null) {
+      return;
+    }
+    if (data.type === "widget-state-write") {
+      if (!Number.isSafeInteger(data.id) || data.id <= 0) {
+        return;
+      }
+      let ok = false;
+      try {
+        if (storage != null) {
+          const state = parseState(data.state);
+          storage.setItem(storageKey, JSON.stringify(state));
+          ok = true;
+        }
+      } catch {
+        // Storage denial, quota limits, and invalid state return a failed receipt.
+      }
+      channel.port1.postMessage({
+        type: "widget-state-result",
+        id: data.id,
+        ok,
+      });
+      return;
+    }
+    if (data.type === "height") {
+      const height = data.height;
+      if (
+        typeof height === "number" &&
+        Number.isFinite(height) &&
+        height >= 0 &&
+        height <= 10_000
+      ) {
+        frame.style.height = Math.ceil(height) + "px";
+      }
+      return;
+    }
+    if (data.type === "scroll-to") {
+      const top = data.top;
+      if (
+        typeof top === "number" &&
+        Number.isFinite(top) &&
+        top >= 0 &&
+        globalThis.navigator.userActivation?.isActive === true
+      ) {
+        globalThis.scrollTo({
+          top: Math.ceil(
+            globalThis.scrollY + frame.getBoundingClientRect().top + top,
+          ),
+        });
+      }
+      return;
+    }
+    if (data.type === "open-external") {
+      const rawHref = data.href;
+      if (typeof rawHref !== "string") {
+        return;
+      }
+      let href;
+      try {
+        const url = new URL(rawHref, document.baseURI);
+        if (url.protocol !== "https:") {
+          return;
+        }
+        href = url.href;
+      } catch {
+        return;
+      }
+      if (globalThis.navigator.userActivation?.isActive === true) {
+        const anchor = document.createElement("a");
+        anchor.href = href;
+        anchor.rel = "noopener noreferrer";
+        anchor.target = "_blank";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      }
+      return;
+    }
+    if (data.type === "follow-up") {
+      const prompt = data.prompt;
+      if (
+        typeof prompt !== "string" ||
+        globalThis.navigator.userActivation?.isActive !== true
+      ) {
+        return;
+      }
+      const title = data.title;
+      globalThis.prompt(typeof title === "string" ? title : prompt, prompt);
+    }
+  });
+  channel.port1.start();
+  const srcdoc = frame.dataset.srcdoc;
+  if (srcdoc == null) {
+    return;
+  }
+  globalThis.addEventListener("resize", () => {
+    const height = Number.parseFloat(frame.style.height);
+    if (!Number.isFinite(height) || height <= viewportHeight) {
+      frame.style.removeProperty("height");
+    }
+    viewportHeight = globalThis.innerHeight;
+    channel.port1.postMessage({ type: "measure" });
+  });
+  frame.addEventListener(
+    "load",
+    () => {
+      frame.contentWindow?.postMessage(
+        { type: "codex-visualization-initialize" },
+        "*",
+        [channel.port2],
+      );
+    },
+    { once: true },
+  );
+  // Match the trusted bootstrap element, not the same text in an authored title.
+  frame.srcdoc = srcdoc.replace(
+    '<script type="application/json" id="codex-visualization-widget-state">__CODEX_VISUALIZATION_WIDGET_STATE__<\/script>',
+    () =>
+      '<script type="application/json" id="codex-visualization-widget-state">' +
+      JSON.stringify(initialGlobals).replaceAll("<", "\\u003c") +
+      "<\/script>",
+  );
+  delete frame.dataset.srcdoc;
+})();
+</script>
+</body>
+</html>

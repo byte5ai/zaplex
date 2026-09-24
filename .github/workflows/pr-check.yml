@@ -67,6 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Verify Docker supply-chain policy
@@ -137,6 +138,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       # Keep this inside the required cargo-check job: a regression fails the
       # required context before setup/compilation instead of failing `changes`
@@ -225,6 +228,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Verify remote-server archive installation
         run: python3 script/remote-server-install-tests
@@ -281,6 +286,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Enforce compact sidebar row actions
         run: script/check-compact-row-actions
@@ -315,6 +322,7 @@ jobs:
           test_keystroke_invalid_shift_lowercase
           test_keystroke_invalid_no_shift_uppercase
           test_svg_text_rasterizes_with_loaded_system_fonts
+          core::app::startup_callback_tests::
         shell: bash
 
       - name: cargo test (SSH process-wrapper policy)
@@ -379,6 +387,10 @@ jobs:
           model_token_usage_does_not_reserialize_retired_byok_fields
         shell: bash
 
+      - name: cargo test (SQLite migration regressions)
+        run: cargo test --locked -p warp --lib persistence::sqlite::tests
+        shell: bash
+
       - name: cargo test (subscription agent acceptance)
         run: >
           cargo test --locked -p warp --lib ai::subscription_agent::
@@ -432,12 +444,25 @@ jobs:
       # wiring survive construction", the thing `cargo check` cannot.
       - name: cargo test (app dependency + UI smoke gates)
         run: >
-          cargo test --locked -p warp --lib --
+          cargo test --locked -p warp --lib -- --nocapture
           maps_credentials_not_loaded_to_user_message
           newer_profile_refresh_rejects_late_success_or_error_from_older_refresh
           test_import_from_file
           file_manager_start_path_uses_session_cwd
           file_manager_start_path_falls_back_when_no_cwd
+          test_split_submenu_
+          pane_group::tree::tests::
+          pane_group::terminal_titles::tests::
+          file_manager_directory_
+          same_fs_conflict_confirmation_rejects_a_closed_target_before_queue_submission
+          same_fs_target_appearing_after_probe_is_skipped_without_overwrite_consent
+          agent_leaf_separates_provider_from_the_exact_optional_model
+          session_identity_avoids_only_exact_project_directory_duplication
+          only_failed_connections_offer_a_connection_retry
+          retry_after_host_key_dialog_cancel_starts_a_fresh_connection_attempt
+          stale_connection_retry_does_not_restart_an_in_flight_or_connected_browser
+          running_command_keeps_host_identity_in_pane_chrome
+          cli_agent_summary_does_not_replace_terminal_host_identity
           confirm_payload_carries_local_selection
           confirm_payload_routes_remote_launch_to_node_id
           confirm_payload_none_when_nothing_installed

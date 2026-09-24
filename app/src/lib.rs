@@ -1024,13 +1024,19 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         ctx.add_singleton_model(move |ctx| {
             plugin::PluginHost::new(ctx).expect("Could not instantiate PluginHost")
         });
-        let app_state = initialize_app(
+        let app_state = match initialize_app(
             &launch_mode,
             timer,
             startup_toml_parse_error,
             ctx,
             pre_init_errors,
-        );
+        ) {
+            Ok(app_state) => app_state,
+            Err(error) => {
+                show_persistence_startup_error(&error, ctx);
+                return;
+            }
+        };
 
         if ImprovedPaletteSearch::improved_search_enabled(ctx) {
             FeatureFlag::UseTantivySearch.set_enabled(true);
@@ -1038,6 +1044,40 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
         launch(ctx, app_state, launch_mode);
     })
+}
+
+fn show_persistence_startup_error(error: &anyhow::Error, ctx: &mut AppContext) {
+    ctx.disable_application_callbacks_after_failed_startup();
+    let title = crate::t!("persistence-startup-error-title").to_string();
+    let detail = crate::t!(
+        "persistence-startup-error-detail",
+        error = format!("{error:#}")
+    )
+    .to_string();
+    log::error!("{title}: {detail}");
+    eprintln!("{title}: {detail}");
+    // Normal termination calls NotebookManager and PersistenceWriter, which do not exist
+    // after failed initialization. No database writer or remote launch has started yet.
+    #[cfg(target_os = "macos")]
+    ctx.show_native_platform_modal(AlertDialogWithCallbacks::for_app(
+        title,
+        detail,
+        vec![warpui::modals::ModalButton::for_app(
+            crate::t!("persistence-startup-error-close").to_string(),
+            |_| std::process::exit(1),
+        )],
+        |_| std::process::exit(1),
+    ));
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
+    {
+        let _ = ctx;
+        if let Err(dialog_error) = warpui::show_startup_error(&title, &detail) {
+            log::error!("Failed to show startup error dialog: {dialog_error}");
+        }
+        std::process::exit(1);
+    }
+    #[cfg(target_family = "wasm")]
+    let _ = ctx;
 }
 
 pub struct UpdateQuakeModeEventArg {
@@ -1050,7 +1090,7 @@ fn initialize_app(
     startup_toml_parse_error: Option<warpui_extras::user_preferences::Error>,
     ctx: &mut warpui::AppContext,
     pre_init_errors: impl IntoIterator<Item = anyhow::Error>,
-) -> Option<AppState> {
+) -> Result<Option<AppState>> {
     // Warning: errors occurring here before crash_reporting::init can only be logged locally.
     // Only crash-reporting dependencies should be initialized here; other failures should be written to pre_init_errors.
     let data_domain = ChannelState::data_domain();
@@ -1114,9 +1154,8 @@ fn initialize_app(
 
     PrivacySettings::register_singleton(ctx);
 
-    // If any part of sqlite initialization fails, we just don't do session restoration (i.e.
-    // feature degradation).
-    let (sqlite_data, writer_handles) = persistence::initialize(ctx);
+    // Failed migrations must stop startup before any independent database writer starts.
+    let (sqlite_data, writer_handles) = persistence::initialize(ctx)?;
     timer.mark_interval_end("SQLITE_INITIALIZED");
 
     // SSH manager opens its own write connection outside the main write thread (WAL + busy_timeout ensure safety).
@@ -1805,7 +1844,7 @@ fn initialize_app(
         http_server::HttpServer::new(routers, ctx)
     });
 
-    app_state
+    Ok(app_state)
 }
 
 fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppCallbacks {

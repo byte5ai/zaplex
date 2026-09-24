@@ -21,12 +21,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Make GitHub token available in the environment
-      shell: bash
-      env:
-        GH_TOKEN_VALUE: ${{ github.token }}
-      run: echo "GH_TOKEN=$GH_TOKEN_VALUE" >> "$GITHUB_ENV"
-
     - name: Validate action inputs
       shell: bash
       env:

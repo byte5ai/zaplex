@@ -283,6 +283,8 @@ pub enum SftpBrowserAction {
     GoForward,
     /// Refresh the current directory
     Refresh,
+    /// Retry the SSH/SFTP connection from the beginning.
+    RetryConnection,
     /// Select the referenced entry if that exact object is still listed.
     SelectEntry(EntryReference),
     /// Toggle the multi-selection mark on the referenced entry — the
@@ -731,6 +733,10 @@ fn resolved_download_size(entry_size: u64, resolved_target_size: Option<u64>) ->
     resolved_target_size.unwrap_or(entry_size)
 }
 
+fn connection_retry_available(connection: &ConnectionState) -> bool {
+    matches!(connection, ConnectionState::Failed(_))
+}
+
 /// SFTP browser view
 pub struct SftpBrowserView {
     /// ID of the associated SSH server node
@@ -751,6 +757,8 @@ pub struct SftpBrowserView {
     // ---- Navigation ----
     /// Current path
     pub(crate) current_path: PathBuf,
+    /// Only successfully listed directories may change the underlying shell.
+    last_listed_path: Option<PathBuf>,
     /// File entries in the current directory
     pub(crate) entries: Vec<FileEntry>,
     /// Set of selected filesystem objects. Indices are never persisted because
@@ -784,6 +792,8 @@ pub struct SftpBrowserView {
     // ---- Mouse handles ----
     /// Refresh button
     refresh_btn: MouseStateHandle,
+    /// Retry button for a failed connection attempt.
+    retry_connection_btn: MouseStateHandle,
     /// Parent directory button
     up_btn: MouseStateHandle,
     /// Back button
@@ -1017,6 +1027,7 @@ impl SftpBrowserView {
             sftp: None,
             safe_file_client: SafeFileClientSlot::default(),
             current_path: start_path.clone().unwrap_or_else(|| PathBuf::from("/")),
+            last_listed_path: None,
             entries: Vec::new(),
             selected: HashSet::new(),
             path_history: vec![start_path.clone().unwrap_or_else(|| PathBuf::from("/"))],
@@ -1032,6 +1043,7 @@ impl SftpBrowserView {
             search_filter: None,
             is_drag_hovering: false,
             refresh_btn: MouseStateHandle::default(),
+            retry_connection_btn: MouseStateHandle::default(),
             up_btn: MouseStateHandle::default(),
             back_btn: MouseStateHandle::default(),
             forward_btn: MouseStateHandle::default(),
@@ -1231,6 +1243,7 @@ impl SftpBrowserView {
         start_path: PathBuf,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.last_listed_path = None;
         self.connection = ConnectionState::Connected;
         self.sftp = Some(backend);
         self.route_epoch = self.route_epoch.wrapping_add(1);
@@ -1249,6 +1262,7 @@ impl SftpBrowserView {
         start_path: PathBuf,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.last_listed_path = None;
         self.connection = ConnectionState::Connected;
         self.sftp = Some(backend);
         self.route_epoch = self.route_epoch.wrapping_add(1);
@@ -1286,6 +1300,7 @@ impl SftpBrowserView {
                         FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
                     ) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
                 });
+                self.last_listed_path = Some(self.current_path.clone());
                 self.entries = entries;
                 self.selected.clear();
                 self.sync_row_mouse_handles();
@@ -1599,6 +1614,7 @@ impl SftpBrowserView {
         // once the listing lands (see `cursor_reset_pending`).
         self.cursor = 0;
         self.cursor_reset_pending = true;
+        self.last_listed_path = None;
         self.connection = ConnectionState::Connected;
         self.sftp = Some(backend);
         self.route_epoch = self.route_epoch.wrapping_add(1);
@@ -1757,6 +1773,7 @@ impl SftpBrowserView {
                     self.cursor_reset_pending = departed_directory.is_none();
                     self.pending_departed_directory = departed_directory;
                 }
+                self.last_listed_path = Some(self.current_path.clone());
                 self.entries = entries;
                 let listed_identities: HashSet<EntryIdentity> =
                     self.entries.iter().map(FileEntry::entry_identity).collect();
@@ -2256,6 +2273,14 @@ impl SftpBrowserView {
             self.node_id.clone()
         };
         format!("{where_}:{}", self.current_path.display())
+    }
+
+    /// Only a successfully connected browser directory may be returned to its shell.
+    pub(crate) fn shell_directory_on_close(&self) -> Option<PathBuf> {
+        if self.pick_mode || !matches!(self.connection, ConnectionState::Connected) {
+            return None;
+        }
+        self.last_listed_path.clone()
     }
 
     fn fm_descriptor(&self) -> Option<FmPaneDescriptor> {
@@ -2844,6 +2869,9 @@ impl SftpBrowserView {
             ProbeError(String),
         }
         loop {
+            if self.pending_copy_move.is_none() {
+                return;
+            }
             let current = self
                 .pending_copy_move
                 .as_ref()
@@ -2865,7 +2893,9 @@ impl SftpBrowserView {
                         .expect("copy/move operation must be probed off-thread")
                     {
                         Ok(false) => Step::Execute {
-                            conflict: super::transfer_job::ConflictDecision::Overwrite,
+                            // Absence at probe time is not consent to replace a
+                            // destination that appears before the worker starts.
+                            conflict: super::transfer_job::ConflictDecision::Skip,
                         },
                         Ok(true) => match pending.conflict_default {
                             Some(super::transfer_job::ConflictDecision::Skip) => Step::Skip,
@@ -2937,6 +2967,14 @@ impl SftpBrowserView {
         conflict: super::transfer_job::ConflictDecision,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !self
+            .pending_copy_move
+            .as_ref()
+            .is_some_and(|pending| self.transfer_guard_is_current(&pending.guard, ctx))
+        {
+            self.reject_stale_transfer(ctx);
+            return;
+        }
         let Some(pending) = self.pending_copy_move.as_ref() else {
             return;
         };
@@ -4406,7 +4444,18 @@ impl SftpBrowserView {
             }
         };
 
-        render_centered_status(icon, &msg, 12.0, appearance)
+        let action = connection_retry_available(&self.connection).then(|| {
+            super::dialogs::render_button(
+                &crate::t!("common-try-again"),
+                false,
+                appearance,
+                SftpBrowserAction::RetryConnection,
+                self.retry_connection_btn.clone(),
+                Some("sftp_btn:retry_connection"),
+            )
+        });
+
+        render_centered_status_with_action(icon, &msg, 12.0, action, appearance)
     }
 
     fn render_dialog_overlay(
@@ -4937,6 +4986,16 @@ fn render_centered_status(
     spacing: f32,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    render_centered_status_with_action(icon, message, spacing, None, appearance)
+}
+
+fn render_centered_status_with_action(
+    icon: Icon,
+    message: &str,
+    spacing: f32,
+    action: Option<Box<dyn Element>>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.sub_text_color(theme.background());
 
@@ -4945,7 +5004,7 @@ fn render_centered_status(
         .with_height(24.0)
         .finish();
 
-    let text_el = Text::new_inline(
+    let text_el = Text::new(
         message.to_string(),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
@@ -4953,15 +5012,29 @@ fn render_centered_status(
     .with_color(text_color.into())
     .finish();
 
-    let content = Flex::row()
+    let status = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(spacing)
         .with_child(icon_el)
-        .with_child(text_el)
+        .with_child(Shrinkable::new(1.0, text_el).finish())
         .with_main_axis_size(MainAxisSize::Min)
         .finish();
 
-    Align::new(Container::new(content).with_uniform_padding(24.0).finish()).finish()
+    let mut content = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_spacing(12.0)
+        .with_child(status);
+    if let Some(action) = action {
+        content.add_child(action);
+    }
+
+    Align::new(
+        Container::new(content.finish())
+            .with_uniform_padding(24.0)
+            .finish(),
+    )
+    .finish()
 }
 
 /// The plan for a cross-connection directory transfer: the (local, remote) file
@@ -5544,6 +5617,11 @@ impl TypedActionView for SftpBrowserView {
             }
             SftpBrowserAction::Refresh => {
                 self.refresh_dir(ctx);
+            }
+            SftpBrowserAction::RetryConnection => {
+                if connection_retry_available(&self.connection) && self.dialog.is_none() {
+                    self.connect_to_server(ctx);
+                }
             }
             SftpBrowserAction::ToggleMark(entry) => {
                 if self.row_clicks_suppressed() {

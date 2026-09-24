@@ -9,8 +9,8 @@
 //! - Right-click a folder: New folder / New server / Rename / Delete
 //! - Right-click empty space: New folder / New server
 //!
-//! Visual polish follows the constants in `app/src/drive/index.rs` (ITEM_FONT_SIZE=14 / indent 16 /
-//! row padding 4×8).
+//! Visual polish follows the spacing rhythm in `app/src/drive/index.rs` (16 px indentation and
+//! compact row padding).
 
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -259,9 +259,9 @@ fn session_row_details(
                 Text::new_inline(
                     title,
                     appearance.ui_font_family(),
-                    appearance.ui_font_subheading(),
+                    appearance.ui_font_body(),
                 )
-                .with_color(theme.main_text_color(theme.background()).into())
+                .with_color(theme.main_text_color(theme.surface_2()).into())
                 .with_clip(ClipConfig::ellipsis())
                 .finish(),
                 &format!("ssh-manager-session:{key}:title"),
@@ -275,9 +275,9 @@ fn session_row_details(
                 Text::new(
                     metadata,
                     appearance.ui_font_family(),
-                    appearance.ui_font_body(),
+                    appearance.ui_font_footnote(),
                 )
-                .with_color(theme.sub_text_color(theme.background()).into())
+                .with_color(theme.sub_text_color(theme.surface_2()).into())
                 .finish(),
                 &format!("ssh-manager-session:{key}:metadata"),
             )
@@ -2259,7 +2259,7 @@ impl SshManagerPanel {
         appearance: &warp_core::ui::appearance::Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let icon_color = theme.sub_text_color(theme.background());
+        let icon_color = theme.sub_text_color(theme.surface_2());
 
         let make_btn = |icon: crate::ui_components::icons::Icon,
                         state: MouseStateHandle,
@@ -2344,8 +2344,8 @@ impl SshManagerPanel {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let muted = theme.sub_text_color(theme.background());
-        let main = theme.main_text_color(theme.background());
+        let muted = theme.sub_text_color(theme.surface_2());
+        let main = theme.main_text_color(theme.surface_2());
         let accent = theme.accent().into_solid();
         let icon_color = muted;
 
@@ -2526,8 +2526,8 @@ impl SshManagerPanel {
             return Empty::new().finish();
         }
 
-        let muted = theme.sub_text_color(theme.background());
-        let main = theme.main_text_color(theme.background());
+        let muted = theme.sub_text_color(theme.surface_2());
+        let main = theme.main_text_color(theme.surface_2());
 
         let mut col = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
@@ -2618,8 +2618,8 @@ impl SshManagerPanel {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let icon_color = theme.sub_text_color(theme.background());
-        let muted = theme.sub_text_color(theme.background());
+        let icon_color = theme.sub_text_color(theme.surface_2());
+        let muted = theme.sub_text_color(theme.surface_2());
 
         // Collapsed-state chevron (▶) vs expanded-state (▼) — is_expanded comes straight from the view-model.
         let expanded = self.candidates.as_ref(app).is_expanded();
@@ -2781,7 +2781,7 @@ impl SshManagerPanel {
         let CandidateRowColors { main, muted } = colors;
         let theme = appearance.theme();
         let icon = crate::ui_components::icons::Icon::Key
-            .to_warpui_icon(theme.sub_text_color(theme.background()))
+            .to_warpui_icon(theme.sub_text_color(theme.surface_2()))
             .finish();
         let icon_el = ConstrainedBox::new(icon)
             .with_width(ITEM_ICON_SIZE)
@@ -2860,7 +2860,7 @@ impl SshManagerPanel {
         } else {
             let plus_icon = ConstrainedBox::new(
                 crate::ui_components::icons::Icon::Plus
-                    .to_warpui_icon(theme.sub_text_color(theme.background()))
+                    .to_warpui_icon(theme.sub_text_color(theme.surface_2()))
                     .finish(),
             )
             .with_width(ITEM_ICON_SIZE)
@@ -2989,7 +2989,7 @@ impl SshManagerPanel {
         appearance: &warp_core::ui::appearance::Appearance,
     ) -> Vec<Box<dyn Element>> {
         let theme = appearance.theme();
-        let muted: pathfinder_color::ColorU = theme.sub_text_color(theme.background()).into();
+        let muted: pathfinder_color::ColorU = theme.sub_text_color(theme.surface_2()).into();
         let depth = self.depths.get(&node.id).copied().unwrap_or(0);
         // Server names follow one fixed disclosure slot, without a leading icon.
         // Section labels align with the host; session content is one level in.
@@ -3001,9 +3001,13 @@ impl SshManagerPanel {
 
         let message = |text: String, color: pathfinder_color::ColorU| -> Box<dyn Element> {
             Container::new(
-                Text::new(text, appearance.ui_font_family(), appearance.ui_font_body())
-                    .with_color(color)
-                    .finish(),
+                Text::new(
+                    text,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_footnote(),
+                )
+                .with_color(color)
+                .finish(),
             )
             .with_padding_top(ITEM_PADDING_VERTICAL)
             .with_padding_bottom(ITEM_PADDING_VERTICAL)
@@ -3015,7 +3019,7 @@ impl SshManagerPanel {
 
         let mut rows = vec![message(
             crate::t!("workspace-left-panel-ssh-manager-zaplex-sessions"),
-            theme.main_text_color(theme.background()).into(),
+            muted,
         )];
         let host_inventory = self.host_session_inventories.get(&node.id);
         if self.sessions_loading.contains_key(&node.id) && host_inventory.is_none() {
@@ -3070,7 +3074,7 @@ impl SshManagerPanel {
             if !inventory.sessions.is_empty() || !inventory.warnings.is_empty() {
                 rows.push(message(
                     crate::t!("workspace-left-panel-ssh-manager-multiplexer-heading"),
-                    theme.main_text_color(theme.background()).into(),
+                    muted,
                 ));
                 for warning in &inventory.warnings {
                     rows.push(message(
@@ -3114,7 +3118,7 @@ impl SshManagerPanel {
         // empty-state — showing both at once reads as a contradiction.
         if self.nodes.is_empty() && !self.adding_mode {
             let theme = appearance.theme();
-            let muted = theme.sub_text_color(theme.background());
+            let muted = theme.sub_text_color(theme.surface_2());
             col.add_child(
                 Container::new(
                     Text::new_inline(
@@ -3187,7 +3191,7 @@ impl SshManagerPanel {
             .map(|rs| rs.node_id == node.id)
             .unwrap_or(false);
 
-        let icon_color = theme.sub_text_color(theme.background());
+        let icon_color = theme.sub_text_color(theme.surface_2());
         let icon_el = tree_row_leading_icon(node.kind).map(|icon| {
             ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
                 .with_width(ITEM_ICON_SIZE)
@@ -3238,7 +3242,7 @@ impl SshManagerPanel {
                     border_color: Some(theme.accent().into()),
                     border_width: Some(1.0),
                     border_radius: Some(CornerRadius::with_all(Radius::Pixels(3.0))),
-                    font_size: Some(appearance.ui_font_subheading()),
+                    font_size: Some(appearance.ui_font_body_large()),
                     ..Default::default()
                 })
                 .build()
@@ -3248,9 +3252,9 @@ impl SshManagerPanel {
             Text::new_inline(
                 node.name.clone(),
                 appearance.ui_font_family(),
-                appearance.ui_font_subheading(),
+                appearance.ui_font_body_large(),
             )
-            .with_color(theme.main_text_color(theme.background()).into())
+            .with_color(theme.main_text_color(theme.surface_2()).into())
             .with_clip(ClipConfig::ellipsis())
             .finish()
         };
@@ -3288,7 +3292,7 @@ impl SshManagerPanel {
             row_flex = row_flex.with_child(
                 warpui::elements::ConstrainedBox::new(
                     crate::ui_components::icons::Icon::Lightning
-                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .to_warpui_icon(theme.sub_text_color(theme.surface_2()))
                         .finish(),
                 )
                 .with_width(mark_size)
@@ -3354,7 +3358,7 @@ impl SshManagerPanel {
                 .finish();
         }
 
-        let hoverable = Hoverable::new(state, move |_| {
+        let hoverable = Hoverable::new(state, move |mouse| {
             let mut c = Container::new(row)
                 .with_padding_top(ITEM_PADDING_VERTICAL)
                 .with_padding_bottom(ITEM_PADDING_VERTICAL)
@@ -3363,6 +3367,8 @@ impl SshManagerPanel {
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
             if is_selected {
                 c = c.with_background(internal_colors::fg_overlay_3(theme));
+            } else if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_1(theme));
             }
             c.finish()
         })
@@ -3589,7 +3595,7 @@ impl SshManagerPanel {
                 appearance.ui_font_family(),
                 appearance.ui_font_subheading(),
             )
-            .with_color(theme.main_text_color(theme.background()).into())
+            .with_color(theme.main_text_color(theme.surface_2()).into())
             .finish();
             let row_action = action.clone();
             let item = Hoverable::new(state, move |mouse| {
@@ -3970,6 +3976,7 @@ impl View for SshManagerPanel {
                 .with_child(Shrinkable::new(1.0, scrollable_content).finish())
                 .finish(),
         )
+        .with_background(appearance.theme().surface_2())
         .finish();
 
         let positioned_panel = SavePosition::new(panel_content, SSH_PANEL_POSITION_ID).finish();

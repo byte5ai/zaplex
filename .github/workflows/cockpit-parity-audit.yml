@@ -38,6 +38,7 @@ on:
       - 'crates/zaplex_cockpit/**'
       - 'crates/zaplex_remote_session/**'
       - 'docs/ui/cockpit-sidebar-connections.html'
+      - 'docs/ui/premium-workspace.html'
       - 'script/cockpit-parity-audit'
       - 'script/upload-cockpit-runtime-evidence'
       - 'specs/GH-160/**'
@@ -218,6 +219,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Initialize fail-closed audit artifacts
@@ -227,6 +229,7 @@ jobs:
             printf '{"schema_version":1,"status":"fail","errors":["step did not complete"]}\n' > "artifacts/${report}.json"
           done
           cp docs/ui/cockpit-sidebar-connections.html artifacts/cockpit-sidebar-connections.html
+          cp docs/ui/premium-workspace.html artifacts/premium-workspace.html
         shell: bash
 
       - name: Validate runtime evidence source inputs
