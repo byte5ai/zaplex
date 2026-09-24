@@ -157,6 +157,7 @@ pub fn render_context_menu(
             | SftpBrowserAction::GoBack
             | SftpBrowserAction::GoForward
             | SftpBrowserAction::Refresh
+            | SftpBrowserAction::RetryConnection
             | SftpBrowserAction::SelectEntry(_)
             | SftpBrowserAction::ToggleMark(_)
             | SftpBrowserAction::MarkAndAdvance

@@ -2736,7 +2736,6 @@ fn build_vertical_tabs_summary_data(
                 let terminal_view = terminal_pane.terminal_view(app);
                 let terminal_view = terminal_view.as_ref(app);
                 let working_directory = terminal_view.display_working_directory(app);
-                let agent_text = terminal_agent_text(terminal_view, app);
                 push_normalized_unique_summary_text(
                     &mut primary_labels,
                     &mut primary_seen,
