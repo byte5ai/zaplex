@@ -4113,3 +4113,10 @@ workspace-managed-launch-handshake-failed = Der Sitzungsdienst für den verwalte
 workspace-remote-account-readiness-failed = Die Remote-Kontositzung auf { $host } wurde beendet, bevor sie bereit war.
 workspace-managed-launch-readiness-failed = Der verwaltete Agent auf { $host } wurde beendet, bevor er bereit war.
 workspace-remote-routed-split-target-changed = Die Remote-Konto- oder verwaltete Sitzung konnte nicht fortgesetzt werden, weil sich ihr ursprüngliches Split-Ziel geändert hat.
+
+# Persistence initialization must succeed before the workspace can open.
+persistence-startup-error-title = Zaplex konnte die gespeicherten Daten nicht öffnen
+persistence-startup-error-detail = Der Start wurde abgebrochen, damit keine Arbeit ohne Speicherung verloren geht. Die vorhandene Datenbank und Migrationsdateien bleiben erhalten. Schließe gegebenenfalls eine andere Zaplex-Instanz, behebe den folgenden Fehler und starte Zaplex erneut.
+
+    { $error }
+persistence-startup-error-close = Zaplex schließen

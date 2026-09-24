@@ -7189,3 +7189,289 @@ fn test_custom_terminal_page_scroll_binding_applies_when_prompt_is_focused() {
         });
     });
 }
+
+#[test]
+fn file_manager_directory_retains_live_draft_through_command_completion() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let (tx, rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let crate::terminal::view::Event::BlockCompleted { block, .. } = event {
+                    if String::from_utf8_lossy(&block.stylized_output).contains("directory-done") {
+                        tx.try_send(()).unwrap();
+                    }
+                }
+            });
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("echo old-draft", ctx);
+            assert!(input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            input.replace_buffer_content("echo newest-draft", ctx);
+        });
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .simulate_block("cd -- /tmp", "directory-done");
+        });
+        rx.recv().await.unwrap();
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "echo newest-draft");
+            assert_eq!(input.file_manager_directory_input, None);
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_never_overwrites_pending_commands_or_unready_input() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("echo keep-this-draft", ctx);
+            input.set_ordinary_command_input_ready(false, ctx);
+            assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            input.set_ordinary_command_input_ready(true, ctx);
+            input.set_pending_system_command("ssh production".to_string());
+            assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            assert_eq!(
+                input.pending_system_command.as_deref(),
+                Some("ssh production")
+            );
+            assert_eq!(input.buffer_text(ctx), "echo keep-this-draft");
+            assert!(input.input_contents_before_prompt_chip_command.is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_waits_for_running_process_without_sending_input() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "running");
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("echo keep-this-draft", ctx);
+            assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            assert_eq!(input.buffer_text(ctx), "echo keep-this-draft");
+            assert!(input.input_contents_before_prompt_chip_command.is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_pending_preserves_live_draft_when_old_process_finishes() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let (tx, rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let crate::terminal::view::Event::BlockCompleted { block, .. } = event {
+                    if String::from_utf8_lossy(&block.stylized_output).contains("old-process-done")
+                    {
+                        tx.try_send(()).unwrap();
+                    }
+                }
+            });
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("sleep 10", ctx);
+            assert!(input.try_execute_command("sleep 10", ctx));
+        });
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "old-process-done");
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.preserve_pending_file_manager_draft();
+            input.replace_buffer_content("echo keep-after-sleep", ctx);
+            assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+        });
+        terminal.update(&mut app, |view, _| view.model.lock().finish_block());
+        rx.recv().await.unwrap();
+        input.update(&mut app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "echo keep-after-sleep");
+            assert_eq!(input.file_manager_directory_input, None);
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_restored_local_shell_executes_on_its_original_input() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let other = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let other_input = other.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("echo original-draft", ctx)
+        });
+        other_input.update(&mut app, |input, ctx| {
+            input.user_insert("echo other-draft", ctx)
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_file_manager_navigation(true, ctx);
+            view.finish_file_manager_navigation(Some(PathBuf::from("/tmp")), ctx);
+        });
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "echo original-draft");
+            assert!(matches!(
+                input.file_manager_directory_input,
+                Some(FileManagerDirectoryInput::Executing { .. })
+            ));
+        });
+        other_input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "echo other-draft");
+            assert_eq!(input.file_manager_directory_input, None);
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_pending_never_restores_an_already_executed_command() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let (tx, rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let crate::terminal::view::Event::BlockCompleted { block, .. } = event {
+                    if String::from_utf8_lossy(&block.stylized_output).contains("old-process-done")
+                    {
+                        tx.try_send(()).unwrap();
+                    }
+                }
+            });
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("sleep 10", ctx);
+            assert!(input.try_execute_command("sleep 10", ctx));
+        });
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "old-process-done");
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.preserve_pending_file_manager_draft();
+            assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+        });
+        terminal.update(&mut app, |view, _| view.model.lock().finish_block());
+        rx.recv().await.unwrap();
+        input.update(&mut app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "");
+            assert_eq!(input.file_manager_directory_input, None);
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_does_not_consume_environment_selection_or_record_workflow() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let selected = SyncId::ClientId(ClientId::new());
+        let (tx, rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if let Event::ExecuteCommand(event) = event {
+                    tx.try_send((
+                        event.workflow_id,
+                        event.workflow_command.clone(),
+                        event.should_add_command_to_history,
+                    ))
+                    .unwrap();
+                }
+            });
+        });
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("echo draft", ctx);
+            input.env_var_collection_state.selected_env_vars = Some(selected);
+            assert!(input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            assert_eq!(
+                input.env_var_collection_state.selected_env_vars,
+                Some(selected)
+            );
+            assert_eq!(input.buffer_text(ctx), "echo draft");
+        });
+        assert_eq!(rx.recv().await.unwrap(), (None, None, false));
+    });
+}
+
+#[test]
+fn file_manager_directory_remote_abort_clears_execution_marker() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("echo preserved", ctx);
+            assert!(input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.cancel_remote_input_readiness(ctx)
+        });
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.file_manager_directory_input, None);
+            assert_eq!(input.buffer_text(ctx), "echo preserved");
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_pending_preserves_identical_retyped_draft() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let (tx, rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let crate::terminal::view::Event::BlockCompleted { block, .. } = event {
+                    if String::from_utf8_lossy(&block.stylized_output).contains("old-process-done")
+                    {
+                        tx.try_send(()).unwrap();
+                    }
+                }
+            });
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("sleep 10", ctx);
+            assert!(input.try_execute_command("sleep 10", ctx));
+        });
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "old-process-done");
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.preserve_pending_file_manager_draft();
+            input.replace_buffer_content("", ctx);
+            input.user_insert("sleep 10", ctx);
+            assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+        });
+        terminal.update(&mut app, |view, _| view.model.lock().finish_block());
+        rx.recv().await.unwrap();
+        input.update(&mut app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "sleep 10");
+            assert_eq!(input.file_manager_directory_input, None);
+        });
+    });
+}

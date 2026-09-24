@@ -322,6 +322,7 @@ jobs:
           test_keystroke_invalid_shift_lowercase
           test_keystroke_invalid_no_shift_uppercase
           test_svg_text_rasterizes_with_loaded_system_fonts
+          core::app::startup_callback_tests::
         shell: bash
 
       - name: cargo test (SSH process-wrapper policy)
@@ -450,6 +451,11 @@ jobs:
           file_manager_start_path_uses_session_cwd
           file_manager_start_path_falls_back_when_no_cwd
           test_split_submenu_
+          pane_group::tree::tests::
+          pane_group::terminal_titles::tests::
+          file_manager_directory_
+          same_fs_conflict_confirmation_rejects_a_closed_target_before_queue_submission
+          same_fs_target_appearing_after_probe_is_skipped_without_overwrite_consent
           agent_leaf_separates_provider_from_the_exact_optional_model
           session_identity_avoids_only_exact_project_directory_duplication
           only_failed_connections_offer_a_connection_retry

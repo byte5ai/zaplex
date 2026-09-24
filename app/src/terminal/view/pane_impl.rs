@@ -108,8 +108,7 @@ impl TerminalView {
         // Explicit tab titles are applied separately by PaneGroup::display_title.
         self.is_using_conversation_for_pane_header_title = false;
         self.pane_configuration.update(ctx, |pane_config, ctx| {
-            pane_config.set_title(identity.short, ctx);
-            pane_config.set_title_tooltip(Some(identity.full), ctx);
+            pane_config.set_terminal_identity(identity.short, identity.full, ctx);
             if FeatureFlag::AgentView.is_enabled() {
                 pane_config.refresh_pane_header_overflow_menu_items(ctx);
             }

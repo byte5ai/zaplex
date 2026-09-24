@@ -4458,3 +4458,10 @@ workspace-managed-launch-handshake-failed = The managed agent on { $host } could
 workspace-remote-account-readiness-failed = The remote account session on { $host } ended before it became ready.
 workspace-managed-launch-readiness-failed = The managed agent on { $host } ended before it became ready.
 workspace-remote-routed-split-target-changed = The remote account or managed session could not resume because its original split target changed.
+
+# Persistence initialization must succeed before the workspace can open.
+persistence-startup-error-title = Zaplex could not open its saved data
+persistence-startup-error-detail = Startup was stopped to prevent working without saving. Your existing database and migration files have been kept. Close any other Zaplex instance, resolve the error below, then restart Zaplex.
+
+    { $error }
+persistence-startup-error-close = Close Zaplex

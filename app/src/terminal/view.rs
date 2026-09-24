@@ -2445,6 +2445,10 @@ pub struct TerminalView {
     /// next `AfterBlockCompleted`, at which point `Event::PendingCommandCompleted`
     /// is emitted so subscribers know the command has finished.
     awaiting_pending_command_completion: bool,
+    /// The exact shell session and directory hidden by the file manager.
+    file_manager_origin: Option<FileManagerOrigin>,
+    /// Applied at the next idle prompt, never written into a running process.
+    pending_file_manager_directory: Option<PathBuf>,
     /// When true, enter agent view after pending setup commands complete
     /// (i.e. after `PendingCommandCompleted` is emitted). Set by
     /// `pane_tree_from_template_recursive` when a tab config has both
@@ -2787,6 +2791,45 @@ pub struct BlockSelectionDetails {
     delta: BlockSelectionDelta,
     is_cmd_down: bool,
     is_shift_down: bool,
+}
+
+enum FileManagerOrigin {
+    /// A persisted replacement is bound only once its own restored shell is ready.
+    Restoring { is_local: bool },
+    Session {
+        id: SessionId,
+        directory: Option<PathBuf>,
+    },
+}
+
+fn file_manager_directory_command(path: &Path, shell: ShellType) -> Option<String> {
+    let path = path.to_str()?;
+    // Control bytes can terminate a PTY command even inside shell quotes.
+    if path.is_empty() || path.chars().any(char::is_control) {
+        return None;
+    }
+    Some(match shell {
+        ShellType::Bash | ShellType::Zsh => {
+            format!("cd -- {}", shell_words::quote(path))
+        }
+        ShellType::Fish => {
+            let quoted = path.replace('\\', "\\\\").replace('\'', "\\'");
+            format!("cd -- '{quoted}'")
+        }
+        ShellType::PowerShell => {
+            let mut quoted = String::with_capacity(path.len());
+            for character in path.chars() {
+                quoted.push(character);
+                if matches!(
+                    character,
+                    '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}'
+                ) {
+                    quoted.push(character);
+                }
+            }
+            format!("Set-Location -LiteralPath '{quoted}'")
+        }
+    })
 }
 
 impl TerminalView {
@@ -3931,6 +3974,8 @@ impl TerminalView {
             bootstrap_start: None,
             is_login_shell_bootstrapped: false,
             awaiting_pending_command_completion: false,
+            file_manager_origin: None,
+            pending_file_manager_directory: None,
             enter_agent_view_after_pending_commands: false,
             enter_agent_view_after_ssh_bootstrap: false,
             slow_bootstrap_banner,
@@ -6382,6 +6427,136 @@ impl TerminalView {
         }
     }
 
+    fn file_manager_session_matches_target(&self, is_local: bool, ctx: &AppContext) -> bool {
+        let Some(id) = self.active_block_session_id() else {
+            return false;
+        };
+        let Some(session) = self.sessions.as_ref(ctx).get(id) else {
+            return false;
+        };
+        if self.active_session_is_local(ctx) != Some(is_local) {
+            return false;
+        }
+        if is_local {
+            // Subshells can use a different filesystem namespace (for example containers).
+            session.subshell_info().is_none()
+        } else {
+            // Match TerminalModel::init_shell's daemon-root classification. The
+            // daemon connection ID and shell session ID are separate namespaces.
+            self.remote_input_session_id.is_some()
+                && session.subshell_info().is_none()
+                && !session.is_legacy_ssh_session()
+        }
+    }
+
+    pub(crate) fn begin_file_manager_navigation(
+        &mut self,
+        is_local: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.cancel_file_manager_directory(ctx);
+        if !self.file_manager_session_matches_target(is_local, ctx) {
+            return;
+        }
+        self.file_manager_origin =
+            self.active_block_session_id()
+                .map(|id| FileManagerOrigin::Session {
+                    id,
+                    directory: self.active_session_cwd(ctx),
+                });
+    }
+
+    /// The caller verifies the persisted file-manager namespace against the
+    /// original terminal's persisted host identity before arming this binding.
+    pub(crate) fn restore_file_manager_navigation(
+        &mut self,
+        is_local: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.cancel_file_manager_directory(ctx);
+        self.file_manager_origin = Some(FileManagerOrigin::Restoring { is_local });
+        self.apply_file_manager_directory(ctx);
+    }
+
+    pub(crate) fn cancel_file_manager_directory(&mut self, ctx: &mut ViewContext<Self>) {
+        self.pending_file_manager_directory = None;
+        self.file_manager_origin = None;
+        self.input.update(ctx, |input, _| {
+            input.cancel_pending_file_manager_directory();
+        });
+    }
+
+    pub(crate) fn finish_file_manager_navigation(
+        &mut self,
+        path: Option<PathBuf>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if path.is_none() || self.file_manager_origin.is_none() {
+            self.cancel_file_manager_directory(ctx);
+            return;
+        }
+        self.pending_file_manager_directory = path;
+        self.input.update(ctx, |input, _| {
+            input.preserve_pending_file_manager_draft();
+        });
+        self.apply_file_manager_directory(ctx);
+    }
+
+    fn apply_file_manager_directory(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.remote_input_has_failed() {
+            self.cancel_file_manager_directory(ctx);
+            return;
+        }
+        if let Some(FileManagerOrigin::Restoring { is_local }) = self.file_manager_origin {
+            // Remote restoration first creates a local bootstrap shell. Never
+            // bind its session or send a remote path to that temporary shell.
+            if !self.file_manager_session_matches_target(is_local, ctx)
+                || (!is_local && !self.remote_input_is_ready())
+                || !self.is_login_shell_bootstrapped
+            {
+                return;
+            }
+            let Some(id) = self.active_block_session_id() else {
+                return;
+            };
+            self.file_manager_origin = Some(FileManagerOrigin::Session {
+                id,
+                directory: self.active_session_cwd(ctx),
+            });
+        }
+        let Some(FileManagerOrigin::Session { id, directory }) = &self.file_manager_origin else {
+            return;
+        };
+        // Once bound, subshell exits and reconnects cannot retarget the request.
+        if self.active_block_session_id() != Some(*id) {
+            self.cancel_file_manager_directory(ctx);
+            return;
+        }
+        let Some(path) = self.pending_file_manager_directory.as_ref() else {
+            return;
+        };
+        if directory.as_ref() == Some(path) {
+            self.cancel_file_manager_directory(ctx);
+            return;
+        }
+        if self.remote_input_phase.is_some() && !self.remote_input_is_ready() {
+            return;
+        }
+        let Some(shell) = self.active_session_shell_type(ctx) else {
+            return;
+        };
+        let Some(command) = file_manager_directory_command(path, shell) else {
+            self.cancel_file_manager_directory(ctx);
+            return;
+        };
+        if self.input.update(ctx, |input, ctx| {
+            input.try_execute_command_preserving_draft(&command, ctx)
+        }) {
+            self.pending_file_manager_directory = None;
+            self.file_manager_origin = None;
+        }
+    }
+
     pub fn input(&self) -> &ViewHandle<Input> {
         &self.input
     }
@@ -6448,6 +6623,7 @@ impl TerminalView {
         self.remote_input_session_id = None;
         self.input.update(ctx, |input, ctx| {
             input.cancel_pending_system_command();
+            input.clear_file_manager_directory_input();
             input.set_ordinary_command_input_ready(false, ctx);
         });
         ctx.notify();
@@ -6458,6 +6634,7 @@ impl TerminalView {
         self.remote_input_session_id = None;
         self.input.update(ctx, |input, ctx| {
             input.cancel_pending_system_command();
+            input.clear_file_manager_directory_input();
             input.set_ordinary_command_input_ready(false, ctx);
         });
         ctx.notify();
@@ -6499,6 +6676,7 @@ impl TerminalView {
                 RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
             ) {
                 input.cancel_pending_system_command();
+                input.clear_file_manager_directory_input();
             }
             input.set_ordinary_command_input_ready(phase == RemoteInputPhase::Ready, ctx);
         });
@@ -6506,6 +6684,7 @@ impl TerminalView {
             self.focus_terminal(ctx);
         }
         if became_ready {
+            self.apply_file_manager_directory(ctx);
             if ctx.is_self_or_child_focused() {
                 self.redetermine_global_focus(ctx);
             }
@@ -9586,6 +9765,8 @@ impl TerminalView {
                 ctx.request_user_attention();
             }
             ModelEvent::Exit { reason } => {
+                self.input
+                    .update(ctx, |input, _| input.clear_file_manager_directory_input());
                 if self.remote_input_phase.is_some() {
                     self.set_remote_input_phase(
                         RemoteInputPhase::Failed,
@@ -13508,6 +13689,7 @@ impl TerminalView {
 
     /// Executes a command that was submitted by the user and not yet sent to the shell.
     pub fn execute_pending_command(&mut self, _: (), ctx: &mut ViewContext<Self>) {
+        self.apply_file_manager_directory(ctx);
         let had_pending = self.input.read(ctx, |input, _| input.has_pending_command());
         self.input.update(ctx, |input, ctx| {
             input.execute_pending_command(ctx);
@@ -19336,6 +19518,10 @@ impl TerminalView {
             InputEvent::PageUp => self.page_up(ctx),
             InputEvent::PageDown => self.page_down(ctx),
             InputEvent::ExecuteCommand(event) => {
+                // A newer command takes precedence over a deferred directory change.
+                if self.pending_file_manager_directory.is_some() {
+                    self.cancel_file_manager_directory(ctx);
+                }
                 self.update_scroll_position_locking(
                     ScrollPositionUpdate::AfterCommandExecutionStarted,
                     ctx,

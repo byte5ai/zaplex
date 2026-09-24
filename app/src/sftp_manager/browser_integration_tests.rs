@@ -7,7 +7,7 @@
 //! date: 2026-05-30
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -38,6 +38,9 @@ use super::browser::{
     copy_move_submission_summary, transfer_display_priority, SftpBrowserAction, SftpBrowserView,
 };
 use super::sftp_backend::{BackendOwnershipAnchor, InMemorySftpBackend, SftpBackend};
+use super::sftp_ops::{ProgressCallback, SftpOpsError};
+use super::transfer_job::ConflictDecision;
+use super::transfer_queue::{QueuedTransferState, TransferQueue};
 use super::types::{
     ConnectionState, Dialog, EntryIdentity, EntryReference, FileEntry, FileEntryType,
     StableEntryIdentity, TransferDirection, TransferState, TransferTask,
@@ -6762,6 +6765,154 @@ fn f3_views_without_editing() {
 
         view.read(&app, |v, _| {
             assert!(matches!(v.dialog, Some(Dialog::FileDetails { .. })));
+        });
+    });
+}
+
+/// A metadata-only backend: the late target appears on the second existence
+/// probe. Every mutating method fails the test instead of touching any files.
+struct ConflictProbeBackend {
+    first_target_probe_absent: AtomicBool,
+}
+
+impl ConflictProbeBackend {
+    fn unsupported<T>() -> Result<T, SftpOpsError> {
+        panic!("conflict regression must not mutate the backend")
+    }
+}
+
+impl SftpBackend for ConflictProbeBackend {
+    fn list_dir(&self, path: &Path) -> Result<Vec<FileEntry>, SftpOpsError> {
+        Ok(vec![self.stat(&path.join("dup.txt"))?])
+    }
+
+    fn entry_exists(&self, path: &Path) -> Result<bool, SftpOpsError> {
+        Ok(path != Path::new("/right/dup.txt")
+            || !self.first_target_probe_absent.swap(false, Ordering::SeqCst))
+    }
+
+    fn delete_file(&self, _path: &Path) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn delete_dir_recursive(&self, _path: &Path) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn create_dir(&self, _path: &Path) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn rename(&self, _old_path: &Path, _new_path: &Path) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn realpath(&self, _path: &Path) -> Result<PathBuf, SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn stat(&self, path: &Path) -> Result<FileEntry, SftpOpsError> {
+        Ok(FileEntry {
+            name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: path.to_path_buf(),
+            file_type: FileEntryType::File,
+            size: 0,
+            modified: None,
+            permissions: None,
+            identity: super::types::StableEntryIdentity {
+                file_type: FileEntryType::File,
+                size: 0,
+                object_id: path.display().to_string(),
+                revision: "1".to_string(),
+            },
+        })
+    }
+
+    fn lstat(&self, path: &Path) -> Result<FileEntry, SftpOpsError> {
+        self.stat(path)
+    }
+
+    fn upload_file(
+        &self,
+        _local_path: &Path,
+        _remote_path: &Path,
+        _progress_cb: Option<&ProgressCallback>,
+        _cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn download_file(
+        &self,
+        _remote_path: &Path,
+        _local_path: &Path,
+        _progress_cb: Option<&ProgressCallback>,
+        _cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn copy_file(&self, _src: &Path, _dst: &Path) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+}
+
+#[test]
+fn same_fs_conflict_confirmation_rejects_a_closed_target_before_queue_submission() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let backend = Arc::new(ConflictProbeBackend {
+            first_target_probe_absent: AtomicBool::new(false),
+        });
+        let (_, source) = create_view_with_node(&mut app, "same-host");
+        source.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend.clone(), PathBuf::from("/left"), ctx);
+        });
+        let (_, target) = create_view_with_node(&mut app, "same-host");
+        target.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
+        });
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+            assert!(matches!(view.dialog, Some(Dialog::CopyMoveConflict { .. })));
+        });
+        target.update(&mut app, |view, ctx| view.set_pane_group_id(None, ctx));
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::OverwriteConflict { all: false }, ctx);
+            assert!(view.dialog.is_none());
+        });
+        app.read(|ctx| {
+            assert_eq!(TransferQueue::as_ref(ctx).activities().count(), 0);
+        });
+    });
+}
+
+#[test]
+fn same_fs_target_appearing_after_probe_is_skipped_without_overwrite_consent() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let backend = Arc::new(ConflictProbeBackend {
+            first_target_probe_absent: AtomicBool::new(true),
+        });
+        let (_, source) = create_view_with_node(&mut app, "same-host");
+        source.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend.clone(), PathBuf::from("/left"), ctx);
+        });
+        let (_, target) = create_view_with_node(&mut app, "same-host");
+        target.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
+        });
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        app.read(|ctx| {
+            let activities: Vec<_> = TransferQueue::as_ref(ctx).activities().collect();
+            assert_eq!(activities.len(), 1);
+            assert_eq!(activities[0].conflict, ConflictDecision::Skip);
+            assert_eq!(activities[0].state, QueuedTransferState::Skipped);
         });
     });
 }

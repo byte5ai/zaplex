@@ -2645,3 +2645,58 @@ fn refresh_closes_open_context_menu() {
         });
     });
 }
+
+#[test]
+fn file_manager_directory_close_uses_connected_current_path_only() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.current_path = PathBuf::from("/srv/last-opened");
+            view.connection = ConnectionState::Connected;
+            assert!(view.shell_directory_on_close().is_none());
+            view.on_dir_listed(view.refresh_generation, Ok(Ok(Vec::new())), ctx);
+            assert_eq!(
+                view.shell_directory_on_close(),
+                Some(PathBuf::from("/srv/last-opened"))
+            );
+            view.connection = ConnectionState::Disconnected;
+            assert!(view.shell_directory_on_close().is_none());
+            view.connection = ConnectionState::Failed("connection lost".to_string());
+            assert!(view.shell_directory_on_close().is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_initial_listing_failure_never_changes_shell_directory() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.current_path = PathBuf::from("/missing/restored-directory");
+            view.connection = ConnectionState::Connected;
+            view.on_dir_listed(
+                view.refresh_generation,
+                Ok(Err(super::sftp_ops::SftpOpsError::Operation(
+                    "missing directory".to_string(),
+                ))),
+                ctx,
+            );
+            assert!(view.shell_directory_on_close().is_none());
+            view.current_path = PathBuf::from("/successfully-opened");
+            view.on_dir_listed(view.refresh_generation, Ok(Ok(Vec::new())), ctx);
+            view.on_dir_listed(
+                view.refresh_generation,
+                Ok(Err(super::sftp_ops::SftpOpsError::Operation(
+                    "permission denied".to_string(),
+                ))),
+                ctx,
+            );
+            assert_eq!(
+                view.shell_directory_on_close(),
+                Some(PathBuf::from("/successfully-opened"))
+            );
+        });
+    });
+}

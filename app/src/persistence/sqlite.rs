@@ -9,6 +9,8 @@ use std::ptr;
 use std::str::FromStr;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Mutex, Once, OnceLock};
+#[cfg(not(target_family = "wasm"))]
+use std::time::Duration;
 use std::{
     collections::{HashMap, VecDeque},
     convert::TryInto,
@@ -259,7 +261,7 @@ fn take_prewarmed_db() -> Option<Result<SqliteConnection>> {
     result
 }
 
-pub fn initialize(ctx: &mut AppContext) -> (Option<PersistedData>, Option<WriterHandles>) {
+pub fn initialize(ctx: &mut AppContext) -> Result<(Option<PersistedData>, Option<WriterHandles>)> {
     let database_path = database_file_path();
 
     // Prefer to get background prewarming result; if unavailable, synchronously call init_db() (original behavior).
@@ -299,15 +301,17 @@ pub fn initialize(ctx: &mut AppContext) -> (Option<PersistedData>, Option<Writer
                     None
                 }
             };
-            (app_state, writer_handles)
+            Ok((app_state, writer_handles))
         }
         Err(err) => {
             send_telemetry_from_app_ctx!(
                 TelemetryEvent::DatabaseStartUpError(err.to_string()),
                 ctx
             );
-            report_db_error("initialization", err, &database_path);
-            (None, None)
+            log_db_access(&database_path);
+            let err = err.context("SQLite initialization error");
+            report_error!(&err);
+            Err(err)
         }
     }
 }
@@ -463,6 +467,11 @@ pub(super) fn init_db() -> Result<SqliteConnection> {
 
 #[cfg(not(target_family = "wasm"))]
 fn lock_sqlite_migration(target_db: &Path) -> Result<fs::File> {
+    lock_sqlite_migration_with_timeout(target_db, Duration::from_secs(3))
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn lock_sqlite_migration_with_timeout(target_db: &Path, timeout: Duration) -> Result<fs::File> {
     let lock_path = target_db.with_extension("sqlite-migration-lock");
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
@@ -474,9 +483,21 @@ fn lock_sqlite_migration(target_db: &Path) -> Result<fs::File> {
             lock_path.display()
         )
     })?;
-    lock.try_lock()
-        .context("Failed to lock SQLite migrations; another application may be starting")?;
-    Ok(lock)
+    let started = Instant::now();
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(lock),
+            Err(fs::TryLockError::WouldBlock) if started.elapsed() < timeout => {
+                let remaining = timeout.saturating_sub(started.elapsed());
+                thread::sleep(Duration::from_millis(25).min(remaining));
+            }
+            Err(error) => {
+                return Err(error).context(
+                    "Failed to lock SQLite migrations; another application may be starting",
+                );
+            }
+        }
+    }
 }
 
 fn migrate_legacy_state_sqlite_if_needed(source_db: &Path, target_db: &Path) -> Result<bool> {
@@ -1225,6 +1246,11 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
 
 /// Report a database error and additional context for debugging.
 fn report_db_error(err_kind: &str, err: anyhow::Error, database_path: &Path) {
+    log_db_access(database_path);
+    report_error!(err.context(format!("SQLite {err_kind} error")));
+}
+
+fn log_db_access(database_path: &Path) {
     // Database sometimes goes missing or becomes inaccessible; here we add permission and existence diagnostics.
     fn log_access(prefix: &str, path: &Path) {
         match fs::metadata(path) {
@@ -1262,8 +1288,6 @@ fn report_db_error(err_kind: &str, err: anyhow::Error, database_path: &Path) {
         log_access("Database directory", parent);
     }
     log_access("Database", database_path);
-
-    report_error!(err.context(format!("SQLite {err_kind} error")));
 }
 
 /// Filter a collection of model events to remove skippable events:

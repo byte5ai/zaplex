@@ -681,6 +681,7 @@ pub struct AppContext {
     is_unit_test: bool,
 
     termination_result: OnceLock<TerminationResult>,
+    application_callbacks_disabled_after_failed_startup: bool,
 
     /// The current zoom (magnification) factor of the application.
     zoom_factor: ZoomFactor,
@@ -806,6 +807,7 @@ impl AppContext {
             cursor_updated_for_view: None,
             is_unit_test,
             termination_result: Default::default(),
+            application_callbacks_disabled_after_failed_startup: false,
             zoom_factor: ZoomFactor::default(),
             view_to_window: Default::default(),
             structural_child_to_parent: Default::default(),
@@ -871,6 +873,16 @@ impl AppContext {
 
     fn matches_any_window_bounds(&self, r: RectF) -> bool {
         self.window_bounds.values().any(|b| *b == Some(r))
+    }
+
+    /// Suppress application callbacks after initialization fails. Framework modal
+    /// responses remain available so a fatal startup dialog can still be dismissed.
+    pub fn disable_application_callbacks_after_failed_startup(&mut self) {
+        self.application_callbacks_disabled_after_failed_startup = true;
+    }
+
+    pub(crate) fn application_callbacks_disabled_after_failed_startup(&self) -> bool {
+        self.application_callbacks_disabled_after_failed_startup
     }
 
     /// Create a window showing a modal dialog native to the platform. The modal will synchronously
@@ -4603,3 +4615,7 @@ impl AppContext {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "startup_callback_tests.rs"]
+mod startup_callback_tests;

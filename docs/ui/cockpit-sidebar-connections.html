@@ -7,7 +7,7 @@
   <meta name="ui-spec-reference-updated" content="2026-09-23">
   <meta name="ui-spec-route" content="/native/cockpit-sidebar-connections">
   <meta name="ui-spec-viewports" content="1440x1000,1024x1200,760x900">
-  <meta name="ui-spec-issue" content="160,455,456,458,459,460,461,462,463,464">
+  <meta name="ui-spec-issue" content="160,455,456,458,459,460,461,462,463,464,469">
   <title>Zaplex — verbindliche UI-Referenz</title>
   <style>
     :root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; color: CanvasText; background: Canvas; }
@@ -81,7 +81,7 @@
       <div class="spec-block">
         <h2>Dateien und Bereitschaft</h2>
         <ul>
-          <li><code>#spec F1</code> Dateimanager ist ein reversibler Terminal-Pane-Modus. F10/Schließen kehrt zum Terminal zurück; es gibt keinen globalen Dateimanager-Tab.</li>
+          <li><code>#spec F1</code> Dateimanager ist ein reversibler Terminal-Pane-Modus. F10/Schließen kehrt zum Terminal zurück und übernimmt das zuletzt geöffnete Verzeichnis in die zugehörige Shell, sobald diese bereit und frei ist. Eingabeentwurf und laufender Prozess bleiben erhalten; es gibt keinen globalen Dateimanager-Tab.</li>
           <li><code>#spec F2</code> Jede Dateimanager-Pane zeigt F3/F4/F5/F6 einzeilig in stabiler Geometrie; nur die fokussierte kompatible Pane aktiviert Aktionen.</li>
           <li><code>#spec F3</code> Transferziel umfasst Host, stabile Pane-/Sessionreferenz und Pfad. Mehrdeutigkeit verlangt Auswahl; Ziele anderer Tabs bleiben erlaubt und werden vor Ausführung erneut validiert.</li>
           <li><code>#spec F4</code> Nach erfolgreichem <code>..</code> wird das verlassene Verzeichnis anhand seiner Identität markiert und sichtbar gescrollt, nicht anhand eines alten Zeilenindex.</li>

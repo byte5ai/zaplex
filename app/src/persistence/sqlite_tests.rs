@@ -965,9 +965,25 @@ fn sqlite_migration_lock_excludes_another_start_and_releases_on_drop() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let target_db = tempdir.path().join("warp.sqlite");
     let first = super::lock_sqlite_migration(&target_db).expect("first start should acquire lock");
-    assert!(super::lock_sqlite_migration(&target_db).is_err());
+    assert!(super::lock_sqlite_migration_with_timeout(&target_db, Duration::ZERO).is_err());
     drop(first);
     super::lock_sqlite_migration(&target_db).expect("next start should acquire released lock");
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn sqlite_migration_lock_waits_for_a_concurrent_start_to_finish() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let target_db = tempdir.path().join("warp.sqlite");
+    let first = super::lock_sqlite_migration(&target_db).expect("first start should acquire lock");
+    let release = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        drop(first);
+    });
+    let next = super::lock_sqlite_migration_with_timeout(&target_db, Duration::from_secs(2))
+        .expect("second start should acquire the released lock within its deadline");
+    release.join().expect("first startup thread should finish");
+    drop(next);
 }
 
 #[cfg(unix)]

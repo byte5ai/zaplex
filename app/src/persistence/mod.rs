@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use ai::project_context::model::ProjectRulePath;
+use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
 use uuid::Uuid;
 use warp_core::command::ExitCode;
@@ -64,12 +65,12 @@ pub use sqlite::establish_ro_connection;
 /// writing updated data to persist, if the persistence subsystem is
 /// available.
 #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
-pub fn initialize(ctx: &mut AppContext) -> (Option<PersistedData>, Option<WriterHandles>) {
+pub fn initialize(ctx: &mut AppContext) -> Result<(Option<PersistedData>, Option<WriterHandles>)> {
     cfg_if::cfg_if! {
         if #[cfg(feature = "local_fs")] {
             sqlite::initialize(ctx)
         } else {
-            (None, None)
+            Ok((None, None))
         }
     }
 }

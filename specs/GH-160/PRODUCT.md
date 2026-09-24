@@ -222,7 +222,9 @@ The previous static illustrations are superseded, not alternative approved layou
 
 33. **Terminal identity is short, real, and pane-local.** The automatic pane title is
     `Host · project-or-directory`, with full host/path available accessibly. Missing metadata uses
-    an honest host/session fallback, and only actual collisions add a restrained disambiguator.
+    an honest host/session fallback. Actual short-title collisions expose the full path; identical
+    full identities add a stable suffix derived from the persistent session identity. Moving or
+    restoring a pane does not change that suffix; non-colliding titles stay short.
     The automatic tab title follows the focused pane through the existing title-priority rules;
     an explicit title wins until removed. Account panes retain their native Cockpit identity.
 
@@ -251,7 +253,11 @@ The previous static illustrations are superseded, not alternative approved layou
     the session, host, working directory, input draft, and process. F10 or mode close returns to the
     terminal rather than closing the session. Two File Manager panes form the familiar MC workflow,
     but any number of panes and destinations in other tabs remain valid; no global File Manager tab
-    exists.
+    exists. Closing after navigation adopts the last successfully opened directory in the owning
+    shell (#469), including after layout restore. An idle shell changes directory immediately; a
+    running process is left untouched and the change waits for a ready prompt. The input draft is
+    retained. A newer shell command or reopening the File Manager supersedes a deferred change.
+    A changed session/host or failed connection must never redirect a foreign path into another shell.
 
 38. **The File Manager function bar is one stable row per pane.** F3/F4/F5/F6 and their actions are
     visible in every File Manager pane; only the focused pane enables them. Unfocused panes keep the

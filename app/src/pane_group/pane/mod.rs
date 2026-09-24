@@ -722,6 +722,7 @@ where
 /// to one another.
 pub struct PaneConfiguration {
     title: String,
+    terminal_identity: Option<(String, String)>,
     title_secondary: String,
     /// Host backing this terminal pane. `None` means the local application
     /// host; remote panes set this from their registry node at launch time.
@@ -755,6 +756,7 @@ impl PaneConfiguration {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
+            terminal_identity: None,
             title_secondary: String::from(""),
             terminal_identity_host: None,
             title_tooltip: None,
@@ -770,6 +772,26 @@ impl PaneConfiguration {
 
     pub fn title(&self) -> &str {
         &self.title
+    }
+
+    pub(crate) fn terminal_identity(&self) -> Option<&(String, String)> {
+        self.terminal_identity.as_ref()
+    }
+
+    pub(crate) fn set_terminal_identity(
+        &mut self,
+        short: String,
+        full: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let identity = (short, full);
+        if self.terminal_identity.as_ref() != Some(&identity) {
+            self.set_title(identity.0.clone(), ctx);
+            self.set_title_tooltip(Some(identity.1.clone()), ctx);
+            self.terminal_identity = Some(identity);
+            // A full-path change can introduce a collision without changing the basename.
+            ctx.emit(PaneConfigurationEvent::TitleUpdated);
+        }
     }
 
     pub fn title_secondary(&self) -> &str {

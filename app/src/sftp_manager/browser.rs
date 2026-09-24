@@ -757,6 +757,8 @@ pub struct SftpBrowserView {
     // ---- Navigation ----
     /// Current path
     pub(crate) current_path: PathBuf,
+    /// Only successfully listed directories may change the underlying shell.
+    last_listed_path: Option<PathBuf>,
     /// File entries in the current directory
     pub(crate) entries: Vec<FileEntry>,
     /// Set of selected filesystem objects. Indices are never persisted because
@@ -1025,6 +1027,7 @@ impl SftpBrowserView {
             sftp: None,
             safe_file_client: SafeFileClientSlot::default(),
             current_path: start_path.clone().unwrap_or_else(|| PathBuf::from("/")),
+            last_listed_path: None,
             entries: Vec::new(),
             selected: HashSet::new(),
             path_history: vec![start_path.clone().unwrap_or_else(|| PathBuf::from("/"))],
@@ -1240,6 +1243,7 @@ impl SftpBrowserView {
         start_path: PathBuf,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.last_listed_path = None;
         self.connection = ConnectionState::Connected;
         self.sftp = Some(backend);
         self.route_epoch = self.route_epoch.wrapping_add(1);
@@ -1258,6 +1262,7 @@ impl SftpBrowserView {
         start_path: PathBuf,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.last_listed_path = None;
         self.connection = ConnectionState::Connected;
         self.sftp = Some(backend);
         self.route_epoch = self.route_epoch.wrapping_add(1);
@@ -1295,6 +1300,7 @@ impl SftpBrowserView {
                         FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
                     ) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
                 });
+                self.last_listed_path = Some(self.current_path.clone());
                 self.entries = entries;
                 self.selected.clear();
                 self.sync_row_mouse_handles();
@@ -1608,6 +1614,7 @@ impl SftpBrowserView {
         // once the listing lands (see `cursor_reset_pending`).
         self.cursor = 0;
         self.cursor_reset_pending = true;
+        self.last_listed_path = None;
         self.connection = ConnectionState::Connected;
         self.sftp = Some(backend);
         self.route_epoch = self.route_epoch.wrapping_add(1);
@@ -1766,6 +1773,7 @@ impl SftpBrowserView {
                     self.cursor_reset_pending = departed_directory.is_none();
                     self.pending_departed_directory = departed_directory;
                 }
+                self.last_listed_path = Some(self.current_path.clone());
                 self.entries = entries;
                 let listed_identities: HashSet<EntryIdentity> =
                     self.entries.iter().map(FileEntry::entry_identity).collect();
@@ -2265,6 +2273,14 @@ impl SftpBrowserView {
             self.node_id.clone()
         };
         format!("{where_}:{}", self.current_path.display())
+    }
+
+    /// Only a successfully connected browser directory may be returned to its shell.
+    pub(crate) fn shell_directory_on_close(&self) -> Option<PathBuf> {
+        if self.pick_mode || !matches!(self.connection, ConnectionState::Connected) {
+            return None;
+        }
+        self.last_listed_path.clone()
     }
 
     fn fm_descriptor(&self) -> Option<FmPaneDescriptor> {
@@ -2853,6 +2869,9 @@ impl SftpBrowserView {
             ProbeError(String),
         }
         loop {
+            if self.pending_copy_move.is_none() {
+                return;
+            }
             let current = self
                 .pending_copy_move
                 .as_ref()
@@ -2874,7 +2893,9 @@ impl SftpBrowserView {
                         .expect("copy/move operation must be probed off-thread")
                     {
                         Ok(false) => Step::Execute {
-                            conflict: super::transfer_job::ConflictDecision::Overwrite,
+                            // Absence at probe time is not consent to replace a
+                            // destination that appears before the worker starts.
+                            conflict: super::transfer_job::ConflictDecision::Skip,
                         },
                         Ok(true) => match pending.conflict_default {
                             Some(super::transfer_job::ConflictDecision::Skip) => Step::Skip,
@@ -2946,6 +2967,14 @@ impl SftpBrowserView {
         conflict: super::transfer_job::ConflictDecision,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !self
+            .pending_copy_move
+            .as_ref()
+            .is_some_and(|pending| self.transfer_guard_is_current(&pending.guard, ctx))
+        {
+            self.reject_stale_transfer(ctx);
+            return;
+        }
         let Some(pending) = self.pending_copy_move.as_ref() else {
             return;
         };
