@@ -397,8 +397,8 @@ fn start_adopted_loop_impl(
 }
 
 /// Replay callbacks run on the app executor after a background task completes.
-/// Their terminal wakeups let tests await the finished state without guessing
-/// how many foreground yields the background executor needs.
+/// Wakeups speed up the wait, but an unready shell can finish replay silently.
+/// Periodic state checks also cover that case without assuming a yield count.
 async fn wait_for_attach_replay(
     event_loop: &ModelHandle<EventLoop>,
     app: &App,
@@ -406,10 +406,13 @@ async fn wait_for_attach_replay(
 ) {
     async {
         while event_loop.read(app, |me, _| me.pending_attach_replay.is_some()) {
-            wakeups
+            if let Ok(result) = wakeups
                 .recv()
+                .with_timeout(Duration::from_millis(10))
                 .await
-                .expect("terminal wakeup channel closed");
+            {
+                result.expect("terminal wakeup channel closed");
+            }
         }
     }
     .with_timeout(Duration::from_secs(5))
