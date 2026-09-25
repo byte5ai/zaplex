@@ -38,6 +38,11 @@ on:
         type: boolean
         required: false
         default: false
+      coverage_preflight:
+        description: "Check compilation of the two test crates that blocked coverage; no tests run."
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -77,7 +82,7 @@ jobs:
         shell: bash
 
       - name: Install Rust coverage tools
-        if: ${{ inputs.coverage }}
+        if: ${{ inputs.coverage && !inputs.coverage_preflight }}
         run: |
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov --locked --version 0.9.1
@@ -85,7 +90,7 @@ jobs:
         shell: bash
 
       - name: Rust workspace line coverage
-        if: ${{ inputs.coverage }}
+        if: ${{ inputs.coverage && !inputs.coverage_preflight }}
         run: >
           cargo llvm-cov nextest --locked --workspace --exclude command-signatures-v2
           --profile ci --ignore-run-fail --lcov
@@ -94,7 +99,7 @@ jobs:
         shell: bash
 
       - name: Upload Rust coverage report
-        if: ${{ inputs.coverage && always() }}
+        if: ${{ inputs.coverage && !inputs.coverage_preflight && always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rust-workspace-lcov
@@ -102,8 +107,13 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Check repaired test targets
+        if: ${{ inputs.coverage_preflight }}
+        run: cargo check --locked --tests -p repo_metadata -p warp_editor
+        shell: bash
+
       - name: cargo test
-        if: ${{ !inputs.coverage }}
+        if: ${{ !inputs.coverage && !inputs.coverage_preflight }}
         env:
           PKG: ${{ inputs.package }}
           FILTER: ${{ inputs.filter }}
