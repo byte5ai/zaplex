@@ -33,6 +33,11 @@ on:
         type: boolean
         required: false
         default: false
+      coverage:
+        description: "Measure full Rust workspace line coverage (Linux); slower than the package test run."
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -71,7 +76,32 @@ jobs:
         run: rustup target add x86_64-unknown-linux-gnu
         shell: bash
 
+      - name: Install Rust coverage tools
+        if: ${{ inputs.coverage }}
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked --version 0.9.1
+        shell: bash
+
+      - name: Rust workspace line coverage
+        if: ${{ inputs.coverage }}
+        run: >
+          cargo llvm-cov --locked --workspace --exclude command-signatures-v2
+          --ignore-run-fail --lcov --output-path "${{ runner.temp }}/rust-lcov.info"
+          --ignore-filename-regex '(_test|_tests|mod_test)\.rs$|/tests/'
+        shell: bash
+
+      - name: Upload Rust coverage report
+        if: ${{ inputs.coverage && always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rust-workspace-lcov
+          path: ${{ runner.temp }}/rust-lcov.info
+          if-no-files-found: error
+          retention-days: 14
+
       - name: cargo test
+        if: ${{ !inputs.coverage }}
         env:
           PKG: ${{ inputs.package }}
           FILTER: ${{ inputs.filter }}
