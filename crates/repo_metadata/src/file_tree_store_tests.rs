@@ -35,7 +35,7 @@ fn cloning_watcher_gitignores_shares_compiled_rules() {
         .map(|index| {
             let mut builder = GitignoreBuilder::new(format!("/repo/nested-{index}"));
             builder
-                .add_line(None, format!("ignored-{index}/**"))
+                .add_line(None, &format!("ignored-{index}/**"))
                 .expect("test gitignore rule should be valid");
             builder.build().expect("test gitignore should compile")
         })

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -6849,8 +6850,8 @@ fn test_multiline_insert_in_header_preserves_each_line_once() {
                 buffer.content.debug(),
                 "<text>test<header1>lia<text>bne\nsecond"
             );
-            assert_eq!(buffer.text().matches('a').count(), 1);
-            assert_eq!(buffer.text().matches('b').count(), 1);
+            assert_eq!(buffer.text().as_str().matches('a').count(), 1);
+            assert_eq!(buffer.text().as_str().matches('b').count(), 1);
         });
 
         selection.read(&app, |selection, _| {
@@ -6881,19 +6882,19 @@ fn test_header_text_conversion_defines_multiline_boundaries() {
         .lines
     };
 
-    assert_eq!(convert("a\nb"), vec![heading("a"), line("b")].into());
+    assert_eq!(convert("a\nb"), VecDeque::from(vec![heading("a"), line("b")]));
     assert_eq!(
         convert("\na"),
-        vec![FormattedTextLine::LineBreak, line("a")].into()
+        VecDeque::from(vec![FormattedTextLine::LineBreak, line("a")])
     );
-    assert_eq!(convert("a\n"), vec![heading("a")].into());
+    assert_eq!(convert("a\n"), VecDeque::from(vec![heading("a")]));
     assert_eq!(
         convert("a\n\nb"),
-        vec![heading("a"), FormattedTextLine::LineBreak, line("b")].into()
+        VecDeque::from(vec![heading("a"), FormattedTextLine::LineBreak, line("b")])
     );
     assert_eq!(
         convert("a\n\n"),
-        vec![heading("a"), FormattedTextLine::LineBreak].into()
+        VecDeque::from(vec![heading("a"), FormattedTextLine::LineBreak])
     );
 }
 
