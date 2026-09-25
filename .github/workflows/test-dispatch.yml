@@ -81,13 +81,15 @@ jobs:
         run: |
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov --locked --version 0.9.1
+          cargo install cargo-nextest --locked --version 0.9.146
         shell: bash
 
       - name: Rust workspace line coverage
         if: ${{ inputs.coverage }}
         run: >
-          cargo llvm-cov --locked --workspace --exclude command-signatures-v2
-          --ignore-run-fail --lcov --output-path "${{ runner.temp }}/rust-lcov.info"
+          cargo llvm-cov nextest --locked --workspace --exclude command-signatures-v2
+          --profile ci --ignore-run-fail --lcov
+          --output-path "${{ runner.temp }}/rust-lcov.info"
           --ignore-filename-regex '(^|/)(test|tests|mod_test)\.rs$|(_test|_tests)\.rs$|/tests/'
         shell: bash
 
