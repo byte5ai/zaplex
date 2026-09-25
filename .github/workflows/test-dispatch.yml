@@ -39,7 +39,7 @@ on:
         required: false
         default: false
       coverage_preflight:
-        description: "Check compilation of the two test crates that blocked coverage; no tests run."
+        description: "Check compilation of the selected package's tests; no tests run."
         type: boolean
         required: false
         default: false
@@ -109,7 +109,9 @@ jobs:
 
       - name: Check repaired test targets
         if: ${{ inputs.coverage_preflight }}
-        run: cargo check --locked --tests -p repo_metadata -p warp_editor
+        env:
+          PKG: ${{ inputs.package }}
+        run: cargo check --locked --tests -p "$PKG"
         shell: bash
 
       - name: cargo test
