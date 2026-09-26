@@ -350,6 +350,12 @@ pub(crate) struct EventLoop {
     /// Success copy staged by an exact open/attach and consumed only when the
     /// same daemon route and PTY generation have real shell-input readiness.
     pending_ready_notice: Option<PendingReadyNotice>,
+    /// An attach replay dropped history since the last success notice, so the
+    /// next notice must not claim that nothing was lost.
+    replay_truncated: bool,
+    /// Success notices handed to the terminal view, observable by tests.
+    #[cfg(test)]
+    published_ready_notices: Vec<String>,
     /// Whether a *terminal* end-state notice has already been surfaced — a clean
     /// `session ended` (`SessionExited`) or a `connection lost`
     /// (`SessionDisconnected` with no reconnect left). Guards against a second,
@@ -740,6 +746,9 @@ impl EventLoop {
             welcomed: false,
             first_ready_notice_kind: ReadyNoticeKind::Attached,
             pending_ready_notice: None,
+            replay_truncated: false,
+            #[cfg(test)]
+            published_ready_notices: Vec::new(),
             terminated: false,
             report_bootstrap_boundary: false,
         }
@@ -1277,6 +1286,7 @@ impl EventLoop {
                 }
                 self.process_historical_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
                 self.write_notice(&crate::t!("terminal-daemon-scrollback-truncated"));
+                self.replay_truncated = true;
             }
             pending.gap_applied = true;
             pending.fed_preamble = false;
@@ -1364,7 +1374,7 @@ impl EventLoop {
             if let Some((pty_session_id, generation)) = self.managed_open_identity.take() {
                 self.report_managed_launch_opened(&pty_session_id, generation, ctx);
             }
-            self.publish_ready_notice();
+            self.publish_ready_notice(ctx);
         }
     }
 
@@ -1380,7 +1390,7 @@ impl EventLoop {
         });
     }
 
-    fn publish_ready_notice(&mut self) {
+    fn publish_ready_notice(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(pending) = self.pending_ready_notice.take() else {
             return;
         };
@@ -1390,27 +1400,40 @@ impl EventLoop {
         {
             return;
         }
-        match pending.kind {
+        let host = self.host_label.clone();
+        let message = match pending.kind {
             ReadyNoticeKind::PersistentSessionActive => {
-                self.write_zaplexify(&crate::t!(
-                    "terminal-daemon-persistent-session-active",
-                    host = self.host_label.clone()
-                ));
+                crate::t!("terminal-daemon-persistent-session-active", host = host)
+            }
+            ReadyNoticeKind::Attached if self.replay_truncated => {
+                crate::t!("terminal-daemon-restored-truncated", host = host)
             }
             ReadyNoticeKind::Attached if self.welcomed => {
-                self.write_zaplexify(&crate::t!(
-                    "terminal-daemon-reconnected",
-                    host = self.host_label.clone()
-                ));
+                crate::t!("terminal-daemon-reconnected", host = host)
             }
-            ReadyNoticeKind::Attached => {
-                self.write_zaplexify(&crate::t!(
-                    "terminal-daemon-reattached",
-                    host = self.host_label.clone()
-                ));
-            }
-        }
+            ReadyNoticeKind::Attached => crate::t!("terminal-daemon-reattached", host = host),
+        };
         self.welcomed = true;
+        self.replay_truncated = false;
+        self.show_session_notice(message, ctx);
+    }
+
+    /// Hands a connection/restore status to the terminal view, which shows it
+    /// outside the terminal grid. Session output stays untouched (#470).
+    fn show_session_notice(&mut self, message: String, ctx: &mut ModelContext<Self>) {
+        #[cfg(test)]
+        self.published_ready_notices.push(message.clone());
+        let Some(terminal_view) = self
+            .terminal_view
+            .as_ref()
+            .and_then(|terminal_view| terminal_view.upgrade(ctx))
+        else {
+            return;
+        };
+        let connection_session_id = self.connection_session_id;
+        terminal_view.update(ctx, |view, ctx| {
+            view.show_remote_session_notice(message, Some(connection_session_id), ctx);
+        });
     }
 
     fn arm_initial_attach_timeout(&mut self, ctx: &mut ModelContext<Self>) {
@@ -2284,13 +2307,6 @@ impl EventLoop {
         self.process_historical_pty_bytes(line.as_bytes());
     }
 
-    /// The Zaplexify signature line — bold cyan. Used for the persistent-session
-    /// welcome and the reconnect/re-attach payoff moments.
-    fn write_zaplexify(&mut self, text: &str) {
-        let line = format!("\r\n\x1b[1;36m{text}\x1b[0m\r\n");
-        self.process_historical_pty_bytes(line.as_bytes());
-    }
-
     /// Processes replayed or synthetic bytes without answering terminal
     /// queries. Replaying old output must never write a second reply to the PTY.
     fn process_historical_pty_bytes(&mut self, bytes: &[u8]) {
@@ -2362,6 +2378,7 @@ impl EventLoop {
             }
             self.process_historical_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
             self.write_notice(&crate::t!("terminal-daemon-scrollback-truncated"));
+            self.replay_truncated = true;
         }
         if !replay.is_empty() {
             self.process_historical_pty_bytes(replay);

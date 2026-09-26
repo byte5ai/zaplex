@@ -1898,11 +1898,35 @@ fn remote_readiness_actions_visible(phase: RemoteInputPhase) -> bool {
     phase == RemoteInputPhase::Failed
 }
 
+/// Footer copy for a remote readiness phase. Once a pane has been ready, the
+/// transient phases describe a reconnect rather than a first start.
+fn remote_readiness_message(
+    phase: RemoteInputPhase,
+    has_reached_initial_ready: bool,
+) -> Option<String> {
+    Some(match phase {
+        RemoteInputPhase::Transport | RemoteInputPhase::Attach | RemoteInputPhase::Replay
+            if has_reached_initial_ready =>
+        {
+            crate::t!("terminal-remote-readiness-reconnecting")
+        }
+        RemoteInputPhase::Transport => crate::t!("terminal-remote-readiness-transport"),
+        RemoteInputPhase::Attach => crate::t!("terminal-remote-readiness-attach"),
+        RemoteInputPhase::Replay => crate::t!("terminal-remote-readiness-replay"),
+        RemoteInputPhase::Ready => return None,
+        RemoteInputPhase::Failed => crate::t!("terminal-remote-readiness-failed"),
+        RemoteInputPhase::Corrupt => crate::t!("terminal-remote-readiness-corrupt"),
+        RemoteInputPhase::Cancelled => crate::t!("terminal-remote-readiness-cancelled"),
+    })
+}
+
 fn remote_input_draft_change_needs_snapshot(phase: Option<RemoteInputPhase>) -> bool {
     phase.is_some()
 }
 
 const CLASSIC_SSH_READY_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a connection/restore success notice stays visible above the grid.
+const REMOTE_SESSION_NOTICE_DURATION: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug)]
 pub enum LongRunningCommandAgentInteractionState {
@@ -2762,6 +2786,11 @@ pub struct TerminalView {
     /// cannot make an established daemon pane look like a new pending start.
     remote_input_has_reached_initial_ready: bool,
     remote_input_session_id: Option<warp_core::SessionId>,
+    /// Transient connection/restore status shown as an overlay instead of being
+    /// written into the terminal grid. A newer notice replaces an older one.
+    remote_session_notice: Option<String>,
+    /// Bumped per notice so an expiry timer only clears its own notice.
+    remote_session_notice_generation: u64,
     remote_restore_retry_button: ViewHandle<ActionButton>,
     remote_restore_cancel_button: ViewHandle<ActionButton>,
 }
@@ -3993,6 +4022,8 @@ impl TerminalView {
             remote_input_phase: None,
             remote_input_has_reached_initial_ready: false,
             remote_input_session_id: None,
+            remote_session_notice: None,
+            remote_session_notice_generation: 0,
             remote_restore_retry_button,
             remote_restore_cancel_button,
             active_block_metadata: None,
@@ -6670,6 +6701,9 @@ impl TerminalView {
         if connection_session_id.is_some() {
             self.remote_input_session_id = connection_session_id;
         }
+        if phase != RemoteInputPhase::Ready {
+            self.remote_session_notice = None;
+        }
         self.input.update(ctx, |input, ctx| {
             if matches!(
                 phase,
@@ -6700,6 +6734,41 @@ impl TerminalView {
             });
         }
         ctx.notify();
+    }
+
+    /// Shows a connection/restore status outside the terminal grid. The
+    /// notice replaces any previous one and expires on its own, so repeated
+    /// reconnects never stack messages.
+    pub(crate) fn show_remote_session_notice(
+        &mut self,
+        message: String,
+        connection_session_id: Option<warp_core::SessionId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !remote_input_phase_update_matches(self.remote_input_session_id, connection_session_id) {
+            return;
+        }
+        self.remote_session_notice_generation =
+            self.remote_session_notice_generation.wrapping_add(1);
+        let generation = self.remote_session_notice_generation;
+        self.remote_session_notice = Some(message);
+        let _ = ctx.spawn(
+            async {
+                Timer::after(REMOTE_SESSION_NOTICE_DURATION).await;
+            },
+            move |view, (), ctx| {
+                if view.remote_session_notice_generation == generation {
+                    view.remote_session_notice = None;
+                    ctx.notify();
+                }
+            },
+        );
+        ctx.notify();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_session_notice(&self) -> Option<&str> {
+        self.remote_session_notice.as_deref()
     }
 
     pub(crate) fn control_context(&self) -> Option<&crate::control_surface::ControlPtyContext> {
@@ -11153,15 +11222,7 @@ impl TerminalView {
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let phase = self.remote_input_phase?;
-        let message = match phase {
-            RemoteInputPhase::Transport => crate::t!("terminal-remote-readiness-transport"),
-            RemoteInputPhase::Attach => crate::t!("terminal-remote-readiness-attach"),
-            RemoteInputPhase::Replay => crate::t!("terminal-remote-readiness-replay"),
-            RemoteInputPhase::Ready => return None,
-            RemoteInputPhase::Failed => crate::t!("terminal-remote-readiness-failed"),
-            RemoteInputPhase::Corrupt => crate::t!("terminal-remote-readiness-corrupt"),
-            RemoteInputPhase::Cancelled => crate::t!("terminal-remote-readiness-cancelled"),
-        };
+        let message = remote_readiness_message(phase, self.remote_input_has_reached_initial_ready)?;
         let content = if matches!(
             phase,
             RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
@@ -11204,6 +11265,28 @@ impl TerminalView {
                 .with_padding_left(*PADDING_LEFT)
                 .with_vertical_padding(8.)
                 .finish(),
+        )
+    }
+
+    fn render_remote_session_notice(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+        let message = self.remote_session_notice.as_ref()?;
+        let theme = appearance.theme();
+        Some(
+            Container::new(
+                Text::new(
+                    message.clone(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.main_text_color(theme.surface_2()).into())
+                .finish(),
+            )
+            .with_horizontal_padding(10.)
+            .with_vertical_padding(6.)
+            .with_background(theme.surface_2())
+            .with_border(Border::all(1.).with_border_fill(theme.outline()))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .finish(),
         )
     }
 
@@ -25139,21 +25222,41 @@ impl View for TerminalView {
                 let remote_input_is_gated = self
                     .remote_input_phase
                     .is_some_and(|phase| phase != RemoteInputPhase::Ready);
-                if self.is_input_box_visible(&model, app) || remote_input_is_gated {
+                let input_box_visible = self.is_input_box_visible(&model, app);
+                let mut floating_readiness_footer = None;
+                if input_box_visible || (remote_input_is_gated && !is_alt_screen_active) {
                     column.add_child(self.render_input());
                     if let Some(footer) = self.render_remote_input_readiness_footer(appearance, app)
                     {
                         column.add_child(footer);
                     }
+                } else if remote_input_is_gated {
+                    // A fullscreen TUI keeps its grid size while the remote
+                    // session reconnects: the status floats above the grid.
+                    floating_readiness_footer =
+                        self.render_remote_input_readiness_footer(appearance, app);
                 } else if self.show_remote_server_loading_footer(&model, app) {
                     column.add_child(
                         self.render_remote_server_loading_footer(&model, appearance, app),
                     );
                 }
 
-                let stack = Stack::new()
+                let mut stack = Stack::new()
                     .with_constrain_absolute_children()
                     .with_child(column.finish());
+                if let Some(footer) = floating_readiness_footer {
+                    stack.add_positioned_child(
+                        Container::new(footer)
+                            .with_background(appearance.theme().surface_2())
+                            .finish(),
+                        OffsetPositioning::offset_from_parent(
+                            vec2f(0., 0.),
+                            ParentOffsetBounds::ParentByPosition,
+                            ParentAnchor::BottomLeft,
+                            ChildAnchor::BottomLeft,
+                        ),
+                    );
+                }
                 if matches!(input_mode, InputMode::Waterfall) && !is_alt_screen_active {
                     self.render_waterfall_mode_background(&model, stack, app)
                 } else {
@@ -25174,6 +25277,18 @@ impl View for TerminalView {
             .is_some()
         {
             stack.add_child(self.render_ambient_agent_progress(appearance, app));
+        }
+
+        if let Some(notice) = self.render_remote_session_notice(appearance) {
+            stack.add_positioned_child(
+                notice,
+                OffsetPositioning::offset_from_parent(
+                    vec2f(-12., 12.),
+                    ParentOffsetBounds::ParentByPosition,
+                    ParentAnchor::TopRight,
+                    ChildAnchor::TopRight,
+                ),
+            );
         }
 
         self.maybe_render_onboarding_callout(

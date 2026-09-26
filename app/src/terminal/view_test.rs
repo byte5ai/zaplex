@@ -222,6 +222,64 @@ fn corrupt_remote_restore_is_terminal_and_never_reenables_normal_input() {
 }
 
 #[test]
+fn remote_readiness_footer_names_reconnects_after_initial_readiness() {
+    crate::i18n::init(Some("en"));
+    for phase in [
+        RemoteInputPhase::Transport,
+        RemoteInputPhase::Attach,
+        RemoteInputPhase::Replay,
+    ] {
+        assert_eq!(
+            remote_readiness_message(phase, true),
+            Some(crate::t!("terminal-remote-readiness-reconnecting")),
+        );
+        assert_ne!(
+            remote_readiness_message(phase, false),
+            Some(crate::t!("terminal-remote-readiness-reconnecting")),
+        );
+    }
+    assert_eq!(
+        remote_readiness_message(RemoteInputPhase::Failed, true),
+        Some(crate::t!("terminal-remote-readiness-failed")),
+    );
+    assert_eq!(
+        remote_readiness_message(RemoteInputPhase::Ready, true),
+        None
+    );
+}
+
+#[test]
+fn remote_session_notice_replaces_older_notice_and_clears_on_reconnect() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let connection_session_id = warp_core::SessionId::from(74u64);
+        let stale_session_id = warp_core::SessionId::from(75u64);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(RemoteInputPhase::Ready, Some(connection_session_id), ctx);
+            view.show_remote_session_notice("first".to_string(), Some(connection_session_id), ctx);
+            view.show_remote_session_notice("second".to_string(), Some(connection_session_id), ctx);
+            view.show_remote_session_notice("stale".to_string(), Some(stale_session_id), ctx);
+        });
+        terminal.read(&app, |view, _| {
+            assert_eq!(view.remote_session_notice(), Some("second"));
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(
+                RemoteInputPhase::Transport,
+                Some(connection_session_id),
+                ctx,
+            );
+        });
+        terminal.read(&app, |view, _| {
+            assert_eq!(view.remote_session_notice(), None);
+        });
+    });
+}
+
+#[test]
 fn direct_control_hook_events_are_not_discarded_as_pty_duplicates() {
     assert!(should_apply_cli_agent_notification(
         ListenerRegistrationAction::Reuse,
