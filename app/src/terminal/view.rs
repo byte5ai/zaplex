@@ -20948,6 +20948,16 @@ impl TerminalView {
             .map(|pwd| pwd.to_string())
     }
 
+    /// The working directory, only while the active session runs on a remote
+    /// host. A classic SSH pane that fell back to its local shell reports None.
+    pub fn pwd_if_remote<C: ModelAsRef>(&self, ctx: &C) -> Option<String> {
+        if self.active_session_is_local(ctx) == Some(false) {
+            self.pwd()
+        } else {
+            None
+        }
+    }
+
     pub fn pwd_if_local(&self, ctx: &AppContext) -> Option<String> {
         self.active_session_path_if_local(ctx)
             .map(|path| path.to_string_lossy().into_owned())

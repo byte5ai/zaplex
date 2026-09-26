@@ -14146,8 +14146,14 @@ impl Workspace {
                     ctx,
                 );
                 let mut pending = pending;
+                // Only a directory of the same remote host may be reused; a
+                // local path must never be sent to the remote shell.
                 pending.inherited_remote_cwd = (source_node.as_deref() == Some(node_id.as_str()))
-                    .then(|| source_view.as_ref().and_then(|view| view.as_ref(ctx).pwd()))
+                    .then(|| {
+                        source_view
+                            .as_ref()
+                            .and_then(|view| view.as_ref(ctx).pwd_if_remote(ctx))
+                    })
                     .flatten();
                 let server = warp_ssh_manager::with_conn(|conn| {
                     Ok(warp_ssh_manager::SshRepository::get_server(conn, &node_id)?)
