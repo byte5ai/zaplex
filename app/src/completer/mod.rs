@@ -194,12 +194,14 @@ impl PathCompletionContext for SessionContext {
             return entries.clone();
         }
 
-        // When the remote server feature is enabled but the session hasn't
-        // connected yet, the command executor may be an InBand fallback that
-        // sends escape sequences to a raw remote shell. Return empty without
-        // caching so we retry after the remote server handshake finishes.
+        // A legacy SSH session with the remote server feature enabled only
+        // gets a working executor after its remote-server handshake. Return
+        // empty without caching so we retry once it has finished. Other
+        // zaplexified remote sessions (daemon-backed shells, subshells) never
+        // receive that handshake; their in-band executor already works, so
+        // they must not wait for it (#471).
         if let SessionType::ZaplexifiedRemote { host_id: None } = self.session.session_type() {
-            if FeatureFlag::SshRemoteServer.is_enabled() && !self.session.is_legacy_ssh_session() {
+            if FeatureFlag::SshRemoteServer.is_enabled() && self.session.is_legacy_ssh_session() {
                 return Arc::new(vec![]);
             }
         }

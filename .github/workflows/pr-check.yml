@@ -389,8 +389,7 @@ jobs:
           cargo test --locked -p warp --lib -- \
             remote_server::headless_connect::tests \
             terminal::daemon_tty::event_loop::tests \
-            listed_fresh_daemon_session_focuses_its_existing_shell_under_file_manager \
-            rejected_adopt_cleanup_does_not_poison_retry_key
+            provisional_daemon_adoption_cleanup_covers_connection_and_tab
           cargo test --locked -p remote_server --lib client::tests
           cargo test --locked -p zap_sftp --lib session::tests
         shell: bash
@@ -493,4 +492,14 @@ jobs:
           pane_group::pane::terminal_pane::tests::
           sftp_manager::fm_registry::tests::captured_target_
           equal_paths_on_different_hosts_are_distinct_target_coordinates
+          menu::tests::test_split_submenu_
+          test_primary_disabled_split_submenu_keeps_child_keyboard_accessible
+          test_submenu_parent_unhover_keeps_submenu_open
+          removed_favorite_host_is_disabled_and_never_routed
+          protected_favorite_store_disables_stale_removal
+          closing_new_session_menu_restores_focus_only_when_the_menu_owned_it
+          empty_titles_show_a_short_identity_within_the_zaplex_session_group
+          test_non_legacy_remote_session_lists_directory_entries_with_remote_server_enabled
+          test_legacy_ssh_session_waits_for_remote_server_handshake
+          test_session_context_lists_directory_entries_remotely
         shell: bash
