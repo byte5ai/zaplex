@@ -1560,6 +1560,19 @@ fn connections_registry_drives_favorite_launch_menu() {
 }
 
 #[test]
+fn host_lookup_failure_distinguishes_registry_errors_from_removed_hosts() {
+    crate::i18n::init(Some("en"));
+    assert_eq!(
+        super::host_lookup_failure_message(false),
+        crate::t!("workspace-left-panel-ssh-manager-session-host-missing")
+    );
+    assert_eq!(
+        super::host_lookup_failure_message(true),
+        crate::t!("workspace-host-registry-unavailable")
+    );
+}
+
+#[test]
 fn favorite_host_label_is_the_direct_terminal_action() {
     let MenuItem::Submenu { fields, menu } = favorite_host_submenu() else {
         panic!("a favorite host must open a right-hand submenu");
@@ -3580,6 +3593,42 @@ fn closing_new_session_menu_restores_focus_only_when_the_menu_owned_it() {
 
         workspace.update(&mut app, |workspace, ctx| {
             assert!(workspace.left_panel_view.is_self_or_child_focused(ctx));
+        });
+    });
+}
+
+#[test]
+fn cancelling_split_launch_menu_returns_focus_to_the_active_tab() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            let pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
+            let target = pane_group
+                .as_ref(ctx)
+                .recapture_split_target(pane_id, Direction::Right)
+                .expect("the focused pane is visible");
+            workspace.open_split_launch_menu(pane_group, target, None, ctx);
+        });
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.split_launch_menu.is_focused(ctx));
+            assert!(workspace.pending_split_launch.is_some());
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.split_launch_menu.update(ctx, |_, ctx| {
+                ctx.emit(MenuEvent::Close {
+                    via_select_item: false,
+                });
+            });
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(!workspace.split_launch_menu.is_focused(ctx));
+            assert!(workspace.pending_split_launch.is_none());
+            assert!(workspace.show_split_launch_menu.is_none());
         });
     });
 }

@@ -503,4 +503,6 @@ jobs:
           test_legacy_ssh_session_waits_for_remote_server_handshake
           test_session_context_lists_directory_entries_remotely
           connections_registry_drives_favorite_launch_menu
+          host_lookup_failure_distinguishes_registry_errors_from_removed_hosts
+          cancelling_split_launch_menu_returns_focus_to_the_active_tab
         shell: bash

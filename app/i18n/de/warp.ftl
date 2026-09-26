@@ -164,6 +164,7 @@ workspace-favorites-add-header = Zu Favoriten hinzufügen
 workspace-favorite-unavailable = Host existiert nicht mehr — dieser Favorit kann nicht gestartet werden
 workspace-favorite-more-actions = Weitere Aktionen für { $host }
 workspace-favorite-manage-host-missing = Dieser Host existiert nicht mehr. Entferne ihn aus den Favoriten.
+workspace-host-registry-unavailable = Verbindungen konnten nicht gelesen werden. Bitte erneut versuchen.
 workspace-favorite-manage-host-error = Die Host-Einstellungen konnten nicht geöffnet werden. Versuche es erneut.
 
 # ── SSH-Hosts (linkes Panel) ─────────────────────────────────────────────────
@@ -4046,6 +4047,8 @@ menu-a11y-action-instructions = Drücke Enter, um die Aktion des ausgewählten M
 # =============================================================================
 workspace-remote-pty-already-open = Dieses Remote-PTY ist bereits geöffnet, aber der vorhandene Tab konnte nicht fokussiert werden.
 workspace-remote-fallback-split-target-changed = Der Remote-Fallback wurde abgebrochen, weil sich das ursprüngliche Split-Ziel geändert hat.
+workspace-split-target-changed = Der Split wurde nicht geöffnet, weil sich seine Pane verschoben hat oder geschlossen wurde.
+workspace-split-host-already-connecting = { $host } wird bereits verbunden. Öffne den Split erneut, sobald die Verbindung steht.
 workspace-remote-agent-route-validation-unavailable = Der Daemon kann diese Agent-zu-PTY-Route nicht validieren.
 workspace-remote-daemon-connection-unavailable = Die Daemon-Verbindung ist nicht verfügbar; aktualisiere die Agent-Sessions.
 workspace-remote-pty-agent-changed = Der Vordergrund-Agent dieses PTYs hat sich geändert. Aktualisiere die Agent-Sessions, bevor du es erneut anhängst.

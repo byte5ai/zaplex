@@ -4066,6 +4066,7 @@ workspace-favorites-add-header = Add to favorites
 workspace-favorite-unavailable = host no longer exists — this favorite cannot be started
 workspace-favorite-more-actions = More actions for { $host }
 workspace-favorite-manage-host-missing = This host no longer exists. Remove it from Favorites.
+workspace-host-registry-unavailable = Connections could not be read. Try again.
 workspace-favorite-manage-host-error = Host settings couldn't be opened. Try again.
 
 # Cockpit — session table (spec v3 §4.3)
@@ -4391,6 +4392,8 @@ menu-a11y-action-instructions = Press the enter key to execute the selected menu
 # =============================================================================
 workspace-remote-pty-already-open = This remote PTY is already open, but its existing tab could not be focused.
 workspace-remote-fallback-split-target-changed = Remote fallback was cancelled because its original split target changed.
+workspace-split-target-changed = The split was not opened because its pane moved or closed.
+workspace-split-host-already-connecting = { $host } is already connecting. Open the split again once it is connected.
 workspace-remote-agent-route-validation-unavailable = The daemon cannot validate this agent-to-PTY route.
 workspace-remote-daemon-connection-unavailable = The daemon connection is unavailable; refresh Agent Sessions.
 workspace-remote-pty-agent-changed = This PTY's foreground agent changed. Refresh Agent Sessions before attaching again.

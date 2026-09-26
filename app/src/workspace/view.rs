@@ -2183,6 +2183,16 @@ pub struct Workspace {
     remove_tab_config_confirmation_dialog: ViewHandle<RemoveTabConfigConfirmationDialog>,
 }
 
+/// Toast copy for a host that could not be resolved from Connections. A failed
+/// registry read is not evidence that the host was removed.
+fn host_lookup_failure_message(registry_read_failed: bool) -> String {
+    if registry_read_failed {
+        crate::t!("workspace-host-registry-unavailable")
+    } else {
+        crate::t!("workspace-left-panel-ssh-manager-session-host-missing")
+    }
+}
+
 fn favorite_host_menu_item(
     favorite: &zaplex_cockpit::Favorite,
     host_nodes: &[(String, String)],
@@ -3822,6 +3832,12 @@ impl Workspace {
                     me.complete_split_launch(destination, ctx);
                 } else {
                     me.pending_split_launch = None;
+                }
+                // The picker took focus when it opened. A local split focuses
+                // its new pane; a cancelled picker or a remote split that is
+                // still connecting hands focus back to the active tab.
+                if menu.is_focused(ctx) {
+                    me.focus_active_tab(ctx);
                 }
                 ctx.notify();
             }
@@ -6062,14 +6078,11 @@ impl Workspace {
                 }
                 opened
             }
-            _ => {
+            lookup @ (Ok(None) | Err(_)) => {
+                log::warn!("Couldn't resolve host {node_id} to run a command on");
+                let message = host_lookup_failure_message(lookup.is_err());
                 self.toast_stack.update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(format!(
-                            "Couldn't find host '{node_id}' to run the command on."
-                        )),
-                        ctx,
-                    );
+                    toast_stack.add_ephemeral_toast(DismissibleToast::error(message), ctx);
                 });
                 false
             }
@@ -11048,6 +11061,11 @@ impl Workspace {
     ) {
         let Some(attempt) = self.begin_ssh_connect(node_id.clone(), server.host.clone(), ctx)
         else {
+            let message = crate::t!(
+                "workspace-split-host-already-connecting",
+                host = server.host
+            );
+            self.show_split_launch_error(message, ctx);
             return;
         };
         self.open_ssh_terminal_command(
@@ -13060,6 +13078,14 @@ impl Workspace {
         );
     }
 
+    /// A split that cannot be opened must say so instead of silently doing
+    /// nothing.
+    fn show_split_launch_error(&mut self, message: String, ctx: &mut ViewContext<Self>) {
+        self.toast_stack.update(ctx, |stack, ctx| {
+            stack.add_ephemeral_toast(DismissibleToast::error(message), ctx);
+        });
+    }
+
     #[cfg(unix)]
     fn show_stale_remote_split_error(&mut self, ctx: &mut ViewContext<Self>) {
         self.toast_stack.update(ctx, |stack, ctx| {
@@ -14119,6 +14145,7 @@ impl Workspace {
                 .as_ref(ctx)
                 .split_target_is_valid(pending.target)
         {
+            self.show_split_launch_error(crate::t!("workspace-split-target-changed"), ctx);
             return;
         }
 
@@ -14162,8 +14189,10 @@ impl Workspace {
                     Ok(Some(server)) => {
                         self.open_ssh_terminal_for_split(node_id, server, pending, ctx)
                     }
-                    Ok(None) | Err(_) => {
+                    lookup @ (Ok(None) | Err(_)) => {
                         log::warn!("Split destination host disappeared before launch");
+                        let message = host_lookup_failure_message(lookup.is_err());
+                        self.show_split_launch_error(message, ctx);
                     }
                 }
             }
@@ -28894,14 +28923,11 @@ impl TypedActionView for Workspace {
                 });
                 match server {
                     Ok(Some(server)) => self.open_ssh_terminal(node_id.clone(), server, false, ctx),
-                    _ => {
+                    lookup @ (Ok(None) | Err(_)) => {
+                        log::warn!("Couldn't resolve host {node_id} to open a terminal on");
+                        let message = host_lookup_failure_message(lookup.is_err());
                         self.toast_stack.update(ctx, |view, ctx| {
-                            view.add_ephemeral_toast(
-                                DismissibleToast::error(format!(
-                                    "Couldn't find host '{node_id}' to open a terminal on."
-                                )),
-                                ctx,
-                            );
+                            view.add_ephemeral_toast(DismissibleToast::error(message), ctx);
                         });
                     }
                 }
