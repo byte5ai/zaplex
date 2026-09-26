@@ -58,6 +58,8 @@ fn terminal_daemon_visible_errors_use_localized_messages() {
         "terminal-daemon-managed-claim-unavailable",
         "terminal-daemon-managed-generation-invalid",
         "terminal-daemon-connection-failed",
+        "terminal-daemon-connection-phase-connect",
+        "terminal-daemon-connection-phase-handshake",
         "terminal-daemon-persistent-session-active",
         "terminal-daemon-session-ended-with-code",
         "terminal-daemon-session-ended",
