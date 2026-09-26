@@ -389,8 +389,7 @@ jobs:
           cargo test --locked -p warp --lib -- \
             remote_server::headless_connect::tests \
             terminal::daemon_tty::event_loop::tests \
-            listed_fresh_daemon_session_focuses_its_existing_shell_under_file_manager \
-            rejected_adopt_cleanup_does_not_poison_retry_key
+            provisional_daemon_adoption_cleanup_covers_connection_and_tab
           cargo test --locked -p remote_server --lib client::tests
           cargo test --locked -p zap_sftp --lib session::tests
         shell: bash
@@ -462,4 +461,46 @@ jobs:
           cross_window_tab_transfer_preserves_mixed_host_identity_through_preview
           cross_window_tab_transfer_cleanup_preserves_other_tabs_remote_identity
           test_boot_registers_all_keybindings_without_panicking
+        shell: bash
+
+      # Regression tests added for the premium workspace issues (#455, #456,
+      # #458, #460, #463). Before this step they ran in no PR job, or only in
+      # the path-filtered Cockpit parity audit, so a regression in
+      # menu/pane/sftp/terminal-view code could merge unnoticed.
+      - name: cargo test (workspace session, pane and file-manager regressions)
+        run: >
+          cargo test --locked -p warp --lib --
+          parent_navigation
+          terminal::input::tests::remote_readiness_gate_
+          pending_remote_setup_command_does_not_replace_the_user_draft
+          failed_remote_setup_command_cannot_execute_later
+          only_failed_remote_readiness_exposes_retry_actions
+          corrupt_remote_restore_is_terminal_and_never_reenables_normal_input
+          classic_ssh_phase_updates_are_allowed_only_while_unbound
+          workspace::view::ssh_connect_tests::
+          exact_daemon_claim_focuses_covered_and_undo_closed_shell
+          adopted_pty_deduplication_
+          app_wide_claim_is_atomic_across_windows_and_reusable_after_release
+          favorite_host_label_is_the_direct_terminal_action
+          favorite_host_flyout_offers_new_agent_edit_and_remove
+          native_favorite_submenu_clears_external_sidecar_and_restores_menu_focus
+          unavailable_host_registry_keeps_favorite_remove_available
+          test_submenu_edge_placement_reverses_only_when_right_side_overflows
+          safe_triangle::tests::
+          terminal::view::tab_metadata::tests::
+          session_rows_keep_flexible_identity_fixed_actions_and_only_semantic_metadata
+          pane_group::pane::terminal_pane::tests::
+          sftp_manager::fm_registry::tests::captured_target_
+          equal_paths_on_different_hosts_are_distinct_target_coordinates
+          menu::tests::test_split_submenu_
+          test_primary_disabled_split_submenu_keeps_child_keyboard_accessible
+          test_submenu_parent_unhover_keeps_submenu_open
+          removed_favorite_host_is_disabled_and_never_routed
+          protected_favorite_store_disables_stale_removal
+          closing_new_session_menu_restores_focus_only_when_the_menu_owned_it
+          empty_titles_show_a_short_identity_within_the_zaplex_session_group
+          test_non_legacy_remote_session_lists_directory_entries_with_remote_server_enabled
+          test_legacy_ssh_session_waits_for_remote_server_handshake
+          test_session_context_lists_directory_entries_remotely
+          connections_registry_drives_favorite_launch_menu
         shell: bash

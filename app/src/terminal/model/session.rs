@@ -1721,6 +1721,12 @@ pub mod testing {
             }
         }
 
+        pub fn test_legacy_ssh_remote(socket_path: PathBuf) -> Self {
+            let mut session = Self::test_remote();
+            session.info = session.info.with_ssh_socket_path(socket_path);
+            session
+        }
+
         pub fn set_shell_options(&mut self, options: Option<HashSet<String>>) {
             self.info.shell = Shell::new(
                 self.info.shell.shell_type(),

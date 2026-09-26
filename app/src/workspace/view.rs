@@ -2276,6 +2276,7 @@ fn favorite_host_menu_items(
 fn favorites_menu_items_from_sources(
     favorites_store: &crate::cockpit::favorites::FavoritesStore,
     host_nodes: Vec<(String, String)>,
+    host_registry_unavailable: bool,
 ) -> Vec<MenuItem<WorkspaceAction>> {
     let persistence_is_protected = favorites_store.persistence_is_protected();
     let favorites = favorites_store
@@ -2304,10 +2305,12 @@ fn favorites_menu_items_from_sources(
                 .into_item(),
         );
     }
+    // A registry read error is not evidence that a host was removed; keep
+    // favorites from being deleted on the strength of a failed read.
     items.extend(favorite_host_menu_items(
         &favorites,
         &host_nodes,
-        persistence_is_protected,
+        persistence_is_protected || host_registry_unavailable,
     ));
     items
 }
@@ -14036,11 +14039,12 @@ impl Workspace {
             }
             Ok(out)
         });
+        let host_registry_unavailable = host_nodes.is_err();
         let host_nodes: Vec<(String, String)> = host_nodes.unwrap_or_default();
 
         let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(ctx);
         let favorites_store = favorites_store.as_ref(ctx);
-        favorites_menu_items_from_sources(favorites_store, host_nodes)
+        favorites_menu_items_from_sources(favorites_store, host_nodes, host_registry_unavailable)
     }
 
     fn open_split_launch_menu(
@@ -14142,8 +14146,14 @@ impl Workspace {
                     ctx,
                 );
                 let mut pending = pending;
+                // Only a directory of the same remote host may be reused; a
+                // local path must never be sent to the remote shell.
                 pending.inherited_remote_cwd = (source_node.as_deref() == Some(node_id.as_str()))
-                    .then(|| source_view.as_ref().and_then(|view| view.as_ref(ctx).pwd()))
+                    .then(|| {
+                        source_view
+                            .as_ref()
+                            .and_then(|view| view.as_ref(ctx).pwd_if_remote(ctx))
+                    })
                     .flatten();
                 let server = warp_ssh_manager::with_conn(|conn| {
                     Ok(warp_ssh_manager::SshRepository::get_server(conn, &node_id)?)

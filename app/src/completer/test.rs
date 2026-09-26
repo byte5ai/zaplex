@@ -17,6 +17,7 @@ use crate::terminal::model::session::{
     command_executor::testing::TestCommandExecutor, SessionInfo,
 };
 use crate::test_util::{Stub, VirtualFS};
+use crate::features::FeatureFlag;
 
 fn test_session_context(session: Session, cwd: TypedPathBuf, app: &App) -> SessionContext {
     app.read(|ctx| SessionContext::new(session, CommandRegistry::default().into(), cwd, ctx))
@@ -274,6 +275,52 @@ pub fn test_session_context_lists_directory_entries_remotely() {
                 );
             },
         );
+    });
+}
+
+/// Regression test for #471: daemon-backed and other non-legacy remote
+/// sessions never receive a remote-server handshake, so path completion must
+/// not wait for one while the remote-server feature is enabled.
+#[cfg_attr(windows, ignore = "TODO(CORE-3626)")]
+#[test]
+pub fn test_non_legacy_remote_session_lists_directory_entries_with_remote_server_enabled() {
+    let _flag_guard = FeatureFlag::SshRemoteServer.override_enabled(true);
+    App::test((), |app| async move {
+        VirtualFS::test(
+            "test_non_legacy_remote_session_lists_directory_entries_with_remote_server_enabled",
+            |dirs, mut sandbox| {
+                sandbox.mkdir("projects");
+                sandbox.touch(vec![Stub::EmptyFile("profile.txt")]);
+
+                let cwd = TypedPathBuf::from(dirs.tests().to_string_lossy().as_bytes());
+                let session = Session::test_remote();
+                assert!(!session.is_legacy_ssh_session());
+                let ctx = test_session_context(session, cwd.clone(), &app);
+
+                let entries = HashSet::<EngineDirEntry>::from_iter(Arc::unwrap_or_clone(
+                    warpui::r#async::block_on(ctx.list_directory_entries(cwd)),
+                ));
+                assert!(entries.contains(&EngineDirEntry::test_dir("projects")));
+                assert!(entries.contains(&EngineDirEntry::test_file("profile.txt")));
+            },
+        );
+    });
+}
+
+/// A legacy SSH session still waits for its remote-server handshake before
+/// listing directories, and the empty result is not cached.
+#[test]
+pub fn test_legacy_ssh_session_waits_for_remote_server_handshake() {
+    let _flag_guard = FeatureFlag::SshRemoteServer.override_enabled(true);
+    App::test((), |app| async move {
+        let cwd = working_directory();
+        let session = Session::test_legacy_ssh_remote("control_path.socket".into());
+        assert!(session.is_legacy_ssh_session());
+        let ctx = test_session_context(session, cwd.clone(), &app);
+
+        let entries = warpui::r#async::block_on(ctx.list_directory_entries(cwd.clone()));
+        assert!(entries.is_empty());
+        assert!(!ctx.cached_directory_entries.contains_key(&cwd));
     });
 }
 

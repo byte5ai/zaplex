@@ -1,4 +1,6 @@
-use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
+use crate::remote_server::manager::{
+    RemoteServerInitPhase, RemoteServerManager, RemoteServerManagerEvent,
+};
 use crate::terminal::{
     cli_agent::CLIAgent,
     cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent},
@@ -545,7 +547,15 @@ impl EventLoop {
                 phase,
                 error,
             } if *session_id == me.connection_session_id => {
-                me.on_connect_failed(&format!("{phase:?}"), error, ctx);
+                let phase = match phase {
+                    RemoteServerInitPhase::Connect => {
+                        crate::t!("terminal-daemon-connection-phase-connect")
+                    }
+                    RemoteServerInitPhase::Initialize => {
+                        crate::t!("terminal-daemon-connection-phase-handshake")
+                    }
+                };
+                me.on_connect_failed(&phase, error, ctx);
             }
             // Advisory from the daemon: this session landed inside a terminal
             // multiplexer (hand-rolled auto-attach). zaplex owns persistence

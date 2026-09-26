@@ -336,8 +336,16 @@ fn test_primary_disabled_split_submenu_keeps_child_keyboard_accessible() {
     })
 }
 
+/// Localized labels wrap interpolated item names in Unicode bidi isolates.
+fn isolated_label(item: &str, state: &str) -> String {
+    format!("\u{2068}{item}\u{2069} {state}")
+}
+
 #[test]
 fn test_split_submenu_accessibility_tracks_primary_trigger_and_nested_selection() {
+    // The accessibility labels are localized; do not rely on another test
+    // having initialized the catalog first.
+    crate::i18n::init(Some("en"));
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
 
@@ -349,7 +357,10 @@ fn test_split_submenu_accessibility_tracks_primary_trigger_and_nested_selection(
 
         menu.update(&mut app, |menu, ctx| {
             menu.set_selected_by_index(0, ctx);
-            assert_eq!(menu.menu.selected_accessibility_label(), "host Selected");
+            assert_eq!(
+                menu.menu.selected_accessibility_label(),
+                isolated_label("host", "Selected")
+            );
 
             menu.handle_action(
                 &MenuAction::HoverSubmenuWithChildren {
@@ -359,17 +370,23 @@ fn test_split_submenu_accessibility_tracks_primary_trigger_and_nested_selection(
                 },
                 ctx,
             );
-            assert_eq!(menu.menu.selected_accessibility_label(), "host Expanded");
+            assert_eq!(
+                menu.menu.selected_accessibility_label(),
+                isolated_label("host", "Expanded")
+            );
 
             menu.handle_action(&MenuAction::OpenSubmenu, ctx);
             assert_eq!(
                 menu.menu.selected_accessibility_label(),
-                "child one Selected"
+                isolated_label("child one", "Selected")
             );
 
             menu.handle_action(&MenuAction::Escape, ctx);
             assert_eq!(menu.menu.escape_accessibility_label(), "Submenu Closed");
-            assert_eq!(menu.menu.selected_accessibility_label(), "host Selected");
+            assert_eq!(
+                menu.menu.selected_accessibility_label(),
+                isolated_label("host", "Selected")
+            );
         });
     })
 }
