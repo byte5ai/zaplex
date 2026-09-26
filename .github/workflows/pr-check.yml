@@ -486,5 +486,7 @@ jobs:
           spaced_ellipsis_detection_ignores_comments_and_leading_ellipses
           cross_window_tab_transfer_preserves_mixed_host_identity_through_preview
           cross_window_tab_transfer_cleanup_preserves_other_tabs_remote_identity
+          remote_readiness_footer_names_reconnects_after_initial_readiness
+          remote_session_notice_replaces_older_notice_and_clears_on_reconnect
           test_boot_registers_all_keybindings_without_panicking
         shell: bash

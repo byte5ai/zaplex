@@ -47,6 +47,7 @@ fn terminal_daemon_visible_errors_use_localized_messages() {
         "terminal-daemon-final-output-truncated",
         "terminal-daemon-reconnected",
         "terminal-daemon-reattached",
+        "terminal-daemon-restored-truncated",
         "terminal-daemon-managed-open-unconfirmed",
         "terminal-daemon-managed-launch-failed",
         "terminal-daemon-managed-account-route-unsupported",
@@ -628,7 +629,10 @@ fn assert_fresh_open_notice_after_readiness(reconnect_before_ready: bool) {
             assert!(me.welcomed);
             assert_eq!(me.input_phase(), RemoteInputPhase::Ready);
         });
-        assert_eq!(terminal_message_count(&model, success.as_ref()), 1);
+        assert_eq!(terminal_message_count(&model, success.as_ref()), 0);
+        event_loop.read(&app, |me, _| {
+            assert_eq!(me.published_ready_notices, vec![success.clone()]);
+        });
 
         manager.update(&mut app, |_, ctx| {
             ctx.emit(output_event(
@@ -638,7 +642,10 @@ fn assert_fresh_open_notice_after_readiness(reconnect_before_ready: bool) {
                 b"later output chunk",
             ));
         });
-        assert_eq!(terminal_message_count(&model, success.as_ref()), 1);
+        assert_eq!(terminal_message_count(&model, success.as_ref()), 0);
+        event_loop.read(&app, |me, _| {
+            assert_eq!(me.published_ready_notices, vec![success.clone()]);
+        });
         for wrong_notice in [
             crate::t!("terminal-daemon-reattached", host = "test-host"),
             crate::t!("terminal-daemon-reconnected", host = "test-host"),
@@ -1159,8 +1166,11 @@ fn attach_success_notices_follow_real_ready_transitions_once_per_attach() {
             assert!(me.welcomed);
             assert_eq!(me.input_phase(), RemoteInputPhase::Ready);
         });
-        assert_eq!(terminal_message_count(&model, reattached.as_ref()), 1);
+        assert_eq!(terminal_message_count(&model, reattached.as_ref()), 0);
         assert_eq!(terminal_message_count(&model, reconnected.as_ref()), 0);
+        event_loop.read(&app, |me, _| {
+            assert_eq!(me.published_ready_notices, vec![reattached.clone()]);
+        });
 
         let reconnect_base_seq = event_loop.read(&app, |me, _| me.last_seq);
         event_loop.update(&mut app, |me, _| me.begin_transport_reconnect_for_test());
@@ -1183,8 +1193,14 @@ fn attach_success_notices_follow_real_ready_transitions_once_per_attach() {
             assert!(me.pending_ready_notice.is_none());
             assert_eq!(me.input_phase(), RemoteInputPhase::Ready);
         });
-        assert_eq!(terminal_message_count(&model, reattached.as_ref()), 1);
-        assert_eq!(terminal_message_count(&model, reconnected.as_ref()), 1);
+        assert_eq!(terminal_message_count(&model, reattached.as_ref()), 0);
+        assert_eq!(terminal_message_count(&model, reconnected.as_ref()), 0);
+        event_loop.read(&app, |me, _| {
+            assert_eq!(
+                me.published_ready_notices,
+                vec![reattached.clone(), reconnected.clone()]
+            );
+        });
 
         manager.update(&mut app, |_, ctx| {
             ctx.emit(output_event(
@@ -1194,8 +1210,107 @@ fn attach_success_notices_follow_real_ready_transitions_once_per_attach() {
                 b"post-reconnect output chunk",
             ));
         });
-        assert_eq!(terminal_message_count(&model, reattached.as_ref()), 1);
-        assert_eq!(terminal_message_count(&model, reconnected.as_ref()), 1);
+        assert_eq!(terminal_message_count(&model, reattached.as_ref()), 0);
+        assert_eq!(terminal_message_count(&model, reconnected.as_ref()), 0);
+        event_loop.read(&app, |me, _| {
+            assert_eq!(
+                me.published_ready_notices,
+                vec![reattached.clone(), reconnected.clone()]
+            );
+        });
+    });
+}
+
+#[test]
+fn truncated_reconnect_replay_does_not_claim_nothing_was_lost() {
+    crate::i18n::init(Some("en"));
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(621u64);
+        let (manager, event_loop, model, wakeups) =
+            start_adopted_loop_unbootstrapped(&mut app, conn);
+        let reattached = crate::t!("terminal-daemon-reattached", host = "test-host");
+        let reconnected = crate::t!("terminal-daemon-reconnected", host = "test-host");
+        let truncated = crate::t!("terminal-daemon-restored-truncated", host = "test-host");
+
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: 0,
+                    replay: b"historical output".to_vec(),
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+        let ready = init_shell_dcs();
+        let ready_seq = event_loop.read(&app, |me, _| me.last_seq);
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(output_event(conn, OUR_PTY, ready_seq, &ready));
+        });
+        event_loop.read(&app, |me, _| {
+            assert_eq!(me.input_phase(), RemoteInputPhase::Ready);
+            assert_eq!(me.published_ready_notices, vec![reattached.clone()]);
+        });
+
+        // The daemon's ring buffer moved past what this client has seen.
+        let gap_base_seq = event_loop.read(&app, |me, _| me.last_seq) + 4096;
+        event_loop.update(&mut app, |me, _| me.begin_transport_reconnect_for_test());
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: gap_base_seq,
+                    replay: Vec::new(),
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+        event_loop.read(&app, |me, _| {
+            assert_eq!(me.input_phase(), RemoteInputPhase::Ready);
+            assert_eq!(
+                me.published_ready_notices,
+                vec![reattached.clone(), truncated.clone()]
+            );
+        });
+
+        // A later gap-free reconnect may report a full restore again.
+        let clean_base_seq = event_loop.read(&app, |me, _| me.last_seq);
+        event_loop.update(&mut app, |me, _| me.begin_transport_reconnect_for_test());
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: clean_base_seq,
+                    replay: Vec::new(),
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+        event_loop.read(&app, |me, _| {
+            assert_eq!(
+                me.published_ready_notices,
+                vec![reattached.clone(), truncated.clone(), reconnected.clone()]
+            );
+        });
+        for notice in [&reattached, &truncated, &reconnected] {
+            assert_eq!(terminal_message_count(&model, notice.as_ref()), 0);
+        }
     });
 }
 
