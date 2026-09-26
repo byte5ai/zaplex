@@ -338,6 +338,9 @@ fn test_primary_disabled_split_submenu_keeps_child_keyboard_accessible() {
 
 #[test]
 fn test_split_submenu_accessibility_tracks_primary_trigger_and_nested_selection() {
+    // The accessibility labels are localized; do not rely on another test
+    // having initialized the catalog first.
+    crate::i18n::init(Some("en"));
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
 
