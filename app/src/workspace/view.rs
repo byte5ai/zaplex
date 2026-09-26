@@ -2276,6 +2276,7 @@ fn favorite_host_menu_items(
 fn favorites_menu_items_from_sources(
     favorites_store: &crate::cockpit::favorites::FavoritesStore,
     host_nodes: Vec<(String, String)>,
+    host_registry_unavailable: bool,
 ) -> Vec<MenuItem<WorkspaceAction>> {
     let persistence_is_protected = favorites_store.persistence_is_protected();
     let favorites = favorites_store
@@ -2304,10 +2305,12 @@ fn favorites_menu_items_from_sources(
                 .into_item(),
         );
     }
+    // A registry read error is not evidence that a host was removed; keep
+    // favorites from being deleted on the strength of a failed read.
     items.extend(favorite_host_menu_items(
         &favorites,
         &host_nodes,
-        persistence_is_protected,
+        persistence_is_protected || host_registry_unavailable,
     ));
     items
 }
@@ -14036,11 +14039,12 @@ impl Workspace {
             }
             Ok(out)
         });
+        let host_registry_unavailable = host_nodes.is_err();
         let host_nodes: Vec<(String, String)> = host_nodes.unwrap_or_default();
 
         let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(ctx);
         let favorites_store = favorites_store.as_ref(ctx);
-        favorites_menu_items_from_sources(favorites_store, host_nodes)
+        favorites_menu_items_from_sources(favorites_store, host_nodes, host_registry_unavailable)
     }
 
     fn open_split_launch_menu(

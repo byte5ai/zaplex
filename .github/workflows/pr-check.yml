@@ -502,4 +502,5 @@ jobs:
           test_non_legacy_remote_session_lists_directory_entries_with_remote_server_enabled
           test_legacy_ssh_session_waits_for_remote_server_handshake
           test_session_context_lists_directory_entries_remotely
+          connections_registry_drives_favorite_launch_menu
         shell: bash

@@ -1492,12 +1492,34 @@ fn connections_registry_drives_favorite_launch_menu() {
         });
 
         let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(&app);
-        let menu_items = favorites_store.read(&app, |store, _| {
+        let (menu_items, unreadable_registry_items) = favorites_store.read(&app, |store, _| {
             assert_eq!(store.items().len(), 1);
             assert_eq!(store.items()[0].label, "stale-display-name");
             assert!(store.contains(zaplex_cockpit::FavoriteKind::Host, &favorite_server.id));
-            super::favorites_menu_items_from_sources(store, registered_hosts)
+            (
+                super::favorites_menu_items_from_sources(store, registered_hosts, false),
+                super::favorites_menu_items_from_sources(store, Vec::new(), true),
+            )
         });
+
+        // A failed registry read must not offer deleting the favorite as if
+        // its host had been removed.
+        let unreadable_registry_removals = unreadable_registry_items
+            .iter()
+            .filter_map(|item| match item {
+                MenuItem::Submenu { menu, .. } => menu.items().last(),
+                MenuItem::Item(_)
+                | MenuItem::Separator
+                | MenuItem::ItemsRow { .. }
+                | MenuItem::Header { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(unreadable_registry_removals.len(), 1);
+        let MenuItem::Item(remove) = unreadable_registry_removals[0] else {
+            panic!("the favorite flyout must end with its removal item");
+        };
+        assert!(remove.is_disabled());
+        assert!(remove.on_select_action().is_none());
 
         let favorite_submenus = menu_items
             .iter()
