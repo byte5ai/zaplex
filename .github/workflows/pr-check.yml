@@ -463,3 +463,34 @@ jobs:
           cross_window_tab_transfer_cleanup_preserves_other_tabs_remote_identity
           test_boot_registers_all_keybindings_without_panicking
         shell: bash
+
+      # Regression tests added for the premium workspace issues (#455, #456,
+      # #458, #460, #463). Before this step they ran in no PR job, or only in
+      # the path-filtered Cockpit parity audit, so a regression in
+      # menu/pane/sftp/terminal-view code could merge unnoticed.
+      - name: cargo test (workspace session, pane and file-manager regressions)
+        run: >
+          cargo test --locked -p warp --lib --
+          parent_navigation
+          terminal::input::tests::remote_readiness_gate_
+          pending_remote_setup_command_does_not_replace_the_user_draft
+          failed_remote_setup_command_cannot_execute_later
+          only_failed_remote_readiness_exposes_retry_actions
+          corrupt_remote_restore_is_terminal_and_never_reenables_normal_input
+          classic_ssh_phase_updates_are_allowed_only_while_unbound
+          workspace::view::ssh_connect_tests::
+          exact_daemon_claim_focuses_covered_and_undo_closed_shell
+          adopted_pty_deduplication_
+          app_wide_claim_is_atomic_across_windows_and_reusable_after_release
+          favorite_host_label_is_the_direct_terminal_action
+          favorite_host_flyout_offers_new_agent_edit_and_remove
+          native_favorite_submenu_clears_external_sidecar_and_restores_menu_focus
+          unavailable_host_registry_keeps_favorite_remove_available
+          test_submenu_edge_placement_reverses_only_when_right_side_overflows
+          safe_triangle::tests::
+          terminal::view::tab_metadata::tests::
+          session_rows_keep_flexible_identity_fixed_actions_and_only_semantic_metadata
+          pane_group::pane::terminal_pane::tests::
+          sftp_manager::fm_registry::tests::captured_target_
+          equal_paths_on_different_hosts_are_distinct_target_coordinates
+        shell: bash
