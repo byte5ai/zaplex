@@ -2808,7 +2808,10 @@ impl SftpBrowserView {
             let Some(name) = source.file_name() else {
                 continue;
             };
-            let dest = normalize_remote_path(&target_dir.join(name));
+            let dest = normalize_browser_path(
+                &target_dir.join(name),
+                matches!(guard.target.fs, FsNamespace::Local),
+            );
             let Some(source_entry) = self.entries.iter().find(|entry| &entry.path == source) else {
                 continue;
             };
@@ -3134,7 +3137,10 @@ impl SftpBrowserView {
                     continue;
                 }
             };
-            let dest = normalize_remote_path(&target_dir.join(name));
+            let dest = normalize_browser_path(
+                &target_dir.join(name),
+                matches!(guard.target.fs, FsNamespace::Local),
+            );
             if is_dir {
                 // Recursively copy/move the directory across the connection: the
                 // tree is enumerated + created off-thread, then a transfer is
@@ -3938,7 +3944,7 @@ impl SftpBrowserView {
 
     /// Request a path and commit it to the view/history only after listing it.
     fn navigate_to(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {
-        let path = normalize_remote_path(&path);
+        let path = normalize_browser_path(&path, self.node_id.is_empty());
         if path == self.current_path {
             return;
         }
@@ -3961,7 +3967,7 @@ impl SftpBrowserView {
     /// Go up to the parent directory
     fn go_up(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(parent) = self.current_path.parent() {
-            let parent = normalize_remote_path(parent);
+            let parent = normalize_browser_path(parent, self.node_id.is_empty());
             if parent != self.current_path {
                 let departed_directory = self.current_path.clone();
                 let mut history = self.path_history.clone();
@@ -4871,13 +4877,15 @@ impl SftpBrowserView {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let remote_path = match build_upload_remote_path(&self.current_path, &file_name) {
-            Some(p) => p,
-            None => {
-                self.show_error_toast(crate::t!("fm-toast-invalid-filename-chars"), ctx);
-                return;
-            }
-        };
+        let remote_path =
+            match build_upload_remote_path(&self.current_path, &file_name, self.node_id.is_empty())
+            {
+                Some(p) => p,
+                None => {
+                    self.show_error_toast(crate::t!("fm-toast-invalid-filename-chars"), ctx);
+                    return;
+                }
+            };
 
         // Check whether a file with the same name already exists in the remote directory
         let existing = self
@@ -5617,20 +5625,34 @@ fn local_entry_exists(path: &Path) -> Result<bool, sftp_ops::SftpOpsError> {
     }
 }
 
+/// Remote paths use POSIX separators; local paths retain their exact native
+/// bytes, including Unix backslash names and Windows verbatim prefixes.
+fn normalize_browser_path(path: &Path, local: bool) -> PathBuf {
+    if local {
+        path.to_path_buf()
+    } else {
+        normalize_remote_path(path)
+    }
+}
+
 /// Build the full path for a renamed entry
-fn build_rename_path(original_path: &Path, new_name: &str) -> Option<PathBuf> {
+fn build_rename_path(original_path: &Path, new_name: &str, local: bool) -> Option<PathBuf> {
     let parent = original_path.parent().unwrap_or(Path::new("/"));
-    safe_join_name(parent, new_name).map(|p| normalize_remote_path(&p))
+    safe_join_name(parent, new_name).map(|p| normalize_browser_path(&p, local))
 }
 
 /// Build the full path for a new folder
-fn build_new_folder_path(parent_path: &Path, folder_name: &str) -> Option<PathBuf> {
-    safe_join_name(parent_path, folder_name).map(|p| normalize_remote_path(&p))
+fn build_new_folder_path(parent_path: &Path, folder_name: &str, local: bool) -> Option<PathBuf> {
+    safe_join_name(parent_path, folder_name).map(|p| normalize_browser_path(&p, local))
 }
 
 /// Build the remote path for an uploaded file
-fn build_upload_remote_path(current_path: &Path, local_file_name: &str) -> Option<PathBuf> {
-    safe_join_name(current_path, local_file_name).map(|p| normalize_remote_path(&p))
+fn build_upload_remote_path(
+    current_path: &Path,
+    local_file_name: &str,
+    local: bool,
+) -> Option<PathBuf> {
+    safe_join_name(current_path, local_file_name).map(|p| normalize_browser_path(&p, local))
 }
 
 impl Entity for SftpBrowserView {
@@ -5810,16 +5832,18 @@ impl TypedActionView for SftpBrowserView {
                         self.show_error_toast(crate::t!("fm-toast-name-empty"), ctx);
                         return;
                     }
-                    let new_path = match build_rename_path(&original_path, &new_name) {
-                        Some(p) => p,
-                        None => {
-                            self.show_error_toast(
-                                crate::t!("fm-toast-name-invalid-separators"),
-                                ctx,
-                            );
-                            return;
-                        }
-                    };
+                    let new_path =
+                        match build_rename_path(&original_path, &new_name, self.node_id.is_empty())
+                        {
+                            Some(p) => p,
+                            None => {
+                                self.show_error_toast(
+                                    crate::t!("fm-toast-name-invalid-separators"),
+                                    ctx,
+                                );
+                                return;
+                            }
+                        };
 
                     if let Some(sftp) = &self.sftp {
                         let sftp = sftp.clone();
@@ -5868,7 +5892,11 @@ impl TypedActionView for SftpBrowserView {
                         self.show_error_toast(crate::t!("fm-toast-folder-name-empty"), ctx);
                         return;
                     }
-                    let folder_path = match build_new_folder_path(parent_path, &folder_name) {
+                    let folder_path = match build_new_folder_path(
+                        parent_path,
+                        &folder_name,
+                        self.node_id.is_empty(),
+                    ) {
                         Some(p) => p,
                         None => {
                             self.show_error_toast(
@@ -6115,7 +6143,7 @@ impl TypedActionView for SftpBrowserView {
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
                     let target_path = match safe_join_name(target_dir, &file_name) {
-                        Some(p) => normalize_remote_path(&p),
+                        Some(p) => normalize_browser_path(&p, self.node_id.is_empty()),
                         None => {
                             self.show_error_toast(crate::t!("fm-toast-invalid-target-path"), ctx);
                             self.dialog = None;

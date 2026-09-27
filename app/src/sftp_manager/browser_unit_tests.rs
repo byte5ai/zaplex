@@ -176,7 +176,7 @@ fn test_normalize_remote_path_mixed() {
 #[test]
 fn test_build_rename_path_basic() {
     let original = PathBuf::from("/home/user/old.txt");
-    let result = build_rename_path(&original, "new.txt");
+    let result = build_rename_path(&original, "new.txt", false);
     assert_eq!(result, Some(PathBuf::from("/home/user/new.txt")));
 }
 
@@ -184,7 +184,7 @@ fn test_build_rename_path_basic() {
 #[test]
 fn test_build_rename_path_no_parent() {
     let original = PathBuf::from("old.txt");
-    let result = build_rename_path(&original, "new.txt");
+    let result = build_rename_path(&original, "new.txt", false);
     assert_eq!(result, Some(PathBuf::from("new.txt")));
 }
 
@@ -192,7 +192,7 @@ fn test_build_rename_path_no_parent() {
 #[test]
 fn test_build_rename_path_normalizes() {
     let original = PathBuf::from("/home/user/old.txt");
-    let result = build_rename_path(&original, "new.txt").unwrap();
+    let result = build_rename_path(&original, "new.txt", false).unwrap();
     assert!(!result.to_string_lossy().contains('\\'));
 }
 
@@ -200,10 +200,10 @@ fn test_build_rename_path_normalizes() {
 #[test]
 fn test_build_rename_path_rejects_traversal() {
     let original = PathBuf::from("/home/user/old.txt");
-    assert_eq!(build_rename_path(&original, "../etc/passwd"), None);
-    assert_eq!(build_rename_path(&original, "/etc/passwd"), None);
-    assert_eq!(build_rename_path(&original, "sub/name"), None);
-    assert_eq!(build_rename_path(&original, ""), None);
+    assert_eq!(build_rename_path(&original, "../etc/passwd", false), None);
+    assert_eq!(build_rename_path(&original, "/etc/passwd", false), None);
+    assert_eq!(build_rename_path(&original, "sub/name", false), None);
+    assert_eq!(build_rename_path(&original, "", false), None);
 }
 
 // ============================================================
@@ -214,7 +214,7 @@ fn test_build_rename_path_rejects_traversal() {
 #[test]
 fn test_build_new_folder_path_basic() {
     let parent = PathBuf::from("/home/user");
-    let result = build_new_folder_path(&parent, "new_dir");
+    let result = build_new_folder_path(&parent, "new_dir", false);
     assert_eq!(result, Some(PathBuf::from("/home/user/new_dir")));
 }
 
@@ -222,7 +222,7 @@ fn test_build_new_folder_path_basic() {
 #[test]
 fn test_build_new_folder_path_normalizes() {
     let parent = PathBuf::from("/home/user");
-    let result = build_new_folder_path(&parent, "test").unwrap();
+    let result = build_new_folder_path(&parent, "test", false).unwrap();
     assert!(!result.to_string_lossy().contains('\\'));
 }
 
@@ -230,10 +230,10 @@ fn test_build_new_folder_path_normalizes() {
 #[test]
 fn test_build_new_folder_path_rejects_traversal() {
     let parent = PathBuf::from("/home/user");
-    assert_eq!(build_new_folder_path(&parent, "../etc"), None);
-    assert_eq!(build_new_folder_path(&parent, "/etc"), None);
-    assert_eq!(build_new_folder_path(&parent, "sub/name"), None);
-    assert_eq!(build_new_folder_path(&parent, ""), None);
+    assert_eq!(build_new_folder_path(&parent, "../etc", false), None);
+    assert_eq!(build_new_folder_path(&parent, "/etc", false), None);
+    assert_eq!(build_new_folder_path(&parent, "sub/name", false), None);
+    assert_eq!(build_new_folder_path(&parent, "", false), None);
 }
 
 // ============================================================
@@ -244,7 +244,7 @@ fn test_build_new_folder_path_rejects_traversal() {
 #[test]
 fn test_build_upload_remote_path_basic() {
     let current = PathBuf::from("/home/user");
-    let result = build_upload_remote_path(&current, "upload.txt");
+    let result = build_upload_remote_path(&current, "upload.txt", false);
     assert_eq!(result, Some(PathBuf::from("/home/user/upload.txt")));
 }
 
@@ -252,7 +252,7 @@ fn test_build_upload_remote_path_basic() {
 #[test]
 fn test_build_upload_remote_path_normalizes() {
     let current = PathBuf::from("/home/user");
-    let result = build_upload_remote_path(&current, "file.txt");
+    let result = build_upload_remote_path(&current, "file.txt", false);
     assert!(result.is_some());
     assert!(!result.unwrap().to_string_lossy().contains('\\'));
 }
@@ -261,9 +261,15 @@ fn test_build_upload_remote_path_normalizes() {
 #[test]
 fn test_build_upload_remote_path_rejects_dangerous() {
     let current = PathBuf::from("/home/user");
-    assert_eq!(build_upload_remote_path(&current, "../etc/passwd"), None);
-    assert_eq!(build_upload_remote_path(&current, ""), None);
-    assert_eq!(build_upload_remote_path(&current, "/etc/passwd"), None);
+    assert_eq!(
+        build_upload_remote_path(&current, "../etc/passwd", false),
+        None
+    );
+    assert_eq!(build_upload_remote_path(&current, "", false), None);
+    assert_eq!(
+        build_upload_remote_path(&current, "/etc/passwd", false),
+        None
+    );
 }
 
 #[test]
@@ -276,23 +282,23 @@ fn safe_name_helpers_accept_embedded_double_dots() {
         Some(parent.join("notes..txt"))
     );
     assert_eq!(
-        build_rename_path(&original, "v1..v2"),
+        build_rename_path(&original, "v1..v2", false),
         Some(parent.join("v1..v2"))
     );
     assert_eq!(
-        build_new_folder_path(&parent, "archive.tar..gz"),
+        build_new_folder_path(&parent, "archive.tar..gz", false),
         Some(parent.join("archive.tar..gz"))
     );
     assert_eq!(
-        build_upload_remote_path(&parent, "notes..txt"),
+        build_upload_remote_path(&parent, "notes..txt", false),
         Some(parent.join("notes..txt"))
     );
 
     for unsafe_name in ["", ".", "..", "child/name", "child\\name", "/absolute"] {
         assert_eq!(safe_join_name(&parent, unsafe_name), None);
-        assert_eq!(build_rename_path(&original, unsafe_name), None);
-        assert_eq!(build_new_folder_path(&parent, unsafe_name), None);
-        assert_eq!(build_upload_remote_path(&parent, unsafe_name), None);
+        assert_eq!(build_rename_path(&original, unsafe_name, false), None);
+        assert_eq!(build_new_folder_path(&parent, unsafe_name, false), None);
+        assert_eq!(build_upload_remote_path(&parent, unsafe_name, false), None);
     }
 }
 
@@ -602,4 +608,73 @@ fn escape_dismisses_focused_overlays_through_real_key_routing() {
             b"keep"
         );
     });
+}
+
+#[cfg(unix)]
+#[test]
+fn local_navigation_keeps_literal_backslash_names_distinct_from_nested_paths() {
+    use crate::sftp_manager::browser_integration_tests::initialize_app;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let directory = tempfile::tempdir().unwrap();
+        let literal = directory.path().join(r"a\b");
+        let nested = directory.path().join("a/b");
+        std::fs::create_dir_all(literal.join("child")).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(literal.join("literal.txt"), b"literal").unwrap();
+        std::fs::write(nested.join("nested.txt"), b"nested").unwrap();
+        let (_, browser) = app.add_window(warpui::platform::WindowStyle::NotStealFocus, |ctx| {
+            SftpBrowserView::new_local(directory.path().to_path_buf(), ctx)
+        });
+        browser.update(&mut app, |browser, ctx| {
+            browser.navigate_to(literal.clone(), ctx);
+            assert_eq!(browser.current_path, literal);
+            assert!(browser
+                .entries
+                .iter()
+                .any(|entry| entry.name == "literal.txt"));
+            assert!(!browser
+                .entries
+                .iter()
+                .any(|entry| entry.name == "nested.txt"));
+            browser.navigate_to(literal.join("child"), ctx);
+            browser.go_up(ctx);
+            assert_eq!(browser.current_path, literal);
+            assert_eq!(
+                build_new_folder_path(&literal, "new", true),
+                Some(literal.join("new"))
+            );
+            assert_eq!(
+                build_rename_path(&literal.join("old"), "new", true),
+                Some(literal.join("new"))
+            );
+            assert_eq!(
+                build_upload_remote_path(&literal, "upload", true),
+                Some(literal.join("upload"))
+            );
+        });
+        assert_eq!(std::fs::read(nested.join("nested.txt")).unwrap(), b"nested");
+    });
+}
+
+#[cfg(windows)]
+#[test]
+fn local_path_formatting_preserves_windows_verbatim_disk_and_unc_prefixes() {
+    for value in [r"\\?\C:\work\child", r"\\?\UNC\server\share\child"] {
+        let path = Path::new(value);
+        assert_eq!(
+            normalize_browser_path(path, true).as_os_str(),
+            path.as_os_str()
+        );
+        assert_eq!(
+            build_new_folder_path(path, "new", true),
+            Some(path.join("new"))
+        );
+    }
+    let remote = Path::new(r"\srv\work\child");
+    assert_eq!(
+        normalize_browser_path(remote, false),
+        normalize_remote_path(remote)
+    );
 }

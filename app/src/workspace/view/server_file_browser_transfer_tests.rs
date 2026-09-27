@@ -241,15 +241,47 @@ fn spawn_safe_file_test_client(
                 Err(remote_server::protocol::ProtocolError::UnexpectedEof) => break,
                 Err(error) => panic!("safe-file test transport failed: {error}"),
             };
-            let Some(client_message::Message::SafeFile(request)) = message.message else {
-                panic!("safe-file test received an unexpected request");
+            let response = match message.message {
+                Some(client_message::Message::SafeFile(request)) => {
+                    server_message::Message::SafeFileResponse(server.handle(connection_id, request))
+                }
+                Some(client_message::Message::ListDirectory(request)) => {
+                    let entries = fs::read_dir(&request.path)
+                        .unwrap()
+                        .map(|entry| {
+                            let entry = entry.unwrap();
+                            let metadata = entry.metadata().unwrap();
+                            remote_server::proto::DirEntry {
+                                name: entry.file_name().to_string_lossy().into_owned(),
+                                is_dir: metadata.is_dir(),
+                                kind: if metadata.is_dir() {
+                                    FileSystemEntryKind::Directory as i32
+                                } else {
+                                    FileSystemEntryKind::File as i32
+                                },
+                                size_bytes: Some(metadata.len()),
+                                modified_epoch_millis: None,
+                            }
+                        })
+                        .collect();
+                    server_message::Message::ListDirectoryResponse(
+                        remote_server::proto::ListDirectoryResponse {
+                            result: Some(list_directory_response::Result::Success(
+                                remote_server::proto::ListDirectorySuccess {
+                                    entries,
+                                    canonical_path: request.path,
+                                },
+                            )),
+                        },
+                    )
+                }
+                _ => panic!("safe-file test received an unexpected request"),
             };
-            let response = server.handle(connection_id, request);
             remote_server::protocol::write_server_message(
                 &mut writer,
                 &ServerMessage {
                     request_id: message.request_id,
-                    message: Some(server_message::Message::SafeFileResponse(response)),
+                    message: Some(response),
                 },
             )
             .await
@@ -656,4 +688,143 @@ fn skip_and_overwrite_keep_their_conflict_semantics() {
     assert_eq!(skipped.len(), 1);
     assert_eq!(skipped[0].final_remote_path, "/remote/new.txt");
     assert_eq!(overwritten.len(), 2);
+}
+
+#[test]
+fn clearing_completed_transfers_preserves_indices_until_all_callbacks_finish() {
+    warpui::App::test((), |mut app| async move {
+        crate::test_util::settings::initialize_settings_for_tests(&mut app);
+        crate::appearance::register(&mut app);
+        let (_, browser) = app.add_window(
+            warpui::platform::WindowStyle::NotStealFocus,
+            ServerFileBrowserView::new,
+        );
+        browser.update(&mut app, |browser, ctx| {
+            let task = |name: &str, status| ServerFileUploadTask {
+                local_path: PathBuf::from(name),
+                file_name: name.to_string(),
+                final_remote_path: format!("/remote/{name}"),
+                staging_remote_path: format!("/staging/{name}"),
+                total_bytes: 4,
+                uploaded_bytes: Arc::new(AtomicU64::new(4)),
+                status,
+            };
+            browser.upload_batches.push(ServerFileUploadBatch {
+                staging_root: "/staging".to_string(),
+                staging_batch_handle: None,
+                staging_handles: HashMap::new(),
+                remote_directory: "/remote".to_string(),
+                conflict_policy: UploadConflictPolicy::OverwriteAll,
+                directory_roots: Vec::new(),
+                phase: UploadBatchPhase::Uploading,
+                tasks: vec![
+                    task("done", UploadTaskStatus::Completed),
+                    task("active", UploadTaskStatus::Uploading),
+                ],
+                next_task_index: 2,
+            });
+            browser.active_upload_batch_index = Some(0);
+            browser.upload_pipeline_claimed = true;
+            browser.clear_completed_uploads(ctx);
+            assert_eq!(browser.upload_batches[0].tasks.len(), 2);
+            assert_eq!(browser.upload_batches[0].tasks[1].file_name, "active");
+            browser.active_upload_batch_index = None;
+            browser.clear_completed_uploads(ctx);
+            assert_eq!(
+                browser.upload_batches[0].tasks.len(),
+                2,
+                "staging/promotion still owns the pipeline"
+            );
+            browser.upload_pipeline_claimed = false;
+            browser.active_download_batch_index = Some(0);
+            browser.clear_completed_uploads(ctx);
+            assert_eq!(
+                browser.upload_batches[0].tasks.len(),
+                2,
+                "a download callback still owns its indices"
+            );
+            browser.active_download_batch_index = None;
+            browser.upload_batches[0].tasks[1].status = UploadTaskStatus::Completed;
+            browser.clear_completed_uploads(ctx);
+            assert!(browser.upload_batches.is_empty());
+        });
+    });
+}
+
+#[cfg(windows)]
+#[test]
+fn download_names_cannot_switch_windows_drives_or_write_alternate_streams() {
+    for name in ["D:relative", "C:", "file.txt:stream", "file.txt::$DATA"] {
+        assert!(
+            validate_download_entry_name(name).is_err(),
+            "accepted {name:?}"
+        );
+    }
+    assert!(validate_download_entry_name("ordinary.txt").is_ok());
+    // Remote rename syntax remains independent of the local Windows filesystem.
+    assert!(validate_remote_entry_name("file:remote-name").is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn directory_download_manifest_preserves_empty_paths_without_preflight_writes() {
+    warpui::r#async::block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        fs::create_dir_all(source.join("nested/empty")).unwrap();
+        fs::create_dir(source.join("empty-root")).unwrap();
+        fs::write(source.join("file.txt"), b"data").unwrap();
+        let destination = directory.path().join("download");
+        let (client, executor, server_task) =
+            spawn_safe_file_test_client(directory.path().join("journal"));
+        let plan = collect_download_files(
+            client.clone(),
+            source.to_string_lossy().into_owned(),
+            destination.clone(),
+            "source".to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(plan.files.len(), 1);
+        assert!(plan.directories.contains(&destination));
+        assert!(plan.directories.contains(&destination.join("nested/empty")));
+        assert!(plan.directories.contains(&destination.join("empty-root")));
+        assert!(
+            !destination.exists(),
+            "enumeration/cancel must not create directories"
+        );
+        prepare_download_directories(&plan.directories).unwrap();
+        assert!(destination.join("nested/empty").is_dir());
+        assert!(destination.join("empty-root").is_dir());
+        assert!(!destination.join("file.txt").exists());
+
+        let empty_destination = directory.path().join("only-empty");
+        let empty = collect_download_files(
+            client.clone(),
+            source.join("empty-root").to_string_lossy().into_owned(),
+            empty_destination.clone(),
+            "empty-root".to_string(),
+        )
+        .await
+        .unwrap();
+        assert!(empty.files.is_empty());
+        assert_eq!(empty.directories, vec![empty_destination.clone()]);
+        assert!(!empty_destination.exists());
+        prepare_download_directories(&empty.directories).unwrap();
+        assert!(empty_destination.is_dir());
+        drop(client);
+        drop(executor);
+        server_task.abort();
+    });
+}
+
+#[test]
+fn directory_download_rechecks_conflicts_before_creating_empty_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let fresh = directory.path().join("fresh");
+    let changed = directory.path().join("changed");
+    fs::write(&changed, b"new file in the destination").unwrap();
+    assert!(prepare_download_directories(&[fresh.clone(), changed.clone()]).is_err());
+    assert!(!fresh.exists());
+    assert_eq!(fs::read(changed).unwrap(), b"new file in the destination");
 }

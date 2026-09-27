@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Dateiübertragungen (#245/#464) erhalten leere Ordner und halten laufende Rückrufe beim Aufräumen abgeschlossener Transfers gültig. Lokale Pfade bleiben in ihrem nativen Format erhalten; Windows-Downloads weisen Laufwerkswechsel und alternative Datenströme in entfernten Dateinamen zurück.
+
 - Mehrhost-Terminals (#245/#456) übernehmen Ausgabe, Sitzungsende und Hinweise nur von ihrer eigenen Daemon-Verbindung, auch wenn ein anderer Host dieselbe PTY-Kennung verwendet.
 
 - Lokale Dateiansichten unter Windows (#245) erhalten absolute Laufwerks- und UNC-Pfade; abgeschottete Testdateisysteme bleiben getrennt. Escape schließt im fokussierten Dateimanager zuerst das Kontextmenü, anschließend den Dialog. SFTP-Wiederherstellung behält mehrere offene Vorgänge am selben Pfad und bereits erreichte Wiederherstellungsergebnisse über spätere Fehler und erneute Versuche hinweg.
