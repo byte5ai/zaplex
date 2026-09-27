@@ -3940,9 +3940,12 @@ fn cli_agent_rich_input_hint_text_mentions_active_cli_agent() {
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         for (agent, expected_hint_text) in [
-            (CLIAgent::Claude, "Enter prompt for Claude Code..."),
-            (CLIAgent::Gemini, "Enter prompt for Gemini..."),
-            (CLIAgent::Codex, "Enter prompt for Codex..."),
+            (
+                CLIAgent::Claude,
+                "Enter prompt for \u{2068}Claude Code\u{2069}...",
+            ),
+            (CLIAgent::Gemini, "Enter prompt for \u{2068}Gemini\u{2069}..."),
+            (CLIAgent::Codex, "Enter prompt for \u{2068}Codex\u{2069}..."),
             (CLIAgent::Unknown, "Tell the agent what to build..."),
         ] {
             let terminal = open_cli_agent_rich_input_for_agent(&mut app, agent);
@@ -5594,17 +5597,18 @@ fn completed_su_command_cannot_write_password_to_the_next_command() {
 fn interrupted_su_confirmation_cannot_revive_or_inject_a_password() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        let terminal = add_window_with_terminal(&mut app, None);
         let writes = Rc::new(RefCell::new(Vec::new()));
-        let observed = writes.clone();
-        app.update(|ctx| {
-            ctx.subscribe_to_view(&terminal, move |_, event, _| {
-                if let Event::WriteBytesToPty { bytes } = event {
-                    observed.borrow_mut().push(bytes.to_vec());
-                }
-            });
-        });
         for interrupt in [escape_sequences::C0::ETX, escape_sequences::C0::EOT] {
+            // Each interrupt starts from its own executing command and terminal grid.
+            let terminal = add_window_with_terminal(&mut app, None);
+            let observed = writes.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                    if let Event::WriteBytesToPty { bytes } = event {
+                        observed.borrow_mut().push(bytes.to_vec());
+                    }
+                });
+            });
             terminal.update(&mut app, |view, ctx| {
                 start_su_test_command(view);
                 let request = view.begin_su_root_confirmation().unwrap();

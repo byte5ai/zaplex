@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::terminal::shared_session::protocol::SessionSourceType;
 use crate::terminal::shared_session::protocol::{ParticipantId, ParticipantList, SessionId};
+use remote_server::manager::RemoteServerManager;
 use warpui::platform::WindowStyle;
 use warpui::{App, ViewHandle};
 
@@ -17,6 +18,7 @@ use crate::GlobalResourceHandles;
 /// set up for the viewer.
 pub fn terminal_view_for_viewer(app: &mut App) -> ViewHandle<TerminalView> {
     initialize_app_for_terminal_view(app);
+    app.add_singleton_model(RemoteServerManager::new);
 
     let global_resource_handles = GlobalResourceHandles::mock(app);
     let GlobalResourceHandles {

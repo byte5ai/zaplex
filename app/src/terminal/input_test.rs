@@ -35,6 +35,7 @@ use crate::terminal::cli_agent_sessions::{
 use crate::terminal::input::slash_command_model::SlashCommandEntryState;
 use crate::terminal::input::slash_commands::SlashCommandsEvent;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
+use remote_server::manager::RemoteServerManager;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
@@ -121,6 +122,7 @@ pub fn initialize_app(app: &mut App) {
     // Initialize any global models required by the Input view.
     app.add_singleton_model(|_| ChangelogModel::new(Arc::new(http_client::Client::new())));
     app.add_singleton_model(|_| NetworkStatus::new());
+    app.add_singleton_model(RemoteServerManager::new);
     app.add_singleton_model(|_| SystemStats::new());
     app.add_singleton_model(|_| Prompt::mock());
     app.add_singleton_model(ObjectStoreModel::mock);

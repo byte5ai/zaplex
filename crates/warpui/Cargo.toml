@@ -54,6 +54,7 @@ warpui_core.workspace = true
 wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
+tempfile.workspace = true
 asset_cache.workspace = true
 env_logger.workspace = true
 futures-timer = "3.0.2"

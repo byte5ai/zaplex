@@ -660,7 +660,7 @@ fn test_shared_team_object() {
 }
 
 #[test]
-fn test_unshared_team_object() {
+fn test_cached_team_object_does_not_restore_retired_team_space() {
     let _guard = FeatureFlag::SharedWithMe.override_enabled(true);
     App::test((), |mut app| async move {
         app.update(init_and_register_user_preferences);
@@ -693,7 +693,11 @@ fn test_unshared_team_object() {
                 .get_notebook(&shared_notebook_id)
                 .expect("Notebook is in ObjectStoreModel")
                 .space(ctx);
-            assert_eq!(space, Space::Team { team_uid });
+            assert_eq!(space, Space::Shared);
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).all_user_spaces(ctx),
+                vec![Space::Personal]
+            );
         });
     });
 }

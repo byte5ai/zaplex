@@ -14577,6 +14577,7 @@ dependencies = [
  "sum_tree",
  "takecell",
  "tauri-winrt-notification",
+ "tempfile",
  "thiserror 2.0.18",
  "tini",
  "urlencoding",

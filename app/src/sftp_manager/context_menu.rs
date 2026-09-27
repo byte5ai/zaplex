@@ -400,6 +400,9 @@ mod tests {
             app.add_singleton_model(RemoteServerManager::new);
             app.add_singleton_model(|_| crate::workspace::ToastStack);
             app.add_singleton_model(|_| crate::sftp_manager::transfer_queue::TransferQueue::new());
+            app.add_singleton_model(|_| {
+                crate::sftp_manager::fm_registry::FileManagerRegistry::new()
+            });
 
             let temp_db = std::env::temp_dir().join("warp_sftp_ctx_test.sqlite");
             let _ = warp_ssh_manager::set_database_path(temp_db);

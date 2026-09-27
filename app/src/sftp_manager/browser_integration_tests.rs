@@ -389,7 +389,10 @@ fn create_workspace_action_capture_view(
         }
     });
     let browser = app.read(|ctx| root.as_ref(ctx).browser.clone());
+    let pane_id = PaneId::dummy_pane_id();
+    let focus_state = app.add_model(|_| PaneGroupFocusState::new(pane_id, None, false));
     browser.update(app, |view, ctx| {
+        view.set_focus_handle(PaneFocusHandle::new(pane_id, focus_state), ctx);
         view.set_backend_for_test(backend, PathBuf::from("/"), ctx);
     });
 
@@ -3878,6 +3881,7 @@ fn disabled_function_click_cannot_execute_after_mouse_down_focuses_the_pane() {
         });
         let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
         let action = position(&presenter, &layout_id(&browsers[0], &app, "function-F7"));
+        let pane_before = position(&presenter, &layout_id(&browsers[0], &app, "pane-root"));
 
         // Real pane activation runs on mouse-down, before the subsequent enabled frame.
         mouse_down(&mut app, window_id, presenter, action.center());
@@ -3887,7 +3891,11 @@ fn disabled_function_click_cannot_execute_after_mouse_down_focuses_the_pane() {
         );
         let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
         let enabled_action = position(&presenter, &layout_id(&browsers[0], &app, "function-F7"));
-        assert!(rects_approximately_equal(action, enabled_action));
+        let pane_after = position(&presenter, &layout_id(&browsers[0], &app, "pane-root"));
+        assert!(
+            rects_approximately_equal(action, enabled_action),
+            "function action moved after focus: {action:?} -> {enabled_action:?}; pane: {pane_before:?} -> {pane_after:?}"
+        );
         mouse_up(
             &mut app,
             window_id,

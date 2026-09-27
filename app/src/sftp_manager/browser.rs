@@ -980,7 +980,7 @@ impl SftpBrowserView {
         format!("sftp_layout:{}:{part}", self.fm_id)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "integration_tests"))]
     pub(crate) fn layout_position_id_for_test(&self, part: &str) -> String {
         self.layout_position_id(part)
     }
@@ -6485,6 +6485,12 @@ impl View for SftpBrowserView {
             && self.has_focus_within
             && self.dialog.is_none()
             && self.context_menu.is_none();
+        // Keep the content bounds stable when mouse-down activates an inactive pane.
+        let pane_border_fill = if pane_is_focused {
+            theme.accent()
+        } else {
+            Fill::None
+        };
 
         // 1. When not connected, show the connection state.
         //
@@ -6496,7 +6502,7 @@ impl View for SftpBrowserView {
         // the "Connecting…" state). The tight `Container` wrapper is the same
         // remedy `CodeView` uses.
         if !matches!(self.connection, ConnectionState::Connected) {
-            let mut content = Container::new(
+            let content = Container::new(
                 Flex::column()
                     .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                     .with_main_axis_size(MainAxisSize::Max)
@@ -6504,11 +6510,9 @@ impl View for SftpBrowserView {
                     .finish(),
             )
             .finish();
-            if pane_is_focused {
-                content = Container::new(content)
-                    .with_border(Border::all(2.0).with_border_fill(theme.accent()))
-                    .finish();
-            }
+            let content = Container::new(content)
+                .with_border(Border::all(2.0).with_border_fill(pane_border_fill))
+                .finish();
             return self.render_dialog_overlay(content, appearance);
         }
 
@@ -6586,12 +6590,10 @@ impl View for SftpBrowserView {
         // view root (same reason as the not-connected branch above): the pane
         // mounts this as a `Shrinkable` flex child, and a bare `Flex(Max)` root
         // would be measured with an infinite main axis and crash.
-        let mut main_content = Container::new(col.finish()).finish();
-        if pane_is_focused {
-            main_content = Container::new(main_content)
-                .with_border(Border::all(2.0).with_border_fill(theme.accent()))
-                .finish();
-        }
+        let main_content = Container::new(col.finish()).finish();
+        let mut main_content = Container::new(main_content)
+            .with_border(Border::all(2.0).with_border_fill(pane_border_fill))
+            .finish();
         let root_position_id = self.layout_position_id("pane-root");
         main_content = save_layout_position(main_content, &root_position_id);
 

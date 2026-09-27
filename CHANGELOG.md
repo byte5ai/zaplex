@@ -4,6 +4,10 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Der Dateimanager (#458/#464) reserviert seine Fokusumrandung in jedem Zustand. Dadurch bleiben Funktionsbuttons beim Aktivieren eines Panes an derselben Position und ein begonnener Klick auf eine deaktivierte Aktion wird nicht nachträglich ausgeführt.
+
+- Die CI-Testaufbauten (#472) initialisieren den Remote-Sitzungsmanager, prüfen die aktuellen lokalen Drive-Menüs und verwenden echte temporäre Dateien für die Linux-Zwischenablage. Passwort-Unterbrechungen werden jeweils an einer eigenen laufenden Shell geprüft; die Sicherheitsassertionen bleiben erhalten.
+
 - Ein separater CI-Abnahmetest (#456/#471) nutzt einen echten Daemon und ein isoliertes SSH-Konto für Tab-Vervollständigung, Ghosttext und Wiederaufnahme derselben PTY-Generation. Er verwendet bereits gebaute Programme und hält seine Profile von der Baseline-Coverage getrennt.
 
 - Der Skript-Messjob (#472) installiert und prüft `ripgrep` ausdrücklich. Die Konfliktdialog-Fixture erhält den produktiven Overlay-Aufbau, damit ihre unveränderten Geometrie- und Klickprüfungen echte Buttonpositionen finden.
