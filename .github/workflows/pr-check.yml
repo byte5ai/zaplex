@@ -70,49 +70,8 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      - name: Verify Docker supply-chain policy
-        run: script/check-docker-supply-chain --self-test
-        shell: bash
-
-      - name: Verify release supply-chain policy
-        run: script/check-release-supply-chain --self-test
-        shell: bash
-
-      - name: Validate release input rejection
-        run: script/validate-release-tag-tests
-        shell: bash
-
-      - name: Verify fork-facing repository links
-        run: script/fork-link-contract-tests
-        shell: bash
-
-      - name: Verify Linux development container security
-        run: script/check-linux-dev-container-security
-        shell: bash
-
-      - name: Verify SSH tmux installer assets
-        run: script/ssh-tmux-asset-tests
-        shell: bash
-
-      - name: Validate release tag classification
-        run: script/classify-release-tag-tests
-        shell: bash
-
-      - name: Verify atomic release version updater
-        run: script/set-version-tests
-        shell: bash
-
-      - name: Verify release-readiness fixtures
-        run: script/check-v1-release-readiness --self-test
-        shell: bash
-
-      - name: Verify release metadata consistency
-        run: script/check-v1-release-readiness --phase-a
-        shell: bash
-
-      - name: Verify macOS packaging split
-        run: python3 script/test-macos-bundle
-        shell: bash
+      - name: Run static PR checks
+        uses: ./.github/actions/static-pr-checks
 
       - name: Detect build-relevant changes
         id: detect
