@@ -110,7 +110,7 @@ After you push changes that address Oz's feedback, comment `/oz-review` on the P
 
 ## Using a Coding Agent
 
-You can use **any coding agent** to implement a contribution — for example, Zap's built-in agent, Claude Code, Codex, Gemini CLI, or others — or no agent at all. This repository ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`WARP.md`](WARP.md)) that any harness supporting these formats can pick up.
+You can use **any coding agent** to implement a contribution — for example, Zap's built-in agent, Claude Code, Codex, Gemini CLI, or others — or no agent at all. This repository ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/)) that any harness supporting these formats can pick up.
 
 If you'd rather have an **Oz cloud agent** implement a ready issue for you, mention **@oss-maintainers** on the issue to request it. Approved requests run **for free** on complimentary Oz credits — you don't need to set up your own Oz account or pay for compute.
 
@@ -124,7 +124,7 @@ Contributors with several merged PRs may be invited to become collaborators. Col
 
 ## Development Setup
 
-See [README.md](README.md) and [WARP.md](WARP.md) for the full engineering guide. Quick start:
+See [README.md](README.md) for project setup and `.agents/skills/` for task-specific guidance. Quick start:
 
 ```bash
 ./script/bootstrap   # platform-specific setup
@@ -140,13 +140,13 @@ Tests are required for most code changes:
 - **Algorithmic or non-trivial logic** needs unit tests.
 - **User-facing flows** should have end-to-end coverage under [`crates/integration/`](crates/integration/) whenever the behavior can be exercised that way. The bar is high-quality coverage of the changes you ship — with agent-driven development the expectation is more integration tests, not just coverage of P0 paths. If a flow is worth shipping, it's usually worth an integration test.
 
-Run unit tests with `cargo nextest run`. See [WARP.md](WARP.md) for more detail.
+Run unit tests with `cargo nextest run`.
 
 ## Code Style
 
 - `cargo fmt` and `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings` must pass.
 - Prefer imports over path qualifiers, inline format args (`println!("{x}")`), and exhaustive `match` over `_` wildcards.
-- See [WARP.md](WARP.md) for the full style guide, including WarpUI patterns and terminal model locking rules.
+- Use `.agents/skills/warp-ui-guidelines/SKILL.md` for WarpUI conventions. Before acquiring a terminal model lock, check whether the caller already holds it; pass the locked reference down and keep the locked scope short.
 
 ## Commit and Branch Conventions
 

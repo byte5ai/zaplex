@@ -42,8 +42,7 @@ Every comment body must start with one of these labels:
 
 Write comments with these constraints:
 
-- Be concise, direct, and actionable.
-- Do not add compliments or hedging.
+- Be concise, direct, and actionable: state the problem and the fix.
 - Prefer single-line comments.
 - Keep ranges to at most 10 lines.
 - Restrict inline comments to valid changed lines in this PR.
