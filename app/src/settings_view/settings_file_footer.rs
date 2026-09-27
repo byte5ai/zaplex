@@ -260,12 +260,12 @@ pub fn render_settings_error_alert(
                 .filter(|a| a.is_available_for_new_launch())
                 .filter(|a| install_model.is_cli_agent_installed(*a))
                 .collect();
-        let label = match installed.first() {
-            Some(agent) => crate::t!(
+        let label = match installed.as_slice() {
+            [agent] => crate::t!(
                 "settings-footer-alert-fix-with-agent",
                 agent = agent.display_name()
             ),
-            None => crate::t!("settings-footer-alert-fix-with-oz"),
+            [] | [_, _, ..] => crate::t!("settings-footer-alert-fix-with-oz"),
         };
         let fix_with_oz_button = render_alert_action_button(
             ui_font_family,

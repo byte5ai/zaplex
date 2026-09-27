@@ -1956,7 +1956,7 @@ fn save_pane_state(
 
             let settings_pane = model::NewSettingsPane {
                 id,
-                current_page: current_page.to_string(),
+                current_page: current_page.persistence_key().to_string(),
             };
 
             diesel::insert_into(schema::settings_panes::dsl::settings_panes)

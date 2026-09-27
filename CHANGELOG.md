@@ -4,6 +4,12 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- SSH-Vertrauen (#245): `@revoked`-Hostschlüssel werden vor Anmeldung und manueller Bestätigung abgewiesen. Aliase, Hashes, Hostmuster und Portgrenzen bleiben berücksichtigt.
+
+- Einstellungen (#245) speichern die gewählte Seite mit sprachunabhängigen Schlüsseln und lesen frühere Namen weiter. Externe SSH-Einstellungen aktualisieren die Dropdown-Bedienbarkeit sofort; bei mehreren CLI-Agenten verspricht der Reparaturknopf keinen bereits gewählten Anbieter.
+
+- Kontrollschnittstelle und Quellidentität (#245): Bereits vorhandene Worktrees müssen zum angeforderten Repository gehören. Gepackte Git-Referenzen werden für die eingebettete Commit-ID mitbeobachtet; der folgende Commit bleibt damit als Änderung erkennbar.
+
 - Subscription-Agenten (#245) behalten bei geänderten Anzeigenamen ihre exakte Kontoauswahl. Ein Abbruch während Discovery oder Sitzungsinitialisierung beendet den Start, bevor ein weiterer Prompt zugestellt wird.
 
 - SFTP-Speichern (#245) verwendet die bestätigte POSIX-Rename-Erweiterung des Servers statt eines Shell-Move mit Verzeichnisrennen. Wiederherstellung nach Überschreiben behält alle verifizierten Backup- und verdrängten Zieldateien bis zum erfolgreichen Aufräumen.

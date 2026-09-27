@@ -678,6 +678,7 @@ async fn create_or_attach_worktree(repo: PathBuf, branch: String) -> Result<Path
         let existing_branch =
             crate::util::git::run_git_command(&worktree, &["branch", "--show-current"]).await?;
         if existing_branch.trim() == branch {
+            validate_existing_worktree(&root, &worktree).await?;
             return Ok(worktree);
         }
         bail!("worktree destination exists for a different branch");
@@ -712,6 +713,26 @@ async fn create_or_attach_worktree(repo: PathBuf, branch: String) -> Result<Path
         .await?;
     }
     Ok(worktree)
+}
+
+/// A matching branch name alone does not establish repository ownership.
+async fn validate_existing_worktree(repo: &Path, worktree: &Path) -> Result<()> {
+    let worktree = worktree.canonicalize()?;
+    let candidate_root =
+        crate::util::git::run_git_command(&worktree, &["rev-parse", "--show-toplevel"]).await?;
+    if Path::new(candidate_root.trim()).canonicalize()? != worktree {
+        bail!("worktree destination is not a repository root");
+    }
+    let source_common =
+        crate::util::git::run_git_command(repo, &["rev-parse", "--git-common-dir"]).await?;
+    let candidate_common =
+        crate::util::git::run_git_command(&worktree, &["rev-parse", "--git-common-dir"]).await?;
+    if repo.join(source_common.trim()).canonicalize()?
+        != worktree.join(candidate_common.trim()).canonicalize()?
+    {
+        bail!("worktree destination belongs to a different repository");
+    }
+    Ok(())
 }
 
 async fn resolve_worktree_base(repo: &Path) -> Result<String> {
