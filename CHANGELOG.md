@@ -4,6 +4,10 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- CLI-Agenten (#245) erhalten aufgerufene Skill-Inhalte, benannte Anhänge und Reviewkommentare mit Diff-Kontext. Globale Regeln werden unter dem bestehenden Einwilligungsschalter übertragen; gelöschte Regeln bleiben ausgeschlossen.
+
+- Spracheingabe (#245) lässt sich nur vom zugehörigen Editor abbrechen. Verspätete Aufnahmeergebnisse verändern keine neuere Sitzung; korrigierte Suchtestdaten verwenden die tatsächlichen Bytepositionen.
+
 - Drive-Importe (#245) verwerfen verspätete Dateiauswahlen nach Schließen oder Zielwechsel. Sammelexporte lehnen vorhandene Symlinks als Zielunterordner ab und erhalten bestehende Dateien.
 
 - Die Bereinigung alter Linux-Zugangsdaten (#245) akzeptiert frühere Dateirechte nach Prüfung und Reparatur. Eine doppelte Testmodul-Deklaration und ein verfälschter Unicode-Erwartungswert sind korrigiert.

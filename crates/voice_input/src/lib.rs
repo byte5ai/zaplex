@@ -441,6 +441,13 @@ impl VoiceInput {
         Ok(())
     }
 
+    /// Cancels only the recording or transcription owned by the given session.
+    pub fn abort_session(&mut self, session_id: VoiceSessionId) {
+        if self.is_current_session(session_id) {
+            self.abort_listening();
+        }
+    }
+
     /// Stops listening without forwarding audio for processing.
     /// The VoiceSession will receive VoiceSessionResult::Aborted.
     pub fn abort_listening(&mut self) {
@@ -604,6 +611,31 @@ mod tests {
         worker.join().unwrap();
 
         assert_eq!(output, reference_output(&input, 512));
+    }
+
+    #[test]
+    fn session_abort_cannot_cancel_another_owners_transcription() {
+        let (result_tx, result_rx) = oneshot::channel();
+        let mut voice = VoiceInput {
+            state: VoiceInputState::Transcribing {
+                session_id: 2,
+                result_tx: Some(result_tx),
+                session_duration_ms: Some(10),
+            },
+            next_session_id: 2,
+            current_session_id: Some(2),
+            should_suppress_new_feature_popup: false,
+            voice_session_start: None,
+        };
+
+        voice.abort_session(1);
+        assert!(voice.is_current_session(2));
+        assert!(voice.is_transcribing());
+
+        voice.abort_session(2);
+        assert!(!voice.is_active());
+        assert!(!voice.is_current_session(2));
+        assert_eq!(warpui::r#async::block_on(result_rx).unwrap().session_id(), 2);
     }
 
     #[test]

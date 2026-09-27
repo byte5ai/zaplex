@@ -10,7 +10,12 @@ use super::{
 use crate::ai::agent::{api, AIAgentContext, AIAgentInput, AIIdentifiers};
 use crate::ai::api_error::AIApiError;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, SessionContext};
+use crate::ai::facts::{AIFact, AIFactObjectModel};
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::model::persistence::ObjectStoreModel;
+use crate::cloud_object::StoredObject;
 use crate::cockpit::CockpitModel;
+use crate::code_review::comments::AttachedReviewCommentTarget;
 use crate::remote_server::manager::{ConnectedDaemon, RemoteServerManager};
 use crate::report_if_error;
 use crate::terminal::ssh::util::InteractiveSshCommand;
@@ -307,7 +312,8 @@ pub(crate) fn subscription_dispatch_info(
         .context("subscription agent conversation is not in local history")?;
     let task_id = conversation.get_root_task_id().to_string();
     let needs_create_task = conversation.compute_active_tasks().is_empty();
-    let prompt = prompt_from_inputs(&params.input)?;
+    let user_rules = subscription_user_rules(params.is_memory_enabled, ctx);
+    let prompt = prompt_from_inputs(&params.input, &user_rules)?;
     let registry = SubscriptionSessionRegistry::as_ref(ctx).clone();
     let (candidates, preferences, working_directory) = match runtime_candidates(
         &conversation_id_string,
@@ -1033,7 +1039,26 @@ async fn with_timeout<T>(action: &str, future: impl Future<Output = Result<T>>) 
     }
 }
 
-fn prompt_from_inputs(inputs: &[AIAgentInput]) -> Result<SubscriptionPrompt> {
+fn subscription_user_rules(enabled: bool, ctx: &AppContext) -> Vec<(Option<String>, String)> {
+    if !enabled {
+        return Vec::new();
+    }
+    let store = ObjectStoreModel::as_ref(ctx);
+    let mut rules: Vec<_> = store
+        .get_all_objects_of_type::<GenericStringObjectId, AIFactObjectModel>()
+        .filter(|fact| !fact.is_trashed(store))
+        .map(|fact| match &fact.model().string_model {
+            AIFact::Memory(memory) => (memory.name.clone(), memory.content.clone()),
+        })
+        .collect();
+    rules.sort();
+    rules
+}
+
+fn prompt_from_inputs(
+    inputs: &[AIAgentInput],
+    user_rules: &[(Option<String>, String)],
+) -> Result<SubscriptionPrompt> {
     let query = inputs
         .iter()
         .filter_map(AIAgentInput::user_query)
@@ -1047,6 +1072,9 @@ fn prompt_from_inputs(inputs: &[AIAgentInput]) -> Result<SubscriptionPrompt> {
         ..Default::default()
     };
     let mut attached_context = Vec::new();
+    if !user_rules.is_empty() {
+        attached_context.push(serde_json::json!({ "user_rules": user_rules }));
+    }
     for input in inputs {
         let mut context = Vec::new();
         for item in input.context().unwrap_or_default() {
@@ -1057,6 +1085,74 @@ fn prompt_from_inputs(inputs: &[AIAgentInput]) -> Result<SubscriptionPrompt> {
         }
         if !context.is_empty() {
             attached_context.push(serde_json::json!({ "context": context }));
+        }
+        match input {
+            AIAgentInput::InvokeSkill {
+                skill, user_query, ..
+            } => {
+                attached_context.push(serde_json::json!({
+                    "invoked_skill": {
+                        "name": skill.name,
+                        "path": skill.path,
+                        "content": skill.content,
+                    },
+                }));
+                if let Some(user_query) = user_query {
+                    if !user_query.referenced_attachments.is_empty() {
+                        attached_context.push(serde_json::json!({
+                            "referenced_attachments": user_query.referenced_attachments,
+                        }));
+                    }
+                }
+            }
+            AIAgentInput::CodeReview {
+                review_comments, ..
+            } => {
+                let comments: Vec<_> = review_comments.comments.iter().map(|comment| {
+                    let target = match &comment.target {
+                        AttachedReviewCommentTarget::Line { absolute_file_path, line, content } => {
+                            serde_json::json!({
+                                "file_path": absolute_file_path,
+                                "line_index_zero_based": line.line_number().map(|line| line.as_usize()),
+                                "diff_content": content.content,
+                                "lines_added": content.lines_added.as_usize(),
+                                "lines_removed": content.lines_removed.as_usize(),
+                            })
+                        }
+                        AttachedReviewCommentTarget::File { absolute_file_path } => {
+                            serde_json::json!({ "file_path": absolute_file_path })
+                        }
+                        AttachedReviewCommentTarget::General => serde_json::json!({ "diff_set": true }),
+                    };
+                    serde_json::json!({
+                        "id": comment.id.to_string(),
+                        "comment": comment.content,
+                        "target": target,
+                        "base": comment.base,
+                        "head": comment.head,
+                    })
+                }).collect();
+                attached_context.push(serde_json::json!({
+                    "review_comments": comments,
+                    "diff_set": review_comments.diff_set,
+                }));
+            }
+            AIAgentInput::FetchReviewComments { repo_path, .. } => {
+                attached_context.push(serde_json::json!({ "review_repository": repo_path }));
+            }
+            AIAgentInput::UserQuery { .. }
+            | AIAgentInput::AutoCodeDiffQuery { .. }
+            | AIAgentInput::TriggerPassiveSuggestion { .. }
+            | AIAgentInput::ResumeConversation { .. }
+            | AIAgentInput::InitProjectRules { .. }
+            | AIAgentInput::CreateNewProject { .. }
+            | AIAgentInput::CloneRepository { .. }
+            | AIAgentInput::SummarizeConversation { .. }
+            | AIAgentInput::StartFromAmbientRunPrompt { .. }
+            | AIAgentInput::ActionResult { .. }
+            | AIAgentInput::MessagesReceivedFromAgents { .. }
+            | AIAgentInput::EventsFromAgents { .. }
+            | AIAgentInput::PassiveSuggestionResult { .. } => {}
         }
         if let AIAgentInput::UserQuery {
             referenced_attachments,

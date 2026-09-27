@@ -58,10 +58,10 @@ fn test_tokenizer_warp_special_chars() {
         7,
         "C:\\\\Program_Files\\\\Zaplex\\\\core-engine",
         28,
-        64,
+        66,
     );
-    assert_token(&tokens[15], 15, "dll", 65, 68);
-    assert_token(&tokens[16], 16, "check_status:/dev/warp_drive-0", 69, 99);
+    assert_token(&tokens[15], 15, "dll", 67, 70);
+    assert_token(&tokens[16], 16, "check_status:/dev/warp_drive-0", 71, 101);
 }
 
 #[test]

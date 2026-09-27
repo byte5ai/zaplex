@@ -7,15 +7,35 @@ use super::{
     SubscriptionLocationPreference, SubscriptionSessionRegistry, SubscriptionTarget,
 };
 use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, AnyFileContent, FileContext, ImageContext,
+    AIAgentAttachment, AIAgentContext, AIAgentInput, AgentReviewCommentBatch, AnyFileContent,
+    CurrentHead, DiffBase, DiffSetHunk, FileContext, ImageContext, InvokeSkillUserQuery,
     RunningCommand, UserQueryMode,
 };
+use crate::ai::facts::{AIFact, AIFactObject, AIFactObjectModel, AIMemory};
 use crate::ai::subscription_agent::{ModelCapability, SessionIdentity};
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::ObjectStoreModel;
+use crate::cloud_object::model::view::ObjectStoreViewModel;
+use crate::cloud_object::update_manager::UpdateManager;
+use crate::cloud_object::{StoredObjectMetadata, StoredObjectPermissions};
+use crate::code::editor::line::EditorLineLocation;
+use crate::code_review::comments::{
+    AttachedReviewComment, AttachedReviewCommentTarget, LineDiffContent,
+};
+use crate::notebooks::manager::NotebookManager;
 use crate::remote_server::client::RemoteServerClient;
 use crate::remote_server::proto::{AgentAccountInfo, AgentAccountInventory};
 use crate::remote_server::transport::DaemonRuntimeRoute;
+use crate::server::ids::SyncId;
+use crate::server_time::ServerTimestamp;
+use crate::settings::AISettings;
+use crate::system::SystemStats;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::ssh::util::InteractiveSshCommand;
+use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::NetworkStatus;
+use settings::manager::SettingsManager;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::sync::Arc;
@@ -23,6 +43,7 @@ use warp_ssh_manager::{
     AuthType, ResolvedSshConnection, SecretKind, SessionResilience, SshServerInfo,
 };
 use warpui::r#async::executor;
+use warpui::{App, SingletonEntity};
 use zaplex_cockpit::{Account, AccountStatus, AccountUsage, Provider, UsageProvenance};
 
 fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
@@ -1401,12 +1422,12 @@ fn subscription_prompt_preserves_attached_context_and_separates_native_images() 
         referenced_attachments.clear();
         *running_command = None;
     }
-    let plain_prompt = super::prompt_from_inputs(&[plain_input]).unwrap();
+    let plain_prompt = super::prompt_from_inputs(&[plain_input], &[]).unwrap();
     assert_eq!(plain_prompt.query, "Explain @note");
     assert!(plain_prompt.context.is_empty());
     assert!(plain_prompt.images.is_empty());
 
-    let prompt = super::prompt_from_inputs(&[input]).unwrap();
+    let prompt = super::prompt_from_inputs(&[input], &[]).unwrap();
     assert_eq!(prompt.query, "Explain @note");
     assert_eq!(prompt.images, vec![image]);
     let (_, json) = prompt.context.split_once('\n').unwrap();
@@ -1428,4 +1449,175 @@ fn subscription_prompt_preserves_attached_context_and_separates_native_images() 
     );
     assert_eq!(context[2]["running_command"]["is_alt_screen_active"], true);
     assert!(!prompt.context.contains("aW1hZ2U="));
+}
+
+#[test]
+fn subscription_prompt_preserves_skill_and_review_payloads() {
+    let skill = ai::skills::ParsedSkill {
+        path: "/bundled/review/SKILL.md".into(),
+        name: "review".to_string(),
+        description: "Review changes".to_string(),
+        content: "Read the changes before responding.".to_string(),
+        line_range: None,
+        provider: ai::skills::SkillProvider::Zaplex,
+        scope: ai::skills::SkillScope::Bundled,
+    };
+    let comment = AttachedReviewComment {
+        id: Default::default(),
+        content: "Handle an empty result".to_string(),
+        target: AttachedReviewCommentTarget::Line {
+            absolute_file_path: "/workspace/main.rs".into(),
+            line: EditorLineLocation::Current {
+                line_number: 4.into(),
+                line_range: 4.into()..5.into(),
+            },
+            content: LineDiffContent::from_content("+let result = query();"),
+        },
+        last_update_time: chrono::Local::now(),
+        base: Some(DiffBase::UncommittedChanges),
+        head: Some(CurrentHead::BranchName("feature".to_string())),
+        outdated: false,
+        origin: Default::default(),
+    };
+    let hunk = DiffSetHunk {
+        line_range: 4.into()..5.into(),
+        diff_content: "+let result = query();".to_string(),
+        lines_added: 1,
+        lines_removed: 0,
+    };
+    let inputs = [
+        AIAgentInput::InvokeSkill {
+            context: Vec::new().into(),
+            skill: skill.clone(),
+            user_query: Some(InvokeSkillUserQuery {
+                query: "@note".to_string(),
+                referenced_attachments: [(
+                    "@note".to_string(),
+                    AIAgentAttachment::PlainText("Review the parser".to_string()),
+                )]
+                .into(),
+            }),
+        },
+        AIAgentInput::CodeReview {
+            context: Vec::new().into(),
+            review_comments: AgentReviewCommentBatch {
+                comments: vec![comment.clone()],
+                diff_set: [("/workspace/main.rs".to_string(), vec![hunk.clone()])].into(),
+            },
+        },
+        AIAgentInput::FetchReviewComments {
+            context: Vec::new().into(),
+            repo_path: "/workspace/other-repository".to_string(),
+        },
+    ];
+    let prompt = super::prompt_from_inputs(&inputs, &[]).unwrap();
+    assert!(prompt
+        .query
+        .starts_with("/review @note\n\nAddress these comments"));
+    assert!(!prompt.query.contains(&skill.content));
+    let (_, json) = prompt.context.split_once('\n').unwrap();
+    let context: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert_eq!(context[0]["invoked_skill"]["content"], skill.content);
+    assert_eq!(
+        context[0]["invoked_skill"]["path"],
+        "/bundled/review/SKILL.md"
+    );
+    assert_eq!(
+        context[1]["referenced_attachments"]["@note"],
+        serde_json::json!({"PlainText": "Review the parser"})
+    );
+    assert_eq!(context[2]["review_comments"][0]["comment"], comment.content);
+    assert_eq!(
+        context[2]["review_comments"][0]["target"]["line_index_zero_based"],
+        4
+    );
+    assert_eq!(
+        context[2]["review_comments"][0]["target"]["file_path"],
+        "/workspace/main.rs"
+    );
+    assert_eq!(
+        context[2]["review_comments"][0]["base"],
+        serde_json::json!(comment.base)
+    );
+    assert_eq!(
+        context[2]["review_comments"][0]["head"],
+        serde_json::json!(comment.head)
+    );
+    assert_eq!(
+        context[2]["diff_set"]["/workspace/main.rs"][0],
+        serde_json::json!(hunk)
+    );
+    assert_eq!(
+        context[3]["review_repository"],
+        "/workspace/other-repository"
+    );
+}
+
+#[test]
+fn subscription_user_rules_respect_opt_out_trash_and_stable_order() {
+    App::test((), |mut app| async move {
+        // The disabled path must not even require access to the rule store.
+        assert!(app
+            .read(|app| super::subscription_user_rules(false, app))
+            .is_empty());
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(|_| SystemStats::new());
+        app.add_singleton_model(|ctx| UserWorkspaces::mock(vec![], ctx));
+        app.add_singleton_model(ObjectStoreModel::mock);
+        app.add_singleton_model(|ctx| UpdateManager::new(None, ctx));
+        app.add_singleton_model(|_| UserProfiles::new(Vec::new()));
+        app.add_singleton_model(ObjectStoreViewModel::new);
+        app.add_singleton_model(NotebookManager::mock);
+        app.add_singleton_model(|_| SettingsManager::default());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.update(crate::settings::init_and_register_user_preferences);
+        app.update(AISettings::register_and_subscribe_to_events);
+        ObjectStoreModel::handle(&app).update(&mut app, |model, _| {
+            for (id, name, content, trashed) in [
+                (1, Some("zebra"), "Last rule", false),
+                (2, Some("alpha"), "First named rule", false),
+                (3, None, "Unnamed rule", false),
+                (4, Some("deleted"), "Do not send", true),
+            ] {
+                let mut metadata = StoredObjectMetadata::mock();
+                if trashed {
+                    metadata.trashed_ts =
+                        Some(ServerTimestamp::from_unix_timestamp_micros(10).unwrap());
+                }
+                let fact = AIFactObject::new(
+                    SyncId::ServerId(id.into()),
+                    AIFactObjectModel::new(AIFact::Memory(AIMemory {
+                        name: name.map(str::to_string),
+                        content: content.to_string(),
+                        is_autogenerated: false,
+                        suggested_logging_id: None,
+                    })),
+                    metadata,
+                    StoredObjectPermissions::mock_personal(),
+                );
+                model.add_object(fact.id, fact);
+            }
+        });
+        assert!(app
+            .read(|app| super::subscription_user_rules(false, app))
+            .is_empty());
+        let rules = app.read(|app| super::subscription_user_rules(true, app));
+        assert_eq!(
+            rules,
+            vec![
+                (None, "Unnamed rule".to_string()),
+                (Some("alpha".to_string()), "First named rule".to_string()),
+                (Some("zebra".to_string()), "Last rule".to_string()),
+            ]
+        );
+        let input = AIAgentInput::CreateNewProject {
+            query: "Create a project".to_string(),
+            context: Vec::new().into(),
+        };
+        let prompt = super::prompt_from_inputs(&[input], &rules).unwrap();
+        let (_, json) = prompt.context.split_once('\n').unwrap();
+        let context: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(context[0]["user_rules"], serde_json::json!(rules));
+        assert!(!prompt.context.contains("Do not send"));
+    });
 }
