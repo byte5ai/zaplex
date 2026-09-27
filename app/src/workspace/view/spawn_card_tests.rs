@@ -1,4 +1,191 @@
 use super::*;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
+use pathfinder_geometry::vector::vec2f;
+use warpui::elements::{ChildView, Empty, Stack};
+use warpui::platform::WindowStyle;
+use warpui::{App, Event as WindowEvent, Presenter, WindowId, WindowInvalidation};
+
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::test_util::settings::initialize_settings_for_tests;
+
+/// Hosts the real dialog above an independently clickable background.
+pub(crate) struct ModalBackdropTestRoot<T: View> {
+    pub(crate) child: ViewHandle<T>,
+    pub(crate) visible: bool,
+    pub(crate) background_clicks: Rc<Cell<usize>>,
+    pub(crate) background_mouse_downs: Rc<Cell<usize>>,
+    background_mouse: MouseStateHandle,
+}
+
+impl<T: View> ModalBackdropTestRoot<T> {
+    pub(crate) fn new(child: ViewHandle<T>) -> Self {
+        Self {
+            child,
+            visible: true,
+            background_clicks: Rc::new(Cell::new(0)),
+            background_mouse_downs: Rc::new(Cell::new(0)),
+            background_mouse: MouseStateHandle::default(),
+        }
+    }
+}
+
+impl<T: View> Entity for ModalBackdropTestRoot<T> {
+    type Event = ();
+}
+
+impl<T: View> TypedActionView for ModalBackdropTestRoot<T> {
+    type Action = ();
+}
+
+impl<T: View> View for ModalBackdropTestRoot<T> {
+    fn ui_name() -> &'static str {
+        "ModalBackdropTestRoot"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        let clicks = self.background_clicks.clone();
+        let mouse_downs = self.background_mouse_downs.clone();
+        let background = Hoverable::new(self.background_mouse.clone(), |_| {
+            ConstrainedBox::new(Empty::new().finish())
+                .with_width(1200.)
+                .with_height(1000.)
+                .finish()
+        })
+        .on_mouse_down(move |_, _, _| mouse_downs.set(mouse_downs.get() + 1))
+        .on_click(move |_, _, _| clicks.set(clicks.get() + 1))
+        .finish();
+        let mut stack = Stack::new().with_child(background);
+        if self.visible {
+            stack = stack.with_child(ChildView::new(&self.child).finish());
+        }
+        stack.finish()
+    }
+}
+
+pub(crate) fn render_modal_fixture(
+    app: &mut App,
+    window_id: WindowId,
+    presenter: &Rc<RefCell<Presenter>>,
+) {
+    let updated = app.read(|ctx| ctx.view_ids_for_window(window_id).into_iter().collect());
+    app.update(|ctx| {
+        let mut presenter = presenter.borrow_mut();
+        presenter.invalidate(
+            WindowInvalidation {
+                updated,
+                ..Default::default()
+            },
+            ctx,
+        );
+        presenter.build_scene(vec2f(1200., 1000.), 1., None, ctx);
+    });
+}
+
+pub(crate) fn click_modal_backdrop(
+    app: &mut App,
+    window_id: WindowId,
+    presenter: &Rc<RefCell<Presenter>>,
+) {
+    app.update(|ctx| {
+        ctx.simulate_window_event(
+            WindowEvent::LeftMouseDown {
+                position: vec2f(5., 5.),
+                modifiers: Default::default(),
+                click_count: 1,
+                is_first_mouse: false,
+            },
+            window_id,
+            presenter.clone(),
+        );
+        ctx.simulate_window_event(
+            WindowEvent::LeftMouseUp {
+                position: vec2f(5., 5.),
+                modifiers: Default::default(),
+            },
+            window_id,
+            presenter.clone(),
+        );
+    });
+}
+
+pub(crate) fn assert_spawn_dialog_preserves_draft_until_explicit_close() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+        let (window_id, root) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let child = ctx.add_typed_action_view(SpawnCard::new);
+            ctx.subscribe_to_view(
+                &child,
+                |root: &mut ModalBackdropTestRoot<SpawnCard>, _, event, ctx| {
+                    if matches!(event, SpawnCardEvent::Close) {
+                        root.visible = false;
+                        ctx.notify();
+                    }
+                },
+            );
+            ModalBackdropTestRoot::new(child)
+        });
+        let card = root.read(&app, |root, _| root.child.clone());
+        let clicks = root.read(&app, |root, _| root.background_clicks.clone());
+        let mouse_downs = root.read(&app, |root, _| root.background_mouse_downs.clone());
+        card.update(&mut app, |card, ctx| {
+            card.cfg.hosts = vec![host("fixture-host", "Fixture host")];
+            card.host = HostChoice::Remote(0);
+            card.prompt = Some("unsaved cockpit request".to_string());
+            card.remote_dir_editor
+                .as_ref()
+                .unwrap()
+                .update(ctx, |editor, ctx| {
+                    editor.set_buffer_text("/unsaved/project", ctx);
+                });
+            ctx.notify();
+        });
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        render_modal_fixture(&mut app, window_id, &presenter);
+        click_modal_backdrop(&mut app, window_id, &presenter);
+        assert!(root.read(&app, |root, _| root.visible));
+        card.read(&app, |card, ctx| {
+            assert_eq!(card.prompt.as_deref(), Some("unsaved cockpit request"));
+            assert_eq!(
+                card.remote_dir_editor
+                    .as_ref()
+                    .unwrap()
+                    .as_ref(ctx)
+                    .buffer_text(ctx),
+                "/unsaved/project"
+            );
+            assert_eq!(card.host, HostChoice::Remote(0));
+        });
+        assert_eq!(
+            mouse_downs.get(),
+            0,
+            "the dialog must block mouse-down actions"
+        );
+        assert_eq!(clicks.get(), 0, "the dialog must block click-through");
+
+        // Both the close button and the Cancel chip dispatch this production action.
+        card.update(&mut app, |card, ctx| {
+            card.handle_action(&SpawnCardAction::Close, ctx)
+        });
+        assert!(!root.read(&app, |root, _| root.visible));
+        render_modal_fixture(&mut app, window_id, &presenter);
+        click_modal_backdrop(&mut app, window_id, &presenter);
+        assert_eq!(
+            mouse_downs.get(),
+            1,
+            "the background must receive mouse-down after closing"
+        );
+        assert_eq!(
+            clicks.get(),
+            1,
+            "the same background target must work after closing"
+        );
+    });
+}
 
 fn host(id: &str, name: &str) -> HostOption {
     HostOption {

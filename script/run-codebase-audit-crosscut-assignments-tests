@@ -306,7 +306,7 @@ class CrosscutRunnerTest(unittest.TestCase):
         record = json.loads(
             (self.state_dir / "unsafe-app-and-zaplex-1.json").read_text()
         )
-        self.assertEqual(record["config_dir"], str(self.config_dir))
+        self.assertEqual(record["config_dir"], str(self.config_dir.resolve(strict=True)))
         self.assertTrue(record["prompt"].startswith(RUNNER.LEAF_MARKER))
         self.assertEqual(record["argv"][record["argv"].index("--tools") + 1], "Read,Glob,Grep")
         self.assertEqual(

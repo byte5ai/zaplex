@@ -3431,4 +3431,4 @@ pub enum SpawnCardAction {
 
 #[cfg(test)]
 #[path = "spawn_card_tests.rs"]
-mod tests;
+pub(crate) mod tests;

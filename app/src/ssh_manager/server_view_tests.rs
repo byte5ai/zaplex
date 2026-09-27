@@ -4,16 +4,22 @@
 use super::*;
 use pathfinder_geometry::vector::vec2f;
 use remote_server::proto::SessionList;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
-use warpui::{App, WindowInvalidation};
+use warpui::{App, Presenter, WindowInvalidation};
 
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::view_components::dropdown::DropdownAction;
+use crate::workspace::view::spawn_card::tests::{
+    assert_spawn_dialog_preserves_draft_until_explicit_close, click_modal_backdrop,
+    render_modal_fixture, ModalBackdropTestRoot,
+};
 
 /// In-process mock bypassing OS keychain. Supports error injection to simulate NoBackend / Keyring errors.
 struct MockSecretStore {
@@ -849,5 +855,105 @@ fn credential_io_locks_editors_actions_and_stale_key_picker_results() {
                 .is_empty());
             view
         });
+    });
+}
+
+#[test]
+fn cockpit_and_ssh_dialogs_use_shared_state_contract() {
+    assert_spawn_dialog_preserves_draft_until_explicit_close();
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        let (window_id, root) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let child = ctx.add_typed_action_view(|ctx| {
+                let mut view = SshServerView::new_with_secret_store(
+                    "server-1".to_string(),
+                    Arc::new(MockSecretStore::new()),
+                    ctx,
+                );
+                // Ignore the constructor's asynchronous DB reload in this in-memory fixture.
+                view.reload_generation = view.reload_generation.wrapping_add(1);
+                view.reload_in_flight = false;
+                view.update_form_interaction(ctx);
+                view.node = Some(SshNode {
+                    id: "server-1".to_string(),
+                    parent_id: None,
+                    kind: NodeKind::Server,
+                    name: "server".to_string(),
+                    sort_order: 0,
+                    created_at: chrono::Utc::now().naive_utc(),
+                    updated_at: chrono::Utc::now().naive_utc(),
+                    is_collapsed: false,
+                });
+                view.clear_managed_onekey_form(ctx);
+                view.show_onekey_manager = true;
+                view.onekey_label_editor.update(ctx, |editor, ctx| {
+                    editor.set_buffer_text("unsaved credential", ctx);
+                });
+                view
+            });
+            ModalBackdropTestRoot::new(child)
+        });
+        let view = root.read(&app, |root, _| root.child.clone());
+        let clicks = root.read(&app, |root, _| root.background_clicks.clone());
+        let mouse_downs = root.read(&app, |root, _| root.background_mouse_downs.clone());
+        let draft = view.read(&app, |view, ctx| {
+            assert!(view.is_onekey_dirty(ctx));
+            view.current_onekey_form_snapshot(ctx)
+        });
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        render_modal_fixture(&mut app, window_id, &presenter);
+        click_modal_backdrop(&mut app, window_id, &presenter);
+        view.read(&app, |view, ctx| {
+            assert!(view.show_onekey_manager);
+            assert!(view.pending_onekey_transition.is_none());
+            assert!(view.current_onekey_form_snapshot(ctx) == draft);
+        });
+        assert_eq!(
+            mouse_downs.get(),
+            0,
+            "the dialog must block mouse-down actions"
+        );
+        assert_eq!(clicks.get(), 0, "the dialog must block click-through");
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SshServerAction::CloseOneKeyManager, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert!(view.show_onekey_manager);
+            assert!(matches!(
+                view.pending_onekey_transition,
+                Some(OneKeyTransition::Close)
+            ));
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SshServerAction::CancelManagedOneKeyTransition, ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert!(view.show_onekey_manager);
+            assert!(view.pending_onekey_transition.is_none());
+            assert!(view.current_onekey_form_snapshot(ctx) == draft);
+            assert!(view.is_onekey_dirty(ctx));
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SshServerAction::CloseOneKeyManager, ctx);
+            view.handle_action(&SshServerAction::DiscardManagedOneKeyChanges, ctx);
+        });
+        assert!(!view.read(&app, |view, _| view.show_onekey_manager));
+        render_modal_fixture(&mut app, window_id, &presenter);
+        click_modal_backdrop(&mut app, window_id, &presenter);
+        assert_eq!(
+            mouse_downs.get(),
+            1,
+            "the background must receive mouse-down after closing"
+        );
+        assert_eq!(
+            clicks.get(),
+            1,
+            "the same background target must work after closing"
+        );
     });
 }

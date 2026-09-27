@@ -18,7 +18,7 @@ erhält eine Referenz; `MultilineString` wird vor `matches` als `str` gelesen; d
 | Fünf reine Enum-Konstruktionstests | `app/src/sftp_manager/browser_unit_tests.rs`: `test_action_{cancel_transfer,confirm_move,set_search_filter,clear_search_filter,download_save_as}` konstruierten eine Variante und matchten unmittelbar genau diese Variante; kein Action-Handler wurde ausgeführt. | Entfernt: ausschließlich Rust-Sprachmechanik, keine Produktwirkung. Echte Handler-, Transfer- und Navigationsprüfungen bleiben. |
 | Zwei schwächere Permission-Tests | `app/src/sftp_manager/sftp_ops_tests.rs`: `test_bool_to_rwx_length` und `test_bool_to_rwx_valid_chars`. | Entfernt: die acht erhaltenen exakten Ergebnisprüfungen decken alle acht möglichen Eingaben ab und implizieren Länge und erlaubte Zeichen. |
 | Doppelte Cancelled-Ausgabe | `app/src/sftp_manager/sftp_ops_tests.rs`: `test_sftp_ops_error_cancelled_consistent`. | Entfernt: `test_sftp_ops_error_display_cancelled` prüft denselben exakten Ausgabestring; der zusätzliche Selbstvergleich prüfte keinen weiteren Pfad. |
-| Konstante Modal-Policy | `app/src/ui_components/modal_frame_tests.rs`: `cockpit_and_ssh_dialogs_use_shared_state_contract` rief nur den generischen konstanten `None`-Helper auf, ohne Cockpit, SSH-Dialog oder Ereignisverarbeitung. | Entfernt: keine Dialogintegration geprüft; der unveränderte Helper und beide echten Aufrufer behalten ihre Policy. Eine native Prüfung des Backdrop-Verhaltens bleibt erforderlich, diese Entfernung behauptet keinen solchen Nachweis. |
+| Konstante Modal-Policy | `app/src/ui_components/modal_frame_tests.rs`: `cockpit_and_ssh_dialogs_use_shared_state_contract` rief nur den generischen konstanten `None`-Helper auf, ohne Cockpit, SSH-Dialog oder Ereignisverarbeitung. | Der Konstantentest ist durch einen echten Presenter-Test in `app/src/ssh_manager/server_view_tests.rs` ersetzt: beide Dialoge erhalten ungespeicherte Eingaben bei einem Scrim-Klick und sperren den darunterliegenden Klickbereich; explizite Schließaktionen werden separat geprüft. Noch kein ausgeführter Rust-Nachweis und keine Testanzahl-Einsparung für diesen Ersatz. |
 | Sechs Worktree-Sidecar-Platzhalter | `app/src/workspace/view_test.rs`: hover, pointer entry, close via selection, search Enter, search navigation/Escape, hide linked worktrees. | Entfernt. Alle waren explizit ignoriert und enthielten ausschließlich `unimplemented!` für das abgeschaffte `PersistedWorkspace`; keine Assertions gehen verloren. **Null eingesparte reguläre Ausführungen.** |
 | Zwei App-ID-Tests | `app/src/app_id_test.rs` und `crates/warp_core/src/app_id_test.rs`. | Identischer Inhalt, aber nur die Core-Datei ist im statisch gefundenen Modulbaum referenziert. Keine getestete Reduktion beansprucht; Dateien unverändert. |
 | `test_priority_normalization` | `crates/warp_completer/src/completer/suggest/priority/priority_test.rs` und `crates/warp_completer/src/signatures/v2/signatures_test.rs`. | **Behalten.** Identischer Testkörper prüft zwei verschiedene `Priority`-Implementierungen. |
@@ -30,8 +30,9 @@ jetzt tatsächlich die Toggle-Aktion; die bisher allein geprüfte Transferanzahl
 blieb auch bei einem unerwünschten Toggle unverändert. Der Hintergrund-Recovery-Test
 akzeptiert den legitimen Fall, dass sein Worker schon vor der ersten Beobachtung
 fertig ist, und verlangt weiterhin den endgültigen erfolgreichen Zustand.
-Die neun zusätzlichen Entfernungen sind statisch begründet; tatsächliche eingesparte
-Ausführungen, Laufzeit und Coverage bleiben bis zur Messung unbekannt.
+Die verbleibenden Entfernungen sind statisch begründet; tatsächliche eingesparte
+Ausführungen, Laufzeit und Coverage bleiben bis zur Messung unbekannt. Der neue
+Dialogtest ersetzt den früheren Konstantentest, statt als Einsparung zu zählen.
 
 Diese Auswahl ist eine konkrete erste Bereinigung, **keine 20-%-Erfüllung**. Weitere
 Entfernungen benötigen beobachtete Laufzeiten und Abdeckung sowie eine Zuordnung
@@ -149,6 +150,11 @@ Ein numerisch guter Vergleich allein schließt #472 nicht:
 4. Jede weitere Entfernung braucht eine konkrete Redundanzbegründung, erhaltene
    Assertions und einen vergleichbaren tatsächlichen Kandidatenlauf.
 
-Kein Coverage-Lauf wurde durch diese Vorbereitung ausgelöst. Für die neue
-Zusammenstellung sind ausgeführte Testzahl, Zeiteinsparung und Produktionscoverage
-noch **unbekannt**; die 20-%-/2-Prozentpunkte-Abnahme steht aus.
+Die CI-Test-/Buildphase wurde inzwischen ausdrücklich freigegeben. Der
+[Lauf 36342623285](https://github.com/byte5ai/zaplex/actions/runs/36342623285)
+brach vor Rust-Tests an einem verwaisten ndarray-Lockeintrag ab. Die minimale
+Korrektur wurde mit gesperrter Offline-Auflösung geprüft; der korrigierte
+[Baseline-Lauf 36343457716](https://github.com/byte5ai/zaplex/actions/runs/36343457716)
+wurde auf `dad0924453904ce5d17a00c8f4d80d140def02be` gestartet.
+Die Python-Fixtures der Auswertung einschließlich Policy 3 sind bestanden.
+Die 20-%-/2-Prozentpunkte-Abnahme bleibt bis zu einem gültigen Messpaar offen.
