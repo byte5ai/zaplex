@@ -100,6 +100,9 @@ impl TerminalPane {
         model_event_sender: Option<SyncSender<ModelEvent>>,
         ctx: &mut ViewContext<PaneGroup>,
     ) -> Self {
+        terminal_view.update(ctx, |view, _| {
+            view.set_remote_restore_pane_uuid(uuid.clone());
+        });
         let pane_configuration = terminal_view.as_ref(ctx).pane_configuration().to_owned();
         let view = ctx.add_typed_action_view(|ctx| {
             let pane_id = PaneId::from_terminal_pane_ctx(ctx);

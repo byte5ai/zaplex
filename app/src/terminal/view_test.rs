@@ -182,15 +182,42 @@ fn only_remote_terminal_draft_changes_request_a_snapshot() {
 }
 
 #[test]
-fn only_failed_remote_readiness_exposes_retry_actions() {
-    assert!(remote_readiness_actions_visible(RemoteInputPhase::Failed));
-    assert!(!remote_readiness_actions_visible(
-        RemoteInputPhase::Cancelled
+fn failed_and_cancelled_remote_readiness_expose_retry_actions() {
+    assert!(remote_readiness_retry_visible(
+        RemoteInputPhase::Failed,
+        true
     ));
-    assert!(!remote_readiness_actions_visible(
-        RemoteInputPhase::Transport
+    assert!(remote_readiness_retry_visible(
+        RemoteInputPhase::Cancelled,
+        true
     ));
-    assert!(!remote_readiness_actions_visible(RemoteInputPhase::Corrupt));
+    assert!(!remote_readiness_retry_visible(
+        RemoteInputPhase::Transport,
+        true
+    ));
+    assert!(!remote_readiness_retry_visible(
+        RemoteInputPhase::Corrupt,
+        true
+    ));
+}
+
+#[test]
+fn pending_remote_attach_can_be_cancelled_without_exposing_retry() {
+    for phase in [
+        RemoteInputPhase::Transport,
+        RemoteInputPhase::Attach,
+        RemoteInputPhase::Replay,
+    ] {
+        assert!(remote_readiness_cancel_visible(phase, true));
+        assert!(!remote_readiness_retry_visible(phase, true));
+    }
+    for phase in [
+        RemoteInputPhase::Ready,
+        RemoteInputPhase::Cancelled,
+        RemoteInputPhase::Corrupt,
+    ] {
+        assert!(!remote_readiness_cancel_visible(phase, true));
+    }
 }
 
 #[test]
@@ -300,8 +327,9 @@ fn remote_session_notice_failure_detail_survives_failure_and_rejects_stale_updat
                 Some("connection timed out")
             );
             assert_eq!(view.remote_session_notice(), None);
-            assert!(remote_readiness_actions_visible(
-                view.remote_input_phase.unwrap()
+            assert!(remote_readiness_retry_visible(
+                view.remote_input_phase.unwrap(),
+                true
             ));
         });
         terminal.update(&mut app, |view, ctx| {
@@ -5339,4 +5367,42 @@ fn file_manager_directory_rejects_local_subshell_namespaces() {
             ));
         });
     });
+}
+
+#[test]
+fn cancelled_pending_attach_retains_draft_and_rejects_late_readiness() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let session = warp_core::SessionId::from(78u64);
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_input_draft("unfinished command".to_string(), ctx);
+            view.set_remote_input_phase(RemoteInputPhase::Replay, Some(session), ctx);
+            view.cancel_remote_input_readiness(ctx);
+            view.set_remote_input_phase(RemoteInputPhase::Ready, Some(session), ctx);
+        });
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Cancelled));
+            assert_eq!(view.input_draft(ctx), "unfinished command");
+            assert!(!view.input.as_ref(ctx).ordinary_command_input_is_ready());
+            assert!(remote_readiness_retry_visible(
+                RemoteInputPhase::Cancelled,
+                true
+            ));
+        });
+    });
+}
+
+#[test]
+fn readiness_controls_require_an_existing_restore_identity() {
+    for phase in [
+        RemoteInputPhase::Transport,
+        RemoteInputPhase::Attach,
+        RemoteInputPhase::Replay,
+        RemoteInputPhase::Failed,
+        RemoteInputPhase::Cancelled,
+    ] {
+        assert!(!remote_readiness_retry_visible(phase, false));
+        assert!(!remote_readiness_cancel_visible(phase, false));
+    }
 }

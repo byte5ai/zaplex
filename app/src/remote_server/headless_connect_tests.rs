@@ -269,6 +269,11 @@ fn merged_daemon_inventory_preserves_exact_route_per_session() {
         sessions(),
         MultiplexerSessionList::default(),
         Some(current_route.clone()),
+        &InitializeResponse {
+            host_id: "current-host".to_string(),
+            server_version: "v1.0.30".to_string(),
+            ..Default::default()
+        },
         0,
     );
     merge_daemon_inventory(
@@ -276,6 +281,11 @@ fn merged_daemon_inventory_preserves_exact_route_per_session() {
         sessions(),
         MultiplexerSessionList::default(),
         Some(old_route.clone()),
+        &InitializeResponse {
+            host_id: "old-host".to_string(),
+            server_version: "v1.0.29".to_string(),
+            ..Default::default()
+        },
         1,
     );
     let runtime_diagnostics = [&current_route, &old_route]
@@ -297,6 +307,15 @@ fn merged_daemon_inventory_preserves_exact_route_per_session() {
         .collect::<Vec<_>>();
 
     assert_eq!(inventory.sessions.len(), 2);
+    assert_eq!(
+        inventory.sessions[0].host_id.as_deref(),
+        Some("current-host")
+    );
+    assert_eq!(inventory.sessions[1].host_id.as_deref(), Some("old-host"));
+    assert_eq!(
+        inventory.sessions[1].daemon_runtime.as_ref(),
+        Some(&old_route)
+    );
     assert_eq!(inventory.sessions[0].route.as_ref(), Some(&current_route));
     assert_eq!(inventory.sessions[1].route.as_ref(), Some(&old_route));
     assert_eq!(inventory.daemon.host_ring_cap_bytes, 0);

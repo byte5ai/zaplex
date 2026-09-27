@@ -6424,6 +6424,7 @@ impl PaneGroup {
     ) -> Option<ReplacedRemoteTerminalSurface> {
         let terminal_pane = self.terminal_session_by_id(pane_id)?;
         let pane_stack = terminal_pane.pane_stack(ctx);
+        let pane_uuid = terminal_pane.session_uuid();
         let previous_view = terminal_pane.terminal_view(ctx);
         let previous_view_id = previous_view.id();
         let previous_connection_session_id = previous_view.as_ref(ctx).remote_input_session_id();
@@ -6450,6 +6451,7 @@ impl PaneGroup {
             ctx,
         );
         view.update(ctx, |view, ctx| {
+            view.set_remote_restore_pane_uuid(pane_uuid);
             view.restore_input_draft(draft, ctx);
             if cancelled {
                 view.cancel_remote_input_readiness(ctx);

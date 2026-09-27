@@ -4,6 +4,10 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Aufgelistete Remote-Sessions behalten ihre bestätigte Host- und Daemon-Version beim Wiederöffnen ohne aktive Verbindung. Wiederherstellbare Sessions lassen sich während des Attach-Vorgangs abbrechen und danach erneut verbinden (#456).
+
+- Sessionzeilen ohne eigenen Titel zeigen Host und tatsächliches Arbeitsverzeichnis; der vollständige Pfad bleibt im Tooltip sichtbar (#455). Die Auswahl nach `..` ist zusätzlich über Maus-/Tastaturereignisse und veraltete oder fehlgeschlagene Verzeichnisantworten abgesichert (#458).
+
 - Issue-Nachprüfung: Der Split-Picker kennzeichnet den aktuellen Host und meldet Registry-Ausfälle (#460); Favoriten verwechseln Lesefehler nicht mit entfernten Hosts (#463). Dateiaktionen sind nur bei tatsächlichem Fokus in der Dateimanager-Pane aktiv (#464). Verbindungs-, Fehler- und Wiederherstellungshinweise bleiben außerhalb des Terminalrasters (#470). Pfad-Completion funktioniert auch mit dem Legacy-SSH-Fallback nach übersprungener oder fehlgeschlagener Remote-Server-Einrichtung (#471).
 
 - Dateimanager-Rückkehr (#469) übernimmt das besuchte Verzeichnis in die zugehörige Shell und erhält Eingabeentwürfe; laufende Prozesse bleiben unberührt. Kollidierende Pane-Titel bleiben anhand von Pfad und stabiler Session-Kennung unterscheidbar (#461). Ungültige Drag-Ziele verändern weder Layout noch Undo-Zustand (#462). Transfers prüfen nach Konfliktdialogen ihr Ziel erneut und überschreiben nachträglich angelegte Dateien nicht ohne Zustimmung (#464).

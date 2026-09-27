@@ -73,7 +73,7 @@ fn entry_action(
 }
 
 /// Initializes the minimal set of singletons required by the tests
-fn initialize_app(app: &mut warpui::App) {
+pub(super) fn initialize_app(app: &mut warpui::App) {
     use crate::workspace::ToastStack;
 
     initialize_settings_for_tests(app);
@@ -117,7 +117,7 @@ fn create_temp_dir_with_files(files: &[(&str, &[u8])]) -> tempfile::TempDir {
 /// Creates a Connected-state view backed by an InMemorySftpBackend
 ///
 /// Returns (window_id, view_handle, temp_dir); temp_dir must be kept alive for the duration of the test
-fn create_connected_view(
+pub(super) fn create_connected_view(
     app: &mut warpui::App,
     files: &[(&str, &[u8])],
 ) -> (
@@ -3566,7 +3566,45 @@ fn parent_row_click_survives_rerender() {
             PathBuf::from("/"),
             "the parent-row click must survive a render between mouse-down and mouse-up"
         );
+        view.read(&app, |view, _| {
+            let selected = view
+                .cursor_entry_index()
+                .and_then(|index| view.entries.get(index));
+            assert_eq!(selected.map(|entry| entry.name.as_str()), Some("subdir"));
+        });
     });
+}
+
+#[test]
+fn parent_navigation_keyboard_restores_directory_selection() {
+    for key in ["backspace", "left"] {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let (window_id, view, _temp) = create_connected_view(
+                &mut app,
+                &[("alpha/file.txt", b"a"), ("departed/file.txt", b"d")],
+            );
+            let pane_id = PaneId::dummy_pane_id();
+            let focus_state = app.add_model(|_| PaneGroupFocusState::new(pane_id, None, true));
+            view.update(&mut app, |view, ctx| {
+                view.set_focus_handle(PaneFocusHandle::new(pane_id, focus_state), ctx);
+                view.focus_contents(ctx);
+                view.handle_action(
+                    &SftpBrowserAction::NavigateTo(PathBuf::from("/departed")),
+                    ctx,
+                );
+            });
+            let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(800.0, 600.0));
+            assert!(key_down(&mut app, window_id, presenter, key));
+            view.read(&app, |view, _| {
+                assert_eq!(view.current_path, PathBuf::from("/"));
+                let selected = view
+                    .cursor_entry_index()
+                    .and_then(|index| view.entries.get(index));
+                assert_eq!(selected.map(|entry| entry.name.as_str()), Some("departed"));
+            });
+        });
+    }
 }
 
 /// Verifies that DeleteSelected triggers the delete confirmation

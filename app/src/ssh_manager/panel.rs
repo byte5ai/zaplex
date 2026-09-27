@@ -64,6 +64,7 @@ use crate::ssh_manager::{
     credential_operation_message, endpoint_validation_message, SshTreeChangedEvent,
     SshTreeChangedNotifier,
 };
+use crate::terminal::view::{terminal_identity, TerminalIdentity};
 use crate::ui_components::compact_row_action::CompactRowAction;
 use crate::ui_components::modal_frame;
 use crate::view_components::action_button::{ActionButton, DangerPrimaryTheme, NakedTheme};
@@ -230,15 +231,22 @@ fn connected_hosts_by_registry_node(
     grouped
 }
 
-fn daemon_session_title(session: &SessionInfo) -> String {
-    if !session.title.is_empty() {
-        return session.title.clone();
-    }
+fn daemon_session_identity(host: &str, session: &SessionInfo) -> TerminalIdentity {
     let short_id: String = session.session_id.chars().take(8).collect();
-    crate::t!(
+    let fallback = crate::t!(
         "workspace-left-panel-ssh-manager-session-fallback",
         id = short_id
-    )
+    );
+    let mut identity = terminal_identity(host, Some(&session.cwd), &fallback);
+    if !session.title.trim().is_empty() {
+        identity.full = if session.cwd.trim().is_empty() {
+            session.title.clone()
+        } else {
+            format!("{}\n{}", session.title, identity.full)
+        };
+        identity.short = session.title.clone();
+    }
+    identity
 }
 
 fn session_row_details(
@@ -475,6 +483,8 @@ pub enum SshManagerPanelEvent {
         pty_session_id: String,
         pty_generation: u64,
         daemon_route: Option<remote_server::transport::DaemonRuntimeRoute>,
+        expected_host_id: Option<String>,
+        expected_daemon_runtime: Option<remote_server::transport::DaemonRuntimeRoute>,
     },
     OpenMultiplexerSession {
         node_id: String,
@@ -1671,6 +1681,21 @@ impl SshManagerPanel {
         daemon_route: Option<remote_server::transport::DaemonRuntimeRoute>,
         ctx: &mut ViewContext<Self>,
     ) {
+        let Some(session) = self
+            .host_session_inventories
+            .get(&node_id)
+            .and_then(|inventory| {
+                inventory.sessions.iter().find(|session| {
+                    session.session.session_id == pty_session_id
+                        && session.session.generation == pty_generation
+                        && session.route == daemon_route
+                })
+            })
+        else {
+            return;
+        };
+        let expected_host_id = session.host_id.clone();
+        let expected_daemon_runtime = session.daemon_runtime.clone();
         // Resolve OneKey → effective auth so the adopt connects with the same
         // username/key_path the listing + connect paths use — otherwise an
         // OneKey-key host would target a different ControlMaster / fail auth.
@@ -1680,6 +1705,8 @@ impl SshManagerPanel {
                 pty_session_id,
                 pty_generation,
                 daemon_route,
+                expected_host_id,
+                expected_daemon_runtime,
             }),
             Ok(None) => {
                 self.sessions_error.insert(
@@ -2927,7 +2954,7 @@ impl SshManagerPanel {
     fn render_session_row(
         &self,
         key: &str,
-        title: String,
+        identity: TerminalIdentity,
         metadata: Option<String>,
         indent: f32,
         appearance: &warp_core::ui::appearance::Appearance,
@@ -2940,7 +2967,7 @@ impl SshManagerPanel {
             .get(key)
             .cloned()
             .unwrap_or_default();
-        let details = session_row_details(title, metadata, key, appearance);
+        let details = session_row_details(identity.short, metadata, key, appearance);
         let row_key = key.to_string();
         let primary = Hoverable::new(state, move |mouse| {
             let mut row = Container::new(details)
@@ -2950,7 +2977,28 @@ impl SshManagerPanel {
             if mouse.is_hovered() || focused {
                 row = row.with_background(internal_colors::fg_overlay_3(theme));
             }
-            row.finish()
+            let mut stack = Stack::new().with_child(row.finish());
+            if mouse.is_hovered() {
+                let tooltip = ConstrainedBox::new(
+                    appearance
+                        .ui_builder()
+                        .tool_tip(identity.full)
+                        .build()
+                        .finish(),
+                )
+                .with_max_width(400.0)
+                .finish();
+                stack.add_positioned_overlay_child(
+                    tooltip,
+                    OffsetPositioning::offset_from_parent(
+                        Vector2F::new(0.0, 3.0),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::BottomLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                );
+            }
+            stack.finish()
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
@@ -3053,7 +3101,7 @@ impl SshManagerPanel {
                 let key = session_row_key(&node.id, session, routed_session.route.as_ref());
                 rows.push(self.render_session_row(
                     &key,
-                    daemon_session_title(session),
+                    daemon_session_identity(&node.name, session),
                     None,
                     session_indent,
                     appearance,
@@ -3100,7 +3148,10 @@ impl SshManagerPanel {
                     );
                     rows.push(self.render_session_row(
                         &key,
-                        title,
+                        TerminalIdentity {
+                            full: title.clone(),
+                            short: title,
+                        },
                         Some(metadata),
                         session_indent,
                         appearance,

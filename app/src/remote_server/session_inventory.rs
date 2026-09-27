@@ -20,6 +20,10 @@ pub struct HostSessionInventory {
 pub struct RoutedDaemonSession {
     pub session: remote_server::proto::SessionInfo,
     pub route: Option<DaemonRuntimeRoute>,
+    /// Authenticated handshake identity retained even after the listing disconnects.
+    pub host_id: Option<String>,
+    /// Exact runtime, including the version of the current-runtime route.
+    pub daemon_runtime: Option<DaemonRuntimeRoute>,
 }
 
 #[derive(Clone, Debug)]

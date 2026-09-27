@@ -5940,3 +5940,108 @@ fn conflicting_remote_restore_degrades_duplicate_without_persisting_its_identity
         crate::app_state::release_daemon_pty_claim_for_connection(conn);
     });
 }
+
+#[cfg(unix)]
+#[test]
+fn listed_daemon_adoption_requires_complete_matching_handshake_identity() {
+    let runtime = remote_server::transport::DaemonRuntimeRoute::new(
+        remote_server::setup::daemon_runtime_filename("sock"),
+        "v1.0.30".to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        listed_daemon_adoption_identity(Some("host-a"), Some(&runtime), None),
+        Some(("host-a".to_string(), runtime.clone())),
+    );
+    assert!(listed_daemon_adoption_identity(None, Some(&runtime), None).is_none());
+    assert!(listed_daemon_adoption_identity(Some(""), Some(&runtime), None).is_none());
+    assert!(listed_daemon_adoption_identity(Some("host-a"), None, None).is_none());
+    let old = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.29.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap();
+    assert!(listed_daemon_adoption_identity(Some("host-a"), Some(&old), None).is_none());
+    assert!(listed_daemon_adoption_identity(Some("host-a"), Some(&runtime), Some(&old)).is_none());
+    assert_eq!(
+        listed_daemon_adoption_identity(Some("host-a"), Some(&old), Some(&old)),
+        Some(("host-a".to_string(), old)),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cancelling_pending_adoption_retires_only_local_surface_and_keeps_retry_identity() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let session = SessionId::from(794u64);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    daemon_request: Some(crate::terminal::daemon_tty::DaemonSessionRequest {
+                        connection_session_id: session,
+                        open_params: Default::default(),
+                        adopt_pty_session_id: Some("retained-pty".to_string()),
+                        adopt_pty_generation: Some(9),
+                        expected_host_id: Some("retained-host".to_string()),
+                        expected_agent_binding: None,
+                        install_progress_rx: None,
+                        host_label: "saved.example.test".to_string(),
+                    }),
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let group = workspace.active_tab_pane_group().clone();
+            let pane = group.as_ref(ctx).focused_pane_id(ctx);
+            let identity = RemoteTerminalIdentity {
+                registry_node_id: "retained-node".to_string(),
+                host: "saved.example.test".to_string(),
+                transport: RemoteTerminalTransport::Daemon {
+                    daemon_host_id: "retained-host".to_string(),
+                    daemon_runtime: Some(PersistedDaemonRuntime {
+                        runtime_filename: "server-v1.0.29.sock".to_string(),
+                        server_version: "v1.0.29".to_string(),
+                    }),
+                    pty_session_id: "retained-pty".to_string(),
+                    pty_generation: 9,
+                },
+                current_working_directory: None,
+                input_draft: String::new(),
+            };
+            assert!(group
+                .as_ref(ctx)
+                .set_terminal_remote_identity(pane, identity.clone()));
+            let previous_view = group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(pane, ctx)
+                .unwrap();
+            previous_view.update(ctx, |view, ctx| {
+                view.restore_input_draft("unfinished command".to_string(), ctx);
+            });
+            assert!(workspace.daemon_session_surface_is_active(session, None, ctx));
+            workspace.cancel_remote_restore(&group, pane, ctx);
+            // The asynchronous transport completion checks this same predicate
+            // before registering a connection, so a cancelled attach cannot return.
+            assert!(!workspace.daemon_session_surface_is_active(session, None, ctx));
+            let current_view = group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(pane, ctx)
+                .unwrap();
+            assert_ne!(current_view.id(), previous_view.id());
+            assert!(current_view.as_ref(ctx).remote_input_has_failed());
+            let (_, retained, draft) = group
+                .as_ref(ctx)
+                .remote_terminal_restore_state(pane, ctx)
+                .unwrap();
+            assert_eq!(draft, "unfinished command");
+            assert_eq!(retained.transport, identity.transport);
+            assert_eq!(retained.registry_node_id, identity.registry_node_id);
+            assert_eq!(retained.input_draft, draft);
+        });
+    });
+}

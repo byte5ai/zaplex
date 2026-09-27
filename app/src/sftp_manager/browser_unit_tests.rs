@@ -504,3 +504,99 @@ fn test_action_download_save_as() {
         } if actual == entry
     ));
 }
+
+#[test]
+fn parent_navigation_rejects_failed_and_superseded_listings_without_moving_selection() {
+    use super::super::browser_integration_tests::{create_connected_view, initialize_app};
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[("departed/keep.txt", b"keep"), ("alpha/file.txt", b"a")],
+        );
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::NavigateTo(PathBuf::from("/departed")),
+                ctx,
+            );
+            let parent_entries = view
+                .sftp
+                .as_ref()
+                .unwrap()
+                .list_dir(Path::new("/"))
+                .unwrap();
+            let before_path = view.current_path.clone();
+            let before_cursor = view.cursor;
+            let before_entries = view
+                .entries
+                .iter()
+                .map(FileEntry::entry_identity)
+                .collect::<Vec<_>>();
+            let before_history = view.path_history.clone();
+            let before_history_index = view.history_index;
+            let pending = || NavigationCommit {
+                path: PathBuf::from("/"),
+                history: vec![
+                    PathBuf::from("/"),
+                    PathBuf::from("/departed"),
+                    PathBuf::from("/"),
+                ],
+                history_index: 2,
+                departed_directory: Some(PathBuf::from("/departed")),
+            };
+            view.refresh_generation = 10;
+            view.is_loading = true;
+            view.on_dir_listed_with_navigation(
+                9,
+                Some(pending()),
+                Ok(Ok(parent_entries.clone())),
+                ctx,
+            );
+            assert!(
+                view.is_loading,
+                "a stale response must not finish the current request"
+            );
+            assert_eq!(view.current_path, before_path);
+            assert_eq!(view.cursor, before_cursor);
+            assert_eq!(view.path_history, before_history);
+            assert_eq!(view.history_index, before_history_index);
+            assert_eq!(
+                view.entries
+                    .iter()
+                    .map(FileEntry::entry_identity)
+                    .collect::<Vec<_>>(),
+                before_entries
+            );
+
+            view.on_dir_listed_with_navigation(
+                10,
+                Some(pending()),
+                Ok(Err(super::super::sftp_ops::SftpOpsError::Operation(
+                    "listing denied".into(),
+                ))),
+                ctx,
+            );
+            assert!(!view.is_loading);
+            assert_eq!(view.current_path, before_path);
+            assert_eq!(view.cursor, before_cursor);
+            assert_eq!(view.path_history, before_history);
+            assert_eq!(view.history_index, before_history_index);
+            assert_eq!(
+                view.entries
+                    .iter()
+                    .map(FileEntry::entry_identity)
+                    .collect::<Vec<_>>(),
+                before_entries
+            );
+
+            view.refresh_generation = 11;
+            view.on_dir_listed_with_navigation(11, Some(pending()), Ok(Ok(parent_entries)), ctx);
+            assert_eq!(view.current_path, PathBuf::from("/"));
+            let selected = view
+                .cursor_entry_index()
+                .and_then(|index| view.entries.get(index));
+            assert_eq!(selected.map(|entry| entry.name.as_str()), Some("departed"));
+        });
+    });
+}

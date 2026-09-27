@@ -32,6 +32,7 @@ pub mod ssh_file_upload;
 pub(crate) mod ssh_remote_server_choice_view;
 pub(crate) mod ssh_remote_server_failed_banner;
 mod tab_metadata;
+pub(crate) use tab_metadata::{terminal_identity, TerminalIdentity};
 #[cfg(any(test, feature = "integration_tests"))]
 mod testing;
 mod tooltips;
@@ -1894,8 +1895,23 @@ fn remote_input_phase_update_matches(
     }
 }
 
-fn remote_readiness_actions_visible(phase: RemoteInputPhase) -> bool {
-    phase == RemoteInputPhase::Failed
+fn remote_readiness_retry_visible(phase: RemoteInputPhase, has_restore_identity: bool) -> bool {
+    has_restore_identity
+        && matches!(
+            phase,
+            RemoteInputPhase::Failed | RemoteInputPhase::Cancelled
+        )
+}
+
+fn remote_readiness_cancel_visible(phase: RemoteInputPhase, has_restore_identity: bool) -> bool {
+    has_restore_identity
+        && matches!(
+            phase,
+            RemoteInputPhase::Transport
+                | RemoteInputPhase::Attach
+                | RemoteInputPhase::Replay
+                | RemoteInputPhase::Failed
+        )
 }
 
 /// Footer copy for a remote readiness phase. Once a pane has been ready, the
@@ -2782,6 +2798,7 @@ pub struct TerminalView {
     /// Explicit readiness for a remote pane. The input editor keeps its draft,
     /// while normal submissions stay blocked until this reaches Ready.
     remote_input_phase: Option<RemoteInputPhase>,
+    remote_restore_pane_uuid: Option<Vec<u8>>,
     /// Remains true after initial input readiness so transient reconnect phases
     /// cannot make an established daemon pane look like a new pending start.
     remote_input_has_reached_initial_ready: bool,
@@ -4022,6 +4039,7 @@ impl TerminalView {
             sessions,
             remote_server_shimmer_handle: ShimmeringTextStateHandle::new(),
             remote_input_phase: None,
+            remote_restore_pane_uuid: None,
             remote_input_has_reached_initial_ready: false,
             remote_input_session_id: None,
             remote_session_notice: None,
@@ -6597,6 +6615,17 @@ impl TerminalView {
 
     pub(crate) fn input_draft(&self, ctx: &AppContext) -> String {
         self.input.as_ref(ctx).buffer_text(ctx)
+    }
+
+    pub(crate) fn set_remote_restore_pane_uuid(&mut self, uuid: Vec<u8>) {
+        self.remote_restore_pane_uuid = Some(uuid);
+    }
+
+    fn has_remote_restore_identity(&self) -> bool {
+        self.remote_restore_pane_uuid
+            .as_deref()
+            .and_then(crate::app_state::remote_terminal_identity)
+            .is_some()
     }
 
     pub(crate) fn remote_input_is_ready(&self) -> bool {
@@ -11260,6 +11289,7 @@ impl TerminalView {
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let phase = self.remote_input_phase?;
+        let has_restore_identity = self.has_remote_restore_identity();
         let message = if phase == RemoteInputPhase::Failed {
             self.remote_session_error.clone().or_else(|| {
                 remote_readiness_message(phase, self.remote_input_has_reached_initial_ready)
@@ -11286,15 +11316,20 @@ impl TerminalView {
                 app,
             )
         };
-        let content = if remote_readiness_actions_visible(phase) {
+        let content = if remote_readiness_retry_visible(phase, has_restore_identity)
+            || remote_readiness_cancel_visible(phase, has_restore_identity)
+        {
             let message = Flex::row()
                 .with_child(Shrinkable::new(1., content).finish())
                 .finish();
-            let actions = Flex::row()
-                .with_spacing(8.)
-                .with_child(ChildView::new(&self.remote_restore_retry_button).finish())
-                .with_child(ChildView::new(&self.remote_restore_cancel_button).finish())
-                .finish();
+            let mut actions = Flex::row().with_spacing(8.);
+            if remote_readiness_retry_visible(phase, has_restore_identity) {
+                actions.add_child(ChildView::new(&self.remote_restore_retry_button).finish());
+            }
+            if remote_readiness_cancel_visible(phase, has_restore_identity) {
+                actions.add_child(ChildView::new(&self.remote_restore_cancel_button).finish());
+            }
+            let actions = actions.finish();
             Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .with_spacing(8.)

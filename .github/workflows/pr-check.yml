@@ -501,10 +501,17 @@ jobs:
         run: >
           cargo test --locked -p warp --lib --
           parent_navigation
+          parent_row_click_survives_rerender
           terminal::input::tests::remote_readiness_gate_
           pending_remote_setup_command_does_not_replace_the_user_draft
           failed_remote_setup_command_cannot_execute_later
-          only_failed_remote_readiness_exposes_retry_actions
+          failed_and_cancelled_remote_readiness_expose_retry_actions
+          pending_remote_attach_can_be_cancelled_without_exposing_retry
+          listed_current_runtime_pins_version_without_becoming_a_historical_route
+          listed_daemon_adoption_requires_complete_matching_handshake_identity
+          cancelling_pending_adoption_retires_only_local_surface_and_keeps_retry_identity
+          cancelled_pending_attach_retains_draft_and_rejects_late_readiness
+          readiness_controls_require_an_existing_restore_identity
           corrupt_remote_restore_is_terminal_and_never_reenables_normal_input
           classic_ssh_phase_updates_are_allowed_only_while_unbound
           workspace::view::ssh_connect_tests::
@@ -528,7 +535,10 @@ jobs:
           removed_favorite_host_is_disabled_and_never_routed
           protected_favorite_store_disables_stale_removal
           closing_new_session_menu_restores_focus_only_when_the_menu_owned_it
-          empty_titles_show_a_short_identity_within_the_zaplex_session_group
+          empty_titles_use_known_cwd_and_retain_the_full_path
+          unknown_cwd_uses_an_honest_short_session_id_fallback
+          normalized_agent_titles_are_preserved_with_known_cwd_in_the_tooltip
+          stale_daemon_adoption_cannot_resolve_a_different_inventory_row
           test_non_legacy_remote_session_lists_directory_entries_with_remote_server_enabled
           test_legacy_ssh_fallback_lists_directory_entries_without_remote_host_id
           test_session_context_lists_directory_entries_remotely

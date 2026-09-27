@@ -253,6 +253,7 @@ fn session_rows_keep_flexible_identity_fixed_actions_and_only_semantic_metadata(
                 },
                 SessionInfo {
                     session_id: "87654321-abcdef-0123456789".into(),
+                    cwd: "/srv/a-project-with-a-long-name-to-test-the-shared-short-identity".into(),
                     ring_bytes: 1_048_576,
                     ..Default::default()
                 },
@@ -298,6 +299,8 @@ fn session_rows_keep_flexible_identity_fixed_actions_and_only_semantic_metadata(
                                 .into_iter()
                                 .map(|session| {
                                     crate::remote_server::session_inventory::RoutedDaemonSession {
+                                        host_id: None,
+                                        daemon_runtime: None,
                                         session,
                                         route: None,
                                     }
@@ -419,6 +422,23 @@ fn session_rows_keep_flexible_identity_fixed_actions_and_only_semantic_metadata(
                 "hover must not shift actions"
             );
             assert_eq!(position(&keys[0], "title"), first_title);
+
+            let project_title = position(&keys[1], "title");
+            app.update(|ctx| {
+                ctx.simulate_window_event(
+                    Event::MouseMoved {
+                        position: project_title.center(),
+                        cmd: false,
+                        shift: false,
+                        is_synthetic: false,
+                    },
+                    window_id,
+                    presenter.clone(),
+                );
+            });
+            render(&mut app);
+            assert_eq!(position(&keys[1], "title"), project_title);
+            assert_eq!(position(&mux_key, "open"), action);
 
             let generation = panel.update(&mut app, |panel, ctx| {
                 let generation = panel.begin_session_fetch("fixture-host").unwrap();
@@ -843,6 +863,8 @@ fn keyboard_navigation_reaches_both_session_kinds_and_enter_uses_the_exact_sessi
                         daemon: SessionList::default(),
                         sessions: vec![
                             crate::remote_server::session_inventory::RoutedDaemonSession {
+                                host_id: None,
+                                daemon_runtime: None,
                                 session: daemon,
                                 route: None,
                             },
@@ -1441,6 +1463,8 @@ fn daemon_session_rows_keep_the_same_mouse_state_across_renders() {
     let mut states = HashMap::new();
     let inventory = vec![
         crate::remote_server::session_inventory::RoutedDaemonSession {
+            host_id: None,
+            daemon_runtime: None,
             session: remote_server::proto::SessionInfo {
                 session_id: "pty-1".to_string(),
                 ..Default::default()
@@ -1458,6 +1482,8 @@ fn daemon_session_rows_keep_the_same_mouse_state_across_renders() {
 
     let replacement = vec![
         crate::remote_server::session_inventory::RoutedDaemonSession {
+            host_id: None,
+            daemon_runtime: None,
             session: remote_server::proto::SessionInfo {
                 session_id: "pty-2".to_string(),
                 ..Default::default()
@@ -1620,6 +1646,8 @@ fn session_lifecycle_events_during_inventory_fetch_coalesce_into_one_followup() 
         let inventory = crate::remote_server::session_inventory::HostSessionInventory {
             sessions: vec![
                 crate::remote_server::session_inventory::RoutedDaemonSession {
+                    host_id: None,
+                    daemon_runtime: None,
                     session: SessionInfo {
                         session_id: "newly-opened-session".to_string(),
                         ..Default::default()
@@ -1690,28 +1718,116 @@ fn changed_or_deleted_hosts_reject_old_inventory_results() {
 }
 
 #[test]
-fn empty_titles_show_a_short_identity_within_the_zaplex_session_group() {
-    crate::i18n::init(Some("en"));
-    let session = remote_server::proto::SessionInfo {
-        session_id: "12345678-abcdef".to_string(),
-        cwd: "/srv/project".to_string(),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        daemon_session_title(&session),
-        "Session · \u{2068}12345678\u{2069}"
-    );
+fn stale_daemon_adoption_cannot_resolve_a_different_inventory_row() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        app.add_singleton_model(FavoritesStore::new_for_test);
+        app.add_singleton_model(RemoteServerManager::new);
+        app.update(init);
+        let route = remote_server::transport::DaemonRuntimeRoute::new(
+            "server-v1.0.28.sock".to_string(),
+            "v1.0.28".to_string(),
+        )
+        .unwrap();
+        let (_, panel) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut panel = SshManagerPanel::new(ctx);
+            panel.host_session_inventories.insert(
+                "missing-database-host".to_string(),
+                crate::remote_server::session_inventory::HostSessionInventory {
+                    sessions: vec![
+                        crate::remote_server::session_inventory::RoutedDaemonSession {
+                            session: SessionInfo {
+                                session_id: "pty-1".into(),
+                                generation: 7,
+                                ..Default::default()
+                            },
+                            route: Some(route.clone()),
+                            host_id: Some("stable-host".into()),
+                            daemon_runtime: Some(route.clone()),
+                        },
+                    ],
+                    ..Default::default()
+                },
+            );
+            panel
+        });
+        panel.update(&mut app, |panel, ctx| {
+            for (host, id, generation, requested_route) in [
+                ("other-host", "pty-1", 7, Some(route.clone())),
+                ("missing-database-host", "other-pty", 7, Some(route.clone())),
+                ("missing-database-host", "pty-1", 8, Some(route.clone())),
+                ("missing-database-host", "pty-1", 7, None),
+            ] {
+                panel.on_adopt_session(host.into(), id.into(), generation, requested_route, ctx);
+                assert!(
+                    panel.sessions_error.is_empty(),
+                    "stale actions must not resolve another row"
+                );
+            }
+            panel.on_adopt_session(
+                "missing-database-host".into(),
+                "pty-1".into(),
+                7,
+                Some(route),
+                ctx,
+            );
+            // Only the matching inventory row reaches database host resolution.
+            assert!(panel.sessions_error.contains_key("missing-database-host"));
+        });
+    });
 }
 
 #[test]
-fn normalized_agent_titles_are_preserved() {
-    let session = remote_server::proto::SessionInfo {
+fn empty_titles_use_known_cwd_and_retain_the_full_path() {
+    crate::i18n::init(Some("en"));
+    for title in ["", "  "] {
+        let session = SessionInfo {
+            session_id: "12345678-abcdef".to_string(),
+            title: title.to_string(),
+            cwd: "/srv/project/".to_string(),
+            ..Default::default()
+        };
+        let identity = daemon_session_identity("devhost", &session);
+        assert_eq!(identity.short, "devhost · project");
+        assert_eq!(identity.full, "devhost · /srv/project/");
+    }
+}
+
+#[test]
+fn unknown_cwd_uses_an_honest_short_session_id_fallback() {
+    crate::i18n::init(Some("en"));
+    for cwd in ["", "  "] {
+        let session = SessionInfo {
+            session_id: "12345678-abcdef".to_string(),
+            cwd: cwd.to_string(),
+            ..Default::default()
+        };
+        let identity = daemon_session_identity("devhost", &session);
+        assert_eq!(
+            identity.short,
+            "devhost · Session · \u{2068}12345678\u{2069}"
+        );
+        assert_eq!(identity.full, identity.short);
+    }
+}
+
+#[test]
+fn normalized_agent_titles_are_preserved_with_known_cwd_in_the_tooltip() {
+    crate::i18n::init(Some("en"));
+    let mut session = SessionInfo {
         title: "Codex · zaplex".to_string(),
         ..Default::default()
     };
-
-    assert_eq!(daemon_session_title(&session), "Codex · zaplex");
+    let identity = daemon_session_identity("devhost", &session);
+    assert_eq!(identity.short, "Codex · zaplex");
+    assert_eq!(identity.full, "Codex · zaplex");
+    session.cwd = "/srv/project".to_string();
+    let identity = daemon_session_identity("devhost", &session);
+    assert_eq!(identity.short, "Codex · zaplex");
+    assert_eq!(identity.full, "Codex · zaplex\ndevhost · /srv/project");
 }
 
 #[test]

@@ -228,9 +228,9 @@ use crate::menu::{
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
 use crate::notebooks::manager::{NotebookManager, NotebookSource};
+use crate::pane_group::pane::sftp_pane::SftpPane;
 #[cfg(feature = "local_fs")]
 use crate::pane_group::FilePane;
-use crate::pane_group::pane::sftp_pane::SftpPane;
 use crate::pane_group::ImagePane;
 use crate::pane_group::{
     self, AnyPaneContent, CodeDiffPane, CodePane, Direction, NewTerminalOptions, PaneContent,
@@ -1513,6 +1513,24 @@ struct RestoredDaemonPanePlan {
     connection: warp_ssh_manager::ResolvedSshConnection,
     daemon_route: remote_server::transport::DaemonRuntimeRoute,
     progress_tx: async_channel::Sender<String>,
+}
+
+#[cfg(unix)]
+fn listed_daemon_adoption_identity(
+    host_id: Option<&str>,
+    runtime: Option<&remote_server::transport::DaemonRuntimeRoute>,
+    route: Option<&remote_server::transport::DaemonRuntimeRoute>,
+) -> Option<(String, remote_server::transport::DaemonRuntimeRoute)> {
+    let host_id = host_id.filter(|host_id| !host_id.trim().is_empty())?;
+    let runtime = runtime?;
+    if runtime.server_version().trim().is_empty() {
+        return None;
+    }
+    let route_matches = match route {
+        Some(route) => route == runtime,
+        None => runtime.runtime_filename() == remote_server::setup::daemon_runtime_filename("sock"),
+    };
+    route_matches.then(|| (host_id.to_string(), runtime.clone()))
 }
 
 #[cfg(unix)]
@@ -7155,6 +7173,7 @@ impl Workspace {
                                 generation,
                                 daemon_route,
                                 host_id.map(str::to_string),
+                                None,
                                 Some(expected_agent_binding),
                                 ctx,
                             );
@@ -7264,6 +7283,7 @@ impl Workspace {
                 current.generation,
                 daemon_route,
                 Some(current.host_id),
+                None,
                 Some(expected_agent_binding),
                 ctx,
             );
@@ -10238,6 +10258,8 @@ impl Workspace {
                 pty_session_id,
                 pty_generation,
                 daemon_route,
+                expected_host_id,
+                expected_daemon_runtime,
             } => {
                 #[cfg(unix)]
                 match resolve_ssh_connection(server) {
@@ -10246,7 +10268,8 @@ impl Workspace {
                         pty_session_id.clone(),
                         *pty_generation,
                         daemon_route.clone(),
-                        None,
+                        expected_host_id.clone(),
+                        expected_daemon_runtime.clone(),
                         None,
                         ctx,
                     ),
@@ -10257,7 +10280,7 @@ impl Workspace {
                 };
                 #[cfg(not(unix))]
                 {
-                    let _ = (server, pty_session_id, pty_generation, daemon_route);
+                    let _ = (server, pty_session_id, pty_generation, daemon_route, expected_host_id, expected_daemon_runtime);
                     log::warn!("AdoptDaemonSession ignored: daemon sessions are unix-only");
                 }
             }
@@ -13500,6 +13523,7 @@ impl Workspace {
         pty_generation: u64,
         daemon_route: Option<remote_server::transport::DaemonRuntimeRoute>,
         expected_host_id: Option<String>,
+        expected_daemon_runtime: Option<remote_server::transport::DaemonRuntimeRoute>,
         expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -13528,20 +13552,15 @@ impl Workspace {
                     && expected_host_id
                         .as_deref()
                         .is_none_or(|host_id| daemon.host_id.as_str() == host_id)
+                    && expected_daemon_runtime
+                        .as_ref()
+                        .is_none_or(|runtime| runtime == &daemon.daemon_runtime)
                     && daemon.registry_node_id.as_deref() == Some(server.node_id.as_str())
             });
-        let Some(expected_daemon) = matching_daemons.next() else {
-            self.toast_stack.update(ctx, |stack, ctx| {
-                stack.add_persistent_toast(
-                    DismissibleToast::error(
-                        crate::t!("workspace-remote-daemon-route-disconnected").to_string(),
-                    ),
-                    ctx,
-                );
-            });
-            return;
-        };
-        if matching_daemons.any(|daemon| daemon.host_id != expected_daemon.host_id) {
+        let connected_daemon = matching_daemons.next();
+        if connected_daemon.as_ref().is_some_and(|selected| {
+            matching_daemons.any(|daemon| daemon.host_id != selected.host_id)
+        }) {
             self.toast_stack.update(ctx, |stack, ctx| {
                 stack.add_persistent_toast(
                     DismissibleToast::error(
@@ -13552,17 +13571,41 @@ impl Workspace {
             });
             return;
         }
+        // A completed authenticated inventory is sufficient to reconnect its exact
+        // PTY even when closing the last tab removed the manager connection.
+        // Keep the host and runtime checks in the subsequent attach handshake.
+        let host_label = connected_daemon
+            .as_ref()
+            .map(|daemon| daemon.host_label.clone())
+            .unwrap_or_else(|| server.host.clone());
+        let target = connected_daemon
+            .map(|daemon| (daemon.host_id.as_str().to_string(), daemon.daemon_runtime))
+            .or_else(|| {
+                listed_daemon_adoption_identity(
+                    expected_host_id.as_deref(),
+                    expected_daemon_runtime.as_ref(),
+                    daemon_route.as_ref(),
+                )
+            });
+        let Some((daemon_host_id, daemon_runtime)) = target else {
+            self.toast_stack.update(ctx, |stack, ctx| {
+                stack.add_persistent_toast(
+                    DismissibleToast::error(
+                        crate::t!("workspace-remote-daemon-route-disconnected").to_string(),
+                    ),
+                    ctx,
+                );
+            });
+            return;
+        };
+        let is_current_runtime = daemon_route.is_none();
         let binding_key = daemon_adoption_key(
-            expected_daemon.host_id.as_str(),
-            &expected_daemon.daemon_runtime,
+            &daemon_host_id,
+            &daemon_runtime,
             &pty_session_id,
             pty_generation,
         );
-        let registry_node_id = expected_daemon
-            .registry_node_id
-            .clone()
-            .expect("the selected descriptor was matched by registry node");
-        let host_label = expected_daemon.host_label.clone();
+        let registry_node_id = server.node_id.clone();
         if self.focus_existing_adopted_daemon_session(
             &binding_key,
             expected_agent_binding.clone(),
@@ -13601,7 +13644,7 @@ impl Workspace {
             open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
             adopt_pty_session_id: Some(pty_session_id.clone()),
             adopt_pty_generation: Some(pty_generation),
-            expected_host_id: Some(expected_daemon.host_id.as_str().to_string()),
+            expected_host_id: Some(daemon_host_id.clone()),
             expected_agent_binding,
             install_progress_rx: Some(install_progress_rx),
             host_label: host_label.clone(),
@@ -13641,13 +13684,10 @@ impl Workspace {
                 registry_node_id: registry_node_id.clone(),
                 host: host_label,
                 transport: RemoteTerminalTransport::Daemon {
-                    daemon_host_id: expected_daemon.host_id.as_str().to_string(),
+                    daemon_host_id: daemon_host_id.clone(),
                     daemon_runtime: Some(PersistedDaemonRuntime {
-                        runtime_filename: expected_daemon
-                            .daemon_runtime
-                            .runtime_filename()
-                            .to_string(),
-                        server_version: expected_daemon.daemon_runtime.server_version().to_string(),
+                        runtime_filename: daemon_runtime.runtime_filename().to_string(),
+                        server_version: daemon_runtime.server_version().to_string(),
                     }),
                     pty_session_id: pty_session_id.clone(),
                     pty_generation,
@@ -13684,7 +13724,7 @@ impl Workspace {
         // like a fresh connection. Historical adoption is PTY-only: recording it
         // here could route file operations or new launches to the old daemon.
         #[cfg(feature = "local_tty")]
-        if expected_daemon.is_current_runtime {
+        if is_current_runtime {
             remember_daemon_node_session(
                 &mut self.daemon_node_sessions,
                 registry_node_id,
@@ -13692,7 +13732,13 @@ impl Workspace {
             );
         }
 
-        self.spawn_daemon_session_connect(connection, session_id, daemon_route, progress_tx, ctx);
+        self.spawn_daemon_session_connect(
+            connection,
+            session_id,
+            Some(daemon_runtime),
+            progress_tx,
+            ctx,
+        );
     }
 
     /// Establishes the headless SSH ControlMaster for a daemon session, then
@@ -13747,7 +13793,15 @@ impl Workspace {
                         );
                         let mut transport = SshTransport::new(socket_path, auth_context.clone());
                         if let Some(daemon_route) = daemon_route {
-                            transport = transport.with_daemon_runtime(daemon_route);
+                            transport = if daemon_route.runtime_filename()
+                                == remote_server::setup::daemon_runtime_filename("sock")
+                            {
+                                transport.with_expected_current_version(
+                                    daemon_route.server_version().to_string(),
+                                )
+                            } else {
+                                transport.with_daemon_runtime(daemon_route)
+                            };
                         }
                         let transport = transport.with_self_heal(server_for_transport);
                         let host_label = host.clone();
