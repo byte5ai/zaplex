@@ -8,6 +8,8 @@ mod block_filtering;
 mod bootstrapping;
 mod code_review;
 mod ctrl_d;
+#[cfg(target_os = "linux")]
+mod daemon_terminal;
 mod file_tree;
 mod goto_line;
 mod history;
@@ -43,6 +45,8 @@ pub use block_filtering::*;
 pub use bootstrapping::*;
 pub use code_review::*;
 pub use ctrl_d::*;
+#[cfg(target_os = "linux")]
+pub use daemon_terminal::*;
 pub use file_tree::*;
 use float_cmp::assert_approx_eq;
 pub use goto_line::*;

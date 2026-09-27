@@ -4,6 +4,12 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Ein separater CI-Abnahmetest (#456/#471) nutzt einen echten Daemon und ein isoliertes SSH-Konto für Tab-Vervollständigung, Ghosttext und Wiederaufnahme derselben PTY-Generation. Er verwendet bereits gebaute Programme und hält seine Profile von der Baseline-Coverage getrennt.
+
+- Der Skript-Messjob (#472) installiert und prüft `ripgrep` ausdrücklich. Die Konfliktdialog-Fixture erhält den produktiven Overlay-Aufbau, damit ihre unveränderten Geometrie- und Klickprüfungen echte Buttonpositionen finden.
+
+- Die native Dateimanager-Abnahme (#469) prüft nach F10 das von der ursprünglichen Shell gemeldete Verzeichnis, auch bei Leerzeichen und Apostrophen im Pfad. Sitzungsidentität und Eingabeentwurf müssen erhalten bleiben.
+
 - Die native UI-Abnahme (#455/#458–#464) prüft Verbindungszeilen in zwei Themes und drei Breiten, Favoriten-Flyouts, echtes Mausverschieben sowie den Erhalt lokaler Terminals beim Dateimanagerwechsel. Der macOS-CI-Job verlangt die zugehörigen Screenshots; Layout-Testdaten ersetzen keine Live-SSH-Abnahme.
 
 - Die Testsuite-Messung (#472) erfasst auch tatsächlich ausgeführte Skript-Tests mit Fallkennungen, Laufzeit und Originalprotokollen. Reine Regelprüfungen zählen getrennt; ein Gesamtvergleich verlangt vollständige, zum jeweiligen Commit passende Rust- und Skriptbelege.

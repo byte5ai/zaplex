@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use pathfinder_geometry::vector::vec2f;
+use warpui::elements::Stack;
 use warpui::platform::WindowStyle;
 use warpui::{
     App, AppContext, Entity, Event, Presenter, SingletonEntity, TypedActionView, View, ViewContext,
@@ -34,7 +35,7 @@ impl View for ConflictDialogTestView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        render_copy_move_conflict(
+        let dialog = render_copy_move_conflict(
             "conflicting-file.txt",
             2,
             false,
@@ -48,7 +49,10 @@ impl View for ConflictDialogTestView {
             self.handles[6].clone(),
             self.handles[7].clone(),
             self.handles[8].clone(),
-        )
+        );
+        let mut stack = Stack::new();
+        stack.add_overlay_child(Align::new(dialog).finish());
+        stack.finish()
     }
 }
 

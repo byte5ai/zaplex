@@ -64,7 +64,7 @@ jobs:
       - name: Install binary-only fixture dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fish
+          sudo apt-get install --no-install-recommends -y fish ripgrep
           python3 -m venv "$RUNNER_TEMP/nonrust-evidence-parser"
           "$RUNNER_TEMP/nonrust-evidence-parser/bin/python" -m pip install \
             --only-binary=:all: --require-hashes -r script/test-suite-evidence-requirements.txt
@@ -238,6 +238,22 @@ jobs:
           path: ${{ runner.temp }}/suite-evidence/
           if-no-files-found: error
           retention-days: 90
+
+      - name: Real Linux daemon terminal acceptance
+        if: ${{ inputs.coverage && steps.coverage_tests.outcome == 'success' }}
+        env:
+          CARGO_LLVM_COV_TARGET_DIR: ${{ runner.temp }}/suite-coverage-target
+        run: script/run-daemon-terminal-acceptance
+        shell: bash
+
+      - name: Upload Linux daemon terminal evidence
+        if: ${{ inputs.coverage && always() && steps.coverage_tests.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-daemon-terminal-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/daemon-terminal-acceptance/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: cargo test
         if: ${{ !inputs.coverage }}

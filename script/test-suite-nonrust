@@ -203,8 +203,9 @@ def collect(root, directory):
     plan = load_plan(root)
     if sys.flags.optimize or os.environ.get("PYTHONOPTIMIZE") not in (None, "", "0"):
         raise ValueError("Python assertions must remain enabled")
-    if any(shutil.which(tool) is None for tool in plan["required_tools"]):
-        raise ValueError("required non-Rust fixture tool is missing")
+    missing_tools = [tool for tool in plan["required_tools"] if shutil.which(tool) is None]
+    if missing_tools:
+        raise ValueError(f"required non-Rust fixture tools are missing: {', '.join(missing_tools)}")
     if git(root, "status", "--porcelain", "--untracked-files=no"):
         raise ValueError("non-Rust measurement needs an unchanged source checkout")
     if not os.environ.get("GITHUB_RUN_ID") or not os.environ.get("GITHUB_RUN_ATTEMPT"):
@@ -222,7 +223,7 @@ def collect(root, directory):
         "runner": {key: os.environ.get(key) for key in ("RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion")},
         "python": platform.python_version(), "python_executable": sys.executable,
         "tools": {**{tool: subprocess.check_output([tool, "--version"], text=True).splitlines()[0]
-                     for tool in ("bash", "git", "fish")},
+                     for tool in ("bash", "git", "fish", "rg")},
                   **{name: importlib.metadata.version(name) for name in ("tree-sitter", "tree-sitter-rust")}},
         "environment": {key: os.environ.get(key) for key in ("LANG", "LC_ALL", "CHANNEL", "PYTHONOPTIMIZE")},
         "source_root": str(root), "output_directory": str(directory),

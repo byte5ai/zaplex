@@ -12,6 +12,8 @@ pub mod code_review;
 pub mod command_palette;
 pub mod command_search;
 pub mod context_chips;
+#[cfg(target_os = "linux")]
+pub mod daemon_terminal;
 pub mod find;
 pub mod goto_line;
 pub mod input;

@@ -9,6 +9,7 @@
     "bash",
     "git",
     "fish",
+    "rg",
     "python3"
   ],
   "excluded_non_test_operations": {

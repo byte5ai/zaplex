@@ -425,7 +425,10 @@ pub fn open_local_file_manager(index: usize) -> TestStep {
         "Switch terminal {index} to its own local file manager"
     ))
     .with_action(move |app, window_id, data| {
-        let directory = tempfile::tempdir().expect("isolated file-manager directory");
+        let directory = tempfile::Builder::new()
+            .prefix("zaplex native FM ' ")
+            .tempdir()
+            .expect("isolated file-manager directory");
         std::fs::write(
             directory.path().join("acceptance-file.txt"),
             "native file-manager fixture\n",
@@ -600,6 +603,27 @@ pub fn assert_retained_terminals() -> TestStep {
                     return AssertionOutcome::failure(format!(
                         "Mode switch replaced a terminal or lost a draft: {before:?} -> {after:?}"
                     ));
+                }
+                for (index, identity) in before.iter().enumerate() {
+                    let directory = data
+                        .get::<_, tempfile::TempDir>(format!("native_fm_directory_{index}"))
+                        .expect("retained file-manager directory");
+                    let expected = directory.path().canonicalize().expect("fixture directory");
+                    let terminal = pane_group_view(app, window_id, 0).read(app, |group, ctx| {
+                        group
+                            .terminal_view_from_pane_id(identity.pane, ctx)
+                            .expect("retained terminal")
+                    });
+                    let actual = terminal.read(app, |view, ctx| {
+                        view.active_session_cwd(ctx)
+                            .and_then(|path| path.canonicalize().ok())
+                    });
+                    if actual.as_ref() != Some(&expected) {
+                        return AssertionOutcome::failure(format!(
+                            "F10 did not change the original shell directory: pane={:?}, expected={expected:?}, actual={actual:?}",
+                            identity.pane
+                        ));
+                    }
                 }
                 AssertionOutcome::Success
             },
