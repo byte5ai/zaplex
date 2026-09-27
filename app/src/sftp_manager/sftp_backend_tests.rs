@@ -5449,3 +5449,71 @@ fn sibling_rescan_retains_transferred_anchor_after_cleanup_retry_fails() {
     let restarted = InMemorySftpBackend::new(root.path().to_path_buf());
     assert!(restarted.startup_recovery_paths_for_test().is_empty());
 }
+
+#[cfg(windows)]
+#[test]
+fn host_filesystem_paths_preserve_windows_volumes_and_reject_ambiguous_paths() {
+    let backend = InMemorySftpBackend::for_local_filesystem();
+    for value in [
+        r"C:\Users\alice\Documents",
+        r"D:\Downloads\file.txt",
+        r"\\server\share\folder",
+        r"\\?\C:\Users\alice",
+        r"\\?\UNC\server\share\folder",
+    ] {
+        let path = Path::new(value);
+        assert_eq!(backend.to_local(path).unwrap(), path);
+        assert_eq!(backend.to_remote(path), path);
+    }
+    for value in [
+        r"relative\file.txt",
+        r"C:relative.txt",
+        r"\current-drive-only",
+        r"C:\parent\..\outside",
+        r"\\server\share\parent\..\outside",
+        r"\\.\PhysicalDrive0",
+        r"\\?\GLOBALROOT\Device\HarddiskVolume1\file",
+    ] {
+        assert!(backend.to_local(Path::new(value)).is_err(), "{value}");
+    }
+    assert!(!backend.supports_atomic_exchange());
+    assert!(!backend.supports_identity_bound_cleanup());
+}
+
+#[cfg(windows)]
+#[test]
+fn host_filesystem_listing_and_realpath_keep_native_paths_without_relaxing_confined_roots() {
+    let directory = tempdir().unwrap();
+    let root = dunce::canonicalize(directory.path()).unwrap();
+    let file = root.join("visible.txt");
+    fs::write(&file, b"contents").unwrap();
+    let host = InMemorySftpBackend::for_local_filesystem();
+    let entries = host.list_dir(&root).unwrap();
+    assert!(entries.iter().any(|entry| entry.path == file));
+    assert_eq!(host.realpath(&file).unwrap(), file);
+    assert_eq!(host.stat(&file).unwrap().path, file);
+    assert_eq!(host.lstat(&file).unwrap().path, file);
+    let mut reader = host.open_file_reader(&file).unwrap();
+    let mut bytes = [0; 8];
+    assert_eq!(reader.read_chunk(&mut bytes).unwrap(), 8);
+    assert_eq!(&bytes, b"contents");
+
+    let confined = InMemorySftpBackend::new(root.clone());
+    assert!(confined.to_local(&file).is_err());
+    assert_eq!(confined.to_local(Path::new("/visible.txt")).unwrap(), file);
+    assert!(confined.to_local(Path::new("/../outside")).is_err());
+    assert!(host
+        .create_file_writer(&root.join("unsupported.txt"))
+        .is_err());
+    assert!(!root.join("unsupported.txt").exists());
+}
+
+#[cfg(not(unix))]
+#[test]
+fn unsupported_cleanup_anchor_refuses_before_opening_or_mutating_a_file() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("preserved.txt");
+    fs::write(&path, b"preserved").unwrap();
+    assert!(open_local_cleanup_anchor(&path).is_err());
+    assert_eq!(fs::read(path).unwrap(), b"preserved");
+}

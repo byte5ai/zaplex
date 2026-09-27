@@ -119,3 +119,34 @@ fn account_selection_is_stable_under_discovery_reordering() {
         3
     );
 }
+
+#[test]
+fn directory_validation_reserves_targets_before_the_async_reply() {
+    let mut ledger = BulkLaunchLedger::new(BulkLaunchPlan::new([target("a"), target("b")]));
+    let plan_id = ledger.plan.id;
+    let first = ledger.reserve_attempt();
+    assert_eq!(first.len(), 2);
+    assert!(ledger.reserve_attempt().is_empty());
+    assert!(ledger.is_reserved(plan_id, &first[0].0, &first[0].1));
+    ledger.apply(plan_id, &first[0].0, Ok("launch-a".to_string()));
+    ledger.apply(plan_id, &first[1].0, Err("offline".to_string()));
+    assert!(!ledger.is_reserved(plan_id, &first[0].0, &first[0].1));
+    let retry = ledger.reserve_attempt();
+    assert_eq!(retry.len(), 1);
+    assert_eq!(retry[0].0, first[1].0);
+}
+
+#[test]
+fn reserved_launch_cannot_execute_after_a_plan_or_route_change() {
+    let mut ledger = BulkLaunchLedger::new(BulkLaunchPlan::new([target("a")]));
+    let plan_id = ledger.plan.id;
+    let reserved = ledger.reserve_attempt();
+    let (id, expected) = &reserved[0];
+    let mut changed = expected.clone();
+    changed.cwd = Some(PathBuf::from("/other"));
+    assert!(!ledger.is_reserved(plan_id, id, &changed));
+    let replacement = BulkLaunchLedger::new(BulkLaunchPlan::new([expected.clone()]));
+    assert!(!replacement.is_reserved(plan_id, id, expected));
+    assert!(ledger.mark_in_flight(plan_id, id, "managed".to_string()));
+    assert!(!ledger.is_reserved(plan_id, id, expected));
+}

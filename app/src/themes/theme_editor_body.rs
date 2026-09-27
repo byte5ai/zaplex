@@ -162,6 +162,7 @@ pub(crate) struct ThemeEditorBody {
     ui_colors_expanded: bool,
     pending_action: Option<PendingAction>,
     image_loading: bool,
+    image_request_generation: u64,
 }
 
 impl ThemeEditorBody {
@@ -211,6 +212,7 @@ impl ThemeEditorBody {
             ui_colors_expanded: false,
             pending_action: None,
             image_loading: false,
+            image_request_generation: 0,
         }
     }
 
@@ -228,6 +230,7 @@ impl ThemeEditorBody {
     }
 
     fn execute_pending(&mut self, action: PendingAction, ctx: &mut ViewContext<Self>) {
+        self.invalidate_image_request();
         match action {
             PendingAction::Close => {
                 self.clear_transient(ctx);
@@ -307,6 +310,7 @@ impl ThemeEditorBody {
         image_source: Option<PathBuf>,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.invalidate_image_request();
         theme.set_name(name.clone());
         self.draft = Some(ThemeDraft {
             theme: theme.clone(),
@@ -519,7 +523,8 @@ impl ThemeEditorBody {
         });
     }
 
-    pub(super) fn clear_transient(&self, ctx: &mut ViewContext<Self>) {
+    pub(super) fn clear_transient(&mut self, ctx: &mut ViewContext<Self>) {
+        self.invalidate_image_request();
         AppearanceManager::handle(ctx)
             .update(ctx, |manager, ctx| manager.clear_transient_theme(ctx));
     }
@@ -657,28 +662,54 @@ impl ThemeEditorBody {
         self.send_error(crate::t!("theme-editor-error-local-files"), ctx);
     }
 
+    fn invalidate_image_request(&mut self) {
+        self.image_request_generation = self.image_request_generation.wrapping_add(1);
+        self.image_loading = false;
+    }
+
     fn image_theme(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {
+        self.invalidate_image_request();
+        self.image_loading = true;
+        let generation = self.image_request_generation;
         let name = path
             .file_stem()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Image Theme".into());
         let image_source = path.clone();
+        let image_name = name.clone();
         ctx.spawn(
-            InMemoryThemeOptions::new(name.clone(), path),
+            async move {
+                InMemoryThemeOptions::new(image_name, path)
+                    .await
+                    .map(|options| options.theme())
+            },
             move |me, result, ctx| {
-                me.image_loading = false;
-                match result {
-                    Ok(options) => {
-                        me.load_theme(options.theme(), name, true, Some(image_source), ctx)
-                    }
-                    Err(error) => me.send_error(
-                        crate::t!("theme-editor-error-image", error = error.to_string()),
-                        ctx,
-                    ),
-                }
-                ctx.notify();
+                me.complete_image_theme(generation, result, name, image_source, ctx);
             },
         );
+    }
+
+    fn complete_image_theme(
+        &mut self,
+        generation: u64,
+        result: anyhow::Result<WarpTheme>,
+        name: String,
+        image_source: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // A late image result must not replace a newer draft or revive a closed preview.
+        if generation != self.image_request_generation || !self.image_loading {
+            return;
+        }
+        self.image_loading = false;
+        match result {
+            Ok(theme) => self.load_theme(theme, name, true, Some(image_source), ctx),
+            Err(error) => self.send_error(
+                crate::t!("theme-editor-error-image", error = error.to_string()),
+                ctx,
+            ),
+        }
+        ctx.notify();
     }
 
     fn send_error(&self, message: String, ctx: &mut ViewContext<Self>) {
@@ -1394,7 +1425,7 @@ impl TypedActionView for ThemeEditorBody {
             ThemeEditorBodyAction::HandleImageSelected(path) => self.image_theme(path.clone(), ctx),
             ThemeEditorBodyAction::HandleImportSelected(path) => self.import_theme(path, ctx),
             ThemeEditorBodyAction::FilePickerCancelled => {
-                self.image_loading = false;
+                self.invalidate_image_request();
                 ctx.notify();
             }
         }

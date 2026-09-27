@@ -536,3 +536,70 @@ fn parent_navigation_rejects_failed_and_superseded_listings_without_moving_selec
         });
     });
 }
+
+#[test]
+fn escape_dismisses_focused_overlays_through_real_key_routing() {
+    use crate::pane_group::focus_state::PaneGroupFocusState;
+    use crate::pane_group::pane::PaneId;
+    use crate::sftp_manager::browser_integration_tests::{
+        create_connected_view, initialize_app, key_down, presenter_for_window, rerender,
+    };
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view, _directory) =
+            create_connected_view(&mut app, &[("keep.txt", b"keep")]);
+        let pane_id = PaneId::dummy_pane_id();
+        let focus_state = app.add_model(|_| PaneGroupFocusState::new(pane_id, None, true));
+        view.update(&mut app, |view, ctx| {
+            view.set_focus_handle(PaneFocusHandle::new(pane_id, focus_state), ctx);
+            view.focus_contents(ctx);
+            view.dialog = Some(Dialog::CloseTransferPanelConfirm);
+            view.context_menu = Some(ContextMenuState::new(
+                view.entry_reference(0).unwrap(),
+                Vector2F::new(100.0, 100.0),
+            ));
+        });
+        let (presenter, invalidation) = presenter_for_window(&app, window_id);
+        rerender(&mut app, presenter.clone(), invalidation.clone());
+        key_down(&mut app, window_id, presenter.clone(), "shift-escape");
+        view.read(&app, |view, _| {
+            assert!(view.context_menu.is_some());
+            assert!(view.dialog.is_some());
+        });
+        assert!(key_down(&mut app, window_id, presenter.clone(), "escape"));
+        view.read(&app, |view, _| {
+            assert!(view.context_menu.is_none(), "the context menu closes first");
+            assert!(
+                view.dialog.is_some(),
+                "one Escape must not also close the dialog"
+            );
+        });
+        rerender(&mut app, presenter.clone(), invalidation.clone());
+        assert!(key_down(&mut app, window_id, presenter.clone(), "escape"));
+        view.read(&app, |view, _| assert!(view.dialog.is_none()));
+
+        // Host-key prompts use the separate disconnected rendering branch.
+        view.update(&mut app, |view, _| {
+            view.connection = ConnectionState::Failed("host key confirmation required".to_string());
+            view.dialog = Some(Dialog::ConfirmUnknownHostKey {
+                host: "example.invalid".to_string(),
+                port: 22,
+                fingerprint_sha256: "SHA256:test".to_string(),
+                key_type: "ssh-ed25519".to_string(),
+            });
+            view.has_focus_within = false;
+        });
+        rerender(&mut app, presenter.clone(), invalidation.clone());
+        key_down(&mut app, window_id, presenter.clone(), "escape");
+        view.read(&app, |view, _| assert!(view.dialog.is_some()));
+        view.update(&mut app, |view, _| view.has_focus_within = true);
+        rerender(&mut app, presenter.clone(), invalidation);
+        assert!(key_down(&mut app, window_id, presenter, "escape"));
+        view.read(&app, |view, _| assert!(view.dialog.is_none()));
+        assert_eq!(
+            std::fs::read(_directory.path().join("keep.txt")).unwrap(),
+            b"keep"
+        );
+    });
+}

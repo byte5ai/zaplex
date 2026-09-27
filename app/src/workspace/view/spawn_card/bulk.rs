@@ -121,6 +121,7 @@ pub(super) struct LaunchPreview {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum BulkTargetResult {
     Pending,
+    Reserved,
     InFlight { launch_id: String },
     Succeeded { launch_id: String },
     Failed { message: String },
@@ -150,11 +151,35 @@ impl BulkLaunchLedger {
             .filter(|(id, _)| {
                 !matches!(
                     self.results.get(*id),
-                    Some(BulkTargetResult::InFlight { .. } | BulkTargetResult::Succeeded { .. })
+                    Some(
+                        BulkTargetResult::Reserved
+                            | BulkTargetResult::InFlight { .. }
+                            | BulkTargetResult::Succeeded { .. }
+                    )
                 )
             })
             .map(|(id, target)| (id.clone(), target.clone()))
             .collect()
+    }
+
+    /// Reserve before directory validation yields to the event loop.
+    pub(super) fn reserve_attempt(&mut self) -> Vec<(BulkLaunchTargetId, BulkLaunchTarget)> {
+        let targets = self.targets_for_attempt();
+        for (id, _) in &targets {
+            self.results.insert(id.clone(), BulkTargetResult::Reserved);
+        }
+        targets
+    }
+
+    pub(super) fn is_reserved(
+        &self,
+        plan_id: BulkLaunchPlanId,
+        target_id: &BulkLaunchTargetId,
+        target: &BulkLaunchTarget,
+    ) -> bool {
+        self.plan.id == plan_id
+            && self.plan.targets.get(target_id) == Some(target)
+            && self.results.get(target_id) == Some(&BulkTargetResult::Reserved)
     }
 
     pub(super) fn apply(
@@ -218,6 +243,7 @@ impl BulkLaunchLedger {
                     .get(id)
                     .map(|target| (target, message.as_str())),
                 BulkTargetResult::Pending
+                | BulkTargetResult::Reserved
                 | BulkTargetResult::InFlight { .. }
                 | BulkTargetResult::Succeeded { .. } => None,
             })

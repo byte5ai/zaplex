@@ -383,6 +383,19 @@ pub enum RecoveryOutcome {
     DestinationCommittedSourcePreserved,
 }
 
+impl RecoveryOutcome {
+    fn include(&mut self, other: Self) {
+        *self = match (*self, other) {
+            (Self::DestinationCommittedSourcePreserved, _)
+            | (_, Self::DestinationCommittedSourcePreserved) => {
+                Self::DestinationCommittedSourcePreserved
+            }
+            (Self::SourceRestored, _) | (_, Self::SourceRestored) => Self::SourceRestored,
+            (Self::CleanupCompleted, Self::CleanupCompleted) => Self::CleanupCompleted,
+        };
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EntrySnapshot {
     root: PathBuf,
@@ -411,6 +424,7 @@ struct StreamedFile {
 
 #[derive(Clone)]
 struct PathOwnership {
+    recovery_outcome: RecoveryOutcome,
     root: PathBuf,
     owned: BTreeMap<PathBuf, OwnedEntryIdentity>,
     unresolved: BTreeSet<PathBuf>,
@@ -469,6 +483,7 @@ impl OwnedEntryIdentity {
 impl PathOwnership {
     fn empty(root: &Path) -> Self {
         Self {
+            recovery_outcome: RecoveryOutcome::CleanupCompleted,
             root: root.to_path_buf(),
             owned: BTreeMap::new(),
             unresolved: BTreeSet::new(),
@@ -592,6 +607,7 @@ enum CleanupRecoveryUnit {
 
 #[derive(Clone)]
 struct CleanupRecovery {
+    outcome: RecoveryOutcome,
     units: Vec<CleanupRecoveryUnit>,
     retained_anchors: Vec<Arc<dyn BackendOwnershipAnchor>>,
 }
@@ -645,7 +661,6 @@ fn retry_cleanup(
     progress_callback: &mut Option<&mut dyn FnMut(TransferProgress)>,
 ) -> Result<RecoveryOutcome, SftpOpsError> {
     control.wait_until_runnable()?;
-    let mut outcome = RecoveryOutcome::CleanupCompleted;
     for unit in &mut recovery.units {
         match unit {
             CleanupRecoveryUnit::Verified {
@@ -723,28 +738,23 @@ fn retry_cleanup(
                     }
                 }
             }
-            CleanupRecoveryUnit::Unresolved { backend, ownership } => match cleanup_owned_manifest(
-                &**backend,
-                ownership,
-                control,
-                progress_callback,
-                TransferPhase::Finalizing,
-            )? {
-                RecoveryOutcome::CleanupCompleted => {}
-                RecoveryOutcome::SourceRestored => {
-                    if outcome != RecoveryOutcome::DestinationCommittedSourcePreserved {
-                        outcome = RecoveryOutcome::SourceRestored;
-                    }
-                }
-                RecoveryOutcome::DestinationCommittedSourcePreserved => {
-                    outcome = RecoveryOutcome::DestinationCommittedSourcePreserved;
-                }
-            },
+            CleanupRecoveryUnit::Unresolved { backend, ownership } => {
+                let result = cleanup_owned_manifest(
+                    &**backend,
+                    ownership,
+                    control,
+                    progress_callback,
+                    TransferPhase::Finalizing,
+                );
+                // Preserve completed work even if a later path or filesystem fails.
+                recovery.outcome.include(ownership.recovery_outcome);
+                result?;
+            }
         }
     }
     recovery.units.clear();
     recovery.retained_anchors.clear();
-    Ok(outcome)
+    Ok(recovery.outcome)
 }
 
 fn recovery_error(
@@ -823,6 +833,7 @@ fn cleanup_recovery_error(
                 .insert(
                     recovery_id,
                     CleanupRecovery {
+                        outcome: RecoveryOutcome::CleanupCompleted,
                         units: vec![CleanupRecoveryUnit::Verified {
                             backend,
                             path: path.clone(),
@@ -967,6 +978,7 @@ fn cleanup_failure_with_backend_recovery(
             .insert(
                 recovery_id,
                 CleanupRecovery {
+                    outcome: RecoveryOutcome::CleanupCompleted,
                     units,
                     retained_anchors: Vec::new(),
                 },
@@ -5015,6 +5027,7 @@ fn ownership_recovery_error(
         .insert(
             recovery_id,
             CleanupRecovery {
+                outcome: RecoveryOutcome::CleanupCompleted,
                 units: vec![CleanupRecoveryUnit::Unresolved { backend, ownership }],
                 retained_anchors: Vec::new(),
             },
@@ -5036,14 +5049,15 @@ fn cleanup_owned_manifest(
 ) -> Result<RecoveryOutcome, SftpOpsError> {
     begin_required_cleanup(control, progress_callback, 0)?;
 
-    let mut outcome = RecoveryOutcome::CleanupCompleted;
     let anchored = ownership.anchored_recovery.clone();
     for unit in &anchored {
-        if retry_anchored_recovery(backend, unit, control, progress_callback, phase)?
-            == RecoveryOutcome::SourceRestored
-        {
-            outcome = RecoveryOutcome::SourceRestored;
-        }
+        ownership.recovery_outcome.include(retry_anchored_recovery(
+            backend,
+            unit,
+            control,
+            progress_callback,
+            phase,
+        )?);
     }
     ownership.anchored_recovery.clear();
 
@@ -5052,6 +5066,17 @@ fn cleanup_owned_manifest(
         if let Some(replacements) = backend.retry_unresolved_recovery(&path)? {
             let source_preserved = backend.take_recovery_source_preserved(&path);
             let source_restored = backend.take_recovery_source_restored(&path);
+            // These backend notifications are consumed once; retain them before
+            // any following anchor, path, or owned-entry cleanup can fail.
+            if source_preserved {
+                ownership
+                    .recovery_outcome
+                    .include(RecoveryOutcome::DestinationCommittedSourcePreserved);
+            } else if source_restored {
+                ownership
+                    .recovery_outcome
+                    .include(RecoveryOutcome::SourceRestored);
+            }
             ownership.unresolved.remove(&path);
             let mut anchored = None;
             for replacement in &replacements {
@@ -5070,21 +5095,16 @@ fn cleanup_owned_manifest(
                 // Retain the transferred anchor before a fallible retry, because the backend
                 // no longer owns it and the original unresolved path has been superseded.
                 ownership.anchored_recovery.push(unit.clone());
-                if retry_anchored_recovery(backend, &unit, control, progress_callback, phase)?
-                    == RecoveryOutcome::SourceRestored
-                {
-                    outcome = RecoveryOutcome::SourceRestored;
-                }
+                ownership.recovery_outcome.include(retry_anchored_recovery(
+                    backend,
+                    &unit,
+                    control,
+                    progress_callback,
+                    phase,
+                )?);
                 ownership.anchored_recovery.pop();
             } else {
                 ownership.unresolved.extend(replacements);
-            }
-            if source_preserved {
-                outcome = RecoveryOutcome::DestinationCommittedSourcePreserved;
-            } else if source_restored
-                && outcome != RecoveryOutcome::DestinationCommittedSourcePreserved
-            {
-                outcome = RecoveryOutcome::SourceRestored;
             }
             continue;
         }
@@ -5235,7 +5255,7 @@ fn cleanup_owned_manifest(
     }
 
     if ownership.is_empty() {
-        Ok(outcome)
+        Ok(ownership.recovery_outcome)
     } else {
         Err(SftpOpsError::Operation(format!(
             "Transfer cleanup retained paths below {} (owned={}, unresolved={}, anchored={}, retained_anchors={})",

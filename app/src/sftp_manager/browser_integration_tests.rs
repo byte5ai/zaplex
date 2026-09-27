@@ -158,7 +158,7 @@ fn create_local_connected_view(
     (window_id, view, temp_dir)
 }
 
-fn presenter_for_window(
+pub(super) fn presenter_for_window(
     app: &App,
     window_id: warpui::WindowId,
 ) -> (Rc<RefCell<Presenter>>, WindowInvalidation) {
@@ -193,7 +193,11 @@ fn render_position(
     })
 }
 
-fn rerender(app: &mut App, presenter: Rc<RefCell<Presenter>>, invalidation: WindowInvalidation) {
+pub(super) fn rerender(
+    app: &mut App,
+    presenter: Rc<RefCell<Presenter>>,
+    invalidation: WindowInvalidation,
+) {
     app.update(move |ctx| {
         presenter.borrow_mut().invalidate(invalidation, ctx);
         presenter
@@ -280,7 +284,7 @@ fn right_click(
     });
 }
 
-fn key_down(
+pub(super) fn key_down(
     app: &mut App,
     window_id: WindowId,
     presenter: Rc<RefCell<Presenter>>,

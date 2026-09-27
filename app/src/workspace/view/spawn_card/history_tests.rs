@@ -1,6 +1,11 @@
 use super::*;
 use chrono::TimeZone as _;
 
+fn local_path(relative: &str) -> PathBuf {
+    let root = if cfg!(windows) { "C:/" } else { "/" };
+    Path::new(root).join(relative)
+}
+
 fn at(second: i64) -> DateTime<Utc> {
     Utc.timestamp_opt(second, 0).single().unwrap()
 }
@@ -12,22 +17,22 @@ fn mru_is_deduplicated_and_bounded_per_host() {
         history
             .record_success(
                 &FolderHistoryHost::Local,
-                Path::new(&format!("/work/{index}")),
+                &local_path(&format!("work/{index}")),
                 at(index as i64),
             )
             .unwrap();
     }
     history
-        .record_success(&FolderHistoryHost::Local, Path::new("/work/7"), at(99))
+        .record_success(&FolderHistoryHost::Local, &local_path("work/7"), at(99))
         .unwrap();
 
     let entries = history.entries(&FolderHistoryHost::Local);
     assert_eq!(entries.len(), MAX_FOLDERS_PER_HOST);
-    assert_eq!(entries[0].path, PathBuf::from("/work/7"));
+    assert_eq!(entries[0].path, local_path("work/7"));
     assert_eq!(
         entries
             .iter()
-            .filter(|entry| entry.path == Path::new("/work/7"))
+            .filter(|entry| entry.path == local_path("work/7"))
             .count(),
         1
     );
@@ -39,7 +44,7 @@ fn local_and_remote_hosts_never_share_history() {
     let remote_a = FolderHistoryHost::remote("node-a").unwrap();
     let remote_b = FolderHistoryHost::remote("node-b").unwrap();
     history
-        .record_success(&FolderHistoryHost::Local, Path::new("/work/local"), at(1))
+        .record_success(&FolderHistoryHost::Local, &local_path("work/local"), at(1))
         .unwrap();
     history
         .record_success(&remote_a, Path::new("/srv/a"), at(2))
@@ -50,7 +55,7 @@ fn local_and_remote_hosts_never_share_history() {
 
     assert_eq!(
         history.entries(&FolderHistoryHost::Local)[0].path,
-        Path::new("/work/local")
+        local_path("work/local")
     );
     assert_eq!(history.entries(&remote_a)[0].path, Path::new("/srv/a"));
     assert_eq!(history.entries(&remote_b)[0].path, Path::new("/srv/b"));
@@ -73,15 +78,15 @@ fn navigation_truncates_forward_branch_without_reordering_mru() {
 fn search_is_case_insensitive_and_does_not_change_selection() {
     let mut history = FolderHistory::empty();
     history
-        .record_success(&FolderHistoryHost::Local, Path::new("/work/Zaplex"), at(1))
+        .record_success(&FolderHistoryHost::Local, &local_path("work/Zaplex"), at(1))
         .unwrap();
     history
-        .record_success(&FolderHistoryHost::Local, Path::new("/work/Other"), at(2))
+        .record_success(&FolderHistoryHost::Local, &local_path("work/Other"), at(2))
         .unwrap();
 
     let matches = history.search(&FolderHistoryHost::Local, "zap");
     assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].path, Path::new("/work/Zaplex"));
+    assert_eq!(matches[0].path, local_path("work/Zaplex"));
 }
 
 #[test]
@@ -96,6 +101,7 @@ fn late_validation_result_cannot_enable_a_new_path() {
 }
 
 #[test]
+#[cfg(not(target_family = "wasm"))]
 fn corrupt_history_is_protected_from_overwrite() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("history.json");
@@ -115,7 +121,7 @@ fn failed_history_save_does_not_publish_an_unpersisted_entry() {
     let mut history = FolderHistory::with_file(path);
 
     assert!(history
-        .record_success(&FolderHistoryHost::Local, Path::new("/work/zaplex"), at(7),)
+        .record_success(&FolderHistoryHost::Local, &local_path("work/zaplex"), at(7),)
         .is_err());
     assert!(history.entries(&FolderHistoryHost::Local).is_empty());
 }
@@ -127,13 +133,13 @@ fn successful_history_survives_store_reload() {
     let file = directory.path().join("history.json");
     let mut history = FolderHistory::with_file(file.clone());
     history
-        .record_success(&FolderHistoryHost::Local, Path::new("/work/zaplex"), at(7))
+        .record_success(&FolderHistoryHost::Local, &local_path("work/zaplex"), at(7))
         .unwrap();
 
     let reloaded = FolderHistory::with_file(file);
     assert_eq!(
         reloaded.entries(&FolderHistoryHost::Local)[0].path,
-        Path::new("/work/zaplex")
+        local_path("work/zaplex")
     );
 }
 
@@ -144,10 +150,10 @@ fn path_normalization_rejects_relative_and_root_escape_paths() {
     assert_eq!(
         normalize_path(
             &FolderHistoryHost::Local,
-            Path::new("/work/./zaplex/../app")
+            &local_path("work/./zaplex/../app")
         )
         .unwrap(),
-        PathBuf::from("/work/app")
+        local_path("work/app")
     );
 }
 
@@ -160,4 +166,47 @@ fn remote_paths_use_posix_normalization_independent_of_local_host_syntax() {
     );
     assert!(normalize_path(&remote, Path::new("srv/zaplex")).is_err());
     assert!(normalize_path(&remote, Path::new("/../../escape")).is_err());
+}
+
+#[test]
+#[cfg(not(target_family = "wasm"))]
+fn workspaces_merge_successful_launches_from_the_latest_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("history.json");
+    let mut first = FolderHistory::with_file(file.clone());
+    let mut second = FolderHistory::with_file(file.clone());
+    first
+        .record_success(&FolderHistoryHost::Local, &local_path("work/first"), at(1))
+        .unwrap();
+    second
+        .record_success(&FolderHistoryHost::Local, &local_path("work/second"), at(2))
+        .unwrap();
+
+    first.refresh();
+    let entries = first.entries(&FolderHistoryHost::Local);
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].path, local_path("work/second"));
+    assert_eq!(entries[1].path, local_path("work/first"));
+    let reloaded = FolderHistory::with_file(file);
+    assert_eq!(reloaded.entries(&FolderHistoryHost::Local), entries);
+}
+
+#[test]
+#[cfg(not(target_family = "wasm"))]
+fn history_corrupted_after_loading_is_still_protected() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("history.json");
+    let mut history = FolderHistory::with_file(file.clone());
+    history
+        .record_success(&FolderHistoryHost::Local, &local_path("work/first"), at(1))
+        .unwrap();
+    std::fs::write(&file, "recover this malformed history").unwrap();
+
+    assert!(history
+        .record_success(&FolderHistoryHost::Local, &local_path("work/second"), at(2))
+        .is_err());
+    assert_eq!(
+        std::fs::read_to_string(file).unwrap(),
+        "recover this malformed history"
+    );
 }

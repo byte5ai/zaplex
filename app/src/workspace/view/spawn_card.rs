@@ -356,10 +356,14 @@ fn resolve_scoped_host(
     // Fallback: resolve by display label (only when no id was supplied).
     if scoped_id.is_none() {
         if let Some(name) = scoped_name {
-            if let Some(pos) = hosts.iter().position(|h| h.name == name) {
-                return HostChoice::Remote(pos);
-            }
-            return HostChoice::Unselected;
+            let mut matches = hosts
+                .iter()
+                .enumerate()
+                .filter(|(_, host)| host.name == name);
+            return match (matches.next(), matches.next()) {
+                (Some((index, _)), None) => HostChoice::Remote(index),
+                (None, None) | (None, Some(_)) | (Some(_), Some(_)) => HostChoice::Unselected,
+            };
         }
     }
     HostChoice::Local
@@ -640,6 +644,7 @@ impl SpawnCard {
     /// Takes a `ViewContext` because a remote-scoped open may prefill the
     /// remote-dir editor buffer (touching an editor view needs ctx).
     pub fn configure(&mut self, cfg: SpawnCardConfig, ctx: &mut ViewContext<Self>) {
+        self.folder_history.refresh();
         self.model.clear();
         self.effort.clear();
         self.managed_mode = ManagedLaunchMode::Ordinary;
@@ -796,8 +801,10 @@ impl SpawnCard {
         result: DirectoryValidation,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !self.folder_validation.apply(request, result) {
+            return;
+        }
         self.history_validation.insert(request.path.clone(), result);
-        self.folder_validation.apply(request, result);
         ctx.notify();
     }
 
@@ -922,13 +929,29 @@ impl SpawnCard {
         }
     }
 
+    fn directory_is_ready(&self, directory: Result<Option<PathBuf>, RemoteCwdError>) -> bool {
+        match directory {
+            Err(RemoteCwdError::RelativePath) => false,
+            Ok(None) => self.managed_mode == ManagedLaunchMode::Ordinary,
+            Ok(Some(_)) => self.folder_validation.is_valid(),
+        }
+    }
+
+    fn can_launch(&self, app: &AppContext) -> bool {
+        self.selected_agent_is_available()
+            && self.host_is_ready()
+            && self.model_is_ready()
+            && self.managed_mode_is_valid()
+            && self.account_is_ready()
+            && self.directory_is_ready(if matches!(self.host, HostChoice::Remote(_)) {
+                self.selected_remote_cwd(app)
+            } else {
+                Ok(self.project.clone())
+            })
+    }
+
     fn build_bulk_plan(&self, app: &AppContext) -> Option<BulkLaunchPlan> {
-        if !self.selected_agent_is_available()
-            || !self.host_is_ready()
-            || !self.model_is_ready()
-            || !self.account_is_ready()
-            || !self.managed_mode_is_valid()
-        {
+        if !self.can_launch(app) {
             return None;
         }
         let cwd = self.selected_directory(app);
@@ -957,16 +980,34 @@ impl SpawnCard {
     }
 
     fn launch_attempt(&mut self, app: &AppContext) -> Option<SpawnCardEvent> {
+        if !self.can_launch(app) {
+            return None;
+        }
         if self.bulk_launch.is_none() {
             let plan = self.build_bulk_plan(app)?;
             self.bulk_launch = Some(BulkLaunchLedger::new(plan));
         }
-        let ledger = self.bulk_launch.as_ref()?;
-        let targets = ledger.targets_for_attempt();
+        let ledger = self.bulk_launch.as_mut()?;
+        let targets = ledger.reserve_attempt();
         (!targets.is_empty()).then_some(SpawnCardEvent::LaunchBatch {
             plan_id: ledger.plan.id,
             targets,
         })
+    }
+
+    pub fn cancel_pending_launches(&mut self) {
+        self.invalidate_bulk_plan();
+    }
+
+    pub fn launch_target_is_reserved(
+        &self,
+        plan_id: BulkLaunchPlanId,
+        target_id: &BulkLaunchTargetId,
+        target: &BulkLaunchTarget,
+    ) -> bool {
+        self.bulk_launch
+            .as_ref()
+            .is_some_and(|ledger| ledger.is_reserved(plan_id, target_id, target))
     }
 
     pub fn apply_launch_result(
@@ -1440,6 +1481,7 @@ impl SpawnCard {
             return false;
         }
         self.host = host;
+        self.history_validation.clear();
         if matches!(host, HostChoice::Unselected | HostChoice::Local) {
             self.managed_mode = ManagedLaunchMode::Ordinary;
         } else {
@@ -3000,15 +3042,7 @@ impl SpawnCard {
 
         // Confirm + cancel. Confirm renders inert (dimmed, no click handler) when
         // no supported agent CLI is installed — there is nothing it could launch.
-        let can_launch = self.selected_agent_is_available()
-            && self.host_is_ready()
-            && self.model_is_ready()
-            && self.managed_mode_is_valid()
-            && self.account_is_ready()
-            && self.selected_remote_cwd(app).is_ok()
-            && (self.managed_mode == ManagedLaunchMode::Ordinary
-                || self.selected_directory(app).is_some())
-            && (self.selected_directory(app).is_none() || self.folder_validation.is_valid());
+        let can_launch = self.can_launch(app);
         let confirm: Box<dyn Element> = if can_launch {
             let label = self
                 .bulk_launch
@@ -3285,6 +3319,7 @@ impl TypedActionView for SpawnCard {
                 }
             }
             SpawnCardAction::Close => {
+                self.invalidate_bulk_plan();
                 ctx.emit(SpawnCardEvent::Close);
             }
         }

@@ -1224,9 +1224,9 @@ impl SftpBrowserView {
         let mut me = Self::new(String::new(), None, ctx);
         me.pane_configuration = ctx
             .add_model(|_ctx| PaneConfiguration::new(crate::t!("sftp-local-file-manager-title")));
-        let backend = Arc::new(crate::sftp_manager::sftp_backend::InMemorySftpBackend::new(
-            std::path::PathBuf::from("/"),
-        )) as Arc<dyn SftpBackend>;
+        let backend = Arc::new(
+            crate::sftp_manager::sftp_backend::InMemorySftpBackend::for_local_filesystem(),
+        ) as Arc<dyn SftpBackend>;
         me.connection = ConnectionState::Connected;
         me.sftp = Some(backend);
         me.route_epoch = me.route_epoch.wrapping_add(1);
@@ -3442,9 +3442,8 @@ impl SftpBrowserView {
             self.show_error_toast(crate::t!("fm-toast-not-connected"), ctx);
             return;
         };
-        let local_backend: Arc<dyn SftpBackend> = Arc::new(
-            super::sftp_backend::InMemorySftpBackend::new(PathBuf::from("/")),
-        );
+        let local_backend: Arc<dyn SftpBackend> =
+            Arc::new(super::sftp_backend::InMemorySftpBackend::for_local_filesystem());
         let (source_backend, target_backend) = match direction {
             TransferDirection::Upload => (own_backend, remote_backend),
             TransferDirection::Download => (remote_backend, local_backend),
@@ -3794,9 +3793,8 @@ impl SftpBrowserView {
             .activity_handle(queue_id)
             .expect("new transfer queue activity must exist");
         let control = activity.control();
-        let local_backend: Arc<dyn SftpBackend> = Arc::new(
-            super::sftp_backend::InMemorySftpBackend::new(PathBuf::from("/")),
-        );
+        let local_backend: Arc<dyn SftpBackend> =
+            Arc::new(super::sftp_backend::InMemorySftpBackend::for_local_filesystem());
         let (source_backend, target_backend, source_path, target_path) = match direction {
             TransferDirection::Upload => (
                 delete_after
@@ -4466,29 +4464,62 @@ impl SftpBrowserView {
         main_content: Box<dyn Element>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let Some(dialog) = &self.dialog else {
-            return main_content;
+        let content = if let Some(dialog) = &self.dialog {
+            let dialog_el = super::dialogs::render_dialog(
+                dialog,
+                &self.rename_editor,
+                &self.new_folder_editor,
+                appearance,
+                self.dialog_confirm_btn.clone(),
+                self.dialog_cancel_btn.clone(),
+                self.dialog_close_btn.clone(),
+                self.overwrite_all_btn.clone(),
+                self.skip_all_btn.clone(),
+                self.rename_conflict_btn.clone(),
+                self.newer_only_conflict_btn.clone(),
+                self.rename_all_btn.clone(),
+                self.newer_only_all_btn.clone(),
+                &self.target_pick_btn_states,
+            );
+            let mut stack = Stack::new();
+            stack.add_child(main_content);
+            stack.add_overlay_child(Align::new(dialog_el).finish());
+            stack.finish()
+        } else {
+            main_content
         };
-        let dialog_el = super::dialogs::render_dialog(
-            dialog,
-            &self.rename_editor,
-            &self.new_folder_editor,
-            appearance,
-            self.dialog_confirm_btn.clone(),
-            self.dialog_cancel_btn.clone(),
-            self.dialog_close_btn.clone(),
-            self.overwrite_all_btn.clone(),
-            self.skip_all_btn.clone(),
-            self.rename_conflict_btn.clone(),
-            self.newer_only_conflict_btn.clone(),
-            self.rename_all_btn.clone(),
-            self.newer_only_all_btn.clone(),
-            &self.target_pick_btn_states,
-        );
-        let mut stack = Stack::new();
-        stack.add_child(main_content);
-        stack.add_overlay_child(Align::new(dialog_el).finish());
-        stack.finish()
+        let close_action = if self.context_menu.is_some() {
+            SftpBrowserAction::CloseContextMenu
+        } else if self.dialog.is_some() {
+            SftpBrowserAction::CloseDialog
+        } else {
+            return content;
+        };
+        let focus_handle = self.focus_handle.clone();
+        let has_focus_within = self.has_focus_within;
+        // This inner handler remains available while the outer file-action
+        // handler is disabled by an overlay. Children still handle input first,
+        // so an editor's consumed Escape is not dispatched a second time.
+        EventHandler::new(content)
+            .on_keydown(move |ctx, app, keystroke| {
+                if has_focus_within
+                    && focus_handle
+                        .as_ref()
+                        .is_some_and(|handle| handle.is_focused(app))
+                    && keystroke.key == "escape"
+                    && !keystroke.ctrl
+                    && !keystroke.cmd
+                    && !keystroke.alt
+                    && !keystroke.meta
+                    && !keystroke.shift
+                {
+                    ctx.dispatch_typed_action(close_action.clone());
+                    DispatchEventResult::StopPropagation
+                } else {
+                    DispatchEventResult::PropagateToParent
+                }
+            })
+            .finish()
     }
 
     /// The pick-mode banner (#105): the current directory + a "Use this folder"

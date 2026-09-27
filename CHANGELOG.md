@@ -4,6 +4,14 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Mehrhost-Terminals (#245/#456) übernehmen Ausgabe, Sitzungsende und Hinweise nur von ihrer eigenen Daemon-Verbindung, auch wenn ein anderer Host dieselbe PTY-Kennung verwendet.
+
+- Lokale Dateiansichten unter Windows (#245) erhalten absolute Laufwerks- und UNC-Pfade; abgeschottete Testdateisysteme bleiben getrennt. Escape schließt im fokussierten Dateimanager zuerst das Kontextmenü, anschließend den Dialog. SFTP-Wiederherstellung behält mehrere offene Vorgänge am selben Pfad und bereits erreichte Wiederherstellungsergebnisse über spätere Fehler und erneute Versuche hinweg.
+
+- Der Startdialog (#245) prüft die Startfreigabe auch bei Enter, reserviert Ziele vor asynchroner Prüfung und verwirft verspätete Starts nach Auswahlwechsel oder Schließen. Ordnerhistorien mehrerer Workspaces bleiben erhalten; mehrdeutige Hostnamen werden nicht automatisch zugeordnet. Stop-/Kill-Bestätigungen nehmen am gemeinsamen Modal-Fokus und Schließen teil.
+
+- Der Themeeditor (#245) verwirft verspätete Bildverarbeitung nach Vorlagenwechsel oder Schließen der Vorschau. Die Command-Palette bietet GitHub-Analysen nur bei einem tatsächlich unterstützten lokalen Claude-Konto an.
+
 - Pane-Ziele (#245/#460/#462) werden nach Verschieben, Ausblenden und Dateimanager-Wechsel ungültig. Cockpit- und Dateimanager-Kopfzeilen leiten ihre Drag-/Tab-Aktionen an die Pane-Gruppe weiter; Remote-Wiederverbindung erhält die gemeinsame Titel- und Hostkonfiguration.
 
 - Der Daemon (#245) erhält Agentenzuordnungen bei Inventarabfragen älterer Clients. Ein veralteter Projektpfad einer anderen Session blockiert neue, unabhängige Starts nicht mehr.

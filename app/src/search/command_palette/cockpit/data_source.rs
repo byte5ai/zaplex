@@ -3,7 +3,7 @@ use itertools::Itertools;
 use warpui::{AppContext, Entity, SingletonEntity};
 
 use super::search_item::SearchItem;
-use crate::cockpit::github_flows::RepositoryContext;
+use crate::cockpit::github_flows::{analysis_accounts, RepositoryContext};
 use crate::cockpit::model::CockpitModel;
 use crate::cockpit::palette::{build_palette_index, CockpitPaletteKind};
 use crate::cockpit::settings::CockpitSettings;
@@ -101,15 +101,9 @@ impl DataSource {
         }
         let model = CockpitModel::as_ref(app);
         let installed_agents = CLIAgentInstallModel::as_ref(app);
-        let has_analysis_account = [
-            zaplex_cockpit::Provider::Claude,
-            zaplex_cockpit::Provider::Codex,
-        ]
-        .into_iter()
-        .any(|provider| {
-            installed_agents.is_cli_agent_installed(crate::cockpit::agent_of(provider))
-                && zaplex_cockpit::pick_freest_checked(provider, model.snapshot()).is_some()
-        });
+        let has_analysis_account = installed_agents
+            .is_cli_agent_installed(crate::cockpit::agent_of(zaplex_cockpit::Provider::Claude))
+            && !analysis_accounts(model.snapshot()).is_empty();
         let github_cli_available = cfg!(not(target_family = "wasm"))
             && crate::util::path::resolve_executable("gh").is_some();
         let repository = (has_analysis_account && github_cli_available)

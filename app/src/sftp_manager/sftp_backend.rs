@@ -1063,6 +1063,39 @@ fn open_local_cleanup_anchor(path: &Path) -> Result<fs::File, SftpOpsError> {
     })
 }
 
+#[cfg(not(unix))]
+fn open_local_cleanup_anchor(path: &Path) -> Result<fs::File, SftpOpsError> {
+    Err(SftpOpsError::Operation(format!(
+        "Identity-bound local cleanup is unsupported on this platform: {}",
+        path.display()
+    )))
+}
+
+#[cfg(windows)]
+fn validate_windows_host_path(path: &Path) -> Result<(), SftpOpsError> {
+    let supported_prefix = matches!(
+        path.components().next(),
+        Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(),
+                std::path::Prefix::Disk(_)
+                    | std::path::Prefix::UNC(_, _)
+                    | std::path::Prefix::VerbatimDisk(_)
+                    | std::path::Prefix::VerbatimUNC(_, _))
+    );
+    if !path.is_absolute()
+        || !supported_prefix
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(SftpOpsError::Operation(format!(
+            "Local filesystem access requires a fully qualified disk or share path: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 /// Removes an entry that is already isolated below an authenticated private
 /// cleanup namespace. Callers must never pass a user-visible parent: public
@@ -1895,6 +1928,28 @@ fn replace_recovery_routes(
     newly_reported
 }
 
+fn complete_remote_recovery_route(
+    routes: &mut HashMap<PathBuf, Vec<RemoteRecoveryOperation>>,
+    path: &Path,
+    completed: &RemoteRecoveryOperation,
+) -> Vec<PathBuf> {
+    if let Some(operations) = routes.get_mut(path) {
+        if operations.first() == Some(completed) {
+            operations.remove(0);
+        }
+        if operations.is_empty() {
+            routes.remove(path);
+        }
+    }
+    // The transfer manifest replaces this logical path with the returned list.
+    // Keep it reachable until every operation multiplexed on it has completed.
+    if routes.contains_key(path) {
+        vec![path.to_path_buf()]
+    } else {
+        Vec::new()
+    }
+}
+
 fn safe_kind(file_type: FileEntryType) -> Result<SafeFileEntryKind, SftpOpsError> {
     match file_type {
         FileEntryType::File => Ok(SafeFileEntryKind::Regular),
@@ -2382,14 +2437,7 @@ impl SftpBackend for LiveSftpBackend {
             .recovery_operations
             .lock()
             .expect("safe-file recovery route lock poisoned");
-        if let Some(operations) = routes.get_mut(path) {
-            if operations.first() == Some(&operation) {
-                operations.remove(0);
-            }
-            if operations.is_empty() {
-                routes.remove(path);
-            }
-        }
+        let replacements = complete_remote_recovery_route(&mut routes, path, &operation);
         match resolution {
             RemoteRecoveryResolution::MutationApplied => {}
             RemoteRecoveryResolution::DestinationCommittedSourcePreserved => {
@@ -2405,10 +2453,18 @@ impl SftpBackend for LiveSftpBackend {
                     .insert(path.to_path_buf());
             }
         }
-        Ok(Some(Vec::new()))
+        Ok(Some(replacements))
     }
 
     fn take_recovery_source_preserved(&self, path: &Path) -> bool {
+        if self
+            .recovery_operations
+            .lock()
+            .expect("safe-file recovery route lock poisoned")
+            .contains_key(path)
+        {
+            return false;
+        }
         self.recovered_source_preserved
             .lock()
             .expect("safe-file recovered-source lock poisoned")
@@ -2416,6 +2472,14 @@ impl SftpBackend for LiveSftpBackend {
     }
 
     fn take_recovery_source_restored(&self, path: &Path) -> bool {
+        if self
+            .recovery_operations
+            .lock()
+            .expect("safe-file recovery route lock poisoned")
+            .contains_key(path)
+        {
+            return false;
+        }
         self.recovered_source_restored
             .lock()
             .expect("safe-file restored-source lock poisoned")
@@ -2965,6 +3029,8 @@ impl SftpBackend for LiveSftpBackend {
 pub struct InMemorySftpBackend {
     /// Root directory that simulates the remote filesystem root.
     root: PathBuf,
+    #[cfg(windows)]
+    host_filesystem_paths: bool,
     directory_reservation_registry: Option<DirectoryReservationRegistry>,
     safe_mutation_capabilities: Mutex<HashMap<(u64, bool), Result<(), String>>>,
     #[allow(clippy::type_complexity)]
@@ -5158,6 +5224,21 @@ impl Drop for RegistryLock {
 struct RegistryLock;
 
 impl InMemorySftpBackend {
+    /// Uses native absolute host paths for the local file manager. Confined
+    /// backends created with `new(root)` keep their separate virtual root.
+    pub fn for_local_filesystem() -> Self {
+        #[cfg(windows)]
+        {
+            let mut backend = Self::new(PathBuf::from("/"));
+            backend.host_filesystem_paths = true;
+            backend
+        }
+        #[cfg(not(windows))]
+        {
+            Self::new(PathBuf::from("/"))
+        }
+    }
+
     /// Creates a new in-memory backend using the specified directory as root.
     pub fn new(root: PathBuf) -> Self {
         let registry = DirectoryReservationRegistry::open(&root);
@@ -5174,6 +5255,8 @@ impl InMemorySftpBackend {
         };
         let backend = Self {
             root,
+            #[cfg(windows)]
+            host_filesystem_paths: false,
             directory_reservation_registry,
             safe_mutation_capabilities: Mutex::new(HashMap::new()),
             cleanup_recovery_identities: Mutex::new(HashMap::new()),
@@ -8225,6 +8308,11 @@ impl InMemorySftpBackend {
         {
             return Ok(local.clone());
         }
+        #[cfg(windows)]
+        if self.host_filesystem_paths {
+            validate_windows_host_path(remote_path)?;
+            return Ok(remote_path.to_path_buf());
+        }
         let mut relative = PathBuf::new();
         for component in remote_path.components() {
             match component {
@@ -8302,6 +8390,13 @@ impl InMemorySftpBackend {
         local: &Path,
         backend_path: &Path,
     ) -> Result<(), SftpOpsError> {
+        #[cfg(windows)]
+        if self.host_filesystem_paths {
+            // Host browsing intentionally spans disks and shares. Validate the
+            // resolved native path, while virtual-root backends remain confined.
+            validate_windows_host_path(&dunce::canonicalize(local)?)?;
+            return Ok(());
+        }
         let opaque_local = self
             .opaque_recovery_paths
             .lock()
@@ -8384,6 +8479,10 @@ impl InMemorySftpBackend {
 
     /// Converts a local path to a "remote" path.
     fn to_remote(&self, local_path: &Path) -> PathBuf {
+        #[cfg(windows)]
+        if self.host_filesystem_paths {
+            return local_path.to_path_buf();
+        }
         match local_path.strip_prefix(&self.root) {
             Ok(rel) => {
                 if rel.as_os_str().is_empty() {

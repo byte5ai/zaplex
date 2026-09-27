@@ -47,7 +47,7 @@ fn scoped_id_resolves_past_same_named_hosts() {
 }
 
 /// With no id (e.g. a source that lacks a stable id), fall back to matching
-/// by name — the first same-named node is the best we can do.
+/// by name only when the label identifies exactly one host.
 #[test]
 fn name_fallback_when_no_id() {
     let hosts = vec![host("id-a", "alpha"), host("id-b", "beta")];
@@ -1403,4 +1403,84 @@ fn managed_launch_is_explicit_exact_and_does_not_claim_unsupported_settings() {
     assert_eq!(model, None);
     assert_eq!(effort, None);
     assert_eq!(prompt, None);
+}
+
+#[test]
+fn ambiguous_name_scope_requires_an_explicit_host_choice() {
+    let hosts = vec![host("a", "devbox"), host("b", "devbox")];
+    assert_eq!(
+        resolve_scoped_host(&hosts, None, Some("devbox")),
+        HostChoice::Unselected
+    );
+}
+
+#[test]
+fn launch_directory_gate_rejects_pending_stale_and_invalid_remote_paths() {
+    let mut card = remote_claude_card(
+        remote_provider(true, "claude"),
+        vec![managed_host("node-7", "devbox")],
+        HostChoice::Remote(0),
+        AccountChoice::Freest,
+    );
+    let path = PathBuf::from("/srv/app");
+    let request = card
+        .folder_validation
+        .begin(card.history_host(), path.clone());
+    assert!(!card.directory_is_ready(Ok(Some(path.clone()))));
+    card.folder_validation
+        .apply(&request, DirectoryValidation::Stale);
+    assert!(!card.directory_is_ready(Ok(Some(path.clone()))));
+    card.folder_validation
+        .apply(&request, DirectoryValidation::Valid);
+    assert!(card.directory_is_ready(Ok(Some(path.clone()))));
+    assert!(!card.directory_is_ready(remote_cwd_from_input(card.host, "relative")));
+    assert!(card.directory_is_ready(Ok(None)));
+    card.managed_mode = ManagedLaunchMode::ManagedInteractive;
+    assert!(!card.directory_is_ready(Ok(None)));
+    assert!(!card.directory_is_ready(remote_cwd_from_input(card.host, "relative")));
+    assert!(card.directory_is_ready(Ok(Some(path))));
+}
+
+#[test]
+fn changing_host_clears_directory_badges() {
+    let mut card = remote_claude_card(
+        remote_provider(true, "claude"),
+        vec![host("node-7", "first"), host("node-8", "second")],
+        HostChoice::Remote(0),
+        AccountChoice::Freest,
+    );
+    card.history_validation
+        .insert(PathBuf::from("/srv/app"), DirectoryValidation::Valid);
+    assert!(card.select_host_for_launch(HostChoice::Remote(1)));
+    assert!(card.history_validation.is_empty());
+}
+
+#[test]
+fn confirm_attempt_checks_directory_and_reserves_until_cancelled() {
+    warpui::App::test((), |app| async move {
+        let mut card = remote_claude_card(
+            provider(true),
+            Vec::new(),
+            HostChoice::Local,
+            AccountChoice::Freest,
+        );
+        card.project = Some(PathBuf::from("/work/app"));
+        app.read(|ctx| assert!(card.launch_attempt(ctx).is_none()));
+        let request = card
+            .folder_validation
+            .begin(FolderHistoryHost::Local, card.project.clone().unwrap());
+        card.folder_validation
+            .apply(&request, DirectoryValidation::Valid);
+        let event = app
+            .read(|ctx| card.launch_attempt(ctx))
+            .expect("validated directory can launch");
+        let SpawnCardEvent::LaunchBatch { plan_id, targets } = event else {
+            panic!("expected a batch launch");
+        };
+        assert_eq!(targets.len(), 1);
+        assert!(card.launch_target_is_reserved(plan_id, &targets[0].0, &targets[0].1));
+        app.read(|ctx| assert!(card.launch_attempt(ctx).is_none()));
+        card.cancel_pending_launches();
+        assert!(!card.launch_target_is_reserved(plan_id, &targets[0].0, &targets[0].1));
+    });
 }

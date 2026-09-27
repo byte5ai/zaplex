@@ -148,3 +148,80 @@ fn yaml_round_trip_preserves_ansi_and_ui_color_overrides() {
     assert_eq!(ansi_color(&imported, false, "red"), ansi_red);
     assert_eq!(configured_ui_color(&imported, "warning"), Some(warning));
 }
+
+#[test]
+fn delayed_image_result_cannot_replace_a_newer_template_or_closed_preview() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        appearance::register(&mut app);
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, ThemeEditorBody::new);
+        editor.update(&mut app, |editor, ctx| {
+            editor.execute_pending(PendingAction::Image, ctx);
+            let old_request = editor.image_request_generation;
+            editor.choose_template(TemplateChoice::Light, ctx);
+            let chosen = editor.draft.as_ref().unwrap().theme.clone();
+
+            editor.complete_image_theme(
+                old_request,
+                Ok(dark_theme()),
+                "Obsolete image".to_string(),
+                PathBuf::from("old.png"),
+                ctx,
+            );
+            assert_eq!(editor.draft.as_ref().unwrap().theme, chosen);
+            assert_eq!(Appearance::as_ref(ctx).theme(), &chosen);
+            assert!(!editor.image_loading);
+
+            editor.execute_pending(PendingAction::Image, ctx);
+            let closed_request = editor.image_request_generation;
+            // The modal parent also clears the preview without closing its app window.
+            editor.clear_transient(ctx);
+            let restored = Appearance::as_ref(ctx).theme().clone();
+            editor.complete_image_theme(
+                closed_request,
+                Ok(dark_theme()),
+                "After close".to_string(),
+                PathBuf::from("closed.png"),
+                ctx,
+            );
+            assert_eq!(Appearance::as_ref(ctx).theme(), &restored);
+            assert_eq!(editor.draft.as_ref().unwrap().theme, chosen);
+        });
+    });
+}
+
+#[test]
+fn only_the_latest_image_request_updates_the_preview() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        appearance::register(&mut app);
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, ThemeEditorBody::new);
+        editor.update(&mut app, |editor, ctx| {
+            editor.execute_pending(PendingAction::Image, ctx);
+            let old_request = editor.image_request_generation;
+            editor.execute_pending(PendingAction::Image, ctx);
+            let current_request = editor.image_request_generation;
+            editor.complete_image_theme(
+                old_request,
+                Ok(dark_theme()),
+                "Old image".to_string(),
+                PathBuf::from("old.png"),
+                ctx,
+            );
+            assert!(editor.draft.is_none());
+            assert!(editor.image_loading);
+            editor.complete_image_theme(
+                current_request,
+                Ok(light_theme()),
+                "Current image".to_string(),
+                PathBuf::from("current.png"),
+                ctx,
+            );
+            let draft = editor.draft.as_ref().unwrap();
+            assert_eq!(draft.name, "Current image");
+            assert_eq!(draft.image_source, Some(PathBuf::from("current.png")));
+            assert_eq!(Appearance::as_ref(ctx).theme(), &draft.theme);
+            assert!(!editor.image_loading);
+        });
+    });
+}

@@ -3777,3 +3777,87 @@ fn truncated_adopt_cannot_recover_a_wrong_identity_or_terminated_attach() {
         });
     }
 }
+
+#[test]
+fn matching_pty_on_foreign_connection_cannot_change_output_exit_or_notice() {
+    for attached in [false, true] {
+        App::test((), move |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            crate::i18n::init(Some("en"));
+            let conn = SessionId::from(950u64);
+            let foreign_conn = SessionId::from(951u64);
+            let (manager, event_loop, model, wakeups) = start_adopted_loop(&mut app, conn);
+            let terminal = add_window_with_terminal(&mut app, None);
+            event_loop.update(&mut app, |me, ctx| me.bind_terminal_view(&terminal, ctx));
+            if attached {
+                complete_adopted_attach(&event_loop, &mut app);
+            }
+            let before = terminal_contents(&model);
+            let notice_before = terminal.read(&app, |view, _| {
+                view.remote_session_notice().map(str::to_owned)
+            });
+            drain(&wakeups);
+            let notice = |session_id| RemoteServerManagerEvent::SessionNotice {
+                session_id,
+                host_id: HostId::new(HOST.to_string()),
+                pty_session_id: OUR_PTY.to_string(),
+                kind: "multiplexer-detected".to_string(),
+                detail: "tmux".to_string(),
+            };
+            let exited = |session_id| RemoteServerManagerEvent::SessionExited {
+                session_id,
+                host_id: HostId::new(HOST.to_string()),
+                pty_session_id: OUR_PTY.to_string(),
+                exit_code: Some(0),
+            };
+            manager.update(&mut app, |_, ctx| {
+                ctx.emit(output_event(foreign_conn, OUR_PTY, 0, b"foreign output"));
+                ctx.emit(notice(foreign_conn));
+                ctx.emit(exited(foreign_conn));
+            });
+            event_loop.read(&app, |me, _| {
+                assert_eq!(me.last_seq, 0);
+                assert!(me.pending_output.is_empty());
+                assert!(!me.pending_output_overflowed);
+                assert!(me.pending_exit.is_none());
+                assert!(!me.terminated);
+                assert!(me.published_error_notices.is_empty());
+                assert_eq!(me.awaiting_attach_snapshot, !attached);
+            });
+            assert!(wakeups.is_empty());
+            assert_eq!(terminal_contents(&model), before);
+            terminal.read(&app, |view, _| {
+                assert_eq!(view.remote_session_notice(), notice_before.as_deref());
+            });
+
+            // The same PTY on the owning connection still drives all three paths.
+            manager.update(&mut app, |_, ctx| {
+                ctx.emit(notice(conn));
+                ctx.emit(output_event(conn, OUR_PTY, 0, b"owned output"));
+            });
+            terminal.read(&app, |view, _| {
+                assert_eq!(
+                    view.remote_session_notice(),
+                    Some(crate::t!("terminal-daemon-multiplexer-nested", detail = "tmux").as_str())
+                );
+            });
+            event_loop.read(&app, |me, _| {
+                if attached {
+                    assert_eq!(me.last_seq, b"owned output".len() as u64);
+                    assert!(me.pending_output.is_empty());
+                } else {
+                    assert_eq!(me.pending_output.len(), 1);
+                }
+            });
+            manager.update(&mut app, |_, ctx| ctx.emit(exited(conn)));
+            event_loop.read(&app, |me, _| {
+                if attached {
+                    assert!(me.terminated);
+                } else {
+                    assert_eq!(me.pending_exit, Some(Some(0)));
+                    assert!(!me.terminated);
+                }
+            });
+        });
+    }
+}

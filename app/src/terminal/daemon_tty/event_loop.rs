@@ -505,7 +505,7 @@ impl EventLoop {
                 bytes,
                 ..
             } => {
-                if me.terminated {
+                if me.terminated || *session_id != me.connection_session_id {
                     return;
                 }
                 if me.is_our_session(pty_session_id)
@@ -542,10 +542,11 @@ impl EventLoop {
                 }
             }
             RemoteServerManagerEvent::SessionExited {
+                session_id,
                 pty_session_id,
                 exit_code,
                 ..
-            } if me.is_our_session(pty_session_id) => {
+            } if *session_id == me.connection_session_id && me.is_our_session(pty_session_id) => {
                 if me.awaiting_attach_snapshot {
                     me.pending_exit = Some(*exit_code);
                 } else {
@@ -597,11 +598,15 @@ impl EventLoop {
             // natively, so surface the nesting in the tab; the workspace shows
             // the actionable warning toast.
             RemoteServerManagerEvent::SessionNotice {
+                session_id,
                 pty_session_id,
                 kind,
                 detail,
                 ..
-            } if me.is_our_session(pty_session_id) && kind == "multiplexer-detected" => {
+            } if *session_id == me.connection_session_id
+                && me.is_our_session(pty_session_id)
+                && kind == "multiplexer-detected" =>
+            {
                 me.write_warning(
                     &crate::t!(
                         "terminal-daemon-multiplexer-nested",

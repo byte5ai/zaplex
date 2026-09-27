@@ -8550,7 +8550,18 @@ impl Workspace {
         validation_error: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
+        let mut attempted = false;
         for (target_id, target) in targets {
+            // A directory response may arrive after a selection change or Close.
+            // Check the exact reserved plan before any process or pane is created.
+            if !self.spawn_card.as_ref(ctx).launch_target_is_reserved(
+                plan_id,
+                &target_id,
+                &target,
+            ) {
+                continue;
+            }
+            attempted = true;
             let mut result = if let Some(error) = validation_error.as_ref() {
                 Err(error.clone())
             } else {
@@ -8623,6 +8634,9 @@ impl Workspace {
             });
         }
 
+        if !attempted {
+            return;
+        }
         if self.spawn_card.as_ref(ctx).launch_batch_succeeded(plan_id) {
             self.current_workspace_state.is_spawn_card_open = false;
             self.focus_active_tab(ctx);
@@ -21012,6 +21026,8 @@ impl Workspace {
     }
 
     fn close_all_modals(&mut self, ctx: &mut ViewContext<Self>) {
+        self.spawn_card
+            .update(ctx, |card, _| card.cancel_pending_launches());
         if self.current_workspace_state.is_theme_creator_modal_open {
             self.theme_creator_modal
                 .update(ctx, |modal, ctx| modal.clear_transient(ctx));
@@ -25380,6 +25396,8 @@ impl Workspace {
                 }
             }
             SpawnCardEvent::Close => {
+                self.spawn_card
+                    .update(ctx, |card, _| card.cancel_pending_launches());
                 self.current_workspace_state.is_spawn_card_open = false;
                 self.focus_active_tab(ctx);
                 ctx.notify();
@@ -25391,6 +25409,8 @@ impl Workspace {
                 // Hide the card (its selections persist — it is a persistent view,
                 // not rebuilt) and open the host's SFTP browser in pick mode; the
                 // chosen dir returns via RemoteSpawnDirPicked (#105).
+                self.spawn_card
+                    .update(ctx, |card, _| card.cancel_pending_launches());
                 self.current_workspace_state.is_spawn_card_open = false;
                 self.open_sftp_pane_for_pick(node_id.clone(), start_path.clone(), ctx);
                 ctx.notify();

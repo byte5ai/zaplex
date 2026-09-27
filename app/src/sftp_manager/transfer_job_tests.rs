@@ -18,6 +18,8 @@ use crate::sftp_manager::types::FileEntry;
 
 struct InstrumentedBackend {
     inner: InMemorySftpBackend,
+    recovery_results: Mutex<BTreeMap<PathBuf, Vec<Result<RecoveryOutcome, &'static str>>>>,
+    recovered_outcomes: Mutex<BTreeMap<PathBuf, RecoveryOutcome>>,
     supports_exchange: bool,
     durable_exchange_recovery: bool,
     supports_cleanup: bool,
@@ -63,6 +65,8 @@ struct InstrumentedBackend {
 impl InstrumentedBackend {
     fn new(root: &Path) -> Self {
         Self {
+            recovery_results: Mutex::new(BTreeMap::new()),
+            recovered_outcomes: Mutex::new(BTreeMap::new()),
             inner: InMemorySftpBackend::new(root.to_path_buf()),
             supports_exchange: true,
             durable_exchange_recovery: false,
@@ -460,6 +464,46 @@ impl BackendFileReader for InstrumentedReader {
 }
 
 impl SftpBackend for InstrumentedBackend {
+    fn retry_unresolved_recovery(&self, path: &Path) -> Result<Option<Vec<PathBuf>>, SftpOpsError> {
+        let result = {
+            let mut results = self.recovery_results.lock().unwrap();
+            match results.get_mut(path) {
+                Some(steps) if !steps.is_empty() => Some(steps.remove(0)),
+                Some(_) | None => None,
+            }
+        };
+        let Some(result) = result else {
+            return Ok(None);
+        };
+        let outcome = result.map_err(|message| SftpOpsError::Operation(message.to_string()))?;
+        fs::remove_file(self.local_path(path))?;
+        self.recovered_outcomes
+            .lock()
+            .unwrap()
+            .insert(path.to_path_buf(), outcome);
+        Ok(Some(Vec::new()))
+    }
+
+    fn take_recovery_source_preserved(&self, path: &Path) -> bool {
+        let mut outcomes = self.recovered_outcomes.lock().unwrap();
+        if outcomes.get(path) == Some(&RecoveryOutcome::DestinationCommittedSourcePreserved) {
+            outcomes.remove(path);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn take_recovery_source_restored(&self, path: &Path) -> bool {
+        let mut outcomes = self.recovered_outcomes.lock().unwrap();
+        if outcomes.get(path) == Some(&RecoveryOutcome::SourceRestored) {
+            outcomes.remove(path);
+            true
+        } else {
+            false
+        }
+    }
+
     fn supports_atomic_exchange(&self) -> bool {
         self.supports_exchange
     }
@@ -5419,5 +5463,104 @@ fn displaced_cleanup_failure_keeps_independent_backup_in_recovery() {
         );
         assert!(transfer_artifacts(target.path(), "zaplex-backup").is_empty());
         assert!(transfer_artifacts(target.path(), stage_marker).is_empty());
+    }
+}
+
+#[test]
+fn recovery_outcomes_survive_later_errors_within_and_across_filesystems() {
+    for split_filesystems in [false, true] {
+        for (first, second, expected) in [
+            (
+                RecoveryOutcome::SourceRestored,
+                RecoveryOutcome::CleanupCompleted,
+                RecoveryOutcome::SourceRestored,
+            ),
+            (
+                RecoveryOutcome::DestinationCommittedSourcePreserved,
+                RecoveryOutcome::SourceRestored,
+                RecoveryOutcome::DestinationCommittedSourcePreserved,
+            ),
+            (
+                RecoveryOutcome::SourceRestored,
+                RecoveryOutcome::DestinationCommittedSourcePreserved,
+                RecoveryOutcome::DestinationCommittedSourcePreserved,
+            ),
+        ] {
+            let source = tempdir().unwrap();
+            let target = tempdir().unwrap();
+            let source_backend = Arc::new(InstrumentedBackend::new(source.path()));
+            let target_backend = if split_filesystems {
+                Arc::new(InstrumentedBackend::new(target.path()))
+            } else {
+                source_backend.clone()
+            };
+            let first_path = PathBuf::from("/a-first");
+            let second_path = PathBuf::from("/b-second");
+            let failing_path = PathBuf::from("/z-fail");
+            for (backend, path, steps) in [
+                (&source_backend, &first_path, vec![Ok(first)]),
+                (&target_backend, &second_path, vec![Ok(second)]),
+                (
+                    &target_backend,
+                    &failing_path,
+                    vec![
+                        Err("injected later recovery failure"),
+                        Ok(RecoveryOutcome::CleanupCompleted),
+                    ],
+                ),
+            ] {
+                fs::write(backend.local_path(path), b"retained artifact").unwrap();
+                backend
+                    .recovery_results
+                    .lock()
+                    .unwrap()
+                    .insert(path.clone(), steps);
+            }
+            let mut ownership = PathOwnership::empty(Path::new("/"));
+            ownership.unresolved.insert(first_path.clone());
+            if !split_filesystems {
+                ownership
+                    .unresolved
+                    .extend([second_path.clone(), failing_path.clone()]);
+            }
+            let error =
+                ownership_recovery_error("retry fixture", source_backend.clone(), ownership, true);
+            let recovery_id = error.recovery_id().unwrap();
+            if split_filesystems {
+                let mut ownership = PathOwnership::empty(Path::new("/"));
+                ownership
+                    .unresolved
+                    .extend([second_path.clone(), failing_path.clone()]);
+                recovery_actions()
+                    .lock()
+                    .unwrap()
+                    .get_mut(&recovery_id)
+                    .unwrap()
+                    .units
+                    .push(CleanupRecoveryUnit::Unresolved {
+                        backend: target_backend.clone(),
+                        ownership,
+                    });
+            }
+
+            let error = retry_recovery(recovery_id).expect_err("later path must fail once");
+            assert!(error
+                .to_string()
+                .contains("injected later recovery failure"));
+            assert!(!source_backend.local_path(&first_path).exists());
+            assert!(!target_backend.local_path(&second_path).exists());
+            assert!(target_backend.local_path(&failing_path).exists());
+            assert!(!source_backend.take_recovery_source_preserved(&first_path));
+            assert!(!source_backend.take_recovery_source_restored(&first_path));
+            assert!(!target_backend.take_recovery_source_preserved(&second_path));
+            assert!(!target_backend.take_recovery_source_restored(&second_path));
+
+            assert_eq!(retry_recovery(recovery_id).unwrap(), expected);
+            assert!(!target_backend.local_path(&failing_path).exists());
+            assert!(!recovery_actions()
+                .lock()
+                .unwrap()
+                .contains_key(&recovery_id));
+        }
     }
 }
