@@ -6045,3 +6045,66 @@ fn cancelling_pending_adoption_retires_only_local_surface_and_keeps_retry_identi
         });
     });
 }
+
+#[cfg(unix)]
+#[test]
+fn cancelling_fresh_daemon_open_preserves_draft_without_inventing_a_restore_identity() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let session = SessionId::from(795u64);
+        let (group, pane, view) = workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    daemon_request: Some(crate::terminal::daemon_tty::DaemonSessionRequest {
+                        connection_session_id: session,
+                        open_params: Default::default(),
+                        adopt_pty_session_id: None,
+                        adopt_pty_generation: None,
+                        expected_host_id: None,
+                        expected_agent_binding: None,
+                        install_progress_rx: None,
+                        host_label: "pending.example.test".to_string(),
+                    }),
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let group = workspace.active_tab_pane_group().clone();
+            let pane = group.as_ref(ctx).focused_pane_id(ctx);
+            let view = group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(pane, ctx)
+                .unwrap();
+            view.update(ctx, |view, ctx| {
+                view.restore_input_draft("unfinished command".to_string(), ctx);
+            });
+            assert!(group
+                .as_ref(ctx)
+                .remote_terminal_restore_state(pane, ctx)
+                .is_none());
+            assert!(workspace.daemon_session_surface_is_active(session, None, ctx));
+            let tabs_before = workspace.tabs.len();
+            workspace.cancel_remote_restore(&group, pane, ctx);
+            assert_eq!(workspace.tabs.len(), tabs_before);
+            assert!(!workspace.daemon_session_surface_is_active(session, None, ctx));
+            (group, pane, view)
+        });
+        // Inspect after the manager deregistration event has reached subscribers.
+        view.read(&app, |view, ctx| {
+            assert!(view.remote_input_has_failed());
+            assert!(view.remote_input_session_id().is_none());
+            assert_eq!(view.input_draft(ctx), "unfinished command");
+        });
+        group.read(&app, |group, ctx| {
+            assert_eq!(
+                group.terminal_view_from_pane_id(pane, ctx).unwrap().id(),
+                view.id()
+            );
+            assert!(group.remote_terminal_restore_state(pane, ctx).is_none());
+        });
+    });
+}

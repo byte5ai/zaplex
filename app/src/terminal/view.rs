@@ -1903,8 +1903,11 @@ fn remote_readiness_retry_visible(phase: RemoteInputPhase, has_restore_identity:
         )
 }
 
-fn remote_readiness_cancel_visible(phase: RemoteInputPhase, has_restore_identity: bool) -> bool {
-    has_restore_identity
+fn remote_readiness_cancel_visible(
+    phase: RemoteInputPhase,
+    has_cancellable_connection: bool,
+) -> bool {
+    has_cancellable_connection
         && matches!(
             phase,
             RemoteInputPhase::Transport
@@ -11290,6 +11293,8 @@ impl TerminalView {
     ) -> Option<Box<dyn Element>> {
         let phase = self.remote_input_phase?;
         let has_restore_identity = self.has_remote_restore_identity();
+        let has_cancellable_connection =
+            has_restore_identity || self.remote_input_session_id.is_some();
         let message = if phase == RemoteInputPhase::Failed {
             self.remote_session_error.clone().or_else(|| {
                 remote_readiness_message(phase, self.remote_input_has_reached_initial_ready)
@@ -11317,7 +11322,7 @@ impl TerminalView {
             )
         };
         let content = if remote_readiness_retry_visible(phase, has_restore_identity)
-            || remote_readiness_cancel_visible(phase, has_restore_identity)
+            || remote_readiness_cancel_visible(phase, has_cancellable_connection)
         {
             let message = Flex::row()
                 .with_child(Shrinkable::new(1., content).finish())
@@ -11326,7 +11331,7 @@ impl TerminalView {
             if remote_readiness_retry_visible(phase, has_restore_identity) {
                 actions.add_child(ChildView::new(&self.remote_restore_retry_button).finish());
             }
-            if remote_readiness_cancel_visible(phase, has_restore_identity) {
+            if remote_readiness_cancel_visible(phase, has_cancellable_connection) {
                 actions.add_child(ChildView::new(&self.remote_restore_cancel_button).finish());
             }
             let actions = actions.finish();

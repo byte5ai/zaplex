@@ -11736,6 +11736,38 @@ impl Workspace {
             .as_ref(ctx)
             .remote_terminal_restore_state(pane_id, ctx)
         else {
+            // A fresh daemon open can be cancelled before it returns a PTY ID.
+            // Keep the draft and retire only this local connection attempt.
+            #[cfg(unix)]
+            if let Some(view) = pane_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(pane_id, ctx)
+            {
+                let session_id = view.as_ref(ctx).remote_input_session_id();
+                if let Some(session_id) = session_id.filter(|session_id| {
+                    pane_group
+                        .as_ref(ctx)
+                        .daemon_pane_matches_connection(pane_id, *session_id, ctx)
+                        && !view.as_ref(ctx).remote_input_is_ready()
+                }) {
+                    view.update(ctx, |view, ctx| view.cancel_remote_input_readiness(ctx));
+                    self.pending_daemon_split_focus.remove(&session_id);
+                    self.pending_routed_daemon_starts.remove(&session_id);
+                    self.daemon_session_servers.remove(&session_id);
+                    self.daemon_session_hosts.remove(&session_id);
+                    #[cfg(feature = "local_tty")]
+                    {
+                        self.sftp_file_service_sessions
+                            .retain(|_, candidate| *candidate != session_id);
+                        forget_daemon_node_session(&mut self.daemon_node_sessions, session_id);
+                    }
+                    release_daemon_pty_claim_for_connection(session_id);
+                    RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+                        manager.deregister_session(session_id, false, ctx);
+                    });
+                    ctx.dispatch_global_action("workspace:save_app", ());
+                }
+            }
             return;
         };
         identity.input_draft = draft.clone();
@@ -13428,6 +13460,9 @@ impl Workspace {
             );
             return;
         };
+        if terminal_view.as_ref(ctx).remote_input_has_failed() {
+            return;
+        }
         let binding_key = daemon_adoption_key(
             descriptor.host_id.as_str(),
             &descriptor.daemon_runtime,

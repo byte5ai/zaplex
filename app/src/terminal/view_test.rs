@@ -5394,7 +5394,7 @@ fn cancelled_pending_attach_retains_draft_and_rejects_late_readiness() {
 }
 
 #[test]
-fn readiness_controls_require_an_existing_restore_identity() {
+fn readiness_controls_require_an_available_action_target() {
     for phase in [
         RemoteInputPhase::Transport,
         RemoteInputPhase::Attach,
