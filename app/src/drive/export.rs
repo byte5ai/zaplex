@@ -479,11 +479,23 @@ async fn write_object(
         bail!("Cannot export unnamed object");
     }
 
-    // Create the full path if it doesn't exist
+    // The bulk path is one generated child of the user-selected directory. Reject an
+    // existing link at that child, since it could redirect exports outside the selected root.
     if is_bulk {
-        async_fs::create_dir_all(&parent_path)
-            .await
-            .with_context(|| format!("could not create directory {}", parent_path.display()))?;
+        match async_fs::create_dir(&parent_path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                let metadata = async_fs::symlink_metadata(&parent_path).await?;
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    bail!("Bulk export destination is not a regular directory");
+                }
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("could not create directory {}", parent_path.display())
+                });
+            }
+        }
     }
 
     let mut current_name = object_name;

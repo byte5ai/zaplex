@@ -118,6 +118,38 @@ fn fallback_rejects_symbolic_link_ciphertext() {
 }
 
 #[test]
+fn fallback_deletion_accepts_legacy_file_permissions() {
+    let root = tempdir().unwrap();
+    let fallback = root.path().join("fallback");
+    fs::create_dir(&fallback).unwrap();
+    let ciphertext = fallback.join("darmok-AiApiKeys");
+    fs::write(&ciphertext, b"legacy ciphertext").unwrap();
+    fs::set_permissions(&ciphertext, fs::Permissions::from_mode(0o644)).unwrap();
+    let storage = SecureStorage::new_with_fallback("darmok", fallback);
+
+    storage.delete_fallback_value("AiApiKeys").unwrap();
+
+    assert!(!ciphertext.exists());
+}
+
+#[test]
+fn fallback_deletion_rejects_symbolic_link_ciphertext() {
+    let root = tempdir().unwrap();
+    let fallback = root.path().join("fallback");
+    fs::create_dir(&fallback).unwrap();
+    let target = root.path().join("target");
+    fs::write(&target, b"must remain untouched").unwrap();
+    let ciphertext = fallback.join("darmok-AiApiKeys");
+    symlink(&target, &ciphertext).unwrap();
+    let storage = SecureStorage::new_with_fallback("darmok", fallback);
+
+    assert!(storage.delete_fallback_value("AiApiKeys").is_err());
+
+    assert!(fs::symlink_metadata(ciphertext).unwrap().file_type().is_symlink());
+    assert_eq!(fs::read(target).unwrap(), b"must remain untouched");
+}
+
+#[test]
 fn decrypt_fails_on_malformed_data() {
     let root = tempdir().unwrap();
     let storage = SecureStorage::new_with_fallback("darmok", root.path().join("fallback"));

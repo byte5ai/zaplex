@@ -168,7 +168,7 @@ fn applies_replacements_with_multibyte_and_prefix() {
     let replacements = vec![(secret, Cow::Owned("***".to_string()))];
     apply_secret_replacements(&mut text, glyph_offset, &replacements);
 
-    assert_eq!(text, format!("{}{}", "•  ", "prefix***suffix"));
+    assert_eq!(text, format!("{}{}", "•  ", "\u{4ee4}\u{72d0}***cXYZ"));
 }
 
 #[test]

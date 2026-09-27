@@ -23,7 +23,10 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use super::modal_body::{ImportModalBody, ImportModalBodyAction, ImportModalBodyEvent};
+use super::{
+    modal_body::{ImportModalBody, ImportModalBodyAction, ImportModalBodyEvent},
+    queue::ImportGeneration,
+};
 
 const CLOSE_BUTTON_SIZE: f32 = 24.;
 const MODAL_CORNER_RADIUS: f32 = 8.;
@@ -78,14 +81,22 @@ impl ImportModal {
         self.owner = Some(owner);
         self.folder_id = initial_folder_id;
 
-        self.import_modal.update(ctx, |import_modal, _ctx| {
+        self.import_modal.update(ctx, |import_modal, ctx| {
+            import_modal.reset(ctx);
             import_modal.set_new_target(owner, initial_folder_id);
         });
 
         ctx.notify();
     }
 
-    pub fn open_file_picker(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn clear_transient(&mut self, ctx: &mut ViewContext<Self>) {
+        self.import_modal.update(ctx, |body, ctx| body.reset(ctx));
+    }
+
+    fn open_file_picker(&mut self, generation: ImportGeneration, ctx: &mut ViewContext<Self>) {
+        if !self.import_modal.as_ref(ctx).accepts_picker_result(generation) {
+            return;
+        }
         let window_id = ctx.window_id();
         let import_body_id = self.import_modal.id();
 
@@ -109,21 +120,21 @@ impl ImportModal {
                     ctx.dispatch_typed_action_for_view(
                         window_id,
                         import_body_id,
-                        &ImportModalBodyAction::PathsSelected(paths),
+                        &ImportModalBodyAction::PathsSelected(generation, paths),
                     );
                 }
                 Ok(_) => {
                     ctx.dispatch_typed_action_for_view(
                         window_id,
                         import_body_id,
-                        &ImportModalBodyAction::FilePickerCancelled,
+                        &ImportModalBodyAction::FilePickerCancelled(generation),
                     );
                 }
                 Err(err) => {
                     ctx.dispatch_typed_action_for_view(
                         window_id,
                         import_body_id,
-                        &ImportModalBodyAction::FilePickerError(err),
+                        &ImportModalBodyAction::FilePickerError(generation, err),
                     );
                 }
             },
@@ -139,7 +150,9 @@ impl ImportModal {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            ImportModalBodyEvent::OpenFilePicker => self.open_file_picker(ctx),
+            ImportModalBodyEvent::OpenFilePicker(generation) => {
+                self.open_file_picker(*generation, ctx)
+            }
             ImportModalBodyEvent::OpenTargetWithHashedId(hashed_id) => {
                 ctx.emit(ImportModalEvent::OpenTargetWithHashedId(hashed_id.clone()))
             }
@@ -377,9 +390,7 @@ impl TypedActionView for ImportModal {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             ImportModalAction::Close => {
-                self.import_modal.update(ctx, |import_modal_body, ctx| {
-                    import_modal_body.reset(ctx);
-                });
+                self.clear_transient(ctx);
 
                 ctx.emit(ImportModalEvent::Close);
             }

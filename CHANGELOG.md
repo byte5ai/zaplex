@@ -4,6 +4,10 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Drive-Importe (#245) verwerfen verspätete Dateiauswahlen nach Schließen oder Zielwechsel. Sammelexporte lehnen vorhandene Symlinks als Zielunterordner ab und erhalten bestehende Dateien.
+
+- Die Bereinigung alter Linux-Zugangsdaten (#245) akzeptiert frühere Dateirechte nach Prüfung und Reparatur. Eine doppelte Testmodul-Deklaration und ein verfälschter Unicode-Erwartungswert sind korrigiert.
+
 - Headless-Agenten (#245) erhalten ausgewählten Text, Dateikontext, Referenzen und laufende Befehlsausgabe zusammen mit der Anfrage. Bilder gehen als native Bilddaten an Claude/Codex; die angezeigte Anfrage bleibt unverändert.
 
 - Aufeinanderfolgende Logdatei-Generationen (#245) verlieren ihre Ausgabe nicht mehr durch verspätetes Schließen des Vorgängers. ONNX-Aufrufe passen zum vorhandenen ORT-Lockstand; veraltete Windows-Pfade, Lexerpositionen und ein verwaister WASM-Modulfilter sind korrigiert.

@@ -550,3 +550,47 @@ fn test_export_multiple_objects() {
         assert!(notebook_path.exists(), "Notebook file does not exist");
     });
 }
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn bulk_export_rejects_existing_symlink_directory() {
+    let selected = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    let bulk_dir = selected.path().join("Personal");
+    std::os::unix::fs::symlink(outside.path(), &bulk_dir).unwrap();
+
+    let result = warpui::r#async::block_on(super::write_object(
+        bulk_dir,
+        true,
+        "report".to_string(),
+        "md",
+        b"private export".to_vec(),
+    ));
+
+    assert!(result.is_err());
+    assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn bulk_export_reuses_regular_directory_without_overwriting_existing_file() {
+    let selected = TempDir::new().unwrap();
+    let bulk_dir = selected.path().join("Personal");
+    fs::create_dir(&bulk_dir).unwrap();
+    let existing = bulk_dir.join("report.md");
+    fs::write(&existing, b"original").unwrap();
+
+    let path = warpui::r#async::block_on(super::write_object(
+        bulk_dir.clone(),
+        true,
+        "report".to_string(),
+        "md",
+        b"new export".to_vec(),
+    ))
+    .unwrap();
+
+    assert_eq!(path.parent(), Some(bulk_dir.as_path()));
+    assert_ne!(path, existing);
+    assert_eq!(fs::read(existing).unwrap(), b"original");
+    assert_eq!(fs::read(path).unwrap(), b"new export");
+}

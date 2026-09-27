@@ -21169,6 +21169,10 @@ impl Workspace {
     }
 
     fn close_all_modals(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.current_workspace_state.is_import_modal_open {
+            self.import_modal
+                .update(ctx, |modal, ctx| modal.clear_transient(ctx));
+        }
         self.spawn_card
             .update(ctx, |card, _| card.cancel_pending_launches());
         if self.current_workspace_state.is_theme_creator_modal_open {
