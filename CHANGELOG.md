@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- SFTP-Prüffälle (#245) erzeugen die benötigten Overlay-Dateien und erzwingen bei Sortierung und Aktualisierung einen tatsächlichen Zeilenwechsel. Dadurch erkennen sie verlorene Cursor- und Markierungszuordnungen.
+
 - Der Fish-SSH-Wrapper (#245) aktiviert die vorhandene Aufräummeldung entfernter Bash-/Zsh-Shells. Windows-Prozessgruppen halten ihre ursprüngliche Prozessidentität bis zum Ende der Bereinigung fest; ein gleichzeitiger Abbruch kann keine wiederverwendete Prozessnummer treffen.
 
 - Website-Installationspfade (#245) führen zu den aktuellen Zaplex-Releases und zur Installationsanleitung. Historische Entwürfe und Übergabepläne sind als solche gekennzeichnet; die SSH-Diagnose nennt die tatsächlich ausgewertete Debug-Variable.

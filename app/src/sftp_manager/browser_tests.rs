@@ -1732,6 +1732,7 @@ fn test_render_all_overlays_combined() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("x-overlay", false)]);
 
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::DragFilesEnter, ctx);
@@ -2331,28 +2332,30 @@ fn test_sort_keeps_cursor_on_its_file() {
         let (_, view) = create_view(&mut app);
         view.update(&mut app, |view, _| {
             view.entries = vec![
-                sized_entry("a_big.txt", false, 900, None),
-                sized_entry("b_small.txt", false, 10, None),
+                sized_entry("a_small.txt", false, 10, None),
+                sized_entry("b_big.txt", false, 900, None),
             ];
         });
 
-        // Park the cursor on the SMALL file (row 1 in name order).
+        // Park the cursor on the BIG file (row 1 in name order).
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::CursorDown, ctx);
         });
         view.read(&app, |view, _| {
-            assert_eq!(view.cursor_entry_index(), Some(1), "on b_small.txt");
+            assert_eq!(view.cursor_entry_index(), Some(1), "on b_big.txt");
         });
 
-        // Sort by size (descending first): the small file moves to the end.
+        // Sort by size (descending first): the big file moves from row 1 to row 0.
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::SortBy(SortColumn::Size), ctx);
         });
         view.read(&app, |view, _| {
+            assert_eq!(view.visible_indices(), vec![1, 0], "sort must move the file");
+            assert_eq!(view.cursor, 0, "cursor must follow the file to its new row");
             assert_eq!(
                 view.cursor_entry_index(),
                 Some(1),
-                "cursor still on b_small.txt, wherever it now sits"
+                "cursor still on b_big.txt, wherever it now sits"
             );
         });
     });
@@ -2576,9 +2579,9 @@ fn refresh_preserves_marks_for_stable_entries() {
             view.mark_index_for_test(2); // gamma
         });
 
-        // Refresh returns a different input order, drops gamma, adds zeta. After
-        // sort: alpha(0), beta(1), zeta(2). beta stays marked (now index 1),
-        // gamma's mark is gone, zeta is unmarked.
+        // Refresh returns a different input order, drops gamma, and inserts a
+        // new first row. beta moves from index 1 to index 2; an index-based
+        // mark would incorrectly select alpha. gamma and new files stay unmarked.
         view.update(&mut app, |view, ctx| {
             view.refresh_generation = view.refresh_generation.wrapping_add(1);
             let gen = view.refresh_generation;
@@ -2586,13 +2589,18 @@ fn refresh_preserves_marks_for_stable_entries() {
                 entry("zeta", false),
                 entry("beta", false),
                 entry("alpha", false),
+                entry("aardvark", false),
             ];
             view.on_dir_listed(gen, Ok(Ok(listing)), ctx);
         });
 
         view.read(&app, |view, _| {
             let names: Vec<_> = view.entries.iter().map(|e| e.name.clone()).collect();
-            assert_eq!(names, vec!["alpha", "beta", "zeta"], "re-sorted listing");
+            assert_eq!(
+                names,
+                vec!["aardvark", "alpha", "beta", "zeta"],
+                "refresh must move the surviving marked file to a different index"
+            );
             let marked: std::collections::HashSet<String> = view
                 .entries
                 .iter()
