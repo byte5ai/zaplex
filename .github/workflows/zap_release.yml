@@ -154,6 +154,36 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Release tag: $TAG / build commit: ${{ steps.resolve-release-sha.outputs.sha }}"
 
+      - name: Reject an existing release tag at another commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.compute_tag.outputs.tag }}
+          RELEASE_SHA: ${{ steps.resolve-release-sha.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          refs="$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${RELEASE_TAG}")"
+          count="$(jq --arg ref "refs/tags/${RELEASE_TAG}" '[.[] | select(.ref == $ref)] | length' <<<"$refs")"
+          if [[ "$count" == "0" ]]; then
+            exit 0
+          fi
+          [[ "$count" == "1" ]] || { echo "Release tag is ambiguous" >&2; exit 1; }
+          object="$(jq --arg ref "refs/tags/${RELEASE_TAG}" '.[] | select(.ref == $ref) | .object' <<<"$refs")"
+          for depth in {1..8}; do
+            tag_type="$(jq -er .type <<<"$object")"
+            tag_sha="$(jq -er .sha <<<"$object")"
+            [[ "$tag_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            if [[ "$tag_type" == "commit" ]]; then
+              break
+            fi
+            [[ "$tag_type" == "tag" ]] || exit 1
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" --jq .object)"
+          done
+          [[ "$tag_type" == "commit" && "$tag_sha" == "$RELEASE_SHA" ]] || {
+            echo "Existing release tag does not point at the immutable build commit." >&2
+            exit 1
+          }
+
       # Only a published GitHub Release is a valid changelog boundary. A tag can
       # exist after a failed pre-publish run and must not truncate the notes.
       - name: Compute previous release tag
@@ -162,10 +192,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           if ! PREV=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null); then
-            # A reachable empty release list means this is the first release;
-            # authentication or network failures remain fatal.
-            gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=1" --silent
+            # Only the absence of published stable releases justifies no boundary.
+            # A failing latest endpoint must not erase an existing release history.
+            stable_tags="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')"
+            [[ -z "$stable_tags" ]] || {
+              echo "Latest release lookup failed despite existing stable releases." >&2
+              exit 1
+            }
             PREV=""
           fi
           echo "prev=$PREV" >> $GITHUB_OUTPUT
@@ -308,7 +344,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: zap-remote-server-linux-x86_64.tar.gz
-          key: release-remote-server-musl-x86_64-${{ needs.prepare_metadata.outputs.release_tag }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources') }}
+          key: release-remote-server-musl-x86_64-${{ needs.prepare_metadata.outputs.release_sha }}-${{ needs.prepare_metadata.outputs.release_tag }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources') }}
 
       - name: Free up disk space
         if: steps.daemon_cache.outputs.cache-hit != 'true'
@@ -771,6 +807,36 @@ jobs:
       - name: List downloaded files
         run: ls -lh dist
         shell: bash
+
+      - name: Reject an existing release tag at another commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare_metadata.outputs.release_tag }}
+          RELEASE_SHA: ${{ needs.prepare_metadata.outputs.release_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          refs="$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${RELEASE_TAG}")"
+          count="$(jq --arg ref "refs/tags/${RELEASE_TAG}" '[.[] | select(.ref == $ref)] | length' <<<"$refs")"
+          if [[ "$count" == "0" ]]; then
+            exit 0
+          fi
+          [[ "$count" == "1" ]] || { echo "Release tag is ambiguous" >&2; exit 1; }
+          object="$(jq --arg ref "refs/tags/${RELEASE_TAG}" '.[] | select(.ref == $ref) | .object' <<<"$refs")"
+          for depth in {1..8}; do
+            tag_type="$(jq -er .type <<<"$object")"
+            tag_sha="$(jq -er .sha <<<"$object")"
+            [[ "$tag_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            if [[ "$tag_type" == "commit" ]]; then
+              break
+            fi
+            [[ "$tag_type" == "tag" ]] || exit 1
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" --jq .object)"
+          done
+          [[ "$tag_type" == "commit" && "$tag_sha" == "$RELEASE_SHA" ]] || {
+            echo "Existing release tag does not point at the immutable build commit." >&2
+            exit 1
+          }
 
       - name: Create GitHub release with all assets
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2

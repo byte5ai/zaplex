@@ -56,6 +56,15 @@ pub(crate) struct AccountIdentity {
     pub(crate) config_dir: Option<PathBuf>,
 }
 
+impl AccountIdentity {
+    /// Display labels may change during CLI discovery without changing the selected account.
+    pub(crate) fn same_route(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.provider_account_id == other.provider_account_id
+            && self.config_dir == other.config_dir
+    }
+}
+
 /// A concrete CLI installation. The version participates in capability-cache identity.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub(crate) struct InstallationIdentity {

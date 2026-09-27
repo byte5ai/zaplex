@@ -1421,6 +1421,8 @@ pub fn run_transfer(
             ));
         }
     };
+    let retain_artifacts =
+        |error| retain_destination_artifacts(error, job, displaced.as_ref(), backup.as_ref());
     let published_snapshot =
         capture_snapshot(&*job.target_backend, &job.target_path).map_err(|error| {
             let mut paths = vec![job.target_path.clone()];
@@ -1552,14 +1554,14 @@ pub fn run_transfer(
             .rename_if_matches(&job.source_path, &quarantine, source_anchor.clone())
             .err();
         if !source_anchor.matches_path(&quarantine).unwrap_or(false) {
-            return Err(source_anchor_recovery_error(
+            return Err(retain_artifacts(source_anchor_recovery_error(
                 "Source ownership changed during quarantine rename",
                 job.source_backend.clone(),
                 &job.source_path,
                 &quarantine,
                 source_anchor,
                 true,
-            ));
+            )));
         }
         let expected_quarantine_publication = source_publication.relocated(&quarantine);
         match resolve_publish(
@@ -1592,7 +1594,7 @@ pub fn run_transfer(
                 ));
             }
             PublishState::Ambiguous => {
-                return Err(source_anchor_recovery_error(
+                return Err(retain_artifacts(source_anchor_recovery_error(
                     format!(
                         "{}; source quarantine state is indeterminate",
                         rename_error
@@ -1604,20 +1606,20 @@ pub fn run_transfer(
                     &quarantine,
                     source_anchor.clone(),
                     true,
-                ));
+                )));
             }
         }
         let quarantined_snapshot = match capture_snapshot(&*job.source_backend, &quarantine) {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                return Err(source_anchor_recovery_error(
+                return Err(retain_artifacts(source_anchor_recovery_error(
                     format!("Capturing source quarantine failed: {error}"),
                     job.source_backend.clone(),
                     &job.source_path,
                     &quarantine,
                     source_anchor.clone(),
                     true,
-                ));
+                )));
             }
         };
         if capture_publication_snapshot_controlled(
@@ -1628,17 +1630,17 @@ pub fn run_transfer(
             &mut progress_callback,
         )
         .map_err(|error| {
-            source_anchor_recovery_error(
+            retain_artifacts(source_anchor_recovery_error(
                 format!("Verifying source quarantine failed: {error}"),
                 job.source_backend.clone(),
                 &job.source_path,
                 &quarantine,
                 source_anchor.clone(),
                 true,
-            )
+            ))
         })? != expected_quarantine_publication
         {
-            return Err(source_anchor_recovery_error(
+            return Err(retain_artifacts(source_anchor_recovery_error(
                 format!(
                     "Source quarantine content changed at {}",
                     quarantine.display()
@@ -1648,7 +1650,7 @@ pub fn run_transfer(
                 &quarantine,
                 source_anchor.clone(),
                 true,
-            ));
+            )));
         }
         let target_after_quarantine = capture_publication_snapshot_controlled(
             &*job.target_backend,
@@ -1667,19 +1669,21 @@ pub fn run_transfer(
                     job.target_path.display()
                 ))
             });
-            return Err(restore_quarantine_after_validation_failure(
-                job,
-                &quarantine,
-                &source_anchor,
-                &quarantined_snapshot,
-                &expected_quarantine_publication,
-                primary,
-                &published_snapshot,
-                &expected_publication,
-                displaced.as_ref(),
-                backup.as_ref(),
-                control,
-                &mut progress_callback,
+            return Err(retain_artifacts(
+                restore_quarantine_after_validation_failure(
+                    job,
+                    &quarantine,
+                    &source_anchor,
+                    &quarantined_snapshot,
+                    &expected_quarantine_publication,
+                    primary,
+                    &published_snapshot,
+                    &expected_publication,
+                    displaced.as_ref(),
+                    backup.as_ref(),
+                    control,
+                    &mut progress_callback,
+                ),
             ));
         }
         if let Err(error) = verify_anchor_at_path(
@@ -1687,36 +1691,40 @@ pub fn run_transfer(
             &job.target_path,
             published_snapshot.root_identity(),
         ) {
-            return Err(restore_quarantine_after_validation_failure(
-                job,
-                &quarantine,
-                &source_anchor,
-                &quarantined_snapshot,
-                &expected_quarantine_publication,
-                error,
-                &published_snapshot,
-                &expected_publication,
-                displaced.as_ref(),
-                backup.as_ref(),
-                control,
-                &mut progress_callback,
+            return Err(retain_artifacts(
+                restore_quarantine_after_validation_failure(
+                    job,
+                    &quarantine,
+                    &source_anchor,
+                    &quarantined_snapshot,
+                    &expected_quarantine_publication,
+                    error,
+                    &published_snapshot,
+                    &expected_publication,
+                    displaced.as_ref(),
+                    backup.as_ref(),
+                    control,
+                    &mut progress_callback,
+                ),
             ));
         }
         if let Err(error) = begin_finalizing(control, &mut progress_callback, source_identity.size)
         {
-            return Err(restore_quarantine_after_validation_failure(
-                job,
-                &quarantine,
-                &source_anchor,
-                &quarantined_snapshot,
-                &expected_quarantine_publication,
-                error,
-                &published_snapshot,
-                &expected_publication,
-                displaced.as_ref(),
-                backup.as_ref(),
-                control,
-                &mut progress_callback,
+            return Err(retain_artifacts(
+                restore_quarantine_after_validation_failure(
+                    job,
+                    &quarantine,
+                    &source_anchor,
+                    &quarantined_snapshot,
+                    &expected_quarantine_publication,
+                    error,
+                    &published_snapshot,
+                    &expected_publication,
+                    displaced.as_ref(),
+                    backup.as_ref(),
+                    control,
+                    &mut progress_callback,
+                ),
             ));
         }
         if let Err(error) = verify_anchor_at_path(
@@ -1724,30 +1732,32 @@ pub fn run_transfer(
             &job.target_path,
             published_snapshot.root_identity(),
         ) {
-            return Err(restore_quarantine_after_validation_failure(
-                job,
-                &quarantine,
-                &source_anchor,
-                &quarantined_snapshot,
-                &expected_quarantine_publication,
-                error,
-                &published_snapshot,
-                &expected_publication,
-                displaced.as_ref(),
-                backup.as_ref(),
-                control,
-                &mut progress_callback,
+            return Err(retain_artifacts(
+                restore_quarantine_after_validation_failure(
+                    job,
+                    &quarantine,
+                    &source_anchor,
+                    &quarantined_snapshot,
+                    &expected_quarantine_publication,
+                    error,
+                    &published_snapshot,
+                    &expected_publication,
+                    displaced.as_ref(),
+                    backup.as_ref(),
+                    control,
+                    &mut progress_callback,
+                ),
             ));
         }
         if !source_anchor.matches_path(&quarantine).unwrap_or(false) {
-            return Err(source_anchor_recovery_error(
+            return Err(retain_artifacts(source_anchor_recovery_error(
                 "Source quarantine ownership changed before destructive cleanup",
                 job.source_backend.clone(),
                 &job.source_path,
                 &quarantine,
                 source_anchor,
                 true,
-            ));
+            )));
         }
         if let Err(error) = remove_snapshot_root_controlled(
             &*job.source_backend,
@@ -1771,13 +1781,13 @@ pub fn run_transfer(
                 control,
                 &mut progress_callback,
             );
-            return Err(retain_source_anchor_for_recovery(
+            return Err(retain_artifacts(retain_source_anchor_for_recovery(
                 recovery,
                 job.source_backend.clone(),
                 &job.source_path,
                 &quarantine,
                 source_anchor,
-            ));
+            )));
         }
     }
 
@@ -1807,16 +1817,21 @@ pub fn run_transfer(
             &mut progress_callback,
             TransferPhase::Finalizing,
         ) {
-            return Err(cleanup_failure_with_backend_recovery(
-                format!("Transfer committed but displaced target cleanup failed: {error}"),
-                &error,
-                job.target_backend.clone(),
-                displaced.path,
-                &displaced.snapshot,
-                &displaced.publication,
-                true,
-                control,
-                &mut progress_callback,
+            return Err(retain_destination_artifacts(
+                cleanup_failure_with_backend_recovery(
+                    format!("Transfer committed but displaced target cleanup failed: {error}"),
+                    &error,
+                    job.target_backend.clone(),
+                    displaced.path,
+                    &displaced.snapshot,
+                    &displaced.publication,
+                    true,
+                    control,
+                    &mut progress_callback,
+                ),
+                job,
+                None,
+                backup.as_ref(),
             ));
         }
     }
@@ -2432,6 +2447,8 @@ pub fn run_directory_transfer(
             ));
         }
     };
+    let retain_artifacts =
+        |error| retain_destination_artifacts(error, job, displaced.as_ref(), backup.as_ref());
     let published_snapshot =
         capture_snapshot(&*job.target_backend, &job.target_path).map_err(|error| {
             let mut paths = vec![job.target_path.clone()];
@@ -2567,14 +2584,14 @@ pub fn run_directory_transfer(
             .rename_if_matches(&job.source_path, &quarantine, source_anchor.clone())
             .err();
         if !source_anchor.matches_path(&quarantine).unwrap_or(false) {
-            return Err(source_anchor_recovery_error(
+            return Err(retain_artifacts(source_anchor_recovery_error(
                 "Directory source ownership changed during quarantine rename",
                 job.source_backend.clone(),
                 &job.source_path,
                 &quarantine,
                 source_anchor,
                 true,
-            ));
+            )));
         }
         let expected_quarantine_publication = source_publication.relocated(&quarantine);
         match resolve_publish(
@@ -2607,7 +2624,7 @@ pub fn run_directory_transfer(
                 ));
             }
             PublishState::Ambiguous => {
-                return Err(source_anchor_recovery_error(
+                return Err(retain_artifacts(source_anchor_recovery_error(
                     format!(
                         "{}; source quarantine state is indeterminate",
                         rename_error
@@ -2619,21 +2636,21 @@ pub fn run_directory_transfer(
                     &quarantine,
                     source_anchor.clone(),
                     true,
-                ));
+                )));
             }
         }
 
         let quarantined_snapshot = match capture_snapshot(&*job.source_backend, &quarantine) {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                return Err(source_anchor_recovery_error(
+                return Err(retain_artifacts(source_anchor_recovery_error(
                     format!("Capturing directory source quarantine failed: {error}"),
                     job.source_backend.clone(),
                     &job.source_path,
                     &quarantine,
                     source_anchor.clone(),
                     true,
-                ));
+                )));
             }
         };
         if capture_publication_snapshot_controlled(
@@ -2644,17 +2661,17 @@ pub fn run_directory_transfer(
             &mut progress_callback,
         )
         .map_err(|error| {
-            source_anchor_recovery_error(
+            retain_artifacts(source_anchor_recovery_error(
                 format!("Verifying source quarantine failed: {error}"),
                 job.source_backend.clone(),
                 &job.source_path,
                 &quarantine,
                 source_anchor.clone(),
                 true,
-            )
+            ))
         })? != expected_quarantine_publication
         {
-            return Err(source_anchor_recovery_error(
+            return Err(retain_artifacts(source_anchor_recovery_error(
                 format!(
                     "Source quarantine content does not match the validated source at {}",
                     quarantine.display()
@@ -2664,7 +2681,7 @@ pub fn run_directory_transfer(
                 &quarantine,
                 source_anchor.clone(),
                 true,
-            ));
+            )));
         }
         let target_after_quarantine = capture_publication_snapshot_controlled(
             &*job.target_backend,
@@ -2683,19 +2700,21 @@ pub fn run_directory_transfer(
                     job.target_path.display()
                 ))
             });
-            return Err(restore_quarantine_after_validation_failure(
-                job,
-                &quarantine,
-                &source_anchor,
-                &quarantined_snapshot,
-                &expected_quarantine_publication,
-                primary,
-                &published_snapshot,
-                &expected_publication,
-                displaced.as_ref(),
-                backup.as_ref(),
-                control,
-                &mut progress_callback,
+            return Err(retain_artifacts(
+                restore_quarantine_after_validation_failure(
+                    job,
+                    &quarantine,
+                    &source_anchor,
+                    &quarantined_snapshot,
+                    &expected_quarantine_publication,
+                    primary,
+                    &published_snapshot,
+                    &expected_publication,
+                    displaced.as_ref(),
+                    backup.as_ref(),
+                    control,
+                    &mut progress_callback,
+                ),
             ));
         }
         if let Err(error) = verify_anchor_at_path(
@@ -2703,51 +2722,57 @@ pub fn run_directory_transfer(
             &job.target_path,
             published_snapshot.root_identity(),
         ) {
-            return Err(restore_quarantine_after_validation_failure(
-                job,
-                &quarantine,
-                &source_anchor,
-                &quarantined_snapshot,
-                &expected_quarantine_publication,
-                error,
-                &published_snapshot,
-                &expected_publication,
-                displaced.as_ref(),
-                backup.as_ref(),
-                control,
-                &mut progress_callback,
+            return Err(retain_artifacts(
+                restore_quarantine_after_validation_failure(
+                    job,
+                    &quarantine,
+                    &source_anchor,
+                    &quarantined_snapshot,
+                    &expected_quarantine_publication,
+                    error,
+                    &published_snapshot,
+                    &expected_publication,
+                    displaced.as_ref(),
+                    backup.as_ref(),
+                    control,
+                    &mut progress_callback,
+                ),
             ));
         }
         if let Err(error) = validate_snapshot(&*job.source_backend, &quarantined_snapshot) {
-            return Err(restore_quarantine_after_validation_failure(
-                job,
-                &quarantine,
-                &source_anchor,
-                &quarantined_snapshot,
-                &expected_quarantine_publication,
-                error,
-                &published_snapshot,
-                &expected_publication,
-                displaced.as_ref(),
-                backup.as_ref(),
-                control,
-                &mut progress_callback,
+            return Err(retain_artifacts(
+                restore_quarantine_after_validation_failure(
+                    job,
+                    &quarantine,
+                    &source_anchor,
+                    &quarantined_snapshot,
+                    &expected_quarantine_publication,
+                    error,
+                    &published_snapshot,
+                    &expected_publication,
+                    displaced.as_ref(),
+                    backup.as_ref(),
+                    control,
+                    &mut progress_callback,
+                ),
             ));
         }
         if let Err(error) = begin_finalizing(control, &mut progress_callback, total) {
-            return Err(restore_quarantine_after_validation_failure(
-                job,
-                &quarantine,
-                &source_anchor,
-                &quarantined_snapshot,
-                &expected_quarantine_publication,
-                error,
-                &published_snapshot,
-                &expected_publication,
-                displaced.as_ref(),
-                backup.as_ref(),
-                control,
-                &mut progress_callback,
+            return Err(retain_artifacts(
+                restore_quarantine_after_validation_failure(
+                    job,
+                    &quarantine,
+                    &source_anchor,
+                    &quarantined_snapshot,
+                    &expected_quarantine_publication,
+                    error,
+                    &published_snapshot,
+                    &expected_publication,
+                    displaced.as_ref(),
+                    backup.as_ref(),
+                    control,
+                    &mut progress_callback,
+                ),
             ));
         }
         if let Err(error) = verify_anchor_at_path(
@@ -2755,30 +2780,32 @@ pub fn run_directory_transfer(
             &job.target_path,
             published_snapshot.root_identity(),
         ) {
-            return Err(restore_quarantine_after_validation_failure(
-                job,
-                &quarantine,
-                &source_anchor,
-                &quarantined_snapshot,
-                &expected_quarantine_publication,
-                error,
-                &published_snapshot,
-                &expected_publication,
-                displaced.as_ref(),
-                backup.as_ref(),
-                control,
-                &mut progress_callback,
+            return Err(retain_artifacts(
+                restore_quarantine_after_validation_failure(
+                    job,
+                    &quarantine,
+                    &source_anchor,
+                    &quarantined_snapshot,
+                    &expected_quarantine_publication,
+                    error,
+                    &published_snapshot,
+                    &expected_publication,
+                    displaced.as_ref(),
+                    backup.as_ref(),
+                    control,
+                    &mut progress_callback,
+                ),
             ));
         }
         if !source_anchor.matches_path(&quarantine).unwrap_or(false) {
-            return Err(source_anchor_recovery_error(
+            return Err(retain_artifacts(source_anchor_recovery_error(
                 "Source quarantine ownership changed before destructive cleanup",
                 job.source_backend.clone(),
                 &job.source_path,
                 &quarantine,
                 source_anchor,
                 true,
-            ));
+            )));
         }
         if let Err(error) = remove_snapshot_root_controlled(
             &*job.source_backend,
@@ -2802,13 +2829,13 @@ pub fn run_directory_transfer(
                 control,
                 &mut progress_callback,
             );
-            return Err(retain_source_anchor_for_recovery(
+            return Err(retain_artifacts(retain_source_anchor_for_recovery(
                 recovery,
                 job.source_backend.clone(),
                 &job.source_path,
                 &quarantine,
                 source_anchor,
-            ));
+            )));
         }
     }
 
@@ -2838,18 +2865,23 @@ pub fn run_directory_transfer(
             &mut progress_callback,
             TransferPhase::Finalizing,
         ) {
-            return Err(cleanup_failure_with_backend_recovery(
-                format!(
-                    "Directory transfer committed but displaced target cleanup failed: {error}"
+            return Err(retain_destination_artifacts(
+                cleanup_failure_with_backend_recovery(
+                    format!(
+                        "Directory transfer committed but displaced target cleanup failed: {error}"
+                    ),
+                    &error,
+                    job.target_backend.clone(),
+                    displaced.path,
+                    &displaced.snapshot,
+                    &displaced.publication,
+                    true,
+                    control,
+                    &mut progress_callback,
                 ),
-                &error,
-                job.target_backend.clone(),
-                displaced.path,
-                &displaced.snapshot,
-                &displaced.publication,
-                true,
-                control,
-                &mut progress_callback,
+                job,
+                None,
+                backup.as_ref(),
             ));
         }
     }
@@ -2960,6 +2992,63 @@ fn source_anchor_recovery_error(
         },
     });
     ownership_recovery_error(message, backend, ownership, committed)
+}
+
+fn retain_destination_artifacts(
+    error: SftpOpsError,
+    job: &TransferJob,
+    displaced: Option<&BackupSnapshot>,
+    backup: Option<&BackupSnapshot>,
+) -> SftpOpsError {
+    let artifacts = displaced
+        .into_iter()
+        .chain(backup)
+        .filter(|artifact| !matches!(job.target_backend.entry_exists(&artifact.path), Ok(false)))
+        .collect::<Vec<_>>();
+    if artifacts.is_empty() {
+        return error;
+    }
+    let mut paths = error.recovery_paths().to_vec();
+    paths.extend(artifacts.iter().map(|artifact| artifact.path.clone()));
+    paths.sort();
+    paths.dedup();
+    let mut recovery_id = error.recovery_id();
+    if let Some(id) = recovery_id {
+        let mut actions = recovery_actions()
+            .lock()
+            .expect("transfer recovery registry lock poisoned");
+        if let Some(recovery) = actions.get_mut(&id) {
+            let mut units = Vec::new();
+            for artifact in artifacts {
+                units.push(CleanupRecoveryUnit::Verified {
+                    backend: job.target_backend.clone(),
+                    path: artifact.path.clone(),
+                    snapshot: artifact.snapshot.clone(),
+                    publication: artifact.publication.clone(),
+                });
+                if let Some(ownership) = &artifact.ownership {
+                    recovery
+                        .retained_anchors
+                        .extend(ownership.owned.values().map(|entry| entry.anchor.clone()));
+                    recovery
+                        .retained_anchors
+                        .extend(ownership.retained_anchors.iter().cloned());
+                }
+            }
+            // Finish independent destination cleanup before source restoration, so a
+            // transient cleanup failure cannot consume the SourceRestored outcome.
+            units.append(&mut recovery.units);
+            recovery.units = units;
+        } else {
+            recovery_id = None;
+        }
+    }
+    SftpOpsError::RecoveryRequired {
+        message: error.to_string(),
+        recovery_id,
+        paths,
+        committed: error.destination_committed(),
+    }
 }
 
 fn retain_source_anchor_for_recovery(

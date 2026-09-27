@@ -375,3 +375,44 @@ fn unsupported_effort_is_cleared() {
     };
     assert_eq!(target.effort, None);
 }
+
+#[test]
+fn refreshed_account_label_preserves_only_the_exact_selected_route() {
+    let mut discovered = capability(
+        SubscriptionAgent::ClaudeCode,
+        "account-1",
+        &[("default", true)],
+    );
+    discovered.installation.account.provider_account_id = Some("provider-1".into());
+    discovered.installation.account.config_dir = Some("/accounts/one".into());
+    discovered.installation.account.display_name = "owner@example.test".into();
+    let mut selected = discovered.installation.account.clone();
+    selected.display_name = "Work alias".into();
+    let preferences = RoutePreferences {
+        agent: Some(SubscriptionAgent::ClaudeCode),
+        account_identity: Some(selected.clone()),
+        ..RoutePreferences::default()
+    };
+    assert!(matches!(
+        route_target([discovered.clone()], &preferences, "/workspace".into()),
+        RouteResult::Ready(_)
+    ));
+    for field in ["routing_id", "provider_id", "config"] {
+        let mut changed = discovered.clone();
+        match field {
+            "routing_id" => changed.installation.account.id = "other-route".into(),
+            "provider_id" => {
+                changed.installation.account.provider_account_id = Some("other-provider".into())
+            }
+            "config" => changed.installation.account.config_dir = Some("/accounts/other".into()),
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                route_target([changed], &preferences, "/workspace".into()),
+                RouteResult::NeedsAccountChoice { .. }
+            ),
+            "{field}"
+        );
+    }
+}

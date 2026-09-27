@@ -90,12 +90,26 @@ jobs:
   cargo_check:
     name: cargo check (Linux x86_64)
     needs: changes
-    if: needs.changes.outputs.needs_build == 'true'
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.needs_build != 'false')
     # Same runner as release_linux, glibc 2.35, to avoid deps differences that
     # only appear on ubuntu-latest.
     runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 60
     steps:
+      # Only a successful, explicit docs-only decision may skip this required check.
+      # A failed detector/static guard must fail here before checkout or compilation.
+      - name: Require successful change detection
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          NEEDS_BUILD: ${{ needs.changes.outputs.needs_build }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CHANGES_RESULT" == "success" && "$NEEDS_BUILD" == "true" ]] || {
+            echo "Static PR checks or build-relevance detection did not succeed." >&2
+            exit 1
+          }
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false

@@ -363,7 +363,7 @@ fn selected_authentication_error<'a>(
         .find(|(agent, account, error)| {
             *agent == preferred_agent
                 && match preferences.account_identity.as_ref() {
-                    Some(selected) => selected == account,
+                    Some(selected) => selected.same_route(account),
                     None => preferences
                         .account_id
                         .as_ref()
@@ -667,83 +667,103 @@ pub(crate) async fn generate_subscription_output(
         prompt,
         working_directory,
     } = dispatch;
-    let candidates =
-        resolve_runtime_candidates(candidates, &preferences, &registry, &conversation_id)
-            .await
-            .map_err(api::ConvertToAPITypeError::Other)?;
-    let preflight_target = registry
-        .lifecycle(&conversation_id)
-        .filter(AgentLifecycle::accepts_prompt)
-        .and_then(|_| registry.target(&conversation_id));
-    registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Starting);
-    if let Some(target) = preflight_target {
-        checked_target_location(&target, &candidates, &registry, &conversation_id)
-            .map_err(api::ConvertToAPITypeError::Other)?;
-    }
-    registry.invalidate_target(&conversation_id);
-    // Revalidate the CLI version, account and exact model before every turn. A
-    // daemon restart changes the transport, not the native provider session.
-    let target = discover_routed_target(
-        &candidates,
-        &preferences,
-        &registry,
-        &conversation_id,
-        &working_directory,
-    )
-    .await
-    .map_err(api::ConvertToAPITypeError::Other)?;
-    let location = checked_target_location(&target, &candidates, &registry, &conversation_id)
-        .map_err(api::ConvertToAPITypeError::Other)?;
-    let resume = validated_resume_session(&registry, &conversation_id, &target)
-        .map_err(api::ConvertToAPITypeError::Other)?;
-    registry.remember_target(&conversation_id, &target);
-    registry.set_target(conversation_id.clone(), target.clone());
-    let mut session = match with_timeout(
-        "subscription agent initialization",
-        SubscriptionSession::open(target.clone(), resume, location),
-    )
-    .await
-    {
-        Ok(session) => session,
-        Err(error) => {
-            registry.set_lifecycle(
-                conversation_id.clone(),
-                runtime_error_lifecycle(
-                    &registry,
-                    &conversation_id,
-                    target.installation.agent,
-                    error.to_string(),
-                ),
-            );
-            return Err(api::ConvertToAPITypeError::Other(
-                classify_subscription_error(error),
-            ));
-        }
-    };
-    if let Some(identity) = session.identity().cloned() {
-        registry.store(conversation_id.clone(), target.clone(), identity);
-    }
-    if let Err(error) = with_timeout(
-        "subscription agent prompt delivery",
-        session.send_prompt(&prompt),
-    )
-    .await
-    {
-        end_session(&mut session, &registry, &conversation_id).await;
-        registry.set_lifecycle(
-            conversation_id.clone(),
-            runtime_error_lifecycle(
+    let mut cancellation = cancellation_rx.fuse();
+    let (mut session, target) = {
+        // Cancellation must win before discovery or initialization can deliver a prompt.
+        // Dropping the pending initialization also drops its kill-on-drop CLI process.
+        let initialize = async {
+            let candidates =
+                resolve_runtime_candidates(candidates, &preferences, &registry, &conversation_id)
+                    .await
+                    .map_err(api::ConvertToAPITypeError::Other)?;
+            let preflight_target = registry
+                .lifecycle(&conversation_id)
+                .filter(AgentLifecycle::accepts_prompt)
+                .and_then(|_| registry.target(&conversation_id));
+            registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Starting);
+            if let Some(target) = preflight_target {
+                checked_target_location(&target, &candidates, &registry, &conversation_id)
+                    .map_err(api::ConvertToAPITypeError::Other)?;
+            }
+            registry.invalidate_target(&conversation_id);
+            // Revalidate the CLI version, account and exact model before every turn. A
+            // daemon restart changes the transport, not the native provider session.
+            let target = discover_routed_target(
+                &candidates,
+                &preferences,
                 &registry,
                 &conversation_id,
-                target.installation.agent,
-                error.to_string(),
-            ),
-        );
-        return Err(api::ConvertToAPITypeError::Other(
-            classify_subscription_error(error),
-        ));
-    }
-    registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Responding);
+                &working_directory,
+            )
+            .await
+            .map_err(api::ConvertToAPITypeError::Other)?;
+            let location =
+                checked_target_location(&target, &candidates, &registry, &conversation_id)
+                    .map_err(api::ConvertToAPITypeError::Other)?;
+            let resume = validated_resume_session(&registry, &conversation_id, &target)
+                .map_err(api::ConvertToAPITypeError::Other)?;
+            registry.remember_target(&conversation_id, &target);
+            registry.set_target(conversation_id.clone(), target.clone());
+            let mut session = match with_timeout(
+                "subscription agent initialization",
+                SubscriptionSession::open(target.clone(), resume, location),
+            )
+            .await
+            {
+                Ok(session) => session,
+                Err(error) => {
+                    registry.set_lifecycle(
+                        conversation_id.clone(),
+                        runtime_error_lifecycle(
+                            &registry,
+                            &conversation_id,
+                            target.installation.agent,
+                            error.to_string(),
+                        ),
+                    );
+                    return Err(api::ConvertToAPITypeError::Other(
+                        classify_subscription_error(error),
+                    ));
+                }
+            };
+            if let Some(identity) = session.identity().cloned() {
+                registry.store(conversation_id.clone(), target.clone(), identity);
+            }
+            if let Err(error) = with_timeout(
+                "subscription agent prompt delivery",
+                session.send_prompt(&prompt),
+            )
+            .await
+            {
+                end_session(&mut session, &registry, &conversation_id).await;
+                registry.set_lifecycle(
+                    conversation_id.clone(),
+                    runtime_error_lifecycle(
+                        &registry,
+                        &conversation_id,
+                        target.installation.agent,
+                        error.to_string(),
+                    ),
+                );
+                return Err(api::ConvertToAPITypeError::Other(
+                    classify_subscription_error(error),
+                ));
+            }
+            registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Responding);
+
+            Ok::<_, api::ConvertToAPITypeError>((session, target))
+        }
+        .fuse();
+        futures_util::pin_mut!(initialize);
+        futures_util::select_biased! {
+            _ = cancellation => {
+                registry.clear_approvals(&conversation_id);
+                mark_cancelled(&registry, &conversation_id);
+                return Ok(Box::pin(futures::stream::empty()));
+            }
+            initialized = initialize => initialized?,
+        }
+    };
 
     let context_window = target.model.context_window;
     let stream = async_stream::stream! {
@@ -754,7 +774,6 @@ pub(crate) async fn generate_subscription_output(
         }
         yield Ok(adapter.persist_user_query(prompt));
         yield Ok(adapter.target(&target));
-        let cancellation = cancellation_rx.fuse();
         futures_util::pin_mut!(cancellation);
         loop {
             let event = {

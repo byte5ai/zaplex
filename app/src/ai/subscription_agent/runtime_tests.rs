@@ -460,9 +460,11 @@ fn authentication_error_blocks_only_the_exact_selected_account() {
         None
     );
 
+    let mut signed_out_alias = signed_out;
+    signed_out_alias.display_name = "Changed display label".into();
     let signed_out_selected = RoutePreferences {
         agent: Some(SubscriptionAgent::ClaudeCode),
-        account_identity: Some(signed_out),
+        account_identity: Some(signed_out_alias),
         ..Default::default()
     };
     assert_eq!(
@@ -1215,5 +1217,130 @@ fn remote_probe_failure_does_not_block_a_different_selected_account_with_the_sam
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].installation.account, selected_account);
         assert_eq!(registry.lifecycle("conversation"), None);
+    });
+}
+
+#[test]
+fn cancelled_dispatch_never_starts_discovery() {
+    futures_lite::future::block_on(async {
+        let registry = SubscriptionSessionRegistry::default();
+        let selected = target(SubscriptionAgent::ClaudeCode);
+        let dispatch = super::SubscriptionDispatch {
+            candidates: super::RuntimeCandidates::Ready(Vec::new()),
+            preferences: RoutePreferences::default(),
+            registry: registry.clone(),
+            conversation_id: "cancelled".into(),
+            task_id: "task".into(),
+            needs_create_task: false,
+            prompt: "must not send".into(),
+            working_directory: selected.working_directory,
+        };
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        sender.send(()).unwrap();
+        let mut stream = super::generate_subscription_output(dispatch, receiver)
+            .await
+            .expect("cancellation must win even over missing candidates");
+        assert!(futures_util::StreamExt::next(&mut stream).await.is_none());
+        assert_eq!(registry.lifecycle("cancelled"), Some(AgentLifecycle::Ready));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn cancellation_during_session_initialization_never_delivers_a_prompt() {
+    futures_lite::future::block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-claude");
+        let ready = directory.path().join("session-initialize-received");
+        let release = directory.path().join("release-initialize");
+        let prompt = directory.path().join("unexpected-prompt");
+        let capability = serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "request_id": "zaplex-initialize",
+                "response": {
+                    "account": {"accountUuid": "provider-1"},
+                    "models": [{"value": "default"}],
+                },
+            },
+        });
+        let mut session_capability = capability.clone();
+        session_capability["response"]["request_id"] = "zaplex-session-initialize".into();
+        let script = r#"#!/bin/sh
+case "$1" in
+    --version) printf '%s\n' 1.0; exit 0 ;;
+esac
+IFS= read -r initialize
+case "$initialize" in
+    *zaplex-session-initialize*)
+        : > __READY__
+        while [ ! -e __RELEASE__ ]; do sleep 0.01; done
+        printf '%s\n' __SESSION__
+        if IFS= read -r prompt; then printf '%s\n' "$prompt" > __PROMPT__; fi
+        ;;
+    *zaplex-initialize*)
+        printf '%s\n' __DISCOVERY__
+        while IFS= read -r unused; do :; done
+        ;;
+    *) exit 91 ;;
+esac
+"#
+        .replace("__READY__", &shell_words::quote(ready.to_str().unwrap()))
+        .replace(
+            "__RELEASE__",
+            &shell_words::quote(release.to_str().unwrap()),
+        )
+        .replace("__PROMPT__", &shell_words::quote(prompt.to_str().unwrap()))
+        .replace(
+            "__SESSION__",
+            &shell_words::quote(&session_capability.to_string()),
+        )
+        .replace(
+            "__DISCOVERY__",
+            &shell_words::quote(&capability.to_string()),
+        );
+        std::fs::write(&executable, script).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let registry = SubscriptionSessionRegistry::default();
+        let mut selected = target(SubscriptionAgent::ClaudeCode);
+        selected.installation.executable = executable;
+        selected.installation.account.provider_account_id = Some("provider-1".into());
+        selected.model.id = "default".into();
+        let dispatch = super::SubscriptionDispatch {
+            candidates: super::RuntimeCandidates::Ready(vec![super::RuntimeCandidate {
+                installation: selected.installation,
+                location: ProcessLocation::Local,
+            }]),
+            preferences: RoutePreferences::default(),
+            registry: registry.clone(),
+            conversation_id: "cancelled".into(),
+            task_id: "task".into(),
+            needs_create_task: false,
+            prompt: "must not reach the provider".into(),
+            working_directory: directory.path().to_path_buf(),
+        };
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        let (result, ()) = futures_util::join!(
+            super::generate_subscription_output(dispatch, receiver),
+            async {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while !ready.exists() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "session initialization was not reached"
+                    );
+                    warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
+                }
+                sender.send(()).unwrap();
+                std::fs::write(&release, b"continue").unwrap();
+            }
+        );
+        let mut stream = result.expect("cancelled initialization returns an empty stream");
+        assert!(futures_util::StreamExt::next(&mut stream).await.is_none());
+        assert!(
+            !prompt.exists(),
+            "the cancelled prompt was delivered to the CLI"
+        );
+        assert_eq!(registry.lifecycle("cancelled"), Some(AgentLifecycle::Ready));
     });
 }

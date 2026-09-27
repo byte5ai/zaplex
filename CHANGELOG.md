@@ -4,6 +4,12 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Subscription-Agenten (#245) behalten bei geänderten Anzeigenamen ihre exakte Kontoauswahl. Ein Abbruch während Discovery oder Sitzungsinitialisierung beendet den Start, bevor ein weiterer Prompt zugestellt wird.
+
+- SFTP-Speichern (#245) verwendet die bestätigte POSIX-Rename-Erweiterung des Servers statt eines Shell-Move mit Verzeichnisrennen. Wiederherstellung nach Überschreiben behält alle verifizierten Backup- und verdrängten Zieldateien bis zum erfolgreichen Aufräumen.
+
+- CI-/Release-Korrekturen (#245/#468) lassen den Pflichtcheck bei fehlgeschlagenen Vorprüfungen scheitern, binden fertige Daemon-Caches an den Quellcommit und verlangen tatsächlich ausgeführte Live-SFTP-Tests. Vorhandene Release-Tags müssen zum gebauten Commit gehören; Fehler beim Abruf des letzten Releases werden nicht mehr als leere Release-Historie gewertet.
+
 - Cockpit-Audit (#245): Fehler beim Lesen der Nutzungshistorie sperren die automatische Auswahl scheinbar freier Konten. OAuth-Limits bleiben an Konto und Zugangsdaten gebunden; der erste vollständige Scan erzeugt keinen Startton. Bare-Git-Repositories bleiben getrennte Projekte, und unbekannte Prozesszustände gelten nicht mehr als beendete Sessions.
 
 - GitHub-Analysen (#245) binden Diff, Bestätigung und Review an konkrete Commits; ein Merge verlangt weiterhin denselben Head. Die Analyse nutzt eine getrennte lokale Claude-Sitzung mit ausschließlich Lesewerkzeugen und ohne geerbte Erweiterungen. Codex steht für diese Analyse vorerst nicht zur Auswahl, solange externe Schreibwerkzeuge nicht sicher abgeschaltet werden können.

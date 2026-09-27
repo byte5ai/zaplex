@@ -5196,7 +5196,7 @@ fn review18_directory_isolation_restores_a_replacement_swapped_after_the_final_g
 
 #[test]
 fn committed_move_retains_source_recovery_after_quarantine_read_failure() {
-    for directory in [false, true] {
+    for (directory, overwrite) in [(false, false), (true, false), (false, true), (true, true)] {
         let source = tempdir().unwrap();
         let target = tempdir().unwrap();
         let source_path = if directory { "/source" } else { "/source.bin" };
@@ -5215,12 +5215,21 @@ fn committed_move_retains_source_recovery_after_quarantine_read_failure() {
             fs::create_dir(source.path().join("source")).unwrap();
         }
         fs::write(source.path().join(source_payload), b"owned source").unwrap();
+        if overwrite {
+            if directory {
+                fs::create_dir(target.path().join("target")).unwrap();
+            }
+            fs::write(target.path().join(target_payload), b"old target").unwrap();
+        }
         let mut backend = InstrumentedBackend::new(source.path());
         backend.fail_second_quarantine_read = true;
         let backend = Arc::new(backend);
         let transfer = TransferJob {
             source_backend: backend.clone(),
-            target_backend: Arc::new(InMemorySftpBackend::new(target.path().to_path_buf())),
+            target_backend: Arc::new(
+                InMemorySftpBackend::new(target.path().to_path_buf())
+                    .with_delete_failure_matching_once("zaplex-backup"),
+            ),
             source_path: PathBuf::from(source_path),
             target_path: PathBuf::from(target_path),
             operation: TransferOperation::Move,
@@ -5250,6 +5259,28 @@ fn committed_move_retains_source_recovery_after_quarantine_read_failure() {
             fs::read(target.path().join(target_payload)).unwrap(),
             b"owned source"
         );
+        if overwrite {
+            assert!(error
+                .recovery_paths()
+                .iter()
+                .any(|path| path.to_string_lossy().contains("zaplex-backup")));
+            let stage_marker = if directory {
+                "zaplex-tree"
+            } else {
+                "zaplex-transfer"
+            };
+            assert!(error
+                .recovery_paths()
+                .iter()
+                .any(|path| path.to_string_lossy().contains(stage_marker)));
+            let retry_error = retry_recovery(error.recovery_id().unwrap())
+                .expect_err("the retained backup must hit the one-shot cleanup failure");
+            assert!(retry_error.to_string().contains("injected cleanup failure"));
+            assert!(!source
+                .path()
+                .join(source_path.trim_start_matches('/'))
+                .exists());
+        }
         assert_eq!(
             retry_recovery(error.recovery_id().unwrap()).unwrap(),
             RecoveryOutcome::SourceRestored
@@ -5263,6 +5294,9 @@ fn committed_move_retains_source_recovery_after_quarantine_read_failure() {
             b"owned source"
         );
         assert!(transfer_artifacts(source.path(), "zaplex-source").is_empty());
+        assert!(transfer_artifacts(target.path(), "zaplex-backup").is_empty());
+        assert!(transfer_artifacts(target.path(), "zaplex-transfer").is_empty());
+        assert!(transfer_artifacts(target.path(), "zaplex-tree").is_empty());
     }
 }
 
@@ -5320,5 +5354,70 @@ fn committed_destination_metadata_failure_reports_file_and_directory_paths() {
             b"published payload"
         );
         assert!(transfer_artifacts(source.path(), "zaplex-source").is_empty());
+    }
+}
+
+#[test]
+fn displaced_cleanup_failure_keeps_independent_backup_in_recovery() {
+    for directory in [false, true] {
+        let source = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let source_path = if directory { "/source" } else { "/source.bin" };
+        let target_path = if directory { "/target" } else { "/target.bin" };
+        let source_payload = if directory {
+            "source/payload.bin"
+        } else {
+            "source.bin"
+        };
+        let target_payload = if directory {
+            "target/payload.bin"
+        } else {
+            "target.bin"
+        };
+        let stage_marker = if directory {
+            "zaplex-tree"
+        } else {
+            "zaplex-transfer"
+        };
+        if directory {
+            fs::create_dir(source.path().join("source")).unwrap();
+            fs::create_dir(target.path().join("target")).unwrap();
+        }
+        fs::write(source.path().join(source_payload), b"new").unwrap();
+        fs::write(target.path().join(target_payload), b"old").unwrap();
+        let transfer = TransferJob {
+            source_backend: backend(source.path()),
+            target_backend: Arc::new(
+                InMemorySftpBackend::new(target.path().to_path_buf())
+                    .with_delete_failure_matching_once(stage_marker),
+            ),
+            source_path: PathBuf::from(source_path),
+            target_path: PathBuf::from(target_path),
+            operation: TransferOperation::Copy,
+            conflict: ConflictDecision::Overwrite,
+        };
+        let error = run_transfer(&transfer, &TransferControl::default(), None).unwrap_err();
+        assert!(error.destination_committed());
+        assert!(error
+            .to_string()
+            .contains("displaced target cleanup failed"));
+        assert!(error
+            .recovery_paths()
+            .iter()
+            .any(|path| path.to_string_lossy().contains("zaplex-backup")));
+        assert_eq!(
+            retry_recovery(error.recovery_id().unwrap()).unwrap(),
+            RecoveryOutcome::CleanupCompleted
+        );
+        assert_eq!(
+            fs::read(target.path().join(target_payload)).unwrap(),
+            b"new"
+        );
+        assert_eq!(
+            fs::read(source.path().join(source_payload)).unwrap(),
+            b"new"
+        );
+        assert!(transfer_artifacts(target.path(), "zaplex-backup").is_empty());
+        assert!(transfer_artifacts(target.path(), stage_marker).is_empty());
     }
 }

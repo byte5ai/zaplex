@@ -140,7 +140,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: zap-remote-server-linux-x86_64.tar.gz
-          key: remote-server-musl-x86_64-${{ inputs.fast && 'debug' || 'release-cli' }}-${{ inputs.dmg_tag }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources') }}
+          key: remote-server-musl-x86_64-${{ needs.readiness.outputs.source_sha }}-${{ inputs.fast && 'debug' || 'release-cli' }}-${{ inputs.dmg_tag }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources') }}
 
       - name: Free up disk space
         if: steps.daemon_cache.outputs.cache-hit != 'true'
