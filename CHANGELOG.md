@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Website-Installationspfade (#245) führen zu den aktuellen Zaplex-Releases und zur Installationsanleitung. Historische Entwürfe und Übergabepläne sind als solche gekennzeichnet; die SSH-Diagnose nennt die tatsächlich ausgewertete Debug-Variable.
+
 - Theme-Farben (#245) weisen ungültige Unicode-Hexwerte als Eingabefehler zurück, statt beim Parsen abzustürzen. Das Löschen eines importierten Themes erhält Bilddateien außerhalb des eigenen Theme-Verzeichnisses, auch hinter Symlinks.
 
 - Gespeicherte Einführungstipps (#245) behalten alte Drive-Namen und die übrigen erledigten Tipps. Die eigenständige Workspace-Vorschau bietet ihre Theme- und Recovery-Optionen auch ohne externe Entwurfssteuerung an.

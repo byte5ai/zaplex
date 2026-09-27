@@ -110,7 +110,8 @@ pinned today); the launcher UI; a per-launch **remote** cwd/command parameter.
 ## 5. Order & rationale
 
 C4-1 → C4-2 are pure logic + mechanism (headless-testable, low blast radius) and unlock the
-value even behind a debug trigger. C4-3 makes it visible and flips the title-bar icons back on.
+value even behind a debug trigger. C4-3 makes it visible through the new-session dropdown
+and cockpit account cards; title-bar icons remain unchanged, as decided in §4.
 C4-4 is remote and naturally shares scope with Fork-remote (#6), so it comes last / together.
 
 ## 6. Open questions for the user

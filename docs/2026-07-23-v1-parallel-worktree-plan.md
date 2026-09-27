@@ -4,6 +4,12 @@ Date: 2026-07-23
 Status: approved implementation scope; execution has not started
 Integration source: `rc/master-plan`
 
+> Historical lane plan. The updated [implementation plan](2026-07-23-v1-implementation-plan.md)
+> supersedes the earlier L6 proposal to merge Connections and Cockpit or show
+> offline registry hosts in the live tree. The [Gate 0 resume](2026-07-23-v1-gate0-resume.md)
+> supersedes the `/tmp` build-target examples below with a confirmed replacement
+> volume. Paths, tools and approvals below are historical, not current authorization.
+
 ## 1. Goal
 
 Deliver Zaplex 1.0 as a stable release rather than another preview. Work is split

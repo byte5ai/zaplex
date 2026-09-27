@@ -1,12 +1,12 @@
 ---
 import LandingLayout from '../layouts/LandingLayout.astro';
 
-const repo = 'https://github.com/zerx-lab/zap';
+const repo = 'https://github.com/byte5ai/zaplex';
 
 // 文案集中管理,避免三语 data-lang 标签散落各处
 const t = {
   hero: {
-    badge:  { en: 'v0 · OSS preview',     zh: 'v0 · OSS 预览版',     ja: 'v0 · OSS プレビュー' },
+    badge: { en: 'Zaplex · see release status', zh: 'Zaplex · see release status', ja: 'Zaplex · see release status' },
     h1a:    { en: 'The terminal,',         zh: '把终端,',              ja: 'ターミナルを、' },
     h1b:    { en: 'rebuilt around you.',   zh: '重新交还给你。',         ja: 'あなたの手元に戻す。' },
     lede:   {
@@ -14,7 +14,7 @@ const t = {
       zh: 'Zap 是基于 Warp 的衍生产品 — 完全开放、本地优先的 agentic 终端。使用现有的 Claude Code 或 Codex 订阅，同时由你掌控会话与凭证。',
       ja: 'Zap は Warp を基にした派生プロダクト — 完全オープンでローカルファーストな agentic ターミナル。既存の Claude Code または Codex サブスクリプションを使用し、セッションと認証情報は自分で管理できます。',
     },
-    primary:   { en: 'Install Zap',     zh: '安装 Zap',     ja: 'Zap をインストール' },
+    primary: { en: 'Install Zaplex', zh: 'Install Zaplex', ja: 'Install Zaplex' },
     secondary: { en: 'View on GitHub',  zh: '在 GitHub 查看', ja: 'GitHub で見る' },
   },
   logos: {
@@ -46,12 +46,8 @@ const t = {
   },
   feat3: {
     eyebrow: { en: 'LOCALIZED',   zh: '本地化',        ja: 'ローカライズ' },
-    h:       { en: 'Localized end-to-end. Not just labels.',  zh: '端到端本地化,不只是标签翻译。', ja: '端から端までローカライズ。ラベルだけではありません。' },
-    p:       {
-      en: 'Settings, prompts, command palette, telemetry banners — all rewritten in English, 简体中文 and 日本語. Switch any time; preference persists locally.',
-      zh: '设置、Prompt、命令面板、隐私横幅 — 全部用 English / 简体中文 / 日本語 重写。可随时切换,偏好仅保存在本地。',
-      ja: '設定、プロンプト、コマンドパレット、テレメトリバナー — すべて English / 简体中文 / 日本語 で書き直されています。いつでも切替可能、設定はローカルに保存。',
-    },
+    h: { en: 'English and German desktop interface', zh: 'English and German desktop interface', ja: 'English and German desktop interface' },
+    p: { en: 'Zaplex Desktop supports English and German, with English fallback. The language switch on this website changes the website only.', zh: 'Zaplex Desktop supports English and German, with English fallback. The language switch on this website changes the website only.', ja: 'Zaplex Desktop supports English and German, with English fallback. The language switch on this website changes the website only.' },
     more: { en: 'Switch language ↑', zh: '切换语言 ↑', ja: '言語を切り替える ↑' },
   },
   quote: {
@@ -63,14 +59,9 @@ const t = {
     cite: { en: 'Project ethos', zh: '项目理念', ja: 'プロジェクトの理念' },
   },
   install: {
-    eyebrow: { en: 'INSTALL',    zh: '安装',           ja: 'インストール' },
-    h:       { en: 'Build it yourself in two commands.', zh: '两条命令,自行构建。',          ja: '2 つのコマンドで自分でビルド。' },
-    p:       {
-      en: 'No installer in preview — Zap is source-available and ships only as a build script. Clone, bootstrap, run.',
-      zh: 'preview 阶段不提供安装包 — Zap 完全源码公开,只通过构建脚本发布。Clone、bootstrap、run。',
-      ja: 'preview 段階ではインストーラーはありません。Zap はソース公開で、ビルドスクリプトのみが配布物です。Clone、bootstrap、run。',
-    },
-    tabMac: 'macOS', tabLinux: 'Linux', tabWin: 'Windows',
+    eyebrow: { en: 'INSTALL', zh: 'INSTALL', ja: 'INSTALL' },
+    h: { en: 'Install from published Zaplex releases.', zh: 'Install from published Zaplex releases.', ja: 'Install from published Zaplex releases.' },
+    p: { en: 'Check the README for the prepared source version, then confirm that its release artifact is available. Follow the installation and recovery guide.', zh: 'Check the README for the prepared source version, then confirm that its release artifact is available. Follow the installation and recovery guide.', ja: 'Check the README for the prepared source version, then confirm that its release artifact is available. Follow the installation and recovery guide.' },
   },
   cta: {
     h:       { en: 'Your terminal. Your agents.',  zh: '你的终端。你的 Agent。', ja: 'あなたのターミナル。あなたの Agent。' },
@@ -394,6 +385,7 @@ const subscriptionAgents = ['Claude Code', 'Codex'];
           <p data-lang="ja">{t.feat3.p.ja}</p>
         </div>
         <div class="feat-vis">
+          <p class="sec-lede">Historical upstream illustration; available desktop languages are English and German.</p>
           <div class="app-window mock-language">
             <div class="app-titlebar">
               <div class="tb-icon"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6 3v10"/></svg></div>
@@ -475,45 +467,10 @@ const subscriptionAgents = ['Claude Code', 'Codex'];
         <p class="sec-lede" data-lang="ja">{t.install.p.ja}</p>
       </div>
 
-      <div class="install-card fade-in delay-1">
-        <div class="install-tabs">
-          <button data-tab="macos" class="active">macOS</button>
-          <button data-tab="linux">Linux</button>
-          <button data-tab="windows">Windows<span class="meta">.ps1</span></button>
-        </div>
-
-        <div class="pre-wrap" data-pane="macos">
-          <pre class="code"><span class="com"># 1. Bootstrap dependencies (Xcode CLT + cargo helpers)</span>
-git clone https://github.com/zerx-lab/zap.git zap
-<span class="key">cd</span> zap
-./script/bootstrap
-
-<span class="com"># 2. Build &amp; run</span>
-./script/run --release</pre>
-          <button class="copy" type="button" data-copy>Copy</button>
-        </div>
-
-        <div class="pre-wrap" data-pane="linux" hidden>
-          <pre class="code"><span class="com"># Debian / Ubuntu (apt + cargo)</span>
-git clone https://github.com/zerx-lab/zap.git zap
-<span class="key">cd</span> zap
-./script/bootstrap
-
-<span class="com"># Build &amp; run</span>
-./script/run --release</pre>
-          <button class="copy" type="button" data-copy>Copy</button>
-        </div>
-
-        <div class="pre-wrap" data-pane="windows" hidden>
-          <pre class="code"><span class="com"># Run from PowerShell (winget + rustup)</span>
-git clone https://github.com/zerx-lab/zap.git zap
-<span class="key">cd</span> zap
-./script/bootstrap
-
-<span class="com"># Build &amp; run</span>
-./script/run --release</pre>
-          <button class="copy" type="button" data-copy>Copy</button>
-        </div>
+      <div class="btn-row fade-in delay-1">
+        <a class="btn" href="https://github.com/byte5ai/zaplex/releases">Published releases</a>
+        <a class="btn alt" href="https://github.com/byte5ai/zaplex/blob/main/docs/release/1.0-user-guide.md">Installation and recovery guide</a>
+        <a class="more" href="https://github.com/byte5ai/zaplex#install">Current source and release status</a>
       </div>
     </div>
   </section>

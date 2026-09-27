@@ -43,9 +43,10 @@ node. Workspace remains the only owner of opening an adopted terminal tab. So:
 
 - **List:** the panel runs a **list-only** headless connection (no tab), calls
   `list_sessions` on every eligible identity-local daemon runtime, and stores
-  the routed result in per-node render state. The default/current route retains
-  the normal install/start/self-heal behaviour; historical routes remain
-  strictly connect-only. Titles use the generation-matched foreground agent
+  the routed result in per-node render state. Inventory never installs a missing
+  daemon; the user must connect explicitly first. With an installed daemon, the
+  default/current route retains normal start/self-heal behaviour; historical
+  routes remain strictly connect-only. Titles use the generation-matched foreground agent
   provider and task, then project. Failed inventory on a capable daemon may
   retain a cwd-based project title; peers without agent-inventory support use a
   neutral session identifier while retaining cwd metadata for routed operations.

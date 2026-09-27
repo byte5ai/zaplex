@@ -1,6 +1,11 @@
 # Zaplex 1.0 Orchestrator Kick-off Prompt
 
-Copy and paste the following prompt into a new visible Codex task.
+Historical kickoff prompt (2026-07-23), retained for context. Do not copy it as
+a current execution contract: its worktree/HEAD, tool names, approvals and
+`/tmp` target directories describe that session. The subsequent
+[Gate 0 resume](2026-07-23-v1-gate0-resume.md) requires a confirmed replacement
+volume before further compilation; current user instructions and source-bound
+issue evidence take precedence.
 
 ---
 
