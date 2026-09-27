@@ -7,7 +7,7 @@ use warp::{
     cmd_or_ctrl_shift,
     features::FeatureFlag,
     integration_testing::{
-        pane_group::assert_focused_pane_index,
+        pane_group::{assert_focused_pane_index, LocalSplitTarget},
         step::new_step_with_default_assertions,
         terminal::{
             execute_command, util::ExpectedExitStatus, validate_block_output_on_finished_block,
@@ -30,6 +30,7 @@ pub fn test_restore_single_closed_pane() -> Builder {
         .with_step(
             new_step_with_default_assertions("Split off a new pane to the right")
                 .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target()
                 .add_assertion(assert_focused_pane_index(0, 1)),
         )
         .with_step(wait_until_bootstrapped_pane(0, 1))
@@ -86,6 +87,7 @@ pub fn test_restore_multiple_closed_panes() -> Builder {
         .with_step(
             new_step_with_default_assertions("Split off first new pane to the right")
                 .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target()
                 .add_assertion(assert_focused_pane_index(0, 1)),
         )
         .with_step(wait_until_bootstrapped_pane(0, 1))
@@ -99,6 +101,7 @@ pub fn test_restore_multiple_closed_panes() -> Builder {
         .with_step(
             new_step_with_default_assertions("Split off second new pane to the right")
                 .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target()
                 .add_assertion(assert_focused_pane_index(0, 2)),
         )
         .with_step(wait_until_bootstrapped_pane(0, 2))
@@ -179,6 +182,7 @@ pub fn test_undo_close_grace_period_cleanup() -> Builder {
         .with_step(
             new_step_with_default_assertions("Split off a new pane to the right")
                 .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target()
                 .add_assertion(assert_focused_pane_index(0, 1)),
         )
         .with_step(wait_until_bootstrapped_pane(0, 1))
@@ -247,6 +251,7 @@ pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
         .with_step(
             new_step_with_default_assertions("Split off first new pane to the right")
                 .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target()
                 .add_assertion(assert_focused_pane_index(0, 1)),
         )
         .with_step(wait_until_bootstrapped_pane(0, 1))
@@ -260,6 +265,7 @@ pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
         .with_step(
             new_step_with_default_assertions("Split off second new pane to the right")
                 .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target()
                 .add_assertion(assert_focused_pane_index(0, 2)),
         )
         .with_step(wait_until_bootstrapped_pane(0, 2))

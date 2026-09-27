@@ -46,8 +46,8 @@ pub fn test_secret_is_obfuscated_on_copy() -> Builder {
         )
         .with_steps(open_context_menu_for_selected_block())
         .with_step(
-            new_step_with_default_assertions("Arrow down and select copy Command")
-                .with_keystrokes(&["down", "down", "enter"])
+            new_step_with_default_assertions("Select Copy command")
+                .with_click_on_saved_position_fn(|_, _| warp::t!("menu-block-copy-command"))
                 .add_assertion(assert_clipboard_contains_string(format!(
                     "echo {phone_number_obfuscated}"
                 ))),
@@ -125,8 +125,8 @@ pub fn test_copy_secret_respects_safe_mode_setting() -> Builder {
         )
         .with_steps(open_context_menu_for_selected_block())
         .with_step(
-            new_step_with_default_assertions("Arrow down and select copy Command")
-                .with_keystrokes(&["down", "down", "enter"])
+            new_step_with_default_assertions("Select Copy command")
+                .with_click_on_saved_position_fn(|_, _| warp::t!("menu-block-copy-command"))
                 .add_assertion(assert_clipboard_contains_string(format!(
                     "echo {phone_number}"
                 ))),
@@ -205,8 +205,8 @@ pub fn test_secret_case_sensitivity() -> Builder {
         )
         .with_steps(open_context_menu_for_selected_block())
         .with_step(
-            new_step_with_default_assertions("Arrow down and select copy Command")
-                .with_keystrokes(&["down", "down", "enter"])
+            new_step_with_default_assertions("Select Copy command")
+                .with_click_on_saved_position_fn(|_, _| warp::t!("menu-block-copy-command"))
                 // Only the uppercase ID should be redacted since pattern requires uppercase
                 .add_assertion(assert_clipboard_contains_string(
                     "echo '******************** akiaabc123456789defg'".to_string(),

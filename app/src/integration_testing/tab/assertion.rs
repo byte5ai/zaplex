@@ -1,6 +1,9 @@
 use warpui::{async_assert, integration::AssertionCallback};
 
-use crate::integration_testing::{terminal::util::ExpectedOutput, view_getters::pane_group_view};
+use crate::integration_testing::{
+    terminal::util::ExpectedOutput,
+    view_getters::{pane_group_view, terminal_view},
+};
 
 /// Asserts that the tab has a pane at the given index with the expected title.
 pub fn assert_pane_title(
@@ -36,6 +39,23 @@ pub fn assert_tab_title(
         async_assert!(
             expected_title.matches(&title),
             "Expected title of tab {tab_index} to match [{expected_title:?}], but was [{title}]"
+        )
+    })
+}
+
+/// Checks OSC title ingestion separately from the visible host/cwd identity.
+pub fn assert_shell_title(
+    tab_index: usize,
+    pane_index: usize,
+    expected_title: String,
+) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let terminal = terminal_view(app, window_id, tab_index, pane_index);
+        // This callback runs without a model guard; release it before any pane title read.
+        let title = terminal.read(app, |view, _| view.model.lock().terminal_title());
+        async_assert!(
+            title.as_deref() == Some(expected_title.as_str()),
+            "Expected shell OSC title [{expected_title}], got [{title:?}]"
         )
     })
 }

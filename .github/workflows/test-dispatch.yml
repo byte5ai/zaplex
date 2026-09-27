@@ -161,10 +161,10 @@ jobs:
               "runner": os.environ["RUNNER_LABEL"],
               "source_root": os.environ["GITHUB_WORKSPACE"],
               "tools": {"cargo-llvm-cov": "0.9.1", "cargo-nextest": "0.9.146", "tree-sitter": "0.25.2", "tree-sitter-rust": "0.24.2"},
-              "command": ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1920x1080x24", "cargo", "llvm-cov", "nextest", "--locked", "--workspace", "--exclude", "command-signatures-v2", "--profile", "ci", "--no-report"],
+              "command": ["script/run-shell-ssh-fixtures", "--", "xvfb-run", "--auto-servernum", "--server-args=-screen 0 1920x1080x24", "cargo", "llvm-cov", "nextest", "--locked", "--workspace", "--exclude", "command-signatures-v2", "--profile", "ci", "--no-report"],
               "environment": {name: os.environ.get(name) for name in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTUP_TOOLCHAIN", "CHANNEL")},
               "config_hashes": {str(path): hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
-                                for path in [pathlib.Path("Cargo.lock"), pathlib.Path("Cargo.toml"), pathlib.Path("app/Cargo.toml"), pathlib.Path(".config/nextest.toml"), pathlib.Path(".github/workflows/test-dispatch.yml"), pathlib.Path("script/linux/install_test_deps"), pathlib.Path("crates/integration/tests/common/mod.rs"), pathlib.Path(".cargo/config.toml"), pathlib.Path("script/test-suite-rust-projection.py"), pathlib.Path("script/test-suite-evidence-requirements.txt"), *sorted(pathlib.Path("crates").glob("*/Cargo.toml")), *sorted(pathlib.Path(".").glob("rust-toolchain*"))]},
+                                for path in [pathlib.Path("Cargo.lock"), pathlib.Path("Cargo.toml"), pathlib.Path("app/Cargo.toml"), pathlib.Path(".config/nextest.toml"), pathlib.Path(".github/workflows/test-dispatch.yml"), pathlib.Path("script/linux/install_test_deps"), pathlib.Path("script/run-shell-ssh-fixtures"), pathlib.Path("crates/integration/tests/common/mod.rs"), pathlib.Path(".cargo/config.toml"), pathlib.Path("script/test-suite-rust-projection.py"), pathlib.Path("script/test-suite-evidence-requirements.txt"), *sorted(pathlib.Path("crates").glob("*/Cargo.toml")), *sorted(pathlib.Path(".").glob("rust-toolchain*"))]},
               "rustc": subprocess.check_output(["rustc", "--version"], text=True).strip(),
               "scope": "Rust workspace; exclude command-signatures-v2; default features; nextest ci profile",
               "coverage_scope": "Linux Rust production-source projection; test-only feature/module regions excluded; ambiguous covered regions unproven; Rust-only suite",
@@ -193,6 +193,7 @@ jobs:
         env:
           CARGO_LLVM_COV_TARGET_DIR: ${{ runner.temp }}/suite-coverage-target
         run: >
+          script/run-shell-ssh-fixtures --
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24"
           cargo llvm-cov nextest --locked --workspace --exclude command-signatures-v2
           --profile ci --no-report
@@ -266,5 +267,5 @@ jobs:
             args+=("$FILTER")
           fi
           echo "Running: cargo test ${args[*]}"
-          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" cargo test "${args[@]}"
+          script/run-shell-ssh-fixtures -- xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" cargo test "${args[@]}"
         shell: bash

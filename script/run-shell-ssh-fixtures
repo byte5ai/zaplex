@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# Provision loopback-only SSH shells for the existing integration suite.
+set -euo pipefail
+if [[ ${GITHUB_ACTIONS:-} != true || ${RUNNER_OS:-} != Linux || ${RUNNER_ENVIRONMENT:-} != github-hosted ]]; then
+  echo 'SSH fixtures require an ephemeral GitHub-hosted Linux runner.' >&2
+  exit 2
+fi
+if [[ ${1:-} != -- || $# -lt 2 ]]; then
+  echo 'Usage: run-shell-ssh-fixtures -- COMMAND [ARG...]' >&2
+  exit 2
+fi
+shift
+: "${RUNNER_TEMP:?Runner temporary directory is required}"
+fixture_root="$(mktemp -d /tmp/zps-XXXXXXXX)"
+fixture_tag="$(basename "$fixture_root" | tr '[:upper:]' '[:lower:]')"
+profile_path="/etc/profile.d/${fixture_tag}.sh"
+users=()
+uids=()
+sshd_pid=''
+profile_installed=false
+cleanup() {
+  result=$?
+  trap - EXIT
+  for uid in "${uids[@]}"; do
+    sudo pkill -TERM -u "$uid" 2>/dev/null || true
+  done
+  if [[ -n $sshd_pid ]]; then sudo kill "$sshd_pid" 2>/dev/null || true; fi
+  for uid in "${uids[@]}"; do
+    sudo pkill -KILL -u "$uid" 2>/dev/null || true
+  done
+  for uid in "${uids[@]}"; do
+    for attempt in {1..50}; do
+      if ! pgrep -u "$uid" >/dev/null; then break; fi
+      sleep 0.1
+    done
+    if pgrep -u "$uid" >/dev/null; then
+      echo "Fixture processes for UID $uid did not terminate." >&2
+      result=1
+    fi
+  done
+  for user in "${users[@]}"; do
+    if ! sudo userdel "$user"; then result=1; fi
+  done
+  if [[ $result -ne 0 && -f $fixture_root/sshd.log ]]; then
+    mkdir -p "$RUNNER_TEMP/suite-evidence"
+    # Keep only daemon diagnostics; never export keys or account configuration.
+    if ! sudo cat "$fixture_root/sshd.log" > "$RUNNER_TEMP/suite-evidence/shell-sshd.log"; then
+      echo 'Could not preserve SSH daemon diagnostics.' >&2
+    fi
+  fi
+  if [[ $profile_installed == true ]]; then sudo rm -f -- "$profile_path"; fi
+  sudo rm -rf -- "$fixture_root"
+  exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+sudo apt-get update
+sudo apt-get install --yes --no-install-recommends openssh-server netcat-openbsd zsh fish busybox tmux
+# Package installation may start the runner's default daemon. The password
+# fixture accounts must only be reachable through our loopback-only instance.
+sudo systemctl stop ssh.socket ssh.service 2>/dev/null || true
+if systemctl is-active --quiet ssh.socket || systemctl is-active --quiet ssh.service || pgrep -x sshd >/dev/null; then
+  echo 'Unexpected SSH daemon remains active; refusing to create password fixtures.' >&2
+  exit 1
+fi
+chmod 711 "$fixture_root"
+ln -s /usr/bin/busybox "$fixture_root/ash"
+: > "$fixture_root/users.tsv"
+for shell in bash zsh sh ash fish; do
+  user="${fixture_tag//-/}${shell}"
+  shell_path="$(command -v "$shell" || true)"
+  if [[ $shell == ash ]]; then shell_path="$fixture_root/ash"; fi
+  [[ -x $shell_path ]]
+  user_home="$fixture_root/$shell"
+  sudo useradd --no-create-home --home-dir "$user_home" --shell "$shell_path" "$user"
+  users+=("$user")
+  uids+=("$(id -u "$user")")
+  sudo install -d -m 700 -o "$user" -g "$user" "$user_home"
+  # Public test credential; these accounts only accept loopback SSH and expire at exit.
+  printf '%s:password\n' "$user" | sudo chpasswd
+  printf '%s\t%s\n' "$shell" "$user" >> "$fixture_root/users.tsv"
+done
+# Unknown-shell bootstrap explicitly sources /etc/profile. This fragment affects
+# only the exact dedicated UIDs; it does not change the runner's shell environment.
+uid_pattern="$(IFS='|'; echo "${uids[*]}")"
+printf 'case "$(id -u)" in\n  %s)\n    export ZAPLEX_PROFILE_LOADED=true\n    export PS1="\\$ "\n    printf "Zaplex isolated SSH login fixture\\n"\n    ;;\nesac\n' "$uid_pattern" > "$fixture_root/profile.sh"
+[[ ! -e $profile_path && ! -L $profile_path ]]
+sudo install -m 644 "$fixture_root/profile.sh" "$profile_path"
+profile_installed=true
+ssh-keygen -q -t ed25519 -N '' -f "$fixture_root/host-key"
+ssh-keygen -q -t ed25519 -N '' -f "$fixture_root/client-key"
+for shell in bash zsh sh ash fish; do
+  user="${fixture_tag//-/}${shell}"
+  user_home="$fixture_root/$shell"
+  sudo install -d -m 700 -o "$user" -g "$user" "$user_home/.ssh"
+  sudo install -m 600 -o "$user" -g "$user" "$fixture_root/client-key.pub" "$user_home/.ssh/authorized_keys"
+done
+# Zsh has a separate login-profile sequence; keep its login output deterministic.
+printf 'printf "Zaplex isolated SSH login fixture\\n"\n' > "$fixture_root/zprofile"
+sudo install -m 600 -o "${users[1]}" -g "${users[1]}" "$fixture_root/zprofile" "$fixture_root/zsh/.zprofile"
+sudo install -d -m 700 -o "${users[4]}" -g "${users[4]}" "$fixture_root/fish/.config/fish"
+cat > "$fixture_root/config.fish" <<'FISH'
+if status --is-login
+    printf 'Zaplex isolated SSH login fixture\n'
+end
+function fish_prompt
+    printf '%s@%s ~> ' (whoami) (hostname)
+end
+FISH
+sudo install -m 600 -o "${users[4]}" -g "${users[4]}" "$fixture_root/config.fish" "$fixture_root/fish/.config/fish/config.fish"
+port="$(python3 - <<'PY'
+import socket
+with socket.socket() as server:
+    server.bind(('127.0.0.1', 0))
+    print(server.getsockname()[1])
+PY
+)"
+printf '[127.0.0.1]:%s %s\n' "$port" "$(cat "$fixture_root/host-key.pub")" > "$fixture_root/known_hosts"
+cat > "$fixture_root/sshd_config" <<CONFIG
+Port $port
+ListenAddress 127.0.0.1
+HostKey $fixture_root/host-key
+PidFile $fixture_root/sshd.pid
+AuthorizedKeysFile .ssh/authorized_keys
+PasswordAuthentication yes
+PubkeyAuthentication yes
+KbdInteractiveAuthentication no
+UsePAM no
+PermitRootLogin no
+AllowUsers ${users[*]}
+AllowAgentForwarding no
+X11Forwarding no
+PrintMotd no
+Subsystem sftp internal-sftp
+CONFIG
+sudo mkdir -p /run/sshd
+sudo /usr/sbin/sshd -t -f "$fixture_root/sshd_config"
+sudo /usr/sbin/sshd -E "$fixture_root/sshd.log" -f "$fixture_root/sshd_config"
+sshd_pid="$(sudo cat "$fixture_root/sshd.pid")"
+ssh -F /dev/null -i "$fixture_root/client-key" -p "$port" \
+  -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+  -o "UserKnownHostsFile=$fixture_root/known_hosts" -o ConnectTimeout=10 \
+  "${users[0]}@127.0.0.1" true
+python3 - "$fixture_root" "$port" <<'PY'
+import json, pathlib, socket, sys
+root = pathlib.Path(sys.argv[1])
+config = {'users': dict(line.split('\t') for line in (root / 'users.tsv').read_text().splitlines()),
+          'hostname': socket.gethostname(), 'port': int(sys.argv[2]),
+          'known_hosts': str(root / 'known_hosts')}
+(root / 'fixture.json').write_text(json.dumps(config))
+PY
+export ZAPLEX_SHELL_SSH_FIXTURE="$fixture_root/fixture.json"
+# This executes the already selected CI command, without any replacement build.
+"$@"

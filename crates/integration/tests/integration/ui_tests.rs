@@ -227,7 +227,7 @@ integration_tests! {
 
     test_open_workflow_in_pane,
     test_create_personal_workflow_pane_from_command_palette,
-    test_create_team_workflow_pane_from_command_palette,
+    test_cached_team_membership_does_not_offer_team_workflow_creation,
 
     // TODO(alokedesai): Fix this on the latest version of Bash.
     #[ignore]

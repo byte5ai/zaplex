@@ -350,11 +350,7 @@ pub fn test_restore_snapshot_with_notebooks() -> Builder {
         )
         .with_step(
             new_step_with_default_assertions_for_pane("Wait for terminal pane to bootstrap", 0, 2)
-                .add_assertion(assert_pane_title(
-                    0,
-                    2,
-                    tab_title_in_home_dir("test_restore_snapshot_with_notebooks"),
-                )),
+                .add_assertion(assert_pane_title(0, 2, tab_title_in_home_dir())),
         )
         .with_step(
             TestStep::new("Verify notebook contents")
@@ -457,11 +453,7 @@ pub fn test_restore_snapshot_with_markdown_file() -> Builder {
         // home directory and context for the notebook pane.
         .with_step(
             new_step_with_default_assertions_for_pane("Wait for terminal pane to bootstrap", 0, 0)
-                .add_assertion(assert_pane_title(
-                    0,
-                    0,
-                    tab_title_in_home_dir("test_restore_snapshot_with_markdown_file"),
-                )),
+                .add_assertion(assert_pane_title(0, 0, tab_title_in_home_dir())),
         )
         .with_step(
             // The pane title isn't set until after the Markdown file is read in, so this verifies
@@ -497,11 +489,7 @@ pub fn test_restore_snapshot_with_code_file() -> Builder {
         // home directory and context for the notebook pane.
         .with_step(
             new_step_with_default_assertions_for_pane("Wait for terminal pane to bootstrap", 0, 0)
-                .add_assertion(assert_pane_title(
-                    0,
-                    0,
-                    tab_title_in_home_dir("test_restore_snapshot_with_code_file"),
-                )),
+                .add_assertion(assert_pane_title(0, 0, tab_title_in_home_dir())),
         )
         .with_step(
             // The pane title isn't set until after the file is read in, so this verifies

@@ -9,3 +9,13 @@ pub fn tab_title_step(assertion_name: &str, expected_tab_title: String) -> TestS
     new_step_with_default_assertions(assertion_name)
         .add_assertion(assert_tab_title(0, expected_tab_title))
 }
+
+/// Shell titles remain available while the visible tab identifies the local host and cwd.
+pub fn shell_title_step(assertion_name: &str, expected_shell_title: String) -> TestStep {
+    new_step_with_default_assertions(assertion_name)
+        .add_assertion(super::assert_shell_title(0, 0, expected_shell_title))
+        .add_assertion(assert_tab_title(
+            0,
+            format!("{} · ~", crate::t!("cockpit-spawn-card-host-local")),
+        ))
+}

@@ -90,3 +90,10 @@ pub fn cursor_path(app: &App, window_id: WindowId) -> Option<PathBuf> {
             .map(|entry| entry.path.clone())
     })
 }
+
+/// Returns the saved geometry ID for a row in this browser instance.
+pub fn row_position_id(app: &App, window_id: WindowId, index: usize) -> String {
+    sftp_browser_view(app, window_id).read(app, |view, _| {
+        view.layout_position_id_for_test(&format!("row:{index}"))
+    })
+}

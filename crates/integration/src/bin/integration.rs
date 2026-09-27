@@ -60,6 +60,9 @@ pub fn main() -> Result<()> {
         }
     }
 
+    // Initialize before constructing builders: test actions also capture localized labels.
+    warp::i18n::init(Some("en"));
+
     let tests = register_tests();
     let test_name = args
         .integration_test_name
@@ -350,7 +353,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     // Workflow tests
     register_test!(test_open_workflow_in_pane);
     register_test!(test_create_personal_workflow_pane_from_command_palette);
-    register_test!(test_create_team_workflow_pane_from_command_palette);
+    register_test!(test_cached_team_membership_does_not_offer_team_workflow_creation);
 
     register_test!(test_block_filtering_keybinding);
     register_test!(test_block_filtering_keybinding_with_long_running_command);

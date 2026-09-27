@@ -139,7 +139,7 @@ use warp::{
             assert_no_pending_model_events, new_step_with_default_assertions,
             new_step_with_default_assertions_for_pane,
         },
-        tab::tab_title_step,
+        tab::shell_title_step,
         terminal::{
             assert_active_block_output_for_single_terminal_in_tab,
             assert_active_block_received_precmd,
@@ -183,7 +183,7 @@ use warp::{
     features::FeatureFlag,
     integration_testing::{
         find::{Find, FindWithinBlockState},
-        pane_group::assert_focused_pane_index,
+        pane_group::{assert_focused_pane_index, LocalSplitTarget},
         settings::set_window_custom_size,
         terminal::assert_terminal_bootstrapping,
         view_getters::pane_group_view,
@@ -207,14 +207,15 @@ use warp::{
     settings::MonospaceFontSize,
 };
 use warp::{
-    integration_testing::{assertions::join_a_workspace, view_getters::single_terminal_view},
+    integration_testing::{assertions::load_cached_workspace, view_getters::single_terminal_view},
     terminal::view::TerminalAction,
 };
 use warp::{
     integration_testing::{
         command_palette::{
-            close_command_palette, open_command_palette, open_command_palette_and_run_action,
-            TestStepsExt,
+            assert_command_palette_binding_not_offered,
+            assert_personal_creation_without_team_actions, close_command_palette,
+            open_command_palette, open_command_palette_and_run_action, TestStepsExt,
         },
         view_getters::single_terminal_pane_view_for_tab,
     },
@@ -3401,7 +3402,7 @@ pub fn test_auto_title() -> Builder {
             matches!(starter.shell_type(), shell::ShellType::Zsh)
         })
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(tab_title_step(
+        .with_step(shell_title_step(
             "Assert the default tab title used",
             "~".to_string(),
         ))
@@ -3480,7 +3481,7 @@ PROMPT_COMMAND='echo -en "\033]0;TEST_TAB_TITLE\a"'
             ExpectedExitStatus::Success,
             (),
         ))
-        .with_step(tab_title_step(
+        .with_step(shell_title_step(
             "Assert the user's tab title used",
             "TEST_TAB_TITLE".to_string(),
         ))
@@ -3511,7 +3512,7 @@ precmd_functions+=(set_title)
             );
         })
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(tab_title_step(
+        .with_step(shell_title_step(
             "Assert the user's tab title used",
             "TEST_TAB_TITLE".to_string(),
         ))
@@ -4488,7 +4489,9 @@ pub fn test_create_session_with_split_pane_while_bootstrapping() -> Builder {
                 the first is done bootstrapping.",
             )
             .with_keystrokes(&[cmd_or_ctrl_shift("d")])
-            .with_keystrokes(&[cmd_or_ctrl_shift("d")]),
+            .with_local_split_target()
+            .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+            .with_local_split_target(),
         )
         .with_step(
             wait_until_bootstrapped_single_pane_for_tab(1)
@@ -6182,7 +6185,11 @@ pub fn test_escape_sequences_sent_to_focused_terminal() -> Builder {
         // TODO(CORE-2857) There is some flakiness with long-running commands exiting.
         .set_should_run_test(skip_if_powershell_core_2303)
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(TestStep::new("Create a new session").with_keystrokes(&[cmd_or_ctrl_shift("d")]))
+        .with_step(
+            TestStep::new("Create a new session")
+                .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target(),
+        )
         .with_step(
             wait_until_bootstrapped_pane(0 /* tab_index */, 1 /* pane_index */)
                 .set_timeout(Duration::from_secs(10))
@@ -6452,7 +6459,9 @@ pub fn test_pane_group_state_multi_pane() -> Builder {
         .with_step(
             new_step_with_default_assertions("create 2 additional panes")
                 .with_keystrokes(&[cmd_or_ctrl_shift("d")])
-                .with_keystrokes(&[cmd_or_ctrl_shift("d")]),
+                .with_local_split_target()
+                .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target(),
         )
         .with_step(wait_until_bootstrapped_pane(0, 0))
         .with_step(wait_until_bootstrapped_pane(0, 1))
@@ -6550,7 +6559,8 @@ pub fn test_pane_group_state_close_pane() -> Builder {
     new_builder()
         .with_step(
             new_step_with_default_assertions("create 1 additional pane")
-                .with_keystrokes(&[cmd_or_ctrl_shift("d")]),
+                .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target(),
         )
         .with_step(wait_until_bootstrapped_pane(0, 0))
         .with_step(wait_until_bootstrapped_pane(0, 1))
@@ -6618,7 +6628,8 @@ pub fn test_agent_mode_pane_minimum_size() -> Builder {
         )
         .with_step(
             new_step_with_default_assertions("Create a new empty pane")
-                .with_keystrokes(&[cmd_or_ctrl_shift("d")]),
+                .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target(),
         )
         .with_step(
             new_step_with_default_assertions("Create an Agent Mode pane and check its width")
@@ -6677,23 +6688,31 @@ pub fn test_agent_mode_pane_minimum_size() -> Builder {
 pub fn test_create_folder_from_command_palette() -> Builder {
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(join_a_workspace())
+        .with_step(load_cached_workspace())
         .with_step(go_offline())
-        .with_steps(
-            open_command_palette_and_run_action("Create a New Team Folder")
+        .with_step(
+            open_command_palette()
+                .with_typed_characters(&["Create a new"])
+                .add_assertion(assert_personal_creation_without_team_actions(
+                    "workspace:create_personal_workflow",
+                ))
+                .add_assertion(assert_command_palette_binding_not_offered(
+                    "workspace:create_personal_folder",
+                ))
                 .add_assertion(assert_warp_drive_is_closed()),
         )
-        .with_steps(
-            open_command_palette_and_run_action("Create a New Personal Folder")
-                .add_assertion(assert_warp_drive_is_closed()),
-        )
+        .with_step(close_command_palette())
         .with_step(go_online())
-        .with_steps(
-            open_command_palette_and_run_action("Create a New Team Folder")
-                .add_assertion(assert_warp_drive_is_open()),
+        .with_step(
+            open_command_palette()
+                .with_typed_characters(&["Create a new"])
+                .add_assertion(assert_personal_creation_without_team_actions(
+                    "workspace:create_personal_folder",
+                )),
         )
+        .with_step(close_command_palette())
         .with_steps(
-            open_command_palette_and_run_action("Create a New Personal Folder")
+            open_command_palette_and_run_action("Create a new personal folder")
                 .add_assertion(assert_warp_drive_is_open()),
         )
 }

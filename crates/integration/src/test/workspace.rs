@@ -21,7 +21,7 @@ use warp::integration_testing::workspace::{
 use warp::{
     cmd_or_ctrl_shift,
     integration_testing::{
-        pane_group::assert_focused_pane_index,
+        pane_group::{assert_focused_pane_index, LocalSplitTarget},
         step::new_step_with_default_assertions,
         terminal::{
             assert_active_session_local_path, execute_command,
@@ -178,7 +178,8 @@ pub fn test_active_session_follows_focus() -> Builder {
         )
         .with_step(
             new_step_with_default_assertions("Create another session in the same tab")
-                .with_keystrokes(&[cmd_or_ctrl_shift("d")]),
+                .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target(),
         )
         .with_step(wait_until_bootstrapped_pane(0, 1))
         .with_step(
@@ -217,6 +218,7 @@ pub fn test_focus_panes_on_hover() -> Builder {
         .with_step(
             new_step_with_default_assertions("Create a new session in a split pane")
                 .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target()
                 .add_assertion(assert_focused_pane_index(0, 1)),
         )
         .with_step(wait_until_bootstrapped_pane(0, 1))
@@ -251,7 +253,8 @@ pub fn test_focus_panes_on_hover() -> Builder {
         )
         .with_step(
             new_step_with_default_assertions("Create another new session in a split pane")
-                .with_keystrokes(&[cmd_or_ctrl_shift("d")]),
+                .with_keystrokes(&[cmd_or_ctrl_shift("d")])
+                .with_local_split_target(),
         )
         .with_step(wait_until_bootstrapped_pane(0, 2))
         .with_step(

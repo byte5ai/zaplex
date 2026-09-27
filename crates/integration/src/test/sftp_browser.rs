@@ -434,7 +434,9 @@ pub fn test_sftp_click_file_row_selects() -> Builder {
         ]))
         .with_step(
             TestStep::new("Click on first file row")
-                .with_click_on_saved_position("sftp_row:0")
+                .with_click_on_saved_position_fn(|app, window_id| {
+                    sftp::row_position_id(app, window_id, 0)
+                })
                 .set_post_step_pause(std::time::Duration::from_millis(300)),
         )
         .with_step(
@@ -459,12 +461,12 @@ pub fn test_sftp_right_click_opens_menu() -> Builder {
             false.to_string(),
         )]))
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(open_sftp_with_mock_step(&[
-            ("menu_file.txt", b"content"),
-        ]))
+        .with_step(open_sftp_with_mock_step(&[("menu_file.txt", b"content")]))
         .with_step(
             TestStep::new("Right-click on file row")
-                .with_right_click_on_saved_position("sftp_row:0")
+                .with_right_click_on_saved_position_fn(|app, window_id| {
+                    sftp::row_position_id(app, window_id, 0)
+                })
                 .set_post_step_pause(std::time::Duration::from_millis(500)),
         )
         .with_step(
@@ -495,7 +497,9 @@ pub fn test_sftp_ctx_menu_delete() -> Builder {
         // Right-click to open menu
         .with_step(
             TestStep::new("Right-click on file")
-                .with_right_click_on_saved_position("sftp_row:0")
+                .with_right_click_on_saved_position_fn(|app, window_id| {
+                    sftp::row_position_id(app, window_id, 0)
+                })
                 .set_post_step_pause(std::time::Duration::from_millis(500)),
         )
         // Click delete menu item
@@ -547,12 +551,12 @@ pub fn test_sftp_ctx_menu_rename() -> Builder {
             false.to_string(),
         )]))
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(open_sftp_with_mock_step(&[
-            ("old_name.txt", b"content"),
-        ]))
+        .with_step(open_sftp_with_mock_step(&[("old_name.txt", b"content")]))
         .with_step(
             TestStep::new("Right-click on file")
-                .with_right_click_on_saved_position("sftp_row:0")
+                .with_right_click_on_saved_position_fn(|app, window_id| {
+                    sftp::row_position_id(app, window_id, 0)
+                })
                 .set_post_step_pause(std::time::Duration::from_millis(500)),
         )
         .with_step(

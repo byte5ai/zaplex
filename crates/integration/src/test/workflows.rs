@@ -1,12 +1,12 @@
-use std::time::Duration;
-use warp::integration_testing::workflow::{
-    assert_no_team_workflow_pane_open, assert_open_team_workflow_pane_count_equals,
-};
+use warp::integration_testing::workflow::assert_no_team_workflow_pane_open;
 use warp::{
     integration_testing::{
         self,
-        assertions::{go_offline, go_online, join_a_workspace},
-        command_palette::{open_command_palette_and_run_action, TestStepsExt},
+        assertions::{go_offline, go_online, load_cached_workspace},
+        command_palette::{
+            assert_personal_creation_without_team_actions, close_command_palette,
+            open_command_palette, open_command_palette_and_run_action, TestStepsExt,
+        },
         step::new_step_with_default_assertions,
         terminal::{
             execute_command_for_single_terminal_in_tab, util::ExpectedExitStatus,
@@ -51,7 +51,7 @@ pub fn test_create_personal_workflow_pane_from_command_palette() -> Builder {
             assert_no_workflow_pane_open(),
         ))
         .with_steps(
-            open_command_palette_and_run_action("Create a New Personal Workflow")
+            open_command_palette_and_run_action("Create a new personal workflow")
                 .add_named_assertion(
                     "There should be one workflow pane open",
                     assert_open_workflow_pane_count_equals(1),
@@ -59,31 +59,35 @@ pub fn test_create_personal_workflow_pane_from_command_palette() -> Builder {
         )
 }
 
-pub fn test_create_team_workflow_pane_from_command_palette() -> Builder {
+pub fn test_cached_team_membership_does_not_offer_team_workflow_creation() -> Builder {
+    // Cached team membership must not re-enable the retired cloud creation actions.
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(TestStep::new("Noop step").add_named_assertion(
-            "Make sure no workflow panes are open",
-            assert_no_workflow_pane_open(),
-        ))
-        .with_step(join_a_workspace())
+        .with_step(load_cached_workspace())
         .with_step(go_offline())
         .with_step(
-            TestStep::new("delay for test consistency")
-                .set_post_step_pause(Duration::from_millis(250)),
+            open_command_palette()
+                .with_typed_characters(&["Create a new"])
+                .add_assertion(assert_personal_creation_without_team_actions(
+                    "workspace:create_personal_workflow",
+                ))
+                .add_assertion(assert_no_team_workflow_pane_open()),
         )
-        .with_steps(
-            open_command_palette_and_run_action("Create a New Team Workflow").add_named_assertion(
-                "There should still not be any panes open",
-                assert_no_team_workflow_pane_open(),
-            ),
-        )
+        .with_step(close_command_palette())
         .with_step(go_online())
+        .with_step(
+            open_command_palette()
+                .with_typed_characters(&["Create a new"])
+                .add_assertion(assert_personal_creation_without_team_actions(
+                    "workspace:create_personal_workflow",
+                ))
+                .add_assertion(assert_no_team_workflow_pane_open()),
+        )
+        .with_step(close_command_palette())
         .with_steps(
-            open_command_palette_and_run_action("Create a New Team Workflow").add_named_assertion(
-                "There should be an open workflow pane",
-                assert_open_team_workflow_pane_count_equals(1),
-            ),
+            open_command_palette_and_run_action("Create a new personal workflow")
+                .add_assertion(assert_open_workflow_pane_count_equals(1))
+                .add_assertion(assert_no_team_workflow_pane_open()),
         )
 }
 

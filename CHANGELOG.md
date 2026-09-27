@@ -4,6 +4,10 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Die Integrationssuite (#472) initialisiert englische Texte vor dem Start und bedient beim Teilen eines Panes den echten Hostpicker. SSH-Prüfungen nutzen eigene kurzlebige Konten auf einem lokalen CI-SSH-Server; Passwortanmeldung, Shell-Bootstrap und ProxyCommand bleiben Teil der Prüfung.
+
+- Notebook- und Drive-Prüfungen (#245/#472) erhalten bereits gewährten Bearbeitungszugriff und prüfen die aktuellen persönlichen Aktionen. Gespeicherte Teamdaten dürfen entfernte Cloud-Menüs nicht wieder aktivieren; OSC-Shelltitel werden getrennt von der sichtbaren Host-/Verzeichnisanzeige geprüft.
+
 - Der Dateimanager (#458/#464) reserviert seine Fokusumrandung in jedem Zustand. Dadurch bleiben Funktionsbuttons beim Aktivieren eines Panes an derselben Position und ein begonnener Klick auf eine deaktivierte Aktion wird nicht nachträglich ausgeführt.
 
 - Die CI-Testaufbauten (#472) initialisieren den Remote-Sitzungsmanager, prüfen die aktuellen lokalen Drive-Menüs und verwenden echte temporäre Dateien für die Linux-Zwischenablage. Passwort-Unterbrechungen werden jeweils an einer eigenen laufenden Shell geprüft; die Sicherheitsassertionen bleiben erhalten.
