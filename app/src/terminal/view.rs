@@ -17183,10 +17183,14 @@ impl TerminalView {
     /// run `cd <dir>` in that remote shell session.
     #[cfg(all(feature = "local_tty", feature = "local_fs"))]
     fn cd_into_remote_directory(&mut self, path: &std::path::Path, ctx: &mut ViewContext<Self>) {
-        // Shell-escape the path to prevent command injection by the remote shell when it contains characters like `"`, `$(...)`, or backticks.
-        let quoted_dir = shell_words::quote(&path.to_string_lossy()).into_owned();
+        let Some(shell) = self.active_session_shell_type(ctx) else {
+            return;
+        };
+        let Some(command) = file_manager_directory_command(path, shell) else {
+            return;
+        };
         self.input.update(ctx, |input, ctx| {
-            input.try_execute_command(format!("cd -- {quoted_dir}").as_str(), ctx);
+            input.try_execute_command(&command, ctx);
         });
     }
 
@@ -17243,6 +17247,11 @@ impl TerminalView {
                 }
                 return;
             }
+            // Historical and reconnecting SSH sessions can outlive their manager
+            // host mapping. Their paths must never fall back to the local host.
+            if !self.can_open_session_path_locally(target_session_id, ctx) {
+                return;
+            }
         }
 
         let settings = EditorSettings::as_ref(ctx);
@@ -17253,6 +17262,26 @@ impl TerminalView {
             target,
             line_col: line_and_column_num,
         });
+    }
+
+    #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+    fn can_open_session_path_locally(
+        &self,
+        session_id: Option<SessionId>,
+        ctx: &AppContext,
+    ) -> bool {
+        match session_id {
+            Some(id) => self
+                .sessions
+                .as_ref(ctx)
+                .get(id)
+                .is_some_and(|session| session.is_local() && !session.is_legacy_ssh_session()),
+            None => {
+                self.remote_input_phase.is_none()
+                    && self.remote_input_session_id.is_none()
+                    && !self.model.lock().is_zaplexified_ssh()
+            }
+        }
     }
 
     #[cfg(feature = "local_fs")]
@@ -17283,6 +17312,11 @@ impl TerminalView {
                     line_col: line_and_column_num,
                 });
             }
+            return;
+        }
+
+        #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+        if !self.can_open_session_path_locally(self.active_block_session_id(), ctx) {
             return;
         }
 

@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Terminal-Dateilinks (#245) öffnen während Remote-Reconnect oder nach dem Entfernen einer Session keine gleichnamige lokale Datei. Verzeichnislinks verwenden die tatsächliche Shell; Unicode-Suchfälle sind in den bestehenden Testdaten wiederhergestellt.
+
 - SSH-Installationsfehler (#245) liefern gültige Statusmeldungen auch bei Sonderzeichen im Befehl. Fish übergibt das eingebettete Skript unverändert; portable tmux-Wrapper behandeln den Home-Pfad als Daten.
 
 - Fork-Auditbelege (#245) prüfen gespeicherte Reviewartefakte einschließlich ihrer Quellblobs statt nur Hashformate. Als binär markierte UTF-8-Dateien behalten ihre tatsächlichen Fork-Hunks im Inventar.

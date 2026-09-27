@@ -11,6 +11,8 @@ use warpui::{notification::UserNotification, Presenter, WindowInvalidation};
 
 use crate::ai::agent::task::TaskId;
 use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
+#[cfg(all(feature = "local_tty", feature = "local_fs"))]
+use warpui::r#async::FutureExt;
 use warpui::App;
 
 use crate::pane_group::focus_state::PaneGroupFocusState;
@@ -5088,12 +5090,18 @@ fn onekey_query_no_match_returns_no_matches() {
 
 #[test]
 fn onekey_query_matches_chinese_characters() {
-    // Chinese character sequence matching: skim algorithm processes by Unicode char.
+    // Match Unicode label characters while excluding a different Unicode label.
     let candidates = vec![
-        ("production-database", "ops@db.example.com:22"),
-        ("test-server", "qa@test.example.com:22"),
+        (
+            "\u{751f}\u{4ea7}\u{6570}\u{636e}\u{5e93}",
+            "ops@db.example.com:22",
+        ),
+        (
+            "\u{6d4b}\u{8bd5}\u{670d}\u{52a1}\u{5668}",
+            "qa@test.example.com:22",
+        ),
     ];
-    let result = filter_and_sort_onekey_candidates(candidates.iter().copied(), "prod");
+    let result = filter_and_sort_onekey_candidates(candidates.iter().copied(), "\u{751f}\u{4ea7}");
     let indices = rows_indices(result);
     assert_eq!(indices, vec![0]);
 }
@@ -5713,5 +5721,172 @@ fn terminals_with_matching_kitty_ids_keep_distinct_pixels_and_animation_roots() 
                 .unwrap().rgba_bytes(),
             &[0, 0xff, 0, 0xff]
         );
+    });
+}
+
+#[cfg(all(feature = "local_tty", feature = "local_fs"))]
+#[test]
+fn remote_directory_click_uses_the_active_shell_and_session() {
+    let _remote_server = FeatureFlag::SshRemoteServer.override_enabled(false);
+    for (shell, expected) in [
+        (ShellType::Bash, r#"cd -- '/tmp/a\b'\''[x]$()'"#),
+        (ShellType::Zsh, r#"cd -- '/tmp/a\b'\''[x]$()'"#),
+        (ShellType::Fish, r#"cd -- '/tmp/a\\b\'[x]$()'"#),
+        (
+            ShellType::PowerShell,
+            r#"Set-Location -LiteralPath '/tmp/a\b''[x]$()'"#,
+        ),
+    ] {
+        App::test((), |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+            // The standard terminal fixture bootstraps session 123 asynchronously.
+            let session_id = SessionId::from(123u64);
+            let mut history = History::handle(&app);
+            History::initialized_sessions(&mut history, &mut app, vec![session_id])
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("terminal history should initialize");
+            let input = terminal.read(&app, |view, _| view.input.clone());
+            let (tx, rx) = async_channel::unbounded();
+            app.update(|ctx| {
+                ctx.subscribe_to_view(&input, move |_, event, _| {
+                    if let InputEvent::ExecuteCommand(event) = event {
+                        tx.try_send((event.command.clone(), event.session_id))
+                            .unwrap();
+                    }
+                });
+            });
+            terminal.update(&mut app, |view, ctx| {
+                view.model
+                    .lock()
+                    .block_list_mut()
+                    .active_block_for_test()
+                    .set_session_id(session_id);
+                view.model_event_dispatcher().update(ctx, |dispatcher, _| {
+                    dispatcher.set_active_session_id(session_id);
+                });
+                view.sessions.update(ctx, |sessions, _| {
+                    sessions.register_session_for_test(
+                        SessionInfo::new_for_test()
+                            .with_id(session_id)
+                            .with_shell_type(shell)
+                            .with_session_type(BootstrapSessionType::ZaplexifiedRemote),
+                    );
+                });
+                view.active_block_metadata = None;
+                view.cd_into_remote_directory(Path::new("/tmp/no-session"), ctx);
+                view.active_block_metadata = Some(BlockMetadata::new(Some(session_id), None));
+                view.input.update(ctx, |input, ctx| {
+                    input.set_active_block_metadata(
+                        BlockMetadata::new(Some(session_id), None),
+                        false,
+                        ctx,
+                    );
+                });
+                view.cd_into_remote_directory(Path::new("/tmp/line\nfeed"), ctx);
+                view.cd_into_remote_directory(Path::new(r#"/tmp/a\b'[x]$()"#), ctx);
+            });
+            assert_eq!(
+                rx.recv()
+                    .with_timeout(Duration::from_secs(5))
+                    .await
+                    .expect("directory click should emit ExecuteCommand")
+                    .unwrap(),
+                (expected.to_string(), session_id),
+            );
+            assert!(rx.try_recv().is_err());
+        });
+    }
+}
+
+#[cfg(all(
+    feature = "local_tty",
+    feature = "local_fs",
+    not(target_family = "wasm")
+))]
+#[test]
+fn unavailable_remote_file_links_never_open_same_named_local_files() {
+    let _remote_server = FeatureFlag::SshRemoteServer.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(RemoteServerManager::new);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (tx, rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::OpenFileWithTarget { path, .. } = event {
+                    tx.try_send(path.clone()).unwrap();
+                }
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            let local = SessionId::from(930u64);
+            let remote = SessionId::from(931u64);
+            let legacy = SessionId::from(932u64);
+            let missing = SessionId::from(933u64);
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(SessionInfo::new_for_test().with_id(local));
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(remote)
+                        .with_session_type(BootstrapSessionType::ZaplexifiedRemote),
+                );
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(legacy)
+                        .with_ssh_socket_path(PathBuf::from("/tmp/test-ssh-socket"))
+                        .with_session_type(BootstrapSessionType::Local),
+                );
+            });
+            view.active_block_metadata = Some(BlockMetadata::new(Some(local), None));
+            for session in [remote, legacy, missing] {
+                view.open_file_path(PathBuf::from("/tmp/remote-file"), None, Some(session), ctx);
+                view.active_block_metadata = Some(BlockMetadata::new(Some(session), None));
+                view.open_file_path_with_target(
+                    PathBuf::from("/tmp/remote-file"),
+                    FileTarget::SystemDefault,
+                    None,
+                    ctx,
+                );
+                view.active_block_metadata = Some(BlockMetadata::new(Some(local), None));
+            }
+            view.active_block_metadata = Some(BlockMetadata::new(Some(remote), None));
+            view.open_file_path(PathBuf::from("/tmp/remote-file"), None, None, ctx);
+            view.active_block_metadata = None;
+            view.remote_input_phase = Some(RemoteInputPhase::Transport);
+            view.open_file_path(PathBuf::from("/tmp/remote-file"), None, None, ctx);
+            view.open_file_path_with_target(
+                PathBuf::from("/tmp/remote-file"),
+                FileTarget::SystemDefault,
+                None,
+                ctx,
+            );
+            view.open_file_path(PathBuf::from("/tmp/local-file"), None, Some(local), ctx);
+            view.active_block_metadata = Some(BlockMetadata::new(Some(local), None));
+            view.open_file_path_with_target(
+                PathBuf::from("/tmp/local-override"),
+                FileTarget::SystemDefault,
+                None,
+                ctx,
+            );
+        });
+        assert_eq!(
+            rx.recv()
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("local session file should still open")
+                .unwrap(),
+            PathBuf::from("/tmp/local-file"),
+        );
+        assert_eq!(
+            rx.recv()
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("local target override should still open")
+                .unwrap(),
+            PathBuf::from("/tmp/local-override"),
+        );
+        assert!(rx.try_recv().is_err());
     });
 }
