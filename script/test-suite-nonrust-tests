@@ -42,6 +42,27 @@ class NonRustEvidenceTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(HERE / "test-suite-nonrust"), "_unittest", str(source)],
                               env=env, capture_output=True, text=True, timeout=20)
 
+    def test_ripgrep_without_pcre2_fails_before_measurement(self):
+        function = ADAPTER["ripgrep_capabilities"]
+        probe = SimpleNamespace(returncode=2, stderr="PCRE2 is not available")
+        with patch.object(function.__globals__["shutil"], "which", return_value="/fixture/rg"), \
+                patch.object(function.__globals__["subprocess"], "run", return_value=probe) as run:
+            with self.assertRaisesRegex(ValueError, "requires working PCRE2"):
+                function()
+            self.assertEqual(run.call_args.args[0], ["/fixture/rg", "--no-config", "--pcre2", "--quiet", "(?<=zaplex-)fixture"])
+            self.assertEqual(run.call_args.kwargs["input"], "zaplex-fixture\n")
+
+    def test_ripgrep_capability_records_selected_binary_and_full_features(self):
+        function = ADAPTER["ripgrep_capabilities"]
+        probe = SimpleNamespace(returncode=0, stderr="")
+        version = "ripgrep 14.1.1\nfeatures:+pcre2\n"
+        with patch.object(function.__globals__["shutil"], "which", return_value="/fixture/rg"), \
+                patch.object(function.__globals__["subprocess"], "run", return_value=probe), \
+                patch.object(function.__globals__["subprocess"], "check_output", return_value=version) as output:
+            result = function()
+            self.assertEqual(result, {"executable": "/fixture/rg", "version": version.strip(), "pcre2_probe": "lookbehind matched"})
+            self.assertEqual(output.call_args.args[0], ["/fixture/rg", "--version"])
+
     def test_framework_execution_records_real_ids_and_skips(self):
         result = self.child('''import unittest
 class Cases(unittest.TestCase):
@@ -229,6 +250,17 @@ if __name__ == "__main__": unittest.main()
         before, after = EVIDENCE["compare_nonrust"](candidate, baseline)
         self.assertEqual((before, after), (7, 6))
         self.assertFalse(after * 5 <= before * 4)
+
+    def test_tool_location_can_differ_but_pcre2_capabilities_must_match(self):
+        baseline, candidate = self.comparison_fixture()
+        for report, path in ((baseline, "/runner-one/bin/rg"), (candidate, "/runner-two/bin/rg")):
+            provenance = report["nonrust"]["provenance"]
+            provenance["tool_paths"] = {"rg": path}
+            provenance["tools"] = {"rg": {"version": "ripgrep 14.1.1\nfeatures:+pcre2", "pcre2_probe": "lookbehind matched"}}
+        self.assertEqual(EVIDENCE["compare_nonrust"](candidate, baseline), (7, 6))
+        candidate["nonrust"]["provenance"]["tools"]["rg"]["version"] = "ripgrep 14.1.1\nfeatures:-pcre2"
+        with self.assertRaisesRegex(ValueError, "tools"):
+            EVIDENCE["compare_nonrust"](candidate, baseline)
 
     def test_missing_nonrust_evidence_cannot_form_a_total(self):
         baseline, candidate = self.comparison_fixture()

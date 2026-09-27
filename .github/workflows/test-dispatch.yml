@@ -64,7 +64,17 @@ jobs:
       - name: Install binary-only fixture dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fish ripgrep
+          sudo apt-get install --no-install-recommends -y fish
+          # Ubuntu 22.04's ripgrep package lacks the PCRE2 engine used by our guards.
+          rg_archive="$RUNNER_TEMP/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$rg_archive" \
+            https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz
+          printf '%s  %s\n' '4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e' "$rg_archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/nonrust-tools/bin"
+          tar -xzf "$rg_archive" --directory "$RUNNER_TEMP/nonrust-tools/bin" \
+            --strip-components=1 ripgrep-14.1.1-x86_64-unknown-linux-musl/rg
+          printf '%s\n' "$RUNNER_TEMP/nonrust-tools/bin" >> "$GITHUB_PATH"
           python3 -m venv "$RUNNER_TEMP/nonrust-evidence-parser"
           "$RUNNER_TEMP/nonrust-evidence-parser/bin/python" -m pip install \
             --only-binary=:all: --require-hashes -r script/test-suite-evidence-requirements.txt

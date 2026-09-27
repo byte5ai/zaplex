@@ -198,6 +198,25 @@ def read_cases(events, discovery, mode, expected, cockpit=None):
     return rows
 
 
+def ripgrep_capabilities():
+    executable = shutil.which("rg")
+    if executable is None:
+        raise ValueError("required non-Rust fixture tool is missing: rg")
+    probe = subprocess.run(
+        [executable, "--no-config", "--pcre2", "--quiet", "(?<=zaplex-)fixture"],
+        input="zaplex-fixture\n", text=True, capture_output=True, timeout=10,
+    )
+    if probe.returncode != 0:
+        raise ValueError(
+            f"ripgrep requires working PCRE2 support ({executable}): {probe.stderr.strip()}"
+        )
+    return {
+        "executable": str(Path(executable).resolve()),
+        "version": subprocess.check_output([executable, "--version"], text=True).strip(),
+        "pcre2_probe": "lookbehind matched",
+    }
+
+
 def collect(root, directory):
     root = root.resolve()
     plan = load_plan(root)
@@ -206,6 +225,7 @@ def collect(root, directory):
     missing_tools = [tool for tool in plan["required_tools"] if shutil.which(tool) is None]
     if missing_tools:
         raise ValueError(f"required non-Rust fixture tools are missing: {', '.join(missing_tools)}")
+    rg_capabilities = ripgrep_capabilities()
     if git(root, "status", "--porcelain", "--untracked-files=no"):
         raise ValueError("non-Rust measurement needs an unchanged source checkout")
     if not os.environ.get("GITHUB_RUN_ID") or not os.environ.get("GITHUB_RUN_ATTEMPT"):
@@ -223,8 +243,10 @@ def collect(root, directory):
         "runner": {key: os.environ.get(key) for key in ("RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion")},
         "python": platform.python_version(), "python_executable": sys.executable,
         "tools": {**{tool: subprocess.check_output([tool, "--version"], text=True).splitlines()[0]
-                     for tool in ("bash", "git", "fish", "rg")},
+                     for tool in ("bash", "git", "fish")},
+                  "rg": {key: value for key, value in rg_capabilities.items() if key != "executable"},
                   **{name: importlib.metadata.version(name) for name in ("tree-sitter", "tree-sitter-rust")}},
+        "tool_paths": {"rg": rg_capabilities["executable"]},
         "environment": {key: os.environ.get(key) for key in ("LANG", "LC_ALL", "CHANNEL", "PYTHONOPTIMIZE")},
         "source_root": str(root), "output_directory": str(directory),
         "source_hashes": source_hashes, "plan_sha256": digest(root / "script/test-suite-nonrust-plan.json"),

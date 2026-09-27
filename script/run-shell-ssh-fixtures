@@ -56,7 +56,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 sudo apt-get update
-sudo apt-get install --yes --no-install-recommends openssh-server netcat-openbsd zsh fish busybox tmux
+sudo apt-get install --yes --no-install-recommends openssh-server netcat-openbsd zsh fish busybox-static tmux
 # Package installation may start the runner's default daemon. The password
 # fixture accounts must only be reachable through our loopback-only instance.
 sudo systemctl stop ssh.socket ssh.service 2>/dev/null || true
@@ -65,12 +65,13 @@ if systemctl is-active --quiet ssh.socket || systemctl is-active --quiet ssh.ser
   exit 1
 fi
 chmod 711 "$fixture_root"
-ln -s /usr/bin/busybox "$fixture_root/ash"
+mkdir -m 755 "$fixture_root/bin"
+ln -s /usr/bin/busybox "$fixture_root/bin/ash"
 : > "$fixture_root/users.tsv"
 for shell in bash zsh sh ash fish; do
   user="${fixture_tag//-/}${shell}"
   shell_path="$(command -v "$shell" || true)"
-  if [[ $shell == ash ]]; then shell_path="$fixture_root/ash"; fi
+  if [[ $shell == ash ]]; then shell_path="$fixture_root/bin/ash"; fi
   [[ -x $shell_path ]]
   user_home="$fixture_root/$shell"
   sudo useradd --no-create-home --home-dir "$user_home" --shell "$shell_path" "$user"
