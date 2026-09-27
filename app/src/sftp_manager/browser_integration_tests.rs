@@ -37,7 +37,9 @@ use pathfinder_geometry::vector::{vec2f, Vector2F};
 use super::browser::{
     copy_move_submission_summary, transfer_display_priority, SftpBrowserAction, SftpBrowserView,
 };
-use super::sftp_backend::{BackendOwnershipAnchor, InMemorySftpBackend, SftpBackend};
+use super::sftp_backend::{
+    BackendFileReader, BackendFileWriter, BackendOwnershipAnchor, InMemorySftpBackend, SftpBackend,
+};
 use super::sftp_ops::{ProgressCallback, SftpOpsError};
 use super::transfer_job::ConflictDecision;
 use super::transfer_queue::{QueuedTransferState, TransferQueue};
@@ -591,7 +593,9 @@ struct TracingBackend {
     listed_paths: Mutex<Vec<PathBuf>>,
     stat_paths: Mutex<Vec<PathBuf>>,
     realpath_paths: Mutex<Vec<PathBuf>>,
-    fail_copy: AtomicBool,
+    fail_write: AtomicBool,
+    write_failure_observed: AtomicBool,
+    replace_failure_observed: AtomicBool,
     fail_replace: AtomicBool,
     create_after_next_list: Mutex<Option<(PathBuf, Vec<u8>)>>,
 }
@@ -603,14 +607,16 @@ impl TracingBackend {
             listed_paths: Mutex::new(Vec::new()),
             stat_paths: Mutex::new(Vec::new()),
             realpath_paths: Mutex::new(Vec::new()),
-            fail_copy: AtomicBool::new(false),
+            fail_write: AtomicBool::new(false),
+            write_failure_observed: AtomicBool::new(false),
+            replace_failure_observed: AtomicBool::new(false),
             fail_replace: AtomicBool::new(false),
             create_after_next_list: Mutex::new(None),
         }
     }
 
-    fn fail_copies(&self) {
-        self.fail_copy.store(true, Ordering::SeqCst);
+    fn fail_writes(&self) {
+        self.fail_write.store(true, Ordering::SeqCst);
     }
 
     fn fail_replacements(&self) {
@@ -691,6 +697,7 @@ impl SftpBackend for TracingBackend {
         new_path: &std::path::Path,
     ) -> Result<(), super::sftp_ops::SftpOpsError> {
         if self.fail_replace.load(Ordering::SeqCst) {
+            self.replace_failure_observed.store(true, Ordering::SeqCst);
             return Err(super::sftp_ops::SftpOpsError::Operation(
                 "injected atomic replacement failure".to_string(),
             ));
@@ -752,12 +759,21 @@ impl SftpBackend for TracingBackend {
         src: &std::path::Path,
         dst: &std::path::Path,
     ) -> Result<(), super::sftp_ops::SftpOpsError> {
-        if self.fail_copy.load(Ordering::SeqCst) {
-            return Err(super::sftp_ops::SftpOpsError::Operation(
-                "injected copy failure".to_string(),
+        self.inner.copy_file(src, dst)
+    }
+
+    fn open_file_reader(&self, path: &Path) -> Result<Box<dyn BackendFileReader>, SftpOpsError> {
+        self.inner.open_file_reader(path)
+    }
+
+    fn create_file_writer(&self, path: &Path) -> Result<Box<dyn BackendFileWriter>, SftpOpsError> {
+        if self.fail_write.load(Ordering::SeqCst) {
+            self.write_failure_observed.store(true, Ordering::SeqCst);
+            return Err(SftpOpsError::Operation(
+                "injected staging writer failure".to_string(),
             ));
         }
-        self.inner.copy_file(src, dst)
+        self.inner.create_file_writer(path)
     }
 }
 
@@ -3227,8 +3243,8 @@ fn test_download_creates_transfer_task() {
 fn save_as_resolves_the_same_entry_after_refresh() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _remote) =
-            create_connected_view(&mut app, &[("a.txt", b"alpha"), ("b.txt", b"beta")]);
+        let (_, view, remote) =
+            create_connected_view(&mut app, &[("a.txt", b"alpha"), ("b.txt", b"beta-long")]);
         let local = tempfile::tempdir().expect("local temp");
         let destination = local.path().join("saved.txt");
 
@@ -3241,12 +3257,18 @@ fn save_as_resolves_the_same_entry_after_refresh() {
         let entry = view.read(&app, |view, _| {
             view.entry_reference(selected_index).unwrap()
         });
+        assert_eq!(selected_index, 0);
+        std::fs::write(remote.path().join("0.txt"), b"0").unwrap();
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::Refresh, ctx);
             view.handle_action(
                 &SftpBrowserAction::SortBy(super::browser::SortColumn::Size),
                 ctx,
             );
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.entries[1].name, "a.txt");
+            assert_eq!(view.visible_indices(), vec![2, 1, 0]);
         });
         view.update(&mut app, |view, ctx| {
             view.handle_action(
@@ -6149,6 +6171,7 @@ fn test_dir_move_cleanup_deletes_source_when_all_succeed() {
 
 /// If cleanup fails after deleting part of the quarantined tree, the remaining
 /// source stays at the reported recovery path and is never falsely restored.
+#[cfg(unix)]
 #[test]
 fn partial_directory_cleanup_failure_keeps_recovery_path() {
     warpui::App::test((), |mut app| async move {
@@ -6622,7 +6645,7 @@ fn failed_copy_overwrite_keeps_existing_destination_intact() {
             ("right/dup.txt", b"precious-original"),
         ]);
         let backend = Arc::new(TracingBackend::new(temp.path().to_path_buf()));
-        backend.fail_copies();
+        backend.fail_writes();
 
         let (_, source_view) = create_view(&mut app);
         source_view.update(&mut app, |view, ctx| {
@@ -6645,6 +6668,10 @@ fn failed_copy_overwrite_keeps_existing_destination_intact() {
             view.handle_action(&SftpBrowserAction::OverwriteConflict { all: false }, ctx);
         });
 
+        assert!(
+            backend.write_failure_observed.load(Ordering::SeqCst),
+            "the transfer must reach the injected staging writer failure"
+        );
         assert_eq!(
             std::fs::read(temp.path().join("right/dup.txt")).unwrap(),
             b"precious-original",
@@ -6687,6 +6714,10 @@ fn failed_atomic_replace_keeps_existing_destination_intact() {
             view.handle_action(&SftpBrowserAction::OverwriteConflict { all: false }, ctx);
         });
 
+        assert!(
+            backend.replace_failure_observed.load(Ordering::SeqCst),
+            "the transfer must reach the injected atomic replacement failure"
+        );
         assert_eq!(
             std::fs::read(temp.path().join("right/dup.txt")).unwrap(),
             b"precious-original",
