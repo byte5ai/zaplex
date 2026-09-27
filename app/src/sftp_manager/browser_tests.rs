@@ -2369,11 +2369,14 @@ fn queued_delete_never_retargets_after_sort() {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
         let root = tempfile::tempdir().unwrap();
-        view.update(&mut app, |view, _| {
-            view.sftp = Some(std::sync::Arc::new(
-                super::sftp_backend::InMemorySftpBackend::new(root.path().to_path_buf()),
-            ));
-            view.connection = ConnectionState::Connected;
+        view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(
+                std::sync::Arc::new(super::sftp_backend::InMemorySftpBackend::new(
+                    root.path().to_path_buf(),
+                )),
+                PathBuf::from("/"),
+                ctx,
+            );
             view.entries = vec![
                 sized_entry("a_small.txt", false, 10, None),
                 sized_entry("b_large.txt", false, 900, None),

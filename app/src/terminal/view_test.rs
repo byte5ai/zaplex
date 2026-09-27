@@ -48,7 +48,7 @@ use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::view_components::find::FindWithinBlockState;
 
-use crate::terminal::model::ansi::{self, Handler as _, InitShellValue, PrecmdValue};
+use crate::terminal::model::ansi::{self, InitShellValue, PrecmdValue};
 use crate::terminal::model::ansi::{BootstrappedValue, PreexecValue};
 use crate::terminal::model::blocks::{insert_block, TotalIndex};
 use crate::terminal::model::session::SessionInfo;
