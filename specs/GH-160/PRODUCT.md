@@ -283,8 +283,14 @@ The previous static illustrations are superseded, not alternative approved layou
     retain their explicit secure input. Transport, attach, replay, and ready phases are distinguished
     where known. Every start ends in ready, a concrete retryable/cancellable error, or cancellation;
     cancellation never terminates the remote work. Reopening the same already-visible session focuses
-    it instead of creating a duplicate. Replay text alone is not proof of readiness. A restored pane
-    whose saved remote identity is corrupt remains visibly present with its siblings, names the
+    it instead of creating a duplicate. Replay text alone is not proof of readiness.
+    An exactly identified existing PTY whose original shell-start metadata has been lost may finish
+    in an explicitly labelled simple terminal mode. The same process and saved input draft remain;
+    typing and pasting go directly to the terminal after replay completes. Integrated command input,
+    completion, automatic directory changes, and agent/startup automation stay unavailable. A later
+    reconnect gates manual input again without losing the mode or editing the hidden draft. New
+    sessions and ambiguous identities cannot use this fallback to bypass their startup checks.
+    A restored pane whose saved remote identity is corrupt remains visibly present with its siblings, names the
     damaged restore honestly, exposes no actions that cannot work without that identity, and never
     falls back to a local shell on any platform. Retrying or cancelling a valid daemon restore also
     retains a daemon-backed fail-closed surface on every platform and never starts a local process.

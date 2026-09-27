@@ -81,6 +81,29 @@ Use only the stable host aliases `local` and `remote-a`. Do not record real host
 3. Capture `reattach.png` and confirm that no provider, account, host, or session boundary was
    crossed during reattach.
 
+## Additional shell-recovery acceptance (#456)
+
+These cases are a separate issue acceptance record, not additional keys in the closed-world
+Cockpit evidence bundle below. They require a client/daemon build containing the repair. When no
+such build is available, record them as unexecuted; a fixture or source inspection is not a pass.
+
+1. Use a disposable ordinary shell session, retain its PTY id/generation, and produce enough output
+   to exceed retained scrollback. Reopen it from Connections. Confirm the same running process,
+   working directory, replay/live output, and usable integrated input when its handshake was saved.
+2. For a known legacy session whose original handshake is no longer available, reopen the exact
+   PTY. Confirm the persistent simple-terminal notice, visible output, typing, Enter/control keys,
+   paste, and alternate-screen use. The integrated command editor and completion stay unavailable;
+   neither agent automation nor a startup command is dispatched. Keep any saved editor draft intact.
+3. Disconnect/reconnect that simple-mode session. Type and paste during the outage: those bytes
+   must neither execute after reconnect nor alter the hidden draft. Once replay finishes, manual
+   input resumes in the same PTY and the simple-mode notice returns.
+4. Repeat the Connections click while the session is already visible: focus the existing pane.
+   A stale generation, terminated PTY, and non-answering transport must still produce the existing
+   visible error/retry/cancel outcome; they cannot gain readiness through the simple-mode fallback.
+
+Record sanitized observations with the client and daemon revisions in the issue/PR. Do not stop or
+modify a user's working session to manufacture the missing-handshake case.
+
 ## Machine-readable snapshot
 
 1. From a Zaplex-managed terminal in this run, execute `zaplex cockpit snapshot --json`. Confirm

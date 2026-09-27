@@ -151,11 +151,12 @@ drag, text selection, and divider resize retain disjoint hit targets.
 Whole-tab cross-window drag is fail-closed while any contained daemon terminal is pending or while
 a managed start remains between input readiness and its final managed acknowledgement. Those
 routes, attempt generations, futures, and completion subscriptions remain workspace-owned, so no
-`TransferredTab` is produced until Ready or terminal failure, and managed Ready remains blocked
+`TransferredTab` is produced until Ready, confirmed simple terminal mode, or terminal failure;
+managed Ready remains blocked
 until `ManagedLaunchOpened` or `ManagedLaunchFailed`. Same-workspace pane moves remain available
 because their workspace owner does not change. Pending terminal state ends monotonically at the
-first authoritative Ready: later Transport, Attach, or Replay phases still gate input but do not
-re-arm workspace ownership for an established session. Managed acknowledgement remains a separate
+first authoritative Ready or confirmed simple terminal mode: later Transport, Attach, or Replay
+phases still gate input but do not re-arm workspace ownership for an established session. Managed acknowledgement remains a separate
 guard. Hidden Undo Close panes and terminals covered by a temporary File Manager replacement
 participate in the same initial-start and managed-acknowledgement gates.
 
@@ -184,6 +185,25 @@ closes the local attempt without stopping the remote PTY. A corrupt restore is t
 neither action because no authoritative retry or cancellation target exists. Inventory refresh
 independently reaches loaded or an honest retryable error and does not discard still-valid rows
 merely to show an unbounded spinner.
+
+The daemon's bounded `BootstrapPreamble` parser recognizes a complete root `InitShell` →
+`Bootstrapped` handshake and freezes its exact byte prefix without a client acknowledgement. It
+uses the existing framing and hook decoders; incomplete, aborted, nested, or mismatched handshakes
+cannot establish a prefix. Attach includes that prefix when ring eviction or the replay-size limit
+would otherwise omit it. Existing client boundary reports remain idempotent.
+
+A validated initial adopt with a known generation and an omitted output prefix may enter
+`RemoteInputPhase::Raw` if neither complete bootstrap nor pending `InitShell` metadata survives.
+The model keeps one visible continuous output block and ignores later shell-integration hooks;
+it never fabricates a shell session or bootstrap success. Before processing replay notifications,
+the view also records this persistent restriction, hiding integrated input and suppressing agent
+hydration and automatic commands. Raw is published only after the exact attach replay and buffered
+output finish. Transport/Attach/Replay continue to reject ordinary bytes on reconnect; typed
+characters never fall back into the hidden draft. The simple-mode footer remains distinct from
+integrated Ready and suppresses the obsolete slow-bootstrap banner. Fresh opens, non-evicted
+provisional sessions, stale identities, and terminated sessions retain their existing failure or
+readiness checks. Entering Raw ends initial-start ownership for an adopted ordinary PTY; it does
+not satisfy a managed-agent launch acknowledgement.
 
 Corrupt persisted remote metadata is represented by a dedicated terminal-view phase. Restoration
 keeps the original pane tree and constructs a fail-closed daemon-backed surface on every platform;
