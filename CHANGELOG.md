@@ -4,6 +4,10 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Der vollständige Rust-CI-Lauf (#472) erhält eine grafische Testumgebung und den korrekten JUnit-Export. Neun beschädigte SQLite-Testdateien sind aus der geprüften Historie wiederhergestellt; verwaiste Einträge gelöschter Cloud-Tests entfallen ohne Anrechnung als Testeinsparung.
+
+- Die CI-Fehlerkorrektur erhält CLAUDE.md-Regeln auch im laufenden Projektindex und bewahrt beim mehrzeiligen Einfügen in Überschriften die Absatzstruktur einschließlich Undo/Redo. Testaufbauten halten Logger-Runtimes am Leben und initialisieren benötigte Modelle, Sprache und asynchrone Dateioperationen.
+
 - Die Coverage-Projektion (#472) erkennt das exakt geprüfte Settings-Makro als Produktions-Template und nimmt nur dessen testexklusiven Konstruktor aus. Veränderte Makros bleiben ungeklärt; ungetroffene Produktionszeilen bleiben Teil der Messung.
 
 - Die CI-Compilefehler im SSH-Dateipicker, der Einstellungsübernahme und den Bootstrap-/Terminalbild-Tests sind korrigiert (#472). Schwache View-Referenzen, Fehlermeldungen und vorhandene Testaussagen bleiben erhalten.
