@@ -1,4 +1,5 @@
 use super::*;
+use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use std::borrow::Cow;
 use std::time::Duration;
@@ -3507,4 +3508,272 @@ fn initial_attach_deadline_preserves_an_interactive_shell_initialization() {
         });
         assert!(!model.lock().is_read_only());
     });
+}
+
+#[test]
+fn truncated_adopt_recovers_same_pty_as_plain_terminal_without_shell_hooks() {
+    App::test((), move |mut app| async move {
+        let conn = SessionId::from(180u64);
+        let (_manager, event_loop, model, wakeups) =
+            start_adopted_loop_unbootstrapped(&mut app, conn);
+        let mut replay = b"running command output\r\n".to_vec();
+        replay.extend(init_shell_dcs());
+        replay.extend(bootstrapped_dcs());
+        replay.extend_from_slice(b"\x1bP$f{\"hook\":\"InitShell\",\"value\":{\"session_id\":167303092612201,\"shell\":\"zsh\"}}\x9c");
+        replay.extend_from_slice(b"\x1b]9278;k;A;InitShell\x07\x1b]9278;k;B;session_id;167303092612201\x07\x1b]9278;k;B;shell;zsh\x07\x1b]9278;k;C\x07");
+        replay.extend_from_slice(b"\x1b]133;A\x07still running\r\n");
+        event_loop.update(&mut app, |me, ctx| {
+            me.pending_input
+                .push(EventLoopMessage::Input(Cow::Borrowed(b"stale-control")));
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: 4096,
+                    replay,
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: Some(AgentSessionIdentity {
+                        session_id: "running-agent".to_string(),
+                        provider: "claude".to_string(),
+                        ..Default::default()
+                    }),
+                },
+                true,
+                ctx,
+            );
+            assert_eq!(me.input_phase(), RemoteInputPhase::Replay);
+            assert!(!me.is_user_input_ready());
+        });
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+
+        {
+            let mut model = model.lock();
+            assert!(model.is_raw_terminal());
+            assert!(!model.block_list().is_bootstrapped());
+            model.block_list_mut().set_show_bootstrap_block(false);
+            assert!(!model
+                .block_list()
+                .active_block()
+                .should_hide_block(&AgentViewState::Inactive));
+            assert!(model.block_list().active_block().ready_to_render());
+            assert!(model.pending_session_id().is_none());
+            assert!(model
+                .block_list()
+                .active_block()
+                .is_active_and_long_running());
+        }
+        let contents = terminal_contents(&model);
+        assert!(contents.contains("running command output"));
+        assert!(contents.contains("still running"));
+        event_loop.update(&mut app, |me, ctx| {
+            assert_eq!(me.input_phase(), RemoteInputPhase::Raw);
+            assert!(me.is_user_input_ready());
+            assert!(me.pending_input.is_empty());
+            assert!(me.startup_command.is_none());
+            assert!(me.agent_binding.is_none());
+            assert!(me.desired_agent_binding.is_none());
+            assert!(me.published_ready_notices.is_empty());
+            assert!(!me.initial_attach_pending);
+            let mut delivered = None;
+            assert!(me
+                .try_deliver_user_input_with(Cow::Borrowed(b"\x03"), |pty, bytes| {
+                    delivered = Some((pty.to_string(), bytes));
+                    Ok::<(), ()>(())
+                })
+                .unwrap());
+            assert_eq!(delivered, Some((OUR_PTY.to_string(), vec![3])));
+            // A later live hook cannot leave plain mode or replay initialization.
+            me.process_live_pty_bytes(&init_shell_dcs(), ctx);
+            me.process_live_pty_bytes(&bootstrapped_dcs(), ctx);
+            me.complete_initial_attach_if_ready(ctx);
+            assert_eq!(me.input_phase(), RemoteInputPhase::Raw);
+            me.process_live_pty_bytes(b"\x1b[?1049hfull-screen output", ctx);
+            assert!(me.terminal_model.lock().is_alt_screen_active());
+            me.process_live_pty_bytes(b"\x1b[?1049l", ctx);
+            assert!(!me.terminal_model.lock().is_alt_screen_active());
+        });
+        assert!(!model.lock().block_list().is_bootstrapped());
+        assert!(model.lock().pending_session_id().is_none());
+    });
+}
+
+#[test]
+fn plain_terminal_reconnect_requires_exact_attach_and_retains_plain_mode() {
+    App::test((), move |mut app| async move {
+        let conn = SessionId::from(181u64);
+        let (_manager, event_loop, model, wakeups) =
+            start_adopted_loop_unbootstrapped(&mut app, conn);
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: 100,
+                    replay: b"old output".to_vec(),
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+        event_loop.update(&mut app, |me, ctx| {
+            assert_eq!(me.input_phase(), RemoteInputPhase::Raw);
+            me.begin_transport_reconnect(ctx);
+            assert!(!me.is_user_input_ready());
+            assert!(!me
+                .try_deliver_user_input_with::<()>(Cow::Borrowed(b"do not queue\r"), |_, _| {
+                    panic!("reconnecting raw terminal must reject input")
+                })
+                .unwrap());
+            let mut bootstrap_preamble = init_shell_dcs();
+            bootstrap_preamble.extend(bootstrapped_dcs());
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: me.last_seq,
+                    replay: b"new output".to_vec(),
+                    bootstrap_preamble,
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+            assert!(!me.is_user_input_ready());
+        });
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+        event_loop.read(&app, |me, _| {
+            assert_eq!(me.input_phase(), RemoteInputPhase::Raw);
+            assert!(me.is_user_input_ready());
+            assert!(me.pending_input.is_empty());
+        });
+        assert!(model.lock().is_raw_terminal());
+        assert!(!model.lock().block_list().is_bootstrapped());
+        assert!(terminal_contents(&model).contains("new output"));
+    });
+}
+
+#[test]
+fn missing_bootstrap_without_eviction_or_on_fresh_open_stays_provisional() {
+    for (index, adopted, base_seq) in [(0, true, 0), (1, false, 4096)] {
+        App::test((), move |mut app| async move {
+            let conn = SessionId::from(182u64 + index);
+            let (_manager, event_loop, model, wakeups) =
+                start_adopted_loop_unbootstrapped(&mut app, conn);
+            event_loop.update(&mut app, |me, ctx| {
+                me.adopted_session = adopted;
+                me.on_session_attached(
+                    SessionAttached {
+                        session_id: OUR_PTY.to_string(),
+                        size: None,
+                        base_seq,
+                        replay: b"waiting for initialization".to_vec(),
+                        bootstrap_preamble: Vec::new(),
+                        generation: 7,
+                        agent_binding: None,
+                    },
+                    true,
+                    ctx,
+                );
+            });
+            wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+            assert!(!model.lock().is_raw_terminal());
+            event_loop.read(&app, |me, _| {
+                assert!(!me.is_user_input_ready());
+                assert!(me.initial_attach_pending);
+                assert_eq!(me.input_phase(), RemoteInputPhase::Replay);
+            });
+        });
+    }
+}
+
+#[test]
+fn valid_bootstrap_preamble_preserves_integrated_adopt_after_eviction() {
+    App::test((), move |mut app| async move {
+        let conn = SessionId::from(184u64);
+        let (_manager, event_loop, model, wakeups) =
+            start_adopted_loop_unbootstrapped(&mut app, conn);
+        let mut bootstrap_preamble = init_shell_dcs();
+        bootstrap_preamble.extend(bootstrapped_dcs());
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: bootstrap_preamble.len() as u64 + 100,
+                    replay: b"integrated output".to_vec(),
+                    bootstrap_preamble,
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+        assert!(!model.lock().is_raw_terminal());
+        assert!(model.lock().block_list().is_bootstrapped());
+        event_loop.read(&app, |me, _| {
+            assert_eq!(me.input_phase(), RemoteInputPhase::Ready)
+        });
+    });
+}
+
+#[test]
+fn orphan_bootstrapped_hook_does_not_invent_shell_readiness() {
+    App::test((), move |mut app| async move {
+        let conn = SessionId::from(185u64);
+        let (_manager, event_loop, model, _wakeups) =
+            start_adopted_loop_unbootstrapped(&mut app, conn);
+        event_loop.update(&mut app, |me, ctx| {
+            me.process_historical_pty_bytes(&bootstrapped_dcs());
+            me.awaiting_attach_snapshot = false;
+            me.complete_initial_attach_if_ready(ctx);
+            assert!(!me.is_user_input_ready());
+        });
+        assert!(!model.lock().block_list().is_bootstrapped());
+        assert!(model.lock().pending_session_id().is_none());
+    });
+}
+
+#[test]
+fn truncated_adopt_cannot_recover_a_wrong_identity_or_terminated_attach() {
+    for (index, pty, generation, terminated) in [
+        (0, "another-pty", 7, false),
+        (1, OUR_PTY, 8, false),
+        (2, OUR_PTY, 7, true),
+    ] {
+        App::test((), move |mut app| async move {
+            let conn = SessionId::from(186u64 + index);
+            let (_manager, event_loop, model, wakeups) =
+                start_adopted_loop_unbootstrapped(&mut app, conn);
+            event_loop.update(&mut app, |me, ctx| {
+                if terminated {
+                    me.finish_failed_startup(ctx);
+                }
+                me.on_session_attached(
+                    SessionAttached {
+                        session_id: pty.to_string(),
+                        size: None,
+                        base_seq: 4096,
+                        replay: b"must not attach".to_vec(),
+                        bootstrap_preamble: Vec::new(),
+                        generation,
+                        agent_binding: None,
+                    },
+                    true,
+                    ctx,
+                );
+            });
+            wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+            assert!(!model.lock().is_raw_terminal());
+            event_loop.read(&app, |me, _| assert!(!me.is_user_input_ready()));
+            assert!(!terminal_contents(&model).contains("must not attach"));
+        });
+    }
 }

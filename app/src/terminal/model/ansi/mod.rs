@@ -602,6 +602,9 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
     /// Calls the appropriate `ansi::Handler` function according to the given hook. This function
     /// assumes that the hook was encoded originally.
     fn handle_decoded_hook(&mut self, hook: Result<DProtoHook, serde_json::Error>) {
+        if !self.handler.should_handle_shell_hooks() {
+            return;
+        }
         match hook {
             Ok(DProtoHook::CommandFinished { value }) => self.handler.command_finished(value),
             Ok(DProtoHook::Precmd { value }) => self.handler.precmd(value),
@@ -647,6 +650,9 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
     /// Calls the appropriate `ansi::Handler` function according to the given hook. This function
     /// assumes that the hook was never encoded.
     fn handle_unencoded_hook(&mut self, hook: Result<DProtoHook, serde_json::Error>) {
+        if !self.handler.should_handle_shell_hooks() {
+            return;
+        }
         // Currently, only the `SourcedRcFileForWarp`, `InitShell`, `InitSubshell`, and `InitSsh`
         // DCS's may be emitted without hex-encoding -- other DCS hooks should be sent hex-encoded.
         // This is because we can guarantee that theses RC file hook don't contain non-ASCII chars
@@ -696,6 +702,9 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
     }
 
     fn handle_kv_marker(&mut self, params: &[&[u8]]) {
+        if !self.handler.should_handle_shell_hooks() {
+            return;
+        }
         match params.get(2) {
             Some(&ZAPLEX_KV_START_BYTE) => {
                 let Some(hook) = params.get(3).map(|data| String::from_utf8_lossy(data)) else {
@@ -833,6 +842,19 @@ where
         }
 
         if params.is_empty() || params[0].is_empty() {
+            return;
+        }
+
+        if !self.handler.should_handle_shell_hooks()
+            && matches!(
+                params[0],
+                b"133"
+                    | ZAPLEX_OSC_MARKER
+                    | ZAPLEX_IN_BAND_GENERATOR_OSC_MARKER
+                    | ZAPLEX_RESET_GRID_OSC_MARKER
+                    | ZAPLEX_COMPLETIONS_OSC_MARKER
+            )
+        {
             return;
         }
 

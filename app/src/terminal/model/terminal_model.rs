@@ -521,6 +521,9 @@ pub struct TerminalModel {
     /// shell from sending us bootstrapping messages, but we can ignore them. This value is always
     /// cleared at the next precmd, because it is only relevant for the block where it was set.
     ignore_bootstrapping_messages: bool,
+    /// A confirmed daemon PTY whose original integration metadata is unavailable.
+    /// It remains a plain terminal for this model's lifetime, including reconnects.
+    raw_terminal: bool,
 
     /// One-shot latch (T1.3): the daemon-session adopt path arms this just before
     /// re-feeding the captured bootstrap-handshake preamble, so the client arms
@@ -1203,6 +1206,7 @@ impl TerminalModel {
             active_shell_launch_data: None,
             pending_session_info: None,
             ignore_bootstrapping_messages: false,
+            raw_terminal: false,
             suppress_next_bootstrap_write: false,
             bootstrap_delivered_server_side: false,
             session_startup_path,
@@ -1558,6 +1562,21 @@ impl TerminalModel {
         self.event_proxy.are_any_events_pending()
     }
 
+    pub(crate) fn is_raw_terminal(&self) -> bool {
+        self.raw_terminal
+    }
+
+    /// Keeps the same daemon PTY usable without inventing a bootstrapped shell.
+    pub(crate) fn enter_raw_terminal(&mut self) {
+        if self.raw_terminal {
+            return;
+        }
+        self.raw_terminal = true;
+        self.pending_session_info = None;
+        self.block_list.enter_raw_terminal();
+        self.event_proxy.send_wakeup_event();
+    }
+
     pub fn ignore_bootstrapping_messages(&mut self) {
         self.ignore_bootstrapping_messages = true;
     }
@@ -1681,7 +1700,13 @@ impl TerminalModel {
     }
 
     pub fn terminal_input_state(&self) -> TerminalInputState {
-        if !self.block_list().is_bootstrapped() {
+        if self.raw_terminal {
+            if self.is_alt_screen_active() {
+                TerminalInputState::AltScreen
+            } else {
+                TerminalInputState::LongRunningCommand
+            }
+        } else if !self.block_list().is_bootstrapped() {
             TerminalInputState::NotBootstrapped
         } else if self.is_alt_screen_active() {
             TerminalInputState::AltScreen
@@ -2689,6 +2714,10 @@ pub enum HandlerEvent {
 }
 
 impl ansi::Handler for TerminalModel {
+    fn should_handle_shell_hooks(&self) -> bool {
+        !self.raw_terminal
+    }
+
     fn set_title(&mut self, title: Option<String>) {
         // Don't set the tab title if the title event is for a running in-band command.
         if self.block_list().is_writing_or_executing_in_band_command() {
@@ -3109,8 +3138,6 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn bootstrapped(&mut self, value: BootstrappedValue) {
-        self.block_list.bootstrapped(value.clone());
-
         let pending_session_info = match self.pending_session_info.take() {
             Some(session_info) => session_info,
             None => {
@@ -3121,6 +3148,8 @@ impl ansi::Handler for TerminalModel {
                 return;
             }
         };
+
+        self.block_list.bootstrapped(value.clone());
 
         let rcfiles_duration_seconds = match (value.rcfiles_start_time, value.rcfiles_end_time) {
             (Some(start_time), Some(end_time)) => Some((end_time - start_time).into()),

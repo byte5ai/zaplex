@@ -6652,12 +6652,11 @@ impl ServerModel {
         }))
     }
 
-    /// Freezes the session's bootstrap preamble at the boundary the opening
-    /// client just reported (T1.3). The preamble was accumulated from seq 0 by
-    /// `on_session_output`; here we truncate it to `end_seq` (the client's output
-    /// cursor at bootstrap completion) and stop capturing. Idempotent: a session
-    /// whose preamble is already frozen (or was abandoned at the cap) ignores
-    /// repeats — only the first, opening client defines the boundary.
+    /// Accepts the opening client's bootstrap boundary for compatibility. The
+    /// daemon normally freezes the complete handshake directly from PTY output;
+    /// an already frozen or abandoned preamble ignores later client reports.
+    /// For a handshake the daemon could not recognize, the client's confirmed
+    /// boundary still truncates the captured prefix without changing its bytes.
     fn handle_set_bootstrap_preamble(&mut self, msg: SetBootstrapPreamble) {
         let Some(session) = self.sessions.get_mut(&msg.session_id) else {
             log::debug!(

@@ -1879,6 +1879,8 @@ pub(crate) enum RemoteInputPhase {
     Transport,
     Attach,
     Replay,
+    /// Direct PTY input without shell integration; the command editor stays gated.
+    Raw,
     Ready,
     Failed,
     Corrupt,
@@ -1932,6 +1934,7 @@ fn remote_readiness_message(
         RemoteInputPhase::Transport => crate::t!("terminal-remote-readiness-transport"),
         RemoteInputPhase::Attach => crate::t!("terminal-remote-readiness-attach"),
         RemoteInputPhase::Replay => crate::t!("terminal-remote-readiness-replay"),
+        RemoteInputPhase::Raw => crate::t!("terminal-remote-readiness-raw"),
         RemoteInputPhase::Ready => return None,
         RemoteInputPhase::Failed => crate::t!("terminal-remote-readiness-failed"),
         RemoteInputPhase::Corrupt => crate::t!("terminal-remote-readiness-corrupt"),
@@ -2801,6 +2804,8 @@ pub struct TerminalView {
     /// Explicit readiness for a remote pane. The input editor keeps its draft,
     /// while normal submissions stay blocked until this reaches Ready.
     remote_input_phase: Option<RemoteInputPhase>,
+    /// Persists through reconnect phases without relocking the terminal model.
+    remote_raw_terminal: bool,
     remote_restore_pane_uuid: Option<Vec<u8>>,
     /// Remains true after initial input readiness so transient reconnect phases
     /// cannot make an established daemon pane look like a new pending start.
@@ -4042,6 +4047,7 @@ impl TerminalView {
             sessions,
             remote_server_shimmer_handle: ShimmeringTextStateHandle::new(),
             remote_input_phase: None,
+            remote_raw_terminal: false,
             remote_restore_pane_uuid: None,
             remote_input_has_reached_initial_ready: false,
             remote_input_session_id: None,
@@ -6710,6 +6716,27 @@ impl TerminalView {
         ctx.notify();
     }
 
+    pub(crate) fn mark_remote_raw_terminal(
+        &mut self,
+        connection_session_id: warp_core::SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !remote_input_phase_update_matches(
+            self.remote_input_session_id,
+            Some(connection_session_id),
+        ) {
+            return;
+        }
+        self.remote_raw_terminal = true;
+        self.is_slow_bootstrap_banner_open = false;
+        self.input.update(ctx, |input, ctx| {
+            input.cancel_pending_system_command();
+            input.clear_file_manager_directory_input();
+            input.set_ordinary_command_input_ready(false, ctx);
+        });
+        ctx.notify();
+    }
+
     pub(crate) fn set_remote_input_phase(
         &mut self,
         phase: RemoteInputPhase,
@@ -6729,11 +6756,16 @@ impl TerminalView {
             log::warn!("Ignored unbound or stale remote input phase for a daemon-bound terminal");
             return;
         }
+        if phase == RemoteInputPhase::Raw {
+            if let Some(session_id) = connection_session_id {
+                self.mark_remote_raw_terminal(session_id, ctx);
+            }
+        }
         let became_ready = phase == RemoteInputPhase::Ready
             && self.remote_input_phase != Some(RemoteInputPhase::Ready);
         let became_failed = phase == RemoteInputPhase::Failed
             && self.remote_input_phase != Some(RemoteInputPhase::Failed);
-        if phase == RemoteInputPhase::Ready {
+        if matches!(phase, RemoteInputPhase::Ready | RemoteInputPhase::Raw) {
             self.remote_input_has_reached_initial_ready = true;
         }
         self.remote_input_phase = Some(phase);
@@ -6749,7 +6781,10 @@ impl TerminalView {
         self.input.update(ctx, |input, ctx| {
             if matches!(
                 phase,
-                RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
+                RemoteInputPhase::Failed
+                    | RemoteInputPhase::Corrupt
+                    | RemoteInputPhase::Cancelled
+                    | RemoteInputPhase::Raw
             ) {
                 input.cancel_pending_system_command();
                 input.clear_file_manager_directory_input();
@@ -7036,7 +7071,7 @@ impl TerminalView {
     }
 
     pub fn is_input_box_visible(&self, model: &TerminalModel, app: &AppContext) -> bool {
-        if model.is_read_only() {
+        if model.is_raw_terminal() || model.is_read_only() {
             return false;
         }
         if self.has_active_cli_agent_input_session(app) {
@@ -7672,6 +7707,12 @@ impl TerminalView {
         // Lock the model once and hold it throughout the function
         let model = self.model.lock();
 
+        // Raw input still goes through the transport gate while reconnecting; it
+        // must never be diverted into the hidden integrated editor.
+        if model.is_raw_terminal() {
+            return true;
+        }
+
         // If the active block hasn't started yet, we don't want to write to the pty.
         // Note that we check block started and NOT block.is_long_running(), because
         // the block starts on enter but only becomes long running on receiving Preexec.
@@ -7818,6 +7859,9 @@ impl TerminalView {
         mode: &AIAgentPtyWriteMode,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.remote_raw_terminal {
+            return;
+        }
         ctx.emit(Event::WriteAgentInputToPty {
             bytes: data.into(),
             mode: *mode,
@@ -7885,7 +7929,7 @@ impl TerminalView {
         // detected SSH command is active (for host-key/password prompts);
         // command-editor submission remains gated throughout.
         if self.remote_input_phase.is_some_and(|phase| {
-            phase != RemoteInputPhase::Ready
+            !matches!(phase, RemoteInputPhase::Ready | RemoteInputPhase::Raw)
                 && (self.remote_input_session_id.is_some()
                     || matches!(
                         phase,
@@ -7953,6 +7997,9 @@ impl TerminalView {
     }
 
     pub fn set_pending_command(&self, exec: &str, ctx: &mut ViewContext<Self>) {
+        if self.remote_raw_terminal {
+            return;
+        }
         self.input.update(ctx, |input, ctx| {
             input.set_pending_command(exec, ctx);
         })
@@ -8317,6 +8364,9 @@ impl TerminalView {
         key_event: Option<SshKeyEvent>,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.remote_raw_terminal {
+            return;
+        }
         if self.zaplexify_state.ssh_block_state().is_some() {
             if key_event.is_some_and(|key| key.is_ctrl_c()) {
                 send_telemetry_from_ctx!(TelemetryEvent::SshTmuxZaplexifyBlockDismissed, ctx);
@@ -11302,7 +11352,14 @@ impl TerminalView {
         } else {
             remote_readiness_message(phase, self.remote_input_has_reached_initial_ready)?
         };
-        let content = if matches!(
+        let content = if phase == RemoteInputPhase::Raw {
+            Text::new(
+                message.clone(),
+                appearance.monospace_font_family(),
+                appearance.monospace_font_size() - 2.,
+            )
+            .finish()
+        } else if matches!(
             phase,
             RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
         ) {
@@ -11493,6 +11550,9 @@ impl TerminalView {
         delivered_directly_by_control_surface: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.remote_raw_terminal {
+            return;
+        }
         let Some(notification) = parse_event(title, body) else {
             return;
         };
@@ -13863,6 +13923,9 @@ impl TerminalView {
 
     /// Executes a command that was submitted by the user and not yet sent to the shell.
     pub fn execute_pending_command(&mut self, _: (), ctx: &mut ViewContext<Self>) {
+        if self.remote_raw_terminal {
+            return;
+        }
         self.apply_file_manager_directory(ctx);
         let had_pending = self.input.read(ctx, |input, _| input.has_pending_command());
         self.input.update(ctx, |input, ctx| {
@@ -13893,12 +13956,17 @@ impl TerminalView {
         command: String,
         ctx: &mut ViewContext<Self>,
     ) {
-        if matches!(
-            self.remote_input_phase,
-            Some(
-                RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
+        if self.remote_raw_terminal
+            || matches!(
+                self.remote_input_phase,
+                Some(
+                    RemoteInputPhase::Failed
+                        | RemoteInputPhase::Corrupt
+                        | RemoteInputPhase::Cancelled
+                        | RemoteInputPhase::Raw
+                )
             )
-        ) {
+        {
             return;
         }
         self.input.update(ctx, |input, _| {
@@ -13914,6 +13982,9 @@ impl TerminalView {
         launch: &cli_agent::RoutedAgentLaunch,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
+        if self.remote_raw_terminal {
+            return false;
+        }
         let Some(shell_type) = self.active_session_shell_type(ctx) else {
             return false;
         };
@@ -14111,7 +14182,10 @@ impl TerminalView {
 
             // If we did actually bootstrap, or if the session is no longer usable
             // (e.g.: the shell process terminated), don't show a banner.
-            if model.is_read_only() || model.is_active_block_bootstrapped() {
+            if model.is_raw_terminal()
+                || model.is_read_only()
+                || model.is_active_block_bootstrapped()
+            {
                 return;
             }
 
@@ -21069,7 +21143,7 @@ impl TerminalView {
 
     /// Returns the CLI agent currently active in this terminal, if any.
     pub fn active_cli_agent(&self, ctx: &AppContext) -> Option<super::CLIAgent> {
-        if !FeatureFlag::HoaCodeReview.is_enabled() {
+        if self.remote_raw_terminal || !FeatureFlag::HoaCodeReview.is_enabled() {
             return None;
         }
 
@@ -21080,7 +21154,8 @@ impl TerminalView {
 
     /// Returns `true` if CLI agent rich input is currently open.
     pub fn is_cli_agent_rich_input_open(&self, ctx: &AppContext) -> bool {
-        CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id)
+        !self.remote_raw_terminal
+            && CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id)
     }
 
     /// Appends `text` to CLI agent rich input and focuses it.
@@ -25326,7 +25401,9 @@ impl View for TerminalView {
                 let input_box_visible = self.is_input_box_visible(&model, app);
                 let mut floating_readiness_footer = None;
                 if input_box_visible || (remote_input_is_gated && !is_alt_screen_active) {
-                    column.add_child(self.render_input());
+                    if !model.is_raw_terminal() {
+                        column.add_child(self.render_input());
+                    }
                     if let Some(footer) = self.render_remote_input_readiness_footer(appearance, app)
                     {
                         column.add_child(footer);

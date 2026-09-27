@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- SSH-Wiederaufnahme (#456): Der Daemon sichert vollständige Shell-Startmeldungen unabhängig vom Client. Bestehende Sitzungen mit verlorenem Startpräfix bleiben über einen gekennzeichneten einfachen Terminalmodus bedienbar; Prozesse, PTY und Eingabeentwurf bleiben erhalten, automatische Befehle bleiben gesperrt.
+
 - Aufgelistete Remote-Sessions behalten ihre bestätigte Host- und Daemon-Version beim Wiederöffnen ohne aktive Verbindung. Wiederherstellbare Sessions lassen sich während des Attach-Vorgangs abbrechen und danach erneut verbinden. Auch ein neuer Verbindungsversuch vor bestätigter PTY kann lokal abgebrochen werden, ohne den Entwurf zu verlieren oder entfernte Arbeit zu beenden (#456).
 
 - Sessionzeilen ohne eigenen Titel zeigen Host und tatsächliches Arbeitsverzeichnis; der vollständige Pfad bleibt im Tooltip sichtbar (#455). Die Auswahl nach `..` ist zusätzlich über Maus-/Tastaturereignisse und veraltete oder fehlgeschlagene Verzeichnisantworten abgesichert (#458).

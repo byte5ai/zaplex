@@ -511,6 +511,8 @@ jobs:
           listed_daemon_adoption_requires_complete_matching_handshake_identity
           cancelling_pending_adoption_retires_only_local_surface_and_keeps_retry_identity
           cancelled_pending_attach_retains_draft_and_rejects_late_readiness
+          raw_remote_terminal_keeps_draft_and_accepts_only_ready_manual_input
+          bootstrap_preamble_
           readiness_controls_require_an_available_action_target
           cancelling_fresh_daemon_open_preserves_draft_without_inventing_a_restore_identity
           corrupt_remote_restore_is_terminal_and_never_reenables_normal_input

@@ -27,7 +27,7 @@ pub(super) const UNENCODED_KV_MARKER: char = 'k';
 #[derive(Serialize, Debug, Deserialize)]
 #[allow(clippy::upper_case_acronyms)]
 #[serde(tag = "hook")]
-pub(super) enum DProtoHook {
+pub(crate) enum DProtoHook {
     CommandFinished {
         value: CommandFinishedValue,
     },
@@ -754,7 +754,7 @@ impl PendingHook {
         self.hook.populate_field(key, value);
     }
 
-    pub(super) fn finish(self) -> DProtoHook {
+    pub(crate) fn finish(self) -> DProtoHook {
         self.hook
     }
 }

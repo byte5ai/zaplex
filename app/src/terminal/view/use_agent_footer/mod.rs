@@ -269,7 +269,8 @@ impl TerminalView {
     }
 
     pub(super) fn has_active_cli_agent_input_session(&self, app: &AppContext) -> bool {
-        CLIAgentSessionsModel::as_ref(app).is_input_open(self.view_id)
+        !self.remote_raw_terminal
+            && CLIAgentSessionsModel::as_ref(app).is_input_open(self.view_id)
     }
 
     /// Checks if the footer should be rendered.
@@ -279,6 +280,9 @@ impl TerminalView {
         model: &TerminalModel,
         app: &AppContext,
     ) -> bool {
+        if model.is_raw_terminal() {
+            return false;
+        }
         let ai_settings = AISettings::as_ref(app);
 
         // If a zaplexify mode is set, that means ssh or subshell is detected and we should show the footer.

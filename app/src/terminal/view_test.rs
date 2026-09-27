@@ -5406,3 +5406,88 @@ fn readiness_controls_require_an_available_action_target() {
         assert!(!remote_readiness_cancel_visible(phase, false));
     }
 }
+
+#[test]
+fn raw_remote_terminal_keeps_draft_and_accepts_only_ready_manual_input() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let writes = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let observed = writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes }
+                | Event::WriteAgentInputToPty { bytes, .. } = event
+                {
+                    observed.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+        let session = warp_core::SessionId::from(796u64);
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_input_draft("keep this draft".to_string(), ctx);
+            view.sessions.update(ctx, |sessions, _| {
+                *sessions = Sessions::new_for_test();
+            });
+            assert!(!view
+                .sessions
+                .as_ref(ctx)
+                .has_pending_or_bootstrapped_session());
+            view.model.lock().enter_raw_terminal();
+            view.set_remote_input_phase(RemoteInputPhase::Replay, Some(session), ctx);
+            view.is_slow_bootstrap_banner_open = true;
+            view.mark_remote_raw_terminal(session, ctx);
+            assert!(!view.is_slow_bootstrap_banner_open);
+            view.on_bootstrap_failed_timer_complete((), ctx);
+            assert!(!view.is_slow_bootstrap_banner_open);
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Replay));
+            view.write_agent_bytes_to_pty(
+                b"blocked agent".to_vec(),
+                &AIAgentPtyWriteMode::Raw,
+                ctx,
+            );
+            view.set_remote_input_phase(RemoteInputPhase::Raw, Some(session), ctx);
+            view.execute_system_command_or_set_pending("must not execute".to_string(), ctx);
+            view.execute_pending_command((), ctx);
+            assert!(!view.input.as_ref(ctx).ordinary_command_input_is_ready());
+            assert!(!view.is_input_box_visible(&view.model.lock(), ctx));
+            assert!(!view.remote_input_is_ready());
+            assert!(!view.remote_input_initial_start_is_pending());
+            view.typed_characters_on_terminal("manual", ctx);
+            view.control_sequence_on_terminal(b"\r", ctx);
+            view.set_remote_input_phase(RemoteInputPhase::Transport, Some(session), ctx);
+            view.typed_characters_on_terminal("blocked", ctx);
+            view.control_sequence_on_terminal(b"\r", ctx);
+            view.execute_command_or_set_pending("must not replace draft", ctx);
+            view.execute_system_command_or_set_pending("must not queue".to_string(), ctx);
+            view.execute_pending_command((), ctx);
+            view.write_agent_bytes_to_pty(
+                b"blocked reconnect agent".to_vec(),
+                &AIAgentPtyWriteMode::Raw,
+                ctx,
+            );
+            assert_eq!(view.input_draft(ctx), "keep this draft");
+            view.set_remote_input_phase(
+                RemoteInputPhase::Raw,
+                Some(warp_core::SessionId::from(797u64)),
+                ctx,
+            );
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Transport));
+            view.set_remote_input_phase(RemoteInputPhase::Raw, Some(session), ctx);
+            assert_eq!(view.input_draft(ctx), "keep this draft");
+            assert!(view.model.lock().is_raw_terminal());
+            view.typed_characters_on_terminal("after reconnect", ctx);
+            view.control_sequence_on_terminal(b"\r", ctx);
+        });
+        assert_eq!(
+            *writes.borrow(),
+            vec![
+                b"manual".to_vec(),
+                b"\r".to_vec(),
+                b"after reconnect".to_vec(),
+                b"\r".to_vec(),
+            ]
+        );
+        assert!(remote_readiness_message(RemoteInputPhase::Raw, true).is_some());
+    });
+}

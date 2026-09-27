@@ -25,6 +25,11 @@ use crate::terminal::model::{
 /// Default implementations are provided for some methods to reduce the amount
 /// of necessary boilerplate required for a testing-only implementation.
 pub trait Handler {
+    /// Whether Zaplex shell-integration hooks may mutate the terminal model.
+    fn should_handle_shell_hooks(&self) -> bool {
+        true
+    }
+
     /// OSC to set window title.
     fn set_title(&mut self, _: Option<String>);
 

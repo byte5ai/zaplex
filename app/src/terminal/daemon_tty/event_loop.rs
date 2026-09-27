@@ -87,6 +87,7 @@ struct PendingAttachReplay {
     gap_applied: bool,
     fed_preamble: bool,
     pending_exit: Option<Option<i32>>,
+    agent_binding: Option<AgentSessionIdentity>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -254,6 +255,8 @@ pub(crate) struct EventLoop {
     /// the capability-checked authoritative binding snapshot.
     awaiting_attach_snapshot: bool,
     initial_attach_pending: bool,
+    /// Existing PTYs may have lost their bootstrap prefix on older daemons.
+    adopted_session: bool,
     pending_attach_replay: Option<PendingAttachReplay>,
     /// A transport replacement that arrives while a replay is being parsed is
     /// deferred until that snapshot is consumed, avoiding overlapping attaches.
@@ -453,6 +456,9 @@ impl EventLoop {
         match (adopt_pty_session_id, adopt_pty_generation) {
             // Adopt an existing daemon session: attach + replay on connect.
             (Some(id), generation) if !id.is_empty() => {
+                event_loop.adopted_session = true;
+                event_loop.startup_command = None;
+                event_loop.startup_command_id = None;
                 event_loop.pty_session_id = Some(id);
                 // A legacy daemon predates PTY generations and reports zero.
                 // Preserve its id-only attach path; capability-aware inventory
@@ -733,6 +739,7 @@ impl EventLoop {
             expected_attach_agent_binding: None,
             awaiting_attach_snapshot: false,
             initial_attach_pending: false,
+            adopted_session: false,
             pending_attach_replay: None,
             reattach_after_replay: false,
             attach_in_flight: None,
@@ -793,7 +800,7 @@ impl EventLoop {
             return;
         }
         self.input_phase = phase;
-        self.user_input_ready = phase == RemoteInputPhase::Ready;
+        self.user_input_ready = matches!(phase, RemoteInputPhase::Ready | RemoteInputPhase::Raw);
         if let Some(terminal_view) = self
             .terminal_view
             .as_ref()
@@ -822,9 +829,14 @@ impl EventLoop {
             view.set_remote_input_phase(input_phase, Some(connection_session_id), ctx);
         });
         self.publish_pending_error_notice(ctx);
+        if self.terminal_model.lock().is_raw_terminal() {
+            return;
+        }
         let sessions = CLIAgentSessionsModel::handle(ctx);
         ctx.subscribe_to_model(&sessions, |me, event, ctx| {
-            if me.terminal_view_id != Some(event.terminal_view_id()) {
+            if me.terminal_view_id != Some(event.terminal_view_id())
+                || me.terminal_model.lock().is_raw_terminal()
+            {
                 return;
             }
             match event {
@@ -970,6 +982,9 @@ impl EventLoop {
     /// Serializes bind/unbind requests so rapid lifecycle changes cannot race a
     /// stale callback into becoming foreground.
     fn drive_agent_binding(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.terminal_model.lock().is_raw_terminal() {
+            return;
+        }
         self.settle_agent_binding_if_converged();
         if self.agent_binding_in_flight.is_some() {
             return;
@@ -1227,6 +1242,9 @@ impl EventLoop {
         supports_agent_binding: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.terminated {
+            return;
+        }
         if self.pty_session_id.as_deref() != Some(attached.session_id.as_str()) {
             log::error!(
                 "daemon_tty: rejected attach response for PTY {} (expected {:?})",
@@ -1257,15 +1275,17 @@ impl EventLoop {
             return;
         }
         let pending_exit = self.pending_exit.take();
-        if pending_exit.is_none() && supports_agent_binding {
-            self.apply_authoritative_agent_binding(attached.agent_binding.clone(), ctx);
-        } else {
-            self.apply_authoritative_agent_binding(None, ctx);
-        }
+        // Hydration waits until replay establishes whether shell integration
+        // can be reconstructed. Plain terminal recovery never binds an agent.
+        let agent_binding = (pending_exit.is_none() && supports_agent_binding)
+            .then_some(attached.agent_binding)
+            .flatten();
         self.expected_attach_agent_binding = None;
         self.awaiting_managed_agent_binding = false;
         self.set_input_phase(RemoteInputPhase::Replay, ctx);
-        let bootstrap_preamble = if self.is_bootstrapped() {
+        let bootstrap_preamble = if self.is_bootstrapped()
+            || self.terminal_model.lock().is_raw_terminal()
+        {
             Vec::new()
         } else {
             attached.bootstrap_preamble
@@ -1283,6 +1303,7 @@ impl EventLoop {
             gap_applied: false,
             fed_preamble,
             pending_exit,
+            agent_binding,
         });
         self.process_attach_replay_chunk(ctx);
     }
@@ -1311,6 +1332,38 @@ impl EventLoop {
                     .lock()
                     .take_suppress_next_bootstrap_write();
             }
+            // A validated initial adopt with an evicted prefix cannot recover
+            // its original shell metadata from later command output. Keep that
+            // exact PTY usable as a plain terminal; fresh opens still wait for
+            // their real handshake and retain the startup timeout.
+            if self.adopted_session
+                && self.initial_attach_pending
+                && self.pty_generation.is_some()
+                && pending.base_seq > 0
+            {
+                let entered_raw = {
+                    let mut model = self.terminal_model.lock();
+                    if !model.block_list().is_bootstrapped() && model.pending_session_id().is_none() {
+                        model.enter_raw_terminal();
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if entered_raw {
+                    self.pending_input
+                        .retain(|message| !matches!(message, EventLoopMessage::Input(_)));
+                    // Mirror plain-mode restrictions before historical OSC
+                    // notifications can reach the view. Keep input in Replay
+                    // until this exact snapshot and buffered output complete.
+                    if let Some(view) = self.terminal_view.as_ref().and_then(|view| view.upgrade(ctx)) {
+                        let connection_session_id = self.connection_session_id;
+                        view.update(ctx, |view, ctx| {
+                            view.mark_remote_raw_terminal(connection_session_id, ctx);
+                        });
+                    }
+                }
+            }
             if pending.base_seq > self.last_seq {
                 if pending.fed_preamble {
                     self.reset_parser();
@@ -1334,6 +1387,15 @@ impl EventLoop {
         }
 
         self.last_seq = pending.base_seq + pending.replay.len() as u64;
+        if self.terminal_model.lock().is_raw_terminal() {
+            self.apply_authoritative_agent_binding_state(None);
+            self.desired_agent_binding = None;
+            self.desired_agent_binding_from_lifecycle = false;
+        } else if pending.pending_exit.is_none() && self.pending_exit.is_none() {
+            self.apply_authoritative_agent_binding(pending.agent_binding, ctx);
+        } else {
+            self.apply_authoritative_agent_binding(None, ctx);
+        }
         self.finish_attach_replay(pending.pending_exit, ctx);
     }
 
@@ -1394,9 +1456,14 @@ impl EventLoop {
         let model = self.terminal_model.lock();
         // InitShell already enables raw input to interactive rc-file prompts.
         // Such a prompt may legitimately postpone Bootstrapped indefinitely.
+        let raw_terminal = model.is_raw_terminal();
         let ready = model.block_list().is_bootstrapped() || model.pending_session_id().is_some();
         drop(model);
-        if ready {
+        if raw_terminal {
+            self.initial_attach_pending = false;
+            self.pending_ready_notice = None;
+            self.set_input_phase(RemoteInputPhase::Raw, ctx);
+        } else if ready {
             self.initial_attach_pending = false;
             self.set_input_phase(RemoteInputPhase::Ready, ctx);
             if let Some((pty_session_id, generation)) = self.managed_open_identity.take() {
@@ -2463,6 +2530,7 @@ impl EventLoop {
         if self.startup_command.is_none()
             || self.startup_command_in_flight.is_some()
             || self.startup_retry_requires_reconnect
+            || self.terminal_model.lock().is_raw_terminal()
             || !self.is_bootstrapped()
         {
             return;
