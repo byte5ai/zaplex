@@ -1237,6 +1237,7 @@ impl PaneGroup {
                             }
                             TabBarHoverIndex::OverTab(tab_idx) => {
                                 self.panes.clear_hidden_panes_from_move();
+                                self.handle_pane_count_change(ctx);
                                 ctx.emit(Event::SwitchTabFocusAndMovePane {
                                     tab_idx: *tab_idx,
                                     pane_id,
@@ -1258,6 +1259,7 @@ impl PaneGroup {
                     // If we drag outside of the tab bar or pane group, ensure that there
                     // is no hidden pane
                     self.panes.clear_hidden_panes_from_move();
+                    self.handle_pane_count_change(ctx);
                     // Also clear hidden closed panes since dragging invalidates undo functionality
                     self.clear_hidden_closed_panes(ctx);
                     ctx.emit(Event::ClearHoveredTabIndex);
@@ -4160,7 +4162,7 @@ impl PaneGroup {
         ctx.notify();
         ctx.emit(Event::TerminalViewStateChanged);
         ctx.emit(Event::AppStateChanged);
-        self.refresh_terminal_titles(ctx);
+        self.handle_pane_count_change(ctx);
         Some(PaneMoveBundle {
             visible_pane,
             temporary_original,
@@ -4578,6 +4580,7 @@ impl PaneGroup {
 
             // Focus the replacement pane to ensure proper user interaction
             self.focus_pane_by_id(replacement_pane_id, ctx);
+            self.handle_pane_count_change(ctx);
         } else {
             // If tree replacement failed, clean up the replacement pane we just created
             log::error!(
@@ -4670,6 +4673,7 @@ impl PaneGroup {
             }
             // Focus the original pane to ensure proper user interaction
             self.focus_pane_by_id(original_id, ctx);
+            self.handle_pane_count_change(ctx);
         }
 
         original_pane_id
@@ -4924,6 +4928,7 @@ impl PaneGroup {
             self.panes.remove_hidden_pane(visible_pane_id);
             self.panes.remove(visible_pane_id);
             self.pane_contents.remove(&visible_pane_id);
+            self.handle_pane_count_change(ctx);
             return;
         }
         if !self
@@ -4937,9 +4942,11 @@ impl PaneGroup {
             self.panes.remove_hidden_pane(visible_pane_id);
             self.panes.remove(visible_pane_id);
             self.pane_contents.remove(&visible_pane_id);
+            self.handle_pane_count_change(ctx);
             return;
         }
         self.pane_history.push(original_pane_id);
+        self.handle_pane_count_change(ctx);
         ctx.emit(Event::AppStateChanged);
     }
 
@@ -4957,6 +4964,7 @@ impl PaneGroup {
 
     pub fn hide_pane_for_move(&mut self, id: PaneId, ctx: &mut ViewContext<Self>) {
         self.panes.hide_pane_for_move(id);
+        self.handle_pane_count_change(ctx);
 
         ctx.notify();
         ctx.emit(Event::TerminalViewStateChanged);
@@ -4967,6 +4975,7 @@ impl PaneGroup {
     /// remote session.
     pub fn hide_pane_for_job(&mut self, id: PaneId, ctx: &mut ViewContext<Self>) {
         self.panes.hide_pane_for_job(id);
+        self.handle_pane_count_change(ctx);
 
         ctx.notify();
         ctx.emit(Event::TerminalViewStateChanged);
@@ -4976,6 +4985,7 @@ impl PaneGroup {
     /// Show a pane that was running some job. Undoes `PaneGroup::hide_pane_for_job`.
     pub fn show_pane_for_job(&mut self, id: PaneId, ctx: &mut ViewContext<Self>) {
         self.panes.show_pane_for_job(id);
+        self.handle_pane_count_change(ctx);
 
         ctx.notify();
         ctx.emit(Event::TerminalViewStateChanged);
@@ -4990,6 +5000,7 @@ impl PaneGroup {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let pane_open = self.panes.toggle_pane_visibility_for_job(id);
+        self.handle_pane_count_change(ctx);
 
         ctx.notify();
         ctx.emit(Event::TerminalViewStateChanged);
@@ -5012,6 +5023,7 @@ impl PaneGroup {
     fn unhide_closed_pane(&mut self, id: PaneId, ctx: &mut ViewContext<Self>) -> bool {
         let success = self.panes.unhide_closed_pane(id);
         if success {
+            self.handle_pane_count_change(ctx);
             ctx.notify();
             ctx.emit(Event::TerminalViewStateChanged);
             ctx.emit(Event::AppStateChanged);
@@ -5045,6 +5057,7 @@ impl PaneGroup {
             log::warn!("Attempted to cleanup pane {pane_id} but it was not found in the tree");
         }
         self.pane_contents.remove(&pane_id);
+        self.handle_pane_count_change(ctx);
 
         ctx.notify();
         ctx.emit(Event::TerminalViewStateChanged);
@@ -6428,6 +6441,7 @@ impl PaneGroup {
     ) -> Option<ReplacedRemoteTerminalSurface> {
         let terminal_pane = self.terminal_session_by_id(pane_id)?;
         let pane_stack = terminal_pane.pane_stack(ctx);
+        let pane_configuration = terminal_pane.pane_configuration();
         let pane_uuid = terminal_pane.session_uuid();
         let previous_view = terminal_pane.terminal_view(ctx);
         let previous_view_id = previous_view.id();
@@ -6455,6 +6469,8 @@ impl PaneGroup {
             ctx,
         );
         view.update(ctx, |view, ctx| {
+            view.set_pane_configuration(pane_configuration);
+            view.update_pane_configuration(ctx);
             view.set_remote_restore_pane_uuid(pane_uuid);
             view.restore_input_draft(draft, ctx);
             if cancelled {

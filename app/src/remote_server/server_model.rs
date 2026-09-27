@@ -4097,6 +4097,8 @@ fn now_epoch_millis() -> u64 {
 struct CollectedAgentSessions {
     sessions: Vec<super::proto::AgentSessionInfo>,
     account_routes: Option<super::agent_account::AccountRoutes>,
+    #[cfg(unix)]
+    live_agents: HashSet<AgentIdentity>,
 }
 
 fn collect_agent_sessions_for_peer(
@@ -4120,6 +4122,16 @@ fn collect_agent_sessions_for_peer(
     } else {
         log::warn!("Daemon: ListAgentSessions: no home dir; reporting empty inventory");
     }
+    // Reconcile global bindings against both exact representations from this
+    // scan, before applying the requesting peer's wire capability projection.
+    #[cfg(unix)]
+    let live_agents = live_agent_identities_for_routes(
+        &snapshots
+            .iter()
+            .map(super::agent_session::snapshot_to_proto)
+            .collect::<Vec<_>>(),
+        &scan.routes,
+    );
     let account_routes = supports_account_routing.then_some(scan.routes);
     let sessions = snapshots
         .into_iter()
@@ -4141,6 +4153,8 @@ fn collect_agent_sessions_for_peer(
     CollectedAgentSessions {
         sessions,
         account_routes,
+        #[cfg(unix)]
+        live_agents,
     }
 }
 
@@ -4598,12 +4612,18 @@ impl ServerModel {
                 let CollectedAgentSessions {
                     mut sessions,
                     account_routes,
+                    #[cfg(unix)]
+                    live_agents,
                 } = collected;
                 if let Some(routes) = account_routes {
                     me.agent_account_routes.replace(routes);
                 }
                 #[cfg(unix)]
-                me.reconcile_and_overlay_agent_bindings(conn_id_for_response, &mut sessions);
+                me.reconcile_and_overlay_agent_bindings(
+                    conn_id_for_response,
+                    &mut sessions,
+                    &live_agents,
+                );
                 me.send_server_message(
                     Some(conn_id_for_response),
                     Some(&request_id_for_response),
@@ -4711,6 +4731,32 @@ fn live_agent_identities(sessions: &[AgentSessionInfo]) -> HashSet<AgentIdentity
             account_id: (!session.account_id.is_empty()).then(|| session.account_id.clone()),
         })
         .collect()
+}
+
+#[cfg(unix)]
+fn live_agent_identities_for_routes(
+    sessions: &[AgentSessionInfo],
+    routes: &super::agent_account::AccountRoutes,
+) -> HashSet<AgentIdentity> {
+    let mut identities = live_agent_identities(sessions);
+    let opaque = identities
+        .iter()
+        .filter(|identity| identity.account_id.is_none())
+        .filter_map(|identity| {
+            let account_id = super::agent_account::session_account_id(
+                routes,
+                &identity.provider,
+                identity.config_dir.as_deref(),
+            )?;
+            Some(AgentIdentity {
+                account_id: Some(account_id),
+                config_dir: None,
+                ..identity.clone()
+            })
+        })
+        .collect::<Vec<_>>();
+    identities.extend(opaque);
+    identities
 }
 
 #[cfg(unix)]
@@ -5399,8 +5445,7 @@ impl ServerModel {
                     requested_at,
                     supports_account_routing,
                 );
-                let live_agents = live_agent_identities(&collected.sessions);
-                (live_agents, collected.account_routes)
+                (collected.live_agents, collected.account_routes)
             },
             move |me, (live_agents, account_routes), _ctx| {
                 if let Some(routes) = account_routes {
@@ -5484,9 +5529,9 @@ impl ServerModel {
         &mut self,
         conn_id: ConnectionId,
         sessions: &mut [AgentSessionInfo],
+        live_agents: &HashSet<AgentIdentity>,
     ) {
-        let live_agents = live_agent_identities(sessions);
-        self.agent_pty_bindings.reconcile_live_agents(&live_agents);
+        self.agent_pty_bindings.reconcile_live_agents(live_agents);
         if !self.client_supports_agent_pty_binding(conn_id) {
             return;
         }
@@ -5573,6 +5618,11 @@ impl ServerModel {
                 continue;
             };
             let existing = metadata.plan();
+            if existing.launch_id() != plan.launch_id()
+                && existing.launch_key() != plan.launch_key()
+            {
+                continue;
+            }
             if !existing.project_identity_is_current() {
                 return Err("project-identity-changed");
             }
@@ -6448,8 +6498,7 @@ impl ServerModel {
                     requested_at,
                     supports_account_routing,
                 );
-                let live_agents = live_agent_identities(&collected.sessions);
-                (live_agents, collected.account_routes)
+                (collected.live_agents, collected.account_routes)
             },
             move |me, (live_agents, account_routes), _ctx| {
                 if let Some(routes) = account_routes {

@@ -4,6 +4,12 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Pane-Ziele (#245/#460/#462) werden nach Verschieben, Ausblenden und Dateimanager-Wechsel ungültig. Cockpit- und Dateimanager-Kopfzeilen leiten ihre Drag-/Tab-Aktionen an die Pane-Gruppe weiter; Remote-Wiederverbindung erhält die gemeinsame Titel- und Hostkonfiguration.
+
+- Der Daemon (#245) erhält Agentenzuordnungen bei Inventarabfragen älterer Clients. Ein veralteter Projektpfad einer anderen Session blockiert neue, unabhängige Starts nicht mehr.
+
+- Root-Passwortbestätigungen (#245) bleiben an den ursprünglichen Befehl und die Sitzung gebunden. Abbruch, Blockende und Schließen verwerfen auch noch ausstehende Antworten aus dem Schlüsselspeicher; diese können kein geschlossenes Menü erneut öffnen.
+
 - SSH-Vertrauen (#245): `@revoked`-Hostschlüssel werden vor Anmeldung und manueller Bestätigung abgewiesen. Aliase, Hashes, Hostmuster und Portgrenzen bleiben berücksichtigt.
 
 - Einstellungen (#245) speichern die gewählte Seite mit sprachunabhängigen Schlüsseln und lesen frühere Namen weiter. Externe SSH-Einstellungen aktualisieren die Dropdown-Bedienbarkeit sofort; bei mehreren CLI-Agenten verspricht der Reparaturknopf keinen bereits gewählten Anbieter.

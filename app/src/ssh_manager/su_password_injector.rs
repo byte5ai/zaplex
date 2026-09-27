@@ -18,6 +18,7 @@ use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use regex::bytes::Regex;
 use warp_core::SessionId;
+use warp_terminal::model::BlockId;
 use warpui::r#async::FutureExt;
 use warpui::{ViewContext, WeakViewHandle};
 use zeroize::Zeroizing;
@@ -45,19 +46,21 @@ enum ShellReadyOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SuInjectorEvent {
     ShellReadyFinished(ShellReadyOutcome),
-    PasswordPrompt,
+    PasswordPrompt { generation: u64 },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct ArmedSuRootAttempt {
     generation: u64,
     session_id: SessionId,
+    block_id: BlockId,
     expires_at: Instant,
 }
 
 #[derive(Debug, Default)]
 struct SuRootAttemptGuard {
     armed: Option<ArmedSuRootAttempt>,
+    pending_prompt: Option<ArmedSuRootAttempt>,
     next_generation: u64,
 }
 
@@ -66,6 +69,7 @@ impl SuRootAttemptGuard {
         &mut self,
         command: &str,
         session_id: SessionId,
+        block_id: BlockId,
         is_local_user_command: bool,
         now: Instant,
     ) -> Option<u64> {
@@ -76,6 +80,7 @@ impl SuRootAttemptGuard {
             self.armed = Some(ArmedSuRootAttempt {
                 generation,
                 session_id,
+                block_id,
                 expires_at: now + SU_ROOT_ATTEMPT_TIMEOUT,
             });
             Some(generation)
@@ -84,16 +89,34 @@ impl SuRootAttemptGuard {
         }
     }
 
-    fn consume(&mut self, now: Instant) -> bool {
-        self.armed
+    fn consume(&mut self, now: Instant) -> Option<u64> {
+        let attempt = self
+            .armed
             .take()
-            .is_some_and(|attempt| now <= attempt.expires_at)
+            .filter(|attempt| now <= attempt.expires_at)?;
+        let generation = attempt.generation;
+        self.pending_prompt = Some(attempt);
+        Some(generation)
+    }
+
+    fn take_prompt(&mut self, generation: u64, now: Instant) -> Option<(SessionId, BlockId)> {
+        if !self
+            .pending_prompt
+            .as_ref()
+            .is_some_and(|attempt| attempt.generation == generation && now <= attempt.expires_at)
+        {
+            return None;
+        }
+        let attempt = self.pending_prompt.take()?;
+        Some((attempt.session_id, attempt.block_id))
     }
 
     fn clear_if_session_changed(&mut self, active_session_id: Option<SessionId>) {
         if self
             .armed
-            .is_some_and(|attempt| Some(attempt.session_id) != active_session_id)
+            .iter()
+            .chain(self.pending_prompt.iter())
+            .any(|attempt| Some(attempt.session_id) != active_session_id)
         {
             self.clear();
         }
@@ -102,14 +125,23 @@ impl SuRootAttemptGuard {
     fn expire(&mut self, generation: u64) {
         if self
             .armed
+            .as_ref()
             .is_some_and(|attempt| attempt.generation == generation)
         {
-            self.clear();
+            self.armed = None;
+        }
+        if self
+            .pending_prompt
+            .as_ref()
+            .is_some_and(|attempt| attempt.generation == generation)
+        {
+            self.pending_prompt = None;
         }
     }
 
     fn clear(&mut self) {
         self.armed = None;
+        self.pending_prompt = None;
     }
 }
 
@@ -166,9 +198,16 @@ pub fn spawn_su_password_injector<O>(
         &view,
         move |_owner, terminal_view, event, ctx| match event {
             crate::terminal::Event::ExecuteCommand(event) => {
+                let block_id = terminal_view
+                    .as_ref(ctx)
+                    .model
+                    .lock()
+                    .active_block_id()
+                    .clone();
                 let generation = attempt_guard_for_events.lock().observe_command(
                     &event.command,
                     event.session_id,
+                    block_id,
                     matches!(&event.source, CommandExecutionSource::User),
                     Instant::now(),
                 );
@@ -203,7 +242,7 @@ pub fn spawn_su_password_injector<O>(
         },
     );
 
-    let prompt_stream = su_prompt_events(rx, SHELL_READY_TIMEOUT, attempt_guard);
+    let prompt_stream = su_prompt_events(rx, SHELL_READY_TIMEOUT, attempt_guard.clone());
 
     // on_done remains a final safety net for task abortion or owner teardown. Normal Phase 1
     // completion also emits ShellReadyFinished, so suppression is released immediately at the
@@ -221,9 +260,13 @@ pub fn spawn_su_password_injector<O>(
                 }
                 match event {
                     SuInjectorEvent::ShellReadyFinished(_) => {}
-                    SuInjectorEvent::PasswordPrompt => {
+                    SuInjectorEvent::PasswordPrompt { generation } => {
+                        let prompt = attempt_guard.lock().take_prompt(generation, Instant::now());
+                        let Some((session_id, block_id)) = prompt else {
+                            return;
+                        };
                         view.su_root_password = Some(root_password.clone());
-                        view.show_su_root_confirm_menu(ctx);
+                        view.show_su_root_confirm_menu(session_id, &block_id, ctx);
                     }
                 }
             });
@@ -278,9 +321,9 @@ fn su_prompt_events(
             }
             if PASSWORD_PROMPT_REGEX.is_match(&buf) {
                 buf.clear();
-                let authorized = attempt_guard.lock().consume(Instant::now());
-                if authorized {
-                    yield SuInjectorEvent::PasswordPrompt;
+                let generation = attempt_guard.lock().consume(Instant::now());
+                if let Some(generation) = generation {
+                    yield SuInjectorEvent::PasswordPrompt { generation };
                 }
             }
         }

@@ -119,6 +119,9 @@ impl PaneContent for SftpPane {
         ctx.subscribe_to_view(&child, move |pane_group, _, event, ctx| {
             pane_group.handle_pane_event(pane_id, event, ctx);
         });
+        ctx.subscribe_to_view(&self.view, move |pane_group, _, event, ctx| {
+            pane_group.handle_pane_view_event(pane_id, event, ctx);
+        });
     }
 
     fn detach(
@@ -130,6 +133,7 @@ impl PaneContent for SftpPane {
         let child = self.view.as_ref(ctx).child(ctx);
         child.update(ctx, |view, ctx| view.set_pane_group_id(None, ctx));
         ctx.unsubscribe_to_view(&child);
+        ctx.unsubscribe_to_view(&self.view);
     }
 
     fn snapshot(&self, ctx: &AppContext) -> LeafContents {

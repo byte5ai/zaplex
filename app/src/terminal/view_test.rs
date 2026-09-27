@@ -5491,3 +5491,163 @@ fn raw_remote_terminal_keeps_draft_and_accepts_only_ready_manual_input() {
         assert!(remote_readiness_message(RemoteInputPhase::Raw, true).is_some());
     });
 }
+
+fn su_test_credential(secret: &str) -> OneKeyCredential {
+    OneKeyCredential {
+        label: "Test root password".into(),
+        subtitle: "Test host".into(),
+        secret: zeroize::Zeroizing::new(secret.to_owned()),
+        kind: OneKeyCredentialKind::Password,
+    }
+}
+
+#[test]
+fn closed_su_confirmation_ignores_delayed_credentials_and_older_requests() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("su root", "Password:");
+            let old_request = view.begin_su_root_confirmation().unwrap();
+            view.close_context_menu(ctx, false);
+            view.apply_su_root_credentials(
+                old_request,
+                vec![su_test_credential("old-secret")],
+                ctx,
+            );
+            assert!(view.context_menu_state.is_none());
+            assert!(view.onekey_prompt_candidates.is_empty());
+
+            let current_request = view.begin_su_root_confirmation().unwrap();
+            view.onekey_prompt_candidates = vec![OneKeyPromptCandidate {
+                label: "Current".into(),
+                subtitle: String::new(),
+                secret: zeroize::Zeroizing::new("current-secret".into()),
+                kind: OneKeyCredentialKind::Password,
+            }];
+            view.apply_su_root_credentials(
+                old_request,
+                vec![su_test_credential("old-secret")],
+                ctx,
+            );
+            assert!(view.su_root_confirmation_matches(current_request));
+            assert_eq!(&*view.onekey_prompt_candidates[0].secret, "current-secret");
+            assert!(view.context_menu_state.is_none());
+        });
+    });
+}
+
+#[test]
+fn completed_su_command_cannot_write_password_to_the_next_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let observed = writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    observed.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("su root", "Password:");
+            let request = view.begin_su_root_confirmation().unwrap();
+            view.su_root_password = Some(zeroize::Zeroizing::new("root-secret".into()));
+            view.context_menu_state = Some(ContextMenuState {
+                menu_type: ContextMenuType::SuRootPasswordConfirm,
+            });
+            // Do not depend on delivery of the completion event: the final write guard
+            // must inspect the live model even while UI events are still queued.
+            view.model.lock().finish_block();
+            view.model.lock().simulate_long_running_block("cat", "");
+            assert!(!view.su_root_confirmation_matches(request));
+            view.fill_su_root_password(ctx);
+            view.apply_su_root_credentials(request, vec![su_test_credential("old-secret")], ctx);
+            assert!(view.context_menu_state.is_none());
+            assert!(view.su_root_confirmation.is_none());
+        });
+        assert!(writes.borrow().is_empty());
+    });
+}
+
+#[test]
+fn interrupted_su_confirmation_cannot_revive_or_inject_a_password() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let observed = writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    observed.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+        for interrupt in [escape_sequences::C0::ETX, escape_sequences::C0::EOT] {
+            terminal.update(&mut app, |view, ctx| {
+                view.model
+                    .lock()
+                    .simulate_long_running_block("su root", "Password:");
+                let request = view.begin_su_root_confirmation().unwrap();
+                view.su_root_password = Some(zeroize::Zeroizing::new("root-secret".into()));
+                view.context_menu_state = Some(ContextMenuState {
+                    menu_type: ContextMenuType::SuRootPasswordConfirm,
+                });
+                view.write_to_pty(vec![interrupt], ctx);
+                view.apply_su_root_credentials(
+                    request,
+                    vec![su_test_credential("old-secret")],
+                    ctx,
+                );
+                view.fill_su_root_password(ctx);
+                assert!(view.su_root_confirmation.is_none());
+                assert!(view.context_menu_state.is_none());
+            });
+        }
+        assert_eq!(
+            *writes.borrow(),
+            vec![
+                vec![escape_sequences::C0::ETX],
+                vec![escape_sequences::C0::EOT]
+            ]
+        );
+    });
+}
+
+#[test]
+fn live_su_confirmation_injects_the_selected_password_once() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let observed = writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    observed.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("su root", "Password:");
+            view.begin_su_root_confirmation().unwrap();
+            view.su_root_password = Some(zeroize::Zeroizing::new("root-secret".into()));
+            view.context_menu_state = Some(ContextMenuState {
+                menu_type: ContextMenuType::SuRootPasswordConfirm,
+            });
+            view.fill_su_root_password(ctx);
+            view.fill_su_root_password(ctx);
+            assert!(view.su_root_confirmation.is_none());
+        });
+        assert_eq!(*writes.borrow(), vec![b"root-secret\n".to_vec()]);
+    });
+}

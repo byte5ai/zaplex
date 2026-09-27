@@ -6055,3 +6055,168 @@ fn cancelling_fresh_daemon_open_preserves_draft_without_inventing_a_restore_iden
         });
     });
 }
+
+#[test]
+fn moving_another_pane_invalidates_pending_split_targets_and_results() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let group = workspace.active_tab_pane_group().clone();
+            group.update(ctx, |group, ctx| {
+                let source = group.focused_pane_id(ctx);
+                let sibling: PaneId = group
+                    .add_terminal_pane_ignoring_default_session_mode(Direction::Right, None, ctx)
+                    .into();
+                let target = group
+                    .recapture_split_target(source, Direction::Down)
+                    .unwrap();
+                let (result, _, guard) = group
+                    .insert_local_terminal_for_split(target, None, ctx)
+                    .unwrap();
+                let pending = group
+                    .recapture_split_target(source, Direction::Right)
+                    .unwrap();
+                assert!(group.split_target_is_valid(pending));
+                assert!(group.split_result_is_current(guard, result));
+
+                let moved = group.remove_pane_for_move(&sibling, ctx).unwrap();
+
+                assert!(group.visible_pane_ids().contains(&source));
+                assert!(group.visible_pane_ids().contains(&result));
+                assert!(!group.split_target_is_valid(pending));
+                assert!(!group.split_result_is_current(guard, result));
+                drop(moved);
+            });
+        });
+    });
+}
+
+#[test]
+fn file_manager_round_trip_does_not_revalidate_an_old_split_target() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let group = workspace.active_tab_pane_group().clone();
+            group.update(ctx, |group, ctx| {
+                let source = group.focused_pane_id(ctx);
+                let pending = group
+                    .recapture_split_target(source, Direction::Right)
+                    .unwrap();
+                group.open_file_manager_in_place(
+                    source,
+                    crate::pane_group::FileManagerTarget::Local {
+                        start_path: std::env::temp_dir(),
+                    },
+                    ctx,
+                );
+                let replacement = group.focused_pane_id(ctx);
+                assert_ne!(replacement, source);
+                assert!(!group.split_target_is_valid(pending));
+
+                group.close_pane(replacement, ctx);
+
+                assert!(group.visible_pane_ids().contains(&source));
+                assert!(!group.split_target_is_valid(pending));
+                let refreshed = group
+                    .recapture_split_target(source, Direction::Right)
+                    .unwrap();
+                assert!(group.split_target_is_valid(refreshed));
+            });
+        });
+    });
+}
+
+#[test]
+fn hiding_and_showing_a_neighbor_invalidates_captured_split_layouts() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let group = workspace.active_tab_pane_group().clone();
+            group.update(ctx, |group, ctx| {
+                let source = group.focused_pane_id(ctx);
+                let neighbor: PaneId = group
+                    .add_terminal_pane_ignoring_default_session_mode(Direction::Right, None, ctx)
+                    .into();
+                let pending = group
+                    .recapture_split_target(source, Direction::Right)
+                    .unwrap();
+                group.hide_pane_for_job(neighbor, ctx);
+                assert!(!group.split_target_is_valid(pending));
+                let while_hidden = group
+                    .recapture_split_target(source, Direction::Right)
+                    .unwrap();
+                assert!(group.split_target_is_valid(while_hidden));
+
+                group.show_pane_for_job(neighbor, ctx);
+
+                assert!(group.visible_pane_ids().contains(&source));
+                assert!(group.visible_pane_ids().contains(&neighbor));
+                assert!(!group.split_target_is_valid(pending));
+                assert!(!group.split_target_is_valid(while_hidden));
+            });
+        });
+    });
+}
+
+#[test]
+fn replacing_remote_terminal_surface_preserves_the_pane_configuration() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let group = workspace.active_tab_pane_group().clone();
+            group.update(ctx, |group, ctx| {
+                let pane_id = group.focused_pane_id(ctx);
+                let configuration = group.pane_by_id(pane_id).unwrap().pane_configuration();
+                configuration.update(ctx, |configuration, ctx| {
+                    configuration.set_custom_vertical_tabs_title("Production logs", ctx);
+                });
+                assert!(group.set_terminal_identity_host(
+                    pane_id,
+                    Some("production.example.test".to_string()),
+                    ctx,
+                ));
+                let old_view = group.terminal_view_from_pane_id(pane_id, ctx).unwrap();
+
+                let replacement = group
+                    .replace_remote_terminal_surface(
+                        pane_id,
+                        None,
+                        "unfinished command".to_string(),
+                        true,
+                        ctx,
+                    )
+                    .unwrap();
+
+                assert_ne!(old_view.id(), replacement.view.id());
+                assert_eq!(
+                    replacement.view.as_ref(ctx).pane_configuration().id(),
+                    configuration.id()
+                );
+                assert_eq!(
+                    group.pane_by_id(pane_id).unwrap().pane_configuration().id(),
+                    configuration.id()
+                );
+                assert_eq!(
+                    configuration.as_ref(ctx).terminal_identity_host(),
+                    Some("production.example.test")
+                );
+                assert_eq!(
+                    configuration.as_ref(ctx).custom_vertical_tabs_title(),
+                    Some("Production logs")
+                );
+                replacement.view.update(ctx, |view, ctx| {
+                    view.update_pane_configuration(ctx);
+                });
+                assert!(configuration
+                    .as_ref(ctx)
+                    .title()
+                    .contains("production.example.test"));
+            });
+        });
+    });
+}

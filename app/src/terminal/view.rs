@@ -58,7 +58,9 @@ use crate::ai::predict::prompt_suggestions::{
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
 use crate::search::slash_command_menu::static_commands::commands;
-use crate::ssh_manager::onekey::{load_saved_ssh_credentials, OneKeyCredentialKind};
+use crate::ssh_manager::onekey::{
+    OneKeyCredential, OneKeyCredentialKind, load_saved_ssh_credentials,
+};
 use crate::ssh_manager::password_prompt::bytes_look_like_password_prompt;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
@@ -2370,6 +2372,12 @@ impl DropTargetData for TerminalDropTargetData {
     }
 }
 
+struct SuRootPasswordConfirmation {
+    request_id: u64,
+    session_id: SessionId,
+    block_id: BlockId,
+}
+
 struct OneKeyPromptCandidate {
     label: String,
     subtitle: String,
@@ -2436,6 +2444,8 @@ pub struct TerminalView {
     /// Stashes the root password when a su root password prompt is detected, to be injected once the user confirms.
     pub(crate) su_root_password: Option<zeroize::Zeroizing<String>>,
     su_root_onekey_candidates: Vec<usize>,
+    su_root_confirmation: Option<SuRootPasswordConfirmation>,
+    next_su_root_confirmation_id: u64,
 
     /// The search bar at the top of the terminal view.
     find_bar: ViewHandle<Find<TerminalFindModel>>,
@@ -4009,6 +4019,8 @@ impl TerminalView {
             ssh_secret_auto_injection_in_flight: false,
             su_root_password: None,
             su_root_onekey_candidates: Vec::new(),
+            su_root_confirmation: None,
+            next_su_root_confirmation_id: 0,
             context_menu,
             hovered_secret: None,
             open_secret_tool_tip: None,
@@ -7265,6 +7277,7 @@ impl TerminalView {
     /// Shuts down the pty and event loop, terminating the shell process.
     /// Also marks this view as manually shut down for telemetry attribution.
     pub fn shutdown_pty(&mut self, ctx: &mut ViewContext<Self>) {
+        self.cancel_su_root_confirmation(ctx);
         self.manual_pty_shutdown_requested = true;
         ctx.emit(Event::ShutdownPty);
     }
@@ -7806,7 +7819,12 @@ impl TerminalView {
         data: B,
         ctx: &mut ViewContext<Self>,
     ) {
-        ctx.emit(Event::WriteBytesToPty { bytes: data.into() });
+        let bytes = data.into();
+        if bytes.contains(&escape_sequences::C0::ETX) || bytes.contains(&escape_sequences::C0::EOT)
+        {
+            self.cancel_su_root_confirmation(ctx);
+        }
+        ctx.emit(Event::WriteBytesToPty { bytes });
     }
 
     /// Exposes the PTY output broadcast receiver for non-recording subscribers (currently the SSH manager's
@@ -9954,6 +9972,7 @@ impl TerminalView {
                 ctx.request_user_attention();
             }
             ModelEvent::Exit { reason } => {
+                self.cancel_su_root_confirmation(ctx);
                 self.input
                     .update(ctx, |input, _| input.clear_file_manager_directory_input());
                 if self.remote_input_phase.is_some() {
@@ -10335,6 +10354,7 @@ impl TerminalView {
                 cloud_workflow_id,
                 cloud_env_var_collection_id,
             }) => {
+                self.cancel_su_root_confirmation(ctx);
                 // To automatically zaplexify a subshell, we run the relevant command to open the
                 // subshell and create a future to delay bootstrapping the subshell long enough for
                 // the command to complete. We receive AfterBlockCompleted if the subshell command
@@ -11162,6 +11182,7 @@ impl TerminalView {
                 }
             }
             ModelEvent::ExitShell { session_id } => {
+                self.cancel_su_root_confirmation(ctx);
                 // Drop the remote server client for this session before the
                 // user's outer ssh tunnel starts closing. The last
                 // `Arc<RemoteServerClient>` carries an owned `Child` for the
@@ -16356,9 +16377,74 @@ impl TerminalView {
         self.ssh_secret_auto_injection_in_flight = in_flight;
     }
 
+    fn begin_su_root_confirmation(&mut self) -> Option<u64> {
+        let (session_id, block_id) = {
+            let model = self.model.lock();
+            let block = model.block_list().active_block();
+            if !block.is_executing() {
+                return None;
+            }
+            (block.session_id()?, block.id().clone())
+        };
+        let request_id = self.next_su_root_confirmation_id;
+        self.next_su_root_confirmation_id = request_id.wrapping_add(1);
+        self.su_root_confirmation = Some(SuRootPasswordConfirmation {
+            request_id,
+            session_id,
+            block_id,
+        });
+        Some(request_id)
+    }
+
+    fn su_root_confirmation_matches(&self, request_id: u64) -> bool {
+        let Some(confirmation) = self.su_root_confirmation.as_ref() else {
+            return false;
+        };
+        if confirmation.request_id != request_id {
+            return false;
+        }
+        let model = self.model.lock();
+        let block = model.block_list().active_block();
+        block.is_executing()
+            && block.session_id() == Some(confirmation.session_id)
+            && block.id() == &confirmation.block_id
+    }
+
+    fn cancel_su_root_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
+        if matches!(
+            self.context_menu_state.map(|state| state.menu_type),
+            Some(ContextMenuType::SuRootPasswordConfirm)
+        ) {
+            self.close_context_menu(ctx, false);
+        } else if self.su_root_confirmation.take().is_some() {
+            self.su_root_password = None;
+            self.su_root_onekey_candidates.clear();
+            self.onekey_prompt_candidates.clear();
+        }
+    }
+
     /// Pops up a confirmation menu after detecting a su root password prompt.
-    pub(crate) fn show_su_root_confirm_menu(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn show_su_root_confirm_menu(
+        &mut self,
+        source_session_id: SessionId,
+        source_block_id: &BlockId,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if self.context_menu_state.is_some() {
+            self.su_root_password = None;
+            return;
+        }
+        let Some(request_id) = self.begin_su_root_confirmation() else {
+            self.su_root_password = None;
+            return;
+        };
+        let confirmation = self
+            .su_root_confirmation
+            .as_ref()
+            .expect("just created confirmation");
+        if confirmation.session_id != source_session_id || &confirmation.block_id != source_block_id
+        {
+            self.cancel_su_root_confirmation(ctx);
             return;
         }
         self.su_root_onekey_candidates.clear();
@@ -16386,57 +16472,70 @@ impl TerminalView {
                     return;
                 }
             };
-            if view.context_menu_state.is_some()
-                && !matches!(
-                    view.context_menu_state.map(|state| state.menu_type),
-                    Some(ContextMenuType::SuRootPasswordConfirm)
-                )
-            {
-                return;
-            }
-            view.onekey_prompt_candidates = credentials
-                .into_iter()
-                .map(|credential| OneKeyPromptCandidate {
-                    label: credential.label,
-                    subtitle: credential.subtitle,
-                    secret: credential.secret,
-                    kind: credential.kind,
-                })
-                .collect();
-            view.su_root_onekey_candidates = view
-                .onekey_prompt_candidates
-                .iter()
-                .enumerate()
-                .filter_map(|(index, candidate)| {
-                    matches!(candidate.kind, OneKeyCredentialKind::Password).then_some(index)
-                })
-                .collect();
-            if view.su_root_password.is_none() && view.su_root_onekey_candidates.is_empty() {
-                return;
-            }
-            let items = view.build_su_root_password_menu_items();
-            if matches!(
-                view.context_menu_state.map(|state| state.menu_type),
-                Some(ContextMenuType::SuRootPasswordConfirm)
-            ) {
-                ctx.update_view(&view.context_menu, |context_menu, ctx| {
-                    context_menu.set_items(items, ctx);
-                    context_menu.select_next(ctx);
-                });
-            } else if view.context_menu_state.is_none() {
-                view.show_context_menu(
-                    ContextMenuState {
-                        menu_type: ContextMenuType::SuRootPasswordConfirm,
-                    },
-                    items,
-                    ctx,
-                );
-                ctx.update_view(&view.context_menu, |context_menu, ctx| {
-                    context_menu.select_next(ctx);
-                });
-            }
-            ctx.notify();
+            view.apply_su_root_credentials(request_id, credentials, ctx);
         });
+    }
+
+    fn apply_su_root_credentials(
+        &mut self,
+        request_id: u64,
+        credentials: Vec<OneKeyCredential>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // A closed or replaced menu must never be revived by a delayed keychain response.
+        if !self.su_root_confirmation_matches(request_id) {
+            return;
+        }
+        if self.context_menu_state.is_some()
+            && !matches!(
+                self.context_menu_state.map(|state| state.menu_type),
+                Some(ContextMenuType::SuRootPasswordConfirm)
+            )
+        {
+            return;
+        }
+        self.onekey_prompt_candidates = credentials
+            .into_iter()
+            .map(|credential| OneKeyPromptCandidate {
+                label: credential.label,
+                subtitle: credential.subtitle,
+                secret: credential.secret,
+                kind: credential.kind,
+            })
+            .collect();
+        self.su_root_onekey_candidates = self
+            .onekey_prompt_candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| {
+                matches!(candidate.kind, OneKeyCredentialKind::Password).then_some(index)
+            })
+            .collect();
+        if self.su_root_password.is_none() && self.su_root_onekey_candidates.is_empty() {
+            return;
+        }
+        let items = self.build_su_root_password_menu_items();
+        if matches!(
+            self.context_menu_state.map(|state| state.menu_type),
+            Some(ContextMenuType::SuRootPasswordConfirm)
+        ) {
+            ctx.update_view(&self.context_menu, |context_menu, ctx| {
+                context_menu.set_items(items, ctx);
+                context_menu.select_next(ctx);
+            });
+        } else if self.context_menu_state.is_none() {
+            self.show_context_menu(
+                ContextMenuState {
+                    menu_type: ContextMenuType::SuRootPasswordConfirm,
+                },
+                items,
+                ctx,
+            );
+            ctx.update_view(&self.context_menu, |context_menu, ctx| {
+                context_menu.select_next(ctx);
+            });
+        }
+        ctx.notify();
     }
 
     fn build_su_root_password_menu_items(&self) -> Vec<MenuItem<TerminalAction>> {
@@ -16494,6 +16593,17 @@ impl TerminalView {
         password: &zeroize::Zeroizing<String>,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !matches!(
+            self.context_menu_state.map(|state| state.menu_type),
+            Some(ContextMenuType::SuRootPasswordConfirm)
+        ) || !self
+            .su_root_confirmation
+            .as_ref()
+            .is_some_and(|confirmation| self.su_root_confirmation_matches(confirmation.request_id))
+        {
+            self.cancel_su_root_confirmation(ctx);
+            return;
+        }
         let mut bytes: zeroize::Zeroizing<Vec<u8>> =
             zeroize::Zeroizing::new(password.as_bytes().to_vec());
         bytes.push(b'\n');
@@ -17623,6 +17733,7 @@ impl TerminalView {
     }
 
     fn clear_buffer(&mut self, ctx: &mut ViewContext<Self>) {
+        self.cancel_su_root_confirmation(ctx);
         let agent_view_state = self.agent_view_controller.as_ref(ctx).agent_view_state();
         let is_fullscreen_agent_view = agent_view_state.is_fullscreen();
         let is_ambient_agent = self.ambient_agent_view_model.as_ref(ctx).is_ambient_agent();
@@ -19436,6 +19547,12 @@ impl TerminalView {
     }
 
     fn close_context_menu(&mut self, ctx: &mut ViewContext<Self>, should_redetermine_focus: bool) {
+        // Also invalidate a request whose credential lookup has not opened its menu yet.
+        if self.su_root_confirmation.take().is_some() {
+            self.su_root_password = None;
+            self.su_root_onekey_candidates.clear();
+            self.onekey_prompt_candidates.clear();
+        }
         if let Some(state) = self.context_menu_state.take() {
             if matches!(state.menu_type, ContextMenuType::OneKeyPrompt) {
                 self.onekey_prompt_candidates.clear();
@@ -24561,7 +24678,10 @@ impl TypedActionView for TerminalView {
             CtrlC => self.handle_ctrl_c_input_event(0, ctx),
             ClearSelectionsWhenShellMode => self.clear_selections_when_shell_mode(ctx),
             ContextMenu(context_action) => self.context_menu_action(context_action, ctx),
-            Close => ctx.emit(Event::CloseRequested),
+            Close => {
+                self.cancel_su_root_confirmation(ctx);
+                ctx.emit(Event::CloseRequested);
+            }
             SplitRight(chosen_shell) => {
                 ctx.emit(Event::Pane(PaneEvent::SplitRight(chosen_shell.to_owned())))
             }
