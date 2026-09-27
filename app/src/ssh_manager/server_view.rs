@@ -6,7 +6,8 @@
 //! Phase 3 onwards: "Connect" button → emit OpenSshTerminal → SecretInjector.
 
 use crate::editor::{
-    EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
+    EditorView, Event as EditorEvent, InteractionState, SingleLineEditorOptions, TextColors,
+    TextOptions,
 };
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
@@ -577,6 +578,7 @@ pub struct SshServerView {
     reload_generation: u64,
     reload_in_flight: bool,
     credential_operation_in_flight: bool,
+    key_picker_generation: u64,
     /// Node metadata (mainly uses name as header title).
     node: Option<SshNode>,
     /// Cached server from last DB read, used for placeholder text and initial values. None for folder nodes.
@@ -744,6 +746,7 @@ impl SshServerView {
             reload_generation: 0,
             reload_in_flight: false,
             credential_operation_in_flight: false,
+            key_picker_generation: 0,
             node: None,
             server: None,
             pane_configuration,
@@ -910,6 +913,56 @@ impl SshServerView {
         }
     }
 
+    fn form_is_busy(&self) -> bool {
+        self.reload_in_flight || self.credential_operation_in_flight
+    }
+
+    fn update_form_interaction(&mut self, ctx: &mut ViewContext<Self>) {
+        // Lock the focused editor too: hiding the form alone does not stop keyboard input.
+        let state = if self.form_is_busy() {
+            self.key_picker_generation = self.key_picker_generation.wrapping_add(1);
+            InteractionState::Selectable
+        } else {
+            InteractionState::Editable
+        };
+        for editor in [
+            &self.name_editor,
+            &self.host_editor,
+            &self.port_editor,
+            &self.user_editor,
+            &self.password_editor,
+            &self.key_path_editor,
+            &self.onekey_label_editor,
+            &self.onekey_user_editor,
+            &self.onekey_key_path_editor,
+            &self.onekey_secret_editor,
+            &self.root_password_editor,
+            &self.startup_command_editor,
+            &self.notes_editor,
+        ] {
+            editor.update(ctx, |editor, ctx| editor.set_interaction_state(state, ctx));
+        }
+    }
+
+    fn apply_key_file_pick(
+        &mut self,
+        generation: u64,
+        onekey: bool,
+        path: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.form_is_busy() || generation != self.key_picker_generation {
+            return;
+        }
+        self.key_picker_generation = self.key_picker_generation.wrapping_add(1);
+        let editor = if onekey {
+            &self.onekey_key_path_editor
+        } else {
+            &self.key_path_editor
+        };
+        editor.update(ctx, |editor, ctx| editor.set_buffer_text(path, ctx));
+    }
+
     fn advance_connection_test_generation(&mut self) -> u64 {
         self.connection_test_generation = self.connection_test_generation.wrapping_add(1);
         self.connection_test_generation
@@ -922,6 +975,7 @@ impl SshServerView {
     }
 
     fn handle_server_form_edit(&mut self, field: ServerFormField, ctx: &mut ViewContext<Self>) {
+        self.key_picker_generation = self.key_picker_generation.wrapping_add(1);
         self.invalidate_connection_test();
         if field.defines_connection() && self.baseline_snapshot.is_some() {
             self.invalidate_runtime_diagnostics_for_connection_edit(ctx);
@@ -1050,6 +1104,7 @@ impl SshServerView {
         self.reload_generation = self.reload_generation.wrapping_add(1);
         let generation = self.reload_generation;
         self.reload_in_flight = true;
+        self.update_form_interaction(ctx);
         self.baseline_snapshot = None;
         let node_id = self.node_id.clone();
         let secret_store = self.secret_store.clone();
@@ -1067,6 +1122,7 @@ impl SshServerView {
                     return;
                 }
                 me.reload_in_flight = false;
+                me.update_form_interaction(ctx);
                 match result {
                     Ok(Ok(snapshot)) => me.apply_reload_snapshot(snapshot, ctx),
                     Ok(Err(error)) => {
@@ -1550,6 +1606,7 @@ impl SshServerView {
         let root_password_was_entered = !root_password.is_empty();
         let secret_store = self.secret_store.clone();
         self.credential_operation_in_flight = true;
+        self.update_form_interaction(ctx);
         self.status = None;
         ctx.notify();
 
@@ -1575,6 +1632,7 @@ impl SshServerView {
             },
             move |me, result, ctx| {
                 me.credential_operation_in_flight = false;
+                me.update_form_interaction(ctx);
                 match result {
                     Ok(Ok(())) => {
                         if password_was_entered {
@@ -1819,37 +1877,28 @@ impl SshServerView {
         );
     }
 
-    /// Open system file picker to select private key file, write to key_path editor on selection. Callback ctx
-    /// is ViewContext<Self> (framework automatically maintains original view context).
     fn on_pick_key_file(&mut self, ctx: &mut ViewContext<Self>) {
-        let editor = self.key_path_editor.clone();
-        ctx.open_file_picker(
-            move |result, ctx| match result {
-                Ok(paths) => {
-                    if let Some(path) = paths.into_iter().next() {
-                        editor.update(ctx, |e, ctx| e.set_buffer_text(&path, ctx));
-                    }
-                }
-                Err(e) => {
-                    log::warn!("ssh: file picker failed: {e}");
-                }
-            },
-            FilePickerConfiguration::new(),
-        );
+        self.open_key_file_picker(false, ctx);
     }
 
     fn on_pick_onekey_key_file(&mut self, ctx: &mut ViewContext<Self>) {
-        let editor = self.onekey_key_path_editor.clone();
+        self.open_key_file_picker(true, ctx);
+    }
+
+    fn open_key_file_picker(&mut self, onekey: bool, ctx: &mut ViewContext<Self>) {
+        self.key_picker_generation = self.key_picker_generation.wrapping_add(1);
+        let generation = self.key_picker_generation;
+        let view = ctx.handle().downgrade();
         ctx.open_file_picker(
             move |result, ctx| match result {
                 Ok(paths) => {
-                    if let Some(path) = paths.into_iter().next() {
-                        editor.update(ctx, |e, ctx| e.set_buffer_text(&path, ctx));
+                    if let (Some(path), Some(view)) = (paths.into_iter().next(), view.upgrade(ctx)) {
+                        view.update(ctx, |view, ctx| {
+                            view.apply_key_file_pick(generation, onekey, &path, ctx);
+                        });
                     }
                 }
-                Err(e) => {
-                    log::warn!("ssh: OneKey key file picker failed: {e}");
-                }
+                Err(error) => log::warn!("ssh: key file picker failed: {error}"),
             },
             FilePickerConfiguration::new(),
         );
@@ -1969,6 +2018,7 @@ impl SshServerView {
         let secret_was_entered = !secret.is_empty();
         let secret_store = self.secret_store.clone();
         self.credential_operation_in_flight = true;
+        self.update_form_interaction(ctx);
         self.onekey_status = None;
         ctx.notify();
 
@@ -1991,6 +2041,7 @@ impl SshServerView {
             },
             move |me, result, ctx| {
                 me.credential_operation_in_flight = false;
+                me.update_form_interaction(ctx);
                 match result {
                     Ok(Ok((credential, credentials))) => {
                         if secret_was_entered {
@@ -2046,6 +2097,7 @@ impl SshServerView {
         };
         let secret_store = self.secret_store.clone();
         self.credential_operation_in_flight = true;
+        self.update_form_interaction(ctx);
         self.onekey_status = None;
         ctx.notify();
 
@@ -2062,6 +2114,7 @@ impl SshServerView {
             },
             |me, result, ctx| {
                 me.credential_operation_in_flight = false;
+                me.update_form_interaction(ctx);
                 match result {
                     Ok(Ok((id, credentials))) => {
                         if me.selected_onekey_credential_id.as_deref() == Some(id.as_str()) {
@@ -3443,6 +3496,11 @@ impl TypedActionView for SshServerView {
     type Action = SshServerAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        if self.form_is_busy() {
+            return;
+        }
+        // A picker result belongs to the exact form and auth selection that opened it.
+        self.key_picker_generation = self.key_picker_generation.wrapping_add(1);
         match action {
             SshServerAction::Save => self.on_save(ctx),
             SshServerAction::Connect => self.on_connect(ctx),
@@ -3559,7 +3617,7 @@ impl View for SshServerView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
 
-        if self.reload_in_flight {
+        if self.form_is_busy() {
             let theme = appearance.theme();
             let body = Text::new_inline(
                 crate::t!("common-loading"),

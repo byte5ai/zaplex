@@ -4,6 +4,12 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- SSH-Formulare (#245) sperren Änderungen während laufender Speicherung und verwerfen veraltete Dateiauswahlen. Tailscale-Importe rollen bei einem Fehler den gesamten Import zurück; alle sieben Servermenüaktionen behalten ihren Mauszustand.
+
+- Kitty-Grafiken (#245) löschen nur die angeforderten Platzierungen und erhalten weitere Referenzen, Scrollback, virtuelle Platzierungen und iTerm-Bilder. Bildschirmkoordinaten berücksichtigen gescrollte Ausgabe; auch ersetzte Animationsframes müssen innerhalb des Speicherlimits bleiben.
+
+- Fish-Agentenstarts (#245) erhalten Backslashes und Apostrophe in Konto-, Programm- und Sitzungsargumenten.
+
 - SSH-Starts (#245) binden Konten nur an tatsächlich geöffnete Terminals. Verspätete Startergebnisse öffnen geschlossene oder neu konfigurierte Startdialoge nicht erneut. Der klassische Verbindungstest lehnt widerrufene Hostschlüssel auch nach einer Bestätigung ab und prüft fehlende Passwörter vor jedem Netzwerkzugriff.
 
 - CLI-Agenten (#245) erhalten unter PowerShell die ursprüngliche Konto- und API-Umgebung sowie ihren Exitstatus. Fremde Anbieterereignisse verändern keine bestehende Sitzung. Fish-Dateipfade bleiben bei Backslashes und Apostrophen korrekt gequotet; Standardpfade für entfernte Shell-Historien behalten die Home-Expansion.

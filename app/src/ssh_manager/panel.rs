@@ -17,6 +17,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+use diesel::{sqlite::SqliteConnection, Connection};
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
@@ -54,6 +55,7 @@ use settings::Setting;
 use zaplex_cockpit::{Favorite, FavoriteKind};
 
 use crate::cockpit::favorites::FavoritesStore;
+use crate::cockpit::tailscale::TailscaleHost;
 use crate::editor::{
     EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
 };
@@ -84,7 +86,7 @@ const PANEL_HORIZONTAL_PADDING: f32 = 8.0;
 const CONTEXT_MENU_WIDTH: f32 = 200.0;
 const CONTEXT_MENU_ITEM_PADDING_V: f32 = 7.0;
 const CONTEXT_MENU_ITEM_PADDING_H: f32 = 12.0;
-const MAX_CONTEXT_MENU_ITEMS: usize = 6;
+const MAX_CONTEXT_MENU_ITEMS: usize = 7;
 const SSH_PANEL_POSITION_ID: &str = "ssh_manager_panel_root";
 const DELETE_CONFIRM_BODY_MAX_HEIGHT: f32 = 320.0;
 const TAILSCALE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1271,40 +1273,7 @@ impl SshManagerPanel {
                     .collect::<Vec<_>>();
                 tokio::task::spawn_blocking(move || {
                     warp_ssh_manager::with_conn(|conn| {
-                        let mut existing = std::collections::HashSet::new();
-                        for node in SshRepository::list_nodes(conn)? {
-                            if matches!(node.kind, NodeKind::Server) {
-                                if let Some(info) = SshRepository::get_server(conn, &node.id)? {
-                                    existing.insert(info.host);
-                                }
-                            }
-                        }
-                        let mut count = 0usize;
-                        for candidate in &candidates {
-                            let host = candidate.connect_host().to_string();
-                            if host.is_empty() || existing.contains(&host) {
-                                continue;
-                            }
-                            let info = SshServerInfo {
-                                node_id: String::new(),
-                                host: host.clone(),
-                                port: 22,
-                                username: String::new(),
-                                auth_type: AuthType::Key,
-                                key_path: None,
-                                credential_id: None,
-                                startup_command: None,
-                                notes: Some(format!("Discovered via Tailscale ({})", candidate.os)),
-                                last_connected_at: None,
-                                session_resilience: warp_ssh_manager::SessionResilience::default(),
-                                ring_ceiling_mb: 0,
-                            };
-                            let name = unique_name(conn, parent.as_deref(), &candidate.hostname)?;
-                            SshRepository::create_server(conn, parent.as_deref(), &name, &info)?;
-                            existing.insert(host);
-                            count += 1;
-                        }
-                        Ok(count)
+                        import_tailscale_hosts(conn, parent.as_deref(), &candidates)
                     })
                 })
                 .await
@@ -4270,6 +4239,50 @@ fn list_server_hosts() -> Vec<String> {
     .unwrap_or_else(|e| {
         log::warn!("ssh_manager: failed to list server hosts for candidates: {e:?}");
         Vec::new()
+    })
+}
+
+/// Import one discovery result atomically, including its sync-version changes.
+fn import_tailscale_hosts(
+    conn: &mut SqliteConnection,
+    parent: Option<&str>,
+    candidates: &[TailscaleHost],
+) -> anyhow::Result<usize> {
+    conn.transaction(|conn| {
+        let mut existing = std::collections::HashSet::new();
+        for node in SshRepository::list_nodes(conn)? {
+            if matches!(node.kind, NodeKind::Server) {
+                if let Some(info) = SshRepository::get_server(conn, &node.id)? {
+                    existing.insert(info.host);
+                }
+            }
+        }
+        let mut count = 0usize;
+        for candidate in candidates {
+            let host = candidate.connect_host().to_string();
+            if host.is_empty() || existing.contains(&host) {
+                continue;
+            }
+            let info = SshServerInfo {
+                node_id: String::new(),
+                host: host.clone(),
+                port: 22,
+                username: String::new(),
+                auth_type: AuthType::Key,
+                key_path: None,
+                credential_id: None,
+                startup_command: None,
+                notes: Some(format!("Discovered via Tailscale ({})", candidate.os)),
+                last_connected_at: None,
+                session_resilience: warp_ssh_manager::SessionResilience::default(),
+                ring_ceiling_mb: 0,
+            };
+            let name = unique_name(conn, parent, &candidate.hostname)?;
+            SshRepository::create_server(conn, parent, &name, &info)?;
+            existing.insert(host);
+            count += 1;
+        }
+        Ok(count)
     })
 }
 

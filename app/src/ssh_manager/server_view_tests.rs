@@ -347,6 +347,8 @@ fn selecting_onekey_dropdown_item_does_not_rebuild_dropdown_while_it_is_borrowed
 
         let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
             let mut view = SshServerView::new("server-1".to_string(), ctx);
+            view.reload_in_flight = false;
+            view.update_form_interaction(ctx);
             view.node = Some(SshNode {
                 id: "server-1".to_string(),
                 parent_id: None,
@@ -523,6 +525,8 @@ fn connection_edit_clears_diagnostics_and_saved_refresh_target() {
 
         app.add_window(WindowStyle::NotStealFocus, |ctx| {
             let mut view = SshServerView::new("server-1".to_string(), ctx);
+            view.reload_in_flight = false;
+            view.update_form_interaction(ctx);
             view.baseline_snapshot = Some(view.current_form_snapshot(ctx));
             view.runtime_diagnostics_server =
                 Some(SshServerInfo::new_default("server-1".to_string()));
@@ -779,4 +783,71 @@ fn unreachable_runtime_is_distinct_from_zero_measurements() {
     let presentations = runtime_diagnostic_presentations(&[diagnostic], false);
     assert_eq!(presentations[0].state, DiagnosticValueState::Unavailable);
     assert!(presentations[0].rows.is_empty());
+}
+
+#[test]
+fn credential_io_locks_editors_actions_and_stale_key_picker_results() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut view = SshServerView::new("server-1".to_string(), ctx);
+            view.reload_in_flight = false;
+            view.update_form_interaction(ctx);
+            view.host_editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text("saved-host", ctx);
+            });
+            view.auth_type = AuthType::Key;
+            let old_pick = view.key_picker_generation;
+            view.credential_operation_in_flight = true;
+            view.update_form_interaction(ctx);
+            view.host_editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text_ignoring_undo("lost-edit", ctx);
+            });
+            assert_eq!(view.current_text(&view.host_editor, ctx), "saved-host");
+            assert!(!view.onekey_secret_editor.as_ref(ctx).can_edit(ctx));
+            view.handle_action(&SshServerAction::SetAuthPassword, ctx);
+            view.handle_action(&SshServerAction::NewOneKeyCredential, ctx);
+            assert_eq!(view.auth_type, AuthType::Key);
+            assert!(view.pending_onekey_transition.is_none());
+            view.apply_key_file_pick(old_pick, false, "/stale-during-save", ctx);
+            assert!(view.current_text(&view.key_path_editor, ctx).is_empty());
+
+            // Both success and error completions unlock the same editors. A following
+            // reload keeps them locked until its own completion.
+            view.credential_operation_in_flight = false;
+            view.reload_in_flight = true;
+            view.update_form_interaction(ctx);
+            assert!(!view.host_editor.as_ref(ctx).can_edit(ctx));
+            view.reload_in_flight = false;
+            view.update_form_interaction(ctx);
+            assert!(view.host_editor.as_ref(ctx).can_edit(ctx));
+            assert!(view.onekey_secret_editor.as_ref(ctx).can_edit(ctx));
+            view.apply_key_file_pick(old_pick, false, "/stale-after-save", ctx);
+            assert!(view.current_text(&view.key_path_editor, ctx).is_empty());
+
+            let current_pick = view.key_picker_generation;
+            view.apply_key_file_pick(current_pick, false, "/current-key", ctx);
+            assert_eq!(
+                view.current_text(&view.key_path_editor, ctx),
+                "/current-key"
+            );
+            view.apply_key_file_pick(current_pick, false, "/duplicate-key", ctx);
+            assert_eq!(
+                view.current_text(&view.key_path_editor, ctx),
+                "/current-key"
+            );
+
+            let other_credential_pick = view.key_picker_generation;
+            view.handle_action(&SshServerAction::NewOneKeyCredential, ctx);
+            view.apply_key_file_pick(other_credential_pick, true, "/other-credential", ctx);
+            assert!(view
+                .current_text(&view.onekey_key_path_editor, ctx)
+                .is_empty());
+            view
+        });
+    });
 }

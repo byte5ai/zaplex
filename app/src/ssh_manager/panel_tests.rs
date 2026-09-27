@@ -1885,3 +1885,36 @@ fn multiplexer_connection_resolves_onekey_to_effective_ssh_auth() {
         Some("/home/deploy/.ssh/id_ed25519")
     );
 }
+
+#[test]
+fn tailscale_import_rolls_back_earlier_hosts_when_a_later_host_fails() {
+    use diesel::connection::SimpleConnection;
+    let mut conn = diesel::sqlite::SqliteConnection::establish(":memory:").unwrap();
+    conn.run_pending_migrations(persistence::MIGRATIONS)
+        .unwrap();
+    conn.batch_execute(
+        "CREATE TRIGGER reject_second_discovered_host BEFORE INSERT ON ssh_servers
+         WHEN NEW.host = 'second.example' BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;",
+    )
+    .unwrap();
+    let candidates = ["first.example", "second.example"].map(|host| TailscaleHost {
+        hostname: host.to_string(),
+        dns_name: host.to_string(),
+        os: "linux".to_string(),
+        online: true,
+        ipv4: String::new(),
+    });
+    assert!(import_tailscale_hosts(&mut conn, None, &candidates).is_err());
+    assert!(SshRepository::list_nodes(&mut conn).unwrap().is_empty());
+    conn.batch_execute("DROP TRIGGER reject_second_discovered_host;")
+        .unwrap();
+    assert_eq!(
+        import_tailscale_hosts(&mut conn, None, &candidates).unwrap(),
+        2
+    );
+    assert_eq!(
+        import_tailscale_hosts(&mut conn, None, &candidates).unwrap(),
+        0
+    );
+    assert_eq!(SshRepository::list_nodes(&mut conn).unwrap().len(), 2);
+}

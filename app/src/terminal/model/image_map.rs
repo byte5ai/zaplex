@@ -2,7 +2,7 @@ use itertools::Itertools;
 use pathfinder_geometry::vector::Vector2F;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ops::Bound::Included;
+use std::ops::{Bound::Included, Range};
 
 use super::{
     grid::grid_handler::{AbsolutePoint, AbsoluteRectangle},
@@ -268,41 +268,39 @@ impl ImageMap {
         }
     }
 
-    /// Removes every kitty placement of an image that is not in `live`. Only
-    /// kitty placements: a kitty delete command must be structurally incapable
-    /// of touching an iTerm image, whose metadata lifecycle is independent.
-    pub fn evict_images_absent_from(&mut self, live: &HashSet<u32>) {
-        let orphaned: Vec<(u32, u32)> = self
-            .point_by_image_id
-            .keys()
-            .copied()
-            .filter(|(image_id, _)| {
-                !live.contains(image_id)
-                    && self.image_type_by_image_id.get(image_id) == Some(&ImageType::Kitty)
-            })
-            .collect();
-
-        self.evict_placements(&orphaned);
-    }
-
-    /// Every placement in the map, paired with its anchor cell and its geometry.
+    /// Every Kitty placement, paired with its anchor cell and its geometry.
     /// Placements without recorded geometry are skipped, matching how the
     /// rendering queries treat them.
     fn placements(
         &self,
     ) -> impl Iterator<Item = (AbsolutePoint, (u32, u32), &ImagePlacementData)> + '_ {
         let placement_data = &self.image_placement_data;
+        let image_types = &self.image_type_by_image_id;
         self.image_ids_by_point
             .iter()
             .flat_map(move |(&top_left, ids)| {
                 ids.iter().filter_map(move |&id| {
+                    if image_types.get(&id.0) != Some(&ImageType::Kitty) {
+                        return None;
+                    }
                     let data = placement_data.get(&id)?;
                     Some((top_left, id, data))
                 })
             })
     }
 
-    /// The placements whose cell footprint contains the given absolute cell.
+    /// Kitty placements that overlap the visible half-open absolute row range.
+    pub fn placements_in_rows(&self, rows: Range<u64>) -> Vec<(u32, u32)> {
+        self.placements()
+            .filter(|(top_left, _, data)| {
+                top_left.row < rows.end
+                    && top_left.row.saturating_add(data.height_cells.max(1) as u64) > rows.start
+            })
+            .map(|(_, id, _)| id)
+            .collect_vec()
+    }
+
+    /// The Kitty placements whose cell footprint contains the given absolute cell.
     pub fn placements_at_point(&self, col: usize, row: u64) -> Vec<(u32, u32)> {
         self.placements()
             .filter(|(top_left, _, data)| {
@@ -344,6 +342,9 @@ impl ImageMap {
 
         self.point_by_image_id
             .range((Included(&(start, u32::MIN)), Included(&(end, u32::MAX))))
+            .filter(|((image_id, _), _)| {
+                self.image_type_by_image_id.get(image_id) == Some(&ImageType::Kitty)
+            })
             .map(|(&id, _)| id)
             .collect_vec()
     }
