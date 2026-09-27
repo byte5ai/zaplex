@@ -2882,7 +2882,7 @@ cockpit-session-is-reviewed = ✓ Reviewed
 cockpit-session-redirect = ↻ Redirect
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
-cockpit-session-live-unavailable = “{ $session }” is still running on { $host }, but its terminal is not available in Zaplex. Stop it first, then open it here; no duplicate was started.
+cockpit-session-live-unavailable = “{ $session }” is running on { $host }. Zaplex cannot currently open its agent terminal. Use the terminal where you started this session. The session keeps running unchanged.
 cockpit-session-no-longer-available = This session is no longer available on { $host }. Nothing was started.
 workspace-left-panel-cockpit-empty = No Claude or Codex accounts found.
 cockpit-loading = Loading accounts…
@@ -3432,6 +3432,7 @@ terminal-bootstrapping-checking = Checking...
 terminal-remote-readiness-transport = Connecting remote transport…
 terminal-remote-readiness-attach = Attaching the remote PTY…
 terminal-remote-readiness-replay = Replaying remote output…
+terminal-remote-readiness-reconnecting = Reconnecting to the remote session…
 terminal-remote-readiness-failed = Remote session unavailable. Retry the connection or cancel this restore.
 terminal-remote-readiness-corrupt = This remote session could not be restored because its saved identity is damaged. The pane was kept safely and no local shell was started.
 terminal-remote-readiness-cancelled = Remote session restore cancelled.
@@ -4366,7 +4367,6 @@ ai-footer-subscription-target-unavailable = The selected agent target is no long
 
 workspace-left-panel-ssh-manager-sessions-confirm-host-key = Connect to this host and confirm the SSH key for { $host }:{ $port } ({ $fingerprint }) first.
 
-cockpit-shell-sessions-connections = Open shell sessions in Connections
 
 ai-footer-subscription-target-changed = This session's execution target has changed. Restore the previous target or start a new conversation.
 
@@ -4425,6 +4425,7 @@ terminal-daemon-scrollback-truncated = Scrollback was truncated during a long di
 terminal-daemon-final-output-truncated = Some final session output was truncated before the exit notification.
 terminal-daemon-reconnected = Reconnected to { $host } — session restored, nothing lost.
 terminal-daemon-reattached = Re-attached to your running session on { $host } — right where you left off.
+terminal-daemon-restored-truncated = Reconnected to { $host } — session restored; older scrollback was truncated.
 terminal-daemon-connection-failed = Connection failed ({ $phase }): { $detail }
 terminal-daemon-connection-phase-connect = connecting
 terminal-daemon-connection-phase-handshake = handshake
@@ -4464,3 +4465,10 @@ workspace-managed-launch-handshake-failed = The managed agent on { $host } could
 workspace-remote-account-readiness-failed = The remote account session on { $host } ended before it became ready.
 workspace-managed-launch-readiness-failed = The managed agent on { $host } ended before it became ready.
 workspace-remote-routed-split-target-changed = The remote account or managed session could not resume because its original split target changed.
+
+# Persistence initialization must succeed before the workspace can open.
+persistence-startup-error-title = Zaplex could not open its saved data
+persistence-startup-error-detail = Startup was stopped to prevent working without saving. Your existing database and migration files have been kept. Close any other Zaplex instance, resolve the error below, then restart Zaplex.
+
+    { $error }
+persistence-startup-error-close = Close Zaplex

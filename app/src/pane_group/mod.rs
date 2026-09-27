@@ -151,6 +151,7 @@ use crate::workspace::{
 
 pub mod focus_state;
 pub mod pane;
+mod terminal_titles;
 pub mod tree;
 pub mod working_directories;
 
@@ -1821,6 +1822,18 @@ impl PaneGroup {
                 if let Some(snapshot) =
                     app_state::temporary_file_manager_replacement(&terminal_snapshot.uuid)
                 {
+                    let origin_identity =
+                        app_state::remote_terminal_identity(&terminal_snapshot.uuid);
+                    let same_host = match (snapshot.mode, origin_identity) {
+                        (FileManagerPaneMode::Local, None) => true,
+                        (FileManagerPaneMode::Remote, Some(identity)) => {
+                            snapshot.node_id == identity.registry_node_id
+                        }
+                        (FileManagerPaneMode::Local, Some(_))
+                        | (FileManagerPaneMode::Remote, None)
+                        | (FileManagerPaneMode::RemotePicker, _) => false,
+                    };
+                    let is_local = snapshot.mode == FileManagerPaneMode::Local;
                     let file_manager = match snapshot.mode {
                         FileManagerPaneMode::Local => {
                             Some(SftpPane::new_local(snapshot.current_path, ctx))
@@ -1836,6 +1849,15 @@ impl PaneGroup {
                         if !pane_data.replace_pane(pane_id, visible_pane_id, true) {
                             pane_contents.remove(&visible_pane_id);
                             visible_pane_id = pane_id;
+                        } else if same_host {
+                            if let Some(terminal) = pane_contents
+                                .get(&pane_id)
+                                .and_then(|pane| pane.as_any().downcast_ref::<TerminalPane>())
+                            {
+                                terminal.terminal_view(ctx).update(ctx, |view, ctx| {
+                                    view.restore_file_manager_navigation(is_local, ctx);
+                                });
+                            }
                         }
                     }
                 }
@@ -4134,6 +4156,7 @@ impl PaneGroup {
         ctx.notify();
         ctx.emit(Event::TerminalViewStateChanged);
         ctx.emit(Event::AppStateChanged);
+        self.refresh_terminal_titles(ctx);
         Some(PaneMoveBundle {
             visible_pane,
             temporary_original,
@@ -4576,6 +4599,29 @@ impl PaneGroup {
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::pane_group::pane::sftp_pane::SftpPane;
+        if let Some(terminal) = self.downcast_pane_by_id::<TerminalPane>(pane_id) {
+            let identity = app_state::remote_terminal_identity(&terminal.session_uuid());
+            let same_host = match (&target, identity) {
+                (FileManagerTarget::Local { .. }, None) => true,
+                (FileManagerTarget::Remote { node_id, .. }, Some(identity)) => {
+                    node_id == &identity.registry_node_id
+                }
+                (FileManagerTarget::Local { .. }, Some(_))
+                | (FileManagerTarget::Remote { .. }, None) => false,
+            };
+            if same_host {
+                terminal.terminal_view(ctx).update(ctx, |view, ctx| {
+                    view.begin_file_manager_navigation(
+                        matches!(&target, FileManagerTarget::Local { .. }),
+                        ctx,
+                    );
+                });
+            } else {
+                terminal.terminal_view(ctx).update(ctx, |view, ctx| {
+                    view.cancel_file_manager_directory(ctx);
+                });
+            }
+        }
         match target {
             FileManagerTarget::Local { start_path } => {
                 let pane = SftpPane::new_local(start_path, ctx);
@@ -4596,6 +4642,13 @@ impl PaneGroup {
         replacement_pane_id: PaneId,
         ctx: &mut ViewContext<Self>,
     ) -> Option<PaneId> {
+        let directory = self
+            .downcast_pane_by_id::<SftpPane>(replacement_pane_id)
+            .and_then(|pane| {
+                pane.browser_view(ctx)
+                    .as_ref(ctx)
+                    .shell_directory_on_close()
+            });
         let original_pane_id = self.panes.revert_temporary_replacement(replacement_pane_id);
         self.clean_up_pane(replacement_pane_id, ctx);
         self.pane_contents.remove(&replacement_pane_id);
@@ -4607,6 +4660,9 @@ impl PaneGroup {
                 .and_then(|pane| pane.as_any().downcast_ref::<TerminalPane>())
             {
                 app_state::remove_temporary_file_manager_replacement(&terminal.session_uuid());
+                terminal.terminal_view(ctx).update(ctx, |view, ctx| {
+                    view.finish_file_manager_navigation(directory, ctx);
+                });
             }
             // Focus the original pane to ensure proper user interaction
             self.focus_pane_by_id(original_id, ctx);
@@ -5048,6 +5104,15 @@ impl PaneGroup {
         direction: Direction,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Do not discard undo state or mutate the layout for a stale drop target.
+        let pane_ids = self.panes.pane_ids();
+        if id == target_pane_id
+            || !pane_ids.contains(&id)
+            || !pane_ids.contains(&target_pane_id)
+            || self.panes.is_pane_hidden(&target_pane_id)
+        {
+            return;
+        }
         // Before we do a move, clear any hidden panes
         self.panes.clear_hidden_panes_from_move();
         // Also clear hidden closed panes since rearranging invalidates undo functionality
@@ -5451,6 +5516,7 @@ impl PaneGroup {
 
     /// Sync changes in the visible pane count to the [`focus_state::PaneGroupFocusState`] model.
     fn handle_pane_count_change(&mut self, ctx: &mut ViewContext<Self>) {
+        self.refresh_terminal_titles(ctx);
         self.layout_generation = self.layout_generation.wrapping_add(1);
         let in_split_pane = self.panes.visible_pane_count() > 1;
         self.focus_state.update(ctx, |focus_state, ctx| {
@@ -6728,6 +6794,7 @@ impl PaneGroup {
         for pane in self.pane_contents.values() {
             self.attach_pane(pane.as_ref(), ctx);
         }
+        self.refresh_terminal_titles(ctx);
     }
 
     /// Attempts to attach a pane, calling pre_attach first.
@@ -6750,15 +6817,43 @@ impl PaneGroup {
         pane.attach(self, focus_handle, ctx);
 
         // Title updates need to get propagated up to workspace (to update tab bar and window title).
-        ctx.subscribe_to_model(&pane.pane_configuration(), |_group, _, event, ctx| {
+        ctx.subscribe_to_model(&pane.pane_configuration(), |group, _, event, ctx| {
             if matches!(
                 event,
                 PaneConfigurationEvent::TitleUpdated
                     | PaneConfigurationEvent::VerticalTabsTitleUpdated
             ) {
+                group.refresh_terminal_titles(ctx);
                 ctx.emit(Event::PaneTitleUpdated);
             }
         });
+    }
+
+    fn refresh_terminal_titles(&self, ctx: &mut ViewContext<Self>) {
+        let terminals: Vec<_> = self
+            .panes
+            .visible_pane_ids()
+            .into_iter()
+            .filter_map(|pane_id| {
+                let owner = self.panes.pane_configuration_owner(pane_id);
+                let terminal = self.downcast_pane_by_id::<TerminalPane>(owner)?;
+                let configuration = terminal.pane_configuration();
+                let (short, full) = configuration.as_ref(ctx).terminal_identity()?.clone();
+                Some((configuration, (terminal.session_uuid(), short, full)))
+            })
+            .collect();
+        let identities: Vec<_> = terminals
+            .iter()
+            .map(|(_, identity)| identity.clone())
+            .collect();
+        for ((configuration, _), title) in terminals
+            .into_iter()
+            .zip(terminal_titles::resolve(&identities))
+        {
+            configuration.update(ctx, |configuration, ctx| {
+                configuration.set_title(title, ctx)
+            });
+        }
     }
 
     fn estimated_view_bounds(ctx: &mut ViewContext<Self>) -> RectF {

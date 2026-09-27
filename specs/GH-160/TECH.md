@@ -128,7 +128,10 @@ restore—resolves the pane's `HostId`/daemon/PTY/generation, never a tab-level 
 
 `app/src/pane_group/pane/terminal_pane.rs` derives the automatic terminal identity from the pane's
 actual host plus project or working-directory basename. The full host/path remains in tooltip and
-accessibility text. A missing CWD uses an honest host/session fallback. Collision handling adds a
+accessibility text. A missing CWD uses the host plus the localized Terminal label; OSC command titles and agent
+summaries never replace this identity. Horizontal tabs, pane headers, and visible vertical-tab
+labels consume the same pane configuration. Activity titles remain searchable and available in
+details or the configured command subtitle. Collision handling adds a
 stable restrained suffix only when two displayed short identities really collide; it does not make
 a row index, truncated session id, or global project value the primary identity.
 
@@ -168,7 +171,9 @@ focus callbacks so late connection/restore events cannot steal focus.
 `app/src/terminal/daemon_tty/event_loop.rs` keep transport, attach, replay, and input readiness as
 distinct evidence. A successful attach is bound to the requested daemon route, PTY id, and
 generation; arbitrary replay output or a status line is not readiness. An already-open exact
-session is focused instead of attached a second time.
+session is focused instead of attached a second time. Success notices for fresh open, attach, and
+reconnect are staged for that exact route/PTY/generation and consumed once only after actual input
+readiness. Failure, exit, and transport replacement discard a pending notice.
 
 The terminal pane exposes ordinary command input only after the event loop can deliver it to that
 attached PTY generation. Text typed or pasted before then is not invisibly queued for later
@@ -375,6 +380,10 @@ Sidebar account cards stack the five-hour and weekly meters so each meter receiv
 available text width. Unknown and estimated values retain their semantic state and never render as
 measured zero. The Cockpit and Connections panels share existing layout constants/components for
 section headers, hierarchy indentation, row heights, flexible identity, and fixed action slots.
+The two Cockpit sections retain independent scroll state and bounded flexible height so a large
+session tree cannot displace the account section. The session area receives at most three fifths
+of available height; unused account space does not expand this cap. This preserves the existing
+navigation.
 Native colors, borders, selection, hover, focus, status, and progress resolve exclusively through
 `appearance.theme()` and existing component themes; the HTML artifact defines role relationships,
 not literal color values. No provider-colored border or other decorative pane outline is added.
@@ -385,7 +394,21 @@ The existing File Manager integration in `app/src/workspace/view.rs` remains a m
 terminal pane. Entering or leaving the mode does not replace or terminate the terminal session.
 Host/daemon/PTY/generation, CWD, draft input, process, and selection remain pane-owned. F10 and the
 mode-close action switch back to Terminal mode through the same lifecycle rather than closing the
-pane.
+pane. The browser supplies only a successfully listed directory from a connected, non-picker browser on close.
+The original terminal binds navigation to its active shell session and executes a shell-quoted
+directory command only at a ready idle prompt. Its completion marker matches both block and
+session; it preserves the editor, workflow, and environment selection. While waiting for a preceding
+process, genuine type-ahead remains available, but the already submitted command is not restored.
+The existing CRDT buffer version distinguishes later edits even when their final text is identical;
+selection and styling changes do not count as edits. Edit followed by Undo still counts as a new draft. Pending work is superseded by new shell commands or renewed navigation. Layout restore
+reestablishes this binding only for the original terminal and matching host context. A remote
+binding additionally requires a daemon connection and root-shell metadata: no subshell information
+and no legacy-SSH flag, matching the existing `TerminalModel::init_shell` root classification.
+The daemon connection ID and active shell session ID are independent; the origin binds the actual
+shell ID only after this check. A pane label or registry node alone cannot prove that a nested SSH
+shell uses the same filesystem. Local subshells (including containers), nested remote shells, and
+legacy SSH sessions remain unbound: their shell directory is left unchanged rather than receiving
+a foreign path.
 
 `app/src/sftp_manager/browser.rs::render_responsive_function_bar` renders a single non-wrapping
 function row with stable F3/F4/F5/F6 slots in every File Manager pane. Enabled state comes only from
@@ -399,7 +422,9 @@ coordinate contains stable pane/session identity, exact host/daemon route, gener
 path; the tab title and a presumed tab host are never routing inputs. Candidates may live in other
 tabs. Immediately before transfer, `browser.rs`, `file_list.rs`, and `transfer_queue.rs` re-resolve
 and validate source/target identity, mode, CWD, generation, and transport. Any stale coordinate
-returns to target selection or a visible safe failure. Existing conflict, symlink, path, streaming,
+returns to target selection or a visible safe failure. Same-filesystem conflict confirmation
+revalidates the route again at queue submission; a negative destination probe never grants overwrite
+permission if a destination appears later. Such a late conflict is reported as skipped. Existing conflict, symlink, path, streaming,
 cancellation, and overwrite guards remain authoritative.
 
 Parent navigation stores the directory identity being left before requesting `..`. After the
@@ -407,6 +432,12 @@ successful, possibly delayed local or remote listing, `keynav.rs` selects that i
 current sorted/filtered projection and scrolls it into view. It never restores a stale numeric row
 index. Root, failed/cancelled navigation, or a removed/filtered child uses the established safe
 fallback without altering another pane or pending transfer.
+
+Pane configurations retain raw short/full terminal identity separately from the displayed title.
+`pane_group/terminal_titles.rs` resolves collisions among visible pane owners: full paths first,
+then a stable fingerprint of the persistent terminal UUID for identical full identities. Title and
+pane lifecycle events recompute the display; explicit tab-title priority remains unchanged.
+Invalid pane moves validate both endpoints before removal or Undo-state cleanup.
 
 ## 6. Localization and documentation
 
@@ -417,6 +448,10 @@ a loading/error substitute.
 
 The binding visual contract is
 [`docs/ui/cockpit-sidebar-connections.html`](../../docs/ui/cockpit-sidebar-connections.html).
+Its desktop and narrow examples embed the same versioned
+[`premium-workspace.html`](../../docs/ui/premium-workspace.html), not independently maintained
+layouts. The [comparison guide](../../docs/ui/README.md) documents anonymization, simulated
+interactions, runtime limits, and the native verification still needed after PR #465.
 Historical Cockpit documents are amended only where needed to mark the old combined registry/live
 tree and three-level hierarchy as superseded by GH-160.
 
@@ -503,6 +538,21 @@ the owning task finishes.
 
 Der Remote-Client bietet zeitschrankenfähige Listenmethoden. Die Frist umfasst Ausgangsqueue und Antwort, und eine RAII-Korrelation entfernt Pending-Einträge auch bei Abbruch. Ein Timeout sendet best-effort Abort; spätere Antworten können keine neue Anfrage erfüllen. Die übrigen Aufrufer behalten ihre bisherige Standardfrist.
 
-`ssh_manager::panel::init` registriert ausschließlich im fokussierten Verbindungsbaum aktive Keybindings. Der gemeinsame Session-Renderer hält primäre Identität flexibel und Öffnen-Aktion fest; Statuswechsel erzeugen keine Zusatzzeile. Der Cockpit-Link öffnet die vorhandene Verbindungen-Ansicht. `adopt_daemon_session` reicht denselben echten Installationsfortschrittskanal wie eine neue Verbindung durch.
+`ssh_manager::panel::init` registriert ausschließlich im fokussierten Verbindungsbaum aktive Keybindings. Der gemeinsame Session-Renderer hält primäre Identität flexibel und Öffnen-Aktion fest; Statuswechsel erzeugen keine Zusatzzeile. Der normative Entwurf nutzt ausschließlich die vorhandene Sidebar-Navigation zum Wechsel nach Verbindungen, keinen zusätzlichen Cockpit-Link. Der redundante Link und sein ungenutzter Interaktionszustand sind entfernt; die native Gesamtabnahme bleibt davon unabhängig. `adopt_daemon_session` reicht denselben echten Installationsfortschrittskanal wie eine neue Verbindung durch.
 
 SFTP lädt bekannte Schlüssel zeilenweise in voneinander getrennte libssh2-Sammlungen. Aliasaufteilung und Hash-/Port-Matching bleiben bei libssh2; Verifikationsansichten schreiben keine normalisierten oder verlustbehafteten Daten zurück. Tests enthalten identische Schlüssel gehashter Endpunkte, kurze Aliase, große fremde Inventare, Ports, Marker und nicht-UTF8-Kommentare.
+
+## SQLite startup failure (#467)
+
+An `init_db` failure propagates through persistence initialization and stops startup before the main
+writer, the independent SSH database path, and application launch. Migration markers, source,
+target, and sidecars remain intact; startup never resets them merely because migration failed.
+A concurrent startup may release the migration lock within a bounded three-second wait.
+
+The failure is logged and shown through a native dialog; application lifecycle callbacks that
+require fully initialized models are disabled while the macOS dialog remains open. Dismissal
+exits with status 1. Linux/FreeBSD use the existing native-dialog backend, which requires zenity
+or kdialog: without a dialog provider the diagnostic remains on stderr/in the log and startup
+still exits safely. Native visibility is therefore not guaranteed on such installations.
+This change covers database initialization failures; existing read-state and writer-start
+degradation paths are unchanged.

@@ -49,13 +49,97 @@ use crate::view_components::find::FindWithinBlockState;
 use crate::terminal::model::ansi::{self, InitShellValue};
 use crate::terminal::model::ansi::{BootstrappedValue, PreexecValue};
 use crate::terminal::model::blocks::{insert_block, TotalIndex};
-use crate::terminal::model::terminal_model::WithinBlock;
+use crate::terminal::model::session::SessionInfo;
+use crate::terminal::model::terminal_model::{SubshellInitializationInfo, WithinBlock};
 
 use crate::terminal::{MockTerminalManager, TerminalManager, TerminalModel};
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::test_util::{add_window_with_terminal, assert_eventually};
 
 use super::*;
+
+#[test]
+fn running_command_keeps_host_identity_in_pane_chrome() {
+    crate::i18n::init(Some("en"));
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "running");
+            view.terminal_title = "sleep 10".to_string();
+            for host in ["buildnode", "worknode"] {
+                view.pane_configuration.update(ctx, |config, ctx| {
+                    config.set_terminal_identity_host(Some(host.to_string()), ctx);
+                });
+                view.update_pane_configuration(ctx);
+                let config = view.pane_configuration.as_ref(ctx);
+                assert!(config.title().starts_with(&format!("{host} · ")));
+                assert!(!config.title().contains("sleep 10"));
+                if view.display_working_directory(ctx).is_none() {
+                    assert_eq!(
+                        config.title(),
+                        format!("{host} · {}", crate::t!("workspace-new-session-terminal"))
+                    );
+                }
+                assert!(config
+                    .title_tooltip()
+                    .is_some_and(|title| title.starts_with(&format!("{host} · "))));
+                assert!(!view.is_using_conversation_for_pane_header_title);
+            }
+        });
+    });
+}
+
+#[test]
+fn cli_agent_summary_does_not_replace_terminal_host_identity() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let listener = ctx.add_model(|ctx| {
+                CLIAgentSessionListener::new(
+                    view.view_id,
+                    CLIAgent::Claude,
+                    &view.model_events_handle,
+                    ctx,
+                )
+            });
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.set_session(
+                    view.view_id,
+                    CLIAgentSession {
+                        agent: CLIAgent::Claude,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext {
+                            summary: Some("Account setup".to_string()),
+                            ..Default::default()
+                        },
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input: false,
+                        listener: Some(listener),
+                        remote_host: Some("buildnode".to_string()),
+                        plugin_version: None,
+                        draft_text: None,
+                        custom_command_prefix: None,
+                    },
+                    ctx,
+                );
+            });
+            view.pane_configuration.update(ctx, |config, ctx| {
+                config.set_terminal_identity_host(Some("buildnode".to_string()), ctx);
+            });
+            view.update_pane_configuration(ctx);
+            assert!(view
+                .pane_configuration
+                .as_ref(ctx)
+                .title()
+                .starts_with("buildnode · "));
+        });
+    });
+}
 
 #[test]
 fn classic_ssh_phase_updates_are_allowed_only_while_unbound() {
@@ -133,6 +217,101 @@ fn corrupt_remote_restore_is_terminal_and_never_reenables_normal_input() {
             assert_eq!(view.remote_input_session_id(), None);
             assert!(!view.remote_input_is_ready());
             assert!(!view.input.as_ref(ctx).ordinary_command_input_is_ready());
+        });
+    });
+}
+
+#[test]
+fn remote_readiness_footer_names_reconnects_after_initial_readiness() {
+    crate::i18n::init(Some("en"));
+    for phase in [
+        RemoteInputPhase::Transport,
+        RemoteInputPhase::Attach,
+        RemoteInputPhase::Replay,
+    ] {
+        assert_eq!(
+            remote_readiness_message(phase, true),
+            Some(crate::t!("terminal-remote-readiness-reconnecting")),
+        );
+        assert_ne!(
+            remote_readiness_message(phase, false),
+            Some(crate::t!("terminal-remote-readiness-reconnecting")),
+        );
+    }
+    assert_eq!(
+        remote_readiness_message(RemoteInputPhase::Failed, true),
+        Some(crate::t!("terminal-remote-readiness-failed")),
+    );
+    assert_eq!(
+        remote_readiness_message(RemoteInputPhase::Ready, true),
+        None
+    );
+}
+
+#[test]
+fn remote_session_notice_replaces_older_notice_and_clears_on_reconnect() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let connection_session_id = warp_core::SessionId::from(74u64);
+        let stale_session_id = warp_core::SessionId::from(75u64);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(RemoteInputPhase::Ready, Some(connection_session_id), ctx);
+            view.show_remote_session_notice("first".to_string(), Some(connection_session_id), ctx);
+            view.show_remote_session_notice("second".to_string(), Some(connection_session_id), ctx);
+            view.show_remote_session_notice("stale".to_string(), Some(stale_session_id), ctx);
+        });
+        terminal.read(&app, |view, _| {
+            assert_eq!(view.remote_session_notice(), Some("second"));
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(
+                RemoteInputPhase::Transport,
+                Some(connection_session_id),
+                ctx,
+            );
+        });
+        terminal.read(&app, |view, _| {
+            assert_eq!(view.remote_session_notice(), None);
+        });
+    });
+}
+
+#[test]
+fn remote_session_notice_failure_detail_survives_failure_and_rejects_stale_updates() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let session = warp_core::SessionId::from(76u64);
+        let stale = warp_core::SessionId::from(77u64);
+        terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(RemoteInputPhase::Transport, Some(session), ctx);
+            view.show_remote_session_notice("installing".to_string(), Some(session), ctx);
+            view.show_remote_session_error("connection timed out".to_string(), Some(session), ctx);
+            view.set_remote_input_phase(RemoteInputPhase::Failed, Some(session), ctx);
+            view.show_remote_session_error("stale error".to_string(), Some(stale), ctx);
+            view.show_remote_session_notice("late success".to_string(), Some(session), ctx);
+        });
+        terminal.read(&app, |view, _| {
+            assert_eq!(
+                view.remote_session_error.as_deref(),
+                Some("connection timed out")
+            );
+            assert_eq!(view.remote_session_notice(), None);
+            assert!(remote_readiness_actions_visible(
+                view.remote_input_phase.unwrap()
+            ));
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.cancel_remote_input_readiness(ctx);
+            view.show_remote_session_error("late error".to_string(), Some(session), ctx);
+            view.show_remote_session_notice("late success".to_string(), Some(session), ctx);
+        });
+        terminal.read(&app, |view, _| {
+            assert!(view.remote_session_error.is_none());
+            assert_eq!(view.remote_session_notice(), None);
         });
     });
 }
@@ -4944,4 +5123,220 @@ fn file_manager_start_path_falls_back_when_no_cwd() {
         dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"))
     );
     assert!(start.is_absolute());
+}
+
+#[test]
+fn file_manager_directory_quotes_literal_paths_for_each_shell() {
+    let path = PathBuf::from("/tmp/a'b $(touch nope) [x]");
+    for shell in [ShellType::Bash, ShellType::Zsh] {
+        let command = file_manager_directory_command(&path, shell).unwrap();
+        assert_eq!(
+            shell_words::split(&command).unwrap(),
+            ["cd", "--", path.to_str().unwrap()]
+        );
+    }
+    assert_eq!(
+        file_manager_directory_command(Path::new(r"/tmp/a\\b'c\"), ShellType::Fish).unwrap(),
+        r"cd -- '/tmp/a\\\\b\'c\\'"
+    );
+    assert_eq!(
+        file_manager_directory_command(&path, ShellType::PowerShell).unwrap(),
+        "Set-Location -LiteralPath '/tmp/a''b $(touch nope) [x]'"
+    );
+    for quote in ['\u{2018}', '\u{2019}', '\u{201a}', '\u{201b}'] {
+        let path = format!("/tmp/x{quote}; echo injected; {quote}");
+        assert_eq!(
+            file_manager_directory_command(Path::new(&path), ShellType::PowerShell).unwrap(),
+            format!(
+                "Set-Location -LiteralPath '/tmp/x{quote}{quote}; echo injected; {quote}{quote}'"
+            )
+        );
+    }
+    for path in ["/tmp/a\nb", "/tmp/a\rb", "/tmp/a\0b", ""] {
+        assert!(file_manager_directory_command(Path::new(path), ShellType::Bash).is_none());
+    }
+}
+
+#[test]
+fn file_manager_directory_discards_changed_session_and_superseded_navigation() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.file_manager_origin = Some(FileManagerOrigin::Session {
+                id: SessionId::from(u64::MAX),
+                directory: None,
+            });
+            view.pending_file_manager_directory = Some(PathBuf::from("/remote/only"));
+            view.apply_file_manager_directory(ctx);
+            assert!(view.pending_file_manager_directory.is_none());
+            view.pending_file_manager_directory = Some(PathBuf::from("/old/navigation"));
+            view.begin_file_manager_navigation(true, ctx);
+            assert!(view.pending_file_manager_directory.is_none());
+            view.finish_file_manager_navigation(None, ctx);
+            assert!(view.pending_file_manager_directory.is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_restore_never_binds_remote_paths_to_bootstrap_shell() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_file_manager_navigation(false, ctx);
+            view.finish_file_manager_navigation(Some(PathBuf::from("/remote/project")), ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Restoring { is_local: false })
+            ));
+            assert_eq!(
+                view.pending_file_manager_directory.as_deref(),
+                Some(Path::new("/remote/project"))
+            );
+            view.remote_input_phase = Some(RemoteInputPhase::Failed);
+            view.apply_file_manager_directory(ctx);
+            assert!(view.file_manager_origin.is_none());
+            assert!(view.pending_file_manager_directory.is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_restore_is_superseded_by_another_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_file_manager_navigation(false, ctx);
+            view.finish_file_manager_navigation(Some(PathBuf::from("/old/remote")), ctx);
+            view.handle_input_event(
+                &InputEvent::ExecuteCommand(Box::new(ExecuteCommandEvent {
+                    command: "echo newer intent".to_string(),
+                    session_id: SessionId::from(0u64),
+                    workflow_id: None,
+                    workflow_command: None,
+                    should_add_command_to_history: true,
+                    source: CommandExecutionSource::User,
+                })),
+                ctx,
+            );
+            assert!(view.file_manager_origin.is_none());
+            assert!(view.pending_file_manager_directory.is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_binds_only_matching_root_session() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let root = SessionId::from(900u64);
+            let nested = SessionId::from(901u64);
+            let legacy = SessionId::from(904u64);
+            let connection = SessionId::from((1u64 << 63) + 900);
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(root)
+                        .with_session_type(BootstrapSessionType::ZaplexifiedRemote),
+                );
+                let mut info = SessionInfo::new_for_test()
+                    .with_id(nested)
+                    .with_session_type(BootstrapSessionType::ZaplexifiedRemote);
+                info.subshell_info = Some(SubshellInitializationInfo {
+                    spawning_command: "ssh nested-host".to_string(),
+                    was_triggered_by_rc_file_snippet: false,
+                    env_var_collection_name: None,
+                    ssh_connection_info: None,
+                });
+                sessions.register_session_for_test(info);
+                // Legacy SSH is independently excluded even without subshell metadata.
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(legacy)
+                        .with_ssh_socket_path(PathBuf::from("/mock/ssh.socket")),
+                );
+            });
+            assert_ne!(connection, root);
+            view.remote_input_session_id = Some(connection);
+            view.remote_input_phase = Some(RemoteInputPhase::Ready);
+            view.is_login_shell_bootstrapped = true;
+            view.active_block_metadata = Some(BlockMetadata::new(Some(nested), None));
+            view.begin_file_manager_navigation(false, ctx);
+            assert!(view.file_manager_origin.is_none());
+            view.begin_file_manager_navigation(true, ctx);
+            assert!(view.file_manager_origin.is_none());
+            view.restore_file_manager_navigation(false, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Restoring { .. })
+            ));
+
+            view.active_block_metadata = Some(BlockMetadata::new(Some(legacy), None));
+            view.begin_file_manager_navigation(false, ctx);
+            assert!(view.file_manager_origin.is_none());
+            view.restore_file_manager_navigation(false, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Restoring { .. })
+            ));
+
+            view.active_block_metadata = Some(BlockMetadata::new(Some(root), None));
+            view.begin_file_manager_navigation(false, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Session { id, .. }) if id == root
+            ));
+            view.restore_file_manager_navigation(false, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Session { id, .. }) if id == root
+            ));
+            view.remote_input_session_id = None;
+            view.begin_file_manager_navigation(false, ctx);
+            assert!(view.file_manager_origin.is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_rejects_local_subshell_namespaces() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let root = SessionId::from(902u64);
+            let nested = SessionId::from(903u64);
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(root)
+                        .with_session_type(BootstrapSessionType::Local),
+                );
+                let mut info = SessionInfo::new_for_test()
+                    .with_id(nested)
+                    .with_session_type(BootstrapSessionType::Local);
+                info.subshell_info = Some(SubshellInitializationInfo {
+                    spawning_command: "container-shell".to_string(),
+                    was_triggered_by_rc_file_snippet: false,
+                    env_var_collection_name: None,
+                    ssh_connection_info: None,
+                });
+                sessions.register_session_for_test(info);
+            });
+            view.active_block_metadata = Some(BlockMetadata::new(Some(nested), None));
+            view.begin_file_manager_navigation(true, ctx);
+            assert!(view.file_manager_origin.is_none());
+            view.active_block_metadata = Some(BlockMetadata::new(Some(root), None));
+            view.begin_file_manager_navigation(true, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Session { id, .. }) if id == root
+            ));
+        });
+    });
 }

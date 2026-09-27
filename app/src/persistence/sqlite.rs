@@ -1,9 +1,16 @@
 use std::collections::HashSet;
-use std::ffi::OsString;
+use std::ffi::{CStr, CString, OsString};
+use std::io::Write;
+use std::marker::PhantomData;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::ptr;
 use std::str::FromStr;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Mutex, Once, OnceLock};
+#[cfg(not(target_family = "wasm"))]
+use std::time::Duration;
 use std::{
     collections::{HashMap, VecDeque},
     convert::TryInto,
@@ -138,6 +145,11 @@ use crate::persistence::cloud_objects::{upsert_stored_object, StoredObjectId};
 
 const ZAPLEX_SQLITE_FILE_NAME: &str = "warp.sqlite";
 const ZAP_APP_GROUP_SQLITE_MIGRATION_MARKER: &str = ".zap-app-group-sqlite-migrated";
+const ZAP_APP_GROUP_SQLITE_MIGRATION_PENDING_MARKER: &str =
+    ".zap-app-group-sqlite-migration-pending";
+const LEGACY_STATE_SQLITE_MIGRATION_MARKER: &str = ".legacy-state-sqlite-migrated";
+const LEGACY_STATE_SQLITE_MIGRATION_PENDING_MARKER: &str = ".legacy-state-sqlite-migration-pending";
+const SQLITE_BACKUP_BUSY_TIMEOUT_MS: i32 = 1_000;
 #[cfg(target_os = "macos")]
 const ZAPLEX_APP_GROUP_ID: &str = "2BBY89MBSN.dev.warp";
 
@@ -249,7 +261,7 @@ fn take_prewarmed_db() -> Option<Result<SqliteConnection>> {
     result
 }
 
-pub fn initialize(ctx: &mut AppContext) -> (Option<PersistedData>, Option<WriterHandles>) {
+pub fn initialize(ctx: &mut AppContext) -> Result<(Option<PersistedData>, Option<WriterHandles>)> {
     let database_path = database_file_path();
 
     // Prefer to get background prewarming result; if unavailable, synchronously call init_db() (original behavior).
@@ -289,15 +301,17 @@ pub fn initialize(ctx: &mut AppContext) -> (Option<PersistedData>, Option<Writer
                     None
                 }
             };
-            (app_state, writer_handles)
+            Ok((app_state, writer_handles))
         }
         Err(err) => {
             send_telemetry_from_app_ctx!(
                 TelemetryEvent::DatabaseStartUpError(err.to_string()),
                 ctx
             );
-            report_db_error("initialization", err, &database_path);
-            (None, None)
+            log_db_access(&database_path);
+            let err = err.context("SQLite initialization error");
+            report_error!(&err);
+            Err(err)
         }
     }
 }
@@ -423,60 +437,114 @@ pub(super) fn init_db() -> Result<SqliteConnection> {
         );
     }
 
+    // Serialize marker decisions and both migration paths before any writer can start.
+    // Keep the lock file in place: deleting it could let a second process lock a new inode.
+    #[cfg(not(target_family = "wasm"))]
+    let _migration_lock = lock_sqlite_migration(&db_path)?;
+
     #[cfg(target_os = "macos")]
     if warp_core::channel::ChannelState::channel() == warp_core::channel::Channel::Oss {
         if let Some(legacy_dir) = zap_legacy_app_group_sqlite_dir() {
-            if let Err(err) = migrate_zap_app_group_sqlite_if_needed(&db_path, &legacy_dir)
-                .context("Failed to migrate Zaplex SQLite database out of legacy App Group")
-            {
-                report_error!(err);
-                log::warn!("Skipping legacy App Group SQLite migration and continuing startup");
-            }
+            migrate_zap_app_group_sqlite_if_needed(&db_path, &legacy_dir)
+                .context("Failed to migrate Zaplex SQLite database out of legacy App Group")?;
         }
     }
 
     // Migrate old SQLite files into the secure application container.
     let old_db_path = warp_core::paths::state_dir().join(ZAPLEX_SQLITE_FILE_NAME);
-    if old_db_path != db_path && old_db_path.exists() && !db_path.exists() {
-        match std::fs::rename(&old_db_path, &db_path) {
-            Ok(_) => {
-                safe_info!(
-                    safe: ("Migrated SQLite database into application container"),
-                    full: ("Migrated SQLite database from `{}` to `{}`", old_db_path.display(), db_path.display())
-                );
+    if old_db_path != db_path
+        && migrate_legacy_state_sqlite_if_needed(&old_db_path, &db_path)
+            .context("Failed to migrate SQLite database into application container")?
+    {
+        safe_info!(
+            safe: ("Migrated SQLite database into application container"),
+            full: ("Migrated SQLite database from `{}` to `{}`", old_db_path.display(), db_path.display())
+        );
+    }
 
-                // Also migrate the associated WAL and SHM files.
-                let old_wal = old_db_path.with_extension("sqlite-wal");
-                let old_shm = old_db_path.with_extension("sqlite-shm");
-                let new_wal = db_path.with_extension("sqlite-wal");
-                let new_shm = db_path.with_extension("sqlite-shm");
+    setup_database(&db_path)
+}
 
-                if let Err(err) = std::fs::rename(&old_wal, &new_wal) {
-                    if err.kind() != std::io::ErrorKind::NotFound {
-                        report_error!(anyhow::Error::new(err)
-                            .context("Failed to migrate SQLite WAL into application container"));
-                    }
-                } else {
-                    log::info!("Migrated SQLite WAL into application container");
-                }
+#[cfg(not(target_family = "wasm"))]
+fn lock_sqlite_migration(target_db: &Path) -> Result<fs::File> {
+    lock_sqlite_migration_with_timeout(target_db, Duration::from_secs(3))
+}
 
-                if let Err(err) = std::fs::rename(&old_shm, &new_shm) {
-                    if err.kind() != std::io::ErrorKind::NotFound {
-                        report_error!(anyhow::Error::new(err)
-                            .context("Failed to migrate SQLite SHM into application container"));
-                    }
-                } else {
-                    log::info!("Migrated SQLite shared memory file into application container");
-                }
+#[cfg(not(target_family = "wasm"))]
+fn lock_sqlite_migration_with_timeout(target_db: &Path, timeout: Duration) -> Result<fs::File> {
+    let lock_path = target_db.with_extension("sqlite-migration-lock");
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let lock = options.open(&lock_path).with_context(|| {
+        format!(
+            "Failed to open SQLite migration lock `{}`",
+            lock_path.display()
+        )
+    })?;
+    let started = Instant::now();
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(lock),
+            Err(fs::TryLockError::WouldBlock) if started.elapsed() < timeout => {
+                let remaining = timeout.saturating_sub(started.elapsed());
+                thread::sleep(Duration::from_millis(25).min(remaining));
             }
-            Err(err) => {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to migrate SQLite database into application container"));
+            Err(error) => {
+                return Err(error).context(
+                    "Failed to lock SQLite migrations; another application may be starting",
+                );
             }
         }
     }
+}
 
-    setup_database(&database_file_path())
+fn migrate_legacy_state_sqlite_if_needed(source_db: &Path, target_db: &Path) -> Result<bool> {
+    let target_dir = target_db
+        .parent()
+        .context("SQLite database path has no parent directory")?;
+    let complete_marker = target_dir.join(LEGACY_STATE_SQLITE_MIGRATION_MARKER);
+    let pending_marker = target_dir.join(LEGACY_STATE_SQLITE_MIGRATION_PENDING_MARKER);
+
+    if migration_path_exists(&complete_marker)? {
+        remove_pending_migration_marker(&pending_marker)?;
+        return Ok(false);
+    }
+
+    let pending = migration_path_exists(&pending_marker)?;
+    match std::fs::metadata(source_db) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound && !pending => return Ok(false),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to access legacy SQLite database `{}`",
+                    source_db.display()
+                )
+            });
+        }
+    }
+
+    std::fs::create_dir_all(target_dir).with_context(|| {
+        format!(
+            "Failed to create SQLite state directory `{}`",
+            target_dir.display()
+        )
+    })?;
+
+    // A pre-existing target without a pending marker predates this migration protocol. Preserve
+    // the target, matching the old migration's `!db_path.exists()` guard.
+    if migration_path_exists(target_db)? && !pending {
+        write_complete_migration_marker(&complete_marker)?;
+        return Ok(false);
+    }
+
+    write_pending_migration_marker(&pending_marker)?;
+    snapshot_sqlite_database(source_db, target_db)?;
+    write_complete_migration_marker(&complete_marker)?;
+    remove_pending_migration_marker(&pending_marker)?;
+    Ok(true)
 }
 
 #[cfg(target_os = "macos")]
@@ -490,25 +558,39 @@ fn zap_legacy_app_group_sqlite_dir() -> Option<PathBuf> {
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 fn migrate_zap_app_group_sqlite_if_needed(target_db: &Path, legacy_dir: &Path) -> Result<()> {
     let Some(target_dir) = target_db.parent() else {
         return Ok(());
     };
 
-    let marker = target_dir.join(ZAP_APP_GROUP_SQLITE_MIGRATION_MARKER);
-    if marker.exists() {
+    let complete_marker = target_dir.join(ZAP_APP_GROUP_SQLITE_MIGRATION_MARKER);
+    let pending_marker = target_dir.join(ZAP_APP_GROUP_SQLITE_MIGRATION_PENDING_MARKER);
+    if migration_path_exists(&complete_marker)? {
+        remove_pending_migration_marker(&pending_marker)?;
         return Ok(());
     }
 
     let legacy_db = legacy_dir.join(ZAPLEX_SQLITE_FILE_NAME);
-    if !legacy_db.exists() {
-        write_zap_app_group_sqlite_migration_marker(&marker)?;
-        return Ok(());
+    let pending = migration_path_exists(&pending_marker)?;
+    match std::fs::metadata(&legacy_db) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound && !pending => {
+            write_complete_migration_marker(&complete_marker)?;
+            return Ok(());
+        }
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to access legacy App Group SQLite database `{}`",
+                    legacy_db.display()
+                )
+            });
+        }
     }
 
-    if !should_copy_legacy_zap_sqlite(&legacy_db, target_db)? {
-        write_zap_app_group_sqlite_migration_marker(&marker)?;
+    if !pending && !should_copy_legacy_zap_sqlite(&legacy_db, target_db)? {
+        write_complete_migration_marker(&complete_marker)?;
         return Ok(());
     }
 
@@ -518,10 +600,10 @@ fn migrate_zap_app_group_sqlite_if_needed(target_db: &Path, legacy_dir: &Path) -
             target_dir.display()
         )
     })?;
-    copy_sqlite_file(&legacy_db, target_db)?;
-    copy_sqlite_sidecar(&legacy_db, target_db, "sqlite-wal")?;
-    copy_sqlite_sidecar(&legacy_db, target_db, "sqlite-shm")?;
-    write_zap_app_group_sqlite_migration_marker(&marker)?;
+    write_pending_migration_marker(&pending_marker)?;
+    snapshot_sqlite_database(&legacy_db, target_db)?;
+    write_complete_migration_marker(&complete_marker)?;
+    remove_pending_migration_marker(&pending_marker)?;
 
     safe_info!(
         safe: ("Migrated Zaplex SQLite database out of legacy App Group"),
@@ -531,9 +613,9 @@ fn migrate_zap_app_group_sqlite_if_needed(target_db: &Path, legacy_dir: &Path) -
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 fn should_copy_legacy_zap_sqlite(legacy_db: &Path, target_db: &Path) -> Result<bool> {
-    if !target_db.exists() {
+    if !migration_path_exists(target_db)? {
         return Ok(true);
     }
 
@@ -543,7 +625,7 @@ fn should_copy_legacy_zap_sqlite(legacy_db: &Path, target_db: &Path) -> Result<b
     Ok(legacy_modified > target_modified)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 fn latest_sqlite_modified_time(db: &Path) -> Result<std::time::SystemTime> {
     let mut latest = std::fs::metadata(db)
         .and_then(|metadata| metadata.modified())
@@ -551,49 +633,298 @@ fn latest_sqlite_modified_time(db: &Path) -> Result<std::time::SystemTime> {
 
     for extension in ["sqlite-wal", "sqlite-shm"] {
         let sidecar = db.with_extension(extension);
-        if !sidecar.exists() {
-            continue;
-        }
-
-        let modified = std::fs::metadata(&sidecar)
-            .and_then(|metadata| metadata.modified())
-            .with_context(|| {
+        let modified = match std::fs::metadata(&sidecar) {
+            Ok(metadata) => metadata.modified().with_context(|| {
                 format!(
                     "Failed to read modified time for SQLite sidecar `{}`",
                     sidecar.display()
                 )
-            })?;
+            })?,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("Failed to access SQLite sidecar `{}`", sidecar.display())
+                });
+            }
+        };
         latest = latest.max(modified);
     }
 
     Ok(latest)
 }
 
-#[cfg(target_os = "macos")]
-fn copy_sqlite_sidecar(legacy_db: &Path, target_db: &Path, extension: &str) -> Result<()> {
-    let legacy_path = legacy_db.with_extension(extension);
-    if !legacy_path.exists() {
-        return Ok(());
-    }
-
-    copy_sqlite_file(&legacy_path, &target_db.with_extension(extension))
+fn snapshot_sqlite_database(source_db: &Path, target_db: &Path) -> Result<()> {
+    snapshot_sqlite_database_with_page_limit(source_db, target_db, -1)
 }
 
-#[cfg(target_os = "macos")]
-fn copy_sqlite_file(source: &Path, target: &Path) -> Result<()> {
-    std::fs::copy(source, target).map(|_| ()).with_context(|| {
+fn snapshot_sqlite_database_with_page_limit(
+    source_db: &Path,
+    target_db: &Path,
+    page_limit: i32,
+) -> Result<()> {
+    let source =
+        RawSqliteConnection::open(source_db, sqlite3::SQLITE_OPEN_READONLY).with_context(|| {
+            format!(
+                "Failed to open source SQLite database `{}`",
+                source_db.display()
+            )
+        })?;
+    // SQLite's default creation mode can widen a private source database to 0644.
+    // Pre-create new targets privately; leave existing target permissions untouched.
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    match options.open(target_db) {
+        Ok(file) => drop(file),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to create SQLite migration target `{}`",
+                    target_db.display()
+                )
+            });
+        }
+    }
+    let target = RawSqliteConnection::open(target_db, sqlite3::SQLITE_OPEN_READWRITE)
+        .with_context(|| {
+            format!(
+                "Failed to open destination SQLite database `{}`",
+                target_db.display()
+            )
+        })?;
+
+    let mut backup = RawSqliteBackup::new(&target, &source)?;
+    let step_status = backup.step(page_limit);
+    // `sqlite3_backup_finish` may return SQLITE_OK after a BUSY/LOCKED/incomplete step. Success
+    // therefore requires both a completed step and a successful finish.
+    let finish_status = backup.finish();
+    if step_status != sqlite3::SQLITE_DONE || finish_status != sqlite3::SQLITE_OK {
+        let error_status = if finish_status != sqlite3::SQLITE_OK {
+            finish_status
+        } else {
+            step_status
+        };
+        return Err(target.error(error_status)).with_context(|| {
+            format!(
+                "SQLite backup from `{}` to `{}` did not complete (step status {step_status}, finish status {finish_status})",
+                source_db.display(),
+                target_db.display()
+            )
+        });
+    }
+
+    Ok(())
+}
+
+struct RawSqliteConnection {
+    handle: *mut sqlite3::sqlite3,
+}
+
+impl RawSqliteConnection {
+    fn open(path: &Path, flags: i32) -> Result<Self> {
+        let path = path
+            .to_str()
+            .context("Failed to convert SQLite database path to UTF-8")?;
+        let path = CString::new(path).context("SQLite database path contains a null byte")?;
+        let mut handle = ptr::null_mut();
+        // SAFETY: `path` is null terminated and `handle` points to writable storage for SQLite's
+        // connection pointer. The returned pointer is owned by `RawSqliteConnection`.
+        let status =
+            unsafe { sqlite3::sqlite3_open_v2(path.as_ptr(), &mut handle, flags, ptr::null()) };
+        let connection = Self { handle };
+        if status != sqlite3::SQLITE_OK {
+            return Err(connection.error(status));
+        }
+
+        // SAFETY: `handle` is a valid open SQLite connection. The timeout bounds lock waits; the
+        // backup itself is deliberately attempted only once rather than retried indefinitely.
+        let status = unsafe {
+            sqlite3::sqlite3_busy_timeout(connection.handle, SQLITE_BACKUP_BUSY_TIMEOUT_MS)
+        };
+        if status != sqlite3::SQLITE_OK {
+            return Err(connection.error(status)).context("Failed to set SQLite backup timeout");
+        }
+
+        Ok(connection)
+    }
+
+    fn error(&self, status: i32) -> anyhow::Error {
+        if self.handle.is_null() {
+            return anyhow!("SQLite error {status}: {}", sqlite3::code_to_str(status));
+        }
+
+        // SAFETY: SQLite owns the error string for the lifetime of this open connection.
+        let message = unsafe { CStr::from_ptr(sqlite3::sqlite3_errmsg(self.handle)) };
+        anyhow!(
+            "SQLite error {status} ({}): {}",
+            sqlite3::code_to_str(status),
+            message.to_string_lossy()
+        )
+    }
+}
+
+impl Drop for RawSqliteConnection {
+    fn drop(&mut self) {
+        if self.handle.is_null() {
+            return;
+        }
+
+        // SAFETY: this wrapper uniquely owns the connection and all backup handles borrowing it
+        // are finalized before the connection is dropped.
+        unsafe {
+            sqlite3::sqlite3_close(self.handle);
+        }
+    }
+}
+
+struct RawSqliteBackup<'a> {
+    handle: *mut sqlite3::sqlite3_backup,
+    _connections: PhantomData<&'a RawSqliteConnection>,
+}
+
+impl<'a> RawSqliteBackup<'a> {
+    fn new(target: &'a RawSqliteConnection, source: &'a RawSqliteConnection) -> Result<Self> {
+        const MAIN: &[u8] = b"main\0";
+        // SAFETY: both connections remain alive for this backup's lifetime, and MAIN is a
+        // null-terminated SQLite database name.
+        let handle = unsafe {
+            sqlite3::sqlite3_backup_init(
+                target.handle,
+                MAIN.as_ptr().cast(),
+                source.handle,
+                MAIN.as_ptr().cast(),
+            )
+        };
+        if handle.is_null() {
+            return Err(target.error(sqlite3::SQLITE_ERROR))
+                .context("Failed to initialize SQLite backup");
+        }
+
+        Ok(Self {
+            handle,
+            _connections: PhantomData,
+        })
+    }
+
+    fn step(&mut self, page_limit: i32) -> i32 {
+        // SAFETY: `handle` is a live backup handle and this method has exclusive access to it.
+        unsafe { sqlite3::sqlite3_backup_step(self.handle, page_limit) }
+    }
+
+    fn finish(mut self) -> i32 {
+        let handle = std::mem::replace(&mut self.handle, ptr::null_mut());
+        // SAFETY: `handle` is live and is finalized exactly once here.
+        unsafe { sqlite3::sqlite3_backup_finish(handle) }
+    }
+}
+
+impl Drop for RawSqliteBackup<'_> {
+    fn drop(&mut self) {
+        if self.handle.is_null() {
+            return;
+        }
+
+        // SAFETY: `handle` is live and this fallback finalizes it exactly once during unwinding or
+        // an early return.
+        unsafe {
+            sqlite3::sqlite3_backup_finish(self.handle);
+        }
+    }
+}
+
+fn write_pending_migration_marker(marker: &Path) -> Result<()> {
+    write_and_sync_file(marker, b"pending\n")?;
+    sync_parent_directory(marker)
+}
+
+fn write_complete_migration_marker(marker: &Path) -> Result<()> {
+    let file_name = marker
+        .file_name()
+        .context("SQLite migration marker has no file name")?;
+    let mut temporary_name = file_name.to_os_string();
+    temporary_name.push(".tmp");
+    let temporary_marker = marker.with_file_name(temporary_name);
+
+    write_and_sync_file(&temporary_marker, b"migrated\n")?;
+    std::fs::rename(&temporary_marker, marker).with_context(|| {
         format!(
-            "Failed to copy `{}` to `{}`",
-            source.display(),
-            target.display()
+            "Failed to install SQLite migration marker `{}`",
+            marker.display()
+        )
+    })?;
+    sync_parent_directory(marker)
+}
+
+fn write_and_sync_file(path: &Path, contents: &[u8]) -> Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .with_context(|| {
+            format!(
+                "Failed to create SQLite migration marker `{}`",
+                path.display()
+            )
+        })?;
+    file.write_all(contents).with_context(|| {
+        format!(
+            "Failed to write SQLite migration marker `{}`",
+            path.display()
+        )
+    })?;
+    file.sync_all().with_context(|| {
+        format!(
+            "Failed to sync SQLite migration marker `{}`",
+            path.display()
         )
     })
 }
 
-#[cfg(target_os = "macos")]
-fn write_zap_app_group_sqlite_migration_marker(marker: &Path) -> Result<()> {
-    std::fs::write(marker, b"migrated\n")
-        .with_context(|| format!("Failed to write migration marker `{}`", marker.display()))
+fn remove_pending_migration_marker(marker: &Path) -> Result<()> {
+    match std::fs::remove_file(marker) {
+        Ok(()) => sync_parent_directory(marker),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "Failed to remove pending SQLite migration marker `{}`",
+                marker.display()
+            )
+        }),
+    }
+}
+
+fn migration_path_exists(path: &Path) -> Result<bool> {
+    path.try_exists().with_context(|| {
+        format!(
+            "Failed to access SQLite migration path `{}`",
+            path.display()
+        )
+    })
+}
+
+fn sync_parent_directory(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let parent = path
+            .parent()
+            .context("SQLite migration marker has no parent directory")?;
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .with_context(|| {
+                format!(
+                    "Failed to sync SQLite migration marker directory `{}`",
+                    parent.display()
+                )
+            })?;
+    }
+
+    #[cfg(not(unix))]
+    let _ = path;
+
+    Ok(())
 }
 
 /// Creates or connects to the database at `database_path` and runs any migrations.
@@ -915,6 +1246,11 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
 
 /// Report a database error and additional context for debugging.
 fn report_db_error(err_kind: &str, err: anyhow::Error, database_path: &Path) {
+    log_db_access(database_path);
+    report_error!(err.context(format!("SQLite {err_kind} error")));
+}
+
+fn log_db_access(database_path: &Path) {
     // Database sometimes goes missing or becomes inaccessible; here we add permission and existence diagnostics.
     fn log_access(prefix: &str, path: &Path) {
         match fs::metadata(path) {
@@ -952,8 +1288,6 @@ fn report_db_error(err_kind: &str, err: anyhow::Error, database_path: &Path) {
         log_access("Database directory", parent);
     }
     log_access("Database", database_path);
-
-    report_error!(err.context(format!("SQLite {err_kind} error")));
 }
 
 /// Filter a collection of model events to remove skippable events:

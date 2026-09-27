@@ -89,6 +89,19 @@ struct PendingAttachReplay {
     pending_exit: Option<Option<i32>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadyNoticeKind {
+    PersistentSessionActive,
+    Attached,
+}
+
+struct PendingReadyNotice {
+    connection_session_id: SessionId,
+    pty_session_id: String,
+    generation: Option<u64>,
+    kind: ReadyNoticeKind,
+}
+
 /// Deduplicates the two manager events that describe one connected transport.
 ///
 /// A successful reconnect currently emits `SessionConnected` while installing
@@ -333,6 +346,22 @@ pub(crate) struct EventLoop {
     /// adopt's first attach welcomes while later re-attaches announce the
     /// reconnect instead.
     welcomed: bool,
+    /// The first Ready message distinguishes a newly opened PTY from an adopted
+    /// session, even when its transport drops before the initial Ready event.
+    first_ready_notice_kind: ReadyNoticeKind,
+    /// Success copy staged by an exact open/attach and consumed only when the
+    /// same daemon route and PTY generation have real shell-input readiness.
+    pending_ready_notice: Option<PendingReadyNotice>,
+    /// An attach replay dropped history since the last success notice, so the
+    /// next notice must not claim that nothing was lost.
+    replay_truncated: bool,
+    /// Success notices handed to the terminal view, observable by tests.
+    #[cfg(test)]
+    published_ready_notices: Vec<String>,
+    #[cfg(test)]
+    published_error_notices: Vec<String>,
+    /// A startup failure may arrive before the terminal view has been bound.
+    pending_error_notice: Option<String>,
     /// Whether a *terminal* end-state notice has already been surfaced — a clean
     /// `session ended` (`SessionExited`) or a `connection lost`
     /// (`SessionDisconnected` with no reconnect left). Guards against a second,
@@ -434,7 +463,7 @@ impl EventLoop {
                 event_loop.arm_initial_attach_timeout(ctx);
             }
             (Some(_), _) | (None, Some(_)) => {
-                event_loop.write_notice(&crate::t!("terminal-daemon-attach-identity-invalid"));
+                event_loop.write_notice(&crate::t!("terminal-daemon-attach-identity-invalid"), ctx);
                 event_loop.finish_failed_startup(ctx);
             }
             // Open a fresh session once the transport is connected. Only a
@@ -453,7 +482,7 @@ impl EventLoop {
         if let Some(progress_rx) = install_progress_rx {
             ctx.spawn_stream_local(
                 progress_rx,
-                |me, message, _ctx| me.write_progress(&message),
+                |me, message, ctx| me.write_progress(&message, ctx),
                 |_, _| (),
             );
         }
@@ -514,7 +543,7 @@ impl EventLoop {
                 if me.awaiting_attach_snapshot {
                     me.pending_exit = Some(*exit_code);
                 } else {
-                    me.on_session_exited(*exit_code, ctx);
+                    me.on_session_exited(*exit_code, false, ctx);
                 }
             }
             RemoteServerManagerEvent::SessionConnected { session_id, .. }
@@ -567,10 +596,13 @@ impl EventLoop {
                 detail,
                 ..
             } if me.is_our_session(pty_session_id) && kind == "multiplexer-detected" => {
-                me.write_warning(&crate::t!(
-                    "terminal-daemon-multiplexer-nested",
-                    detail = detail.clone()
-                ));
+                me.write_warning(
+                    &crate::t!(
+                        "terminal-daemon-multiplexer-nested",
+                        detail = detail.clone()
+                    ),
+                    ctx,
+                );
             }
             // The transport went away for good: a spontaneous drop with no
             // reconnect possible, or reconnect attempts exhausted (§9). A mere
@@ -655,7 +687,10 @@ impl EventLoop {
         if matches_expected_host {
             return true;
         }
-        self.write_notice(&crate::t!("terminal-daemon-restore-host-identity-mismatch"));
+        self.write_notice(
+            &crate::t!("terminal-daemon-restore-host-identity-mismatch"),
+            ctx,
+        );
         self.abandon_failed_attach(ctx);
         false
     }
@@ -729,6 +764,14 @@ impl EventLoop {
             last_seq: 0,
             host_label: String::new(),
             welcomed: false,
+            first_ready_notice_kind: ReadyNoticeKind::Attached,
+            pending_ready_notice: None,
+            replay_truncated: false,
+            #[cfg(test)]
+            published_ready_notices: Vec::new(),
+            #[cfg(test)]
+            published_error_notices: Vec::new(),
+            pending_error_notice: None,
             terminated: false,
             report_bootstrap_boundary: false,
         }
@@ -778,6 +821,7 @@ impl EventLoop {
         terminal_view.update(ctx, |view, ctx| {
             view.set_remote_input_phase(input_phase, Some(connection_session_id), ctx);
         });
+        self.publish_pending_error_notice(ctx);
         let sessions = CLIAgentSessionsModel::handle(ctx);
         ctx.subscribe_to_model(&sessions, |me, event, ctx| {
             if me.terminal_view_id != Some(event.terminal_view_id()) {
@@ -1112,14 +1156,15 @@ impl EventLoop {
             .agent_binding_client(ctx)
             .is_some_and(|(_, supported, _)| supported);
         if !Self::attach_generation_is_valid(expected_generation, supports_agent_binding) {
-            self.write_notice(&crate::t!("terminal-daemon-attach-generation-invalid"));
+            self.write_notice(&crate::t!("terminal-daemon-attach-generation-invalid"), ctx);
             self.abandon_failed_attach(ctx);
             return;
         }
         if self.expected_attach_agent_binding.is_some() && !supports_agent_binding {
-            self.write_notice(&crate::t!(
-                "terminal-daemon-attach-agent-routing-unsupported"
-            ));
+            self.write_notice(
+                &crate::t!("terminal-daemon-attach-agent-routing-unsupported"),
+                ctx,
+            );
             self.abandon_failed_attach(ctx);
             return;
         }
@@ -1162,14 +1207,14 @@ impl EventLoop {
                     // timeout, malformed response, or authoritative rejection.
                     // Fail visibly and release the provisional dedupe route.
                     log::error!("Session attach failed: {err:?}");
-                    me.write_notice(&crate::t!(
-                        "terminal-daemon-attach-failed",
-                        detail = err.to_string()
-                    ));
+                    me.write_notice(
+                        &crate::t!("terminal-daemon-attach-failed", detail = err.to_string()),
+                        ctx,
+                    );
                     me.abandon_failed_attach(ctx);
                     if let Some(exit_code) = me.pending_exit.take() {
                         me.awaiting_attach_snapshot = false;
-                        me.on_session_exited(exit_code, ctx);
+                        me.on_session_exited(exit_code, false, ctx);
                     }
                 }
             }
@@ -1188,7 +1233,10 @@ impl EventLoop {
                 attached.session_id,
                 self.pty_session_id
             );
-            self.write_notice(&crate::t!("terminal-daemon-attach-pty-identity-mismatch"));
+            self.write_notice(
+                &crate::t!("terminal-daemon-attach-pty-identity-mismatch"),
+                ctx,
+            );
             self.abandon_failed_attach(ctx);
             return;
         }
@@ -1201,7 +1249,10 @@ impl EventLoop {
                 attached.generation,
                 self.pty_generation
             );
-            self.write_notice(&crate::t!("terminal-daemon-attach-generation-mismatch"));
+            self.write_notice(
+                &crate::t!("terminal-daemon-attach-generation-mismatch"),
+                ctx,
+            );
             self.abandon_failed_attach(ctx);
             return;
         }
@@ -1265,7 +1316,8 @@ impl EventLoop {
                     self.reset_parser();
                 }
                 self.process_historical_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
-                self.write_notice(&crate::t!("terminal-daemon-scrollback-truncated"));
+                self.write_warning(&crate::t!("terminal-daemon-scrollback-truncated"), ctx);
+                self.replay_truncated = true;
             }
             pending.gap_applied = true;
             pending.fed_preamble = false;
@@ -1301,10 +1353,7 @@ impl EventLoop {
         if let Some(exit_code) = self.pending_exit.take().or(pending_exit) {
             self.awaiting_attach_snapshot = false;
             self.reattach_after_replay = false;
-            if replay_again {
-                self.write_warning(&crate::t!("terminal-daemon-final-output-truncated"));
-            }
-            self.on_session_exited(exit_code, ctx);
+            self.on_session_exited(exit_code, replay_again, ctx);
             return;
         }
         if self.terminated {
@@ -1319,6 +1368,12 @@ impl EventLoop {
             return;
         }
         self.awaiting_attach_snapshot = false;
+        let notice_kind = if self.welcomed {
+            ReadyNoticeKind::Attached
+        } else {
+            self.first_ready_notice_kind
+        };
+        self.stage_ready_notice(notice_kind);
         self.complete_initial_attach_if_ready(ctx);
         // If bootstrap only completed now — a fresh open that dropped
         // mid-handshake and finished it from this reconnect's replay — the
@@ -1326,21 +1381,6 @@ impl EventLoop {
         // too (a no-op for adopted sessions and once already reported).
         self.maybe_report_bootstrap_boundary(ctx);
         self.maybe_dispatch_startup_command(ctx);
-        // Stage the payoff moment: an adopt's first attach welcomes the
-        // user into their running session; a reconnect after a drop
-        // states plainly that nothing was lost.
-        if self.welcomed {
-            self.write_zaplexify(&crate::t!(
-                "terminal-daemon-reconnected",
-                host = self.host_label.clone()
-            ));
-        } else {
-            self.write_zaplexify(&crate::t!(
-                "terminal-daemon-reattached",
-                host = self.host_label.clone()
-            ));
-            self.welcomed = true;
-        }
         // Transport is back and we're re-attached. This buffer contains only
         // protocol/control traffic; ordinary user bytes are never replayed.
         self.flush_pending_input(ctx);
@@ -1362,7 +1402,66 @@ impl EventLoop {
             if let Some((pty_session_id, generation)) = self.managed_open_identity.take() {
                 self.report_managed_launch_opened(&pty_session_id, generation, ctx);
             }
+            self.publish_ready_notice(ctx);
         }
+    }
+
+    fn stage_ready_notice(&mut self, kind: ReadyNoticeKind) {
+        let Some(pty_session_id) = self.pty_session_id.clone() else {
+            return;
+        };
+        self.pending_ready_notice = Some(PendingReadyNotice {
+            connection_session_id: self.connection_session_id,
+            pty_session_id,
+            generation: self.pty_generation,
+            kind,
+        });
+    }
+
+    fn publish_ready_notice(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(pending) = self.pending_ready_notice.take() else {
+            return;
+        };
+        if pending.connection_session_id != self.connection_session_id
+            || self.pty_session_id.as_deref() != Some(pending.pty_session_id.as_str())
+            || self.pty_generation != pending.generation
+        {
+            return;
+        }
+        let host = self.host_label.clone();
+        let message = match pending.kind {
+            ReadyNoticeKind::PersistentSessionActive => {
+                crate::t!("terminal-daemon-persistent-session-active", host = host)
+            }
+            ReadyNoticeKind::Attached if self.replay_truncated => {
+                crate::t!("terminal-daemon-restored-truncated", host = host)
+            }
+            ReadyNoticeKind::Attached if self.welcomed => {
+                crate::t!("terminal-daemon-reconnected", host = host)
+            }
+            ReadyNoticeKind::Attached => crate::t!("terminal-daemon-reattached", host = host),
+        };
+        self.welcomed = true;
+        self.replay_truncated = false;
+        #[cfg(test)]
+        self.published_ready_notices.push(message.clone());
+        self.show_session_notice(message, ctx);
+    }
+
+    /// Hands a connection/restore status to the terminal view, which shows it
+    /// outside the terminal grid. Session output stays untouched (#470).
+    fn show_session_notice(&mut self, message: String, ctx: &mut ModelContext<Self>) {
+        let Some(terminal_view) = self
+            .terminal_view
+            .as_ref()
+            .and_then(|terminal_view| terminal_view.upgrade(ctx))
+        else {
+            return;
+        };
+        let connection_session_id = self.connection_session_id;
+        terminal_view.update(ctx, |view, ctx| {
+            view.show_remote_session_notice(message, Some(connection_session_id), ctx);
+        });
     }
 
     fn arm_initial_attach_timeout(&mut self, ctx: &mut ModelContext<Self>) {
@@ -1382,10 +1481,13 @@ impl EventLoop {
         if self.terminated || !self.initial_attach_pending {
             return;
         }
-        self.write_notice(&crate::t!(
-            "terminal-daemon-initial-attach-timeout",
-            seconds = INITIAL_ATTACH_TIMEOUT.as_secs()
-        ));
+        self.write_notice(
+            &crate::t!(
+                "terminal-daemon-initial-attach-timeout",
+                seconds = INITIAL_ATTACH_TIMEOUT.as_secs()
+            ),
+            ctx,
+        );
         self.abandon_failed_attach(ctx);
     }
 
@@ -1402,6 +1504,7 @@ impl EventLoop {
         self.pending_input.clear();
         self.pending_output.clear();
         self.pending_attach_replay = None;
+        self.pending_ready_notice = None;
         self.attach_in_flight = None;
         self.awaiting_managed_agent_binding = false;
         self.managed_open_identity = None;
@@ -1503,9 +1606,10 @@ impl EventLoop {
                 .as_ref()
                 .is_some_and(|pending| pending.next_attempt > 0)
         {
-            self.write_notice(&crate::t!(
-                "terminal-daemon-open-ack-unknown-upgrade-required"
-            ));
+            self.write_notice(
+                &crate::t!("terminal-daemon-open-ack-unknown-upgrade-required"),
+                ctx,
+            );
             self.report_managed_launch_failed(
                 crate::t!("terminal-daemon-managed-open-unconfirmed").to_string(),
                 ctx,
@@ -1558,9 +1662,10 @@ impl EventLoop {
         let managed_launch = open_params.managed_launch;
         let requested_min_available_bytes = open_params.requested_min_available_bytes;
         if !account_route_is_compatible(agent_launch_route.as_ref(), supports_account_routing) {
-            self.write_notice(&crate::t!(
-                "terminal-daemon-managed-account-route-unsupported"
-            ));
+            self.write_notice(
+                &crate::t!("terminal-daemon-managed-account-route-unsupported"),
+                ctx,
+            );
             self.pending_open = None;
             self.report_managed_launch_failed(
                 crate::t!("terminal-daemon-managed-account-route-unsupported").to_string(),
@@ -1570,7 +1675,7 @@ impl EventLoop {
             return;
         }
         if managed_launch.is_some() && !supports_managed_fleet {
-            self.write_notice(&crate::t!("terminal-daemon-managed-host-unsupported"));
+            self.write_notice(&crate::t!("terminal-daemon-managed-host-unsupported"), ctx);
             self.pending_open = None;
             self.report_managed_launch_failed(
                 crate::t!("terminal-daemon-managed-host-unsupported").to_string(),
@@ -1583,7 +1688,7 @@ impl EventLoop {
             && (agent_launch_route.is_none()
                 || cwd.as_deref().is_none_or(|path| path.trim().is_empty()))
         {
-            self.write_notice(&crate::t!("terminal-daemon-managed-route-incomplete"));
+            self.write_notice(&crate::t!("terminal-daemon-managed-route-incomplete"), ctx);
             self.pending_open = None;
             self.report_managed_launch_failed(
                 crate::t!("terminal-daemon-managed-route-incomplete").to_string(),
@@ -1684,7 +1789,7 @@ impl EventLoop {
                     } else {
                         me.write_notice(&crate::t!(
                             "terminal-daemon-open-ack-unknown-upgrade-required"
-                        ));
+                        ), ctx);
                         me.report_managed_launch_failed(
                             crate::t!("terminal-daemon-managed-open-unconfirmed").to_string(),
                             ctx,
@@ -1708,7 +1813,7 @@ impl EventLoop {
                         );
                         me.write_notice(&crate::t!(
                             "terminal-daemon-open-ack-unknown-upgrade-required"
-                        ));
+                        ), ctx);
                         me.report_managed_launch_failed(
                             crate::t!("terminal-daemon-managed-open-unconfirmed").to_string(),
                             ctx,
@@ -1725,7 +1830,7 @@ impl EventLoop {
                     me.write_notice(&crate::t!(
                         "terminal-daemon-open-failed",
                         detail = err.to_string()
-                    ));
+                    ), ctx);
                     me.report_managed_launch_failed(
                         crate::t!("terminal-daemon-managed-open-rejected").to_string(),
                         ctx,
@@ -1780,11 +1885,14 @@ impl EventLoop {
         );
         // Surface the failure in the tab so the user sees *why* instead of a
         // blank/hung view (the connection never produced any PTY output).
-        self.write_notice(&crate::t!(
-            "terminal-daemon-connection-failed",
-            phase = phase,
-            detail = error
-        ));
+        self.write_notice(
+            &crate::t!(
+                "terminal-daemon-connection-failed",
+                phase = phase,
+                detail = error
+            ),
+            ctx,
+        );
         // Drop the pending open so a later spurious event can't reopen it.
         self.report_managed_launch_failed(
             crate::t!("terminal-daemon-managed-connection-failed").to_string(),
@@ -1830,7 +1938,7 @@ impl EventLoop {
                 "daemon_tty: refusing opened PTY {pty_session_id} because ownership could not be claimed"
             );
             let error = crate::t!("terminal-daemon-managed-claim-unavailable").to_string();
-            self.write_notice(&error);
+            self.write_notice(&error, ctx);
             self.report_managed_launch_failed(error, ctx);
             self.abandon_failed_attach(ctx);
             return;
@@ -1888,6 +1996,7 @@ impl EventLoop {
                 );
             }
         }
+        self.first_ready_notice_kind = ReadyNoticeKind::PersistentSessionActive;
         let managed_attach_required = self.managed_launch_id.is_some();
         if authoritative_attach_required || managed_attach_required {
             self.awaiting_attach_snapshot = true;
@@ -1909,18 +2018,12 @@ impl EventLoop {
             return;
         }
         self.awaiting_attach_snapshot = false;
+        self.stage_ready_notice(ReadyNoticeKind::PersistentSessionActive);
         // The pre-OpenSession output burst may already have supplied InitShell
         // or Bootstrapped. Evaluate that real model evidence now; the Ack and
         // replay bytes alone are not readiness.
         self.complete_initial_attach_if_ready(ctx);
         self.drive_agent_binding(ctx);
-        // Stage the moment: the user should SEE they're in a persistent session
-        // (the whole point of zaplex), not have to infer it. One line, once.
-        self.write_zaplexify(&crate::t!(
-            "terminal-daemon-persistent-session-active",
-            host = self.host_label.clone()
-        ));
-        self.welcomed = true;
         // Render output the daemon produced before this response arrived (it
         // auto-attaches and starts the shell immediately), so the initial
         // shell/bootstrap output isn't missing from a fresh tab. In seq order.
@@ -2183,7 +2286,12 @@ impl EventLoop {
         }
     }
 
-    fn on_session_exited(&mut self, exit_code: Option<i32>, ctx: &mut ModelContext<Self>) {
+    fn on_session_exited(
+        &mut self,
+        exit_code: Option<i32>,
+        final_output_truncated: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         log::info!(
             "Daemon session {:?} exited (code {exit_code:?})",
             self.pty_session_id
@@ -2196,7 +2304,13 @@ impl EventLoop {
             Some(code) => crate::t!("terminal-daemon-session-ended-with-code", code = code),
             None => crate::t!("terminal-daemon-session-ended"),
         };
-        self.write_notice(&notice);
+        let notice = if final_output_truncated {
+            let warning = crate::t!("terminal-daemon-final-output-truncated");
+            format!("{notice}\n{warning}")
+        } else {
+            notice
+        };
+        self.write_notice(&notice, ctx);
         self.finish_failed_startup(ctx);
     }
 
@@ -2211,40 +2325,51 @@ impl EventLoop {
             return;
         }
         self.terminated = true;
-        self.write_notice(&crate::t!(
-            "terminal-daemon-connection-lost",
-            host = self.host_label.clone()
-        ));
+        self.write_notice(
+            &crate::t!(
+                "terminal-daemon-connection-lost",
+                host = self.host_label.clone()
+            ),
+            ctx,
+        );
         self.finish_failed_startup(ctx);
     }
 
-    /// Writes a Zaplex notice line (e.g. a connection error or session-ended
-    /// message) into the terminal via the normal ANSI path, so the user sees it
-    /// in the tab rather than a blank/hung view. Rendered in bold red.
-    fn write_notice(&mut self, text: &str) {
-        let line = format!("\r\n\x1b[1;31m[zaplex] {text}\x1b[0m\r\n");
-        self.process_historical_pty_bytes(line.as_bytes());
+    /// Keeps failure details in the pane UI through the Failed transition.
+    fn write_notice(&mut self, text: &str, ctx: &mut ModelContext<Self>) {
+        #[cfg(test)]
+        self.published_error_notices.push(text.to_string());
+        self.pending_error_notice = Some(text.to_string());
+        self.publish_pending_error_notice(ctx);
     }
 
-    /// Neutral (non-error) status line, used for install/setup progress. Dim
-    /// cyan instead of the red error styling of [`Self::write_notice`].
-    fn write_progress(&mut self, text: &str) {
-        let line = format!("\r\n\x1b[2;36m[zaplex] {text}\x1b[0m\r\n");
-        self.process_historical_pty_bytes(line.as_bytes());
+    fn publish_pending_error_notice(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(terminal_view) = self
+            .terminal_view
+            .as_ref()
+            .and_then(|view| view.upgrade(ctx))
+        else {
+            return;
+        };
+        let Some(message) = self.pending_error_notice.take() else {
+            return;
+        };
+        let connection_session_id = self.connection_session_id;
+        terminal_view.update(ctx, |view, ctx| {
+            view.show_remote_session_error(message, Some(connection_session_id), ctx);
+        });
     }
 
-    /// Advisory (non-fatal) warning line — yellow, between the dim-cyan
-    /// progress and the red error notices.
-    fn write_warning(&mut self, text: &str) {
-        let line = format!("\r\n\x1b[1;33m[zaplex] {text}\x1b[0m\r\n");
-        self.process_historical_pty_bytes(line.as_bytes());
+    /// Install/setup progress replaces the previous status outside the grid.
+    fn write_progress(&mut self, text: &str, ctx: &mut ModelContext<Self>) {
+        if !self.terminated {
+            self.show_session_notice(text.to_string(), ctx);
+        }
     }
 
-    /// The Zaplexify signature line — bold cyan. Used for the persistent-session
-    /// welcome and the reconnect/re-attach payoff moments.
-    fn write_zaplexify(&mut self, text: &str) {
-        let line = format!("\r\n\x1b[1;36m{text}\x1b[0m\r\n");
-        self.process_historical_pty_bytes(line.as_bytes());
+    /// Advisory warnings also leave session output untouched.
+    fn write_warning(&mut self, text: &str, ctx: &mut ModelContext<Self>) {
+        self.show_session_notice(text.to_string(), ctx);
     }
 
     /// Processes replayed or synthetic bytes without answering terminal
@@ -2317,7 +2442,7 @@ impl EventLoop {
                 self.reset_parser();
             }
             self.process_historical_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
-            self.write_notice(&crate::t!("terminal-daemon-scrollback-truncated"));
+            self.replay_truncated = true;
         }
         if !replay.is_empty() {
             self.process_historical_pty_bytes(replay);
@@ -2347,9 +2472,10 @@ impl EventLoop {
         };
         if !supports_retry_safe_startup {
             if !self.startup_capability_notice_shown {
-                self.write_notice(&crate::t!(
-                    "terminal-daemon-startup-helper-upgrade-required"
-                ));
+                self.write_notice(
+                    &crate::t!("terminal-daemon-startup-helper-upgrade-required"),
+                    ctx,
+                );
                 self.startup_capability_notice_shown = true;
             }
             return;
@@ -2391,7 +2517,7 @@ impl EventLoop {
                         ack.startup_command_id,
                         ack.session_id
                     );
-                    me.write_notice(&crate::t!("terminal-daemon-startup-command-rejected"));
+                    me.write_notice(&crate::t!("terminal-daemon-startup-command-rejected"), ctx);
                 }
                 Ok(ack) => {
                     me.startup_command_in_flight = None;
@@ -2401,7 +2527,7 @@ impl EventLoop {
                         ack.session_id,
                         ack.startup_command_id
                     );
-                    me.write_notice(&crate::t!("terminal-daemon-startup-ack-invalid"));
+                    me.write_notice(&crate::t!("terminal-daemon-startup-ack-invalid"), ctx);
                 }
                 Err(err) => {
                     me.startup_command_in_flight = None;
@@ -2420,10 +2546,13 @@ impl EventLoop {
                         me.maybe_dispatch_startup_command(ctx);
                     } else if matches!(err, ClientError::Timeout(_)) {
                         me.startup_retry_requires_reconnect = true;
-                        me.write_notice(&crate::t!(
-                            "terminal-daemon-startup-ack-unconfirmed",
-                            attempts = MAX_STARTUP_COMMAND_DELIVERY_ATTEMPTS
-                        ));
+                        me.write_notice(
+                            &crate::t!(
+                                "terminal-daemon-startup-ack-unconfirmed",
+                                attempts = MAX_STARTUP_COMMAND_DELIVERY_ATTEMPTS
+                            ),
+                            ctx,
+                        );
                     }
                 }
             }
@@ -2512,6 +2641,7 @@ impl EventLoop {
         if self.pending_attach_replay.is_some() {
             self.reattach_after_replay = true;
         }
+        self.pending_ready_notice = None;
         self.awaiting_attach_snapshot = true;
     }
 

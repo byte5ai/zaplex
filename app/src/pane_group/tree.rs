@@ -278,7 +278,10 @@ impl PaneData {
     }
 
     pub fn move_pane(&mut self, id: PaneId, target_pane_id: PaneId, direction: Direction) -> bool {
-        if id == target_pane_id {
+        // Validate both endpoints before removing anything: a target can disappear
+        // while a header drag is in progress.
+        let pane_ids = self.pane_ids();
+        if id == target_pane_id || !pane_ids.contains(&id) || !pane_ids.contains(&target_pane_id) {
             return false;
         }
 

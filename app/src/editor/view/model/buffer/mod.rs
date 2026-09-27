@@ -15,7 +15,7 @@ pub use {
     deferred_ops::DeferredOperations,
     subword_boundaries::SubwordBoundaries,
     text::{Text, TextSummary},
-    time::{LamportValue, ReplicaId},
+    time::{Global, LamportValue, ReplicaId},
 };
 
 use super::selections::{
@@ -39,7 +39,7 @@ use std::{
 };
 use string_offset::{ByteOffset, CharOffset};
 use sum_tree::{self, Cursor, FilterCursor, SeekBias, SumTree};
-use time::{Global, Lamport};
+use time::Lamport;
 use undo::{LocalUndoStack, UndoHistory};
 use vec1::{vec1, Vec1};
 use warpui::color::ColorU;

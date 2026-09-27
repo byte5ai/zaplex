@@ -75,7 +75,7 @@ impl AppCallbackDispatcher {
 
     pub fn initialize_app(&mut self, init_fn: AppInitCallbackFn) {
         let app_clone = self.ui_app.clone();
-        self.ui_app.update(|ctx| {
+        let startup_failed = self.ui_app.update(|ctx| {
             use futures_util::FutureExt;
 
             // Provide the init function with access to the UI app,
@@ -83,9 +83,18 @@ impl AppCallbackDispatcher {
             // thread (to prevent double-borrow issues).
             init_fn(ctx, async move { app_clone }.boxed_local());
 
+            if ctx.application_callbacks_disabled_after_failed_startup() {
+                return true;
+            }
             // Validate all of the registered bindings now that the app is initialized.
             ctx.validate_bindings();
+            false
         });
+        if startup_failed {
+            // Keep framework event/modal dispatch active, but never call application
+            // code that assumes initialization finished and its singletons exist.
+            self.callbacks = AppCallbacks::default();
+        }
     }
 
     pub fn app_became_active(&mut self) {

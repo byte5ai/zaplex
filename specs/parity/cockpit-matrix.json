@@ -1054,7 +1054,7 @@
     },
     {
       "id": "reduced-motion",
-      "path": "docs/ui/cockpit-sidebar-connections.html",
+      "path": "docs/ui/premium-workspace.html",
       "required_regex": [
         "prefers-reduced-motion: reduce",
         "animation: none"

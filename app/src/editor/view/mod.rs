@@ -12,7 +12,7 @@ mod voice;
 pub use {
     element::{EditorDecoratorElements, EditorElement, TextColors},
     model::{
-        Chars, CrdtOperation, DisplayPoint, EditOrigin, EditorSnapshot, InteractionState,
+        Chars, CrdtOperation, DisplayPoint, EditOrigin, EditorSnapshot, Global, InteractionState,
         LocalDrawableSelectionData, PeerSelectionData, RemoteDrawableSelectionData, ReplicaId,
         SelectAction, TextRun, TextStyleOperation,
     },
@@ -3740,6 +3740,11 @@ impl EditorView {
 
     pub fn buffer_text(&self, ctx: &AppContext) -> String {
         self.editor_model.as_ref(ctx).buffer_text(ctx)
+    }
+
+    /// Current buffer version, including edits that leave the text unchanged overall.
+    pub(crate) fn buffer_version(&self, ctx: &AppContext) -> Global {
+        self.editor_model.as_ref(ctx).buffer(ctx).versions()
     }
 
     /// Returns the buffer text before the last edit.

@@ -14,7 +14,7 @@ use warpui::App;
 use crate::completer::SessionContext;
 use crate::terminal::model::session::Session;
 use crate::terminal::model::session::{
-    command_executor::testing::TestCommandExecutor, SessionInfo,
+    command_executor::testing::TestCommandExecutor, SessionInfo, SessionType,
 };
 use crate::test_util::{Stub, VirtualFS};
 use crate::features::FeatureFlag;
@@ -307,20 +307,29 @@ pub fn test_non_legacy_remote_session_lists_directory_entries_with_remote_server
     });
 }
 
-/// A legacy SSH session still waits for its remote-server handshake before
-/// listing directories, and the empty result is not cached.
+/// Skipping or failing remote-server setup leaves legacy SSH without a host
+/// ID, but its initialized fallback executor must still serve completions.
+#[cfg_attr(windows, ignore = "TODO(CORE-3626)")]
 #[test]
-pub fn test_legacy_ssh_session_waits_for_remote_server_handshake() {
+pub fn test_legacy_ssh_fallback_lists_directory_entries_without_remote_host_id() {
     let _flag_guard = FeatureFlag::SshRemoteServer.override_enabled(true);
     App::test((), |app| async move {
-        let cwd = working_directory();
-        let session = Session::test_legacy_ssh_remote("control_path.socket".into());
-        assert!(session.is_legacy_ssh_session());
-        let ctx = test_session_context(session, cwd.clone(), &app);
-
-        let entries = warpui::r#async::block_on(ctx.list_directory_entries(cwd.clone()));
-        assert!(entries.is_empty());
-        assert!(!ctx.cached_directory_entries.contains_key(&cwd));
+        VirtualFS::test(
+            "test_legacy_ssh_fallback_lists_directory_entries_without_remote_host_id",
+            |dirs, mut sandbox| {
+                sandbox.mkdir("projects");
+                let cwd = TypedPathBuf::from(dirs.tests().to_string_lossy().as_bytes());
+                let session = Session::test_legacy_ssh_remote("control_path.socket".into());
+                assert!(session.is_legacy_ssh_session());
+                assert!(matches!(
+                    session.session_type(),
+                    SessionType::ZaplexifiedRemote { host_id: None }
+                ));
+                let ctx = test_session_context(session, cwd.clone(), &app);
+                let entries = warpui::r#async::block_on(ctx.list_directory_entries(cwd));
+                assert!(entries.contains(&EngineDirEntry::test_dir("projects")));
+            },
+        );
     });
 }
 

@@ -151,6 +151,7 @@ use crate::{
         AutosuggestionLocation, AutosuggestionType, BaselinePositionComputationMethod,
         CommandXRayAnchor, CrdtOperation, CursorColors, DisplayPoint, EditOrigin, EditorAction,
         EditorDecoratorElements, EditorOptions, EditorSnapshot, EditorView, Event as EditorEvent,
+        Global,
         ImageContextOptions, InteractionState, PathTransformerFn, PlainTextEditorViewAction,
         Point as BufferPoint, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
         PropagateHorizontalNavigationKeys, ReplicaId, TextColors, TextRun,
@@ -1456,6 +1457,18 @@ impl DenyExecutionReason {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FileManagerDirectoryInput {
+    Pending {
+        block_id: BlockId,
+        session_id: SessionId,
+    },
+    Executing {
+        block_id: BlockId,
+        session_id: SessionId,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CanExecuteCommand {
     Yes,
@@ -1661,6 +1674,9 @@ pub struct Input {
     /// we snapshot the current input contents here so we can restore them after the command
     /// completes and the buffer would normally be cleared.
     input_contents_before_prompt_chip_command: Option<String>,
+    file_manager_directory_input: Option<FileManagerDirectoryInput>,
+    /// Editor version consumed by the current command, distinct from later type-ahead.
+    submitted_input: Option<(BlockId, Global)>,
 }
 
 #[derive(Clone)]
@@ -3228,6 +3244,8 @@ impl Input {
             slash_command_data_source,
             ephemeral_message_model,
             input_contents_before_prompt_chip_command: None,
+            file_manager_directory_input: None,
+            submitted_input: None,
         };
 
         #[cfg(feature = "local_fs")]
@@ -5873,6 +5891,71 @@ impl Input {
 
             buffer_text
         })
+    }
+
+    pub(crate) fn preserve_pending_file_manager_draft(&mut self) {
+        let Some(session_id) = self.active_block_session_id() else {
+            return;
+        };
+        let block_id = self.model.lock().block_list().active_block_id().clone();
+        self.file_manager_directory_input = Some(FileManagerDirectoryInput::Pending {
+            block_id,
+            session_id,
+        });
+    }
+
+    pub(crate) fn cancel_pending_file_manager_directory(&mut self) {
+        if matches!(
+            self.file_manager_directory_input,
+            Some(FileManagerDirectoryInput::Pending { .. })
+        ) {
+            self.file_manager_directory_input = None;
+        }
+    }
+
+    pub(crate) fn clear_file_manager_directory_input(&mut self) {
+        self.file_manager_directory_input = None;
+    }
+
+    /// Submit the automatic directory command without consuming workflow,
+    /// environment, suggestions, or editor state belonging to the user's draft.
+    pub(crate) fn try_execute_command_preserving_draft(
+        &mut self,
+        command: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let (is_shared, has_precmd, block_id) = {
+            let model = self.model.lock();
+            (
+                model.shared_session_status().is_sharer_or_viewer(),
+                model.block_list().active_block().has_received_precmd(),
+                model.block_list().active_block_id().clone(),
+            )
+        };
+        if !self.ordinary_command_input_ready
+            || self.has_pending_command
+            || is_shared
+            || !has_precmd
+            || self.can_execute_command(ctx).is_no()
+        {
+            return false;
+        }
+        let Some(session_id) = self.active_block_session_id() else {
+            return false;
+        };
+        self.file_manager_directory_input = Some(FileManagerDirectoryInput::Executing {
+            block_id,
+            session_id,
+        });
+        ctx.emit(Event::ExecuteCommand(Box::new(ExecuteCommandEvent {
+            command: command.to_string(),
+            session_id,
+            workflow_id: None,
+            workflow_command: None,
+            should_add_command_to_history: false,
+            source: CommandExecutionSource::User,
+        })));
+        true
     }
 
     pub fn try_execute_command(&mut self, command: &str, ctx: &mut ViewContext<Self>) -> bool {
@@ -12762,8 +12845,46 @@ impl Input {
         // off the screen because we were forcing the long running command to be the same
         // size of the cleared input box.
         if let BlockType::User(user_block) = &block_completed_event.block_type {
-            // Only clear the input buffer for user-executed commands, not agent-executed ones.
-            let should_clear_buffer = !user_block.was_part_of_agent_interaction;
+            let matches_directory_block = match self.file_manager_directory_input.as_ref() {
+                Some(FileManagerDirectoryInput::Pending {
+                    block_id,
+                    session_id,
+                })
+                | Some(FileManagerDirectoryInput::Executing {
+                    block_id,
+                    session_id,
+                }) => {
+                    block_id == &block_completed_event.block_id
+                        && Some(*session_id) == block_completed_event.session_id
+                }
+                None => false,
+            };
+            let preserve_file_manager_draft = matches_directory_block
+                && match self.file_manager_directory_input.as_ref() {
+                    Some(FileManagerDirectoryInput::Executing { .. }) => true,
+                    Some(FileManagerDirectoryInput::Pending { block_id, .. }) => self
+                        .submitted_input
+                        .as_ref()
+                        .is_none_or(|(submitted_block, version)| {
+                            submitted_block != block_id
+                                || version != &self.editor.as_ref(ctx).buffer_version(ctx)
+                        }),
+                    None => false,
+                };
+            if matches_directory_block {
+                self.file_manager_directory_input = None;
+            }
+            if self
+                .submitted_input
+                .as_ref()
+                .is_some_and(|(block, _)| block == &block_completed_event.block_id)
+            {
+                self.submitted_input = None;
+            }
+            // The automatic cd owns only its exact block. Type-ahead during a
+            // preceding process is kept only when edited after command submission.
+            let should_clear_buffer =
+                !user_block.was_part_of_agent_interaction && !preserve_file_manager_draft;
             let latest_block_id = self.model.lock().block_list().active_block_id().clone();
             let input_contents_before_prompt_chip_command =
                 self.input_contents_before_prompt_chip_command.take();
@@ -12783,7 +12904,7 @@ impl Input {
                         self.editor.update(ctx, |editor, ctx| {
                             editor.set_buffer_text(&restore_text, ctx);
                         });
-                        self.is_editor_empty_on_last_edit = false;
+                        self.is_editor_empty_on_last_edit = restore_text.is_empty();
                     } else {
                         // This is the one place where buffer contents can change without an `Edit`
                         // -- this is because the buffer semantically isn't being edited, a new one is
@@ -12930,6 +13051,9 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) {
         start_trace!("command_execution:start");
+        self.file_manager_directory_input = None;
+        let block_id = self.model.lock().block_list().active_block_id().clone();
+        self.submitted_input = Some((block_id, self.editor.as_ref(ctx).buffer_version(ctx)));
 
         // Abort running completions since we're about to execute a command.
         if let Some(abort_handle) = self.completions_abort_handle.take() {

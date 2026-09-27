@@ -7,7 +7,7 @@
 //! date: 2026-05-30
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -38,6 +38,9 @@ use super::browser::{
     copy_move_submission_summary, transfer_display_priority, SftpBrowserAction, SftpBrowserView,
 };
 use super::sftp_backend::{BackendOwnershipAnchor, InMemorySftpBackend, SftpBackend};
+use super::sftp_ops::{ProgressCallback, SftpOpsError};
+use super::transfer_job::ConflictDecision;
+use super::transfer_queue::{QueuedTransferState, TransferQueue};
 use super::types::{
     ConnectionState, Dialog, EntryIdentity, EntryReference, FileEntry, FileEntryType,
     StableEntryIdentity, TransferDirection, TransferState, TransferTask,
@@ -3756,6 +3759,7 @@ fn inactive_function_bar_keeps_geometry_but_does_not_dispatch() {
         let focus_state = app.add_model(|_| PaneGroupFocusState::new(left_pane_id, None, true));
         left.update(&mut app, |view, ctx| {
             view.set_focus_handle(PaneFocusHandle::new(left_pane_id, focus_state.clone()), ctx);
+            view.focus_contents(ctx);
         });
         right.update(&mut app, |view, ctx| {
             view.set_focus_handle(
@@ -3786,6 +3790,114 @@ fn inactive_function_bar_keeps_geometry_but_does_not_dispatch() {
 
         mouse_down(&mut app, window_id, presenter.clone(), left_action.center());
         mouse_up(&mut app, window_id, presenter, left_action.center());
+        left.read(&app, |view, _| {
+            assert!(matches!(view.dialog, Some(Dialog::CreateFolder { .. })))
+        });
+    });
+}
+
+#[test]
+fn disabled_function_click_cannot_execute_after_mouse_down_focuses_the_pane() {
+    App::test((), |mut app| async move {
+        let (window_id, pane_group, browsers, pane_ids, temp_dirs) =
+            create_three_pane_group(&mut app);
+        for (browser, temp_dir) in browsers.iter().zip(&temp_dirs) {
+            let backend = Arc::new(InMemorySftpBackend::new(temp_dir.path().to_path_buf()))
+                as Arc<dyn SftpBackend>;
+            browser.update(&mut app, |view, ctx| {
+                view.set_backend_for_test(backend, PathBuf::from("/"), ctx);
+            });
+        }
+        pane_group.update(&mut app, |group, ctx| {
+            group.focus_pane_by_id(pane_ids[1], ctx)
+        });
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let action = position(&presenter, &layout_id(&browsers[0], &app, "function-F7"));
+
+        // Real pane activation runs on mouse-down, before the subsequent enabled frame.
+        mouse_down(&mut app, window_id, presenter, action.center());
+        assert_eq!(
+            pane_group.read(&app, |group, ctx| group.focused_pane_id(ctx)),
+            pane_ids[0]
+        );
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let enabled_action = position(&presenter, &layout_id(&browsers[0], &app, "function-F7"));
+        assert!(rects_approximately_equal(action, enabled_action));
+        mouse_up(
+            &mut app,
+            window_id,
+            presenter.clone(),
+            enabled_action.center(),
+        );
+        browsers[0].read(&app, |view, _| assert!(view.dialog.is_none()));
+
+        // A fresh click on the now-active action still works.
+        mouse_down(
+            &mut app,
+            window_id,
+            presenter.clone(),
+            enabled_action.center(),
+        );
+        mouse_up(&mut app, window_id, presenter, enabled_action.center());
+        browsers[0].read(&app, |view, _| {
+            assert!(matches!(view.dialog, Some(Dialog::CreateFolder { .. })))
+        });
+    });
+}
+
+#[test]
+fn function_bar_tracks_subtree_focus_when_the_remembered_pane_does_not_change() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, root, left, _, _left_temp, _right_temp) =
+            create_dual_connected_view(&mut app);
+        let pane_id = PaneId::dummy_pane_id();
+        let focus_state = app.add_model(|_| PaneGroupFocusState::new(pane_id, None, true));
+        let focus_handle = PaneFocusHandle::new(pane_id, focus_state);
+        left.update(&mut app, |view, ctx| {
+            view.set_focus_handle(focus_handle.clone(), ctx);
+            view.focus_contents(ctx);
+        });
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let active_action = position(&presenter, &layout_id(&left, &app, "function-F7"));
+
+        // Workspace chrome can take keyboard focus while the tab remembers this pane.
+        root.update(&mut app, |_, ctx| ctx.focus_self());
+        assert!(app.read(|ctx| focus_handle.is_focused(ctx)));
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let inactive_action = position(&presenter, &layout_id(&left, &app, "function-F7"));
+        assert!(rects_approximately_equal(active_action, inactive_action));
+        mouse_down(
+            &mut app,
+            window_id,
+            presenter.clone(),
+            inactive_action.center(),
+        );
+        mouse_up(&mut app, window_id, presenter, inactive_action.center());
+        left.read(&app, |view, _| assert!(view.dialog.is_none()));
+
+        // Populate the framework's presenter so focus propagation knows the editor's ancestors.
+        let (_, invalidation) = presenter_for_window(&app, window_id);
+        let framework_presenter = app
+            .presenter(window_id)
+            .expect("window should have a presenter");
+        rerender(&mut app, framework_presenter, invalidation);
+        left.update(&mut app, |view, ctx| view.focus_search_editor_for_test(ctx));
+        assert_ne!(app.focused_view_id(window_id), Some(left.id()));
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let child_focused_action = position(&presenter, &layout_id(&left, &app, "function-F7"));
+        mouse_down(
+            &mut app,
+            window_id,
+            presenter.clone(),
+            child_focused_action.center(),
+        );
+        mouse_up(
+            &mut app,
+            window_id,
+            presenter,
+            child_focused_action.center(),
+        );
         left.read(&app, |view, _| {
             assert!(matches!(view.dialog, Some(Dialog::CreateFolder { .. })))
         });
@@ -6762,6 +6874,154 @@ fn f3_views_without_editing() {
 
         view.read(&app, |v, _| {
             assert!(matches!(v.dialog, Some(Dialog::FileDetails { .. })));
+        });
+    });
+}
+
+/// A metadata-only backend: the late target appears on the second existence
+/// probe. Every mutating method fails the test instead of touching any files.
+struct ConflictProbeBackend {
+    first_target_probe_absent: AtomicBool,
+}
+
+impl ConflictProbeBackend {
+    fn unsupported<T>() -> Result<T, SftpOpsError> {
+        panic!("conflict regression must not mutate the backend")
+    }
+}
+
+impl SftpBackend for ConflictProbeBackend {
+    fn list_dir(&self, path: &Path) -> Result<Vec<FileEntry>, SftpOpsError> {
+        Ok(vec![self.stat(&path.join("dup.txt"))?])
+    }
+
+    fn entry_exists(&self, path: &Path) -> Result<bool, SftpOpsError> {
+        Ok(path != Path::new("/right/dup.txt")
+            || !self.first_target_probe_absent.swap(false, Ordering::SeqCst))
+    }
+
+    fn delete_file(&self, _path: &Path) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn delete_dir_recursive(&self, _path: &Path) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn create_dir(&self, _path: &Path) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn rename(&self, _old_path: &Path, _new_path: &Path) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn realpath(&self, _path: &Path) -> Result<PathBuf, SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn stat(&self, path: &Path) -> Result<FileEntry, SftpOpsError> {
+        Ok(FileEntry {
+            name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: path.to_path_buf(),
+            file_type: FileEntryType::File,
+            size: 0,
+            modified: None,
+            permissions: None,
+            identity: super::types::StableEntryIdentity {
+                file_type: FileEntryType::File,
+                size: 0,
+                object_id: path.display().to_string(),
+                revision: "1".to_string(),
+            },
+        })
+    }
+
+    fn lstat(&self, path: &Path) -> Result<FileEntry, SftpOpsError> {
+        self.stat(path)
+    }
+
+    fn upload_file(
+        &self,
+        _local_path: &Path,
+        _remote_path: &Path,
+        _progress_cb: Option<&ProgressCallback>,
+        _cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn download_file(
+        &self,
+        _remote_path: &Path,
+        _local_path: &Path,
+        _progress_cb: Option<&ProgressCallback>,
+        _cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn copy_file(&self, _src: &Path, _dst: &Path) -> Result<(), SftpOpsError> {
+        Self::unsupported()
+    }
+}
+
+#[test]
+fn same_fs_conflict_confirmation_rejects_a_closed_target_before_queue_submission() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let backend = Arc::new(ConflictProbeBackend {
+            first_target_probe_absent: AtomicBool::new(false),
+        });
+        let (_, source) = create_view_with_node(&mut app, "same-host");
+        source.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend.clone(), PathBuf::from("/left"), ctx);
+        });
+        let (_, target) = create_view_with_node(&mut app, "same-host");
+        target.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
+        });
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+            assert!(matches!(view.dialog, Some(Dialog::CopyMoveConflict { .. })));
+        });
+        target.update(&mut app, |view, ctx| view.set_pane_group_id(None, ctx));
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::OverwriteConflict { all: false }, ctx);
+            assert!(view.dialog.is_none());
+        });
+        app.read(|ctx| {
+            assert_eq!(TransferQueue::as_ref(ctx).activities().count(), 0);
+        });
+    });
+}
+
+#[test]
+fn same_fs_target_appearing_after_probe_is_skipped_without_overwrite_consent() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let backend = Arc::new(ConflictProbeBackend {
+            first_target_probe_absent: AtomicBool::new(true),
+        });
+        let (_, source) = create_view_with_node(&mut app, "same-host");
+        source.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend.clone(), PathBuf::from("/left"), ctx);
+        });
+        let (_, target) = create_view_with_node(&mut app, "same-host");
+        target.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
+        });
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        app.read(|ctx| {
+            let activities: Vec<_> = TransferQueue::as_ref(ctx).activities().collect();
+            assert_eq!(activities.len(), 1);
+            assert_eq!(activities[0].conflict, ConflictDecision::Skip);
+            assert_eq!(activities[0].state, QueuedTransferState::Skipped);
         });
     });
 }

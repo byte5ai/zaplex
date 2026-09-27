@@ -11,6 +11,7 @@ use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{SingletonEntity, TypedActionView};
 
+use crate::remote_server::manager::RemoteServerManager;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 
@@ -33,6 +34,7 @@ fn initialize_app(app: &mut warpui::App) {
     app.add_singleton_model(|_| ToastStack);
     app.add_singleton_model(|_| super::fm_registry::FileManagerRegistry::new());
     app.add_singleton_model(|_| super::transfer_queue::TransferQueue::new());
+    app.add_singleton_model(RemoteServerManager::new);
 
     // The SSH manager needs a SQLite path; use a temporary file so that failed queries don't panic
     let temp_db = std::env::temp_dir().join("warp_sftp_test.sqlite");
@@ -59,6 +61,65 @@ fn review9_partial_transfer_toast_is_not_a_full_skip_or_success_message() {
         partial.contains('2'),
         "transferred file count must be visible"
     );
+}
+
+#[test]
+fn retry_after_host_key_dialog_cancel_starts_a_fresh_connection_attempt() {
+    crate::i18n::init(Some("en"));
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        let cancelled_error = "host key confirmation cancelled";
+
+        view.update(&mut app, |view, ctx| {
+            view.connection = ConnectionState::Failed(cancelled_error.to_string());
+            view.dialog = Some(Dialog::ConfirmUnknownHostKey {
+                host: "test.invalid".to_string(),
+                port: 22,
+                fingerprint_sha256: "SHA256:test".to_string(),
+                key_type: "ssh-ed25519".to_string(),
+            });
+            view.handle_action(&SftpBrowserAction::CloseDialog, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+            assert!(matches!(
+                &view.connection,
+                ConnectionState::Failed(message) if message == cancelled_error
+            ));
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::RetryConnection, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(
+                !matches!(
+                    &view.connection,
+                    ConnectionState::Failed(message) if message == cancelled_error
+                ),
+                "retry must run the connection path instead of leaving the cancelled failure untouched"
+            );
+        });
+    });
+}
+
+#[test]
+fn stale_connection_retry_does_not_restart_an_in_flight_or_connected_browser() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.connection = ConnectionState::Connecting;
+            view.handle_action(&SftpBrowserAction::RetryConnection, ctx);
+            assert!(matches!(view.connection, ConnectionState::Connecting));
+            view.connection = ConnectionState::Connected;
+            view.handle_action(&SftpBrowserAction::RetryConnection, ctx);
+            assert!(matches!(view.connection, ConnectionState::Connected));
+        });
+    });
 }
 
 /// Creates a SftpBrowserView and places it in a window
@@ -2582,6 +2643,61 @@ fn refresh_closes_open_context_menu() {
             assert!(
                 view.context_menu.is_none(),
                 "starting a refresh must close the context menu"
+            );
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_close_uses_connected_current_path_only() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.current_path = PathBuf::from("/srv/last-opened");
+            view.connection = ConnectionState::Connected;
+            assert!(view.shell_directory_on_close().is_none());
+            view.on_dir_listed(view.refresh_generation, Ok(Ok(Vec::new())), ctx);
+            assert_eq!(
+                view.shell_directory_on_close(),
+                Some(PathBuf::from("/srv/last-opened"))
+            );
+            view.connection = ConnectionState::Disconnected;
+            assert!(view.shell_directory_on_close().is_none());
+            view.connection = ConnectionState::Failed("connection lost".to_string());
+            assert!(view.shell_directory_on_close().is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_initial_listing_failure_never_changes_shell_directory() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.current_path = PathBuf::from("/missing/restored-directory");
+            view.connection = ConnectionState::Connected;
+            view.on_dir_listed(
+                view.refresh_generation,
+                Ok(Err(super::sftp_ops::SftpOpsError::Operation(
+                    "missing directory".to_string(),
+                ))),
+                ctx,
+            );
+            assert!(view.shell_directory_on_close().is_none());
+            view.current_path = PathBuf::from("/successfully-opened");
+            view.on_dir_listed(view.refresh_generation, Ok(Ok(Vec::new())), ctx);
+            view.on_dir_listed(
+                view.refresh_generation,
+                Ok(Err(super::sftp_ops::SftpOpsError::Operation(
+                    "permission denied".to_string(),
+                ))),
+                ctx,
+            );
+            assert_eq!(
+                view.shell_directory_on_close(),
+                Some(PathBuf::from("/successfully-opened"))
             );
         });
     });

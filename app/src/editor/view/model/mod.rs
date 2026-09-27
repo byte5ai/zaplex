@@ -6,7 +6,7 @@ use self::buffer::Peer;
 
 pub use {
     buffer::{
-        Anchor, AnchorBias, Chars, EditOrigin, Operation as CrdtOperation, PeerSelectionData,
+        Anchor, AnchorBias, Chars, EditOrigin, Global, Operation as CrdtOperation, PeerSelectionData,
         ReplicaId, SubwordBoundaries, TextRun, TextStyleOperation, ToBufferOffset, ToCharOffset,
         ToPoint,
     },

@@ -62,8 +62,8 @@ use crate::app_state::{
     bind_daemon_pty_claim_owner, claim_daemon_pty, daemon_pty_claim,
     release_daemon_pty_claim_for_connection, release_daemon_pty_claim_for_terminal_view,
     release_daemon_pty_claim_reservation, DaemonPtyClaimOutcome, DaemonPtyClaimOwner,
-    DaemonPtyIdentity, LeafContents, LeafSnapshot, LeftPanelDisplayedTab, LeftPanelSnapshot,
-    NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid, PersistedDaemonRuntime,
+    DaemonPtyIdentity, FileManagerPaneMode, LeafContents, LeafSnapshot, LeftPanelDisplayedTab,
+    LeftPanelSnapshot, NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid, PersistedDaemonRuntime,
     RemoteTerminalIdentity, RemoteTerminalTransport, RightPanelSnapshot, SettingsPaneSnapshot,
     TabSnapshot, TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
@@ -230,10 +230,11 @@ use crate::network::{NetworkStatus, NetworkStatusEvent};
 use crate::notebooks::manager::{NotebookManager, NotebookSource};
 #[cfg(feature = "local_fs")]
 use crate::pane_group::FilePane;
+use crate::pane_group::pane::sftp_pane::SftpPane;
 use crate::pane_group::ImagePane;
 use crate::pane_group::{
-    self, AnyPaneContent, CodeDiffPane, CodePane, Direction, NewTerminalOptions, PanesLayout,
-    TabBarHoverIndex,
+    self, AnyPaneContent, CodeDiffPane, CodePane, Direction, NewTerminalOptions, PaneContent,
+    PanesLayout, TabBarHoverIndex,
 };
 use crate::remote_server::manager::RemoteServerManager;
 #[cfg(feature = "local_fs")]
@@ -2197,8 +2198,9 @@ fn favorite_host_menu_item(
     favorite: &zaplex_cockpit::Favorite,
     host_nodes: &[(String, String)],
     changes_disabled: bool,
+    host_registry_unavailable: bool,
 ) -> MenuItem<WorkspaceAction> {
-    let remove_item = if changes_disabled {
+    let remove_item = if changes_disabled || host_registry_unavailable {
         MenuItemFields::new(crate::t!("cockpit-tt-favorite-remove"))
             .with_disabled(true)
             .with_icon(icons::Icon::Star)
@@ -2248,11 +2250,20 @@ fn favorite_host_menu_item(
         };
     }
 
-    let label = format!(
-        "{} · {}",
-        favorite.display_label(),
-        crate::t!("cockpit-host-removed")
-    );
+    let unavailable_message = if host_registry_unavailable {
+        crate::t!("workspace-host-registry-unavailable")
+    } else {
+        crate::t!("workspace-favorite-unavailable")
+    };
+    let label = if host_registry_unavailable {
+        favorite.display_label().to_string()
+    } else {
+        format!(
+            "{} · {}",
+            favorite.display_label(),
+            crate::t!("cockpit-host-removed")
+        )
+    };
     MenuItem::Submenu {
         fields: MenuItemFields::new_submenu(label.clone())
             .with_split_submenu_primary_disabled(true)
@@ -2263,7 +2274,7 @@ fn favorite_host_menu_item(
             .with_tooltip(label)
             .with_icon(icons::Icon::StarFilled),
         menu: SubMenu::new(vec![
-            MenuItemFields::new(crate::t!("workspace-favorite-unavailable"))
+            MenuItemFields::new(unavailable_message)
                 .with_disabled(true)
                 .with_icon(icons::Icon::AlertTriangle)
                 .into_item(),
@@ -2276,10 +2287,18 @@ fn favorite_host_menu_items(
     favorites: &[zaplex_cockpit::Favorite],
     host_nodes: &[(String, String)],
     changes_disabled: bool,
+    host_registry_unavailable: bool,
 ) -> Vec<MenuItem<WorkspaceAction>> {
     favorites
         .iter()
-        .map(|favorite| favorite_host_menu_item(favorite, host_nodes, changes_disabled))
+        .map(|favorite| {
+            favorite_host_menu_item(
+                favorite,
+                host_nodes,
+                changes_disabled,
+                host_registry_unavailable,
+            )
+        })
         .collect()
 }
 
@@ -2315,13 +2334,63 @@ fn favorites_menu_items_from_sources(
                 .into_item(),
         );
     }
+    if host_registry_unavailable {
+        items.push(
+            MenuItemFields::new(crate::t!("workspace-host-registry-unavailable"))
+                .with_disabled(true)
+                .with_icon(icons::Icon::AlertTriangle)
+                .into_item(),
+        );
+    }
     // A registry read error is not evidence that a host was removed; keep
     // favorites from being deleted on the strength of a failed read.
     items.extend(favorite_host_menu_items(
         &favorites,
         &host_nodes,
-        persistence_is_protected || host_registry_unavailable,
+        persistence_is_protected,
+        host_registry_unavailable,
     ));
+    items
+}
+
+/// `None` means the registry could not be read, rather than an empty registry.
+fn split_launch_menu_items(
+    hosts: Option<Vec<(String, String)>>,
+    current_host: Option<&SplitLaunchDestination>,
+) -> Vec<MenuItem<SplitLaunchDestination>> {
+    let host_item = |name: String, destination: SplitLaunchDestination| {
+        let label = if current_host == Some(&destination) {
+            format!("{name} · {}", crate::t!("common-current"))
+        } else {
+            name
+        };
+        MenuItemFields::new(label)
+            .with_on_select_action(destination)
+            .with_icon(icons::Icon::Terminal)
+            .into_item()
+    };
+    let mut items = vec![host_item(
+        crate::t!("cockpit-spawn-card-host-local"),
+        SplitLaunchDestination::Local,
+    )];
+    match hosts {
+        Some(hosts) if !hosts.is_empty() => {
+            items.push(MenuItem::Separator);
+            items.extend(hosts.into_iter().map(|(node_id, name)| {
+                host_item(name, SplitLaunchDestination::Remote { node_id })
+            }));
+        }
+        Some(_) => {}
+        None => {
+            items.push(MenuItem::Separator);
+            items.push(
+                MenuItemFields::new(crate::t!("workspace-host-registry-unavailable"))
+                    .with_disabled(true)
+                    .with_icon(icons::Icon::AlertTriangle)
+                    .into_item(),
+            );
+        }
+    }
     items
 }
 
@@ -14073,6 +14142,35 @@ impl Workspace {
         favorites_menu_items_from_sources(favorites_store, host_nodes, host_registry_unavailable)
     }
 
+    fn split_launch_source_host(
+        &self,
+        pane_group: &ViewHandle<PaneGroup>,
+        pane_id: PaneId,
+        ctx: &AppContext,
+    ) -> Option<SplitLaunchDestination> {
+        let group = pane_group.as_ref(ctx);
+        if let Some(pane) = group.downcast_pane_by_id::<SftpPane>(pane_id) {
+            // The visible file manager may show a different host than its covered terminal.
+            // Its own persisted identity takes precedence over terminal and legacy tab maps.
+            let LeafContents::Sftp { node_id, mode, .. } = pane.snapshot(ctx) else {
+                return None;
+            };
+            return Some(match mode {
+                FileManagerPaneMode::Local => SplitLaunchDestination::Local,
+                FileManagerPaneMode::Remote | FileManagerPaneMode::RemotePicker => {
+                    SplitLaunchDestination::Remote { node_id }
+                }
+            });
+        }
+        let source_view = group.terminal_view_from_pane_id(pane_id, ctx)?;
+        self.node_for_pane(pane_group, pane_id, Some(&source_view), ctx)
+            .map(|node_id| SplitLaunchDestination::Remote { node_id })
+            .or_else(|| {
+                (source_view.as_ref(ctx).active_session_is_local(ctx) == Some(true))
+                    .then_some(SplitLaunchDestination::Local)
+            })
+    }
+
     fn open_split_launch_menu(
         &mut self,
         pane_group: ViewHandle<PaneGroup>,
@@ -14084,29 +14182,15 @@ impl Workspace {
             return;
         }
 
-        let mut items = vec![
-            MenuItemFields::new(crate::t!("cockpit-spawn-card-host-local"))
-                .with_on_select_action(SplitLaunchDestination::Local)
-                .with_icon(icons::Icon::Terminal)
-                .into_item(),
-        ];
+        let current_host = self.split_launch_source_host(&pane_group, target.pane_id(), ctx);
         let hosts = warp_ssh_manager::with_conn(|conn| {
             Ok(warp_ssh_manager::SshRepository::list_nodes(conn)?
                 .into_iter()
                 .filter(|node| matches!(node.kind, warp_ssh_manager::types::NodeKind::Server))
                 .map(|node| (node.id, node.name))
                 .collect::<Vec<_>>())
-        })
-        .unwrap_or_default();
-        if !hosts.is_empty() {
-            items.push(MenuItem::Separator);
-            items.extend(hosts.into_iter().map(|(node_id, name)| {
-                MenuItemFields::new(name)
-                    .with_on_select_action(SplitLaunchDestination::Remote { node_id })
-                    .with_icon(icons::Icon::Terminal)
-                    .into_item()
-            }));
-        }
+        });
+        let items = split_launch_menu_items(hosts.ok(), current_host.as_ref());
         self.split_launch_menu
             .update(ctx, |menu, ctx| menu.set_items(items, ctx));
         self.pending_split_launch = Some(PendingSplitLaunch {

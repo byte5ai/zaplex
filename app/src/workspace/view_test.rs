@@ -1429,8 +1429,13 @@ fn reopen_closed_session_menu_item(
 
 fn favorite_host_submenu() -> MenuItem<WorkspaceAction> {
     super::favorite_host_menu_item(
-        &zaplex_cockpit::Favorite::new(zaplex_cockpit::FavoriteKind::Host, "node-dev", "example-host"),
+        &zaplex_cockpit::Favorite::new(
+            zaplex_cockpit::FavoriteKind::Host,
+            "node-dev",
+            "example-host",
+        ),
         &[("node-dev".to_string(), "example-host".to_string())],
+        false,
         false,
     )
 }
@@ -1501,6 +1506,33 @@ fn connections_registry_drives_favorite_launch_menu() {
                 super::favorites_menu_items_from_sources(store, Vec::new(), true),
             )
         });
+
+        assert!(unreadable_registry_items.iter().any(|item| matches!(
+            item,
+            MenuItem::Item(fields)
+                if fields.label() == crate::t!("workspace-host-registry-unavailable")
+                    && fields.is_disabled()
+        )));
+        let failed_favorite = unreadable_registry_items
+            .iter()
+            .find_map(|item| {
+                if let MenuItem::Submenu { fields, menu } = item {
+                    Some((fields, menu))
+                } else {
+                    None
+                }
+            })
+            .expect("the favorite remains visible when its registry cannot be read");
+        assert_eq!(failed_favorite.0.label(), "stale-display-name");
+        assert!(failed_favorite.0.on_select_action().is_none());
+        assert!(failed_favorite.0.is_split_submenu_primary_disabled());
+        let MenuItem::Item(reason) = &failed_favorite.1.items()[0] else {
+            panic!("unavailable favorite must explain the registry failure");
+        };
+        assert_eq!(
+            reason.label(),
+            crate::t!("workspace-host-registry-unavailable")
+        );
 
         // A failed registry read must not offer deleting the favorite as if
         // its host had been removed.
@@ -1629,13 +1661,14 @@ fn new_agent_submenu_opens_spawn_card_without_launching() {
 }
 
 #[test]
-fn unavailable_host_registry_keeps_favorite_remove_available() {
+fn missing_host_in_readable_registry_keeps_favorite_remove_available() {
     let favorite = zaplex_cockpit::Favorite::new(
         zaplex_cockpit::FavoriteKind::Host,
         "deleted-node",
         "old-example-host",
     );
-    let mut items = super::favorite_host_menu_items(std::slice::from_ref(&favorite), &[], false);
+    let mut items =
+        super::favorite_host_menu_items(std::slice::from_ref(&favorite), &[], false, false);
     assert_eq!(items.len(), 1);
     let MenuItem::Submenu { fields, menu } = items.pop().unwrap() else {
         panic!("a stale favorite must remain visible as a submenu");
@@ -1673,7 +1706,8 @@ fn protected_favorite_store_disables_stale_removal() {
         "deleted-node",
         "old-example-host",
     );
-    let MenuItem::Submenu { menu, .. } = super::favorite_host_menu_item(&favorite, &[], true)
+    let MenuItem::Submenu { menu, .. } =
+        super::favorite_host_menu_item(&favorite, &[], true, false)
     else {
         panic!("the protected stale favorite must remain visible");
     };
@@ -1691,7 +1725,8 @@ fn removed_favorite_host_is_disabled_and_never_routed() {
         "removed-node",
         "removed-host",
     );
-    let MenuItem::Submenu { menu, .. } = super::favorite_host_menu_item(&favorite, &[], false)
+    let MenuItem::Submenu { menu, .. } =
+        super::favorite_host_menu_item(&favorite, &[], false, false)
     else {
         panic!("a removed favorite must remain explicitly removable");
     };
@@ -1704,7 +1739,149 @@ fn removed_favorite_host_is_disabled_and_never_routed() {
 #[test]
 fn automatic_host_registration_never_adds_menu_favorite() {
     let registered_hosts = vec![("node-dev".to_string(), "example-host".to_string())];
-    assert!(super::favorite_host_menu_items(&[], &registered_hosts, false).is_empty());
+    assert!(super::favorite_host_menu_items(&[], &registered_hosts, false, false).is_empty());
+}
+
+#[test]
+fn split_picker_marks_only_the_current_host_and_preserves_routes() {
+    use super::SplitLaunchDestination;
+
+    crate::i18n::init(Some("en"));
+    let current = SplitLaunchDestination::Remote {
+        node_id: "second".into(),
+    };
+    let items = super::split_launch_menu_items(
+        Some(vec![
+            ("first".into(), "same-name".into()),
+            ("second".into(), "same-name".into()),
+        ]),
+        Some(&current),
+    );
+    let choices = items
+        .iter()
+        .filter_map(|item| {
+            if let MenuItem::Item(fields) = item {
+                Some(fields)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(choices.len(), 3);
+    assert_eq!(
+        choices[0].label(),
+        crate::t!("cockpit-spawn-card-host-local")
+    );
+    assert_eq!(
+        choices[0].on_select_action(),
+        Some(&SplitLaunchDestination::Local)
+    );
+    assert_eq!(choices[1].label(), "same-name");
+    assert_eq!(
+        choices[1].on_select_action(),
+        Some(&SplitLaunchDestination::Remote {
+            node_id: "first".into()
+        })
+    );
+    assert_eq!(
+        choices[2].label(),
+        format!("same-name · {}", crate::t!("common-current"))
+    );
+    assert_eq!(choices[2].on_select_action(), Some(&current));
+
+    let local =
+        super::split_launch_menu_items(Some(Vec::new()), Some(&SplitLaunchDestination::Local));
+    let MenuItem::Item(local) = &local[0] else {
+        panic!("local launch remains available");
+    };
+    assert_eq!(
+        local.label(),
+        format!(
+            "{} · {}",
+            crate::t!("cockpit-spawn-card-host-local"),
+            crate::t!("common-current")
+        )
+    );
+}
+
+#[test]
+fn split_picker_uses_the_visible_file_manager_host_instead_of_the_covered_terminal() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            for (target, expected) in [
+                (
+                    pane_group::FileManagerTarget::Local {
+                        start_path: directory.path().to_path_buf(),
+                    },
+                    SplitLaunchDestination::Local,
+                ),
+                (
+                    pane_group::FileManagerTarget::Remote {
+                        node_id: "visible-file-host".to_string(),
+                        start_path: Some(PathBuf::from("/srv")),
+                    },
+                    SplitLaunchDestination::Remote {
+                        node_id: "visible-file-host".to_string(),
+                    },
+                ),
+            ] {
+                workspace.add_terminal_tab(false, ctx);
+                let group = workspace.active_tab_pane_group().clone();
+                let terminal = group.as_ref(ctx).focused_pane_id(ctx);
+                workspace
+                    .ssh_pane_nodes
+                    .insert(terminal, "covered-host".to_string());
+                workspace
+                    .ssh_tab_nodes
+                    .insert(group.id(), "legacy-tab-host".to_string());
+                let visible = group.update(ctx, |group, ctx| {
+                    group.open_file_manager_in_place(terminal, target, ctx);
+                    group.focused_pane_id(ctx)
+                });
+                assert_ne!(visible, terminal);
+                assert!(group
+                    .as_ref(ctx)
+                    .terminal_view_from_pane_id(visible, ctx)
+                    .is_none());
+                assert_eq!(
+                    workspace.split_launch_source_host(&group, visible, ctx),
+                    Some(expected),
+                );
+            }
+        });
+    });
+}
+
+#[test]
+fn split_picker_distinguishes_unreadable_registry_from_empty_registry() {
+    use super::SplitLaunchDestination;
+
+    crate::i18n::init(Some("en"));
+    let failed = super::split_launch_menu_items(None, None);
+    let empty = super::split_launch_menu_items(Some(Vec::new()), None);
+    assert_eq!(empty.len(), 1);
+    assert_eq!(failed.len(), 3);
+    let MenuItem::Item(local) = &failed[0] else {
+        panic!("local launch remains available");
+    };
+    assert_eq!(local.label(), crate::t!("cockpit-spawn-card-host-local"));
+    assert_eq!(
+        local.on_select_action(),
+        Some(&SplitLaunchDestination::Local)
+    );
+    let MenuItem::Item(error) = &failed[2] else {
+        panic!("registry failure must stay visible");
+    };
+    assert_eq!(
+        error.label(),
+        crate::t!("workspace-host-registry-unavailable")
+    );
+    assert!(error.is_disabled());
+    assert!(error.on_select_action().is_none());
 }
 
 #[test]
