@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Die Lockdatei entfernt einen verwaisten ndarray-Eintrag aus der ORT-Aktualisierung (#472). Die festgeschriebene Abhängigkeitsauflösung funktioniert wieder ohne Versionsänderungen.
+
 - Die vorbereitete Coverage-CI (#472) archiviert zusätzlich vollständige LLVM-Funktions-/Regionsdaten und Abhängigkeitsdiagnostik. Exportfehler bleiben sichtbar fehlgeschlagen; die bestehende Abnahme wird nicht gelockert.
 
 - Die Coverage-Quellprojektion (#472) schließt testabhängige Match-Arme mitsamt ihrem ausgeführten Körper aus. Makroauflösung, generierte Derives und unbekannte Featurebedingungen bleiben ohne zusätzliche Belege ausdrücklich unbewiesen.
