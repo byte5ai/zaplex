@@ -340,6 +340,11 @@ def release_metadata_is_consistent_across_manifests_resources_and_docs(root: Pat
         raise ReadinessError(f"VERSION is not a stable semantic version: {version!r}")
 
     observed = {
+        "readiness protocol version": require_match(
+            read_text(root / "docs/release/1.0-readiness.md"),
+            r"^# Zaplex ([0-9]+\.[0-9]+\.[0-9]+) ",
+            "version in readiness heading",
+        ),
         "app/Cargo.toml": manifest_version(root / "app/Cargo.toml"),
         "Cargo.lock warp package": lock_version(root / "Cargo.lock", "warp"),
         "CLI-Info.plist short": plist_versions(
@@ -725,6 +730,8 @@ def manual_release_matrix_has_result_and_evidence_for_every_row(
             raise ReadinessError(
                 f"{row_id} needs PASS, an artifact ID and independent evidence in Phase B"
             )
+    if phase == "b" and len({row[3] for row in rows}) != 1:
+        raise ReadinessError("Phase B requires the same artifact ID in every runtime row")
 
 
 def copy_fixture(root: Path, destination: Path, relative_paths: tuple[str, ...]) -> None:
@@ -850,6 +857,16 @@ def run_self_test() -> None:
         shutil.copy2(root / "Cargo.lock", cargo_lock)
 
         readiness = fixture / "docs/release/1.0-readiness.md"
+        readiness.write_text(
+            read_text(readiness).replace(f"# Zaplex {fixture_version} ", f"# Zaplex {next_version} ", 1),
+            encoding="utf-8",
+        )
+        expect_readiness_failure_with_fragments(
+            "readiness_protocol_version_matches_the_artifact",
+            lambda: release_metadata_is_consistent_across_manifests_resources_and_docs(fixture),
+            ("readiness protocol version",),
+        )
+        shutil.copy2(root / "docs/release/1.0-readiness.md", readiness)
         readiness.write_text(
             read_text(readiness).replace(V1_BASE_SHA, "0" * 40, 1),
             encoding="utf-8",
@@ -996,6 +1013,15 @@ def run_self_test() -> None:
                 )
             readiness.write_text(matrix_text, encoding="utf-8")
             manual_release_matrix_has_result_and_evidence_for_every_row(fixture, phase)
+            if phase == "b":
+                readiness.write_text(
+                    matrix_text.replace("| fixture-artifact |", "| another-artifact |", 1),
+                    encoding="utf-8",
+                )
+                expect_readiness_failure(
+                    "runtime_matrix_rejects_mixed_artifacts",
+                    lambda: manual_release_matrix_has_result_and_evidence_for_every_row(fixture, "b"),
+                )
             first_row = next(line for line in matrix_text.splitlines() if line.startswith("| M01 |"))
             hidden_failure = first_row.replace(
                 "| PENDING_ARTIFACT |" if phase == "a" else "| PASS |", "| FAIL |"

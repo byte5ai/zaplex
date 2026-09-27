@@ -1173,7 +1173,7 @@ pub async fn run_structured_analysis(
         .await
         .map_err(|error| GitHubFlowError::CommandUnavailable(error.to_string()))?;
     session
-        .send_prompt(prompt)
+        .send_prompt(&prompt.into())
         .await
         .map_err(|error| GitHubFlowError::CommandFailed(error.to_string()))?;
     let mut text = String::new();

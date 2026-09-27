@@ -1,4 +1,5 @@
 use super::*;
+use crate::ai::agent::ImageContext;
 use crate::ai::subscription_agent::{AccountIdentity, HostIdentity, SubscriptionAgent};
 
 fn installation() -> InstallationIdentity {
@@ -283,5 +284,35 @@ fn approval_response_never_bypasses_the_protocol() {
                 }
             }
         })
+    );
+}
+
+#[test]
+fn native_turn_contains_text_context_and_inline_image_data() {
+    let prompt = SubscriptionPrompt {
+        query: "Explain this diagram".to_string(),
+        context: "Attached selected text".to_string(),
+        images: vec![ImageContext {
+            data: "aW1hZ2U=".to_string(),
+            mime_type: "image/png".to_string(),
+            file_name: "diagram.png".to_string(),
+            is_figma: false,
+        }],
+    };
+    let frame = ClaudeProtocol::user_message(&prompt, Some("native-session"));
+    assert_eq!(frame["session_id"], "native-session");
+    assert_eq!(
+        frame["message"]["content"],
+        json!([
+            {"type": "text", "text": "Explain this diagram"},
+            {"type": "text", "text": "Attached selected text"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}}
+        ])
+    );
+    assert_eq!(
+        ClaudeProtocol::user_message(&"plain query".into(), None)["message"]["content"],
+        json!([
+            {"type": "text", "text": "plain query"}
+        ])
     );
 }

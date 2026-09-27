@@ -85,5 +85,5 @@ pub(crate) use types::{
     AccountIdentity, AgentCapability, AgentLifecycle, ApprovalDecision, HostIdentity,
     InstallationIdentity, ModelCapability, ModelEffort, SessionIdentity, SubscriptionAgent,
     SubscriptionAuthenticationError, SubscriptionEvent, SubscriptionLocationPreference,
-    SubscriptionTarget, Usage, LOCAL_SUBSCRIPTION_HOST_ID,
+    SubscriptionPrompt, SubscriptionTarget, Usage, LOCAL_SUBSCRIPTION_HOST_ID,
 };

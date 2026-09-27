@@ -1,9 +1,6 @@
 use anyhow::{Result, ensure};
 use itertools::Itertools as _;
-use ort::{
-    execution_providers::CPUExecutionProvider, session::Session, tensor::ArrayExtensions as _,
-    value::Value,
-};
+use ort::{ep::CPU, session::Session, util::ArrayExt as _, value::Value};
 use parking_lot::Mutex;
 use tokenizers::Tokenizer;
 use warp_completer::ParsedTokensSnapshot;
@@ -31,7 +28,7 @@ impl InferenceRunner {
         })?;
         let session = Session::builder()?
             // For now, we'll do all inference on the CPU.
-            .with_execution_providers([CPUExecutionProvider::default().build()])?
+            .with_execution_providers([CPU::default().build()])?
             .commit_from_memory(model_bytes.as_ref())?;
         Ok(session)
     }

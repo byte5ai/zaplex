@@ -4,6 +4,12 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Headless-Agenten (#245) erhalten ausgewählten Text, Dateikontext, Referenzen und laufende Befehlsausgabe zusammen mit der Anfrage. Bilder gehen als native Bilddaten an Claude/Codex; die angezeigte Anfrage bleibt unverändert.
+
+- Aufeinanderfolgende Logdatei-Generationen (#245) verlieren ihre Ausgabe nicht mehr durch verspätetes Schließen des Vorgängers. ONNX-Aufrufe passen zum vorhandenen ORT-Lockstand; veraltete Windows-Pfade, Lexerpositionen und ein verwaister WASM-Modulfilter sind korrigiert.
+
+- Die Freigabematrix (#245) bindet alle Laufzeitbelege an dasselbe Artefakt und prüft die Protokollversion. Der Übersetzungscheck erkennt mehrzeilige Literale und hält seine temporären Dateien in einem eigenen Verzeichnis.
+
 - Audit-Verifikation (#245) verlangt die archivierten Originalprotokolle und zum Commit passende Quellen. Wiederaufnahmen prüfen bestehende Belege erneut; ausgeschlossene sensible Dateien bleiben als offene Prüflücke sichtbar. Die Freigabematrix weist doppelte Zeilen und fehlerhafte Abschnittsgrenzen zurück.
 
 - Terminal-Dateilinks (#245) öffnen während Remote-Reconnect oder nach dem Entfernen einer Session keine gleichnamige lokale Datei. Verzeichnislinks verwenden die tatsächliche Shell; Unicode-Suchfälle sind in den bestehenden Testdaten wiederhergestellt.

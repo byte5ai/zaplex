@@ -1,4 +1,5 @@
 use super::*;
+use crate::ai::agent::ImageContext;
 use crate::ai::subscription_agent::{AccountIdentity, HostIdentity, SubscriptionAgent};
 
 fn installation() -> InstallationIdentity {
@@ -210,7 +211,7 @@ fn request_sequence_uses_native_threads_turns_and_manual_approvals() {
         })
     );
     assert_eq!(
-        CodexProtocol::turn_start_request(5, &target, "thread-1", "Hello"),
+        CodexProtocol::turn_start_request(5, &target, "thread-1", &"Hello".into()),
         json!({
             "id": 5,
             "method": "turn/start",
@@ -425,5 +426,29 @@ fn permission_approval_echoes_only_the_requested_profile() {
                 "scope": "session"
             }
         })
+    );
+}
+
+#[test]
+fn native_turn_contains_text_context_and_inline_image_data() {
+    let prompt = SubscriptionPrompt {
+        query: "Explain this diagram".to_string(),
+        context: "Attached selected text".to_string(),
+        images: vec![ImageContext {
+            data: "aW1hZ2U=".to_string(),
+            mime_type: "image/png".to_string(),
+            file_name: "diagram.png".to_string(),
+            is_figma: false,
+        }],
+    };
+    let frame = CodexProtocol::turn_start_request(7, &target(), "native-thread", &prompt);
+    assert_eq!(frame["params"]["threadId"], "native-thread");
+    assert_eq!(
+        frame["params"]["input"],
+        json!([
+            {"type": "text", "text": "Explain this diagram"},
+            {"type": "text", "text": "Attached selected text"},
+            {"type": "image", "url": "data:image/png;base64,aW1hZ2U="}
+        ])
     );
 }

@@ -20,9 +20,9 @@ pub(crate) type AfterReceiveHook = Arc<dyn Fn(&str) + Send + Sync>;
 pub(crate) type AfterReceiveHook = ();
 
 enum LogCommand {
-    Begin,
+    Begin(Arc<()>),
     Line(String),
-    Finish(oneshot::Sender<()>),
+    Finish(Arc<()>, oneshot::Sender<()>),
 }
 
 /// Serializes every generation that writes to one log path.
@@ -47,9 +47,11 @@ impl LogWorker {
         let _ = after_receive;
         let logging_task = executor.spawn(async move {
             let mut log_file: Option<async_fs::File> = None;
+            let mut active_generation: Option<Arc<()>> = None;
             while let Ok(command) = log_rx.recv().await {
                 match command {
-                    LogCommand::Begin => {
+                    LogCommand::Begin(generation) => {
+                        active_generation = Some(generation);
                         if let Some(mut previous_file) = log_file.take() {
                             let _ = previous_file.flush().await;
                         }
@@ -92,9 +94,17 @@ impl LogWorker {
                         // Flush after each line to ensure logs are visible immediately.
                         let _ = log_file.flush().await;
                     }
-                    LogCommand::Finish(completion) => {
-                        if let Some(mut finished_file) = log_file.take() {
-                            let _ = finished_file.flush().await;
+                    LogCommand::Finish(generation, completion) => {
+                        // The last writer can already be un-upgradable while its Drop is still
+                        // running. A late Finish must not close a replacement generation's file.
+                        if active_generation
+                            .as_ref()
+                            .is_some_and(|active| Arc::ptr_eq(active, &generation))
+                        {
+                            active_generation = None;
+                            if let Some(mut finished_file) = log_file.take() {
+                                let _ = finished_file.flush().await;
+                            }
                         }
                         let _ = completion.send(());
                     }
@@ -120,6 +130,7 @@ struct WriterState {
 /// Shared state for one [`SimpleLogger`] generation.
 pub(crate) struct LogFileWriter {
     worker: Arc<LogWorker>,
+    generation: Arc<()>,
     state: Mutex<WriterState>,
     completion: Shared<BoxFuture<'static, ()>>,
 }
@@ -128,9 +139,13 @@ impl LogFileWriter {
     fn new(worker: Arc<LogWorker>) -> Arc<Self> {
         let (finish_tx, finish_rx) = oneshot::channel();
         let completion = finish_rx.map(|_| ()).boxed().shared();
-        let _ = worker.log_tx.try_send(LogCommand::Begin);
+        let generation = Arc::new(());
+        let _ = worker
+            .log_tx
+            .try_send(LogCommand::Begin(generation.clone()));
         Arc::new(Self {
             worker,
+            generation,
             state: Mutex::new(WriterState {
                 finish_tx: Some(finish_tx),
             }),
@@ -146,10 +161,15 @@ impl LogFileWriter {
     }
 
     fn finish(&self) {
-        let Some(completion) = self.state.lock().unwrap().finish_tx.take() else {
+        // Keep the close marker and queue insertion atomic to is_closed() and log().
+        let mut state = self.state.lock().unwrap();
+        let Some(completion) = state.finish_tx.take() else {
             return;
         };
-        let _ = self.worker.log_tx.try_send(LogCommand::Finish(completion));
+        let _ = self
+            .worker
+            .log_tx
+            .try_send(LogCommand::Finish(self.generation.clone(), completion));
     }
 
     /// Returns true after this generation stopped accepting new lines.

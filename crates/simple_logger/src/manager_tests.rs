@@ -137,3 +137,47 @@ fn closed_logger_is_drained_before_path_reuse() {
     assert!(!contents.contains("old-final"));
     cleanup_log_path(&log_path);
 }
+
+#[test]
+fn late_finish_from_dropped_generation_preserves_replacement_log() {
+    let mut manager = LogManager::new();
+    let executor = Arc::new(Background::default());
+    let log_path = temp_path("late-finish").join("server.log");
+    let old_logger = manager
+        .register_resolved_path(log_path.clone(), executor.clone())
+        .expect("initial registration should succeed");
+    old_logger.log("old-final".to_string());
+
+    // Model the permitted queue ordering when Weak::upgrade fails during the last
+    // writer's Drop: replacement Begin is enqueued before the old Finish.
+    let completion = old_logger
+        .writer
+        .state
+        .lock()
+        .unwrap()
+        .finish_tx
+        .take()
+        .unwrap();
+    let new_logger = manager
+        .register_resolved_path(log_path.clone(), executor)
+        .expect("the closed generation can be replaced");
+    assert!(old_logger
+        .writer
+        .worker
+        .log_tx
+        .try_send(crate::LogCommand::Finish(
+            old_logger.writer.generation.clone(),
+            completion,
+        ))
+        .is_ok());
+    new_logger.log("new-after-old-finish".to_string());
+    new_logger.close();
+    futures::executor::block_on(async {
+        futures::join!(old_logger.wait_closed(), new_logger.wait_closed());
+    });
+
+    let contents = std::fs::read_to_string(&log_path).unwrap();
+    assert!(contents.contains("new-after-old-finish"));
+    assert!(!contents.contains("old-final"));
+    cleanup_log_path(&log_path);
+}

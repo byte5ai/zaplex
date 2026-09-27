@@ -6,10 +6,15 @@ use super::{
     ProcessLocation, RoutePreferences, RouteResult, SubscriptionAgent,
     SubscriptionLocationPreference, SubscriptionSessionRegistry, SubscriptionTarget,
 };
+use crate::ai::agent::{
+    AIAgentAttachment, AIAgentContext, AIAgentInput, AnyFileContent, FileContext, ImageContext,
+    RunningCommand, UserQueryMode,
+};
 use crate::ai::subscription_agent::{ModelCapability, SessionIdentity};
 use crate::remote_server::client::RemoteServerClient;
 use crate::remote_server::proto::{AgentAccountInfo, AgentAccountInventory};
 use crate::remote_server::transport::DaemonRuntimeRoute;
+use crate::terminal::model::block::BlockId;
 use crate::terminal::ssh::util::InteractiveSshCommand;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
@@ -783,7 +788,7 @@ fn dispatch_with_a_changed_preflight_target_leaves_starting_and_keeps_selection(
                 conversation_id: "conversation".to_string(),
                 task_id: "task".to_string(),
                 needs_create_task: false,
-                prompt: "must not run on another target".to_string(),
+                prompt: "must not run on another target".into(),
                 working_directory: selected.working_directory.clone(),
             };
             let (_sender, receiver) = futures::channel::oneshot::channel();
@@ -926,7 +931,7 @@ fn dispatch_revalidates_a_preflight_target_and_reports_discovery_failure() {
             conversation_id: "conversation".to_string(),
             task_id: "task".to_string(),
             needs_create_task: false,
-            prompt: "must revalidate the target".to_string(),
+            prompt: "must revalidate the target".into(),
             working_directory: selected.working_directory,
         };
         let (_sender, receiver) = futures::channel::oneshot::channel();
@@ -1018,7 +1023,7 @@ done
         conversation_id: "conversation".to_string(),
         task_id: "task".to_string(),
         needs_create_task: false,
-        prompt: "must not silently start another native session".to_string(),
+        prompt: "must not silently start another native session".into(),
         working_directory: selected.working_directory.clone(),
     };
     let (_sender, receiver) = futures::channel::oneshot::channel();
@@ -1141,7 +1146,7 @@ fn dispatch_preserves_the_preferred_cli_probe_error_when_another_agent_resolves(
             conversation_id: "conversation".to_string(),
             task_id: "task".to_string(),
             needs_create_task: false,
-            prompt: "keep the selected CLI diagnosis".to_string(),
+            prompt: "keep the selected CLI diagnosis".into(),
             working_directory: selected.working_directory.clone(),
         };
         let (_sender, receiver) = futures::channel::oneshot::channel();
@@ -1343,4 +1348,84 @@ esac
         );
         assert_eq!(registry.lifecycle("cancelled"), Some(AgentLifecycle::Ready));
     });
+}
+
+#[test]
+fn subscription_prompt_preserves_attached_context_and_separates_native_images() {
+    let image = ImageContext {
+        data: "aW1hZ2U=".to_string(),
+        mime_type: "image/png".to_string(),
+        file_name: "diagram.png".to_string(),
+        is_figma: false,
+    };
+    let file = FileContext::new(
+        "/workspace/source.rs".to_string(),
+        AnyFileContent::StringContent("let answer = 42;".to_string()),
+        None,
+        None,
+    );
+    let input = AIAgentInput::UserQuery {
+        query: "Explain @note".to_string(),
+        context: vec![
+            AIAgentContext::SelectedText("selected terminal output".to_string()),
+            AIAgentContext::File(file.clone()),
+            AIAgentContext::SelectedText(String::new()),
+            AIAgentContext::Image(image.clone()),
+        ]
+        .into(),
+        static_query_type: None,
+        referenced_attachments: [(
+            "@note".to_string(),
+            AIAgentAttachment::PlainText("referenced note".to_string()),
+        )]
+        .into(),
+        user_query_mode: UserQueryMode::Normal,
+        running_command: Some(RunningCommand {
+            command: "top".to_string(),
+            block_id: BlockId::new(),
+            grid_contents: "live terminal contents".to_string(),
+            cursor: "cursor".to_string(),
+            requested_command_id: None,
+            is_alt_screen_active: true,
+        }),
+        intended_agent: None,
+    };
+    let mut plain_input = input.clone();
+    if let AIAgentInput::UserQuery {
+        context,
+        referenced_attachments,
+        running_command,
+        ..
+    } = &mut plain_input {
+        *context = Vec::new().into();
+        referenced_attachments.clear();
+        *running_command = None;
+    }
+    let plain_prompt = super::prompt_from_inputs(&[plain_input]).unwrap();
+    assert_eq!(plain_prompt.query, "Explain @note");
+    assert!(plain_prompt.context.is_empty());
+    assert!(plain_prompt.images.is_empty());
+
+    let prompt = super::prompt_from_inputs(&[input]).unwrap();
+    assert_eq!(prompt.query, "Explain @note");
+    assert_eq!(prompt.images, vec![image]);
+    let (_, json) = prompt.context.split_once('\n').unwrap();
+    let context: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        context[0]["context"][0],
+        serde_json::json!({"SelectedText": "selected terminal output"})
+    );
+    assert_eq!(context[0]["context"][1], serde_json::json!({"File": file}));
+    assert_eq!(context[0]["context"].as_array().unwrap().len(), 3);
+    assert_eq!(context[0]["context"][2], serde_json::json!({"SelectedText": ""}));
+    assert_eq!(
+        context[1]["referenced_attachments"]["@note"],
+        serde_json::json!({"PlainText": "referenced note"})
+    );
+    assert_eq!(
+        context[2]["running_command"]["grid_contents"],
+        "live terminal contents"
+    );
+    assert_eq!(context[2]["running_command"]["is_alt_screen_active"], true);
+    assert!(!prompt.context.contains("aW1hZ2U="));
 }

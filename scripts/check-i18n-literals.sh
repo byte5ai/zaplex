@@ -17,19 +17,24 @@ FILES=(
   app/src/workspace/native_modal.rs
 )
 
-# Text/Span constructors whose first argument is user-visible: a string literal
-# there bypasses crate::t! / t_static!. Matches `Ctor("…` or `Ctor(\n  "…`.
-PATTERN='(Text::new|Text::new_inline|FormattedTextElement::from_str|Span::new)\(\s*"'
+# Scan whole files so a newline before the literal cannot bypass the guard.
+# Python's regular expressions also work on hosts without GNU grep/PCRE.
+python3 - "${FILES[@]}" <<'PYTHON'
+from pathlib import Path
+import re
+import sys
 
-hits="$(grep -rnzoP "$PATTERN" "${FILES[@]}" 2>/dev/null | tr '\0' '\n' || true)"
-# Fallback simple line grep (portable): catch the common single-line form too.
-hits2="$(grep -rnE "$PATTERN" "${FILES[@]}" 2>/dev/null || true)"
-
-if [[ -n "$hits2" ]]; then
-  echo "i18n guard FAILED — bare user-facing literal(s) in a render path"
-  echo "(route them through crate::t! / t_static! + warp.ftl):"
-  echo "$hits2"
-  exit 1
-fi
-
-echo "i18n guard OK — no bare literals in render constructors on the guarded surfaces."
+pattern = re.compile(r'(Text::new|Text::new_inline|FormattedTextElement::from_str|Span::new)\(\s*"')
+hits = []
+for name in sys.argv[1:]:
+    source = Path(name).read_text(encoding="utf-8")
+    for match in pattern.finditer(source):
+        line = source.count("\n", 0, match.start()) + 1
+        hits.append(f"{name}:{line}: {match.group(1)}")
+if hits:
+    print("i18n guard FAILED — bare user-facing literal(s) in a render path")
+    print("(route them through crate::t! / t_static! + warp.ftl):")
+    print("\n".join(hits))
+    raise SystemExit(1)
+print("i18n guard OK — no bare literals in render constructors on the guarded surfaces.")
+PYTHON

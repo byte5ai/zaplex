@@ -6194,7 +6194,7 @@ dependencies = [
  "lazy_static",
  "log",
  "natural_language_detection",
- "ndarray 0.16.1",
+ "ndarray 0.17.2",
  "ort",
  "parking_lot",
  "prost",

@@ -1,6 +1,6 @@
 use super::{
     AgentCapability, ApprovalDecision, InstallationIdentity, ModelCapability, ModelEffort,
-    SessionIdentity, SubscriptionEvent, SubscriptionTarget, Usage,
+    SessionIdentity, SubscriptionEvent, SubscriptionPrompt, SubscriptionTarget, Usage,
 };
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
@@ -89,17 +89,24 @@ impl CodexProtocol {
         id: u64,
         target: &SubscriptionTarget,
         thread_id: &str,
-        prompt: &str,
+        prompt: &SubscriptionPrompt,
     ) -> Value {
+        let mut input = vec![json!({ "type": "text", "text": prompt.query })];
+        if !prompt.context.is_empty() {
+            input.push(json!({ "type": "text", "text": prompt.context }));
+        }
+        input.extend(prompt.images.iter().map(|image| {
+            json!({
+                "type": "image",
+                "url": format!("data:{};base64,{}", image.mime_type, image.data),
+            })
+        }));
         request(
             id,
             "turn/start",
             json!({
                 "threadId": thread_id,
-                "input": [{
-                    "type": "text",
-                    "text": prompt
-                }],
+                "input": input,
                 "cwd": target.working_directory,
                 "model": target.model.id,
                 "effort": target.effort,

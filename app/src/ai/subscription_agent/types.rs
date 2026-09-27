@@ -1,8 +1,26 @@
+use crate::ai::agent::ImageContext;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
 pub(crate) const LOCAL_SUBSCRIPTION_HOST_ID: &str = "local";
+
+/// The visible query and its attached context, delivered in one native CLI turn.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SubscriptionPrompt {
+    pub(crate) query: String,
+    pub(crate) context: String,
+    pub(crate) images: Vec<ImageContext>,
+}
+
+impl From<&str> for SubscriptionPrompt {
+    fn from(query: &str) -> Self {
+        Self {
+            query: query.to_string(),
+            ..Default::default()
+        }
+    }
+}
 
 /// An installed subscription agent supported by the in-app conversation surface.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]

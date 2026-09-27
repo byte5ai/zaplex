@@ -1,6 +1,7 @@
 use super::{
     ApprovalDecision, ClaudeProtocol, CodexProtocol, JsonLineProcess, ProcessLaunch,
-    ProcessLocation, SessionIdentity, SubscriptionAgent, SubscriptionEvent, SubscriptionTarget,
+    ProcessLocation, SessionIdentity, SubscriptionAgent, SubscriptionEvent, SubscriptionPrompt,
+    SubscriptionTarget,
 };
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
@@ -70,7 +71,7 @@ impl SubscriptionSession {
         self.session.as_ref()
     }
 
-    pub(crate) async fn send_prompt(&mut self, prompt: &str) -> Result<()> {
+    pub(crate) async fn send_prompt(&mut self, prompt: &SubscriptionPrompt) -> Result<()> {
         match self.target.installation.agent {
             SubscriptionAgent::ClaudeCode => {
                 self.process

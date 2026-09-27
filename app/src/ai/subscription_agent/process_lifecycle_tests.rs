@@ -203,7 +203,7 @@ cat >/dev/null
         let mut session = SubscriptionSession::open_with_launch(target, None, launch)
             .await
             .unwrap();
-        session.send_prompt("Hello").await.unwrap();
+        session.send_prompt(&"Hello".into()).await.unwrap();
 
         assert_eq!(
             session.next_event().await.unwrap(),
@@ -303,7 +303,7 @@ cat >/dev/null
                 .await
                 .unwrap();
         assert_eq!(session.identity(), Some(&resume));
-        session.send_prompt("Continue").await.unwrap();
+        session.send_prompt(&"Continue".into()).await.unwrap();
         assert_eq!(
             session.next_event().await.unwrap(),
             Some(SubscriptionEvent::SessionStarted(resume.clone()))
@@ -356,7 +356,7 @@ exit 17
         let mut session = SubscriptionSession::open(target, None, ProcessLocation::Local)
             .await
             .unwrap();
-        session.send_prompt("Crash").await.unwrap();
+        session.send_prompt(&"Crash".into()).await.unwrap();
         assert_eq!(
             session.next_event().await.unwrap(),
             Some(SubscriptionEvent::SessionStarted(
@@ -445,7 +445,7 @@ exec /bin/sh -c "$last"
         )
         .await
         .unwrap();
-        session.send_prompt("Run remotely").await.unwrap();
+        session.send_prompt(&"Run remotely".into()).await.unwrap();
 
         assert_eq!(
             session.next_event().await.unwrap(),
@@ -571,7 +571,7 @@ exec /bin/sh -c "$last"
         .await
         .unwrap();
         assert_eq!(session.identity(), Some(&resume));
-        session.send_prompt("Continue").await.unwrap();
+        session.send_prompt(&"Continue".into()).await.unwrap();
         assert_eq!(
             session.next_event().await.unwrap(),
             Some(SubscriptionEvent::ReasoningDelta("Inspecting".to_string()))
@@ -691,7 +691,7 @@ cat >/dev/null
             session.identity(),
             Some(&SessionIdentity::Codex("codex-local-thread".to_string()))
         );
-        session.send_prompt("Run locally").await.unwrap();
+        session.send_prompt(&"Run locally".into()).await.unwrap();
 
         assert_eq!(
             session.next_event().await.unwrap(),
@@ -763,7 +763,7 @@ cat >/dev/null
         let mut session = SubscriptionSession::open(target, None, ProcessLocation::Local)
             .await
             .unwrap();
-        session.send_prompt("Run").await.unwrap();
+        session.send_prompt(&"Run".into()).await.unwrap();
 
         let event = session
             .next_event()
@@ -904,7 +904,10 @@ cat >/dev/null
         let mut session = SubscriptionSession::open_read_only(target, ProcessLocation::Local)
             .await
             .unwrap();
-        session.send_prompt("Inspect the diff").await.unwrap();
+        session
+            .send_prompt(&"Inspect the diff".into())
+            .await
+            .unwrap();
 
         let event = session
             .next_event()

@@ -3,10 +3,11 @@ use super::{
     discover_capabilities, query_cli_version, route_target, AccountIdentity, AgentCapability,
     AgentLifecycle, HostIdentity, InstallationIdentity, ProcessLocation, ResponseEventAdapter,
     RoutePreferences, RouteResult, SessionIdentity, SubscriptionAgent,
-    SubscriptionAuthenticationError, SubscriptionLocationPreference, SubscriptionSession,
-    SubscriptionSessionRegistry, SubscriptionTarget, LOCAL_SUBSCRIPTION_HOST_ID,
+    SubscriptionAuthenticationError, SubscriptionLocationPreference, SubscriptionPrompt,
+    SubscriptionSession, SubscriptionSessionRegistry, SubscriptionTarget,
+    LOCAL_SUBSCRIPTION_HOST_ID,
 };
-use crate::ai::agent::{api, AIAgentInput, AIIdentifiers};
+use crate::ai::agent::{api, AIAgentContext, AIAgentInput, AIIdentifiers};
 use crate::ai::api_error::AIApiError;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, SessionContext};
 use crate::cockpit::CockpitModel;
@@ -106,7 +107,7 @@ pub(crate) struct SubscriptionDispatch {
     conversation_id: String,
     task_id: String,
     needs_create_task: bool,
-    prompt: String,
+    prompt: SubscriptionPrompt,
     working_directory: PathBuf,
 }
 
@@ -772,7 +773,7 @@ pub(crate) async fn generate_subscription_output(
         if needs_create_task {
             yield Ok(adapter.create_task());
         }
-        yield Ok(adapter.persist_user_query(prompt));
+        yield Ok(adapter.persist_user_query(prompt.query));
         yield Ok(adapter.target(&target));
         futures_util::pin_mut!(cancellation);
         loop {
@@ -1032,14 +1033,64 @@ async fn with_timeout<T>(action: &str, future: impl Future<Output = Result<T>>) 
     }
 }
 
-fn prompt_from_inputs(inputs: &[AIAgentInput]) -> Result<String> {
-    let prompt = inputs
+fn prompt_from_inputs(inputs: &[AIAgentInput]) -> Result<SubscriptionPrompt> {
+    let query = inputs
         .iter()
         .filter_map(AIAgentInput::user_query)
         .collect::<Vec<_>>()
         .join("\n\n");
-    if prompt.is_empty() {
+    if query.is_empty() {
         bail!("this in-app action has no prompt supported by the subscription-agent protocol");
+    }
+    let mut prompt = SubscriptionPrompt {
+        query,
+        ..Default::default()
+    };
+    let mut attached_context = Vec::new();
+    for input in inputs {
+        let mut context = Vec::new();
+        for item in input.context().unwrap_or_default() {
+            match item {
+                AIAgentContext::Image(image) => prompt.images.push(image.clone()),
+                item => context.push(item),
+            }
+        }
+        if !context.is_empty() {
+            attached_context.push(serde_json::json!({ "context": context }));
+        }
+        if let AIAgentInput::UserQuery {
+            referenced_attachments,
+            running_command,
+            ..
+        } = input
+        {
+            if !referenced_attachments.is_empty() {
+                attached_context.push(serde_json::json!({
+                    "referenced_attachments": referenced_attachments,
+                }));
+            }
+            if let Some(command) = running_command {
+                attached_context.push(serde_json::json!({
+                    "running_command": {
+                        "command": command.command,
+                        "block_id": command.block_id.to_string(),
+                        "grid_contents": command.grid_contents,
+                        "cursor": command.cursor,
+                        "requested_command_id": command.requested_command_id.as_ref().map(ToString::to_string),
+                        "is_alt_screen_active": command.is_alt_screen_active,
+                    },
+                }));
+            }
+        } else if let Some(attachments) = input.attachments().filter(|items| !items.is_empty()) {
+            attached_context.push(serde_json::json!({ "attachments": attachments }));
+        }
+    }
+    if !attached_context.is_empty() {
+        // Keep user-selected data separate from the query and from native image blocks.
+        prompt.context = format!(
+            "Attached context (JSON data supplied with the user's query):\n{}",
+            serde_json::to_string(&attached_context)?,
+        );
     }
     Ok(prompt)
 }
