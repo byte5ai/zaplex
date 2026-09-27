@@ -532,16 +532,17 @@ pub(crate) fn managed_fleet_details_from_proto_at(
         "linux-proc-memavailable",
         "MemAvailable · Linux",
     );
-    let launch_blocked = match (
-        session
-            .host_available_memory
-            .as_ref()
-            .and_then(|measurement| measurement.bytes),
-        session.daemon_min_available_bytes,
-    ) {
-        (Some(available), floor) => floor > 0 && available < floor,
-        (None, _) => true,
-    };
+    let launch_blocked = host_headroom.health != FleetDetailHealth::Normal
+        || match (
+            session
+                .host_available_memory
+                .as_ref()
+                .and_then(|measurement| measurement.bytes),
+            session.daemon_min_available_bytes,
+        ) {
+            (Some(available), floor) => floor > 0 && available < floor,
+            (None, _) => true,
+        };
     let host_headroom = if host_headroom.health == FleetDetailHealth::Normal
         && session.daemon_min_available_bytes > 0
     {

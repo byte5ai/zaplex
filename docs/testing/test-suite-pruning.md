@@ -15,11 +15,22 @@ erhält eine Referenz; `MultilineString` wird vor `matches` als `str` gelesen; d
 | Auswahl | Quellort / erhaltene Prüfung | Entscheidung |
 | --- | --- | --- |
 | `test_create_version` | `crates/warp_util/src/content_version_test.rs`: `test_versions_equal` und `test_versions_not_equal` rufen denselben `ContentVersion::new()` auf und prüfen zusätzlich Gleichheit bzw. Eindeutigkeit. | Einen reinen Konstruktoraufruf ohne Assertion entfernt. Voraussichtlich eine Rust-Ausführung weniger; noch nicht gemessen. |
+| Fünf reine Enum-Konstruktionstests | `app/src/sftp_manager/browser_unit_tests.rs`: `test_action_{cancel_transfer,confirm_move,set_search_filter,clear_search_filter,download_save_as}` konstruierten eine Variante und matchten unmittelbar genau diese Variante; kein Action-Handler wurde ausgeführt. | Entfernt: ausschließlich Rust-Sprachmechanik, keine Produktwirkung. Echte Handler-, Transfer- und Navigationsprüfungen bleiben. |
+| Zwei schwächere Permission-Tests | `app/src/sftp_manager/sftp_ops_tests.rs`: `test_bool_to_rwx_length` und `test_bool_to_rwx_valid_chars`. | Entfernt: die acht erhaltenen exakten Ergebnisprüfungen decken alle acht möglichen Eingaben ab und implizieren Länge und erlaubte Zeichen. |
+| Doppelte Cancelled-Ausgabe | `app/src/sftp_manager/sftp_ops_tests.rs`: `test_sftp_ops_error_cancelled_consistent`. | Entfernt: `test_sftp_ops_error_display_cancelled` prüft denselben exakten Ausgabestring; der zusätzliche Selbstvergleich prüfte keinen weiteren Pfad. |
 | Sechs Worktree-Sidecar-Platzhalter | `app/src/workspace/view_test.rs`: hover, pointer entry, close via selection, search Enter, search navigation/Escape, hide linked worktrees. | Entfernt. Alle waren explizit ignoriert und enthielten ausschließlich `unimplemented!` für das abgeschaffte `PersistedWorkspace`; keine Assertions gehen verloren. **Null eingesparte reguläre Ausführungen.** |
 | Zwei App-ID-Tests | `app/src/app_id_test.rs` und `crates/warp_core/src/app_id_test.rs`. | Identischer Inhalt, aber nur die Core-Datei ist im statisch gefundenen Modulbaum referenziert. Keine getestete Reduktion beansprucht; Dateien unverändert. |
 | `test_priority_normalization` | `crates/warp_completer/src/completer/suggest/priority/priority_test.rs` und `crates/warp_completer/src/signatures/v2/signatures_test.rs`. | **Behalten.** Identischer Testkörper prüft zwei verschiedene `Priority`-Implementierungen. |
 | Fehlende Plugin-Datei / Versionsdatei | `app/src/terminal/cli_agent_sessions/plugin_manager/{claude,gemini}_tests.rs`. | **Behalten.** Ähnliche Testkörper prüfen unterschiedliche Provider, Dateipfade und Parser. |
 | Kurze SFTP- und Session-Tests | `app/src/sftp_manager/*_tests.rs`, `crates/zaplex_remote_session/src/types_tests.rs`. | Nicht allein wegen Kürze entfernen: Identität, Konflikte und Verbindungszustände sind eigenständige Verträge. |
+
+Zusätzlich beobachtet `clicking_panel_background_does_not_toggle_transfer_panel`
+jetzt tatsächlich die Toggle-Aktion; die bisher allein geprüfte Transferanzahl
+blieb auch bei einem unerwünschten Toggle unverändert. Der Hintergrund-Recovery-Test
+akzeptiert den legitimen Fall, dass sein Worker schon vor der ersten Beobachtung
+fertig ist, und verlangt weiterhin den endgültigen erfolgreichen Zustand.
+Die acht zusätzlichen Entfernungen sind statisch begründet; tatsächliche eingesparte
+Ausführungen, Laufzeit und Coverage bleiben bis zur Messung unbekannt.
 
 Diese Auswahl ist eine konkrete erste Bereinigung, **keine 20-%-Erfüllung**. Weitere
 Entfernungen benötigen beobachtete Laufzeiten und Abdeckung sowie eine Zuordnung

@@ -63,3 +63,7 @@ runs:
     - name: Verify fork-only audit inventory fixtures
       run: PYTHONDONTWRITEBYTECODE=1 python3 script/codebase-audit-fork-scope-tests
       shell: bash
+
+    - name: Verify worktree cleanup preserves unmerged work
+      run: PYTHONDONTWRITEBYTECODE=1 python3 script/prune-worktrees-tests
+      shell: bash

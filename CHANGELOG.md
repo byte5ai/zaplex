@@ -4,6 +4,18 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Cockpit-Audit (#245): Fehler beim Lesen der Nutzungshistorie sperren die automatische Auswahl scheinbar freier Konten. OAuth-Limits bleiben an Konto und Zugangsdaten gebunden; der erste vollständige Scan erzeugt keinen Startton. Bare-Git-Repositories bleiben getrennte Projekte, und unbekannte Prozesszustände gelten nicht mehr als beendete Sessions.
+
+- GitHub-Analysen (#245) binden Diff, Bestätigung und Review an konkrete Commits; ein Merge verlangt weiterhin denselben Head. Die Analyse nutzt eine getrennte lokale Claude-Sitzung mit ausschließlich Lesewerkzeugen und ohne geerbte Erweiterungen. Codex steht für diese Analyse vorerst nicht zur Auswahl, solange externe Schreibwerkzeuge nicht sicher abgeschaltet werden können.
+
+- Weitere Cockpit-Korrekturen (#245) erhalten Konten-Aliase beim Bearbeiten, zeigen wartende Sessions zuerst und wenden Einstellungen sofort an. Lokale Scanfehler und nicht belegte RAM-Werte bleiben sichtbar unvollständig. Auch der CLI-Export meldet bei lokalen Sessions ohne Kontoinventar nur Teilerfolg.
+
+- Dateiübertragungen (#245) behalten nach bereits veröffentlichtem Ziel bei späteren Lese- und Prüfungsfehlern ihren tatsächlichen Zustand und die benötigten Wiederherstellungspfade. Ein fehlgeschlagener Aufräum-Retry verliert seinen übernommenen Eigentumsnachweis nicht mehr.
+
+- Unvollständige Prozessmessungen zeigen keinen vermeintlich vollständigen Speicherverbrauch. Beim Aufräumen eigener Remote-Dateien bleibt eine nicht eindeutig zuordenbare Löschung als Wiederherstellungsfall sichtbar (#245).
+
+- Worktree-Bereinigung (#245) erhält ungemergte lokale Commits auch bei fehlendem Remote-Branch, bricht nach Fetchfehlern ab und prüft das Ziel nach der Bestätigung erneut. Der Commit-Schutz erkennt Hauptverzeichnisse mit Leerzeichen im Pfad korrekt.
+
 - Remote-Speicherstände (#245) erfassen Host-, Daemon- und PTY-Identität, Wiederherstellungsfehler und den temporären Dateimanager gemeinsam mit der Pane. Späteres Schließen oder Wechseln der Pane kann diese bereits vorgemerkten Daten nicht mehr verändern. Ein Rollback der Remote-Pane-Migration entfernt zugehörige Dateimanager-Knoten vollständig und erhält Terminalgeschwister.
 
 - SSH-Wiederaufnahme (#456): Der Daemon sichert vollständige Shell-Startmeldungen unabhängig vom Client. Bestehende Sitzungen mit verlorenem Startpräfix bleiben über einen gekennzeichneten einfachen Terminalmodus bedienbar; Prozesse, PTY und Eingabeentwurf bleiben erhalten, automatische Befehle bleiben gesperrt.

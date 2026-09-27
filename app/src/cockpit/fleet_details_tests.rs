@@ -436,3 +436,36 @@ fn partial_managed_refresh_replaces_only_the_requested_host_and_rejects_foreign_
     inventory.replace_host("host-a", ManagedFleetInventory::default());
     assert_eq!(inventory.sessions(), &[untouched]);
 }
+
+#[test]
+fn unverified_proto_headroom_bytes_cannot_enable_restart() {
+    for (status, provenance) in [
+        (
+            ProtoMemoryMeasurementStatus::Unavailable,
+            "linux-proc-memavailable",
+        ),
+        (ProtoMemoryMeasurementStatus::Measured, "unverified-source"),
+    ] {
+        let mut inventory = ManagedFleetInventory::default();
+        inventory.extend_session_list(
+            "host-a",
+            "host",
+            None,
+            SessionList {
+                sessions: vec![managed_session(3)],
+                host_available_memory: Some(ProtoMemoryMeasurement {
+                    status: status.into(),
+                    bytes: Some(6 * GIB),
+                    provenance: provenance.into(),
+                    diagnostic_code: String::new(),
+                }),
+                daemon_min_available_bytes: 2 * GIB,
+                collected_at_epoch_millis: 10_000,
+                ..Default::default()
+            },
+        );
+        let details = managed_fleet_details_from_proto_at(&inventory.sessions()[0], 10_001);
+        assert_eq!(details.host_headroom.health, FleetDetailHealth::Degraded);
+        assert!(details.launch_blocked);
+    }
+}

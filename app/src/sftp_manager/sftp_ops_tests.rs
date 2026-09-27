@@ -313,34 +313,6 @@ fn test_bool_to_rwx_write_exec() {
     assert_eq!(bool_to_rwx(false, true, true), "-wx");
 }
 
-/// Test return value length is always 3
-#[test]
-fn test_bool_to_rwx_length() {
-    for r in [true, false] {
-        for w in [true, false] {
-            for x in [true, false] {
-                assert_eq!(bool_to_rwx(r, w, x).len(), 3);
-            }
-        }
-    }
-}
-
-/// Test each character position is only the target character
-#[test]
-fn test_bool_to_rwx_valid_chars() {
-    for r in [true, false] {
-        for w in [true, false] {
-            for x in [true, false] {
-                let s = bool_to_rwx(r, w, x);
-                let chars: Vec<char> = s.chars().collect();
-                assert!((chars[0] == 'r') || (chars[0] == '-'));
-                assert!((chars[1] == 'w') || (chars[1] == '-'));
-                assert!((chars[2] == 'x') || (chars[2] == '-'));
-            }
-        }
-    }
-}
-
 // ==================== SftpOpsError edge case tests ====================
 
 /// Test SftpOpsError::Connection with empty message
@@ -377,15 +349,6 @@ fn test_sftp_ops_error_no_credentials_empty() {
         SftpOpsError::NoCredentials(String::new()).to_string(),
         "Credentials not found: "
     );
-}
-
-/// Test SftpOpsError::Cancelled always returns fixed text
-#[test]
-fn test_sftp_ops_error_cancelled_consistent() {
-    let s1 = SftpOpsError::Cancelled.to_string();
-    let s2 = SftpOpsError::Cancelled.to_string();
-    assert_eq!(s1, s2);
-    assert_eq!(s1, "Transfer cancelled");
 }
 
 /// Test shellexpand_path expanding nested ~/ path

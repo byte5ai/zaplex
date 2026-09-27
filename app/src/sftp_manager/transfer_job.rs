@@ -1421,7 +1421,17 @@ pub fn run_transfer(
             ));
         }
     };
-    let published_snapshot = capture_snapshot(&*job.target_backend, &job.target_path)?;
+    let published_snapshot =
+        capture_snapshot(&*job.target_backend, &job.target_path).map_err(|error| {
+            let mut paths = vec![job.target_path.clone()];
+            paths.extend(displaced.iter().map(|entry| entry.path.clone()));
+            paths.extend(backup.iter().map(|entry| entry.path.clone()));
+            recovery_error(
+                format!("Capturing committed destination failed: {error}"),
+                paths,
+                true,
+            )
+        })?;
     if let Err(error) = verify_anchor_at_path(
         &published_target_anchor,
         &job.target_path,
@@ -1511,14 +1521,32 @@ pub fn run_transfer(
             .as_ref()
             .expect("move preflight always returns a source ownership anchor")
             .clone();
-        let quarantine = temporary_target_path(&job.source_path, "source")?;
-        control.begin_finalizing()?;
-        if !source_anchor.matches_path(&job.source_path)? {
-            return Err(SftpOpsError::Operation(format!(
-                "Move source ownership changed immediately before quarantine: {}",
-                job.source_path.display()
-            )));
-        }
+        let quarantine = (|| {
+            let quarantine = temporary_target_path(&job.source_path, "source")?;
+            control.begin_finalizing()?;
+            if !source_anchor.matches_path(&job.source_path)? {
+                return Err(SftpOpsError::Operation(format!(
+                    "Move source ownership changed immediately before quarantine: {}",
+                    job.source_path.display()
+                )));
+            }
+            Ok(quarantine)
+        })();
+        let quarantine = match quarantine {
+            Ok(quarantine) => quarantine,
+            Err(error) => {
+                return Err(rollback_file_publish(
+                    job,
+                    error,
+                    &published_snapshot,
+                    &expected_publication,
+                    displaced.as_ref(),
+                    backup.as_ref(),
+                    control,
+                    &mut progress_callback,
+                ));
+            }
+        };
         let rename_error = job
             .source_backend
             .rename_if_matches(&job.source_path, &quarantine, source_anchor.clone())
@@ -1598,7 +1626,17 @@ pub fn run_transfer(
             source_identity.size,
             control,
             &mut progress_callback,
-        )? != expected_quarantine_publication
+        )
+        .map_err(|error| {
+            source_anchor_recovery_error(
+                format!("Verifying source quarantine failed: {error}"),
+                job.source_backend.clone(),
+                &job.source_path,
+                &quarantine,
+                source_anchor.clone(),
+                true,
+            )
+        })? != expected_quarantine_publication
         {
             return Err(source_anchor_recovery_error(
                 format!(
@@ -2394,7 +2432,17 @@ pub fn run_directory_transfer(
             ));
         }
     };
-    let published_snapshot = capture_snapshot(&*job.target_backend, &job.target_path)?;
+    let published_snapshot =
+        capture_snapshot(&*job.target_backend, &job.target_path).map_err(|error| {
+            let mut paths = vec![job.target_path.clone()];
+            paths.extend(displaced.iter().map(|entry| entry.path.clone()));
+            paths.extend(backup.iter().map(|entry| entry.path.clone()));
+            recovery_error(
+                format!("Capturing committed destination failed: {error}"),
+                paths,
+                true,
+            )
+        })?;
     if let Err(error) = verify_anchor_at_path(
         &published_target_anchor,
         &job.target_path,
@@ -2488,14 +2536,32 @@ pub fn run_directory_transfer(
             ));
         }
 
-        let quarantine = temporary_target_path(&job.source_path, "source")?;
-        control.begin_finalizing()?;
-        if !source_anchor.matches_path(&job.source_path)? {
-            return Err(SftpOpsError::Operation(format!(
-                "Directory move source ownership changed immediately before quarantine: {}",
-                job.source_path.display()
-            )));
-        }
+        let quarantine = (|| {
+            let quarantine = temporary_target_path(&job.source_path, "source")?;
+            control.begin_finalizing()?;
+            if !source_anchor.matches_path(&job.source_path)? {
+                return Err(SftpOpsError::Operation(format!(
+                    "Move source ownership changed immediately before quarantine: {}",
+                    job.source_path.display()
+                )));
+            }
+            Ok(quarantine)
+        })();
+        let quarantine = match quarantine {
+            Ok(quarantine) => quarantine,
+            Err(error) => {
+                return Err(rollback_directory_publish(
+                    job,
+                    error,
+                    &published_snapshot,
+                    &expected_publication,
+                    displaced.as_ref(),
+                    backup.as_ref(),
+                    control,
+                    &mut progress_callback,
+                ));
+            }
+        };
         let rename_error = job
             .source_backend
             .rename_if_matches(&job.source_path, &quarantine, source_anchor.clone())
@@ -2576,7 +2642,17 @@ pub fn run_directory_transfer(
             total,
             control,
             &mut progress_callback,
-        )? != expected_quarantine_publication
+        )
+        .map_err(|error| {
+            source_anchor_recovery_error(
+                format!("Verifying source quarantine failed: {error}"),
+                job.source_backend.clone(),
+                &job.source_path,
+                &quarantine,
+                source_anchor.clone(),
+                true,
+            )
+        })? != expected_quarantine_publication
         {
             return Err(source_anchor_recovery_error(
                 format!(
@@ -4902,11 +4978,15 @@ fn cleanup_owned_manifest(
                 }
             }
             if let Some(unit) = anchored {
+                // Retain the transferred anchor before a fallible retry, because the backend
+                // no longer owns it and the original unresolved path has been superseded.
+                ownership.anchored_recovery.push(unit.clone());
                 if retry_anchored_recovery(backend, &unit, control, progress_callback, phase)?
                     == RecoveryOutcome::SourceRestored
                 {
                     outcome = RecoveryOutcome::SourceRestored;
                 }
+                ownership.anchored_recovery.pop();
             } else {
                 ownership.unresolved.extend(replacements);
             }

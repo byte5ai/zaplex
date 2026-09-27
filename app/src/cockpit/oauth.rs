@@ -18,7 +18,8 @@ use std::time::Duration;
 
 use futures::lock::Mutex;
 use instant::Instant;
-use zaplex_cockpit::{OauthUsage, UtilizationScale};
+use sha2::{Digest, Sha256};
+use zaplex_cockpit::{Account, OauthUsage, UtilizationScale};
 
 const ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
 /// The endpoint has an aggressive per-token 429 budget (~5 requests), so we
@@ -39,9 +40,21 @@ fn build_oauth_client_with_proxy(
 }
 
 /// One cached per-account result. `usage: None` records a failed attempt so we
-/// do not hammer the endpoint (or the keychain) again before the TTL elapses.
-#[derive(Clone, Copy, Debug)]
+/// do not hammer the endpoint again before the TTL elapses.
+type AccountIdentity = (Option<String>, Option<String>, Option<String>);
+
+fn account_identity(account: &Account) -> AccountIdentity {
+    (
+        account.provider_account_id.clone(),
+        account.email.clone(),
+        account.org.clone(),
+    )
+}
+
+#[derive(Clone)]
 pub struct CachedOauth {
+    identity: AccountIdentity,
+    credential_fingerprint: [u8; 32],
     pub usage: Option<OauthUsage>,
     pub fetched_at: Instant,
 }
@@ -144,80 +157,117 @@ fn parse_response(body: &str) -> Option<OauthUsage> {
 /// Fresh entries are passed through untouched — at most one request per
 /// account per TTL, matching the endpoint's tight 429 budget.
 pub async fn refresh_cache(
-    claude_config_dirs: Vec<PathBuf>,
+    claude_accounts: Vec<Account>,
     default_config_dir: PathBuf,
     cache: OauthCache,
 ) -> HashMap<PathBuf, CachedOauth> {
     let Ok(client) = build_oauth_client_with_proxy(http_client::current_proxy_config()) else {
-        return cache.snapshot().await;
+        // Cached credentials cannot be revalidated on this failed refresh.
+        return HashMap::new();
     };
-    refresh_cache_with(claude_config_dirs, cache, move |dir| {
-        let client = client.clone();
-        let default_config_dir = default_config_dir.clone();
-        async move {
-            match read_access_token(dir.clone(), default_config_dir).await {
-                Some(token) => fetch_one(&client, &token).await,
-                None => None,
-            }
-        }
-    })
+    refresh_cache_with(
+        claude_accounts,
+        cache,
+        move |dir| read_access_token(dir, default_config_dir.clone()),
+        move |token| {
+            let client = client.clone();
+            async move { fetch_one(&client, &token).await }
+        },
+    )
     .await
 }
 
-async fn refresh_cache_with<F, Fut>(
-    mut claude_config_dirs: Vec<PathBuf>,
+async fn refresh_cache_with<R, ReadFuture, F, FetchFuture>(
+    mut claude_accounts: Vec<Account>,
     cache: OauthCache,
+    read_token: R,
     fetch: F,
 ) -> HashMap<PathBuf, CachedOauth>
 where
-    F: Fn(PathBuf) -> Fut,
-    Fut: Future<Output = Option<OauthUsage>>,
+    R: Fn(PathBuf) -> ReadFuture,
+    ReadFuture: Future<Output = Option<String>>,
+    F: Fn(String) -> FetchFuture,
+    FetchFuture: Future<Output = Option<OauthUsage>>,
 {
-    claude_config_dirs.sort();
-    claude_config_dirs.dedup();
+    claude_accounts.sort_by(|a, b| a.config_dir.cmp(&b.config_dir));
+    claude_accounts.dedup_by(|a, b| a.config_dir == b.config_dir);
 
-    // Serialize refresh flights without holding the cache mutex across file, keychain, or network
-    // waits. A concurrent caller waits here, then observes the first flight's fresh entries.
+    // Read credentials only after acquiring the flight slot: a queued refresh
+    // must not carry a token captured before the previous request completed.
     let _refresh_flight = cache.refresh_gate.lock().await;
-    let stale: Vec<PathBuf> = {
-        let mut entries = cache.entries.lock().await;
-        entries.retain(|dir, _| claude_config_dirs.contains(dir));
-        claude_config_dirs
-            .into_iter()
-            .filter(|dir| {
-                entries
-                    .get(dir)
-                    .is_none_or(|cached| cached.fetched_at.elapsed() >= TTL)
-            })
-            .collect()
-    };
-    if stale.is_empty() {
-        return cache.snapshot().await;
-    }
-
-    let fetches = stale.into_iter().map(|dir| {
-        let future = fetch(dir.clone());
-        async move { (dir, future.await) }
+    cache.entries.lock().await.retain(|dir, _| {
+        claude_accounts
+            .iter()
+            .any(|account| &account.config_dir == dir)
     });
-    let fetched = futures::future::join_all(fetches).await;
-    let mut entries = cache.entries.lock().await;
-    for (dir, usage) in fetched {
-        entries.insert(
-            dir,
-            CachedOauth {
-                usage,
-                fetched_at: Instant::now(),
-            },
-        );
-    }
-    entries.clone()
+    let fetches = claude_accounts.into_iter().map(|account| {
+        let cache = &cache;
+        let read_token = &read_token;
+        let fetch = &fetch;
+        async move {
+            let dir = account.config_dir;
+            let identity = (account.provider_account_id, account.email, account.org);
+            let Some(token) = read_token(dir.clone()).await else {
+                cache.entries.lock().await.remove(&dir);
+                return;
+            };
+            let fingerprint: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+            let fresh = cache.entries.lock().await.get(&dir).is_some_and(|cached| {
+                cached.identity == identity
+                    && cached.credential_fingerprint == fingerprint
+                    && cached.fetched_at.elapsed() < TTL
+            });
+            if fresh {
+                return;
+            }
+            // Evict the former account before waiting on the network. A failed
+            // or obsolete response must never resurrect its usage.
+            cache.entries.lock().await.remove(&dir);
+            let usage = fetch(token).await;
+            let current_fingerprint = read_token(dir.clone())
+                .await
+                .map(|token| <[u8; 32]>::from(Sha256::digest(token.as_bytes())));
+            if current_fingerprint != Some(fingerprint) {
+                return;
+            }
+            cache.entries.lock().await.insert(
+                dir,
+                CachedOauth {
+                    identity,
+                    credential_fingerprint: fingerprint,
+                    usage,
+                    fetched_at: Instant::now(),
+                },
+            );
+        }
+    });
+    futures::future::join_all(fetches).await;
+    cache.snapshot().await
 }
 
-/// The merge view of a cache: only successful results, keyed by config dir.
-pub fn usable_usage(cache: &HashMap<PathBuf, CachedOauth>) -> HashMap<PathBuf, OauthUsage> {
-    cache
+/// Merge only results belonging to both the scanned and freshly revalidated
+/// account identity. A login changed during the request is retried next scan.
+pub fn usable_usage(
+    cache: &HashMap<PathBuf, CachedOauth>,
+    scanned: &[Account],
+    current: &[Account],
+) -> HashMap<PathBuf, OauthUsage> {
+    scanned
         .iter()
-        .filter_map(|(dir, c)| c.usage.map(|u| (dir.clone(), u)))
+        .filter_map(|account| {
+            let cached = cache.get(&account.config_dir)?;
+            let identity = account_identity(account);
+            let current_matches = current.iter().any(|now| {
+                now.config_dir == account.config_dir && account_identity(now) == identity
+            });
+            (current_matches && cached.identity == identity && cached.fetched_at.elapsed() < TTL)
+                .then(|| {
+                    cached
+                        .usage
+                        .map(|usage| (account.config_dir.clone(), usage))
+                })
+                .flatten()
+        })
         .collect()
 }
 

@@ -5,14 +5,14 @@
 #   - it is not the main worktree
 #   - it has no uncommitted changes and no untracked files
 #   - it is on a named branch (not detached HEAD)
-#   - the branch is either (a) gone from the remote, or (b) fully merged
-#     into the remote's base branch (default: origin/main)
+#   - the LOCAL branch tip is fully merged into the freshly fetched remote
+#     base branch (default: origin/main)
 #
-# Squash-merged branches whose remote ref still exists are NOT detected (their
-# squash commit on main has a different SHA). The reliable signal is the remote
-# branch being deleted post-merge — which is the standard squash-and-delete flow.
+# A missing remote branch does not prove completion: it may never have been
+# pushed, or the local branch may contain additional unpublished commits.
+# Squash merges require manual review because ancestry cannot prove them safe.
 #
-# Default mode: dry-run (report only, change nothing).
+# Default mode: dry-run (fetch refs and report; remove nothing).
 # Pass --yes to actually remove. Pass --yes --batch to skip per-item confirmation.
 
 set -euo pipefail
@@ -46,10 +46,13 @@ done
 
 echo "Fetching from $REMOTE (with --prune)..." >&2
 git fetch --prune "$REMOTE" >/dev/null 2>&1 || {
-  echo "warn: fetch failed — using stale remote-tracking refs" >&2
+  echo "error: fetch failed — cannot prove any worktree safe to remove" >&2
+  exit 1
 }
 
-main_tree=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
+main_tree=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+base_ref="refs/remotes/$REMOTE/$BASE"
+git rev-parse --verify "$base_ref^{commit}" >/dev/null
 
 # Parse worktrees
 wt_paths=()
@@ -88,24 +91,21 @@ for ((i=0; i<n; i++)); do
   fi
 
   # Uncommitted check (status --porcelain covers tracked changes AND untracked files)
-  if [ -n "$(git -C "$p" status --porcelain 2>/dev/null)" ]; then
+  if ! status=$(git -C "$p" status --porcelain 2>/dev/null); then
+    preserved+=("$p ($b) — cannot read worktree status")
+    continue
+  fi
+  if [ -n "$status" ]; then
     preserved+=("$p ($b) — uncommitted changes or untracked files")
     continue
   fi
 
-  if git show-ref --verify --quiet "refs/remotes/$REMOTE/$b"; then
-    # Remote branch still exists. Is its tip merged into the base?
-    if git merge-base --is-ancestor "refs/remotes/$REMOTE/$b" "refs/remotes/$REMOTE/$BASE" 2>/dev/null; then
-      candidates_path+=("$p")
-      candidates_branch+=("$b")
-      candidates_reason+=("merged into $REMOTE/$BASE")
-    else
-      preserved+=("$p ($b) — remote branch exists and is not merged")
-    fi
-  else
+  if git merge-base --is-ancestor "refs/heads/$b" "$base_ref" 2>/dev/null; then
     candidates_path+=("$p")
     candidates_branch+=("$b")
-    candidates_reason+=("remote branch gone")
+    candidates_reason+=("local branch fully merged into $REMOTE/$BASE")
+  else
+    preserved+=("$p ($b) — local commits are not proven merged")
   fi
 done
 
@@ -150,9 +150,21 @@ for ((i=0; i<${#candidates_path[@]}; i++)); do
     esac
   fi
 
+  # Recheck after the prompt: another session may have switched or committed.
+  if [ "$(git -C "$p" symbolic-ref -q HEAD 2>/dev/null || true)" != "refs/heads/$b" ]; then
+    echo "  preserved: worktree changed branch or became detached" >&2
+    continue
+  fi
+  if ! git merge-base --is-ancestor "refs/heads/$b" "$base_ref" 2>/dev/null; then
+    echo "  preserved: local branch changed and is not proven merged" >&2
+    continue
+  fi
   echo "Removing $p ($b)..."
   git worktree remove "$p"
-  git branch -D "$b" 2>/dev/null || true
+  # Never force-delete a branch if Git detects additional unmerged work.
+  git branch -d "$b" 2>/dev/null || {
+    echo "  retained branch $b for manual review" >&2
+  }
 done
 
 echo "Done."

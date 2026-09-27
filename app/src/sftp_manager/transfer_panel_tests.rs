@@ -26,6 +26,7 @@ struct TransferPanelTestView {
     close_btn_state: MouseStateHandle,
     scroll_state: ClippedScrollStateHandle,
     cancelled_ids: Vec<usize>,
+    panel_toggle_count: usize,
 }
 
 struct WorkspaceTransferPanelTestView;
@@ -44,6 +45,7 @@ impl TransferPanelTestView {
             close_btn_state: MouseStateHandle::default(),
             scroll_state: ClippedScrollStateHandle::default(),
             cancelled_ids: Vec::new(),
+            panel_toggle_count: 0,
         }
     }
 
@@ -132,6 +134,10 @@ impl TypedActionView for TransferPanelTestView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         if let SftpBrowserAction::CancelTransfer(id, _) = action {
             self.cancelled_ids.push(*id);
+            ctx.notify();
+        }
+        if matches!(action, SftpBrowserAction::ToggleTransferPanel) {
+            self.panel_toggle_count += 1;
             ctx.notify();
         }
     }
@@ -301,6 +307,7 @@ fn clicking_panel_background_does_not_toggle_transfer_panel() {
         });
 
         view.read(&app, |view, _| {
+            assert_eq!(view.panel_toggle_count, 0);
             assert_eq!(view.transfers.len(), 1);
         });
     });

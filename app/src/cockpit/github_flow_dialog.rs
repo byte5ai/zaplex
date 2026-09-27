@@ -283,14 +283,15 @@ impl GitHubFlowDialog {
                 .find(|account| account.key == selected)
                 .ok_or_else(|| {
                     GitHubFlowError::CommandUnavailable(
-                        "The selected Claude/Codex account is no longer available.".to_string(),
+                        "The selected read-only Claude Code account is no longer available."
+                            .to_string(),
                     )
                 });
         }
         automatic_analysis_account(CockpitModel::as_ref(app).snapshot(), &accounts).ok_or_else(
             || {
                 GitHubFlowError::CommandUnavailable(
-                    "No healthy installed Claude/Codex subscription account is available."
+                    "No healthy installed Claude Code account is available. Read-only GitHub analysis currently requires Claude Code."
                         .to_string(),
                 )
             },
@@ -323,11 +324,12 @@ impl GitHubFlowDialog {
         #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
         ctx.spawn(
             async move {
-                let target = number.map(|number| GitHubTarget {
+                let mut target = number.map(|number| GitHubTarget {
                     repository: repository.clone(),
                     number,
+                    revision: None,
                 });
-                let raw = match (flow, target.as_ref()) {
+                let raw = match (flow, target.as_mut()) {
                     (FlowKind::QuickIssue, None) => {
                         let prompt = quick_issue_analysis_prompt(&repository);
                         crate::cockpit::github_flows::run_structured_analysis(
@@ -596,7 +598,12 @@ impl GitHubFlowDialog {
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.)
-            .with_child(Self::text("Analyze with", 12., true, appearance));
+            .with_child(Self::text(
+                "Analyze with Claude Code (read-only)",
+                12.,
+                true,
+                appearance,
+            ));
         row.add_child(Self::button(
             "Automatic",
             if self.selected_account_key.is_none() {

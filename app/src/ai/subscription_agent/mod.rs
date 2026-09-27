@@ -62,7 +62,7 @@ pub(crate) use claude::ClaudeProtocol;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use codex::CodexProtocol;
 #[cfg(not(target_family = "wasm"))]
-pub(crate) use discovery::discover_capabilities;
+pub(crate) use discovery::{discover_capabilities, discover_read_only_capabilities};
 pub(crate) use presentation::{
     account_identity_label, conversation_identity_fields, host_identity_label,
     location_identity_label, model_identity_label, ComposerPolicy, ConversationAction,

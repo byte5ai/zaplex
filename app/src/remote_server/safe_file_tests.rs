@@ -851,6 +851,83 @@ fn abandoned_created_artifact_is_reaped_but_a_replacement_is_preserved() {
     assert_eq!(server.list_recoveries().unwrap().recoveries.len(), 1);
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn owned_cleanup_final_replacement_stays_in_recovery_after_restart_and_retry() {
+    for kind in [SafeFileEntryKind::Regular, SafeFileEntryKind::Directory] {
+        let directory = tempfile::tempdir().unwrap();
+        let journal = directory.path().join("journal");
+        let artifact = directory.path().join("artifact");
+        let retained = directory.path().join("retained");
+        let owner = ConnectionId::new_v4();
+        let mut server = SafeFileServer::new_for_test(journal.clone());
+        let opened = match call(
+            &mut server,
+            owner,
+            "create-final-race",
+            safe_file_request::Operation::CreateExclusive(SafeFileCreateExclusive {
+                path: path_string(&artifact),
+                kind: kind as i32,
+            }),
+        ) {
+            safe_file_response::Result::Opened(opened) => opened,
+            other => panic!("expected created artifact, got {other:?}"),
+        };
+        let expected = opened.identity.unwrap();
+        server.before_owned_cleanup_unlink = Some(Box::new({
+            let retained = retained.clone();
+            move |tombstone| {
+                fs::rename(tombstone, &retained).unwrap();
+                match kind {
+                    SafeFileEntryKind::Regular => fs::write(tombstone, b"replacement").unwrap(),
+                    SafeFileEntryKind::Directory => fs::create_dir(tombstone).unwrap(),
+                    SafeFileEntryKind::Symlink | SafeFileEntryKind::Unspecified => unreachable!(),
+                }
+            }
+        }));
+
+        if kind == SafeFileEntryKind::Regular {
+            server.close_connection(owner);
+        } else {
+            server.close_handle(owner, &opened.handle_id).unwrap();
+        }
+
+        assert!(same_object(
+            &expected,
+            &identity_for_path(&retained).unwrap()
+        ));
+        let record = server
+            .journal()
+            .unwrap()
+            .load("create-final-race")
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.state, JournalState::Recovery);
+        assert!(record.failure.unwrap().contains("could not be attributed"));
+        drop(server);
+
+        let recovered = SafeFileServer::new_for_test(journal);
+        assert!(recovered.retry_recovery("create-final-race").is_err());
+        let record = recovered
+            .journal()
+            .unwrap()
+            .load("create-final-race")
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.state, JournalState::Recovery);
+        assert!(same_object(
+            &expected,
+            &identity_for_path(&retained).unwrap()
+        ));
+        assert!(recovered
+            .list_recoveries()
+            .unwrap()
+            .recoveries
+            .iter()
+            .any(|recovery| recovery.operation_id == "create-final-race"));
+    }
+}
+
 #[test]
 fn isolated_created_artifact_is_reaped_without_touching_its_replacement() {
     let directory = tempfile::tempdir().unwrap();

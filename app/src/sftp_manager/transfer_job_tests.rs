@@ -53,6 +53,11 @@ struct InstrumentedBackend {
     occupy_after_missing_probe: Option<(PathBuf, Vec<u8>, Arc<AtomicBool>)>,
     fail_identity_after_rename: Option<PathBuf>,
     rename_completed: AtomicBool,
+    fail_second_quarantine_read: bool,
+    quarantine_reads: AtomicU64,
+    fail_identity_after_publication: Option<PathBuf>,
+    publication_read_started: AtomicBool,
+    publication_metadata_ready: AtomicBool,
 }
 
 impl InstrumentedBackend {
@@ -94,6 +99,11 @@ impl InstrumentedBackend {
             occupy_after_missing_probe: None,
             fail_identity_after_rename: None,
             rename_completed: AtomicBool::new(false),
+            fail_second_quarantine_read: false,
+            quarantine_reads: AtomicU64::new(0),
+            fail_identity_after_publication: None,
+            publication_read_started: AtomicBool::new(false),
+            publication_metadata_ready: AtomicBool::new(false),
         }
     }
 
@@ -716,10 +726,27 @@ impl SftpBackend for InstrumentedBackend {
     }
 
     fn regular_file_mode(&self, path: &Path) -> Result<Option<u32>, SftpOpsError> {
-        self.inner.regular_file_mode(path)
+        let mode = self.inner.regular_file_mode(path)?;
+        // Publication hashing reads the payload before its mode; the next snapshot
+        // starts only after that complete publication identity has been accepted.
+        if self.fail_identity_after_publication.as_deref() == Some(path)
+            && self.publication_read_started.load(Ordering::SeqCst)
+        {
+            self.publication_metadata_ready
+                .store(true, Ordering::SeqCst);
+        }
+        Ok(mode)
     }
 
     fn stable_identity(&self, path: &Path) -> Result<StableEntryIdentity, SftpOpsError> {
+        if self
+            .publication_metadata_ready
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(SftpOpsError::Operation(
+                "injected committed destination metadata failure".to_string(),
+            ));
+        }
         if path.to_string_lossy().contains(".zaplex-transfer-") {
             self.stage_identity_calls.fetch_add(1, Ordering::SeqCst);
         }
@@ -780,6 +807,17 @@ impl SftpBackend for InstrumentedBackend {
     }
 
     fn open_file_reader(&self, path: &Path) -> Result<Box<dyn BackendFileReader>, SftpOpsError> {
+        if self.fail_second_quarantine_read
+            && path.to_string_lossy().contains(".zaplex-source-")
+            && self.quarantine_reads.fetch_add(1, Ordering::SeqCst) == 1
+        {
+            return Err(SftpOpsError::Operation(
+                "injected second quarantine read failure".to_string(),
+            ));
+        }
+        if self.fail_identity_after_publication.as_deref() == Some(path) {
+            self.publication_read_started.store(true, Ordering::SeqCst);
+        }
         Ok(Box::new(InstrumentedReader {
             inner: self.inner.open_file_reader(path)?,
             read_bytes: self.read_bytes.clone(),
@@ -2001,8 +2039,10 @@ fn review13_file_move_revalidates_source_after_finalizing_before_quarantine() {
         conflict: ConflictDecision::Overwrite,
     };
 
-    run_transfer(&transfer, &control, None)
+    let error = run_transfer(&transfer, &control, None)
         .expect_err("the source replacement must stop before quarantine mutation");
+    assert!(!error.destination_committed());
+    assert!(!target.path().join("target.bin").exists());
 
     assert_eq!(fs::read(&source_path).unwrap(), b"source");
     assert_eq!(fs::read(&original).unwrap(), b"source");
@@ -2027,7 +2067,7 @@ fn review13_directory_move_revalidates_source_after_finalizing_before_quarantine
         }
     });
 
-    run_directory_transfer(
+    let error = run_directory_transfer(
         &directory_job(
             backend(source.path()),
             backend(target.path()),
@@ -2039,6 +2079,8 @@ fn review13_directory_move_revalidates_source_after_finalizing_before_quarantine
     )
     .expect_err("the directory replacement must stop before quarantine mutation");
 
+    assert!(!error.destination_committed());
+    assert!(!target.path().join("target").exists());
     assert_eq!(fs::read(source_path.join("a.bin")).unwrap(), b"source");
     assert_eq!(fs::read(original.join("a.bin")).unwrap(), b"source");
 }
@@ -5150,4 +5192,133 @@ fn review18_directory_isolation_restores_a_replacement_swapped_after_the_final_g
         !source_backend.startup_recovery_paths_for_test().is_empty(),
         "the ambiguous directory isolation must remain globally recoverable"
     );
+}
+
+#[test]
+fn committed_move_retains_source_recovery_after_quarantine_read_failure() {
+    for directory in [false, true] {
+        let source = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let source_path = if directory { "/source" } else { "/source.bin" };
+        let target_path = if directory { "/target" } else { "/target.bin" };
+        let source_payload = if directory {
+            "source/payload.bin"
+        } else {
+            "source.bin"
+        };
+        let target_payload = if directory {
+            "target/payload.bin"
+        } else {
+            "target.bin"
+        };
+        if directory {
+            fs::create_dir(source.path().join("source")).unwrap();
+        }
+        fs::write(source.path().join(source_payload), b"owned source").unwrap();
+        let mut backend = InstrumentedBackend::new(source.path());
+        backend.fail_second_quarantine_read = true;
+        let backend = Arc::new(backend);
+        let transfer = TransferJob {
+            source_backend: backend.clone(),
+            target_backend: Arc::new(InMemorySftpBackend::new(target.path().to_path_buf())),
+            source_path: PathBuf::from(source_path),
+            target_path: PathBuf::from(target_path),
+            operation: TransferOperation::Move,
+            conflict: ConflictDecision::Overwrite,
+        };
+
+        let error = run_transfer(&transfer, &TransferControl::default(), None)
+            .expect_err("a read error after quarantine must retain recovery authority");
+        assert!(error
+            .to_string()
+            .contains("injected second quarantine read failure"));
+        assert_eq!(backend.quarantine_reads.load(Ordering::SeqCst), 2);
+        assert!(error.destination_committed());
+        assert!(error
+            .recovery_paths()
+            .iter()
+            .any(|path| path == Path::new(source_path)));
+        assert!(error
+            .recovery_paths()
+            .iter()
+            .any(|path| path.to_string_lossy().contains(".zaplex-source-")));
+        assert!(!source
+            .path()
+            .join(source_path.trim_start_matches('/'))
+            .exists());
+        assert_eq!(
+            fs::read(target.path().join(target_payload)).unwrap(),
+            b"owned source"
+        );
+        assert_eq!(
+            retry_recovery(error.recovery_id().unwrap()).unwrap(),
+            RecoveryOutcome::SourceRestored
+        );
+        assert_eq!(
+            fs::read(source.path().join(source_payload)).unwrap(),
+            b"owned source"
+        );
+        assert_eq!(
+            fs::read(target.path().join(target_payload)).unwrap(),
+            b"owned source"
+        );
+        assert!(transfer_artifacts(source.path(), "zaplex-source").is_empty());
+    }
+}
+
+#[test]
+fn committed_destination_metadata_failure_reports_file_and_directory_paths() {
+    for directory in [false, true] {
+        let source = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let source_path = if directory { "/source" } else { "/source.bin" };
+        let target_path = if directory { "/target" } else { "/target.bin" };
+        let source_payload = if directory {
+            "source/payload.bin"
+        } else {
+            "source.bin"
+        };
+        let target_payload = if directory {
+            "target/payload.bin"
+        } else {
+            "target.bin"
+        };
+        if directory {
+            fs::create_dir(source.path().join("source")).unwrap();
+        }
+        fs::write(source.path().join(source_payload), b"published payload").unwrap();
+        let mut backend = InstrumentedBackend::new(target.path());
+        backend.fail_identity_after_publication = Some(Path::new("/").join(target_payload));
+        let transfer = TransferJob {
+            source_backend: Arc::new(InMemorySftpBackend::new(source.path().to_path_buf())),
+            target_backend: Arc::new(backend),
+            source_path: PathBuf::from(source_path),
+            target_path: PathBuf::from(target_path),
+            operation: TransferOperation::Move,
+            conflict: ConflictDecision::Overwrite,
+        };
+
+        let error = run_transfer(&transfer, &TransferControl::default(), None)
+            .expect_err("post-commit metadata failure must report the installed target");
+        assert!(error
+            .to_string()
+            .contains("Capturing committed destination failed"));
+        assert!(error
+            .to_string()
+            .contains("injected committed destination metadata failure"));
+        assert!(error.destination_committed());
+        assert!(error
+            .recovery_paths()
+            .iter()
+            .any(|path| path == Path::new(target_path)));
+        assert_eq!(
+            fs::read(source.path().join(source_payload)).unwrap(),
+            b"published payload"
+        );
+        assert_eq!(
+            fs::read(target.path().join(target_payload)).unwrap(),
+            b"published payload"
+        );
+        assert!(transfer_artifacts(source.path(), "zaplex-source").is_empty());
+    }
 }

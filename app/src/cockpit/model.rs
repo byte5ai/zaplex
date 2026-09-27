@@ -44,7 +44,7 @@ use zaplex_remote_session::types::{
 
 use crate::cockpit::fleet_details::ManagedFleetInventory;
 use crate::cockpit::oauth::{self, OauthCache};
-use crate::cockpit::settings::CockpitSettings;
+use crate::cockpit::settings::{CockpitSettings, CockpitSettingsChangedEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::agent_session::proto_to_snapshot;
 use crate::remote_server::manager::{
@@ -307,6 +307,7 @@ fn codex_home(home: &Path, configured: Option<std::ffi::OsString>) -> PathBuf {
 
 impl CockpitModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+        Self::subscribe_to_settings(ctx);
         // Account add/remove (top-level home entries).
         ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _event, ctx| {
             me.spawn_refresh(ctx);
@@ -365,6 +366,25 @@ impl CockpitModel {
         model.spawn_refresh(ctx);
         model.start_reconcile_timer(ctx);
         model
+    }
+
+    fn subscribe_to_settings(ctx: &mut ModelContext<Self>) {
+        ctx.subscribe_to_model(
+            &CockpitSettings::handle(ctx),
+            |me, event, ctx| match event {
+                CockpitSettingsChangedEvent::CockpitEnabled { .. }
+                | CockpitSettingsChangedEvent::CockpitBudget5h { .. }
+                | CockpitSettingsChangedEvent::CockpitBudgetWeek { .. }
+                | CockpitSettingsChangedEvent::CockpitOauthUsage { .. } => {
+                    // A result captured under the previous policy must not publish.
+                    me.refresh_flight.invalidate();
+                    me.spawn_refresh(ctx);
+                }
+                CockpitSettingsChangedEvent::CockpitContinuationModeSetting { .. }
+                | CockpitSettingsChangedEvent::CockpitAttentionDnd { .. }
+                | CockpitSettingsChangedEvent::CockpitAttentionSound { .. } => {}
+            },
+        );
     }
 
     /// The latest snapshot (empty until the first background scan completes).
@@ -516,20 +536,27 @@ impl CockpitModel {
                 // inside `refresh_cache` keeps actual requests rare. `.compat()`
                 // provides the tokio reactor reqwest needs on this executor.
                 if inputs.oauth_enabled {
-                    let claude_dirs: Vec<PathBuf> = snapshot
+                    let claude_accounts: Vec<_> = snapshot
                         .accounts
                         .iter()
                         .filter(|a| a.account.provider == Provider::Claude)
-                        .map(|a| a.account.config_dir.clone())
+                        .map(|a| a.account.clone())
                         .collect();
                     let cache = oauth::refresh_cache(
-                        claude_dirs,
+                        claude_accounts.clone(),
                         inputs.home.join(".claude"),
                         inputs.oauth_cache.clone(),
                     )
                     .compat()
                     .await;
-                    apply_oauth_usage(&mut snapshot, &oauth::usable_usage(&cache));
+                    let current_accounts = zaplex_cockpit::claude::discover_accounts_with_health(
+                        &inputs.home,
+                        inputs.claude_config_dir_env.as_deref(),
+                    );
+                    apply_oauth_usage(
+                        &mut snapshot,
+                        &oauth::usable_usage(&cache, &claude_accounts, &current_accounts.accounts),
+                    );
                 }
                 // Apply user overrides (instances.json) last, on the fully-built
                 // snapshot: hide / relabel / reorder for display. Read off-thread;
@@ -587,6 +614,7 @@ impl CockpitModel {
                     .collect();
                 let local_label = inputs.local_label.clone();
                 let mut inventory = fold_inventory(inputs.local_label, local, Vec::new());
+                apply_local_scan_health(&mut inventory, &snapshot.health);
 
                 // Validate only the connected roots against the SSH registry.
                 // Registry-only/offline hosts belong to Connections and are never
@@ -1025,6 +1053,17 @@ fn replace_inventory_roots(inventory: &mut FleetTree, completed: FleetTree) {
 /// harness.
 fn is_blank(snapshot: &CockpitSnapshot, inventory: &FleetTree) -> bool {
     snapshot.accounts.is_empty() && *inventory == FleetTree::default()
+}
+
+/// Preserve partial rows without claiming a failed scan authoritatively found none.
+fn apply_local_scan_health(inventory: &mut FleetTree, health: &ScanHealth) {
+    for host in inventory.hosts.iter_mut().filter(|host| host.is_local) {
+        host.inventory_status = match health {
+            ScanHealth::Pending => AgentInventoryStatus::Pending,
+            ScanHealth::Loaded => AgentInventoryStatus::Ready,
+            ScanHealth::Degraded(_) => AgentInventoryStatus::Unavailable,
+        };
+    }
 }
 
 /// Reconcile connection presence independently from slow inventory refreshes.

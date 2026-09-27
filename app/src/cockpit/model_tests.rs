@@ -821,22 +821,25 @@ fn model_refresh_ticks_preserve_active_scan_and_disable_invalidates_it() {
         app.add_singleton_model(RemoteServerManager::new);
         // Reserve an active scan without starting disk/network work. Calls below
         // exercise the real model scheduling path while that scan is blocked.
-        let model = app.add_model(|_| CockpitModel {
-            snapshot: initial_snapshot(),
-            refresh_flight: RefreshSingleFlight {
-                generation: 7,
-                running: true,
-                rerun_requested: false,
-            },
-            inventory: fold_inventory("laptop", Vec::new(), Vec::new()),
-            managed_fleet: ManagedFleetInventory::default(),
-            pricing: PricingTable::default(),
-            oauth_cache: OauthCache::default(),
-            transcript_cache: TranscriptScanCache::default(),
-            registry_hosts: None,
-            overrides: AccountOverrides::default(),
-            local_label: "laptop".into(),
-            selected_account: None,
+        let model = app.add_model(|ctx| {
+            CockpitModel::subscribe_to_settings(ctx);
+            CockpitModel {
+                snapshot: initial_snapshot(),
+                refresh_flight: RefreshSingleFlight {
+                    generation: 7,
+                    running: true,
+                    rerun_requested: false,
+                },
+                inventory: fold_inventory("laptop", Vec::new(), Vec::new()),
+                managed_fleet: ManagedFleetInventory::default(),
+                pricing: PricingTable::default(),
+                oauth_cache: OauthCache::default(),
+                transcript_cache: TranscriptScanCache::default(),
+                registry_hosts: None,
+                overrides: AccountOverrides::default(),
+                local_label: "laptop".into(),
+                selected_account: None,
+            }
         });
         model.update(&mut app, |model, ctx| {
             for _tick in 0..8 {
@@ -852,8 +855,7 @@ fn model_refresh_ticks_preserve_active_scan_and_disable_invalidates_it() {
         CockpitSettings::handle(&app).update(&mut app, |settings, ctx| {
             settings.enabled.set_value(false, ctx).unwrap();
         });
-        model.update(&mut app, |model, ctx| {
-            model.spawn_refresh(ctx);
+        model.update(&mut app, |model, _ctx| {
             assert!(!should_apply_refresh_result(
                 model.refresh_flight.generation,
                 7
@@ -1182,4 +1184,39 @@ async fn remote_refresh_publishes_a_healthy_host_while_another_rpc_hangs() {
     assert!(sessions.is_empty());
     assert!(fleet.sessions().is_empty());
     servers[1].abort();
+}
+
+#[test]
+fn local_scan_failure_cannot_become_an_authoritative_empty_inventory() {
+    let remote = connected_root("remote", "host-a", None);
+    let mut inventory = fold_inventory("local", Vec::new(), vec![(remote, Vec::new())]);
+    let remote_before = inventory
+        .hosts
+        .iter()
+        .find(|host| !host.is_local)
+        .unwrap()
+        .clone();
+    for (health, expected) in [
+        (ScanHealth::Pending, AgentInventoryStatus::Pending),
+        (
+            ScanHealth::Degraded("unreadable account".into()),
+            AgentInventoryStatus::Unavailable,
+        ),
+        (ScanHealth::Loaded, AgentInventoryStatus::Ready),
+    ] {
+        apply_local_scan_health(&mut inventory, &health);
+        assert_eq!(
+            inventory
+                .hosts
+                .iter()
+                .find(|host| host.is_local)
+                .unwrap()
+                .inventory_status,
+            expected
+        );
+        assert_eq!(
+            inventory.hosts.iter().find(|host| !host.is_local).unwrap(),
+            &remote_before
+        );
+    }
 }

@@ -345,6 +345,8 @@ pub struct SafeFileServer {
     #[cfg(test)]
     before_private_delete_unlink: Option<Box<dyn Fn(&Path) + Send + Sync>>,
     #[cfg(test)]
+    before_owned_cleanup_unlink: Option<Box<dyn Fn(&Path) + Send + Sync>>,
+    #[cfg(test)]
     before_handle: Option<Box<dyn Fn(&SafeFileRequest) + Send + Sync>>,
 }
 
@@ -366,6 +368,8 @@ impl SafeFileServer {
                     #[cfg(test)]
                     before_private_delete_unlink: None,
                     #[cfg(test)]
+                    before_owned_cleanup_unlink: None,
+                    #[cfg(test)]
                     before_handle: None,
                 };
                 server.recover_abandoned_records();
@@ -384,6 +388,8 @@ impl SafeFileServer {
                 before_delete_isolation: None,
                 #[cfg(test)]
                 before_private_delete_unlink: None,
+                #[cfg(test)]
+                before_owned_cleanup_unlink: None,
                 #[cfg(test)]
                 before_handle: None,
             },
@@ -406,6 +412,7 @@ impl SafeFileServer {
             after_rename_mutation: None,
             before_delete_isolation: None,
             before_private_delete_unlink: None,
+            before_owned_cleanup_unlink: None,
             before_handle: None,
         };
         server.recover_abandoned_records();
@@ -789,7 +796,7 @@ impl SafeFileServer {
             identity: Some(JournalIdentity::from(&identity)),
         };
         if let Err(error) = journal.save(&record) {
-            let cleanup = cleanup_owned_object(&path, &cleanup_tombstone, &identity);
+            let cleanup = cleanup_owned_object(&path, &cleanup_tombstone, &identity, None);
             return Err(match cleanup {
                 Ok(()) => error.to_string(),
                 Err(cleanup_error) => {
@@ -1600,11 +1607,18 @@ impl SafeFileServer {
             return;
         };
         let cleanup_tombstone = owned_cleanup_tombstone(&handle.path, operation_id);
-        let (state, failure) =
-            match cleanup_owned_object(&handle.path, &cleanup_tombstone, &identity) {
-                Ok(()) => (JournalState::Consumed, None),
-                Err(error) => (JournalState::Recovery, Some(error)),
-            };
+        let (state, failure) = match cleanup_owned_object(
+            &handle.path,
+            &cleanup_tombstone,
+            &identity,
+            #[cfg(test)]
+            self.before_owned_cleanup_unlink.as_deref(),
+            #[cfg(not(test))]
+            None,
+        ) {
+            Ok(()) => (JournalState::Consumed, None),
+            Err(error) => (JournalState::Recovery, Some(error)),
+        };
         let Ok(Some(mut record)) = self.journal().and_then(|journal| {
             journal
                 .load(operation_id)
@@ -1700,7 +1714,7 @@ impl SafeFileServer {
                 let path = validated_path(&path)?;
                 let identity = SafeFileIdentity::from(&identity);
                 let tombstone = owned_cleanup_tombstone(&path, operation_id);
-                match cleanup_owned_object(&path, &tombstone, &identity) {
+                match cleanup_owned_object(&path, &tombstone, &identity, None) {
                     Ok(()) => {
                         record.state = JournalState::Consumed;
                         record.failure = None;
@@ -1765,7 +1779,7 @@ impl SafeFileServer {
                     };
                     let identity = SafeFileIdentity::from(identity);
                     let tombstone = owned_cleanup_tombstone(&path, &record.operation_id);
-                    match cleanup_owned_object(&path, &tombstone, &identity) {
+                    match cleanup_owned_object(&path, &tombstone, &identity, None) {
                         Ok(()) => {
                             record.state = JournalState::Consumed;
                             record.failure = None;
@@ -2068,20 +2082,28 @@ fn cleanup_owned_object(
     path: &Path,
     tombstone: &Path,
     expected: &SafeFileIdentity,
+    before_unlink: Option<&(dyn Fn(&Path) + Send + Sync)>,
 ) -> Result<(), String> {
     let mut cleaned_isolated_object = false;
     if let Ok(isolated) = identity_for_path(tombstone) {
         if !same_object(expected, &isolated) {
             return Err("Owned safe-file cleanup tombstone names another object".to_string());
         }
-        delete_owned_tombstone(tombstone, expected)?;
+        delete_owned_tombstone(tombstone, expected, before_unlink)?;
         cleaned_isolated_object = true;
     } else if !path_is_absent(tombstone) {
         return Err("Owned safe-file cleanup tombstone is inaccessible".to_string());
     }
 
     if path_is_absent(path) {
-        return Ok(());
+        return if cleaned_isolated_object {
+            Ok(())
+        } else {
+            Err(
+                "Owned safe-file objects are absent without a verified committed unlink"
+                    .to_string(),
+            )
+        };
     }
     let current = identity_for_path(path)
         .map_err(|error| format!("Owned safe-file artifact is inaccessible: {error}"))?;
@@ -2098,16 +2120,31 @@ fn cleanup_owned_object(
     if !same_object(expected, &isolated) {
         return Err("Owned safe-file artifact identity changed during isolation".to_string());
     }
-    delete_owned_tombstone(tombstone, expected)
+    delete_owned_tombstone(tombstone, expected, before_unlink)
 }
 
-fn delete_owned_tombstone(tombstone: &Path, expected: &SafeFileIdentity) -> Result<(), String> {
-    let actual = identity_for_path(tombstone)
+fn delete_owned_tombstone(
+    tombstone: &Path,
+    expected: &SafeFileIdentity,
+    before_unlink: Option<&(dyn Fn(&Path) + Send + Sync)>,
+) -> Result<(), String> {
+    let kind = SafeFileEntryKind::try_from(expected.kind)
+        .map_err(|_| "Owned safe-file artifact kind is invalid".to_string())?;
+    let parent = tombstone
+        .parent()
+        .ok_or_else(|| "Owned safe-file artifact has no parent".to_string())?;
+    let directory = open_nofollow(parent, SafeFileEntryKind::Directory, false)
+        .map_err(|error| format!("Owned safe-file cleanup parent is inaccessible: {error}"))?;
+    let name = tombstone
+        .file_name()
+        .ok_or_else(|| "Owned safe-file artifact has no file name".to_string())?;
+    let name = CString::new(name.as_bytes()).map_err(|error| error.to_string())?;
+    let file = open_nofollow(tombstone, kind, false)
         .map_err(|error| format!("Owned safe-file cleanup tombstone is inaccessible: {error}"))?;
+    let actual = identity_for_file(&file, kind)?;
     if !same_object(expected, &actual) {
         return Err("Owned safe-file cleanup tombstone identity changed".to_string());
     }
-    let kind = SafeFileEntryKind::try_from(expected.kind).ok();
     let current = identity_for_path(tombstone)
         .map_err(|error| format!("Owned safe-file cleanup tombstone is inaccessible: {error}"))?;
     if !same_object(expected, &current) {
@@ -2115,14 +2152,34 @@ fn delete_owned_tombstone(tombstone: &Path, expected: &SafeFileIdentity) -> Resu
             "Owned safe-file cleanup tombstone identity changed before removal".to_string(),
         );
     }
-    match kind {
-        Some(SafeFileEntryKind::Regular | SafeFileEntryKind::Symlink) => fs::remove_file(tombstone),
-        Some(SafeFileEntryKind::Directory) => fs::remove_dir(tombstone),
-        Some(SafeFileEntryKind::Unspecified) | None => {
-            return Err("Owned safe-file artifact kind is invalid".to_string());
-        }
+    let expected_links_before = file.metadata().map_err(|error| error.to_string())?.nlink();
+    if let Some(hook) = before_unlink {
+        hook(tombstone);
     }
-    .map_err(|error| format!("Removing the isolated safe-file artifact failed: {error}"))
+    let flags = if kind == SafeFileEntryKind::Directory {
+        libc::AT_REMOVEDIR
+    } else {
+        0
+    };
+    // As with explicit deletion, the final name lookup can still race a
+    // same-UID process. Never consume recovery ownership unless the held
+    // object's link count confirms removal and the anchored name is absent.
+    if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), flags) } != 0 {
+        return Err(format!(
+            "Removing the isolated safe-file artifact failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let expected_links_after = file.metadata().map_err(|error| error.to_string())?.nlink();
+    if expected_links_after >= expected_links_before
+        || !directory_entry_is_absent(&directory, &name)?
+    {
+        return Err(
+            "Owned safe-file final unlink could not be attributed to the held object; recovery required"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn path_is_absent(path: &Path) -> bool {

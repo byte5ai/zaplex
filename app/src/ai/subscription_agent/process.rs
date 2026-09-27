@@ -171,6 +171,62 @@ impl ProcessLaunch {
         launch
     }
 
+    /// A fresh review process must not inherit tools or customizations that can
+    /// mutate the workspace or an external service. Unsupported CLIs fail closed.
+    pub(crate) fn for_read_only_session(
+        target: &SubscriptionTarget,
+        location: ProcessLocation,
+    ) -> Result<Self> {
+        Self::for_session(target, None, location).restrict_to_read_only(target.installation.agent)
+    }
+
+    pub(crate) fn for_read_only_discovery(
+        installation: &InstallationIdentity,
+        working_directory: PathBuf,
+        location: ProcessLocation,
+    ) -> Result<Self> {
+        Self::for_discovery(installation, working_directory, location)
+            .restrict_to_read_only(installation.agent)
+    }
+
+    fn restrict_to_read_only(mut self, agent: SubscriptionAgent) -> Result<Self> {
+        if self.location != ProcessLocation::Local {
+            bail!("Read-only analysis is available only for a local agent");
+        }
+        if agent == SubscriptionAgent::Codex {
+            // Codex's filesystem sandbox does not restrict MCP/app tools.
+            // An empty mcp_servers config overlay does not remove inherited
+            // servers, so do not silently run a write-capable review thread.
+            bail!(
+                "Read-only analysis with Codex is unavailable because external tools cannot be reliably disabled; select Claude Code for this command"
+            );
+        }
+        let permission_mode = self
+            .args
+            .iter()
+            .position(|argument| argument == "--permission-mode")
+            .context("Claude launch is missing its permission mode")?;
+        self.args[permission_mode + 1] = "plan".to_string();
+        self.args.extend([
+            "--tools".to_string(),
+            "Read,Glob,Grep".to_string(),
+            // Safe mode retains subscription authentication but disables hooks,
+            // installed plugins, skills and other account/project customizations.
+            "--safe-mode".to_string(),
+            "--strict-mcp-config".to_string(),
+            "--mcp-config".to_string(),
+            r#"{"mcpServers":{}}"#.to_string(),
+            "--setting-sources".to_string(),
+            String::new(),
+            "--disable-slash-commands".to_string(),
+            "--no-chrome".to_string(),
+            "--permission-prompts".to_string(),
+            "none".to_string(),
+            "--no-session-persistence".to_string(),
+        ]);
+        Ok(self)
+    }
+
     fn command(&self) -> Result<Command> {
         let mut command = match &self.location {
             ProcessLocation::Local => {

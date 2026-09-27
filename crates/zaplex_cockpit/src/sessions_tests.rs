@@ -628,8 +628,11 @@ fn waiting_sorts_before_active() {
 
 // ── Dormant (idle) discovery ────────────────────────────────────────────────
 
+// Reaped-PID discovery requires the Unix existence probe. Unsupported hosts
+// preserve an unverified session rather than asserting that its process exited.
 const MAX_AGE: Duration = Duration::days(7);
 
+#[cfg(unix)]
 #[test]
 fn a_finished_session_is_discovered_as_dormant_and_resumable() {
     let tmp = tempfile::tempdir().unwrap();
@@ -657,6 +660,7 @@ fn a_finished_session_is_discovered_as_dormant_and_resumable() {
 /// The central invariant: `pid_alive` decides, so no session can be in both
 /// lists. Live surfaces (Conductor, account status) read `sessions`; the table's
 /// Idle filter reads the other. An overlap would double-count a session.
+#[cfg(unix)]
 #[test]
 fn live_and_dormant_sessions_never_overlap() {
     let tmp = tempfile::tempdir().unwrap();
@@ -691,6 +695,7 @@ fn live_and_dormant_sessions_never_overlap() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn dormant_history_never_enters_live_tree() {
     let tmp = tempfile::tempdir().unwrap();
@@ -746,6 +751,7 @@ fn an_unknown_pid_is_never_claimed_dormant() {
     assert_eq!(live_sessions(tmp.path(), Utc::now()).len(), 1);
 }
 
+#[cfg(unix)]
 #[test]
 fn dormant_discovery_stops_at_the_age_bound() {
     let tmp = tempfile::tempdir().unwrap();
@@ -772,6 +778,7 @@ fn dormant_discovery_stops_at_the_age_bound() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn dormant_discovery_is_capped_and_most_recent_first() {
     let tmp = tempfile::tempdir().unwrap();
@@ -815,6 +822,7 @@ fn dormant_discovery_is_capped_and_most_recent_first() {
 /// alone could cut a session that is in fact more recent than one it keeps.
 /// Here the registry lags badly while the transcript is current — the fresh
 /// session must still win the single slot.
+#[cfg(unix)]
 #[test]
 fn the_cap_ranks_on_real_recency_not_a_lagging_registry() {
     let tmp = tempfile::tempdir().unwrap();

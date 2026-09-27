@@ -449,3 +449,38 @@ fn a_dangling_worktree_pointer_is_not_a_repo() {
     );
     assert_eq!(p.worktree, None);
 }
+
+#[test]
+fn sibling_bare_repositories_keep_distinct_project_identities() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut repo_roots = Vec::new();
+    for name in ["first", "second"] {
+        let common = tmp.path().join(format!("{name}.git"));
+        fs::create_dir_all(common.join("objects")).unwrap();
+        fs::create_dir_all(common.join("refs")).unwrap();
+        fs::write(common.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let mut roots = Vec::new();
+        for branch in ["one", "two"] {
+            let root = tmp.path().join(format!("{name}-{branch}"));
+            let gitdir = common.join("worktrees").join(branch);
+            fs::create_dir_all(&root).unwrap();
+            fs::create_dir_all(&gitdir).unwrap();
+            fs::write(gitdir.join("HEAD"), format!("ref: refs/heads/{branch}\n")).unwrap();
+            fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+            fs::write(root.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+            let project = resolve_project(&root);
+            assert_eq!(project.root, normalize(&root));
+            assert_eq!(
+                project.repo_root,
+                normalize(&dunce::canonicalize(&common).unwrap())
+            );
+            roots.push(project.repo_root);
+        }
+        assert_eq!(
+            roots[0], roots[1],
+            "worktrees of one bare repository stay grouped"
+        );
+        repo_roots.push(roots.remove(0));
+    }
+    assert_ne!(repo_roots[0], repo_roots[1]);
+}

@@ -1215,24 +1215,7 @@ impl CockpitPanel {
                 }
             }
             if host.projects.is_empty() {
-                let message = if host.inventory_status == AgentInventoryStatus::Pending {
-                    crate::t!("cockpit-host-inventory-pending")
-                } else if host.is_local {
-                    crate::t!("cockpit-host-no-local-agents")
-                } else {
-                    match host.inventory_status {
-                        AgentInventoryStatus::Pending => {
-                            crate::t!("cockpit-host-inventory-pending")
-                        }
-                        AgentInventoryStatus::Ready => crate::t!("cockpit-host-no-agents"),
-                        AgentInventoryStatus::Unsupported => {
-                            crate::t!("cockpit-host-inventory-unsupported")
-                        }
-                        AgentInventoryStatus::Unavailable => {
-                            crate::t!("cockpit-host-inventory-unavailable")
-                        }
-                    }
-                };
+                let message = empty_inventory_message(host.inventory_status, host.is_local);
                 col = col.with_child(
                     Container::new(hover_row(
                         Self::text(message, family, body, muted),
@@ -1854,6 +1837,16 @@ impl TypedActionView for CockpitPanel {
                 CockpitModel::handle(ctx).update(ctx, |model, ctx| model.rescan(ctx));
             }
         }
+    }
+}
+
+fn empty_inventory_message(status: AgentInventoryStatus, is_local: bool) -> String {
+    match status {
+        AgentInventoryStatus::Pending => crate::t!("cockpit-host-inventory-pending"),
+        AgentInventoryStatus::Unavailable => crate::t!("cockpit-host-inventory-unavailable"),
+        AgentInventoryStatus::Unsupported => crate::t!("cockpit-host-inventory-unsupported"),
+        AgentInventoryStatus::Ready if is_local => crate::t!("cockpit-host-no-local-agents"),
+        AgentInventoryStatus::Ready => crate::t!("cockpit-host-no-agents"),
     }
 }
 

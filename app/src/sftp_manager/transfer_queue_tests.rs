@@ -309,10 +309,11 @@ fn recovery_retry_runs_as_a_global_background_job() {
     activity.set_error(&error);
 
     queue.retry_recovery_in_background(id).unwrap();
-    assert_eq!(
+    // The worker can finish before the caller observes its initial state.
+    assert!(matches!(
         queue.activity(id).unwrap().state,
-        QueuedTransferState::Running
-    );
+        QueuedTransferState::Running | QueuedTransferState::Completed
+    ));
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {

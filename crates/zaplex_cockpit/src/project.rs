@@ -74,8 +74,9 @@ pub fn resolve_project(cwd: &Path) -> ResolvedProject {
 /// already it (a primary checkout) or is not a repo at all.
 ///
 /// Git states the relationship itself: a linked worktree's per-worktree gitdir
-/// holds a `commondir` file pointing at the repo's shared git dir, whose parent
-/// is the main working tree. Read that rather than stripping `worktrees/<name>`
+/// holds a `commondir` file pointing at the repo's shared git dir. Its parent
+/// is the main working tree only when it owns that `.git` directory. Read that
+/// rather than stripping `worktrees/<name>`
 /// off the gitdir by hand. A `.git` file without that contract belongs to a
 /// submodule or `--separate-git-dir` checkout, not a linked worktree.
 fn main_worktree_root(root: &Path) -> Option<PathBuf> {
@@ -92,10 +93,15 @@ fn main_worktree_root(root: &Path) -> Option<PathBuf> {
     }
     let gitdir = worktree_gitdir(root)?;
     let common = worktree_common_dir(&gitdir)?;
-    // `<main>/.git` → `<main>`. A bare repo has no working tree above it, so its
-    // parent is not one; grouping still keys on a path every worktree of the repo
-    // shares, which is all the key has to do.
-    common.parent().map(Path::to_path_buf)
+    // Only `<main>/.git` identifies a main checkout. Bare repositories have no
+    // checkout above their common directory; using the parent would merge all
+    // sibling bare repositories into one project.
+    if let Some(parent) = common.parent() {
+        if dunce::canonicalize(parent.join(".git")).ok().as_ref() == Some(&common) {
+            return Some(parent.to_path_buf());
+        }
+    }
+    Some(common)
 }
 
 /// The validated common git directory for a real linked-worktree admin dir.

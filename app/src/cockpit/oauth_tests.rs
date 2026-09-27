@@ -55,7 +55,8 @@ fn endpoint_contract_treats_low_utilization_as_percent() {
 
 #[test]
 fn concurrent_refreshes_send_one_request_per_account_within_ttl() {
-    let account = PathBuf::from("/test/claude-account");
+    let account = account("first");
+    let dir = account.config_dir.clone();
     let cache = OauthCache::default();
     let requests = Arc::new(AtomicUsize::new(0));
     let gate = Arc::new((StdMutex::new(false), Condvar::new()));
@@ -64,7 +65,7 @@ fn concurrent_refreshes_send_one_request_per_account_within_ttl() {
     let fetch = {
         let requests = requests.clone();
         let gate = gate.clone();
-        move |_dir: PathBuf| {
+        move |_token: String| {
             let requests = requests.clone();
             let gate = gate.clone();
             let started_tx = started_tx.clone();
@@ -86,7 +87,12 @@ fn concurrent_refreshes_send_one_request_per_account_within_ttl() {
         let cache = cache.clone();
         let fetch = fetch.clone();
         thread::spawn(move || {
-            futures::executor::block_on(refresh_cache_with(vec![account], cache, fetch))
+            futures::executor::block_on(refresh_cache_with(
+                vec![account],
+                cache,
+                |_| async { Some("token".into()) },
+                fetch,
+            ))
         })
     };
     started_rx.recv().unwrap();
@@ -97,7 +103,12 @@ fn concurrent_refreshes_send_one_request_per_account_within_ttl() {
         let fetch = fetch.clone();
         thread::spawn(move || {
             second_invoked_tx.send(()).unwrap();
-            futures::executor::block_on(refresh_cache_with(vec![account], cache, fetch))
+            futures::executor::block_on(refresh_cache_with(
+                vec![account],
+                cache,
+                |_| async { Some("token".into()) },
+                fetch,
+            ))
         })
     };
     second_invoked_rx.recv().unwrap();
@@ -128,6 +139,121 @@ fn concurrent_refreshes_send_one_request_per_account_within_ttl() {
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     assert_eq!(first_cache.len(), 1);
     assert_eq!(second_cache.len(), 1);
-    assert!(first_cache[&account].usage.is_none());
-    assert!(second_cache[&account].usage.is_none());
+    assert!(first_cache[&dir].usage.is_none());
+    assert!(second_cache[&dir].usage.is_none());
+}
+
+fn account(identity: &str) -> Account {
+    Account {
+        provider: zaplex_cockpit::Provider::Claude,
+        key: "claude:test".into(),
+        config_dir: "/test/claude-account".into(),
+        label: identity.into(),
+        provider_account_id: Some(identity.into()),
+        email: Some(format!("{identity}@example.test")),
+        org: None,
+        role: None,
+        plan_tier: None,
+        is_default: false,
+    }
+}
+
+fn usage() -> OauthUsage {
+    parse_response(r#"{"five_hour":{"utilization":42},"seven_day":{"utilization":13}}"#).unwrap()
+}
+
+#[test]
+fn changed_account_at_same_root_refetches_before_ttl() {
+    futures::executor::block_on(async {
+        let cache = OauthCache::default();
+        let requests = AtomicUsize::new(0);
+        for identity in ["first", "second"] {
+            let result = refresh_cache_with(
+                vec![account(identity)],
+                cache.clone(),
+                |_| async { Some("token".into()) },
+                |_| {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    async { Some(usage()) }
+                },
+            )
+            .await;
+            assert_eq!(
+                result[&account(identity).config_dir].identity,
+                account_identity(&account(identity))
+            );
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+    });
+}
+
+#[test]
+fn changed_token_invalidates_cached_usage_and_inflight_response() {
+    futures::executor::block_on(async {
+        let cache = OauthCache::default();
+        let first = refresh_cache_with(
+            vec![account("first")],
+            cache.clone(),
+            |_| async { Some("old-token".into()) },
+            |_| async { Some(usage()) },
+        )
+        .await;
+        assert_eq!(first.len(), 1);
+        let reads = AtomicUsize::new(0);
+        let result = refresh_cache_with(
+            vec![account("first")],
+            cache.clone(),
+            |_| {
+                let index = reads.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    Some(
+                        if index == 0 {
+                            "replacement-token"
+                        } else {
+                            "new-login-during-request"
+                        }
+                        .into(),
+                    )
+                }
+            },
+            |_| async { Some(usage()) },
+        )
+        .await;
+        assert!(
+            result.is_empty(),
+            "old account and obsolete response must both be absent"
+        );
+        let result = refresh_cache_with(
+            vec![account("first")],
+            cache,
+            |_| async { None },
+            |_| async { Some(usage()) },
+        )
+        .await;
+        assert!(
+            result.is_empty(),
+            "logged-out credentials cannot retain real quota"
+        );
+    });
+}
+
+#[test]
+fn changed_identity_during_request_cannot_merge_into_old_snapshot() {
+    futures::executor::block_on(async {
+        let first = account("first");
+        let result = refresh_cache_with(
+            vec![first.clone()],
+            OauthCache::default(),
+            |_| async { Some("token".into()) },
+            |_| async { Some(usage()) },
+        )
+        .await;
+        assert_eq!(
+            usable_usage(&result, &[first.clone()], &[first.clone()]).len(),
+            1
+        );
+        assert!(usable_usage(&result, &[first.clone()], &[account("second")]).is_empty());
+        assert!(usable_usage(&result, &[account("second")], &[account("second")]).is_empty());
+        assert!(usable_usage(&result, &[first], &[]).is_empty());
+    });
 }

@@ -341,9 +341,14 @@ fn confirmed_usage(
 /// advances. `file_date` (from the `YYYY/MM/DD` path) is the timestamp fallback
 /// when a line carries none.
 pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry> {
-    let Ok(content) = fs::read_to_string(path) else {
-        return Vec::new();
-    };
+    read_transcript_usage(path, file_date).unwrap_or_default()
+}
+
+fn read_transcript_usage(
+    path: &Path,
+    file_date: DateTime<Utc>,
+) -> std::io::Result<Vec<UsageEntry>> {
+    let content = fs::read_to_string(path)?;
     let mut current_model = String::from("unknown");
     let mut current_ts = file_date;
     // Same rule discovery uses, from the same function: the file name names the
@@ -380,7 +385,7 @@ pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry
             }
         }
     }
-    entries
+    Ok(entries)
 }
 
 /// Derive a coarse timestamp (midday UTC) from a `sessions/YYYY/MM/DD/` path, used as
@@ -430,20 +435,21 @@ pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> (Vec<UsageE
         if !(name.starts_with("rollout-") && name.ends_with(".jsonl")) {
             continue;
         }
-        if let Ok(meta) = file.metadata() {
-            if let Ok(modified) = meta.modified() {
-                let modified: DateTime<Utc> = modified.into();
-                if modified < since {
-                    continue;
-                }
+        let modified = match fs::metadata(file.path()).and_then(|meta| meta.modified()) {
+            Ok(modified) => DateTime::<Utc>::from(modified),
+            Err(_) => {
+                io_error = true;
+                continue;
             }
+        };
+        if modified < since {
+            continue;
         }
         let file_date = date_from_path(file.path()).unwrap_or(since);
-        entries.extend(
-            parse_transcript(file.path(), file_date)
-                .into_iter()
-                .filter(|e| e.ts >= since),
-        );
+        match read_transcript_usage(file.path(), file_date) {
+            Ok(parsed) => entries.extend(parsed.into_iter().filter(|entry| entry.ts >= since)),
+            Err(_) => io_error = true,
+        }
     }
     (entries, io_error)
 }

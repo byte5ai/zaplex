@@ -5406,3 +5406,46 @@ async fn live_sftp_remote_safe_rename_does_not_claim_a_missing_user_source_was_r
     let _ = second_server.await;
     fs::remove_dir_all(case_root).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn sibling_rescan_retains_transferred_anchor_after_cleanup_retry_fails() {
+    let root = tempdir().unwrap();
+    let owned = root.path().join("owned.bin");
+    fs::write(&owned, b"owned").unwrap();
+    let backend = Arc::new(
+        InMemorySftpBackend::new(root.path().to_path_buf())
+            .with_sibling_recovery_failure(SiblingRecoveryFailure::ReadDirectory)
+            .with_delete_failure_matching_once("owned.bin"),
+    );
+    let anchor = backend
+        .existing_entry_ownership_anchor(Path::new("/owned.bin"))
+        .unwrap()
+        .unwrap();
+    let identity = anchor.identity().unwrap();
+    let paths = backend
+        .persist_anchor_sibling_recovery(
+            Path::new("/owned.bin"),
+            anchor,
+            &identity,
+            "owned-isolation-source",
+        )
+        .unwrap();
+    backend.clear_sibling_recovery_failure();
+    let error =
+        crate::sftp_manager::transfer_job::startup_backend_recovery_error(backend.clone(), paths);
+    let recovery_id = error.recovery_id().unwrap();
+
+    crate::sftp_manager::transfer_job::retry_recovery(recovery_id)
+        .expect_err("the first cleanup must hit the injected delete failure after anchor transfer");
+    assert_eq!(fs::read(&owned).unwrap(), b"owned");
+    crate::sftp_manager::transfer_job::retry_recovery(recovery_id)
+        .expect("the retained anchor must allow the second cleanup to finish");
+    assert!(
+        !owned.exists(),
+        "a successful retry must actually delete the owned artifact"
+    );
+    drop(backend);
+    let restarted = InMemorySftpBackend::new(root.path().to_path_buf());
+    assert!(restarted.startup_recovery_paths_for_test().is_empty());
+}

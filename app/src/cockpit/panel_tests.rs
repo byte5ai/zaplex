@@ -386,3 +386,20 @@ fn account_scan_error_is_not_rendered_as_zero_accounts() {
         Some(1)
     );
 }
+
+#[test]
+fn empty_local_inventory_does_not_hide_scan_failures() {
+    crate::i18n::init(Some("en"));
+    assert_eq!(
+        empty_inventory_message(AgentInventoryStatus::Unavailable, true),
+        crate::t!("cockpit-host-inventory-unavailable"),
+    );
+    assert_ne!(
+        empty_inventory_message(AgentInventoryStatus::Unavailable, true),
+        empty_inventory_message(AgentInventoryStatus::Ready, true),
+    );
+    assert_eq!(
+        empty_inventory_message(AgentInventoryStatus::Pending, true),
+        crate::t!("cockpit-host-inventory-pending"),
+    );
+}
