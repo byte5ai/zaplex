@@ -18,14 +18,23 @@ use warp_ssh_manager::{
 };
 use warpui::{
     integration::{AssertionOutcome, TestStep},
-    SingletonEntity,
+    App, EntityId, SingletonEntity, WindowId,
 };
 
 use crate::{
     auth::AuthStateProvider,
-    integration_testing::view_getters::{terminal_view, workspace_view},
+    integration_testing::{
+        sftp,
+        view_getters::{pane_group_view, terminal_view, workspace_view},
+    },
+    pane_group::pane::PaneId,
     remote_server::auth_context::server_api_auth_context,
     remote_server::headless_connect,
+    sftp_manager::{
+        fm_registry::{FileManagerRegistry, FsNamespace},
+        types::{ConnectionState, FileEntryType},
+    },
+    terminal::model::session::SessionId,
     workspace::WorkspaceAction,
 };
 
@@ -167,6 +176,7 @@ pub struct State {
     failure: Option<String>,
     prepared: bool,
     inventory_done: bool,
+    remote_fm_cwd: Option<PathBuf>,
 }
 
 pub type SharedState = Arc<Mutex<State>>;
@@ -472,7 +482,12 @@ pub fn write_identity_evidence(state: SharedState) -> TestStep {
             "cwd": session.cwd, "features": daemon.features,
             "tab_completion": "cd pro -> cd projects/ before history seed",
             "ghost_text": "jects/ from executed remote command history",
-            "reattach": "same live PTY generation and preserved shell variable after CloseActiveTab"
+            "reattach": "same live PTY generation and preserved shell variable after CloseActiveTab",
+            "remote_file_manager": {
+                "shell_reported_cwd": state.remote_fm_cwd.as_ref().expect("F10 cwd accepted"),
+                "pwd": "exact remote directory output checked after F10",
+                "retained": "same pane, terminal view, session, draft and daemon PTY generation"
+            }
         });
         let path = PathBuf::from(
             std::env::var("ZAPLEX_DAEMON_ACCEPTANCE_OUTPUT").expect("CI evidence directory"),
@@ -576,4 +591,157 @@ pub fn detached_inventory(state: SharedState) -> TestStep {
 
 pub fn projects_path() -> String {
     format!("{}/acceptance/projects", fixture().remote_home)
+}
+
+pub const REMOTE_FM_DIRECTORY: &str = "FM space's directory";
+const REMOTE_FM_DRAFT: &str = "printf 'draft remains untouched'";
+
+pub fn remote_file_manager_path() -> String {
+    format!("{}/{REMOTE_FM_DIRECTORY}", projects_path())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RemoteTerminalIdentity {
+    pane: PaneId,
+    terminal: EntityId,
+    session: SessionId,
+    draft: String,
+}
+
+fn remote_terminal_identity(app: &App, window_id: WindowId) -> RemoteTerminalIdentity {
+    pane_group_view(app, window_id, 1).read(app, |group, ctx| {
+        assert_eq!(group.visible_pane_count(), 1);
+        let pane = group.pane_id_from_index(0).expect("original remote pane");
+        let terminal = group
+            .terminal_view_from_pane_id(pane, ctx)
+            .expect("original terminal");
+        terminal.read(ctx, |view, ctx| RemoteTerminalIdentity {
+            pane,
+            terminal: terminal.id(),
+            session: view
+                .active_block_session_id()
+                .expect("active remote session"),
+            draft: view.input().read(ctx, |input, ctx| input.buffer_text(ctx)),
+        })
+    })
+}
+
+pub fn open_remote_file_manager(state: SharedState) -> TestStep {
+    TestStep::new("Open the real SFTP file manager in the existing daemon pane")
+        .with_typed_characters(&[REMOTE_FM_DRAFT])
+        .with_action(|app, window_id, data| {
+            let identity = remote_terminal_identity(app, window_id);
+            assert_eq!(identity.draft, REMOTE_FM_DRAFT);
+            data.insert("daemon_fm_terminal", identity);
+            let workspace = workspace_view(app, window_id);
+            app.dispatch_typed_action(
+                window_id,
+                &[workspace.id()],
+                &WorkspaceAction::OpenLocalFileManager {
+                    start_path: PathBuf::from(projects_path()),
+                },
+            );
+        })
+        .set_timeout(Duration::from_secs(30))
+        .add_named_assertion(
+            "The production host route lists the real remote directory",
+            move |app, window_id| {
+                let node = state
+                    .lock()
+                    .expect("fixture state")
+                    .connection
+                    .as_ref()
+                    .expect("saved host")
+                    .server
+                    .node_id
+                    .clone();
+                let registered = app.read(|ctx| {
+                    let panes = FileManagerRegistry::as_ref(ctx).panes();
+                    panes.len() == 1
+                        && panes[0].fs == FsNamespace::Remote(node)
+                        && panes[0].current_path == PathBuf::from(projects_path())
+                });
+                if !registered {
+                    return AssertionOutcome::failure(
+                        "Remote file-manager route is not ready".into(),
+                    );
+                }
+                sftp::sftp_browser_view(app, window_id).read(app, |view, _| {
+                    if !matches!(view.connection_state(), ConnectionState::Connected)
+                        || view.is_loading
+                        || !view.entries().iter().any(|entry| {
+                            entry.name == REMOTE_FM_DIRECTORY
+                                && entry.file_type == FileEntryType::Directory
+                        })
+                    {
+                        return AssertionOutcome::failure(
+                            "Real SFTP directory listing is pending".into(),
+                        );
+                    }
+                    AssertionOutcome::Success
+                })
+            },
+        )
+}
+
+pub fn enter_remote_file_manager_directory() -> TestStep {
+    TestStep::new("Enter the quoted remote directory through its rendered row and keyboard")
+        .with_click_on_saved_position_fn(|app, window_id| {
+            let index = sftp::sftp_browser_view(app, window_id).read(app, |view, _| {
+                view.entries()
+                    .iter()
+                    .position(|entry| entry.name == REMOTE_FM_DIRECTORY)
+                    .expect("real remote directory row")
+            });
+            sftp::row_position_id(app, window_id, index)
+        })
+        .with_keystrokes(&["right"])
+        .set_timeout(Duration::from_secs(30))
+        .add_named_assertion(
+            "SFTP actually listed the selected path containing spaces and an apostrophe",
+            |app, window_id| {
+                sftp::sftp_browser_view(app, window_id).read(app, |view, _| {
+                    let expected = PathBuf::from(remote_file_manager_path());
+                    if view.is_loading
+                        || view.shell_directory_on_close().as_ref() != Some(&expected)
+                        || !view.entries().iter().any(|entry| {
+                            entry.path == expected.join("remote-marker.txt")
+                                && entry.file_type == FileEntryType::File
+                        })
+                    {
+                        return AssertionOutcome::failure(
+                            "Selected remote directory has not been listed".into(),
+                        );
+                    }
+                    AssertionOutcome::Success
+                })
+            },
+        )
+        .with_take_screenshot("linux-daemon-remote-file-manager.png")
+}
+
+pub fn close_remote_file_manager(state: SharedState) -> TestStep {
+    TestStep::new("F10 preserves the daemon terminal and draft while changing its real shell cwd")
+        .with_keystrokes(&["f10"])
+        .set_timeout(Duration::from_secs(30))
+        .add_named_assertion_with_data_from_prior_step(
+            "Original identities and draft survive; remote shell reports the listed directory",
+            move |app, window_id, data| {
+            if app.read(|ctx| !FileManagerRegistry::as_ref(ctx).panes().is_empty()) {
+                return AssertionOutcome::failure("File manager has not closed".into());
+            }
+            let before = data.get::<_, RemoteTerminalIdentity>("daemon_fm_terminal").expect("original identity");
+            let after = remote_terminal_identity(app, window_id);
+            if before != &after {
+                return AssertionOutcome::immediate_failure(format!("Remote file-manager round trip changed identity or draft: {before:?} -> {after:?}"));
+            }
+            let expected = PathBuf::from(remote_file_manager_path());
+            let actual = terminal_view(app, window_id, 1, 0).read(app, |view, ctx| view.active_session_cwd(ctx));
+            if actual.as_ref() != Some(&expected) {
+                return AssertionOutcome::failure(format!("Waiting for the actual remote cwd: expected={expected:?}, actual={actual:?}"));
+            }
+            state.lock().expect("fixture state").remote_fm_cwd = actual;
+            AssertionOutcome::Success
+            },
+        )
 }

@@ -43,7 +43,9 @@ pub fn test_daemon_terminal_acceptance() -> Builder {
             1,
             0,
             concat!(
-                "mkdir -p acceptance/projects && cd acceptance && ",
+                "mkdir -p \"acceptance/projects/FM space's directory\" && ",
+                "printf 'remote FM fixture\\n' > \"acceptance/projects/FM space's directory/remote-marker.txt\" && ",
+                "cd acceptance && ",
                 "export ZAPLEX_ACCEPTANCE_MARKER=daemon-pty-survived"
             )
             .into(),
@@ -112,6 +114,18 @@ pub fn test_daemon_terminal_acceptance() -> Builder {
             TestStep::new("Clear the unexecuted command before detaching")
                 .with_keystrokes(&["ctrl-u"]),
         )
+        .with_step(daemon::inventory(Arc::clone(&state), false))
+        .with_step(daemon::open_remote_file_manager(Arc::clone(&state)))
+        .with_step(daemon::enter_remote_file_manager_directory())
+        .with_step(daemon::close_remote_file_manager(Arc::clone(&state)))
+        .with_step(TestStep::new("Clear the preserved, unexecuted draft").with_keystrokes(&["ctrl-u"]))
+        .with_step(execute_command(
+            1,
+            0,
+            "pwd".into(),
+            ExpectedExitStatus::Success,
+            ExactLine::from(daemon::remote_file_manager_path()),
+        ))
         .with_step(daemon::inventory(Arc::clone(&state), false))
         .with_step(daemon::detach(Arc::clone(&state)))
         .with_step(daemon::detached_inventory(Arc::clone(&state)))

@@ -134,8 +134,9 @@ import hashlib, json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 observations = json.loads((root / 'observations.json').read_text())
 assert observations['pty_generation'] > 0 and observations['pty_id']
+assert observations['remote_file_manager']['shell_reported_cwd'].endswith("/acceptance/projects/FM space's directory")
 captures = {}
-for name in ('linux-daemon-tab-completion.png', 'linux-daemon-ghost-text.png', 'linux-daemon-reattached.png'):
+for name in ('linux-daemon-tab-completion.png', 'linux-daemon-ghost-text.png', 'linux-daemon-reattached.png', 'linux-daemon-remote-file-manager.png'):
     paths = list(root.rglob(name))
     assert len(paths) == 1, f'Expected exactly one native capture: {name}'
     data = paths[0].read_bytes()
