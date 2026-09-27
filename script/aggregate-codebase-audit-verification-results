@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 
-"""Validate and aggregate immutable codebase-audit verification results."""
+"""Validate and aggregate immutable codebase-audit verification results.
+
+Pass --repo with the Git repository containing the pinned commits. The run summary
+must retain its original sibling inputs/ and logs/ directories; a detached JSON
+summary alone is not sufficient evidence. No reviewer is launched by this tool.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import runpy
 import stat
 import subprocess
 import sys
@@ -1189,6 +1195,83 @@ def collect_verified_records(
     return records, result_summaries
 
 
+def validate_archived_evidence(
+    repo: Path,
+    run_path: Path,
+    assignments: dict[str, Any],
+    run: dict[str, Any],
+    records: dict[str, dict[str, Any]],
+    aggregate_raw: bytes,
+    snapshot_raw: bytes,
+    assignments_raw: bytes,
+) -> None:
+    # Reuse the runner's source and response contracts without launching a reviewer.
+    runner = runpy.run_path(str(Path(__file__).with_name(
+        "run-codebase-audit-verification-assignments"
+    )))
+    root = run_path.parent
+    for directory in (root, root / "inputs", root / "logs"):
+        if not stat.S_ISDIR(directory.lstat().st_mode):
+            raise AggregationError(f"evidence directory must be regular: {directory}")
+
+    def artifact(directory: str, name: str, expected_hash: str) -> bytes:
+        path = root / directory / name
+        if not stat.S_ISREG(path.lstat().st_mode):
+            raise AggregationError(f"evidence must be a regular file: {path}")
+        raw = path.read_bytes()
+        if sha256_bytes(raw) != expected_hash:
+            raise AggregationError(f"archived evidence SHA-256 mismatch: {path}")
+        return raw
+
+    for name, raw in (
+        ("aggregate.json", aggregate_raw),
+        ("issue-snapshot.json", snapshot_raw),
+        ("assignments.json", assignments_raw),
+    ):
+        artifact("inputs", name, sha256_bytes(raw))
+    for stream in ("stdout", "stderr"):
+        artifact("logs", f"generator.{stream}.log", run[f"generator_{stream}_sha256"])
+    for lens in LENSES:
+        artifact(
+            "inputs", f"{lens}.response.schema.json",
+            sha256_bytes(canonical_json(response_schema(lens))),
+        )
+    try:
+        files = runner["validate_repo_and_load_files"](repo, assignments)
+        for bucket in assignments["buckets"]:
+            for entry in bucket["entries"]:
+                verification_id = entry["verification_id"]
+                record = records[verification_id]
+                source = runner["source_for_entry"](files, entry)
+                expected_prompt = prompt_for_tuple(assignments, entry, source)
+                prompt = artifact(
+                    "inputs", f"{verification_id}.prompt.json", record["prompt_sha256"]
+                )
+                if prompt != expected_prompt:
+                    raise AggregationError(
+                        f"archived prompt does not match pinned source: {verification_id}"
+                    )
+                events = artifact(
+                    "logs", f"{verification_id}.events.jsonl", record["events_sha256"]
+                )
+                artifact("logs", f"{verification_id}.stderr.log", record["stderr_sha256"])
+                final = artifact(
+                    "logs", f"{verification_id}.final-message.log",
+                    record["final_message_sha256"],
+                )
+                runner["validate_event_stream"](events, verification_id)
+                response = runner["validate_response"](
+                    runner["decode_json"](final, f"{verification_id} final message"),
+                    entry, assignments, source,
+                )
+                if response != record["response"]:
+                    raise AggregationError(
+                        f"archived final response does not match result: {verification_id}"
+                    )
+    except runner["RunnerError"] as error:
+        raise AggregationError(f"invalid archived verification evidence: {error}") from error
+
+
 def lens_evidence(record: dict[str, Any], bucket_id: str) -> dict[str, Any]:
     return {
         "bucket_id": bucket_id,
@@ -1335,6 +1418,10 @@ def atomic_publish(path: Path, contents: bytes) -> None:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--repo", type=Path, required=True,
+        help="Git repository containing all pinned commits; worktree contents are ignored",
+    )
     parser.add_argument("--aggregate", type=Path, required=True)
     parser.add_argument("--issue-snapshot", type=Path, required=True)
     parser.add_argument("--assignments", type=Path, required=True)
@@ -1382,6 +1469,10 @@ def main(argv: list[str] | None = None) -> int:
             executions,
             run_buckets,
             args.results_dir,
+        )
+        validate_archived_evidence(
+            args.repo, args.run_summary, assignments, run, records,
+            aggregate_raw, snapshot_raw, assignments_raw,
         )
         output = build_output(
             aggregate,

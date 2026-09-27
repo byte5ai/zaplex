@@ -659,10 +659,13 @@ def live_sftp_commit_boundaries_have_a_real_protocol_gate(root: Path) -> None:
 
 
 def markdown_rows(text: str, start_marker: str, end_marker: str) -> list[list[str]]:
-    try:
-        section = text.split(start_marker, 1)[1].split(end_marker, 1)[0]
-    except IndexError as error:
-        raise ReadinessError(f"missing section markers {start_marker} / {end_marker}") from error
+    if text.count(start_marker) != 1 or text.count(end_marker) != 1:
+        raise ReadinessError(f"section markers must occur once: {start_marker} / {end_marker}")
+    start = text.index(start_marker) + len(start_marker)
+    end = text.index(end_marker)
+    if end < start:
+        raise ReadinessError(f"section markers are reversed: {start_marker} / {end_marker}")
+    section = text[start:end]
     rows = []
     for line in section.splitlines():
         if not line.startswith("|"):
@@ -696,6 +699,8 @@ def manual_release_matrix_has_result_and_evidence_for_every_row(
     text = read_text(root / "docs/release/1.0-readiness.md")
     rows = markdown_rows(text, "<!-- runtime-matrix:start -->", "<!-- runtime-matrix:end -->")
     by_id = {row[0]: row for row in rows}
+    if len(by_id) != len(rows):
+        raise ReadinessError("runtime matrix IDs must occur exactly once")
     if set(by_id) != set(EXPECTED_MATRIX_ROWS):
         missing = sorted(set(EXPECTED_MATRIX_ROWS) - set(by_id))
         extra = sorted(set(by_id) - set(EXPECTED_MATRIX_ROWS))
@@ -980,6 +985,48 @@ def run_self_test() -> None:
                 fixture, "b"
             ),
         )
+
+        original_readiness = read_text(readiness)
+        for phase in ("a", "b"):
+            matrix_text = original_readiness
+            if phase == "b":
+                matrix_text = matrix_text.replace(
+                    "| PENDING_ARTIFACT | — | — |",
+                    "| PASS | fixture-artifact | fixture-evidence |",
+                )
+            readiness.write_text(matrix_text, encoding="utf-8")
+            manual_release_matrix_has_result_and_evidence_for_every_row(fixture, phase)
+            first_row = next(line for line in matrix_text.splitlines() if line.startswith("| M01 |"))
+            hidden_failure = first_row.replace(
+                "| PENDING_ARTIFACT |" if phase == "a" else "| PASS |", "| FAIL |"
+            )
+            for duplicate in (first_row, hidden_failure):
+                readiness.write_text(
+                    matrix_text.replace(first_row, duplicate + "\n" + first_row, 1),
+                    encoding="utf-8",
+                )
+                expect_readiness_failure(
+                    f"duplicate_runtime_matrix_row_phase_{phase}",
+                    lambda: manual_release_matrix_has_result_and_evidence_for_every_row(fixture, phase),
+                )
+        readiness.write_text(original_readiness, encoding="utf-8")
+
+        for section_name, check in (
+            ("risk-register", lambda: first_ten_user_risks_have_mitigation_recovery_and_validation(fixture)),
+            ("runtime-matrix", lambda: manual_release_matrix_has_result_and_evidence_for_every_row(fixture, "a")),
+        ):
+            start_marker = f"<!-- {section_name}:start -->"
+            end_marker = f"<!-- {section_name}:end -->"
+            for label, malformed in (
+                ("missing-start", original_readiness.replace(start_marker, "", 1)),
+                ("missing-end", original_readiness.replace(end_marker, "", 1)),
+                ("duplicate-start", original_readiness.replace(start_marker, start_marker * 2, 1)),
+                ("duplicate-end", original_readiness.replace(end_marker, end_marker * 2, 1)),
+                ("reversed", end_marker + original_readiness.replace(end_marker, "", 1)),
+            ):
+                readiness.write_text(malformed, encoding="utf-8")
+                expect_readiness_failure(f"{section_name}_{label}", check)
+        readiness.write_text(original_readiness, encoding="utf-8")
 
         planned = planned_red_test_names(root)
         symbols = implemented_test_symbols(root)

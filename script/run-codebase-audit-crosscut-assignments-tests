@@ -253,7 +253,7 @@ class CrosscutRunnerTest(unittest.TestCase):
             },
         )
 
-    def invoke(self, run_dir, *extra):
+    def invoke(self, run_dir, *extra, excluded_sensitive_paths=None):
         arguments = [
             "--repo",
             str(self.repo),
@@ -286,7 +286,7 @@ class CrosscutRunnerTest(unittest.TestCase):
             return_value=(
                 {"src/reviewed.rs": self.file_bytes},
                 {"src/reviewed.rs": 1},
-                set(),
+                excluded_sensitive_paths or set(),
             ),
         ):
             return RUNNER.main(arguments)
@@ -315,6 +315,10 @@ class CrosscutRunnerTest(unittest.TestCase):
         )
         self.assertIn("--disable-slash-commands", record["argv"])
         self.assertIn("--no-session-persistence", record["argv"])
+        for flag in ("--safe-mode", "--strict-mcp-config", "--no-chrome"):
+            self.assertIn(flag, record["argv"])
+        for flag, value in (("--mcp-config", '{"mcpServers":{}}'), ("--setting-sources", ""), ("--permission-prompts", "none")):
+            self.assertEqual(record["argv"][record["argv"].index(flag) + 1], value)
         self.assertEqual(
             record["argv"][record["argv"].index("--permission-mode") + 1], "plan"
         )
@@ -325,6 +329,55 @@ class CrosscutRunnerTest(unittest.TestCase):
         with self.environment():
             self.assertEqual(self.invoke(run_dir, "--resume"), 0)
         self.assertEqual(len(self.read_state()["calls"]), 13)
+
+    def test_resume_rejects_missing_changed_symlinked_and_rehashed_logs(self):
+        run_dir = self.root / "resume-evidence"
+        with self.environment():
+            self.assertEqual(self.invoke(run_dir), 0)
+        crosscut_id = "unsafe-app-and-zaplex"
+        result_path = run_dir / "results" / f"{crosscut_id}.json"
+        original_result = result_path.read_bytes()
+        for kind, suffix in (("stdout", "json"), ("stderr", "log")):
+            log = run_dir / "logs" / f"{crosscut_id}.attempt-1.{kind}.{suffix}"
+            original = log.read_bytes()
+            for mutation in ("missing", "changed", "symlink"):
+                with self.subTest(kind=kind, mutation=mutation):
+                    log.unlink()
+                    if mutation == "changed":
+                        log.write_bytes(original + b"changed")
+                    elif mutation == "symlink":
+                        target = self.root / "copied-log"
+                        target.write_bytes(original)
+                        log.symlink_to(target)
+                    with self.environment(), mock.patch("builtins.print"):
+                        self.assertEqual(self.invoke(run_dir, "--resume"), 1)
+                    self.assertEqual(len(self.read_state()["calls"]), 13)
+                    if log.exists() or log.is_symlink():
+                        log.unlink()
+                    log.write_bytes(original)
+        stdout = run_dir / "logs" / f"{crosscut_id}.attempt-1.stdout.json"
+        outer = json.loads(stdout.read_bytes())
+        outer["structured_output"]["findings"] = []
+        changed = RUNNER.canonical_json(outer)
+        stdout.write_bytes(changed)
+        result = json.loads(original_result)
+        result["stdout_sha256"] = RUNNER.sha256_bytes(changed)
+        result_path.write_bytes(RUNNER.canonical_json(result))
+        with self.environment(), mock.patch("builtins.print"):
+            self.assertEqual(self.invoke(run_dir, "--resume"), 1)
+        self.assertEqual(len(self.read_state()["calls"]), 13)
+
+    def test_sensitive_exclusions_keep_review_incomplete_and_visible_on_resume(self):
+        run_dir = self.root / "partial-run"
+        for extra in ((), ("--resume",)):
+            with self.environment(), mock.patch("builtins.print"):
+                self.assertEqual(self.invoke(run_dir, *extra, excluded_sensitive_paths={"src/reviewed.rs"}), 1)
+            summary = json.loads((run_dir / "run.json").read_bytes())
+            self.assertFalse(summary["complete"])
+            self.assertEqual(summary["completed_crosscuts"], 13)
+            self.assertEqual(len(summary["remaining_review"]), 12)
+            self.assertTrue(all(item["path"] == "src/reviewed.rs" and "local review" in item["reason"] for item in summary["remaining_review"]))
+            self.assertEqual(len(self.read_state()["calls"]), 13)
 
     def test_invalid_structured_response_gets_only_one_retry(self):
         run_dir = self.root / "retry-run"

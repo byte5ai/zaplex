@@ -348,7 +348,7 @@ def build_assignments(
 def build_response(
     assignments: dict, entry: dict, finding_index: int
 ) -> tuple[dict, dict]:
-    source_text = f"source for {entry['finding_id']}\n"
+    source_text = f"source for {entry['finding']['path']}\n"
     source = {
         "path": entry["finding"]["path"],
         "range": copy.deepcopy(entry["finding"]["range"]),
@@ -414,8 +414,8 @@ def build_run_and_results(assignments: dict, raw_inputs: dict[str, bytes]) -> tu
                     canonical_json(response_schema(entry["lens"]))
                 ),
                 "source_sha256": source["sha256"],
-                "events_sha256": label_hash(f"events-{entry['verification_id']}"),
-                "stderr_sha256": label_hash(f"stderr-{entry['verification_id']}"),
+                "events_sha256": sha256_bytes(b'{"type":"turn.completed"}\n'),
+                "stderr_sha256": sha256_bytes(b""),
                 "final_message_sha256": sha256_bytes(canonical_json(response)),
                 "response_sha256": sha256_bytes(canonical_json(response)),
                 "response": response,
@@ -489,11 +489,37 @@ class VerificationAggregatorTests(unittest.TestCase):
         results_directory.mkdir()
         tool = tool_directory / SCRIPT.name
         shutil.copy2(SCRIPT, tool)
+        shutil.copy2(
+            SCRIPT.with_name("run-codebase-audit-verification-assignments"),
+            tool_directory / "run-codebase-audit-verification-assignments",
+        )
         generator = tool_directory / "generate-codebase-audit-verification-assignments"
         generator.write_text(GENERATOR_STUB)
         generator.chmod(0o755)
         repository = "example/project"
         aggregate = build_aggregate()
+        repo = root / "repo"
+        repo.mkdir()
+
+        def git(*arguments):
+            return subprocess.run(
+                ["git", "-C", str(repo), *arguments], check=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            ).stdout.decode().strip()
+
+        git("init", "-q")
+        git("config", "user.name", "Audit Fixture")
+        git("config", "user.email", "audit@example.invalid")
+        for finding in aggregate["findings"]:
+            path = repo / finding["path"]
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(f"source for {finding['path']}\n", encoding="utf-8")
+        git("add", "src")
+        git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "fixture")
+        commit = git("rev-parse", "HEAD")
+        for key in ("target_sha", "upstream_sha", "merge_base_sha"):
+            aggregate[key] = commit
+        aggregate["aggregate_sha256"] = document_hash(aggregate, "aggregate_sha256")
         snapshot = [
             {
                 "number": 245,
@@ -527,6 +553,7 @@ class VerificationAggregatorTests(unittest.TestCase):
             "results": results_directory,
             "output": root / "verification-aggregate.json",
             "tool": tool,
+            "repo": repo,
         }
         paths["aggregate"].write_bytes(aggregate_raw)
         paths["snapshot"].write_bytes(snapshot_raw)
@@ -535,6 +562,41 @@ class VerificationAggregatorTests(unittest.TestCase):
         for document in result_documents:
             result_path = results_directory / f"{document['bucket_id']}.json"
             result_path.write_bytes(canonical_json(document))
+        inputs = root / "inputs"
+        logs = root / "logs"
+        inputs.mkdir()
+        logs.mkdir()
+        for name, raw in (
+            ("aggregate.json", aggregate_raw), ("issue-snapshot.json", snapshot_raw),
+            ("assignments.json", assignments_raw),
+        ):
+            (inputs / name).write_bytes(raw)
+        for stream in ("stdout", "stderr"):
+            (logs / f"generator.{stream}.log").write_bytes(b"")
+        records = {
+            record["verification_id"]: record
+            for document in result_documents for record in document["results"]
+        }
+        for bucket in assignments["buckets"]:
+            for entry in bucket["entries"]:
+                record = records[entry["verification_id"]]
+                response = record["response"]
+                source = {
+                    "path": entry["finding"]["path"], "range": entry["finding"]["range"],
+                    "text": response["source_text"], "sha256": response["source_sha256"],
+                }
+                identifier = entry["verification_id"]
+                (inputs / f"{identifier}.prompt.json").write_bytes(
+                    prompt_for_tuple(assignments, entry, source)
+                )
+                (inputs / f"{entry['lens']}.response.schema.json").write_bytes(
+                    canonical_json(response_schema(entry["lens"]))
+                )
+                (logs / f"{identifier}.events.jsonl").write_bytes(
+                    b'{"type":"turn.completed"}\n'
+                )
+                (logs / f"{identifier}.stderr.log").write_bytes(b"")
+                (logs / f"{identifier}.final-message.log").write_bytes(canonical_json(response))
         return {
             "root": root,
             "paths": paths,
@@ -550,6 +612,8 @@ class VerificationAggregatorTests(unittest.TestCase):
         paths = fixture["paths"]
         return [
             str(paths["tool"]),
+            "--repo",
+            str(paths["repo"]),
             "--aggregate",
             str(paths["aggregate"]),
             "--issue-snapshot",
@@ -884,6 +948,117 @@ class VerificationAggregatorTests(unittest.TestCase):
         )
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("byte-exact", completed.stderr.decode())
+
+    def repin_record(self, fixture, record):
+        # Move all external JSON pins so tests reach the actual artifact checks.
+        result_path = fixture["paths"]["results"] / "verification-bucket-1.json"
+        result = json.loads(result_path.read_bytes())
+        result["results"][0] = record
+        result["result_sha256"] = document_hash(result, "result_sha256")
+        self.rewrite(result_path, result)
+        run = json.loads(fixture["paths"]["run"].read_bytes())
+        for execution in run["executions"]:
+            if execution["verification_id"] == record["verification_id"]:
+                execution.update({key: value for key, value in record.items() if key != "response"})
+        run["buckets"][0]["result_sha256"] = result["result_sha256"]
+        run["run_sha256"] = document_hash(run, "run_sha256")
+        fixture["run"] = run
+        self.rewrite(fixture["paths"]["run"], run)
+
+    def test_requires_actual_archived_artifacts(self):
+        artifacts = (
+            ("logs", "generator.stdout.log"), ("logs", "generator.stderr.log"),
+            ("inputs", "aggregate.json"), ("inputs", "issue-snapshot.json"),
+            ("inputs", "assignments.json"), ("inputs", "disprove.response.schema.json"),
+            ("inputs", "{id}.prompt.json"), ("logs", "{id}.events.jsonl"),
+            ("logs", "{id}.stderr.log"), ("logs", "{id}.final-message.log"),
+        )
+        for directory, name in artifacts:
+            for mode in ("missing", "changed", "symlink"):
+                with self.subTest(name=name, mode=mode):
+                    fixture = self.make_fixture(f"artifact-{directory}-{name}-{mode}")
+                    identifier = fixture["run"]["executions"][0]["verification_id"]
+                    path = fixture["root"] / directory / name.format(id=identifier)
+                    raw = path.read_bytes()
+                    if mode == "missing":
+                        path.unlink()
+                    elif mode == "changed":
+                        path.write_bytes(raw + b"changed")
+                    else:
+                        target = fixture["root"] / "copied-artifact"
+                        target.write_bytes(raw)
+                        path.unlink()
+                        path.symlink_to(target)
+                    result = self.run_tool(fixture)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(fixture["paths"]["output"].exists())
+
+    def test_rehashed_failed_events_and_substituted_final_are_rejected(self):
+        for mode in ("failed-events", "different-final"):
+            with self.subTest(mode=mode):
+                fixture = self.make_fixture(mode)
+                record = copy.deepcopy(fixture["result_documents"][0]["results"][0])
+                identifier = record["verification_id"]
+                if mode == "failed-events":
+                    raw = b'{"type":"turn.failed"}\n'
+                    suffix, key = "events.jsonl", "events_sha256"
+                    expected = "reports a failure"
+                else:
+                    response = copy.deepcopy(record["response"])
+                    response["counter_evidence"] = "different archived assessment"
+                    raw = canonical_json(response)
+                    suffix, key = "final-message.log", "final_message_sha256"
+                    expected = "final response does not match"
+                (fixture["root"] / "logs" / f"{identifier}.{suffix}").write_bytes(raw)
+                record[key] = sha256_bytes(raw)
+                self.repin_record(fixture, record)
+                result = self.run_tool(fixture)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr.decode())
+                self.assertFalse(fixture["paths"]["output"].exists())
+
+    def test_coherently_rehashed_source_must_match_pinned_git_blob(self):
+        fixture = self.make_fixture("substituted-source")
+        record = copy.deepcopy(fixture["result_documents"][0]["results"][0])
+        entry = fixture["assignments"]["buckets"][0]["entries"][0]
+        source = {
+            "path": entry["finding"]["path"], "range": entry["finding"]["range"],
+            "text": "substituted source\n", "sha256": sha256_bytes(b"substituted source\n"),
+        }
+        record["response"].update(source_text=source["text"], source_sha256=source["sha256"])
+        record["source_sha256"] = source["sha256"]
+        prompt = prompt_for_tuple(fixture["assignments"], entry, source)
+        final = canonical_json(record["response"])
+        record["prompt_sha256"] = sha256_bytes(prompt)
+        record["response_sha256"] = sha256_bytes(final)
+        record["final_message_sha256"] = sha256_bytes(final)
+        identifier = record["verification_id"]
+        (fixture["root"] / "inputs" / f"{identifier}.prompt.json").write_bytes(prompt)
+        (fixture["root"] / "logs" / f"{identifier}.final-message.log").write_bytes(final)
+        # A matching mutable worktree must not replace the immutable target blob.
+        (fixture["paths"]["repo"] / source["path"]).write_text(source["text"])
+        self.repin_record(fixture, record)
+        result = self.run_tool(fixture)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("prompt does not match pinned source", result.stderr.decode())
+        self.assertFalse(fixture["paths"]["output"].exists())
+
+    def test_repo_is_required_and_missing_commits_fail_closed(self):
+        fixture = self.make_fixture("repo-pin")
+        command = self.command(fixture)
+        index = command.index("--repo")
+        del command[index:index + 2]
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"--repo", result.stderr)
+        empty_repo = fixture["root"] / "empty-repo"
+        empty_repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(empty_repo)], check=True)
+        fixture["paths"]["repo"] = empty_repo
+        result = self.run_tool(fixture)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Git command failed", result.stderr.decode())
+        self.assertFalse(fixture["paths"]["output"].exists())
 
     def test_output_is_no_overwrite_and_atomic_under_race(self):
         fixture = self.make_fixture("no-overwrite")
