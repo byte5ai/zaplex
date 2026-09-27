@@ -35,6 +35,9 @@ pub fn parse_theme_color_input(input: &str) -> Result<ColorU> {
     } else {
         format!("#{trimmed}")
     };
+    if !hex[1..].bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(anyhow!("Invalid hex color"));
+    }
     if hex.len() == 9 {
         let channels = (1..9)
             .step_by(2)

@@ -39,6 +39,10 @@ pub fn coloru_from_hex_string(s: &str) -> Result<ColorU, HexColorError> {
         return Err(HexColorError::InvalidLength);
     }
 
+    if !s.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(HexColorError::InvalidValue);
+    }
+
     // for a shorter color representation we want to "normalize" it to the standard 6-character
     // one, so #123 becomes #112233.
     if s.len() == SHORT_COLOR_LEN {
@@ -88,3 +92,7 @@ where
     let coloru: ColorU = color.to_owned().into();
     coloru_to_hex_string(&coloru).serialize(serializer)
 }
+
+#[cfg(test)]
+#[path = "hex_color_tests.rs"]
+mod tests;

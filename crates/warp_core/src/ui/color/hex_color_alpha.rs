@@ -25,6 +25,10 @@ fn coloru_from_hex_alpha(s: &str) -> Result<ColorU, String> {
         ));
     }
 
+    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Invalid hex color string".to_string());
+    }
+
     // Expand 3-digit shorthand: #RGB -> #RRGGBB
     let expanded: String = if hex.len() == SHORT_LEN {
         hex.chars().flat_map(|c| std::iter::repeat_n(c, 2)).collect()
