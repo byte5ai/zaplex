@@ -29,7 +29,7 @@ fn dcs(json: &[u8], hex_encoded: bool, terminator: &[u8]) -> Vec<u8> {
     } else {
         (b'f', json.to_vec())
     };
-    [b"\x1bP$", &[marker], payload.as_slice(), terminator].concat()
+    [b"\x1bP$".as_slice(), &[marker], payload.as_slice(), terminator].concat()
 }
 
 fn handshake(shell: &str, terminator: &[u8]) -> Vec<u8> {

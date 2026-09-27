@@ -5682,20 +5682,26 @@ fn terminals_with_matching_kitty_ids_keep_distinct_pixels_and_animation_roots() 
         });
         assert_ne!(first_asset, second_asset);
         assert_eventually!(
-            cached_image(AssetCache::as_ref(&app), &first_asset).is_some()
-                && cached_image(AssetCache::as_ref(&app), &second_asset).is_some(),
+            app.read(|ctx| {
+                cached_image(AssetCache::as_ref(ctx), &first_asset).is_some()
+                    && cached_image(AssetCache::as_ref(ctx), &second_asset).is_some()
+            }),
             "both terminal image events must reach the shared cache"
         );
-        assert_eq!(
-            cached_image(AssetCache::as_ref(&app), &first_asset)
-                .unwrap().rgba_bytes(),
-            &[0xff, 0, 0, 0xff]
-        );
-        assert_eq!(
-            cached_image(AssetCache::as_ref(&app), &second_asset)
-                .unwrap().rgba_bytes(),
-            &[0, 0xff, 0, 0xff]
-        );
+        app.read(|ctx| {
+            assert_eq!(
+                cached_image(AssetCache::as_ref(ctx), &first_asset)
+                    .unwrap()
+                    .rgba_bytes(),
+                &[0xff, 0, 0, 0xff]
+            );
+            assert_eq!(
+                cached_image(AssetCache::as_ref(ctx), &second_asset)
+                    .unwrap()
+                    .rgba_bytes(),
+                &[0, 0xff, 0, 0xff]
+            );
+        });
 
         first.update(&mut app, |view, _| {
             view.model.lock().process_bytes(
@@ -5703,24 +5709,28 @@ fn terminals_with_matching_kitty_ids_keep_distinct_pixels_and_animation_roots() 
             );
         });
         assert_eventually!(
-            matches!(
-                AssetCache::as_ref(&app).load_asset::<ImageType>(AssetSource::Raw {
+            app.read(|ctx| matches!(
+                AssetCache::as_ref(ctx).load_asset::<ImageType>(AssetSource::Raw {
                     id: first_asset.clone(),
                 }),
                 AssetState::Loaded { data } if matches!(&*data, ImageType::AnimatedBitmap { .. })
-            ),
+            )),
             "animation updates must address the originating terminal image"
         );
-        assert_eq!(
-            cached_image(AssetCache::as_ref(&app), &first_asset)
-                .unwrap().rgba_bytes(),
-            &[0xff, 0, 0, 0xff]
-        );
-        assert_eq!(
-            cached_image(AssetCache::as_ref(&app), &second_asset)
-                .unwrap().rgba_bytes(),
-            &[0, 0xff, 0, 0xff]
-        );
+        app.read(|ctx| {
+            assert_eq!(
+                cached_image(AssetCache::as_ref(ctx), &first_asset)
+                    .unwrap()
+                    .rgba_bytes(),
+                &[0xff, 0, 0, 0xff]
+            );
+            assert_eq!(
+                cached_image(AssetCache::as_ref(ctx), &second_asset)
+                    .unwrap()
+                    .rgba_bytes(),
+                &[0, 0xff, 0, 0xff]
+            );
+        });
     });
 }
 

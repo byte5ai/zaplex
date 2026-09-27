@@ -723,7 +723,7 @@ fn unsupported_inline_legacy_ssh_table_is_not_partially_migrated() {
 #[test]
 #[serial_test::serial]
 fn native_ssh_read_failure_does_not_write_toml_or_complete_migration() {
-    use crate::terminal::zaplexify::settings::ZaplexifySettings;
+    use crate::terminal::zaplexify::settings::{EnableSshZaplexification, ZaplexifySettings};
     use user_preferences::{in_memory::InMemoryPreferences, UserPreferences};
 
     struct FailedReadPreferences(InMemoryPreferences);
@@ -765,7 +765,12 @@ fn native_ssh_read_failure_does_not_write_toml_or_complete_migration() {
                 None,
             );
             assert_eq!(
-                PublicPreferences::as_ref(ctx).read_value("EnableSshZaplexification").unwrap(),
+                EnableSshZaplexification::preferences_for_setting(ctx)
+                    .read_value_with_hierarchy(
+                        EnableSshZaplexification::storage_key(),
+                        EnableSshZaplexification::hierarchy(),
+                    )
+                    .unwrap(),
                 None,
             );
         });

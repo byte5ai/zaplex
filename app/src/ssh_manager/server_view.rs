@@ -1888,7 +1888,7 @@ impl SshServerView {
     fn open_key_file_picker(&mut self, onekey: bool, ctx: &mut ViewContext<Self>) {
         self.key_picker_generation = self.key_picker_generation.wrapping_add(1);
         let generation = self.key_picker_generation;
-        let view = ctx.handle().downgrade();
+        let view = ctx.handle();
         ctx.open_file_picker(
             move |result, ctx| match result {
                 Ok(paths) => {

@@ -123,7 +123,8 @@ pub fn init(
 
     ctx.add_singleton_model(|_| SettingsInitializer::new());
 
-    report_if_error!(migrate_legacy_native_ssh_setting(ctx.private_user_preferences()));
+    report_if_error!(migrate_legacy_native_ssh_setting(ctx.private_user_preferences())
+        .map_err(|error| anyhow::anyhow!(error)));
     register_all_settings(ctx);
 
     // One-time migration: copy public settings from the platform-native store

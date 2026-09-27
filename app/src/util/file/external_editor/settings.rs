@@ -1,6 +1,5 @@
 pub use crate::util::openable_file_type::EditorLayout;
 use serde::{Deserialize, Deserializer, Serialize};
-use settings_value::SettingsValue as _;
 use settings::{
     macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
 };
