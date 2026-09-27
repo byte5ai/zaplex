@@ -95,7 +95,12 @@ pub fn set_zsh_histfile_location(dir: impl AsRef<Path>) {
 
 /// The visible terminal title identifies the local host and its home directory.
 pub(crate) fn tab_title_in_home_dir() -> String {
-    format!("{} · ~", warp::t!("cockpit-spawn-card-host-local"))
+    format!(
+        "{} · ~",
+        warp::i18n::loader()
+            .expect("Integration locale must be initialized")
+            .get("cockpit-spawn-card-host-local")
+    )
 }
 
 /// Writes the `rc_contents` into the corresponding RC files depending on the value of
