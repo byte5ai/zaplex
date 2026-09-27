@@ -7835,10 +7835,22 @@ impl Workspace {
                 let branch = crate::util::git::detect_current_branch_display(&root)
                     .await
                     .unwrap_or_default();
-                let (diff, untracked) = crate::util::git::get_review_working_changes(&root).await;
-                (root_str, name, branch, diff, untracked)
+                let changes = crate::util::git::get_review_working_changes(&root).await;
+                (root_str, name, branch, changes)
             },
-            |me, (root_str, name, branch, diff, untracked), ctx| {
+            |me, (root_str, name, branch, changes), ctx| {
+                let (diff, untracked) = match changes {
+                    Ok(changes) => changes,
+                    Err(error) => {
+                        me.toast_stack.update(ctx, |toast_stack, ctx| {
+                            toast_stack.add_ephemeral_toast(
+                                DismissibleToast::error(format!("Could not open review: {error}")),
+                                ctx,
+                            );
+                        });
+                        return;
+                    }
+                };
                 let changes = zaplex_cockpit::WorkingChanges { diff, untracked };
                 // Preview the exact commit command the "commit" verb would run,
                 // with a placeholder message (github_flows ethos: show it).

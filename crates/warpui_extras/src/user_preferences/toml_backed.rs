@@ -57,6 +57,9 @@ pub struct TomlBackedUserPreferences {
     /// Values that should remain readable until the next successful write, then
     /// be removed from the settings file instead of being serialized again.
     retired_values: Vec<(String, Option<String>)>,
+
+    /// Application-specific migrations, applied in memory on load and reload.
+    document_migration: Option<fn(&mut DocumentMut)>,
 }
 
 impl TomlBackedUserPreferences {
@@ -90,6 +93,7 @@ impl TomlBackedUserPreferences {
                 write_inhibited: Cell::new(write_inhibited),
                 write_inhibited_keys: RefCell::new(HashSet::new()),
                 retired_values: Vec::new(),
+                document_migration: None,
             },
             error,
         )
@@ -105,6 +109,14 @@ impl TomlBackedUserPreferences {
             .into_iter()
             .map(|(key, hierarchy)| (key.to_owned(), hierarchy.map(str::to_owned)))
             .collect();
+        self
+    }
+
+    /// Applies an application migration without writing the file. The same migration
+    /// runs after every successful reload; a later ordinary write persists the result.
+    pub fn with_document_migration(mut self, migration: fn(&mut DocumentMut)) -> Self {
+        migration(self.document.get_mut());
+        self.document_migration = Some(migration);
         self
     }
 
@@ -169,7 +181,10 @@ impl TomlBackedUserPreferences {
     /// document is kept and an error is returned.
     pub fn reload_from_disk(&self) -> Result<(), Error> {
         match Self::load_document(self.file_path.as_path()) {
-            Ok(doc) => {
+            Ok(mut doc) => {
+                if let Some(migrate) = self.document_migration {
+                    migrate(&mut doc);
+                }
                 *self.document.borrow_mut() = doc;
                 // The file is now valid — allow writes again.
                 self.write_inhibited.set(false);

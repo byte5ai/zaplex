@@ -4,6 +4,10 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Umbenannte SSH- und Editoreinstellungen (#245) erhalten frühere Abschaltungen, Sperrlisten und Editorwahlen. Neue explizite Werte gewinnen; ein Zurücksetzen reaktiviert keine alten Werte. Native Lesefehler brechen die Erstübernahme ab, ohne Einstellungen zu überschreiben.
+
+- Die Reviewansicht (#245) zeigt Fehler beim Lesen eines Git-Repositories an, statt ein unlesbares Repository als unverändert darzustellen. Zaplex erkennt seine eigene macOS-App als Editor.
+
 - `/plan` (#245) aktiviert bei unterstütztem Claude Code einen eingeschränkten nativen Planmodus und erhält die Sitzung für die nächste normale Anfrage. Der sichtbare Befehl wird nicht nochmals an die CLI weitergereicht; nicht zuverlässig abgesicherte Codex-Planaufrufe werden ausdrücklich abgewiesen.
 
 - Die Signiervorbereitung (#245) erhält vorhandene Keychain-Pfade samt Leerzeichen und stellt die Suchliste wieder her. Temporäre Signierdateien liegen in einem privaten Verzeichnis; geerbte Pfade werden beim Aufräumen nicht angefasst. Der Changelog-Generator behandelt einen fehlgeschlagenen Release-Abruf nicht als leere Historie.

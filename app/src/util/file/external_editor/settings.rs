@@ -1,19 +1,11 @@
 pub use crate::util::openable_file_type::EditorLayout;
 use serde::{Deserialize, Deserializer, Serialize};
+use settings_value::SettingsValue as _;
 use settings::{
     macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
 };
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Serialize,
-    PartialEq,
-    Eq,
-    schemars::JsonSchema,
-    settings_value::SettingsValue,
-)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[schemars(
     description = "Which editor to use when opening files.",
     rename_all = "snake_case"
@@ -24,6 +16,35 @@ pub enum EditorChoice {
     EnvEditor,
     #[schemars(description = "A specific external code editor.")]
     ExternalEditor(super::Editor),
+}
+
+impl settings_value::SettingsValue for EditorChoice {
+    fn to_file_value(&self) -> serde_json::Value {
+        match self {
+            Self::SystemDefault => serde_json::json!("system_default"),
+            Self::Zaplex => serde_json::json!("zaplex"),
+            Self::EnvEditor => serde_json::json!("env_editor"),
+            Self::ExternalEditor(editor) => {
+                serde_json::json!({ "external_editor": editor.to_file_value() })
+            }
+        }
+    }
+
+    fn from_file_value(value: &serde_json::Value) -> Option<Self> {
+        match value {
+            serde_json::Value::String(name) => match name.as_str() {
+                "system_default" => Some(Self::SystemDefault),
+                "zap" | "zaplex" => Some(Self::Zaplex),
+                "env_editor" => Some(Self::EnvEditor),
+                _ => None,
+            },
+            serde_json::Value::Object(object) => {
+                super::Editor::from_file_value(object.get("external_editor")?)
+                    .map(Self::ExternalEditor)
+            }
+            _ => None,
+        }
+    }
 }
 
 // Custom Deserialize implementation to handle backward compatibility
@@ -45,6 +66,7 @@ impl<'de> Deserialize<'de> for EditorChoice {
         #[derive(Deserialize)]
         enum EditorChoiceInner {
             SystemDefault,
+            #[serde(alias = "Zap")]
             Zaplex,
             EnvEditor,
             ExternalEditor(super::Editor),
@@ -151,3 +173,7 @@ impl OpenConversationPreference {
         matches!(self, Self::NewTab)
     }
 }
+
+#[cfg(test)]
+#[path = "settings_tests.rs"]
+mod tests;

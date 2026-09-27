@@ -118,7 +118,7 @@ async fn review_changes_before_first_commit_includes_staged_file() {
         .await
         .expect("failed to write untracked file");
 
-    let (diff, untracked) = get_review_working_changes(&repo).await;
+    let (diff, untracked) = get_review_working_changes(&repo).await.expect("read review changes");
 
     assert!(
         diff.contains("staged.txt") && diff.contains("staged content"),
@@ -133,4 +133,26 @@ async fn review_changes_before_first_commit_includes_staged_file() {
         "untracked files must come from the untracked list, not the diff, got:\n{diff}"
     );
     assert_eq!(untracked, vec!["untracked.txt".to_string()]);
+}
+
+#[tokio::test]
+async fn review_changes_rejects_missing_or_non_repository_directory() {
+    let dir = tempfile::tempdir().expect("temporary non-repository directory");
+    assert!(get_review_working_changes(dir.path()).await.is_err());
+    assert!(get_review_working_changes(&dir.path().join("missing")).await.is_err());
+}
+
+#[tokio::test]
+async fn review_changes_rejects_corrupt_index_instead_of_reporting_clean() {
+    let (_dir, repo) = init_repo().await;
+    tokio::fs::write(repo.join(".git/index"), b"invalid Git index").await.unwrap();
+    assert!(get_review_working_changes(&repo).await.is_err());
+}
+
+#[tokio::test]
+async fn review_changes_preserves_successful_clean_repository() {
+    let (_dir, repo) = init_repo().await;
+    let (diff, untracked) = get_review_working_changes(&repo).await.unwrap();
+    assert!(diff.is_empty());
+    assert!(untracked.is_empty());
 }

@@ -56,3 +56,15 @@ fn test_wsl_subshell_detection_fail() {
         )
     });
 }
+
+#[test]
+fn native_ssh_load_preserves_opt_out_after_failed_alias_migration() {
+    use settings::Setting as _;
+    use warpui_extras::user_preferences::{in_memory::InMemoryPreferences, UserPreferences as _};
+
+    let prefs = InMemoryPreferences::default();
+    prefs.write_value("EnableSshWarpification", "false".to_owned()).unwrap();
+    assert!(!*super::read_enable_ssh_zaplexification(&prefs).value());
+    prefs.write_value("EnableSshZaplexification", "true".to_owned()).unwrap();
+    assert!(*super::read_enable_ssh_zaplexification(&prefs).value());
+}
