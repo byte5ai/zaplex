@@ -169,7 +169,9 @@ against the capture directory. The upload helper below copies into private stagi
 chunks without changing the source files, canonicalizes the text records, and then runs the
 authoritative exact-revision validation before any release is created or asset uploaded. That
 validator checks the closed file set, schema, revision, freshness, topology, coverage, cases, PNG
-structure/dimensions, and that all four screenshots differ. It cannot detect secrets rendered
+structure/dimensions, a complete bounded zlib image stream, legal scanline filters, and that all
+four screenshots differ. Filtered image data is limited to 128 MiB; larger captures must be resized
+before staging. The validator does not render pixels or check palette indices. It cannot detect secrets rendered
 inside otherwise valid pixels; visual inspection therefore remains mandatory.
 
 Concretely, the helper runs `cockpit-parity-audit validate-runtime --require-pass` against its

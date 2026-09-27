@@ -34,7 +34,7 @@
   ((ReleaseChannel == "integration") ? "Integration" : \
   ((ReleaseChannel == "oss") ? "Oss" : \
   "Unknown")))))
-#define AppMutexName "Local\Zap" + ChannelPascalCase + "_SingleInstance"
+#define AppMutexName "Local\Zaplex" + ChannelPascalCase + "_SingleInstance"
 
 
 [Setup]

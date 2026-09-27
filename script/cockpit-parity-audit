@@ -1598,6 +1598,12 @@ def inspect_runtime_png(path: Path, errors: list[str]) -> dict[str, Any] | None:
     height: int | None = None
     saw_idat = False
     saw_iend = False
+    saw_plte = False
+    idat_parts: list[bytes] = []
+    scanline_passes: list[tuple[int, int]] = []
+    expected_image_bytes = 0
+    bit_depth = 0
+    color_type = -1
     chunk_index = 0
     allowed_chunks = {b"IHDR", b"PLTE", b"IDAT", b"IEND"}
     while offset + 12 <= len(source):
@@ -1620,12 +1626,62 @@ def inspect_runtime_png(path: Path, errors: list[str]) -> dict[str, Any] | None:
             if chunk_type != b"IHDR" or chunk_length != 13:
                 errors.append(f"{path.name} does not start with a valid IHDR chunk")
                 return None
-            width, height = struct.unpack(">II", chunk_data[:8])
+            width, height, bit_depth, color_type, compression, filtering, interlace = (
+                struct.unpack(">IIBBBBB", chunk_data)
+            )
+            legal_depths = {
+                0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8},
+                4: {8, 16}, 6: {8, 16},
+            }
+            if (
+                bit_depth not in legal_depths.get(color_type, set())
+                or compression != 0 or filtering != 0 or interlace not in {0, 1}
+            ):
+                errors.append(f"{path.name} contains invalid PNG IHDR fields")
+                return None
+            if not (
+                MIN_RUNTIME_IMAGE_WIDTH <= width <= MAX_RUNTIME_IMAGE_DIMENSION
+                and MIN_RUNTIME_IMAGE_HEIGHT <= height <= MAX_RUNTIME_IMAGE_DIMENSION
+            ):
+                errors.append(f"{path.name} has implausible dimensions {width}x{height}")
+                return None
+            bits_per_pixel = bit_depth * {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
+            # PNG Adam7 uses seven independent filtered subimages. Empty passes
+            # contain no scanlines, including no filter byte.
+            passes = (
+                [(0, 0, 1, 1)] if interlace == 0 else [
+                    (0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8),
+                    (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2),
+                ]
+            )
+            for start_x, start_y, step_x, step_y in passes:
+                columns = max(0, (width - start_x + step_x - 1) // step_x)
+                rows = max(0, (height - start_y + step_y - 1) // step_y)
+                if columns and rows:
+                    row_bytes = (columns * bits_per_pixel + 7) // 8
+                    scanline_passes.append((row_bytes, rows))
+                    expected_image_bytes += (row_bytes + 1) * rows
+            if expected_image_bytes > 128 * 1024 * 1024:
+                errors.append(f"{path.name} exceeds the decoded PNG size limit")
+                return None
         elif chunk_type == b"IHDR":
             errors.append(f"{path.name} contains more than one IHDR chunk")
             return None
+        if chunk_type == b"PLTE":
+            if (
+                saw_plte or saw_idat or color_type in {0, 4}
+                or not 3 <= chunk_length <= 768 or chunk_length % 3 != 0
+                or (color_type == 3 and chunk_length // 3 > (1 << bit_depth))
+            ):
+                errors.append(f"{path.name} contains an invalid or misplaced PNG palette")
+                return None
+            saw_plte = True
         if chunk_type == b"IDAT":
+            if color_type == 3 and not saw_plte:
+                errors.append(f"{path.name} is missing its indexed PNG palette")
+                return None
             saw_idat = True
+            idat_parts.append(chunk_data)
         if chunk_type == b"IEND":
             if chunk_length != 0 or chunk_end != len(source):
                 errors.append(f"{path.name} has an invalid IEND chunk")
@@ -1638,12 +1694,27 @@ def inspect_runtime_png(path: Path, errors: list[str]) -> dict[str, Any] | None:
     if not saw_idat or not saw_iend or width is None or height is None:
         errors.append(f"{path.name} is not a complete PNG")
         return None
-    if not (
-        MIN_RUNTIME_IMAGE_WIDTH <= width <= MAX_RUNTIME_IMAGE_DIMENSION
-        and MIN_RUNTIME_IMAGE_HEIGHT <= height <= MAX_RUNTIME_IMAGE_DIMENSION
-    ):
-        errors.append(f"{path.name} has implausible dimensions {width}x{height}")
+    # A correct chunk CRC does not prove that IDAT is a complete zlib stream.
+    # Bound output before allocation, and retain one extra byte to detect overflow.
+    decoder = zlib.decompressobj()
+    try:
+        image_data = decoder.decompress(b"".join(idat_parts), expected_image_bytes + 1)
+    except zlib.error:
+        errors.append(f"{path.name} contains invalid compressed PNG image data")
         return None
+    if (
+        len(image_data) != expected_image_bytes or not decoder.eof
+        or decoder.unconsumed_tail or decoder.unused_data
+    ):
+        errors.append(f"{path.name} has incomplete, excessive, or trailing PNG image data")
+        return None
+    row_offset = 0
+    for row_bytes, rows in scanline_passes:
+        for _ in range(rows):
+            if image_data[row_offset] > 4:
+                errors.append(f"{path.name} contains an invalid PNG scanline filter")
+                return None
+            row_offset += row_bytes + 1
     return {
         "name": path.name,
         "sha256": hashlib.sha256(source).hexdigest(),
@@ -2855,6 +2926,9 @@ def command_assemble(args: argparse.Namespace) -> int:
     if not references_ok:
         assembly_errors.append("reference report does not contain both required branch/SHA rows")
 
+    audited_revision = git_revision(root)["revision"]
+    suite_zaplex = suites.get("zaplex")
+    suite_revision = suite_zaplex.get("revision") if isinstance(suite_zaplex, dict) else None
     suite_results = suites.get("results")
     passing_suite_rows = [
         item
@@ -2874,11 +2948,11 @@ def command_assemble(args: argparse.Namespace) -> int:
         and passing_suite_ids == set(EXPECTED_SUITE_COMMANDS)
         and len(passing_suite_rows) == len(EXPECTED_SUITE_COMMANDS)
         and suite_commands_ok
+        and suite_revision == audited_revision
     )
     if not suites_ok:
-        assembly_errors.append("Cargo check/Cockpit/daemon suite evidence is incomplete")
+        assembly_errors.append("Cargo check/Cockpit/daemon suite evidence is incomplete or uses another revision")
 
-    audited_revision = git_revision(root)["revision"]
     # Read the pinned commit, not potentially modified working-tree source.
     mutation_source_hashes = {
         mutation["path"]: revision_source_hash(root, audited_revision, mutation["path"])
@@ -2900,14 +2974,12 @@ def command_assemble(args: argparse.Namespace) -> int:
         runtime_status = "fail"
         runtime_errors.append("runtime evidence report has an invalid schema or status")
     if runtime_status == "pass":
-        suite_zaplex = suites.get("zaplex")
-        suite_revision = suite_zaplex.get("revision") if isinstance(suite_zaplex, dict) else None
         if runtime.get("errors") != []:
             runtime_status = "fail"
             runtime_errors.append("passing runtime evidence report contains errors")
-        if runtime.get("zaplex_revision") != suite_revision:
+        if runtime.get("zaplex_revision") != audited_revision:
             runtime_status = "fail"
-            runtime_errors.append("runtime evidence and automated suites use different revisions")
+            runtime_errors.append("runtime evidence uses a different revision from the audited checkout")
         runtime_screenshots = runtime.get("screenshots")
         runtime_screenshot_names = {
             item["name"]
