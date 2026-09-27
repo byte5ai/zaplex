@@ -14,11 +14,17 @@ from tree_sitter import Language, Parser
 import tree_sitter_rust
 
 POLICY = {
-    "version": 3,
+    "version": 4,
     "parser": "tree-sitter=0.25.2,tree-sitter-rust=0.24.2",
     "target": "x86_64-unknown-linux-gnu",
     "test_only_features": ["test-util", "integration_tests"],
     "production_features": [],
+    "reviewed_settings_template": {
+        "path": "crates/settings/src/macros.rs",
+        "name": "define_settings_group",
+        "matcher_sha256": "8700868c17c97ca28bd977d0af37b4787bfd43815e8da420bba7d12cca220d44",
+        "transcriber_sha256": "1f2c4c348a6dfc968a26a1805d7f18445cdb65cfa147703f1cdcce87eb862c9b",
+    },
     "excluded_paths": ["separate test files", "crates/integration", "build scripts", "generated target files"],
     "test_attributes": ["test", "tokio::test", "warpui::test", "test_case", "rstest", "proptest"],
 }
@@ -199,7 +205,47 @@ def parse_source(source):
     return tree, selected
 
 
-def project_source(source):
+def reviewed_settings_test_helper(node, source, relative):
+    """Recognize one reviewed production template, never arbitrary macro names."""
+    contract = POLICY['reviewed_settings_template']
+    if (relative != contract['path'] or node.type != 'macro_definition'
+            or node.parent.type != 'source_file'
+            or node.child_by_field_name('name').text.decode() != contract['name']):
+        return None
+    rules = [part for part in node.named_children if part.type == 'macro_rule']
+    if len(rules) != 1:
+        return None
+    matcher = rules[0].child_by_field_name('left')
+    transcriber = rules[0].child_by_field_name('right')
+    if matcher is None or transcriber is None:
+        return None
+    for part, expected in ((matcher, contract['matcher_sha256']),
+                           (transcriber, contract['transcriber_sha256'])):
+        if hashlib.sha256(source[part.start_byte:part.end_byte]).hexdigest() != expected:
+            return None
+    names = [part for part in descendants(transcriber)
+             if part.type == 'identifier' and part.text == b'new_with_defaults']
+    if len(names) != 1:
+        return None
+    name = names[0]
+    tokens = list(name.parent.children)
+    index = tokens.index(name)
+    if index < 6 or index + 4 >= len(tokens):
+        return None
+    expected = [b'#', b'[cfg(any(test, feature = "integration_tests"))]',
+                b'#', b'[allow(dead_code)]', b'pub', b'fn', b'new_with_defaults',
+                b'(_ctx: &mut warpui::ModelContext<Self>)', b'->', b'Self']
+    if [part.text for part in tokens[index - 6:index + 4]] != expected:
+        return None
+    body = tokens[index + 4]
+    if (body.type != 'token_tree' or body.children[0].type != '{'
+            or body.children[-1].type != '}'
+            or cfg_values('any(test, feature="integration_tests")') != {False}):
+        return None
+    return tokens[index - 6].start_byte, body.end_byte
+
+
+def project_source(source, relative=None):
     tree, pattern_attributes = parse_source(source)
     excluded = []
     comments = []
@@ -258,8 +304,20 @@ def project_source(source):
                 else:
                     walk(body, (*inline, name), suppressed)
             elif child.type in {'macro_definition', 'macro_invocation'}:
-                if not suppressed and re.search(rb'#\s*\[.*?(?:\btest\b|test-util|integration_tests)', child.text, re.S):
-                    if child.type == 'macro_invocation' and child.child_by_field_name('macro').text in {b'cfg_if', b'cfg_if::cfg_if'}:
+                contract = POLICY['reviewed_settings_template']
+                reviewed_candidate = (child.type == 'macro_definition'
+                                      and relative == contract['path']
+                                      and child.child_by_field_name('name').text.decode() == contract['name'])
+                if not suppressed and (reviewed_candidate or re.search(rb'#\s*\[.*?(?:\btest\b|test-util|integration_tests)', child.text, re.S)):
+                    test_helper = reviewed_settings_test_helper(child, source, relative)
+                    if test_helper is not None:
+                        # Test instances exercise the production template just as
+                        # test types exercise generic production functions.
+                        excluded.append(test_helper)
+                    elif reviewed_candidate:
+                        diagnostics.append((child.start_point.row + 1, child.end_point.row + 1,
+                                            'reviewed production macro template changed or is ambiguous'))
+                    elif child.type == 'macro_invocation' and child.child_by_field_name('macro').text in {b'cfg_if', b'cfg_if::cfg_if'}:
                         tokens = [part for part in child.named_children[-1].children[1:-1] if part.type not in COMMENT_TYPES]
                         possible = True
                         index = 0
@@ -340,7 +398,7 @@ class Projection:
             try:
                 data = path.read_bytes()
                 self.line_counts[relative] = len(data.splitlines())
-                self.cache[relative] = project_source(data)
+                self.cache[relative] = project_source(data, relative)
             except ValueError as error:
                 raise ValueError(f'{relative}: {error}') from error
         return self.cache[relative]
