@@ -38,7 +38,7 @@ pub enum TransferTopology {
     RemoteRelay,
 }
 
-trait RecoveryWorkerSpawner: Send + Sync {
+pub(crate) trait RecoveryWorkerSpawner: Send + Sync {
     fn spawn(&self, name: String, worker: Box<dyn FnOnce() + Send>) -> Result<(), std::io::Error>;
 }
 
@@ -795,7 +795,7 @@ impl TransferQueue {
     }
 
     #[cfg(test)]
-    fn set_recovery_worker_spawner(&mut self, spawner: Arc<dyn RecoveryWorkerSpawner>) {
+    pub(crate) fn set_recovery_worker_spawner(&mut self, spawner: Arc<dyn RecoveryWorkerSpawner>) {
         self.data
             .lock()
             .expect("transfer queue lock poisoned")

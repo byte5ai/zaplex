@@ -1080,10 +1080,31 @@ fn startup_directory_recovery_is_visible_and_retryable_without_sftp_browser() {
     use crate::sftp_manager::sftp_backend::{
         DirectoryReservationFailure, InMemorySftpBackend, SftpBackend,
     };
-    use crate::sftp_manager::transfer_queue::{QueuedTransferState, TransferQueue};
+    use crate::sftp_manager::transfer_queue::{
+        QueuedTransferState, RecoveryWorkerSpawner, TransferQueue,
+    };
     use std::path::Path;
     use std::time::Duration;
-    use warpui::r#async::Timer;
+    use warpui::r#async::FutureExt as _;
+
+    struct ObservedRecoverySpawner(async_channel::Sender<()>);
+
+    impl RecoveryWorkerSpawner for ObservedRecoverySpawner {
+        fn spawn(
+            &self,
+            name: String,
+            worker: Box<dyn FnOnce() + Send>,
+        ) -> Result<(), std::io::Error> {
+            let completed = self.0.clone();
+            std::thread::Builder::new()
+                .name(name)
+                .spawn(move || {
+                    worker();
+                    let _ = completed.try_send(());
+                })
+                .map(|_| ())
+        }
+    }
 
     let root = tempfile::tempdir().unwrap();
     let backend = InMemorySftpBackend::new(root.path().to_path_buf())
@@ -1102,9 +1123,12 @@ fn startup_directory_recovery_is_visible_and_retryable_without_sftp_browser() {
         Arc::new(InMemorySftpBackend::new(root.path().to_path_buf()));
     assert_eq!(restarted.startup_recovery_paths().len(), 1);
 
+    let (completed_tx, completed_rx) = async_channel::bounded(1);
     App::test((), |mut app| async move {
         initialize_app_with_transfer_queue(&mut app, move |ctx| {
-            TransferQueue::new_with_startup_backend_for_test(restarted, ctx)
+            let mut queue = TransferQueue::new_with_startup_backend_for_test(restarted, ctx);
+            queue.set_recovery_worker_spawner(Arc::new(ObservedRecoverySpawner(completed_tx)));
+            queue
         });
         let workspace = mock_workspace(&mut app);
         let transfer_id = TransferQueue::handle(&app).read(&app, |queue, _| {
@@ -1127,21 +1151,22 @@ fn startup_directory_recovery_is_visible_and_retryable_without_sftp_browser() {
         workspace.update(&mut app, |workspace, ctx| {
             workspace.handle_action(&WorkspaceAction::RetryTransferRecovery(transfer_id), ctx);
         });
-        for _ in 0..50 {
-            Timer::after(Duration::from_millis(20)).await;
-            let terminal = TransferQueue::handle(&app).read(&app, |queue, _| {
-                queue.activity(transfer_id).is_some_and(|activity| {
-                    matches!(activity.state, QueuedTransferState::Completed)
-                        && !activity.recovery_retryable
-                })
-            });
-            if terminal {
-                return;
-            }
-        }
+        let completed = completed_rx
+            .recv()
+            .with_timeout(Duration::from_secs(10))
+            .await;
         let activity =
             TransferQueue::handle(&app).read(&app, |queue, _| queue.activity(transfer_id));
-        panic!("workspace retry did not complete the restart recovery: {activity:?}");
+        assert!(
+            matches!(completed, Ok(Ok(()))),
+            "workspace recovery worker did not finish: {completed:?}; {activity:?}"
+        );
+        let activity = activity.expect("startup recovery activity must remain visible");
+        assert!(
+            matches!(activity.state, QueuedTransferState::Completed)
+                && !activity.recovery_retryable,
+            "completed recovery worker left an unsuccessful activity: {activity:?}"
+        );
     });
 }
 

@@ -4,6 +4,10 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Gespeicherte Terminalentwürfe bleiben auch in vorübergehend gesperrten Remote-Panes erhalten; lokale Teamzuordnungen und Richtlinien sind wieder aus dem vorhandenen Cache lesbar. SFTP behält bei konkurrierenden Kopien fortlaufende Konfliktnamen und bereinigt eigene Symlinks anhand ihrer Identität, ohne ihrem Ziel zu folgen.
+
+- Die Coverage-Projektion (#472) grenzt auch das exakt geprüfte Server-ID-Makro ab. Recovery-Tests warten auf den Abschluss des echten Workers; Datei- und Verzeichnisfehler werden über den jeweils passenden Transferpfad geprüft.
+
 - Der vollständige Rust-CI-Lauf (#472) erhält eine grafische Testumgebung und den korrekten JUnit-Export. Neun beschädigte SQLite-Testdateien sind aus der geprüften Historie wiederhergestellt; verwaiste Einträge gelöschter Cloud-Tests entfallen ohne Anrechnung als Testeinsparung.
 
 - Die CI-Fehlerkorrektur erhält CLAUDE.md-Regeln auch im laufenden Projektindex und bewahrt beim mehrzeiligen Einfügen in Überschriften die Absatzstruktur einschließlich Undo/Redo. Testaufbauten halten Logger-Runtimes am Leben und initialisieren benötigte Modelle, Sprache und asynchrone Dateioperationen.

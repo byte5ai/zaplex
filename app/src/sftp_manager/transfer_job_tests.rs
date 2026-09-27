@@ -1808,7 +1808,6 @@ fn progress_eta_and_pause_are_observable() {
 #[test]
 fn verification_hash_honors_cancel_and_reports_progress() {
     let source = tempdir().unwrap();
-    let target = tempdir().unwrap();
     fs::write(
         source.path().join("source.bin"),
         vec![0x75; STREAM_CHUNK_SIZE * 3],
@@ -1818,23 +1817,21 @@ fn verification_hash_honors_cancel_and_reports_progress() {
     let source_backend =
         Arc::new(InstrumentedBackend::new(source.path()).cancelling_reads(control.clone()));
     let read_bytes = source_backend.read_bytes.clone();
-    let transfer = TransferJob {
-        source_backend,
-        target_backend: backend(target.path()),
-        source_path: PathBuf::from("/source.bin"),
-        target_path: PathBuf::from("/target.bin"),
-        operation: TransferOperation::Copy,
-        conflict: ConflictDecision::Overwrite,
-    };
     let mut samples = Vec::new();
 
-    run_transfer(
-        &transfer,
+    capture_publication_snapshot_controlled(
+        &*source_backend,
+        Path::new("/source.bin"),
+        (STREAM_CHUNK_SIZE * 3) as u64,
         &control,
-        Some(&mut |progress| samples.push(progress)),
+        &mut Some(&mut |progress| samples.push(progress)),
     )
     .expect_err("cancelling during source verification must stop the hash");
 
+    assert!(
+        read_bytes.load(Ordering::SeqCst) > 0,
+        "the verification read must start"
+    );
     assert!(
         read_bytes.load(Ordering::SeqCst) <= STREAM_CHUNK_SIZE as u64,
         "verification must check cancellation between bounded reads"
@@ -5268,25 +5265,34 @@ fn committed_move_retains_source_recovery_after_quarantine_read_failure() {
         let mut backend = InstrumentedBackend::new(source.path());
         backend.fail_second_quarantine_read = true;
         let backend = Arc::new(backend);
+        // Independent-backup recovery exercises the non-durable exchange contract.
+        let mut target_backend = InstrumentedBackend::new(target.path());
+        target_backend.inner = InMemorySftpBackend::new(target.path().to_path_buf())
+            .with_delete_failure_matching_once("zaplex-backup");
         let transfer = TransferJob {
             source_backend: backend.clone(),
-            target_backend: Arc::new(
-                InMemorySftpBackend::new(target.path().to_path_buf())
-                    .with_delete_failure_matching_once("zaplex-backup"),
-            ),
+            target_backend: Arc::new(target_backend),
             source_path: PathBuf::from(source_path),
             target_path: PathBuf::from(target_path),
             operation: TransferOperation::Move,
             conflict: ConflictDecision::Overwrite,
         };
 
-        let error = run_transfer(&transfer, &TransferControl::default(), None)
-            .expect_err("a read error after quarantine must retain recovery authority");
-        assert!(error
-            .to_string()
-            .contains("injected second quarantine read failure"));
+        let result = if directory {
+            run_directory_transfer(&transfer, &TransferControl::default(), None)
+        } else {
+            run_transfer(&transfer, &TransferControl::default(), None)
+        };
+        let error =
+            result.expect_err("a read error after quarantine must retain recovery authority");
+        assert!(
+            error
+                .to_string()
+                .contains("injected second quarantine read failure"),
+            "{error}"
+        );
         assert_eq!(backend.quarantine_reads.load(Ordering::SeqCst), 2);
-        assert!(error.destination_committed());
+        assert!(error.destination_committed(), "{error}");
         assert!(error
             .recovery_paths()
             .iter()
@@ -5376,15 +5382,26 @@ fn committed_destination_metadata_failure_reports_file_and_directory_paths() {
             conflict: ConflictDecision::Overwrite,
         };
 
-        let error = run_transfer(&transfer, &TransferControl::default(), None)
-            .expect_err("post-commit metadata failure must report the installed target");
-        assert!(error
-            .to_string()
-            .contains("Capturing committed destination failed"));
-        assert!(error
-            .to_string()
-            .contains("injected committed destination metadata failure"));
-        assert!(error.destination_committed());
+        let result = if directory {
+            run_directory_transfer(&transfer, &TransferControl::default(), None)
+        } else {
+            run_transfer(&transfer, &TransferControl::default(), None)
+        };
+        let error =
+            result.expect_err("post-commit metadata failure must report the installed target");
+        assert!(
+            error
+                .to_string()
+                .contains("Capturing committed destination failed"),
+            "{error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("injected committed destination metadata failure"),
+            "{error}"
+        );
+        assert!(error.destination_committed(), "{error}");
         assert!(error
             .recovery_paths()
             .iter()
@@ -5429,22 +5446,31 @@ fn displaced_cleanup_failure_keeps_independent_backup_in_recovery() {
         }
         fs::write(source.path().join(source_payload), b"new").unwrap();
         fs::write(target.path().join(target_payload), b"old").unwrap();
+        // Durable exchange backends intentionally do not create an independent backup.
+        let mut target_backend = InstrumentedBackend::new(target.path());
+        target_backend.inner = InMemorySftpBackend::new(target.path().to_path_buf())
+            .with_delete_failure_matching_once(stage_marker);
         let transfer = TransferJob {
             source_backend: backend(source.path()),
-            target_backend: Arc::new(
-                InMemorySftpBackend::new(target.path().to_path_buf())
-                    .with_delete_failure_matching_once(stage_marker),
-            ),
+            target_backend: Arc::new(target_backend),
             source_path: PathBuf::from(source_path),
             target_path: PathBuf::from(target_path),
             operation: TransferOperation::Copy,
             conflict: ConflictDecision::Overwrite,
         };
-        let error = run_transfer(&transfer, &TransferControl::default(), None).unwrap_err();
-        assert!(error.destination_committed());
-        assert!(error
-            .to_string()
-            .contains("displaced target cleanup failed"));
+        let result = if directory {
+            run_directory_transfer(&transfer, &TransferControl::default(), None)
+        } else {
+            run_transfer(&transfer, &TransferControl::default(), None)
+        };
+        let error = result.unwrap_err();
+        assert!(error.destination_committed(), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("displaced target cleanup failed"),
+            "{error}"
+        );
         assert!(error
             .recovery_paths()
             .iter()

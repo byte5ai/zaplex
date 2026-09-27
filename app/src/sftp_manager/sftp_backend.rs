@@ -3351,8 +3351,9 @@ impl BackendOwnershipAnchor for LocalOwnershipAnchor {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
                 Err(error) => return Err(error.into()),
             };
-            Ok(!current.file_type().is_symlink()
-                && anchored.dev() == current.dev()
+            // symlink_metadata compares the link itself with the no-follow anchor.
+            // An owned symlink is valid; a replacement still has a different identity.
+            Ok(anchored.dev() == current.dev()
                 && anchored.ino() == current.ino()
                 && anchored.file_type() == current.file_type())
         }

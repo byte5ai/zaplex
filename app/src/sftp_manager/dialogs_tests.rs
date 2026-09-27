@@ -87,13 +87,19 @@ fn conflict_actions_fit_inside_the_dialog_and_the_last_action_is_clickable() {
                 "sftp_btn:dialog_rename_all",
                 "sftp_btn:dialog_newer_only_all",
             ];
-            let bounds = ids.map(|id| {
-                presenter
-                    .borrow()
-                    .position_cache()
-                    .get_position(id)
-                    .unwrap_or_else(|| panic!("missing conflict action {id}"))
-            });
+            let bounds = ids
+                .iter()
+                .enumerate()
+                .map(|(index, id)| {
+                    presenter
+                        .borrow()
+                        .position_cache()
+                        .get_position(id)
+                        .unwrap_or_else(|| {
+                            panic!("missing conflict action {index} ({id}) at width {width}")
+                        })
+                })
+                .collect::<Vec<_>>();
             for (index, rect) in bounds.iter().enumerate() {
                 assert!(rect.width() > 0.0 && rect.height() > 0.0);
                 assert!(

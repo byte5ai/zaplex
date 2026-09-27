@@ -68,20 +68,38 @@ fn conflict_name(path: &Path, is_directory: bool, sequence: usize) -> PathBuf {
     path.with_file_name(renamed)
 }
 
-fn available_conflict_name(
-    backend: &dyn SftpBackend,
-    path: &Path,
+fn run_renamed_transfer(
+    job: &TransferJob,
     is_directory: bool,
-) -> Result<PathBuf, SftpOpsError> {
+    control: &TransferControl,
+    mut progress_callback: Option<&mut dyn FnMut(TransferProgress)>,
+) -> Result<TransferOutcome, SftpOpsError> {
     for sequence in 1..=10_000 {
-        let candidate = conflict_name(path, is_directory, sequence);
-        if !backend.entry_exists(&candidate)? {
-            return Ok(candidate);
+        control.wait_until_runnable()?;
+        let candidate = conflict_name(&job.target_path, is_directory, sequence);
+        if job.target_backend.entry_exists(&candidate)? {
+            continue;
+        }
+        let mut renamed_job = job.clone();
+        renamed_job.target_path = candidate;
+        // Recheck the candidate without overwriting it or nesting another copy suffix.
+        // A racing writer consumes this sequence; retry from the original name.
+        renamed_job.conflict = ConflictDecision::Skip;
+        let callback = progress_callback
+            .as_mut()
+            .map(|callback| &mut **callback as &mut dyn FnMut(TransferProgress));
+        let outcome = if is_directory {
+            run_directory_transfer(&renamed_job, control, callback)?
+        } else {
+            run_transfer(&renamed_job, control, callback)?
+        };
+        if outcome != TransferOutcome::Skipped {
+            return Ok(outcome);
         }
     }
     Err(SftpOpsError::Operation(format!(
         "Could not find an available conflict name for {}",
-        path.display()
+        job.target_path.display()
     )))
 }
 
@@ -1040,10 +1058,7 @@ pub fn run_transfer(
         TransferPhase::Verifying,
     )?;
     if original_target.is_some() && job.conflict == ConflictDecision::Rename {
-        let mut renamed_job = job.clone();
-        renamed_job.target_path =
-            available_conflict_name(&*job.target_backend, &job.target_path, false)?;
-        return run_transfer(&renamed_job, control, progress_callback);
+        return run_renamed_transfer(job, false, control, progress_callback);
     }
     if original_target.is_some() && job.conflict == ConflictDecision::Skip {
         return Ok(TransferOutcome::Skipped);
@@ -1987,10 +2002,7 @@ pub fn run_directory_transfer(
         TransferPhase::Verifying,
     )?;
     if original_target.is_some() && job.conflict == ConflictDecision::Rename {
-        let mut renamed_job = job.clone();
-        renamed_job.target_path =
-            available_conflict_name(&*job.target_backend, &job.target_path, true)?;
-        return run_directory_transfer(&renamed_job, control, progress_callback);
+        return run_renamed_transfer(job, true, control, progress_callback);
     }
     if original_target.is_some() && job.conflict == ConflictDecision::Skip {
         return Ok(TransferOutcome::Skipped);

@@ -148,6 +148,70 @@ fn unsupported_delete_type_is_rejected_before_any_rename() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn cleanup_anchor_matches_owned_symlinks_without_following_replacements() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let link = root.path().join("link");
+    let retained = root.path().join("retained");
+    symlink("missing-target", &link).unwrap();
+    let anchor = LocalOwnershipAnchor {
+        file: open_local_cleanup_anchor(&link).unwrap(),
+        root: root.path().to_path_buf(),
+        opaque_paths: None,
+    };
+    assert_eq!(anchor.identity().unwrap().file_type, FileEntryType::Symlink);
+    assert!(anchor.matches_local_path(&link).unwrap());
+    fs::rename(&link, &retained).unwrap();
+    assert!(anchor.matches_local_path(&retained).unwrap());
+    // Even an identical link target does not make a different symlink owned.
+    symlink("missing-target", &link).unwrap();
+    assert!(!anchor.matches_local_path(&link).unwrap());
+
+    let file = root.path().join("file");
+    fs::write(&file, b"preserved").unwrap();
+    let file_anchor = LocalOwnershipAnchor {
+        file: open_local_cleanup_anchor(&file).unwrap(),
+        root: root.path().to_path_buf(),
+        opaque_paths: None,
+    };
+    let alias = root.path().join("alias");
+    symlink(&file, &alias).unwrap();
+    assert!(file_anchor.matches_local_path(&file).unwrap());
+    assert!(!file_anchor.matches_local_path(&alias).unwrap());
+    assert_eq!(fs::read(&file).unwrap(), b"preserved");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn owned_symlink_cleanup_preserves_its_directory_target() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let target = root.path().join("target");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("keep.txt"), b"preserved").unwrap();
+    let link = root.path().join("link");
+    symlink("target", &link).unwrap();
+    let backend = InMemorySftpBackend::new(root.path().to_path_buf());
+    let listed = backend.lstat(Path::new("/link")).unwrap().identity;
+    let anchor = backend
+        .ownership_anchor_for_listed_entry(Path::new("/link"), &listed)
+        .unwrap();
+
+    backend
+        .delete_entry_if_matches(Path::new("/link"), anchor, false)
+        .expect("the owned symlink must reach private cleanup and be removed");
+
+    assert_eq!(
+        fs::symlink_metadata(&link).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert_eq!(fs::read(target.join("keep.txt")).unwrap(), b"preserved");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn symlink_replacement_before_private_unlink_is_preserved() {
     use std::os::unix::fs::symlink;
 
