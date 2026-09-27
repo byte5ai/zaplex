@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Die Coverage-Quellprojektion (#472/#245) verarbeitet bekannte Rust-Patternattribute und Trait-Lifetime-Schreibweisen ohne Verlust von Positionen oder Originalhashes. Testabhängige Feldwerte bleiben ausgeschlossen; andere unklare Regionen verhindern weiterhin eine unbelegte Gesamtquote.
+
 - Gespeicherte Drive-Seitenleisten (#245) bleiben nach der Umbenennung erhalten. Alte und neue Tabnamen werden gelesen; Auswahl, Pane-Zuordnung und Breite gehen beim Wiederherstellen nicht verloren.
 
 - SFTP-Integrationsprüfungen (#245) erreichen die behaupteten Schreib- und Ersetzungsfehler, statt schon an fehlenden Streaming-Methoden zu scheitern. Der Speichern-unter-Fall verschiebt den ursprünglichen Dateieintrag tatsächlich; ein Unix-spezifischer Löschfall erhält den passenden Plattformfilter.

@@ -160,3 +160,42 @@ print('test-only field separators excluded: ok')
 # Platform production code remains production source, even when not instrumented
 # on this Linux run; only test-derived regions are removed.
 assert project(b'#[cfg(windows)] fn windows_production() {}\n')[0] == {1: 1}
+
+
+# Grammar bridges retain original bytes/offsets and reattach pattern attributes
+# to their actual fields. These fixtures are separate from native Rust coverage.
+pattern = b'fn p(value: Data) {\nlet Data {\n#[cfg(test)]\nonly_in_tests,\nproduction,\n} = value;\n}\n'
+production_pattern = b'fn p(value: Data) {\nlet Data {\nproduction,\n} = value;\n}\n'
+assert project(pattern)[1] == project(production_pattern)[1]
+assert project(pattern)[0] == {1: 1, 2: 2, 5: 3, 6: 4, 7: 5}
+assert not project(pattern)[3]
+initializers = b'fn p() { Data {\n#[cfg(test)]\nonly_in_tests: expensive_test_value(),\nproduction: 1,\n} }\n'
+assert project(initializers)[1] == project(b'fn p() { Data {\nproduction: 1,\n} }\n')[1]
+assert not project(initializers)[3]
+ambiguous_pattern = pattern.replace(b'cfg(test)', b'cfg(any(test, feature="unknown"))')
+assert project(ambiguous_pattern)[3]
+comments_and_attributes = pattern.replace(b'#[cfg(test)]', b'#[allow(unused_variables)]\n/* between attributes */\n#[cfg(test)]\n// before field')
+assert project(comments_and_attributes)[1] == project(production_pattern)[1]
+assert not project(comments_and_attributes)[3]
+normal_pattern = pattern.replace(b'cfg(test)', b'cfg(unix)')
+other_pattern = pattern.replace(b'cfg(test)', b'cfg(windows)')
+assert project(normal_pattern)[1] != project(other_pattern)[1]
+assert project(b"type Callback = dyn 'static + Fn(&mut Context) -> bool;\n")[1] != project(b"type Callback = 'static + Fn(&mut Context) -> bool;\n")[1]
+assert project(b"type Callback = dyn 'static + Fn(&mut Context) -> bool;\n")[0] == {1: 1}
+for broken in (
+    pattern + b'fn broken( {',
+    pattern.replace(b'production,', b'production: @@@,'),
+    b"type Broken = dyn 'static + ;",
+    b'fn p(value: Data) { let Data { #[cfg(test] field, } = value; }',
+):
+    try:
+        project(broken)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('unrelated or malformed Rust error accepted by grammar bridge')
+# Attribute-like literals remain ordinary production bytes, never exclusions.
+literal = b'fn p() { let text = r#"#[cfg(test)] field,"#; }\n'
+assert project(literal)[0] == {1: 1}
+assert project(literal)[1] != project(literal.replace(b'test', b'unix'))[1]
+print('position-preserving grammar bridges and complete test field exclusion: ok')

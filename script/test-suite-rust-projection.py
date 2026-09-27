@@ -8,12 +8,13 @@ import itertools
 import json
 from pathlib import Path
 import re
+from types import SimpleNamespace
 
 from tree_sitter import Language, Parser
 import tree_sitter_rust
 
 POLICY = {
-    "version": 1,
+    "version": 2,
     "parser": "tree-sitter=0.25.2,tree-sitter-rust=0.24.2",
     "target": "x86_64-unknown-linux-gnu",
     "test_only_features": ["test-util", "integration_tests"],
@@ -103,10 +104,103 @@ def attribute_excludes(node):
     return False
 
 
-def project_source(source):
-    tree = Parser(RUST_LANGUAGE).parse(source)
+def descendants(node):
+    pending = [node]
+    while pending:
+        current = pending.pop()
+        yield current
+        pending.extend(reversed(current.children))
+
+
+def parse_source(source):
+    """Bridge two known grammar gaps without changing source offsets or cfg meaning."""
+    parser = Parser(RUST_LANGUAGE)
+    original = parser.parse(source)
+    if not original.root_node.has_error:
+        return original, {}
+    attributes = {}
+    dyn_tokens = {}
+
+    def masked(nodes):
+        data = bytearray(source)
+        for node in nodes:
+            for index in range(node.start_byte, node.end_byte):
+                if data[index] not in (10, 13):
+                    data[index] = 32
+        return bytes(data)
+
+    provisional = original
+    provisional_source = source
+    # One broken pattern can hide a later attribute in parser error recovery.
+    # Bounded reparsing exposes those tokens; no ERROR node itself is ignored.
+    for _ in range(8):
+        before = (len(attributes), len(dyn_tokens))
+        for node in descendants(provisional.root_node):
+            attribute = None
+            if (node.type == 'attribute_item' and not node.has_error
+                    and source[node.start_byte:node.end_byte] == node.text):
+                attribute = node
+            if node.type == '#' and node.parent.is_error:
+                # Only an actual lexer token can start recovery, never text in
+                # a string/comment. Require a complete standalone attribute.
+                fragment = parser.parse(source[node.start_byte:node.start_byte + 4096])
+                first = fragment.root_node.named_children[0] if fragment.root_node.named_children else None
+                if first is not None and first.type == 'attribute_item' and first.start_byte == 0 and not first.has_error:
+                    attribute = SimpleNamespace(
+                        start_byte=node.start_byte,
+                        end_byte=node.start_byte + first.end_byte,
+                        named_children=first.named_children,
+                    )
+            if attribute is not None:
+                text = attribute_text(attribute)
+                if text.startswith(('cfg(', 'cfg_attr(', 'allow(', 'warn(', 'deny(', 'forbid(', 'expect(')):
+                    attributes[attribute.start_byte] = attribute
+            # Accept only the lifetime + Fn-type shape affected by the dyn
+            # grammar gap. Original dyn bytes stay in the source fingerprint.
+            if node.is_error and node.text == b'dyn' and node.parent.type == 'type_item':
+                bound = node.parent.child_by_field_name('type')
+                if (bound is not None and bound.type == 'bounded_type'
+                        and [part.type for part in bound.named_children] == ['lifetime', 'function_type']
+                        and not source[node.end_byte:bound.start_byte].strip()):
+                    dyn_tokens[node.start_byte] = node
+        if before == (len(attributes), len(dyn_tokens)):
+            break
+        provisional_source = masked([*attributes.values(), *dyn_tokens.values()])
+        provisional = parser.parse(provisional_source)
+
+    # The provisional tree only locates attributes positively inside struct
+    # patterns. Restore every other attribute before the accepting parse.
+    attributes = sorted(attributes.values(), key=lambda attribute: attribute.start_byte)
+    trivia_source = bytearray(provisional_source)
+    for node in descendants(provisional.root_node):
+        if node.type in COMMENT_TYPES:
+            trivia_source[node.start_byte:node.end_byte] = b' ' * (node.end_byte - node.start_byte)
+    selected = {}
+    for pattern in descendants(provisional.root_node):
+        if pattern.type != 'struct_pattern' or pattern.has_error:
+            continue
+        fields = [child for child in pattern.named_children if child.type == 'field_pattern']
+        for attribute in attributes:
+            if not pattern.start_byte < attribute.start_byte < attribute.end_byte < pattern.end_byte:
+                continue
+            for field in fields:
+                if (attribute.end_byte <= field.start_byte
+                        and not trivia_source[attribute.end_byte:field.start_byte].strip()):
+                    selected.setdefault(field.start_byte, []).append(attribute)
+                    break
+    normalized = [attribute for group in selected.values() for attribute in group]
+    tree = parser.parse(masked(normalized + list(dyn_tokens.values())))
     if tree.root_node.has_error:
         raise ValueError("Rust AST contains an error or missing node")
+    actual_fields = {node.start_byte for node in descendants(tree.root_node)
+                     if node.type == 'field_pattern' and node.parent.type == 'struct_pattern'}
+    if not set(selected).issubset(actual_fields):
+        raise ValueError('normalized attribute has no proven struct-pattern field')
+    return tree, selected
+
+
+def project_source(source):
+    tree, pattern_attributes = parse_source(source)
     excluded = []
     comments = []
     modules = []
@@ -126,6 +220,12 @@ def project_source(source):
                     excluded.append((node.start_byte, node.end_byte))
                     inherited = True
                 continue
+            pending.extend(pattern_attributes.get(child.start_byte, []))
+            # Rust field initializers own their attributes as children rather
+            # than siblings. Excluding only the identifier leaves a test-only
+            # value falsely counted as production on the same physical line.
+            if child.type == 'field_initializer':
+                pending.extend(part for part in child.named_children if part.type == 'attribute_item')
             try:
                 # An enclosing cfg(test) proves the complete item test-only,
                 # regardless of any derives or other attributes on that item.
