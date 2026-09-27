@@ -7,6 +7,7 @@ use crate::ai::llms::LLMPreferences;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
 use crate::ai::AIRequestUsageModel;
+use crate::app_state::TerminalPaneSnapshot;
 use crate::auth::UserUid;
 use crate::cloud_object::model::persistence::ObjectStoreModel;
 use crate::cloud_object::model::view::ObjectStoreViewModel;
@@ -78,7 +79,7 @@ fn terminal_snapshot_leaf(uuid: Vec<u8>) -> PaneNodeSnapshot {
     PaneNodeSnapshot::Leaf(LeafSnapshot {
         is_focused: false,
         custom_vertical_tabs_title: None,
-        contents: LeafContents::Terminal(TerminalPaneSnapshot {
+        contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
             uuid,
             remote_state: Default::default(),
             cwd: Some("/tmp".to_string()),
@@ -91,7 +92,7 @@ fn terminal_snapshot_leaf(uuid: Vec<u8>) -> PaneNodeSnapshot {
             active_profile_id: None,
             conversation_ids_to_restore: Vec::new(),
             active_conversation_id: None,
-        }),
+        })),
     })
 }
 
@@ -293,9 +294,9 @@ fn restore_collision_removes_only_the_duplicate_terminal_leaf() {
     assert!(matches!(
         restored,
         PaneNodeSnapshot::Leaf(LeafSnapshot {
-            contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+            contents: LeafContents::Terminal(terminal),
             ..
-        }) if uuid == vec![2; 16]
+        }) if terminal.uuid == vec![2; 16]
     ));
 }
 
@@ -338,9 +339,9 @@ fn corrupt_remote_restore_is_daemon_backed_on_every_platform_and_keeps_siblings(
     assert!(branch.children.iter().any(|(_, child)| matches!(
         child,
         PaneNodeSnapshot::Leaf(LeafSnapshot {
-            contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+            contents: LeafContents::Terminal(terminal),
             ..
-        }) if uuid == &sibling_uuid
+        }) if terminal.uuid == sibling_uuid
     )));
 }
 
@@ -5572,12 +5573,9 @@ fn exact_daemon_claim_focuses_covered_and_undo_closed_shell() {
                 let shell = group.as_ref(ctx).daemon_connection_pane(conn, ctx).unwrap();
                 let pane_uuid = match group.as_ref(ctx).snapshot(ctx) {
                     crate::app_state::PaneNodeSnapshot::Leaf(crate::app_state::LeafSnapshot {
-                        contents:
-                            crate::app_state::LeafContents::Terminal(
-                                crate::app_state::TerminalPaneSnapshot { uuid, .. },
-                            ),
+                        contents: crate::app_state::LeafContents::Terminal(terminal),
                         ..
-                    }) => uuid,
+                    }) => terminal.uuid,
                     _ => panic!("expected one terminal leaf"),
                 };
                 assert!(group.as_ref(ctx).set_terminal_remote_identity(
@@ -5795,9 +5793,9 @@ fn conflicting_remote_restore_degrades_duplicate_without_persisting_its_identity
                 let owner_pane = group.as_ref(ctx).daemon_connection_pane(conn, ctx).unwrap();
                 let owner_uuid = match group.as_ref(ctx).snapshot(ctx) {
                     PaneNodeSnapshot::Leaf(LeafSnapshot {
-                        contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+                        contents: LeafContents::Terminal(terminal),
                         ..
-                    }) => uuid,
+                    }) => terminal.uuid,
                     _ => panic!("expected one terminal leaf"),
                 };
                 let duplicate: PaneId = group
@@ -5815,9 +5813,9 @@ fn conflicting_remote_restore_degrades_duplicate_without_persisting_its_identity
                         .into_iter()
                         .find_map(|(_, child)| match child {
                             PaneNodeSnapshot::Leaf(LeafSnapshot {
-                                contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+                                contents: LeafContents::Terminal(terminal),
                                 ..
-                            }) if uuid != owner_uuid => Some(uuid),
+                            }) if terminal.uuid != owner_uuid => Some(terminal.uuid),
                             PaneNodeSnapshot::Leaf(_) | PaneNodeSnapshot::Branch(_) => None,
                         })
                         .expect("the split should contain the duplicate terminal"),

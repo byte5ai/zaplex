@@ -83,17 +83,20 @@ impl SshInjectionAttempt {
     }
 }
 
+/// Shared launch state, authorized PTY output, and cancellation for one SSH attempt.
+pub(crate) type SshInjectionWatch = (
+    Arc<Mutex<SshInjectionAttempt>>,
+    oneshot::Receiver<Receiver<Arc<Vec<u8>>>>,
+    oneshot::Receiver<()>,
+);
+
 pub(crate) fn watch_injection_attempt<O: warpui::View + 'static>(
     view: &warpui::ViewHandle<TerminalView>,
     expected_ssh_command: String,
     pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
     releases_password_suppression: bool,
     ctx: &mut ViewContext<O>,
-) -> (
-    Arc<Mutex<SshInjectionAttempt>>,
-    oneshot::Receiver<Receiver<Arc<Vec<u8>>>>,
-    oneshot::Receiver<()>,
-) {
+) -> SshInjectionWatch {
     let (cancel_sender, cancel_receiver) = oneshot::channel();
     let mut cancel_sender = Some(cancel_sender);
     let (start_sender, start_receiver) = oneshot::channel();

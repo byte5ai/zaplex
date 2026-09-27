@@ -467,7 +467,7 @@ pub struct LeafSnapshot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LeafContents {
-    Terminal(TerminalPaneSnapshot),
+    Terminal(Box<TerminalPaneSnapshot>),
     Notebook(NotebookPaneSnapshot),
     /// A read-only image viewer pane backed by a local file.
     Image {

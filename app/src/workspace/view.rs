@@ -65,7 +65,7 @@ use crate::app_state::{
     DaemonPtyIdentity, FileManagerPaneMode, LeafContents, LeafSnapshot, LeftPanelDisplayedTab,
     LeftPanelSnapshot, NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid, PersistedDaemonRuntime,
     RemoteTerminalIdentity, RemoteTerminalTransport, RightPanelSnapshot, SettingsPaneSnapshot,
-    TabSnapshot, TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
+    TabSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
 use crate::code_review::diff_state::DiffStateModel;
 #[cfg(feature = "local_fs")]
@@ -18747,14 +18747,11 @@ impl Workspace {
             .filter(|tab| {
                 // Filter out any tab that contains a single, read-only session.
                 !matches!(
-                    tab.root,
+                    &tab.root,
                     PaneNodeSnapshot::Leaf(LeafSnapshot {
-                        contents: LeafContents::Terminal(TerminalPaneSnapshot {
-                            is_read_only: true,
-                            ..
-                        }),
+                        contents: LeafContents::Terminal(terminal),
                         ..
-                    })
+                    }) if terminal.is_read_only
                 )
             })
             .collect();

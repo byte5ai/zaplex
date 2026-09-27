@@ -1640,7 +1640,8 @@ impl PaneGroup {
                 };
                 Ok((PaneData::new(pane_id), focus))
             }
-            LeafContents::Terminal(mut terminal_snapshot) => {
+            LeafContents::Terminal(terminal_snapshot) => {
+                let mut terminal_snapshot = *terminal_snapshot;
                 let uuid = PaneUuid(terminal_snapshot.uuid.clone());
                 let block_list = block_lists.get(&uuid);
                 let cli_agent_binding = terminal_snapshot.cli_agent_binding.take();
@@ -2318,7 +2319,7 @@ impl PaneGroup {
                             // properly. This approach will allow us to keep the uniqueness constraints
                             // intact so we don't fail to save the snapshot.
                             log::error!("Failed to get session data for pane, so used a new uuid");
-                            LeafContents::Terminal(TerminalPaneSnapshot {
+                            LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                                 uuid: Uuid::new_v4().as_bytes().to_vec(),
                                 remote_state: Default::default(),
                                 cwd: None,
@@ -2332,7 +2333,7 @@ impl PaneGroup {
                                 active_profile_id: None,
                                 conversation_ids_to_restore: Vec::new(),
                                 active_conversation_id: None,
-                            })
+                            }))
                         }
                     },
                 };

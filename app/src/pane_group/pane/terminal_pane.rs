@@ -372,7 +372,7 @@ impl PaneContent for TerminalPane {
                 });
             }
 
-            LeafContents::Terminal(TerminalPaneSnapshot {
+            LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                 uuid: self.uuid.clone(),
                 remote_state: RemoteTerminalPaneState::capture(&self.uuid),
                 cwd: None,
@@ -385,7 +385,7 @@ impl PaneContent for TerminalPane {
                 active_profile_id: None,
                 conversation_ids_to_restore: vec![],
                 active_conversation_id: None,
-            })
+            }))
         } else if view.model.lock().is_conversation_transcript_viewer() {
             // Conversation transcript viewers (opened from the conversation list)
             // can be restored via the ambient agent task if one exists.
@@ -396,7 +396,7 @@ impl PaneContent for TerminalPane {
                     task_id,
                 })
             } else {
-                LeafContents::Terminal(TerminalPaneSnapshot {
+                LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                     uuid: self.uuid.clone(),
                     remote_state: RemoteTerminalPaneState::capture(&self.uuid),
                     cwd: None,
@@ -409,7 +409,7 @@ impl PaneContent for TerminalPane {
                     active_profile_id: None,
                     conversation_ids_to_restore: vec![],
                     active_conversation_id: None,
-                })
+                }))
             }
         } else {
             let llm_model_override =
@@ -443,7 +443,7 @@ impl PaneContent for TerminalPane {
             let cli_agent_binding = CLIAgentSessionsModel::as_ref(app)
                 .local_binding_for_restore(view.id(), cwd.as_deref());
 
-            LeafContents::Terminal(TerminalPaneSnapshot {
+            LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                 uuid: self.uuid.clone(),
                 remote_state: RemoteTerminalPaneState::capture(&self.uuid),
                 cwd,
@@ -456,7 +456,7 @@ impl PaneContent for TerminalPane {
                 active_profile_id,
                 conversation_ids_to_restore,
                 active_conversation_id,
-            })
+            }))
         }
     }
 

@@ -397,7 +397,7 @@ fn make_terminal_leaf(cwd: Option<&str>, is_focused: bool) -> PaneNodeSnapshot {
     PaneNodeSnapshot::Leaf(LeafSnapshot {
         is_focused,
         custom_vertical_tabs_title: None,
-        contents: LeafContents::Terminal(TerminalPaneSnapshot {
+        contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
             uuid: vec![],
             remote_state: Default::default(),
             cwd: cwd.map(|s| s.to_string()),
@@ -410,7 +410,7 @@ fn make_terminal_leaf(cwd: Option<&str>, is_focused: bool) -> PaneNodeSnapshot {
             active_profile_id: None,
             conversation_ids_to_restore: vec![],
             active_conversation_id: None,
-        }),
+        })),
     })
 }
 
@@ -601,7 +601,7 @@ fn make_agent_leaf(cwd: Option<&str>, is_focused: bool) -> PaneNodeSnapshot {
     PaneNodeSnapshot::Leaf(LeafSnapshot {
         is_focused,
         custom_vertical_tabs_title: None,
-        contents: LeafContents::Terminal(TerminalPaneSnapshot {
+        contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
             uuid: vec![],
             remote_state: Default::default(),
             cwd: cwd.map(|s| s.to_string()),
@@ -614,7 +614,7 @@ fn make_agent_leaf(cwd: Option<&str>, is_focused: bool) -> PaneNodeSnapshot {
             active_profile_id: None,
             conversation_ids_to_restore: vec![],
             active_conversation_id: Some(AIConversationId::new()),
-        }),
+        })),
     })
 }
 

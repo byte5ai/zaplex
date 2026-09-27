@@ -3039,7 +3039,7 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                             snapshot.clone(),
                         );
                     }
-                    LeafContents::Terminal(terminal_snapshot)
+                    LeafContents::Terminal(Box::new(terminal_snapshot))
                 }
                 SFTP_PANE_KIND => {
                     let sftp_pane = diesel::sql_query(

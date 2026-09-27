@@ -188,7 +188,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
             root: PaneNodeSnapshot::Leaf(LeafSnapshot {
                 is_focused: true,
                 custom_vertical_tabs_title: None,
-                contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                     uuid: vec![u8::from(vertical_tabs_panel_open) + 1],
                     remote_state: Default::default(),
                     cwd: Some("/tmp".to_string()),
@@ -204,7 +204,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
                     active_profile_id: None,
                     conversation_ids_to_restore: vec![],
                     active_conversation_id: None,
-                }),
+                })),
             }),
             default_directory_color: None,
             selected_color: SelectedTabColor::default(),
@@ -607,9 +607,9 @@ fn test_sqlite_round_trips_temporary_file_manager_over_terminal() {
     assert!(matches!(
         &restored.windows[0].tabs[0].root,
         PaneNodeSnapshot::Leaf(LeafSnapshot {
-            contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+            contents: LeafContents::Terminal(terminal),
             ..
-        }) if uuid == &terminal_uuid
+        }) if terminal.uuid == terminal_uuid
     ));
     assert_eq!(
         temporary_file_manager_replacement(&terminal_uuid),
@@ -696,9 +696,9 @@ fn corrupt_optional_remote_metadata_keeps_the_terminal_and_tab() {
     assert!(branch.children.iter().any(|(_, child)| matches!(
         child,
         PaneNodeSnapshot::Leaf(LeafSnapshot {
-            contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+            contents: LeafContents::Terminal(terminal),
             ..
-        }) if uuid == &terminal_uuid
+        }) if terminal.uuid == terminal_uuid
     )));
     assert!(failed_remote_terminal_restore(&terminal_uuid));
     assert_eq!(remote_terminal_identity(&terminal_uuid), None);
@@ -881,7 +881,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
                 root: PaneNodeSnapshot::Leaf(LeafSnapshot {
                     is_focused: true,
                     custom_vertical_tabs_title: Some("Production API".to_string()),
-                    contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                    contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                         uuid: vec![42],
                         remote_state: Default::default(),
                         cwd: Some("/tmp".to_string()),
@@ -897,7 +897,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
                         active_profile_id: None,
                         conversation_ids_to_restore: vec![],
                         active_conversation_id: None,
-                    }),
+                    })),
                 }),
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),
