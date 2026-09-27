@@ -11,6 +11,8 @@ Die HTML-Dateien nach dem Checkout direkt im Browser öffnen. GitHub zeigt HTML 
 nicht als laufenden Mockup. Es ist kein Zaplex-Build erforderlich. Der Standalone-Export enthält
 den Entwurf und seine Browser-Laufzeit; für die versionsgebundenen Icon-/Tooltip-Bibliotheken
 wird Netzwerkzugriff auf `unpkg.com` benötigt. Es gibt keine Verbindung zu Produktivhosts.
+Die aufklappbaren **Entwurfsoptionen · nur Vorschau** oberhalb des Mockups steuern Farbschema,
+Theme-Akzent, Sidebar-Fläche und den simulierten Recovery-Zustand.
 
 Direkt auf GitHub sichtbare Aufnahmen desselben Artefakts (keine separaten Designvarianten):
 

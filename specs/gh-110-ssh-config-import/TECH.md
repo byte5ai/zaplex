@@ -309,10 +309,8 @@ formal "source" field in the schema.
 
 ## 4. i18n strings
 
-Add to `app/i18n/en/warp.ftl` (and mirror in `app/i18n/ja/warp.ftl` and
-`app/i18n/zh-CN/warp.ftl`; Chinese is direct, Japanese is
-machine-translation-quality with `# TODO: review` markers above each
-key):
+Add to `app/i18n/en/warp.ftl` and `app/i18n/de/warp.ftl`, the supported
+English and German catalogs:
 
 ```
 workspace-left-panel-ssh-manager-candidates-header = From { $path }

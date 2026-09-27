@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Gespeicherte Einführungstipps (#245) behalten alte Drive-Namen und die übrigen erledigten Tipps. Die eigenständige Workspace-Vorschau bietet ihre Theme- und Recovery-Optionen auch ohne externe Entwurfssteuerung an.
+
 - Cockpit-Abnahmeberichte (#160/#169/#245) akzeptieren nur Test- und Laufzeitbelege des geprüften Commits. Screenshot-Prüfungen erkennen auch CRC-gültige, aber beschädigte PNG-Bilddaten und begrenzen die Dekompression. Der geerbte Windows-Installer verwendet denselben Sitzungs-Mutexnamen wie die App.
 
 - Umbenannte SSH- und Editoreinstellungen (#245) erhalten frühere Abschaltungen, Sperrlisten und Editorwahlen. Neue explizite Werte gewinnen; ein Zurücksetzen reaktiviert keine alten Werte. Native Lesefehler brechen die Erstübernahme ab, ohne Einstellungen zu überschreiben.

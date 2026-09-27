@@ -1824,7 +1824,41 @@ html&gt;body{padding:0}&lt;/style&gt;
  window.addEventListener(&#x27;resize&#x27;,()=&gt;{positionMenus();renderSplitPicker();});
  window.addEventListener(&#x27;openai:set_globals&#x27;,event=&gt;{const saved=event.detail?.globals?.widgetState?.privateContent;if(saved&amp;&amp;JSON.stringify(saved)!==lastSaved){restore(saved);render();}});
  restore(window.openai?.widgetState?.privateContent);render();
- if(globalThis.Tweak){const tweak=new Tweak({container:root,onChange:()=&gt;{render();save();}});tweak.addSelect(design,&#x27;appearance&#x27;,{label:&#x27;Farbschema&#x27;,options:[{label:&#x27;System&#x27;,value:&#x27;system&#x27;},{label:&#x27;Dunkel&#x27;,value:&#x27;dark&#x27;},{label:&#x27;Hell&#x27;,value:&#x27;light&#x27;}]});tweak.addSelect(design,&#x27;accent&#x27;,{label:&#x27;Theme-Akzent&#x27;,options:[{label:&#x27;Zaplex&#x27;,value:&#x27;theme&#x27;},{label:&#x27;Cyan (Theme-Variante)&#x27;,value:&#x27;cyan&#x27;}]});tweak.addSelect(design,&#x27;sidebarTone&#x27;,{label:&#x27;Sidebar-Fläche&#x27;,options:[{label:&#x27;Dezent getönt&#x27;,value:&#x27;tinted&#x27;},{label:&#x27;Neutral abgesetzt&#x27;,value:&#x27;neutral&#x27;}]});tweak.addSelect(design,&#x27;reconnect&#x27;,{label:&#x27;Sessionzustand für Recovery-Vorschau&#x27;,options:[{label:&#x27;Bereits geöffnet → fokussieren&#x27;,value:&#x27;ready&#x27;},{label:&#x27;Erfolgreich wiederverbinden&#x27;,value:&#x27;success&#x27;},{label:&#x27;Startfrist abgelaufen&#x27;,value:&#x27;timeout&#x27;}]});}
+ const designOptions=[
+  [&#x27;appearance&#x27;,{label:&#x27;Farbschema&#x27;,options:[{label:&#x27;System&#x27;,value:&#x27;system&#x27;},{label:&#x27;Dunkel&#x27;,value:&#x27;dark&#x27;},{label:&#x27;Hell&#x27;,value:&#x27;light&#x27;}]}],
+  [&#x27;accent&#x27;,{label:&#x27;Theme-Akzent&#x27;,options:[{label:&#x27;Zaplex&#x27;,value:&#x27;theme&#x27;},{label:&#x27;Cyan (Theme-Variante)&#x27;,value:&#x27;cyan&#x27;}]}],
+  [&#x27;sidebarTone&#x27;,{label:&#x27;Sidebar-Fläche&#x27;,options:[{label:&#x27;Dezent getönt&#x27;,value:&#x27;tinted&#x27;},{label:&#x27;Neutral abgesetzt&#x27;,value:&#x27;neutral&#x27;}]}],
+  [&#x27;reconnect&#x27;,{label:&#x27;Sessionzustand für Recovery-Vorschau&#x27;,options:[{label:&#x27;Bereits geöffnet → fokussieren&#x27;,value:&#x27;ready&#x27;},{label:&#x27;Erfolgreich wiederverbinden&#x27;,value:&#x27;success&#x27;},{label:&#x27;Startfrist abgelaufen&#x27;,value:&#x27;timeout&#x27;}]}]
+ ];
+ if(globalThis.Tweak){
+  const tweak=new Tweak({container:root,onChange:()=&gt;{render();save();}});
+  designOptions.forEach(([key,options])=&gt;tweak.addSelect(design,key,options));
+ }else{
+  // Keep standalone preview controls outside the product navigation and its event handlers.
+  const controls=document.createElement(&#x27;details&#x27;);
+  controls.className=&#x27;zp-design-controls&#x27;;
+  const summary=document.createElement(&#x27;summary&#x27;);
+  summary.textContent=&#x27;Entwurfsoptionen · nur Vorschau&#x27;;
+  controls.append(summary);
+  const fields=document.createElement(&#x27;div&#x27;);
+  fields.className=&#x27;zp-design-fields&#x27;;
+  const selects=new Map();
+  designOptions.forEach(([key,{label,options}])=&gt;{
+   const field=document.createElement(&#x27;label&#x27;);
+   const text=document.createElement(&#x27;span&#x27;);
+   text.textContent=label;
+   const select=document.createElement(&#x27;select&#x27;);
+   options.forEach(option=&gt;select.add(new Option(option.label,option.value)));
+   select.value=design[key];
+   select.addEventListener(&#x27;change&#x27;,()=&gt;{design[key]=select.value;render();save();});
+   field.append(text,select);fields.append(field);selects.set(key,select);
+  });
+  controls.append(fields);
+  const style=document.createElement(&#x27;style&#x27;);
+  style.textContent=&#x27;.zp-design-controls{margin:0 0 12px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--background);color:var(--foreground);font:14px system-ui}.zp-design-controls summary{cursor:pointer;padding:8px 0}.zp-design-fields{display:flex;flex-wrap:wrap;gap:12px;padding:8px 0}.zp-design-fields label{display:flex;flex:1 1 220px;min-width:0;flex-direction:column;gap:6px}.zp-design-fields select{width:100%;min-width:0;min-height:44px;font:inherit;background:var(--background);color:var(--foreground);border:1px solid var(--border);border-radius:6px}.zp-design-controls :focus-visible{outline:2px solid var(--ring);outline-offset:2px}&#x27;;
+  root.before(style,controls);
+  window.addEventListener(&#x27;openai:set_globals&#x27;,()=&gt;selects.forEach((select,key)=&gt;{select.value=design[key];}));
+ }
 })();
 &lt;/script&gt;
 

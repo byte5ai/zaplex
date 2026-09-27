@@ -40,7 +40,10 @@ machine-readable report.
 
 The directory is closed-world: it must contain only `observations.json`, `versions.txt`, and the
 four documented PNGs. Symlinks, subdirectories, extra files, oversized JSON/images, malformed PNG
-headers, implausible image dimensions, and duplicate image content fail validation.
+headers, implausible image dimensions, and duplicate image content fail validation. The validator
+also checks legal color/depth and palette combinations, a complete zlib image stream bounded to
+128 MiB of decoded data, and exact scanline lengths/filter bytes including Adam7 passes. These
+checks validate image structure and data, not visual correctness of the depicted application.
 
 `observations.json` binds the evidence to:
 

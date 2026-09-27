@@ -1,5 +1,7 @@
 # GitHub issue and pull-request flows
 
+Current capability limit: read-only GitHub analysis currently supports local Claude Code accounts only. Codex is not offered or automatically selected for this flow because isolation from external MCP/apps/plugin write tools has not yet been verified. The Claude/Codex routing described below remains the intended product contract; this limitation is not evidence of completed Codex acceptance.
+
 ## Context
 
 The product behavior is defined in [PRODUCT.md](./PRODUCT.md). `app/src/cockpit/github_flows.rs` currently owns typed verdict parsing, stable flow keys, prompts, and shell-string builders, but production code does not call it. The Cockpit launches contextual agent tasks through `WorkspaceView::open_spawn_card` in `app/src/workspace/view.rs`, while local processes must use the workspace `command` crate. The dynamic entry point added for GH-167 lives under `app/src/search/command_palette/cockpit/`.

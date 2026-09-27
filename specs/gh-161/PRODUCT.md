@@ -1,5 +1,7 @@
 # GitHub issue and pull-request flows
 
+Current capability limit: read-only GitHub analysis currently supports local Claude Code accounts only. Codex is not offered or automatically selected for this flow because isolation from external MCP/apps/plugin write tools has not yet been verified. The Claude/Codex routing described below remains the intended product contract; this limitation is not evidence of completed Codex acceptance.
+
 ## Summary
 
 Zaplex exposes its GitHub issue and pull-request workflows as real, repository-scoped actions. A user can start an issue analysis, a pull-request analysis, or a pull-request review from the Cockpit surfaces and complete the flow with the subscription account they choose, while every GitHub mutation remains an explicit human decision.

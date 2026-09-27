@@ -78,7 +78,6 @@ pub enum TipHint {
     Serialize,
     Deserialize,
     schemars::JsonSchema,
-    settings_value::SettingsValue,
 )]
 #[schemars(description = "An interactive tip action.", rename_all = "snake_case")]
 pub enum TipAction {
@@ -92,6 +91,8 @@ pub enum TipAction {
     WarpAI,
     // This toggles Zaplex Drive rather than opening it. This enum can't directly be
     // renamed because we serialize it into the welcome tips.
+    #[serde(rename = "ZapDrive", alias = "ZaplexDrive")]
+    #[schemars(rename = "zap_drive")]
     ZaplexDrive,
     Changelog,
     // Note that this item has been deprecated from the UI and is not in any section.
@@ -99,6 +100,42 @@ pub enum TipAction {
     // value. Since old clients will have this value in their user defaults, we want
     // to prevent future usage of this enum value.
     Workflows,
+}
+
+impl settings_value::SettingsValue for TipAction {
+    fn to_file_value(&self) -> serde_json::Value {
+        let key = match self {
+            Self::CommandPalette => "command_palette",
+            Self::SplitPane => "split_pane",
+            Self::ThemePicker => "theme_picker",
+            Self::HistorySearch => "history_search",
+            Self::CommandSearch => "command_search",
+            Self::AiCommandSearch => "ai_command_search",
+            Self::SaveNewLaunchConfig => "save_new_launch_config",
+            Self::WarpAI => "warp_ai",
+            Self::ZaplexDrive => "zap_drive",
+            Self::Changelog => "changelog",
+            Self::Workflows => "workflows",
+        };
+        serde_json::Value::String(key.to_owned())
+    }
+
+    fn from_file_value(value: &serde_json::Value) -> Option<Self> {
+        match value.as_str()? {
+            "command_palette" => Some(Self::CommandPalette),
+            "split_pane" => Some(Self::SplitPane),
+            "theme_picker" => Some(Self::ThemePicker),
+            "history_search" => Some(Self::HistorySearch),
+            "command_search" => Some(Self::CommandSearch),
+            "ai_command_search" => Some(Self::AiCommandSearch),
+            "save_new_launch_config" => Some(Self::SaveNewLaunchConfig),
+            "warp_ai" => Some(Self::WarpAI),
+            "zap_drive" | "zaplex_drive" => Some(Self::ZaplexDrive),
+            "changelog" => Some(Self::Changelog),
+            "workflows" => Some(Self::Workflows),
+            _ => None,
+        }
+    }
 }
 
 impl TipAction {
@@ -308,3 +345,7 @@ impl TipsCompleted {
         self.gamified_tips_count = Some(total)
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

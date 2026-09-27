@@ -364,10 +364,12 @@ the daemon resolves paths internally and returns no path or raw record. Only use
 content, bounded thinking, model, timestamps, and tool names survive projection. Developer/tool
 payloads and results, encrypted content, credentials, and unknown metadata are discarded.
 
-Remote responses expose a source revision and `NotModified` result for a later refresh loop; the
-initial Cockpit integration opens a one-shot snapshot. Generated projections are parsed off the UI
-thread and opened as pathless, selectable in-memory code documents. They are neither editable nor
-restorable, never touch a temporary file, and remain valid after the source Cockpit closes.
+Remote responses expose a source revision and `NotModified` result. After the initial projection,
+the open transcript follows live sessions with a bounded refresh loop. Weak pane handles and
+generation checks discard stale responses; refresh stops for dormant sessions or closed panes.
+Generated projections are parsed off the UI thread and opened as pathless, selectable in-memory
+code documents. They are neither editable nor restorable, never touch a temporary file, and the
+last projection remains valid after the source Cockpit closes.
 
 ### Executable parity gate (#169)
 
