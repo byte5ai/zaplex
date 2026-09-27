@@ -6487,7 +6487,7 @@ impl View for SftpBrowserView {
             && self.context_menu.is_none();
         // Keep the content bounds stable when mouse-down activates an inactive pane.
         let pane_border_fill = if pane_is_focused {
-            theme.accent()
+            theme.accent().into()
         } else {
             Fill::None
         };
