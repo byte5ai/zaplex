@@ -442,6 +442,7 @@ fn create_dual_connected_view(
 
 fn initialize_pane_group_app(app: &mut App) {
     crate::test_util::terminal::initialize_app_for_terminal_view(app);
+    app.add_singleton_model(RemoteServerManager::new);
     app.add_singleton_model(|_| crate::workspace::ToastStack);
     app.add_singleton_model(|_| super::fm_registry::FileManagerRegistry::new());
     app.add_singleton_model(|_| super::transfer_queue::TransferQueue::new());

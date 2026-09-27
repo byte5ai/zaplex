@@ -4,6 +4,7 @@ use warpui::App;
 #[cfg(test)]
 pub fn initialize_settings_for_tests(app: &mut App) {
     use warp_core::execution_mode::ExecutionMode;
+    crate::i18n::init(Some("en"));
     initialize_settings_for_tests_with_mode(app, ExecutionMode::App, false);
 }
 

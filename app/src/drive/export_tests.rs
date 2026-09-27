@@ -102,6 +102,7 @@ impl ExportTest {
 }
 
 fn initialize_app(app: &mut App) {
+    crate::i18n::init(Some("en"));
     app.add_singleton_model(ObjectStoreModel::mock);
     app.add_singleton_model(ExportManager::new);
     app.add_singleton_model(UserWorkspaces::default_mock);

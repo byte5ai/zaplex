@@ -409,10 +409,10 @@ fn test_viewported_table_layout_releases_state_borrow() {
                     .borrow_mut()
                     .build_scene(vec2f(200.0, 100.0), 1.0, None, ctx);
             }
+            // Assert before App::update redraws the mock window at its default size.
+            assert_eq!(state.column_widths(), vec![200.0]);
+            assert_eq!(state.inner.borrow().rows.summary().measured_count, 1);
         });
-
-        assert_eq!(state.column_widths(), vec![200.0]);
-        assert_eq!(state.inner.borrow().rows.summary().measured_count, 1);
     });
 }
 

@@ -6838,7 +6838,8 @@ fn test_multiline_insert_in_header_preserves_each_line_once() {
                 "<text>test<header1>line<text>second"
             );
 
-            buffer.edit_internal_first_selection(
+            let previous_selection = buffer.to_rendered_selection_set(selection.clone(), ctx);
+            let edit = buffer.edit_internal_first_selection(
                 CharOffset::from(8)..CharOffset::from(8),
                 "a\nb",
                 TextStyles::default(),
@@ -6848,10 +6849,21 @@ fn test_multiline_insert_in_header_preserves_each_line_once() {
 
             assert_eq!(
                 buffer.content.debug(),
-                "<text>test<header1>lia<text>bne\nsecond"
+                "<text>test<header1>lia<text>bne\\nsecond"
             );
             assert_eq!(buffer.text().as_str().matches('a').count(), 1);
             assert_eq!(buffer.text().as_str().matches('b').count(), 1);
+            let current_selection = buffer.to_rendered_selection_set(selection.clone(), ctx);
+            buffer.push_undo_item(
+                previous_selection,
+                current_selection,
+                edit.undo_item.expect("multiline insertion has an undo item"),
+                UndoActionType::Atomic,
+            );
+            buffer.undo(selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text>test<header1>line<text>second");
+            buffer.redo(selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text>test<header1>lia<text>bne\\nsecond");
         });
 
         selection.read(&app, |selection, _| {

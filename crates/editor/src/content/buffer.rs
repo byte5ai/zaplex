@@ -4692,6 +4692,10 @@ impl Buffer {
             _ => BufferBlockStyle::PlainText,
         };
 
+        // A newline leaves a heading. The original line suffix must follow the
+        // final inserted line's style instead of starting another heading.
+        let override_next_style = matches!(inheritance_style, BufferBlockStyle::Header { .. })
+            && text.as_ref().contains('\n');
         editor_action_set.push(CoreEditorAction::new(
             range.clone(),
             CoreEditorActionType::Insert {
@@ -4701,7 +4705,7 @@ impl Buffer {
                     inheritance_style,
                 ),
                 source: EditOrigin::UserTyped,
-                override_next_style: false,
+                override_next_style,
                 insert_on_selection: true,
             },
         ));

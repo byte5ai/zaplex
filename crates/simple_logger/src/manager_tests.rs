@@ -26,6 +26,7 @@ fn cleanup_log_path(log_path: &Path) {
 }
 
 #[test]
+// Keep the executor alive until wait_closed completes; workers do not own the runtime.
 fn register_resolved_path_reuses_stale_entries_after_drop() {
     let mut manager = LogManager::new();
     let executor = Arc::new(Background::default());
@@ -38,7 +39,7 @@ fn register_resolved_path_reuses_stale_entries_after_drop() {
     drop(logger);
 
     let logger = manager
-        .register_resolved_path(log_path.clone(), executor)
+        .register_resolved_path(log_path.clone(), executor.clone())
         .expect("stale entry should be reclaimed after the logger is dropped");
     logger.close();
     futures::executor::block_on(logger.wait_closed());
@@ -56,7 +57,7 @@ fn register_resolved_path_rejects_duplicate_active_loggers() {
         .expect("initial registration should succeed");
     assert!(
         manager
-            .register_resolved_path(log_path.clone(), executor)
+            .register_resolved_path(log_path.clone(), executor.clone())
             .is_err(),
         "live logger should block duplicate registration"
     );
@@ -80,7 +81,7 @@ fn register_reclaims_closed_logger() {
     logger.close();
 
     let new_logger = manager
-        .register_resolved_path(log_path.clone(), executor)
+        .register_resolved_path(log_path.clone(), executor.clone())
         .expect("closed logger should be reclaimed even when Arc is still alive");
 
     new_logger.close();
@@ -117,7 +118,7 @@ fn closed_logger_is_drained_before_path_reuse() {
     old_logger.close();
 
     let new_logger = manager
-        .register_resolved_path(log_path.clone(), executor)
+        .register_resolved_path(log_path.clone(), executor.clone())
         .expect("a closed generation should be replaced transparently");
     new_logger.log("new-first".to_string());
     new_logger.close();
@@ -159,7 +160,7 @@ fn late_finish_from_dropped_generation_preserves_replacement_log() {
         .take()
         .unwrap();
     let new_logger = manager
-        .register_resolved_path(log_path.clone(), executor)
+        .register_resolved_path(log_path.clone(), executor.clone())
         .expect("the closed generation can be replaced");
     assert!(old_logger
         .writer

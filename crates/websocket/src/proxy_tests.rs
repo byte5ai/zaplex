@@ -10,6 +10,11 @@ use super::*;
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn clear_proxy_env() {
+    // Environment-resolution tests explicitly exercise System mode; production defaults to Off.
+    set_global_proxy_config(ProxyConfig {
+        mode: ProxyMode::System,
+        ..Default::default()
+    });
     for var in [
         "HTTPS_PROXY",
         "https_proxy",
@@ -41,6 +46,18 @@ fn resolved_proxy_plain(host: &str) -> Option<ProxyInfo> {
 }
 
 // -- resolve_proxy tests --
+
+#[test]
+fn default_off_mode_ignores_proxy_environment() {
+    let _lock = ENV_LOCK.lock();
+    clear_proxy_env();
+    env::set_var("HTTPS_PROXY", "http://proxy.corp:3128");
+    env::set_var("HTTP_PROXY", "http://proxy.corp:3128");
+    set_global_proxy_config(ProxyConfig::default());
+    assert!(resolved_proxy_tls("example.com").is_none());
+    assert!(resolved_proxy_plain("example.com").is_none());
+    clear_proxy_env();
+}
 
 #[test]
 fn resolve_proxy_returns_none_when_no_env_vars_set() {

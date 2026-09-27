@@ -450,3 +450,26 @@ fn upsert_rule_case_insensitive_filename() {
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].path, PathBuf::from("/a/claude.md"));
 }
+
+#[test]
+fn removing_higher_priority_rules_reveals_updated_claude_rule() {
+    let mut rules = ProjectRules::default();
+    rules.upsert_rule(Path::new("/a/WARP.md"), "warp".into());
+    rules.upsert_rule(Path::new("/a/AGENTS.md"), "agents".into());
+    rules.upsert_rule(Path::new("/a/CLAUDE.md"), "old".into());
+    rules.upsert_rule(Path::new("/a/CLAUDE.md"), "updated".into());
+    rules.remove_rule(Path::new("/a/WARP.md")).unwrap();
+    rules.remove_rule(Path::new("/a/AGENTS.md")).unwrap();
+
+    let active = rules
+        .find_active_or_applicable_rules(Path::new("/a/file.rs"))
+        .active_rules;
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].content, "updated");
+    assert_eq!(active[0].path, Path::new("/a/CLAUDE.md"));
+    rules.remove_rule(Path::new("/a/cLaUdE.mD")).unwrap();
+    assert!(rules
+        .find_active_or_applicable_rules(Path::new("/a/file.rs"))
+        .active_rules
+        .is_empty());
+}

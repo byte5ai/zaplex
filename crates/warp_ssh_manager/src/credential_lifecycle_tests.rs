@@ -583,7 +583,7 @@ fn lifecycle_errors_use_localized_ui_presenter() {
 
     assert!(
         server_view
-            .matches("credential_operation_message(&e)")
+            .matches("credential_operation_message(&error)")
             .count()
             >= 3
     );

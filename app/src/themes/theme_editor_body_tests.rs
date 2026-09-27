@@ -1,5 +1,6 @@
 use super::*;
 use crate::appearance::{self, Appearance};
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::default_themes::dark_theme;
 use warpui::assets::asset_cache::AssetSource;
@@ -11,6 +12,7 @@ fn window_close_clears_transient_theme_preview() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         appearance::register(&mut app);
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
 
         let original_theme = app.update(|ctx| Appearance::as_ref(ctx).theme().clone());
         let (_, editor) = app.add_window(WindowStyle::NotStealFocus, ThemeEditorBody::new);
@@ -154,6 +156,7 @@ fn delayed_image_result_cannot_replace_a_newer_template_or_closed_preview() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         appearance::register(&mut app);
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
         let (_, editor) = app.add_window(WindowStyle::NotStealFocus, ThemeEditorBody::new);
         editor.update(&mut app, |editor, ctx| {
             editor.execute_pending(PendingAction::Image, ctx);
@@ -195,6 +198,7 @@ fn only_the_latest_image_request_updates_the_preview() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         appearance::register(&mut app);
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
         let (_, editor) = app.add_window(WindowStyle::NotStealFocus, ThemeEditorBody::new);
         editor.update(&mut app, |editor, ctx| {
             editor.execute_pending(PendingAction::Image, ctx);

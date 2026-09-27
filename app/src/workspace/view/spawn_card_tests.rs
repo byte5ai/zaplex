@@ -1686,6 +1686,8 @@ fn confirm_attempt_checks_directory_and_reserves_until_cancelled() {
 #[test]
 fn launch_result_acceptance_rejects_replaced_and_cancelled_plans() {
     warpui::App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
         let card = remote_claude_card(
             provider(true),
             Vec::new(),
@@ -1717,6 +1719,8 @@ fn launch_result_acceptance_rejects_replaced_and_cancelled_plans() {
 #[test]
 fn native_directory_picker_rejects_reconfigured_or_other_cards() {
     warpui::App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
         let make_card = || {
             remote_claude_card(
                 provider(true),
