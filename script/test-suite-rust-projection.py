@@ -14,7 +14,7 @@ from tree_sitter import Language, Parser
 import tree_sitter_rust
 
 POLICY = {
-    "version": 2,
+    "version": 3,
     "parser": "tree-sitter=0.25.2,tree-sitter-rust=0.24.2",
     "target": "x86_64-unknown-linux-gnu",
     "test_only_features": ["test-util", "integration_tests"],
@@ -221,10 +221,10 @@ def project_source(source):
                     inherited = True
                 continue
             pending.extend(pattern_attributes.get(child.start_byte, []))
-            # Rust field initializers own their attributes as children rather
-            # than siblings. Excluding only the identifier leaves a test-only
-            # value falsely counted as production on the same physical line.
-            if child.type == 'field_initializer':
+            # Field initializers and match arms own their attributes as children
+            # rather than siblings. Exclude the entire value/body, not just the
+            # field identifier or arm pattern followed by test-only execution.
+            if child.type in {'field_initializer', 'match_arm'}:
                 pending.extend(part for part in child.named_children if part.type == 'attribute_item')
             try:
                 # An enclosing cfg(test) proves the complete item test-only,

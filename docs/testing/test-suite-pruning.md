@@ -114,17 +114,20 @@ Ein numerisch guter Vergleich allein schließt #472 nicht:
    Buildskripte und generierte `target`-Quellen sind explizite Policy-Ausschlüsse.
    Die Quote gilt für instrumentierte Linux-Produktionsquellen dieser Policy,
    nicht für nie kompilierte Plattformzweige.
-   Projektionspolicy **2** behandelt die quellenbasiert bestätigten Grammatiklücken
+   Projektionspolicy **3** behandelt die quellenbasiert bestätigten Grammatiklücken
    bei Attributen in Rust-Strukturmustern und der Reihenfolge `dyn 'static + Fn`.
    Die Normalisierung verlangt echte Attribut-/Schlüsselwort-Tokens sowie eine
    anschließend fehlerfrei geparste Struktur; Attribute werden wieder ihrem
    konkreten Patternfeld und der ursprünglichen `cfg`-Auswertung zugeordnet.
    Bytepositionen, Originalquellen und ihre Inhaltsfingerprints bleiben erhalten.
+   Testattribute an Feldinitialisierern und Match-Armen schließen jeweils den
+   vollständigen Wert beziehungsweise Armkörper aus. Ein lediglich testartig
+   aufgebauter `thread_local!`-Aufruf bleibt ohne bewiesene Makroauflösung unklar.
    Andere Syntaxfehler, unbekannte testabhängige Bedingungen und nicht eindeutig
    zuordenbare Makro-/LLVM-Regionen werden weiterhin abgewiesen. Betroffene
    Coverage-Zeilen erscheinen unter `unresolved_production_lines`; der vollständige
-   Prozentwert bleibt dann `null`, der Status `unproven`. Policy-1- und
-   Policy-2-Auswertungen sind wegen unterschiedlicher Policy-Hashes nicht direkt
+   Prozentwert bleibt dann `null`, der Status `unproven`. Auswertungen der
+   Policies 1, 2 und 3 sind wegen unterschiedlicher Policy-Hashes nicht direkt
    vergleichbar; Baseline und Kandidat benötigen dieselbe Policy.
    `partial_known_line_coverage_percent` ist ausdrücklich nur eine Teilstatistik.
    Ein solcher Bericht kann die 2-Prozentpunkte-Grenze **nicht** erfüllen; dafür

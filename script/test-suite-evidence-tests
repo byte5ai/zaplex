@@ -199,3 +199,22 @@ literal = b'fn p() { let text = r#"#[cfg(test)] field,"#; }\n'
 assert project(literal)[0] == {1: 1}
 assert project(literal)[1] != project(literal.replace(b'test', b'unix'))[1]
 print('position-preserving grammar bridges and complete test field exclusion: ok')
+
+
+# Match-arm attributes belong to the complete arm, including its executable body.
+match_arms = b'fn p(value: Kind) {\nmatch value {\n#[cfg(test)]\nKind::Test => test_only(),\nKind::Production => production(),\n}\n}\n'
+production_arms = b'fn p(value: Kind) {\nmatch value {\nKind::Production => production(),\n}\n}\n'
+assert project(match_arms)[1] == project(production_arms)[1]
+assert project(match_arms)[0] == {1: 1, 2: 2, 5: 3, 6: 4, 7: 5}
+assert not project(match_arms)[3]
+block_arm = match_arms.replace(b'Kind::Test => test_only(),', b'Kind::Test => {\ntest_only();\n},')
+assert project(block_arm)[1] == project(production_arms)[1]
+assert not project(block_arm)[3]
+ambiguous_arm = match_arms.replace(b'cfg(test)', b'cfg(any(test, feature="unknown"))')
+assert project(ambiguous_arm)[3]
+assert project(match_arms.replace(b'cfg(test)', b'cfg(unix)'))[1] != project(production_arms)[1]
+# Adjacent production bytes still make one physical LCOV line ambiguous.
+assert project(match_arms.replace(b'test_only(),\n', b'test_only(), '))[3]
+# A test-only-looking macro body is insufficient without macro identity proof.
+assert project(b'thread_local! {\n#[cfg(test)]\nstatic ONLY_TESTS: u64 = 0;\n}\n')[3]
+print('complete match-arm exclusion and unresolved macro identity: ok')
