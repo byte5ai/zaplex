@@ -62,6 +62,13 @@ INTEL_TARGET="$INTEL_ARCH-apple-darwin"
 ARM_ARCH="aarch64"
 ARM_TARGET="$ARM_ARCH-apple-darwin"
 
+# These paths belong only to this invocation, never to inherited environment state.
+SIGNING_TEMP_DIR=""
+CODESIGN_KEYCHAIN_PATH=""
+CODESIGN_CERT_PATH=""
+NOTARY_KEY_PATH=""
+SIGNING_SEARCH_LIST_CHANGED=false
+
 # Function to clean up temporary DMG files
 cleanup_dmg_files() {
     local target_dir="$1"
@@ -83,11 +90,18 @@ cleanup_codesign_keychain() {
         echo "Cleaning up temporary signing keychain."
         security delete-keychain "$CODESIGN_KEYCHAIN_PATH" >/dev/null 2>&1 || true
     fi
+    if [[ "${SIGNING_SEARCH_LIST_CHANGED:-false}" = true ]]; then
+        security list-keychains -d user -s "${EXISTING_KEYCHAINS[@]}" >/dev/null 2>&1 || true
+        SIGNING_SEARCH_LIST_CHANGED=false
+    fi
     if [[ -n "${CODESIGN_CERT_PATH:-}" ]]; then
         rm -f "$CODESIGN_CERT_PATH"
     fi
     if [[ -n "${NOTARY_KEY_PATH:-}" ]]; then
         rm -f "$NOTARY_KEY_PATH"
+    fi
+    if [[ -n "${SIGNING_TEMP_DIR:-}" ]]; then
+        rm -rf "$SIGNING_TEMP_DIR"
     fi
 }
 
@@ -125,9 +139,9 @@ prepare_distribution_signing_inputs() {
     exit 1
   fi
 
-  SIGNING_TEMP_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-  CODESIGN_CERT_PATH="$SIGNING_TEMP_DIR/zaplex-signing-$$.p12"
-  NOTARY_KEY_PATH="$SIGNING_TEMP_DIR/zaplex-notary-$$.p8"
+  SIGNING_TEMP_DIR="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/zaplex-signing.XXXXXXXX")"
+  CODESIGN_CERT_PATH="$SIGNING_TEMP_DIR/certificate.p12"
+  NOTARY_KEY_PATH="$SIGNING_TEMP_DIR/notary.p8"
   (
     umask 077
     printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | /usr/bin/base64 -D > "$CODESIGN_CERT_PATH"
@@ -168,8 +182,21 @@ prepare_distribution_signing_inputs() {
 }
 
 prepare_distribution_signing_keychain() {
-  CODESIGN_KEYCHAIN_PATH="$SIGNING_TEMP_DIR/zaplex-signing-$$.keychain-db"
+  CODESIGN_KEYCHAIN_PATH="$SIGNING_TEMP_DIR/signing.keychain-db"
   CODESIGN_KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+
+  # Capture the original list before create-keychain can add the temporary keychain.
+  # security indents and quotes each path; preserve spaces inside the quoted path.
+  EXISTING_KEYCHAIN_LIST="$(security list-keychains -d user)"
+  EXISTING_KEYCHAINS=()
+  while read -r EXISTING_KEYCHAIN; do
+    EXISTING_KEYCHAIN="${EXISTING_KEYCHAIN#\"}"
+    EXISTING_KEYCHAIN="${EXISTING_KEYCHAIN%\"}"
+    if [[ -n "$EXISTING_KEYCHAIN" ]]; then
+      EXISTING_KEYCHAINS+=("$EXISTING_KEYCHAIN")
+    fi
+  done <<< "$EXISTING_KEYCHAIN_LIST"
+  SIGNING_SEARCH_LIST_CHANGED=true
 
   echo "Creating temporary signing keychain."
   security create-keychain -p "$CODESIGN_KEYCHAIN_PASSWORD" "$CODESIGN_KEYCHAIN_PATH"
@@ -187,13 +214,6 @@ prepare_distribution_signing_keychain() {
     -k "$CODESIGN_KEYCHAIN_PASSWORD" \
     "$CODESIGN_KEYCHAIN_PATH" >/dev/null
 
-  EXISTING_KEYCHAINS=()
-  while IFS= read -r EXISTING_KEYCHAIN; do
-    EXISTING_KEYCHAIN="${EXISTING_KEYCHAIN//\"/}"
-    if [[ -n "$EXISTING_KEYCHAIN" ]]; then
-      EXISTING_KEYCHAINS+=("$EXISTING_KEYCHAIN")
-    fi
-  done < <(security list-keychains -d user)
   if [[ ${#EXISTING_KEYCHAINS[@]} -gt 0 ]]; then
     security list-keychains -d user -s "$CODESIGN_KEYCHAIN_PATH" "${EXISTING_KEYCHAINS[@]}"
   else

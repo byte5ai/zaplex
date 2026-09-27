@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Die Signiervorbereitung (#245) erhält vorhandene Keychain-Pfade samt Leerzeichen und stellt die Suchliste wieder her. Temporäre Signierdateien liegen in einem privaten Verzeichnis; geerbte Pfade werden beim Aufräumen nicht angefasst. Der Changelog-Generator behandelt einen fehlgeschlagenen Release-Abruf nicht als leere Historie.
+
 - CLI-Agenten (#245) erhalten aufgerufene Skill-Inhalte, benannte Anhänge und Reviewkommentare mit Diff-Kontext. Globale Regeln werden unter dem bestehenden Einwilligungsschalter übertragen; gelöschte Regeln bleiben ausgeschlossen.
 
 - Spracheingabe (#245) lässt sich nur vom zugehörigen Editor abbrechen. Verspätete Aufnahmeergebnisse verändern keine neuere Sitzung; korrigierte Suchtestdaten verwenden die tatsächlichen Bytepositionen.

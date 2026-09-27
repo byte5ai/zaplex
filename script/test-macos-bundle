@@ -59,8 +59,23 @@ elif name == "prepare_bundled_resources":
     (resources / "settings_schema.json").write_text('{"type":"object"}\n')
     (resources / "THIRD_PARTY_LICENSES.txt").write_text("mock attribution\n")
 elif name == "security":
-    if args[:1] == ["find-identity"]:
-        print('  1) ABC123 "Apple Development: Test (TESTTEAM01)"')
+    if args == ["list-keychains", "-d", "user"]:
+        if os.environ.get("MOCK_KEYCHAIN_LIST_ERROR") == "1":
+            sys.exit(1)
+        for path in json.loads(os.environ.get("MOCK_INITIAL_KEYCHAINS", "[]")):
+            print('    "' + path + '"')
+    elif args[:4] == ["list-keychains", "-d", "user", "-s"]:
+        (root / "search-list.json").write_text(json.dumps(args[4:]))
+    elif args[:1] == ["find-identity"]:
+        if os.environ.get("MOCK_DISTRIBUTION_SIGNING") == "1":
+            print('  1) ABC123 "Developer ID Application: Test (TESTTEAM01)"')
+        else:
+            print('  1) ABC123 "Apple Development: Test (TESTTEAM01)"')
+elif name == "openssl":
+    if args == ["rand", "-base64", "24"]:
+        print("fixture-only-password")
+    else:
+        sys.exit("Unexpected openssl invocation")
 elif name == "create-dmg":
     Path(args[-2]).write_bytes(b"mock disk image")
 elif name == "sed":
@@ -87,7 +102,7 @@ class MacOSBundleModesTest(unittest.TestCase):
         self.outputs.touch()
         for name in (
             "rustc", "rustup", "cargo", "install_name_tool", "plutil",
-            "security", "codesign", "hdiutil", "create-dmg", "xcrun", "sed",
+            "security", "codesign", "hdiutil", "create-dmg", "xcrun", "sed", "openssl",
         ):
             self.write_mock(self.commands / name)
         for name in (
@@ -153,6 +168,62 @@ class MacOSBundleModesTest(unittest.TestCase):
         (framework / "Versions/Current").symlink_to("A")
         (framework / "Example").symlink_to("Versions/Current/Example")
         return app, files
+
+    def run_keychain_preparation(self):
+        # Load only helper definitions. No certificate, build, or signing command is invoked.
+        helpers = self.script.read_text().split("# Defaults for command-line flags.", 1)[0]
+        program = helpers + r'''
+CODESIGN=true
+SIGNING_TEMP_DIR="$(mktemp -d "$MOCK_ROOT/signing.XXXXXXXX")"
+CODESIGN_CERT_PATH="$SIGNING_TEMP_DIR/fixture.p12"
+MACOS_CERTIFICATE_PASSWORD=fixture-only
+prepare_distribution_signing_keychain
+'''
+        self.env["MOCK_DISTRIBUTION_SIGNING"] = "1"
+        return subprocess.run(
+            ["bash", "-c", program], cwd=self.root, env=self.env,
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=20, check=False,
+        )
+
+    def test_signing_preserves_quoted_keychain_paths_and_restores_search_list(self):
+        original = ["/Users/Test User/Library/Keychains/login.keychain-db", "/Library/Keychains/System.keychain"]
+        self.env["MOCK_INITIAL_KEYCHAINS"] = json.dumps(original)
+        result = self.run_keychain_preparation()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        commands = [json.loads(line) for line in self.log.read_text().splitlines()]
+        changes = [cmd[5:] for cmd in commands if cmd[:5] == ["security", "list-keychains", "-d", "user", "-s"]]
+        self.assertEqual(len(changes), 2)
+        self.assertEqual(changes[0][1:], original)
+        self.assertEqual(changes[1], original)
+        self.assertEqual(json.loads((self.root / "search-list.json").read_text()), original)
+        self.assertFalse(Path(changes[0][0]).parent.exists())
+        self.assertNotIn("codesign", self.command_names())
+
+    def test_early_cleanup_preserves_inherited_paths(self):
+        sentinel = self.root / "unrelated-file"
+        sentinel.write_bytes(b"keep this file")
+        for name in ("CODESIGN_KEYCHAIN_PATH", "CODESIGN_CERT_PATH", "NOTARY_KEY_PATH"):
+            self.env[name] = str(sentinel)
+        self.env["SIGNING_TEMP_DIR"] = str(self.root)
+        helpers = self.script.read_text().split("# Defaults for command-line flags.", 1)[0]
+        result = subprocess.run(
+            ["bash", "-c", helpers + "\nexit 1\n"], cwd=self.root, env=self.env,
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=20, check=False,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(sentinel.read_bytes(), b"keep this file")
+        self.assertNotIn("security", self.command_names())
+
+    def test_unreadable_keychain_list_fails_before_mutating_search_list(self):
+        self.env["MOCK_KEYCHAIN_LIST_ERROR"] = "1"
+        result = self.run_keychain_preparation()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        commands = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertFalse(any(cmd[1:2] == ["create-keychain"] for cmd in commands))
+        self.assertFalse((self.root / "search-list.json").exists())
+        self.assertFalse(list(self.root.glob("signing.*")))
 
     def test_prepare_stops_before_signing_and_disk_image_creation(self):
         for profile_dir, profile_args in (("release-lto", ()), ("debug", ("--debug",))):
