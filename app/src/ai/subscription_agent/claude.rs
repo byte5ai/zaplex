@@ -19,7 +19,7 @@ impl ClaudeProtocol {
     }
 
     pub(crate) fn user_message(prompt: &SubscriptionPrompt, session_id: Option<&str>) -> Value {
-        let mut content = vec![json!({ "type": "text", "text": prompt.query })];
+        let mut content = vec![json!({ "type": "text", "text": prompt.query_for_agent() })];
         if !prompt.context.is_empty() {
             content.push(json!({ "type": "text", "text": prompt.context }));
         }

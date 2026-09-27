@@ -298,6 +298,7 @@ fn native_turn_contains_text_context_and_inline_image_data() {
             file_name: "diagram.png".to_string(),
             is_figma: false,
         }],
+        ..Default::default()
     };
     let frame = ClaudeProtocol::user_message(&prompt, Some("native-session"));
     assert_eq!(frame["session_id"], "native-session");

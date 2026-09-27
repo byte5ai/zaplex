@@ -18,6 +18,7 @@ pub(crate) struct SubscriptionSession {
     pending_approvals: HashMap<String, Value>,
     queued_events: VecDeque<SubscriptionEvent>,
     read_only: bool,
+    plan_mode: bool,
 }
 
 impl SubscriptionSession {
@@ -29,6 +30,24 @@ impl SubscriptionSession {
         let resume_id = resume.as_ref().map(session_id);
         let launch = ProcessLaunch::for_session(&target, resume_id, location);
         Self::open_with_launch(target, resume, launch).await
+    }
+
+    pub(crate) async fn open_for_prompt(
+        target: SubscriptionTarget,
+        resume: Option<SessionIdentity>,
+        location: ProcessLocation,
+        prompt: &SubscriptionPrompt,
+    ) -> Result<Self> {
+        if !prompt.plan_mode {
+            return Self::open(target, resume, location).await;
+        }
+        // Validate policy before spawning, and preserve the existing CLI session.
+        let launch =
+            ProcessLaunch::for_plan_session(&target, resume.as_ref().map(session_id), location)?;
+        let mut session = Self::open_with_launch(target, resume, launch).await?;
+        session.plan_mode = true;
+        session.read_only = true;
+        Ok(session)
     }
 
     /// Opens a fresh, local analysis session with no write-capable tools.
@@ -59,6 +78,7 @@ impl SubscriptionSession {
             pending_approvals: HashMap::new(),
             queued_events: VecDeque::new(),
             read_only: false,
+            plan_mode: false,
         };
         match session.target.installation.agent {
             SubscriptionAgent::ClaudeCode => session.initialize_claude().await?,
@@ -72,6 +92,9 @@ impl SubscriptionSession {
     }
 
     pub(crate) async fn send_prompt(&mut self, prompt: &SubscriptionPrompt) -> Result<()> {
+        if prompt.plan_mode != self.plan_mode {
+            return Err(anyhow!("prompt mode differs from the native session permission mode"));
+        }
         match self.target.installation.agent {
             SubscriptionAgent::ClaudeCode => {
                 self.process

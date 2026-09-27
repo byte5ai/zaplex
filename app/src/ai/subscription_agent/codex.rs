@@ -91,7 +91,7 @@ impl CodexProtocol {
         thread_id: &str,
         prompt: &SubscriptionPrompt,
     ) -> Value {
-        let mut input = vec![json!({ "type": "text", "text": prompt.query })];
+        let mut input = vec![json!({ "type": "text", "text": prompt.query_for_agent() })];
         if !prompt.context.is_empty() {
             input.push(json!({ "type": "text", "text": prompt.context }));
         }

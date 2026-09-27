@@ -558,3 +558,54 @@ exit 127"#,
         });
     }
 }
+
+#[test]
+fn plan_launch_preserves_resume_and_normal_follow_up_restores_default_policy() {
+    let mut selected = target(SubscriptionAgent::ClaudeCode);
+    selected.installation.version = "2.1.212 (Claude Code)".to_string();
+    let plan =
+        ProcessLaunch::for_plan_session(&selected, Some("native-history"), ProcessLocation::Local)
+            .unwrap();
+    for pair in [
+        ["--resume", "native-history"],
+        ["--permission-mode", "plan"],
+        ["--tools", "Read,Glob,Grep,Write,Edit"],
+        ["--mcp-config", r#"{"mcpServers":{}}"#],
+    ] {
+        assert!(plan.args.windows(2).any(|args| args == pair));
+    }
+    assert!(plan.args.contains(&"--safe-mode".to_string()));
+    assert!(plan.args.contains(&"--strict-mcp-config".to_string()));
+    assert!(!plan.args.contains(&"--no-session-persistence".to_string()));
+    let normal =
+        ProcessLaunch::for_session(&selected, Some("native-history"), ProcessLocation::Local);
+    assert!(normal
+        .args
+        .windows(2)
+        .any(|args| args == ["--permission-mode", "default"]));
+    assert!(normal
+        .args
+        .windows(2)
+        .any(|args| args == ["--resume", "native-history"]));
+    assert!(!normal.args.contains(&"--tools".to_string()));
+    for version in ["2.1.211", "2.1.212-beta.1", "unknown"] {
+        selected.installation.version = version.to_string();
+        assert!(ProcessLaunch::for_plan_session(
+            &selected,
+            Some("native-history"),
+            ProcessLocation::Local
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("2.1.212"));
+    }
+    let error = ProcessLaunch::for_plan_session(
+        &target(SubscriptionAgent::Codex),
+        Some("native-thread"),
+        ProcessLocation::Local,
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("/plan with Codex is unavailable"));
+}

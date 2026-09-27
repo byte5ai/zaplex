@@ -440,6 +440,7 @@ fn native_turn_contains_text_context_and_inline_image_data() {
             file_name: "diagram.png".to_string(),
             is_figma: false,
         }],
+        ..Default::default()
     };
     let frame = CodexProtocol::turn_start_request(7, &target(), "native-thread", &prompt);
     assert_eq!(frame["params"]["threadId"], "native-thread");

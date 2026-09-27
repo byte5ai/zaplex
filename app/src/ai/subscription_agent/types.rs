@@ -11,6 +11,15 @@ pub(crate) struct SubscriptionPrompt {
     pub(crate) query: String,
     pub(crate) context: String,
     pub(crate) images: Vec<ImageContext>,
+    pub(crate) plan_mode: bool,
+    /// CLI text without an app-handled mode command; `query` remains the UI text.
+    pub(crate) native_query: Option<String>,
+}
+
+impl SubscriptionPrompt {
+    pub(crate) fn query_for_agent(&self) -> &str {
+        self.native_query.as_deref().unwrap_or(&self.query)
+    }
 }
 
 impl From<&str> for SubscriptionPrompt {

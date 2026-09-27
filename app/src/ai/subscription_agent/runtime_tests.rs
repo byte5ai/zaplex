@@ -1621,3 +1621,28 @@ fn subscription_user_rules_respect_opt_out_trash_and_stable_order() {
         assert!(!prompt.context.contains("Do not send"));
     });
 }
+
+#[test]
+fn subscription_prompt_preserves_plan_mode_separately_from_display_text() {
+    for (mode, expected_plan, expected_query) in [
+        (UserQueryMode::Plan, true, "/plan inspect this"),
+        (UserQueryMode::Normal, false, "inspect this"),
+    ] {
+        let input = AIAgentInput::UserQuery {
+            query: "inspect this".to_string(),
+            context: Vec::new().into(),
+            static_query_type: None,
+            referenced_attachments: Default::default(),
+            user_query_mode: mode,
+            running_command: None,
+            intended_agent: None,
+        };
+        let prompt = super::prompt_from_inputs(&[input], &[]).unwrap();
+        assert_eq!(prompt.plan_mode, expected_plan);
+        assert_eq!(prompt.query, expected_query);
+        assert_eq!(prompt.query_for_agent(), "inspect this");
+        let frame = super::super::ClaudeProtocol::user_message(&prompt, Some("native-history"));
+        assert_eq!(frame["message"]["content"][0]["text"], "inspect this");
+        assert_eq!(frame["session_id"], "native-history");
+    }
+}

@@ -6,6 +6,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use async_process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use command::r#async::Command;
 use futures_lite::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use semver::Version;
 use serde_json::Value;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -169,6 +170,54 @@ impl ProcessLaunch {
             }
         }
         launch
+    }
+
+    /// Keep the native conversation while restricting a /plan turn to research
+    /// and the CLI's own plan document. Normal turns use `for_session` again.
+    pub(crate) fn for_plan_session(
+        target: &SubscriptionTarget,
+        session: Option<&str>,
+        location: ProcessLocation,
+    ) -> Result<Self> {
+        if target.installation.agent == SubscriptionAgent::Codex {
+            // A read-only filesystem sandbox does not restrict inherited MCP/app
+            // tools, and collaboration-mode fields are not a stable v2 contract.
+            bail!("/plan with Codex is unavailable because a read-only turn cannot be reliably enforced; select Claude Code for this command");
+        }
+        // 2.1.169 introduced safe mode; 2.1.212 guarantees that plan-mode
+        // write operations cannot bypass the host permission callback.
+        let version = target
+            .installation
+            .version
+            .split_whitespace()
+            .find_map(|part| Version::parse(part.trim_start_matches('v')).ok());
+        if !version
+            .is_some_and(|version| version.pre.is_empty() && version >= Version::new(2, 1, 212))
+        {
+            bail!("/plan requires Claude Code 2.1.212 or newer; update the selected CLI before planning");
+        }
+        let mut launch = Self::for_session(target, session, location);
+        let permission_mode = launch
+            .args
+            .iter()
+            .position(|argument| argument == "--permission-mode")
+            .context("Claude launch is missing its permission mode")?;
+        launch.args[permission_mode + 1] = "plan".to_string();
+        launch.args.extend([
+            "--tools".to_string(),
+            // Claude's native plan policy allows writes to its plan document;
+            // all other edit approvals are denied by SubscriptionSession.
+            "Read,Glob,Grep,Write,Edit".to_string(),
+            "--safe-mode".to_string(),
+            "--strict-mcp-config".to_string(),
+            "--mcp-config".to_string(),
+            r#"{"mcpServers":{}}"#.to_string(),
+            "--setting-sources".to_string(),
+            String::new(),
+            "--disable-slash-commands".to_string(),
+            "--no-chrome".to_string(),
+        ]);
+        Ok(launch)
     }
 
     /// A fresh review process must not inherit tools or customizations that can

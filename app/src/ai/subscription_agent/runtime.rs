@@ -7,7 +7,7 @@ use super::{
     SubscriptionSession, SubscriptionSessionRegistry, SubscriptionTarget,
     LOCAL_SUBSCRIPTION_HOST_ID,
 };
-use crate::ai::agent::{api, AIAgentContext, AIAgentInput, AIIdentifiers};
+use crate::ai::agent::{api, AIAgentContext, AIAgentInput, AIIdentifiers, UserQueryMode};
 use crate::ai::api_error::AIApiError;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, SessionContext};
 use crate::ai::facts::{AIFact, AIFactObjectModel};
@@ -713,7 +713,7 @@ pub(crate) async fn generate_subscription_output(
             registry.set_target(conversation_id.clone(), target.clone());
             let mut session = match with_timeout(
                 "subscription agent initialization",
-                SubscriptionSession::open(target.clone(), resume, location),
+                SubscriptionSession::open_for_prompt(target.clone(), resume, location, &prompt),
             )
             .await
             {
@@ -1069,8 +1069,34 @@ fn prompt_from_inputs(
     }
     let mut prompt = SubscriptionPrompt {
         query,
+        plan_mode: inputs.iter().any(|input| {
+            matches!(
+                input,
+                AIAgentInput::UserQuery {
+                    user_query_mode: UserQueryMode::Plan,
+                    ..
+                }
+            )
+        }),
         ..Default::default()
     };
+    if prompt.plan_mode {
+        // Mode selection happens before launch, not through a second CLI slash
+        // command. Keep the original /plan text only for local conversation UI.
+        prompt.native_query = Some(
+            inputs
+                .iter()
+                .filter_map(|input| {
+                    if let AIAgentInput::UserQuery { query, .. } = input {
+                        Some(query.clone())
+                    } else {
+                        input.user_query()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        );
+    }
     let mut attached_context = Vec::new();
     if !user_rules.is_empty() {
         attached_context.push(serde_json::json!({ "user_rules": user_rules }));
