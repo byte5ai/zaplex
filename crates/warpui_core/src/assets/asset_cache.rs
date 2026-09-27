@@ -223,7 +223,7 @@ impl AssetCache {
     }
 
     /// Removes the least recently added raw assets until the total size is within the limit.
-    fn evict_raw_assets_if_needed(&self, ctx: &ModelContext<Self>) -> Vec<u32> {
+    fn evict_raw_assets_if_needed(&self, ctx: &ModelContext<Self>) -> Vec<String> {
         let mut total_size = self.get_total_raw_asset_size();
         let mut assets = self.inner.borrow_mut();
 
@@ -252,7 +252,7 @@ impl AssetCache {
         // Sort by timestamp (oldest first)
         raw_assets.sort_by_key(|&(_, timestamp, _)| timestamp);
 
-        let mut evicted_image_ids = vec![];
+        let mut evicted_asset_ids = vec![];
 
         // Evict until within the limit
         for (handle, _, size_in_bytes) in raw_assets {
@@ -265,14 +265,12 @@ impl AssetCache {
                     ImageCache::as_ref(ctx).evict_image(&handle.source);
                     total_size -= size_in_bytes;
 
-                    if let Ok(id) = id.parse::<u32>() {
-                        evicted_image_ids.push(id);
-                    }
+                    evicted_asset_ids.push(id.clone());
                 }
             }
         }
 
-        evicted_image_ids
+        evicted_asset_ids
     }
 
     /// The main API of the asset cache. Given the location of an asset, returns an indicator of the
@@ -366,10 +364,10 @@ impl AssetCache {
         ImageCache::as_ref(ctx).evict_image(&source);
 
         drop(assets);
-        let image_ids = self.evict_raw_assets_if_needed(ctx);
+        let asset_ids = self.evict_raw_assets_if_needed(ctx);
 
-        if !image_ids.is_empty() {
-            ctx.emit(AssetCacheEvent::ImagesEvicted { image_ids });
+        if !asset_ids.is_empty() {
+            ctx.emit(AssetCacheEvent::ImagesEvicted { asset_ids });
         }
     }
 
@@ -408,10 +406,10 @@ impl AssetCache {
         ImageCache::as_ref(ctx).evict_image(&source);
 
         drop(assets);
-        let image_ids = self.evict_raw_assets_if_needed(ctx);
+        let asset_ids = self.evict_raw_assets_if_needed(ctx);
 
-        if !image_ids.is_empty() {
-            ctx.emit(AssetCacheEvent::ImagesEvicted { image_ids });
+        if !asset_ids.is_empty() {
+            ctx.emit(AssetCacheEvent::ImagesEvicted { asset_ids });
         }
     }
 
@@ -521,7 +519,7 @@ impl AssetCache {
 
 #[derive(Debug, Clone)]
 pub enum AssetCacheEvent {
-    ImagesEvicted { image_ids: Vec<u32> },
+    ImagesEvicted { asset_ids: Vec<String> },
 }
 
 impl Entity for AssetCache {

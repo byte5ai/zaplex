@@ -33,6 +33,10 @@ use crate::{
 #[cfg(feature = "local_fs")]
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
 
+#[cfg(feature = "local_tty")]
+use crate::terminal::{available_shells::AvailableShells, shell::ShellType, ShellLaunchData};
+#[cfg(feature = "local_tty")]
+use warp_core::command::ExitCode;
 use warp_core::execution_mode::AppExecutionMode;
 
 use super::{
@@ -811,12 +815,47 @@ fn handle_terminal_view_event(
                 });
             }
             Event::CopyFileToRemote { command, upload_id } => {
-                let new_pane_id = group.insert_terminal_pane(
-                    Direction::Right,
-                    pane_id,
-                    None, /*chosen_shell*/
-                    ctx,
-                );
+                // The upload plan contains host-native paths and OS-specific shell syntax.
+                // Never run it in a user-default WSL/container or incompatible shell.
+                #[cfg(feature = "local_tty")]
+                let chosen_shell = {
+                    let shell = AvailableShells::handle(ctx).read(ctx, |shells, _| {
+                        shells.get_available_shells().find(|shell| {
+                            matches!(shell.get_valid_shell_path_and_type(),
+                                Some(ShellLaunchData::Executable { shell_type, .. })
+                                    if if cfg!(windows) {
+                                        shell_type == ShellType::PowerShell
+                                    } else {
+                                        matches!(shell_type, ShellType::Bash | ShellType::Zsh | ShellType::Fish)
+                                    })
+                        }).cloned()
+                    });
+                    let Some(shell) = shell else {
+                        if let Some(view) = group.terminal_view_from_pane_id(terminal_pane_id, ctx)
+                        {
+                            let upload = view.read(ctx, |view, _| view.ssh_file_upload().clone());
+                            upload.update(ctx, |upload, ctx| {
+                                upload.file_upload_finished(*upload_id, &ExitCode::from(1), ctx);
+                            });
+                        }
+                        ctx.emit(pane_group::Event::ShowToast {
+                            message: if cfg!(windows) {
+                                "File upload requires an installed native PowerShell.".to_string()
+                            } else {
+                                "File upload requires an installed native Bash, Zsh, or Fish shell."
+                                    .to_string()
+                            },
+                            flavor: ToastFlavor::Error,
+                            pane_id: Some(pane_id),
+                        });
+                        return;
+                    };
+                    Some(shell)
+                };
+                #[cfg(not(feature = "local_tty"))]
+                let chosen_shell = None;
+                let new_pane_id =
+                    group.insert_terminal_pane(Direction::Right, pane_id, chosen_shell, ctx);
 
                 group.hide_pane_for_job(new_pane_id.into(), ctx);
 

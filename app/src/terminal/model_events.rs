@@ -289,16 +289,16 @@ impl ModelEventDispatcher {
             Event::ShellSpawned(shell_type) => ModelEvent::ShellSpawned(shell_type),
             Event::SendCompletionsPrompt => ModelEvent::SendCompletionsPrompt,
             Event::ImageReceived {
-                image_id,
+                asset_id,
                 image_data,
                 image_protocol,
             } => ModelEvent::ImageReceived {
-                image_id,
+                asset_id,
                 image_data,
                 image_protocol,
             },
-            Event::AnimatedImageReceived { image_id, frames } => {
-                ModelEvent::AnimatedImageReceived { image_id, frames }
+            Event::AnimatedImageReceived { asset_id, frames } => {
+                ModelEvent::AnimatedImageReceived { asset_id, frames }
             }
             Event::BootstrapPrecmdDone => ModelEvent::BootstrapPrecmdDone,
             Event::AgentTaggedInChanged { is_tagged_in } => {
@@ -465,13 +465,13 @@ pub enum ModelEvent {
     CompletionsFinished(Vec<ShellCompletion>),
     SendCompletionsPrompt,
     ImageReceived {
-        image_id: u32,
+        asset_id: String,
         image_data: Vec<u8>,
         image_protocol: ImageProtocol,
     },
     /// See [`Event::AnimatedImageReceived`].
     AnimatedImageReceived {
-        image_id: u32,
+        asset_id: String,
         frames: Vec<(Vec<u8>, u32)>,
     },
     BootstrapPrecmdDone,

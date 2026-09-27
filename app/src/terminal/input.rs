@@ -1510,7 +1510,9 @@ pub struct Input {
     /// Setup command waiting for the shell bootstrap boundary. Kept separate
     /// from the editor so a restored user draft is never submitted in its place.
     pending_system_command: Option<String>,
-    executing_pending_system_command: bool,
+    /// The setup command never consumes the editor's draft. Preserve the live
+    /// buffer only when this exact block in this shell finishes.
+    system_command_draft: Option<(BlockId, SessionId)>,
     /// Ordinary editor submissions are disabled while a remote transport is
     /// attaching or replaying. The editor keeps its existing draft while its
     /// interaction state is visibly disabled; no text is queued for execution.
@@ -3180,7 +3182,7 @@ impl Input {
             debounce_input_background_tx,
             has_pending_command: false,
             pending_system_command: None,
-            executing_pending_system_command: false,
+            system_command_draft: None,
             ordinary_command_input_ready: true,
             ordinary_command_input_previous_interaction_state: None,
             last_word_insertion,
@@ -5805,21 +5807,19 @@ impl Input {
             return;
         }
 
-        self.executing_pending_system_command = pending_system_command.is_some();
-        let did_execute = self.try_execute_command(&command, ctx);
-        self.executing_pending_system_command = false;
-        if !did_execute {
+        if pending_system_command.is_some() {
+            // Setup may run before ordinary remote input is ready, but must not
+            // consume workflow/environment metadata or the draft's editor state.
+            let Some(identity) = self.emit_automatic_command(&command, ctx) else {
+                return;
+            };
+            self.file_manager_directory_input = None;
+            self.system_command_draft = Some(identity);
+        } else if !self.try_execute_command(&command, ctx) {
             return;
         }
         self.has_pending_command = false;
         self.pending_system_command = None;
-
-        if pending_system_command.is_some() {
-            let draft = self.buffer_text(ctx);
-            if !draft.is_empty() {
-                self.input_contents_before_prompt_chip_command = Some(draft);
-            }
-        }
 
         self.editor.update(ctx, |editor, ctx| {
             let interaction_state = if self.ordinary_command_input_ready {
@@ -5924,6 +5924,24 @@ impl Input {
         command: &str,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
+        if !self.ordinary_command_input_ready || self.has_pending_command {
+            return false;
+        }
+        let Some((block_id, session_id)) = self.emit_automatic_command(command, ctx) else {
+            return false;
+        };
+        self.file_manager_directory_input = Some(FileManagerDirectoryInput::Executing {
+            block_id,
+            session_id,
+        });
+        true
+    }
+
+    fn emit_automatic_command(
+        &mut self,
+        command: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<(BlockId, SessionId)> {
         let (is_shared, has_precmd, block_id) = {
             let model = self.model.lock();
             (
@@ -5932,21 +5950,10 @@ impl Input {
                 model.block_list().active_block_id().clone(),
             )
         };
-        if !self.ordinary_command_input_ready
-            || self.has_pending_command
-            || is_shared
-            || !has_precmd
-            || self.can_execute_command(ctx).is_no()
-        {
-            return false;
+        if is_shared || !has_precmd || self.can_execute_command(ctx).is_no() {
+            return None;
         }
-        let Some(session_id) = self.active_block_session_id() else {
-            return false;
-        };
-        self.file_manager_directory_input = Some(FileManagerDirectoryInput::Executing {
-            block_id,
-            session_id,
-        });
+        let session_id = self.active_block_session_id()?;
         ctx.emit(Event::ExecuteCommand(Box::new(ExecuteCommandEvent {
             command: command.to_string(),
             session_id,
@@ -5955,7 +5962,7 @@ impl Input {
             should_add_command_to_history: false,
             source: CommandExecutionSource::User,
         })));
-        true
+        Some((block_id, session_id))
     }
 
     pub fn try_execute_command(&mut self, command: &str, ctx: &mut ViewContext<Self>) -> bool {
@@ -6012,10 +6019,7 @@ impl Input {
         source: CommandExecutionSource,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        if matches!(&source, CommandExecutionSource::User)
-            && !self.ordinary_command_input_ready
-            && !self.executing_pending_system_command
-        {
+        if matches!(&source, CommandExecutionSource::User) && !self.ordinary_command_input_ready {
             log::debug!("Rejected ordinary command input before remote PTY readiness");
             return false;
         }
@@ -11572,7 +11576,6 @@ impl Input {
     pub(crate) fn cancel_pending_system_command(&mut self) {
         if self.pending_system_command.take().is_some() {
             self.has_pending_command = false;
-            self.executing_pending_system_command = false;
         }
     }
 
@@ -12845,6 +12848,16 @@ impl Input {
         // off the screen because we were forcing the long running command to be the same
         // size of the cleared input box.
         if let BlockType::User(user_block) = &block_completed_event.block_type {
+            let preserve_system_draft =
+                self.system_command_draft
+                    .as_ref()
+                    .is_some_and(|(block_id, session_id)| {
+                        block_id == &block_completed_event.block_id
+                            && Some(*session_id) == block_completed_event.session_id
+                    });
+            if preserve_system_draft {
+                self.system_command_draft = None;
+            }
             let matches_directory_block = match self.file_manager_directory_input.as_ref() {
                 Some(FileManagerDirectoryInput::Pending {
                     block_id,
@@ -12883,8 +12896,9 @@ impl Input {
             }
             // The automatic cd owns only its exact block. Type-ahead during a
             // preceding process is kept only when edited after command submission.
-            let should_clear_buffer =
-                !user_block.was_part_of_agent_interaction && !preserve_file_manager_draft;
+            let should_clear_buffer = !user_block.was_part_of_agent_interaction
+                && !preserve_file_manager_draft
+                && !preserve_system_draft;
             let latest_block_id = self.model.lock().block_list().active_block_id().clone();
             let input_contents_before_prompt_chip_command =
                 self.input_contents_before_prompt_chip_command.take();

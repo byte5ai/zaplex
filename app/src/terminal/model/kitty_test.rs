@@ -979,3 +979,31 @@ fn positional_delete_uses_visible_coordinates_after_scrolling() {
         assert!(!terminal.image_id_to_metadata.contains_key(&2));
     }
 }
+
+
+#[test]
+fn image_cache_eviction_is_scoped_to_one_transmission_in_one_terminal() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let mut first = terminal_with_stored_image();
+    let mut second = terminal_with_stored_image();
+    let first_asset = first.image_id_to_metadata[&1].asset_id();
+    let second_asset = second.image_id_to_metadata[&1].asset_id();
+    assert_ne!(first_asset, second_asset);
+
+    // Global cache notifications reach every terminal, including one whose
+    // application reused the same protocol id for a different image.
+    first.remove_image_asset_metadata(&first_asset);
+    second.remove_image_asset_metadata(&first_asset);
+    assert!(!first.image_id_to_metadata.contains_key(&1));
+    assert_eq!(second.image_id_to_metadata[&1].asset_id(), second_asset);
+
+    // An eviction queued for an earlier transmission must not remove its
+    // replacement, even though the client deliberately reused the protocol id.
+    second.process_bytes(kitty_apc("a=t,i=1,f=24,s=1,v=1", &[0, 0xff, 0]).as_str());
+    let replacement_asset = second.image_id_to_metadata[&1].asset_id();
+    assert_ne!(replacement_asset, second_asset);
+    second.remove_image_asset_metadata(&second_asset);
+    assert_eq!(second.image_id_to_metadata[&1].asset_id(), replacement_asset);
+    second.remove_image_asset_metadata(&replacement_asset);
+    assert!(!second.image_id_to_metadata.contains_key(&1));
+}

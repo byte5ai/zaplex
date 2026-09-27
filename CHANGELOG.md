@@ -4,6 +4,12 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Terminalbilder (#245) erhalten pro Übertragung einen eigenen Cache-Schlüssel. Gleiche Kitty-Bildnummern in verschiedenen Terminals überschreiben einander nicht; verspätetes Aufräumen entfernt keine neu übertragenen Bilder.
+
+- Automatische SSH-Starts (#245) erhalten den aktuellen Eingabeentwurf sowie ausgewählte Workflows und Umgebungsdaten. Nur der zugehörige Systembefehl darf den Entwurf beim Abschluss erhalten.
+
+- SSH-Dateiuploads (#245/#464) geben SFTP-Fehler zuverlässig als Fehlerstatus weiter und verwenden eine passende native Shell. PowerShell übergibt die UTF-8-Batchdatei direkt an SFTP.
+
 - SSH-Automatik (#245) wartet auf den zugehörigen Verbindungsstart. Abbruch, Verbindungsende oder ein neuer Befehl verwerfen wartende Passwort- und Startbefehle; Askpass-Dateien bleiben bis zur Anmeldung erhalten und werden bei Abbruch entfernt.
 
 - SFTP-Arbeitskopien (#245/#464) bleiben bei ausstehenden oder fehlgeschlagenen Uploads nach dem Schließen erhalten; Fehlermeldungen nennen den Wiederherstellungspfad. Erfolgreich übertragene Kopien werden wie bisher aufgeräumt.

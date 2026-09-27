@@ -1786,8 +1786,9 @@ impl TerminalModel {
         &mut self.block_list
     }
 
-    pub fn remove_image_id_to_metadata_entry(&mut self, image_id: u32) {
-        self.image_id_to_metadata.remove(&image_id);
+    pub fn remove_image_asset_metadata(&mut self, asset_id: &str) {
+        self.image_id_to_metadata
+            .retain(|_, metadata| metadata.asset_id() != asset_id);
     }
 
     /// Runs `evict` against every grid that can hold images: the alternate screen
@@ -1976,7 +1977,10 @@ impl TerminalModel {
         };
 
         self.event_proxy
-            .send_terminal_event(Event::AnimatedImageReceived { image_id, frames });
+            .send_terminal_event(Event::AnimatedImageReceived {
+                asset_id: metadata.asset_id.clone(),
+                frames,
+            });
 
         Ok(())
     }

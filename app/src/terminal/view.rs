@@ -3924,10 +3924,10 @@ impl TerminalView {
             .or_default();
 
         ctx.subscribe_to_model(&AssetCache::handle(ctx), |me, _, event, _| match event {
-            AssetCacheEvent::ImagesEvicted { image_ids } => {
+            AssetCacheEvent::ImagesEvicted { asset_ids } => {
                 let mut terminal_model = me.model.lock();
-                for &image_id in image_ids {
-                    terminal_model.remove_image_id_to_metadata_entry(image_id);
+                for asset_id in asset_ids {
+                    terminal_model.remove_image_asset_metadata(asset_id);
                 }
             }
         });
@@ -11102,13 +11102,13 @@ impl TerminalView {
             ModelEvent::CompletionsFinished(_data) => {}
             ModelEvent::SendCompletionsPrompt => {}
             ModelEvent::ImageReceived {
-                image_id,
+                asset_id,
                 image_data,
                 image_protocol,
             } => {
                 AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
                     asset_cache.insert_raw_asset_bytes::<ImageType>(
-                        image_id.to_string(),
+                        asset_id.clone(),
                         &image_data[..],
                         ctx,
                     );
@@ -11121,13 +11121,13 @@ impl TerminalView {
                     ctx
                 );
             }
-            ModelEvent::AnimatedImageReceived { image_id, frames } => {
+            ModelEvent::AnimatedImageReceived { asset_id, frames } => {
                 AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
-                    let Some(asset) = build_animated_image(asset_cache, *image_id, frames) else {
+                    let Some(asset) = build_animated_image(asset_cache, asset_id, frames) else {
                         return;
                     };
 
-                    asset_cache.insert_asset::<ImageType>(image_id.to_string(), asset, ctx);
+                    asset_cache.insert_asset::<ImageType>(asset_id.clone(), asset, ctx);
                 });
                 ctx.notify();
             }
@@ -12527,12 +12527,12 @@ fn build_onboarding_keybindings(ctx: &AppContext) -> OnboardingKeybindings {
 /// only the frames transmitted after it travel with the event.
 fn build_animated_image(
     asset_cache: &AssetCache,
-    image_id: u32,
+    asset_id: &str,
     frames: &[(Vec<u8>, u32)],
 ) -> Option<ImageType> {
     let mut images: Vec<(Arc<StaticImage>, u32)> = Vec::new();
 
-    if let Some(root) = cached_image(asset_cache, image_id) {
+    if let Some(root) = cached_image(asset_cache, asset_id) {
         images.push((root, DEFAULT_FRAME_GAP_MS));
     }
 
@@ -12540,7 +12540,7 @@ fn build_animated_image(
         match ImageType::try_from_bytes(data) {
             Ok(ImageType::StaticBitmap { image }) => images.push((image, *gap_ms)),
             Ok(_) | Err(_) => {
-                log::warn!("Could not decode an animation frame of kitty image {image_id}");
+                log::warn!("Could not decode an animation frame of kitty image {asset_id}");
             }
         }
     }
@@ -12567,9 +12567,9 @@ fn build_animated_image(
 
 /// The decoded image the asset cache holds for an image id. Once an animation
 /// has been built for it, its first frame is that same image.
-fn cached_image(asset_cache: &AssetCache, image_id: u32) -> Option<Arc<StaticImage>> {
+fn cached_image(asset_cache: &AssetCache, asset_id: &str) -> Option<Arc<StaticImage>> {
     let AssetState::Loaded { data } = asset_cache.load_asset::<ImageType>(AssetSource::Raw {
-        id: image_id.to_string(),
+        id: asset_id.to_string(),
     }) else {
         return None;
     };

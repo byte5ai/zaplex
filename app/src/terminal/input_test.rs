@@ -7525,3 +7525,186 @@ fn file_manager_directory_pending_preserves_identical_retyped_draft() {
         });
     });
 }
+
+#[test]
+fn system_setup_completion_preserves_latest_draft_and_normal_submit_consumes_it() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let completed_id = terminal.read(&app, |view, _| {
+            view.model.lock().block_list().active_block_id().clone()
+        });
+        let (tx, rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let crate::terminal::view::Event::BlockCompleted { block, .. } = event {
+                    if block.id == completed_id {
+                        tx.try_send(()).unwrap();
+                    }
+                }
+            });
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("echo original-draft", ctx);
+            input.set_ordinary_command_input_ready(false, ctx);
+            input.set_pending_system_command("ssh example.invalid".to_string());
+            input.execute_pending_command(ctx);
+            assert!(input.system_command_draft.is_some());
+            assert!(input.input_contents_before_prompt_chip_command.is_none());
+        });
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .simulate_long_running_block("ssh example.invalid", "remote ready");
+        });
+        input.update(&mut app, |input, ctx| {
+            input.set_ordinary_command_input_ready(true, ctx);
+            input.replace_buffer_content("echo newest-draft", ctx);
+        });
+        terminal.update(&mut app, |view, _| view.model.lock().finish_block());
+        rx.recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("system setup block must complete")
+            .unwrap();
+        input.update(&mut app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "echo newest-draft");
+            assert!(input.system_command_draft.is_none());
+            assert!(input.try_execute_command("echo newest-draft", ctx));
+            assert!(
+                input.system_command_draft.is_none(),
+                "ordinary submission has no setup exemption"
+            );
+        });
+    });
+}
+
+#[test]
+fn system_setup_draft_marker_cannot_protect_another_shells_completion() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let completed_id = terminal.read(&app, |view, _| {
+            view.model.lock().block_list().active_block_id().clone()
+        });
+        let (tx, rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let crate::terminal::view::Event::BlockCompleted { block, .. } = event {
+                    if block.id == completed_id {
+                        tx.try_send(()).unwrap();
+                    }
+                }
+            });
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("echo consumed", ctx);
+            assert!(input.try_execute_command("echo consumed", ctx));
+            let (block, _) = input.submitted_input.as_ref().unwrap();
+            let other_session = SessionId::from(987654u64);
+            assert_ne!(Some(other_session), input.active_block_session_id());
+            input.system_command_draft = Some((block.clone(), other_session));
+        });
+        terminal.update(&mut app, |view, _| {
+            view.model.lock().simulate_block("echo consumed", "done");
+        });
+        rx.recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("ordinary block must complete")
+            .unwrap();
+        input.read(&app, |input, ctx| {
+            assert_eq!(
+                input.buffer_text(ctx),
+                "",
+                "a foreign shell marker cannot retain consumed input"
+            );
+        });
+    });
+}
+
+#[test]
+fn system_setup_preserves_workflow_and_environment_without_borrowing_their_metadata() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let completed_id = terminal.read(&app, |view, _| {
+            view.model.lock().block_list().active_block_id().clone()
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let selected_env = SyncId::ClientId(ClientId::new());
+        let (complete_tx, complete_rx) = async_channel::bounded(1);
+        let (command_tx, command_rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let crate::terminal::view::Event::BlockCompleted { block, .. } = event {
+                    if block.id == completed_id {
+                        complete_tx.try_send(()).unwrap();
+                    }
+                }
+            });
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if let Event::ExecuteCommand(event) = event {
+                    command_tx
+                        .try_send((
+                            event.command.clone(),
+                            event.workflow_id,
+                            event.workflow_command.clone(),
+                            event.should_add_command_to_history,
+                        ))
+                        .unwrap();
+                }
+            });
+        });
+        input.update(&mut app, |input, ctx| {
+            input.show_workflows_info_box_on_workflow_selection(
+                WorkflowType::Local(Workflow::new("draft workflow", "echo workflow-draft")),
+                WorkflowSource::Global,
+                WorkflowSelectionSource::Undefined,
+                None,
+                ctx,
+            );
+            input.env_var_collection_state.selected_env_vars = Some(selected_env);
+            input.set_ordinary_command_input_ready(false, ctx);
+            input.set_pending_system_command("ssh example.invalid".to_string());
+            input.execute_pending_command(ctx);
+            assert!(!input.has_pending_command());
+            assert!(input.workflows_state.selected_workflow_state.is_some());
+            assert_eq!(
+                input.env_var_collection_state.selected_env_vars,
+                Some(selected_env)
+            );
+            assert_eq!(input.buffer_text(ctx), "echo workflow-draft");
+        });
+        assert_eq!(
+            command_rx
+                .recv()
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .unwrap()
+                .unwrap(),
+            ("ssh example.invalid".to_string(), None, None, false)
+        );
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .simulate_block("ssh example.invalid", "done");
+        });
+        complete_rx
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .unwrap()
+            .unwrap();
+        input.read(&app, |input, ctx| {
+            assert!(input.workflows_state.selected_workflow_state.is_some());
+            assert_eq!(
+                input.env_var_collection_state.selected_env_vars,
+                Some(selected_env)
+            );
+            assert_eq!(input.buffer_text(ctx), "echo workflow-draft");
+        });
+    });
+}

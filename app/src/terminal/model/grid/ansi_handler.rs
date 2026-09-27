@@ -1369,7 +1369,7 @@ impl ansi::Handler for GridHandler {
         self.ansi_handler_state
             .event_proxy
             .send_terminal_event(Event::ImageReceived {
-                image_id,
+                asset_id: image_id.to_string(),
                 image_data: image.data,
                 image_protocol: ImageProtocol::ITerm,
             });
@@ -1785,7 +1785,7 @@ impl GridHandler {
                 self.ansi_handler_state
                     .event_proxy
                     .send_terminal_event(Event::ImageReceived {
-                        image_id: action.image_id,
+                        asset_id: metadata.asset_id.clone(),
                         image_data: action.image.data,
                         image_protocol: ImageProtocol::Kitty,
                     });
@@ -1821,7 +1821,7 @@ impl GridHandler {
                     self.ansi_handler_state
                         .event_proxy
                         .send_terminal_event(Event::ImageReceived {
-                            image_id: action.image_id,
+                            asset_id: metadata.asset_id.clone(),
                             image_data: action.image.data,
                             image_protocol: ImageProtocol::Kitty,
                         });
@@ -1862,7 +1862,7 @@ impl GridHandler {
                 self.ansi_handler_state
                     .event_proxy
                     .send_terminal_event(Event::ImageReceived {
-                        image_id: action.image_id,
+                        asset_id: metadata.asset_id.clone(),
                         image_data: action.image.data,
                         image_protocol: ImageProtocol::Kitty,
                     });

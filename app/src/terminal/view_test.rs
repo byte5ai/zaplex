@@ -5651,3 +5651,67 @@ fn live_su_confirmation_injects_the_selected_password_once() {
         assert_eq!(*writes.borrow(), vec![b"root-secret\n".to_vec()]);
     });
 }
+
+
+#[test]
+fn terminals_with_matching_kitty_ids_keep_distinct_pixels_and_animation_roots() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let first = add_window_with_terminal(&mut app, None);
+        let second = add_window_with_terminal(&mut app, None);
+        let first_asset = first.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.simulate_cmd("kitty");
+            model.process_bytes("\x1b_Ga=t,i=1,f=24,s=1,v=1;/wAA\x1b\\");
+            model.image_id_to_metadata[&1].asset_id()
+        });
+        let second_asset = second.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.simulate_cmd("kitty");
+            model.process_bytes("\x1b_Ga=T,U=1,i=1,f=24,s=1,v=1;AP8A\x1b\\");
+            model.image_id_to_metadata[&1].asset_id()
+        });
+        assert_ne!(first_asset, second_asset);
+        assert_eventually!(
+            cached_image(AssetCache::as_ref(&app), &first_asset).is_some()
+                && cached_image(AssetCache::as_ref(&app), &second_asset).is_some(),
+            "both terminal image events must reach the shared cache"
+        );
+        assert_eq!(
+            cached_image(AssetCache::as_ref(&app), &first_asset)
+                .unwrap().rgba_bytes(),
+            &[0xff, 0, 0, 0xff]
+        );
+        assert_eq!(
+            cached_image(AssetCache::as_ref(&app), &second_asset)
+                .unwrap().rgba_bytes(),
+            &[0, 0xff, 0, 0xff]
+        );
+
+        first.update(&mut app, |view, _| {
+            view.model.lock().process_bytes(
+                "\x1b_Ga=f,i=1,f=24,s=1,v=1;AAD/\x1b\\",
+            );
+        });
+        assert_eventually!(
+            matches!(
+                AssetCache::as_ref(&app).load_asset::<ImageType>(AssetSource::Raw {
+                    id: first_asset.clone(),
+                }),
+                AssetState::Loaded { data } if matches!(&*data, ImageType::AnimatedBitmap { .. })
+            ),
+            "animation updates must address the originating terminal image"
+        );
+        assert_eq!(
+            cached_image(AssetCache::as_ref(&app), &first_asset)
+                .unwrap().rgba_bytes(),
+            &[0xff, 0, 0, 0xff]
+        );
+        assert_eq!(
+            cached_image(AssetCache::as_ref(&app), &second_asset)
+                .unwrap().rgba_bytes(),
+            &[0, 0xff, 0, 0xff]
+        );
+    });
+}

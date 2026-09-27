@@ -134,7 +134,7 @@ pub enum Event {
     ShellSpawned(ShellType),
     SendCompletionsPrompt,
     ImageReceived {
-        image_id: u32,
+        asset_id: String,
         image_data: Vec<u8>,
         image_protocol: ImageProtocol,
     },
@@ -142,7 +142,7 @@ pub enum Event {
     /// follow frame 1, which is the already-received image itself; an empty list
     /// means the animation is stopped.
     AnimatedImageReceived {
-        image_id: u32,
+        asset_id: String,
         frames: Vec<(Vec<u8>, u32)>,
     },
     BootstrapPrecmdDone,
@@ -484,13 +484,13 @@ impl Debug for Event {
             Event::TextSelectionChanged => write!(f, "TextSelectionChanged"),
             Event::ShellSpawned(shell_type) => write!(f, "ShellSpawned({shell_type:?})"),
             Event::SendCompletionsPrompt => write!(f, "SendCompletionsPrompt"),
-            Event::ImageReceived { image_id, .. } => {
-                write!(f, "ImageReceived(image_id: {image_id})")
+            Event::ImageReceived { asset_id, .. } => {
+                write!(f, "ImageReceived(asset_id: {asset_id})")
             }
-            Event::AnimatedImageReceived { image_id, frames } => {
+            Event::AnimatedImageReceived { asset_id, frames } => {
                 write!(
                     f,
-                    "AnimatedImageReceived(image_id: {image_id}, frames: {})",
+                    "AnimatedImageReceived(asset_id: {asset_id}, frames: {})",
                     frames.len()
                 )
             }

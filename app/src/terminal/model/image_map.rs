@@ -390,6 +390,13 @@ pub enum StoredImageMetadata {
 }
 
 impl StoredImageMetadata {
+    pub fn asset_id(&self) -> String {
+        match self {
+            StoredImageMetadata::ITerm(metadata) => metadata.id.to_string(),
+            StoredImageMetadata::Kitty(metadata) => metadata.asset_id.clone(),
+        }
+    }
+
     pub fn image_size(&self) -> Vector2F {
         match self {
             StoredImageMetadata::ITerm(metadata) => metadata.image_size,
