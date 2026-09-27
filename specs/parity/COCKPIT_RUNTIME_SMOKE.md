@@ -1,7 +1,8 @@
 # Cockpit parity runtime smoke
 
 This is the manual half of the GH-160/GH-169 parity gate. The automated matrix validates fixtures,
-focused Rust tests, the UI contract, and freshly synchronized reference revisions. This procedure
+focused Rust tests, real production-code mutation probes (see `BEHAVIOR_MUTATIONS.md`), the UI
+contract, and freshly synchronized reference revisions. This procedure
 validates the installed provider CLIs and the real local/remote transport that hermetic CI cannot
 represent.
 

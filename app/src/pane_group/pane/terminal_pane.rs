@@ -15,7 +15,7 @@ use crate::{
     app_state::{
         release_daemon_pty_claim_for_terminal_view, remove_remote_terminal_identity,
         remove_temporary_file_manager_replacement, update_remote_terminal_pane_state,
-        AmbientAgentPaneSnapshot, LeafContents, TerminalPaneSnapshot,
+        AmbientAgentPaneSnapshot, LeafContents, RemoteTerminalPaneState, TerminalPaneSnapshot,
     },
     pane_group::{self, Direction, Event::OpenConversationHistory, PaneGroup},
     persistence::{BlockCompleted, ModelEvent},
@@ -370,6 +370,7 @@ impl PaneContent for TerminalPane {
 
             LeafContents::Terminal(TerminalPaneSnapshot {
                 uuid: self.uuid.clone(),
+                remote_state: RemoteTerminalPaneState::capture(&self.uuid),
                 cwd: None,
                 cli_agent_binding: None,
                 is_active,
@@ -393,6 +394,7 @@ impl PaneContent for TerminalPane {
             } else {
                 LeafContents::Terminal(TerminalPaneSnapshot {
                     uuid: self.uuid.clone(),
+                    remote_state: RemoteTerminalPaneState::capture(&self.uuid),
                     cwd: None,
                     cli_agent_binding: None,
                     is_active,
@@ -439,6 +441,7 @@ impl PaneContent for TerminalPane {
 
             LeafContents::Terminal(TerminalPaneSnapshot {
                 uuid: self.uuid.clone(),
+                remote_state: RemoteTerminalPaneState::capture(&self.uuid),
                 cwd,
                 cli_agent_binding,
                 is_active,

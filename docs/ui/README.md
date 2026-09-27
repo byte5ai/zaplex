@@ -43,6 +43,7 @@ bereits vorhandene Implementierung. Sie erklärt diese **nicht** nachträglich f
 | Bereich | Im Mockup prüfen | Nativ zusätzlich nachweisen |
 |---|---|---|
 | Sidebar | Cockpit/Verbindungen über die vorhandenen Icons; gleiche Hierarchie, abgesetzte durchgehende Fläche, kein zusätzlicher Shell-Sessions-Link | Hell/Dunkel/Kontrast, lange Identitäten, reale Mindestbreite |
+| Wartezustand | Nur amberne Wartepunkte pulsieren: 1,6 s, auslaufender Ring bis 2× Kerngröße; bei Reduced Motion bleibt ein statischer Halo sichtbar | Native Animation und Betriebssystemeinstellung bestätigen |
 | Konten | 5 h und Woche untereinander; Konto-Klick ergänzt/fokussiert Details, übrige Panes bleiben erhalten | Echte Kontenzuordnung, Zustände und Datenherkunft |
 | Titel | Pane-Titel aus Host und Verzeichnis; Tabtitel folgt der fokussierten Pane, kein erfundener Gruppenname | Explizite Tabtitel, reale Verzeichniswechsel und Restore |
 | Favoriten | Hostname verbindet direkt; separates `⋯` öffnet seitlich bei sichtbar bleibendem Elternmenü | Einmaliger Verbindungsaufbau, Tastatur, Randplatzierung und Fokusrückgabe |
@@ -55,7 +56,7 @@ bereits vorhandene Implementierung. Sie erklärt diese **nicht** nachträglich f
 - Shellausgaben, Kontoverbrauch, Dateien, Transfers und Reconnect sind ausschließlich simuliert.
 - Drag & Drop bestehender Panes ist im Mockup **nicht implementiert**; #462 und native Abnahme bleiben maßgeblich.
 - Agent-Start, Verbindungsbearbeitung und einige vorhandene Sidebar-Werkzeuge sind Vorschau/Platzhalter.
-- Statusanimationen, reale Fehler-/Ladezustände und sämtliche Plattformdetails sind nicht vollständig simuliert.
+- Der Wartepuls und sein statischer Reduced-Motion-Halo sind simuliert und browsergeprüft; reale Fehler-/Ladezustände und sämtliche Plattformdetails sind nicht vollständig simuliert.
 - Browserprüfungen belegen nur die Funktionsfähigkeit dieser Referenz. Sie belegen weder native
   UI-Parität noch erfolgreiche echte Verbindungen oder die Abnahme von PR #465.
 

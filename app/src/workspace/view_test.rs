@@ -80,6 +80,7 @@ fn terminal_snapshot_leaf(uuid: Vec<u8>) -> PaneNodeSnapshot {
         custom_vertical_tabs_title: None,
         contents: LeafContents::Terminal(TerminalPaneSnapshot {
             uuid,
+            remote_state: Default::default(),
             cwd: Some("/tmp".to_string()),
             cli_agent_binding: None,
             shell_launch_data: None,
@@ -1201,42 +1202,6 @@ fn open_worktree_sidecar(workspace: &ViewHandle<Workspace>, app: &mut App) {
                 menu.set_selected_by_index(worktree_index, view_ctx);
             });
     });
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-#[ignore = "depends on decommissioned PersistedWorkspace"]
-fn test_worktree_sidecar_hover_takes_precedence_over_selection() {
-    unimplemented!(
-        "PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended"
-    );
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-#[ignore = "depends on decommissioned PersistedWorkspace"]
-fn test_worktree_sidecar_pointer_entry_does_not_select_top_repo() {
-    unimplemented!(
-        "PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended"
-    );
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-#[ignore = "depends on decommissioned PersistedWorkspace"]
-fn test_worktree_sidecar_close_via_select_item_executes_from_workspace() {
-    unimplemented!(
-        "PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended"
-    );
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-#[ignore = "depends on decommissioned PersistedWorkspace"]
-fn test_worktree_sidecar_search_editor_enter_executes_selection() {
-    unimplemented!(
-        "PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended"
-    );
 }
 
 /// RAII guard that removes tab config TOML files whose name starts with
@@ -3995,24 +3960,6 @@ fn test_unified_new_session_menu_includes_reopen_closed_session() {
             assert!(!reopen_item.is_disabled());
         });
     });
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-#[ignore = "depends on the decommissioned PersistedWorkspace"]
-fn test_worktree_sidecar_search_editor_proxies_navigation_and_escape() {
-    unimplemented!(
-        "PersistedWorkspace has been decommissioned, worktree sidecar repository list testing is paused"
-    );
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-#[ignore = "depends on the decommissioned PersistedWorkspace"]
-fn test_worktree_sidecar_hides_linked_worktrees_from_repo_list() {
-    unimplemented!(
-        "PersistedWorkspace has been decommissioned, worktree sidecar repository list testing is paused"
-    );
 }
 
 #[test]

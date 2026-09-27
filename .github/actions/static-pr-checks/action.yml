@@ -47,3 +47,19 @@ runs:
       run: python3 script/test-macos-bundle
       shell: bash
 
+    - name: Verify Cockpit matrix and mutation-gate fixtures
+      run: |
+        script/cockpit-parity-audit validate
+        script/cockpit-parity-audit self-test
+      shell: bash
+
+    - name: Verify suite-evidence parser fixtures
+      run: |
+        python3 -m venv "$RUNNER_TEMP/suite-evidence-parser"
+        "$RUNNER_TEMP/suite-evidence-parser/bin/python" -m pip install --only-binary=:all: --require-hashes -r script/test-suite-evidence-requirements.txt
+        PYTHONDONTWRITEBYTECODE=1 "$RUNNER_TEMP/suite-evidence-parser/bin/python" script/test-suite-evidence-tests
+      shell: bash
+
+    - name: Verify fork-only audit inventory fixtures
+      run: PYTHONDONTWRITEBYTECODE=1 python3 script/codebase-audit-fork-scope-tests
+      shell: bash

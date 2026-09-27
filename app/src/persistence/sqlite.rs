@@ -114,10 +114,11 @@ use crate::workspaces::workspace::Workspace as WorkspaceMetadata;
 use crate::workspaces::workspace::WorkspaceUid;
 use crate::{
     app_state::{
-        register_remote_terminal_identity, remote_terminal_identity,
-        remove_remote_terminal_identity, AppState, BranchSnapshot, CodePaneSnapShot,
+        register_remote_terminal_identity, remove_remote_terminal_identity, AppState,
+        BranchSnapshot, CodePaneSnapShot,
         CodePaneTabSnapshot, FileManagerPaneMode, LeafContents, LeafSnapshot, NotebookPaneSnapshot,
-        PaneFlex, PaneNodeSnapshot, RemoteTerminalIdentity, SplitDirection, TabSnapshot,
+        PaneFlex, PaneNodeSnapshot, RemoteTerminalIdentity, RemoteTerminalPaneState, SplitDirection,
+        TabSnapshot,
         TerminalPaneSnapshot, WindowSnapshot,
     },
     workspaces::user_profiles::UserProfileWithUID,
@@ -1434,28 +1435,33 @@ fn save_failed_remote_terminal_identity(
     Ok(())
 }
 
-fn read_remote_terminal_identity(
+fn read_remote_terminal_pane_state(
     conn: &mut SqliteConnection,
     terminal_pane_id: i32,
-) -> Result<Option<RemoteTerminalIdentity>> {
+) -> Result<RemoteTerminalPaneState> {
     let row = diesel::sql_query(
         "SELECT identity_json FROM remote_terminal_pane_identities WHERE terminal_pane_id = ?",
     )
     .bind::<diesel::sql_types::Integer, _>(terminal_pane_id)
     .get_result::<RemoteTerminalIdentityRow>(conn)
     .optional()?;
-    let Some(row) = row else {
-        return Ok(None);
+    let (identity, failed_restore) = match row {
+        Some(row) => match serde_json::from_str(&row.identity_json) {
+            Ok(identity) => (Some(identity), false),
+            Err(error) => {
+                log::warn!(
+                    "Ignoring invalid remote terminal identity for terminal pane {terminal_pane_id}: {error}"
+                );
+                (None, true)
+            }
+        },
+        None => (None, false),
     };
-    match serde_json::from_str(&row.identity_json) {
-        Ok(identity) => Ok(Some(identity)),
-        Err(error) => {
-            log::warn!(
-                "Ignoring invalid remote terminal identity for terminal pane {terminal_pane_id}: {error}"
-            );
-            Ok(None)
-        }
-    }
+    Ok(RemoteTerminalPaneState {
+        identity,
+        failed_restore,
+        temporary_file_manager: read_temporary_file_manager_replacement(conn, terminal_pane_id)?,
+    })
 }
 
 fn save_temporary_file_manager_replacement(
@@ -1847,15 +1853,13 @@ fn save_pane_state(
             if let Some(binding) = terminal_snapshot.cli_agent_binding.as_ref() {
                 save_terminal_pane_cli_agent_binding(conn, id, binding)?;
             }
-            if let Some(identity) = remote_terminal_identity(&terminal_snapshot.uuid) {
-                save_remote_terminal_identity(conn, id, &identity)?;
-            } else if crate::app_state::failed_remote_terminal_restore(&terminal_snapshot.uuid) {
+            if let Some(identity) = terminal_snapshot.remote_state.identity.as_ref() {
+                save_remote_terminal_identity(conn, id, identity)?;
+            } else if terminal_snapshot.remote_state.failed_restore {
                 save_failed_remote_terminal_identity(conn, id)?;
             }
-            if let Some(snapshot) =
-                crate::app_state::temporary_file_manager_replacement(&terminal_snapshot.uuid)
-            {
-                save_temporary_file_manager_replacement(conn, id, &snapshot)?;
+            if let Some(snapshot) = terminal_snapshot.remote_state.temporary_file_manager.as_ref() {
+                save_temporary_file_manager_replacement(conn, id, snapshot)?;
             }
         }
         LeafContents::Notebook(notebook_snapshot) => {
@@ -2998,6 +3002,7 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
 
                     let terminal_snapshot = TerminalPaneSnapshot {
                         uuid: terminal_pane.uuid,
+                        remote_state: read_remote_terminal_pane_state(conn, node.id)?,
                         cwd: terminal_pane.cwd,
                         cli_agent_binding,
                         is_active: terminal_pane.is_active,
@@ -3011,31 +3016,27 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                     };
                     remove_remote_terminal_identity(&terminal_snapshot.uuid);
                     crate::app_state::clear_failed_remote_terminal_restore(&terminal_snapshot.uuid);
-                    let has_remote_identity = diesel::sql_query(
-                        "SELECT identity_json FROM remote_terminal_pane_identities WHERE terminal_pane_id = ?",
-                    )
-                    .bind::<diesel::sql_types::Integer, _>(node.id)
-                    .get_result::<RemoteTerminalIdentityRow>(conn)
-                    .optional()?;
-                    match read_remote_terminal_identity(conn, node.id)? {
-                        Some(identity) => {
-                            register_remote_terminal_identity(&terminal_snapshot.uuid, identity)
-                        }
-                        None if has_remote_identity.is_some() => {
-                            crate::app_state::mark_failed_remote_terminal_restore(
-                                &terminal_snapshot.uuid,
-                            );
-                        }
-                        None => {}
+                    if let Some(identity) = terminal_snapshot.remote_state.identity.as_ref() {
+                        register_remote_terminal_identity(
+                            &terminal_snapshot.uuid,
+                            identity.clone(),
+                        );
+                    } else if terminal_snapshot.remote_state.failed_restore {
+                        crate::app_state::mark_failed_remote_terminal_restore(
+                            &terminal_snapshot.uuid,
+                        );
                     }
                     crate::app_state::remove_temporary_file_manager_replacement(
                         &terminal_snapshot.uuid,
                     );
-                    if let Some(snapshot) = read_temporary_file_manager_replacement(conn, node.id)?
+                    if let Some(snapshot) = terminal_snapshot
+                        .remote_state
+                        .temporary_file_manager
+                        .as_ref()
                     {
                         crate::app_state::register_temporary_file_manager_replacement(
                             &terminal_snapshot.uuid,
-                            snapshot,
+                            snapshot.clone(),
                         );
                     }
                     LeafContents::Terminal(terminal_snapshot)

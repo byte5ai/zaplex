@@ -225,7 +225,7 @@ jobs:
       - name: Initialize fail-closed audit artifacts
         run: |
           mkdir -p artifacts/logs artifacts/screenshots references
-          for report in contract-validation gate-self-test reference-revisions suite-results runtime-evidence; do
+          for report in contract-validation gate-self-test reference-revisions suite-results source-mutations runtime-evidence; do
             printf '{"schema_version":1,"status":"fail","errors":["step did not complete"]}\n' > "artifacts/${report}.json"
           done
           cp docs/ui/cockpit-sidebar-connections.html artifacts/cockpit-sidebar-connections.html
@@ -277,7 +277,7 @@ jobs:
         run: script/cockpit-parity-audit validate --output artifacts/contract-validation.json
         shell: bash
 
-      - name: Prove provider, host, and status regressions fail the gate
+      - name: Verify matrix and evidence validators reject invalid contracts
         id: self_test
         continue-on-error: true
         run: script/cockpit-parity-audit self-test --output artifacts/gate-self-test.json
@@ -323,6 +323,16 @@ jobs:
           script/cockpit-parity-audit run-suites
           --log-dir artifacts/logs
           --output artifacts/suite-results.json
+        shell: bash
+
+      - name: Reject real provider, host, and status regressions
+        id: mutations
+        if: steps.suites.outcome == 'success'
+        continue-on-error: true
+        run: >-
+          script/cockpit-parity-audit run-mutations
+          --log-dir artifacts/logs
+          --output artifacts/source-mutations.json
         shell: bash
 
       - name: Install pinned Chromium renderer
@@ -463,6 +473,7 @@ jobs:
           --self-test artifacts/gate-self-test.json
           --references artifacts/reference-revisions.json
           --suites artifacts/suite-results.json
+          --mutations artifacts/source-mutations.json
           --runtime artifacts/runtime-evidence.json
           --screenshot-dir artifacts/screenshots
           --output artifacts/cockpit-parity-report.json

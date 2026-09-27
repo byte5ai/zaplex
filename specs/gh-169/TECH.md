@@ -17,6 +17,22 @@ mandatory, ignored, and zero-execution test evidence. It additionally exercises 
 validator and archive extractor with valid synthetic fixtures and fail-closed mutations. Synthetic
 images are used only inside the validator self-test and are never reported as runtime evidence.
 
+### Production mutation gate
+
+Declaration self-tests alone do not satisfy the regression criterion. The full CI audit now
+runs `run-mutations` after the ordinary suites. It changes three production expressions in an
+isolated checkout of the recorded SHA: provider routing, stable host identity, and Codex completed
+turn state. Each original exact behavior test must pass before the same command runs against the
+mutant. Only one assertion-failed test with exit code 101 counts as a detected regression;
+compilation failures, empty filters, ignored tests, timeouts, and failed baselines fail the audit.
+The source is restored in `finally`, and the disposable checkout is removed.
+
+`source-mutations.json` and the original/mutant logs are required report inputs. Assembly checks
+all three cases against the recorded revision; missing or inconsistent evidence fails closed.
+See `specs/parity/BEHAVIOR_MUTATIONS.md` for the exact probes and build-free harness checks.
+Executing the mutations requires an authorized Cargo/CI run. A passing Python harness is evidence
+about this gate's implementation only.
+
 ### Runtime evidence validator
 
 `script/cockpit-parity-audit validate-runtime` takes an evidence directory and writes a
@@ -125,6 +141,7 @@ python3 -m py_compile script/cockpit-parity-audit
 git diff --check
 ```
 
-Cargo checks/tests and Playwright rendering run only in GitHub Actions. A real runtime pass can be
-produced only on a host with the built Zaplex revision, authenticated installed CLIs, and a real
-remote connection, following `specs/parity/COCKPIT_RUNTIME_SMOKE.md`.
+Cargo checks and Rust tests run only in explicitly authorized CI. Playwright may also verify the
+HTML reference locally without building Zaplex; such results cover only that reference. A real
+runtime pass requires the built Zaplex revision, authenticated installed CLIs, and a real remote
+connection, following `specs/parity/COCKPIT_RUNTIME_SMOKE.md`.

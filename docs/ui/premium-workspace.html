@@ -1389,8 +1389,11 @@ html&gt;body{padding:0}&lt;/style&gt;
 #zaplex-panes .zp-truncate{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 #zaplex-panes .zp-tree-row .zp-model{color:var(--zp-sub-text);font-size:11px;}
 #zaplex-panes .zp-empty-local{margin:2px 0 6px 32px;font-size:11px;color:var(--zp-sub-text);}
-#zaplex-panes .zp-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--zp-success);flex:none;}
-#zaplex-panes .zp-dot.wait{background:var(--zp-warning);box-shadow:0 0 0 3px color-mix(in srgb,var(--zp-warning) 20%,transparent);}
+#zaplex-panes .zp-dot{position:relative;display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--zp-success);flex:none;}
+#zaplex-panes .zp-dot.wait{background:var(--zp-warning);animation:zp-wait-core 1.6s ease-in-out infinite;}
+#zaplex-panes .zp-dot.wait::after{content:&quot;&quot;;position:absolute;inset:0;border:1px solid var(--zp-warning);border-radius:50%;box-sizing:border-box;pointer-events:none;animation:zp-wait-ring 1.6s ease-out infinite;}
+@keyframes zp-wait-ring{from{transform:scale(1);opacity:0.58;}to{transform:scale(2);opacity:0;}}
+@keyframes zp-wait-core{0%,100%{filter:brightness(1);}50%{filter:brightness(1.12);}}
 #zaplex-panes .zp-dot.idle{background:none;border:1px solid var(--zp-sub-text);}
 #zaplex-panes .zp-link{display:inline-flex;align-items:center;gap:6px;color:var(--zp-accent);font-size:12px;}
 #zaplex-panes .zp-account-list{padding:0 4px 4px;}
@@ -1558,7 +1561,7 @@ html&gt;body{padding:0}&lt;/style&gt;
 @media(max-width:850px){#zaplex-panes .zp-layout{grid-template-columns:238px minmax(0,1fr);}#zaplex-panes .zp-session-grid,#zaplex-panes .zp-detail-grid{grid-template-columns:minmax(0,1fr);}#zaplex-panes .zp-pane{border-right:0;}#zaplex-panes .zp-tree-row[data-depth=&quot;3&quot;]{padding-left:48px;}}
 @media(max-width:600px){#zaplex-panes .zp-layout{grid-template-columns:minmax(0,1fr);}#zaplex-panes .zp-sidebar{border-right:0;border-bottom:1px solid var(--zp-border);}#zaplex-panes .zp-side-body{padding:10px;}#zaplex-panes .zp-dots{display:none;}#zaplex-panes .zp-existing-tab{min-width:0;}#zaplex-panes .zp-chrome{gap:6px;padding-inline:8px;}#zaplex-panes .zp-app-footer{flex-wrap:wrap;}#zaplex-panes .zp-overview-cards{grid-template-columns:minmax(0,1fr);}#zaplex-panes .zp-dialog-cover{padding-top:56px;}}
 @media(pointer:coarse){#zaplex-panes .zp-file-button,#zaplex-panes .zp-menu-item{min-height:40px;}#zaplex-panes .zp-icon{min-height:32px;min-width:28px;}#zaplex-panes input,#zaplex-panes textarea,#zaplex-panes select{font-size:16px;}}
-@media (prefers-reduced-motion: reduce){#zaplex-panes *,#zaplex-panes *::before,#zaplex-panes *::after{animation: none!important;transition:none!important;scroll-behavior:auto!important;}}
+@media (prefers-reduced-motion: reduce){#zaplex-panes *,#zaplex-panes *::before,#zaplex-panes *::after{animation:none!important;transition:none!important;scroll-behavior:auto!important;}#zaplex-panes .zp-dot.wait::after{transform:scale(1.45);opacity:0.36;}}
 &lt;/style&gt;
 &lt;div id=&quot;zaplex-panes&quot; aria-label=&quot;Zaplex: bestehendes Pane-Modell mit vereinheitlichter Sidebar und Kontodetails&quot;&gt;
  &lt;div class=&quot;zp-window&quot;&gt;

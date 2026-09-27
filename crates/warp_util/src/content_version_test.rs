@@ -1,11 +1,6 @@
 use super::*;
 
 #[test]
-fn test_create_version() {
-    ContentVersion::new();
-}
-
-#[test]
 fn test_versions_equal() {
     let version1 = ContentVersion::new();
     let version2 = version1;

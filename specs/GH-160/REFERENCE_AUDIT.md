@@ -250,6 +250,43 @@ No Cargo execution or runtime parity is claimed at this stage. The CI report for
 feature commit must prove every automated suite against that exact SHA; GH-160 and GH-169 remain
 open until a strict same-revision two-host report is also green.
 
+## Stage 8 — erneuter Quellabgleich und tatsächliche Mutationsprüfungen
+
+Referenzen synchronisiert: **2026-09-27T13:01:16Z**. Beide Referenz-Repositories liegen im
+Projekt Zaplex, wurden frisch gefetcht und ausschließlich fast-forward aktualisiert; ihre sauberen
+`main`-Trees entsprechen `origin/main`. Beide SHAs sind gegenüber Stage 7 unverändert.
+
+| Repository / Baum | Stand |
+|---|---|
+| Zaplex `origin/main` | `8375611403cc3dd2f4100c8ead9e355abfa6768f` |
+| Zaplex Arbeitsstand dieses Audits | `codex/issue-acceptance-fixes`, Basis `088efe3f13c7c7bd73afe97116305d114f6bfa73` plus gemeinsam eingereichte Änderungen dieser Stage |
+| `claudeplex` `origin/main` | `8c2041ff68d97463aed7aeb01da0f16b708b8e22` |
+| `claudeplex-desktop` `origin/main` | `8c0aad0a944a8f5b6a26636d0827db57ca22d0f3` |
+
+Diese Stage dokumentiert genau die folgenden erneut gelesenen Verträge. Sie ist kein neuer
+Vollreview aller historischen Teilfeatures und kein nativer Laufzeitnachweis.
+
+| Bereich | Erneuter Vergleich und Ergebnis | Nachweis / offene Abnahme |
+|---|---|---|
+| Kontenerkennung | `claudeplex/src/discover.ts` vereinigt Standard-, Nachbar-, Prozess- und Environment-Wurzeln. Zaplex erhält diese Quellen in `crates/zaplex_cockpit/src/claude.rs::discover_accounts_with_process_roots`, kanonisiert Wurzeln, dedupliziert Identitäten und behält Scanfehler. Codex ergänzt mit `discover_account_roots` Standard- und gepinnte Wurzeln. | Gleichwertiger Claude-Vertrag, bewusste Provider-Erweiterung. Vorhandene Tests für Default/Pinned/Aliase/Fehler bleiben Matrixbestandteil; keine neue Rust-Ausführung. |
+| Kontoanzeige | Die Referenz `claudeplex-desktop/src/views/OverviewMain.tsx::AccountCard` zeigt Schlüssel, Label und E-Mail separat. Zaplex `account_identity` verwendet explizite Providerüberschriften und deduplizierte Unterzeilen. `account_count_presentation` unterscheidet geladenes Leerresultat von Pending/Degraded. | Bewusste Anpassung an den genehmigten Mehrprovider-Vertrag, kein Rückbau zur Referenzdarstellung. |
+| Hostbaum | `fleet.rs::reconcile_connected_hosts` nutzt tatsächliche Live-Verbindungen; die Registry benennt und validiert diese, fügt aber keine Offline-Wurzeln hinzu. `model.rs` entfernt getrennte Managed-Hosts und behält lokale Wurzeln. | Tests für ersten/letzten Remote, verspätete Inventare und reine Registry-Hosts sind namentlich in der Matrix. Native Zwei-Host-Abnahme bleibt offen. |
+| Wartezustand | Die native Implementierung `panel.rs::waiting_pulse_frame` beschreibt 1,6 s und maximal 2× Kerndurchmesser sowie statischen Reduced-Motion-Halo. **Die HTML-Referenz hatte bisher nur einen statischen Schatten.** Der frühere Browsertest prüfte ein nicht vorhandenes Pseudoelement und konnte daher fälschlich grün sein. | HTML-Puls ergänzt; positive Browserassertions prüfen normale Animation, Dauer/Ringgröße, nicht wartende Zustände und statischen sichtbaren Reduced-Motion-Halo. Die HTML-Prüfung ersetzt keine native Darstellung. |
+| Verbindliche Matrix | `validate` löst **105 benannte Tests in neun Szenarien** auf; Claude/Codex, Default/Multiple/Pinned, Local/Remote und Live/Waiting/Idle/Dormant bleiben abgedeckt. | Statisch gültige Testzuordnung. Die bloße Existenz eines Tests belegt noch keine erfolgreiche Ausführung. |
+| Echte Regressionsmutationen | Die alten Selbsttests manipulierten nur JSON-/Prüfdeklarationen. Der vollständige Audit verändert nun drei Produktionsausdrücke für Provider, Hostschlüssel und Codex-Status. Unveränderte Baseline und exakt derselbe Test gegen den Mutanten werden getrennt ausgewertet. | Siehe `specs/parity/BEHAVIOR_MUTATIONS.md`. Compilerfehler, leere Filter und fehlende Logs gelten nicht als erkannte Regression. Ausführung erst im freigegebenen Cargo-Audit. |
+| Restore-Identität | Der Fork-Audit fand eine zeitliche Lücke zwischen vorgemerktem Pane-Snapshot und späterem Lesen globaler Remote-Metadaten durch den SQLite-Writer. | Host-/Daemon-/PTY-Identität, fehlgeschlagene Wiederherstellung und temporärer Dateimanager werden im Snapshot eingefroren. Interleaving-Regressionstest ergänzt, Rust-Ausführung ausstehend. |
+
+Buildfreier Browsernachweis: Alle vier Playwright-Tests bestanden mit Playwright 1.55.0 und
+Chrome 149.0.7827.196. Die neuen Normal-/Reduced-Motion-Prüfungen wurden zusätzlich gegen die
+vorherige HTML-Version ausgeführt: Beide scheiterten gezielt am fehlenden Ring. Logs, drei PNGs
+und Quellen-/Artefakthashes liegen im Projektexport `issue160-browser-2026-09-27`.
+
+**Abnahmezustand:** Quellkorrekturen und buildfreie Prüfungen werden mit diesem Änderungsstand
+versioniert. Ein späterer vollständiger Audit muss den endgültigen Commit nennen und die echten
+Cargo-, Mutations- und Zwei-Host-Ergebnisse liefern. Der frühere grüne statische CI-Lauf für
+`088efe3f1` ist kein Nachweis für die danach hinzugekommenen Änderungen. GH-160/GH-169 bleiben bis
+zur vollständigen verlinkten Abnahme offen.
+
 ## Repeat procedure
 
 1. Fetch all three remotes and record default branch, exact revision, and audit time.

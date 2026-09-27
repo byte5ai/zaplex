@@ -2280,7 +2280,7 @@ impl PaneGroup {
             }
             PaneNode::Leaf(pane_id) => {
                 let temporary_original = self.panes.original_pane_for_replacement(*pane_id);
-                let contents = match temporary_original
+                let mut contents = match temporary_original
                     .and_then(|original_id| self.pane_contents.get(&original_id))
                 {
                     Some(original) => {
@@ -2318,6 +2318,7 @@ impl PaneGroup {
                             log::error!("Failed to get session data for pane, so used a new uuid");
                             LeafContents::Terminal(TerminalPaneSnapshot {
                                 uuid: Uuid::new_v4().as_bytes().to_vec(),
+                                remote_state: Default::default(),
                                 cwd: None,
                                 cli_agent_binding: None,
                                 is_active: pane_id.as_terminal_pane_id()
@@ -2333,10 +2334,13 @@ impl PaneGroup {
                         }
                     },
                 };
-                if let LeafContents::Terminal(terminal) = &contents {
+                if let LeafContents::Terminal(terminal) = &mut contents {
                     if temporary_original.is_none() {
                         app_state::remove_temporary_file_manager_replacement(&terminal.uuid);
                     }
+                    // Overlay state is finalized after the underlying terminal snapshot.
+                    terminal.remote_state =
+                        app_state::RemoteTerminalPaneState::capture(&terminal.uuid);
                 }
                 let configuration_pane_id = self.panes.pane_configuration_owner(*pane_id);
                 let custom_vertical_tabs_title = self

@@ -93,6 +93,7 @@ fn test_config_from_snapshot_flattens_single_pane() {
                     custom_vertical_tabs_title: None,
                     contents: LeafContents::Terminal(TerminalPaneSnapshot {
                         uuid: vec![],
+                        remote_state: Default::default(),
                         cwd: Some("/some/dir".into()),
                         cli_agent_binding: None,
                         is_active: true,
@@ -134,6 +135,7 @@ fn test_config_from_snapshot_filters_panes() {
                     custom_vertical_tabs_title: None,
                     contents: LeafContents::Terminal(TerminalPaneSnapshot {
                         uuid: vec![],
+                        remote_state: Default::default(),
                         cwd: Some("/path/to/dir".into()),
                         cli_agent_binding: None,
                         is_active: true,
@@ -165,6 +167,7 @@ fn test_config_from_snapshot_filters_panes() {
                     custom_vertical_tabs_title: None,
                     contents: LeafContents::Terminal(TerminalPaneSnapshot {
                         uuid: vec![],
+                        remote_state: Default::default(),
                         cwd: Some("/some/dir".into()),
                         cli_agent_binding: None,
                         is_active: true,
@@ -236,6 +239,7 @@ fn test_config_from_snapshot_preserves_tab_pin() {
         custom_vertical_tabs_title: None,
         contents: LeafContents::Terminal(TerminalPaneSnapshot {
             uuid: vec![],
+            remote_state: Default::default(),
             cwd: Some("/path/to/dir".into()),
             cli_agent_binding: None,
             is_active: true,
@@ -274,6 +278,7 @@ fn test_config_with_active_tab_index() {
                             custom_vertical_tabs_title: None,
                             contents: LeafContents::Terminal(TerminalPaneSnapshot {
                                 uuid: vec![],
+                                remote_state: Default::default(),
                                 cwd: Some("/path/to/dir".into()),
                                 cli_agent_binding: None,
                                 is_active: true,
@@ -342,6 +347,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
                             custom_vertical_tabs_title: None,
                             contents: LeafContents::Terminal(TerminalPaneSnapshot {
                                 uuid: vec![],
+                                remote_state: Default::default(),
                                 cwd: Some("/path/to/dir".into()),
                                 cli_agent_binding: None,
                                 is_active: true,
@@ -385,6 +391,7 @@ fn test_config_with_active_tab_being_filtered() {
                             custom_vertical_tabs_title: None,
                             contents: LeafContents::Terminal(TerminalPaneSnapshot {
                                 uuid: vec![],
+                                remote_state: Default::default(),
                                 cwd: Some("/path/to/dir".into()),
                                 cli_agent_binding: None,
                                 is_active: true,

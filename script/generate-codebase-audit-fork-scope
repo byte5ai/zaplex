@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Inventory only fork-owned files and fork changes; never claim review coverage.
+
+This is deliberately a separate contract from the legacy whole-file assignment
+schema. Modified upstream files require both sides of their diff hunks, including
+pure deletions, instead of every line of their current contents.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import runpy
+import sys
+
+
+inventory = runpy.run_path(str(Path(__file__).with_name("generate-codebase-audit-inventory")))
+run_git = inventory["run_git"]
+InventoryError = inventory["InventoryError"]
+HUNK = re.compile(rb"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
+
+
+def text_lines(repo, entry):
+    if entry is None or entry["type"] != "blob":
+        return None
+    data = run_git(repo, "cat-file", "blob", entry["object_id"])
+    if b"\0" in data:
+        return None
+    try:
+        data.decode("utf-8")
+        return inventory["line_count"](data)
+    except UnicodeDecodeError:
+        return None
+
+
+def generate(repo, target, upstream, base):
+    inventory["reject_history_overrides"](repo)
+    object_format, oid_length = inventory["repository_object_format"](repo)
+    for label, revision in (("target", target), ("upstream", upstream), ("merge-base", base)):
+        inventory["require_commit"](repo, revision, label, oid_length)
+    inventory["verify_merge_base"](repo, target, upstream, base, oid_length)
+    trees = [
+        {entry["path"]: entry for entry in inventory["load_tree"](repo, revision, oid_length)}
+        for revision in (target, upstream, base)
+    ]
+    current, inherited, baseline = trees
+    entries = []
+    unchanged = []
+    for path in sorted(current.keys() | baseline.keys()):
+        new, old = current.get(path), baseline.get(path)
+        ownership = (
+            inventory["ownership"](new, inherited.get(path), old)
+            if new is not None else "deleted-from-fork"
+        )
+        if ownership == "upstream-unmodified":
+            unchanged.append(path)
+            continue
+        # No unchanged inherited blob is read. Both sides are needed for deletions
+        # and type changes; binary/Gitlink entries remain explicit non-text scope.
+        old_lines = text_lines(repo, old)
+        new_lines = text_lines(repo, new)
+        is_text = (old is None or old_lines is not None) and (new is None or new_lines is not None)
+        hunks = []
+        if is_text:
+            patch = run_git(
+                repo, "--literal-pathspecs", "diff", "--no-color", "--no-relative",
+                "--diff-algorithm=myers", "--no-indent-heuristic",
+                "--no-ext-diff", "--no-textconv", "--no-renames",
+                "--unified=0", base, target, "--", path,
+            )
+            hunks = [
+                {"old_start": int(match[1]), "old_count": int(match[2] or b"1"),
+                 "new_start": int(match[3]), "new_count": int(match[4] or b"1")}
+                for match in HUNK.finditer(patch)
+            ]
+        entries.append({
+            "path": path,
+            "ownership": ownership,
+            "base": old,
+            "target": new,
+            "base_line_count": old_lines,
+            "target_line_count": new_lines,
+            "review_scope": (
+                "explicit-non-text-review" if not is_text else
+                "complete-owned-file" if ownership == "fork-owned" else
+                "deleted-file-and-contract-impact" if new is None else
+                "fork-hunks-and-required-context"
+            ),
+            "changed_hunks": hunks,
+            "added_hunk_lines": sum(hunk["new_count"] for hunk in hunks),
+            "removed_hunk_lines": sum(hunk["old_count"] for hunk in hunks),
+            "review_status": "not-claimed",
+        })
+    counts = {}
+    for entry in entries:
+        scope = entry["review_scope"]
+        count = counts.setdefault(scope, {"files": 0, "added_hunk_lines": 0, "removed_hunk_lines": 0})
+        count["files"] += 1
+        count["added_hunk_lines"] += entry["added_hunk_lines"]
+        count["removed_hunk_lines"] += entry["removed_hunk_lines"]
+    return {
+        "schema": "zaplex-fork-delta-inventory/v1",
+        "object_format": object_format,
+        "target_sha": target,
+        "upstream_sha": upstream,
+        "merge_base_sha": base,
+        "upstream_freshness": "Pinned local Git object; no remote-HEAD or fetch claim.",
+        "counts": counts,
+        "unchanged_entries_excluded": unchanged,
+        "entries": entries,
+        "limits": [
+            "Inventory is not substantive review, verification, or executed test evidence.",
+            "No historical review credit is transferred without exact source identities.",
+            "File line counts are context only; modified-file scope is both sides of the hunks.",
+            "Working-tree changes are excluded; regenerate after committing them.",
+            "Not compatible with legacy contiguous whole-file assignment schema v1.",
+        ],
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--target-sha", required=True)
+    parser.add_argument("--upstream-sha", required=True)
+    parser.add_argument("--merge-base-sha", required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    result = generate(args.repo.resolve(), args.target_sha, args.upstream_sha, args.merge_base_sha)
+    raw = inventory["canonical_json"](result)
+    # An immutable scope must not silently replace a different prior inventory.
+    if args.output.exists() and args.output.read_bytes() != raw:
+        raise InventoryError(f"refusing to overwrite different inventory: {args.output}")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    if not args.output.exists():
+        with args.output.open("xb") as output:
+            output.write(raw)
+    print(json.dumps({"path": str(args.output), "sha256": hashlib.sha256(raw).hexdigest(),
+                      "counts": result["counts"],
+                      "unchanged_entries_excluded": len(result["unchanged_entries_excluded"])}, indent=2))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (InventoryError, OSError) as error:
+        print(f"fork audit inventory error: {error}", file=sys.stderr)
+        raise SystemExit(1)
