@@ -371,14 +371,21 @@ def validate_source_sha_contract() -> list[str]:
 
 
 def self_test() -> list[str]:
+    nonrust_case = __import__("runpy").run_path(str(Path(__file__).with_name("test-suite-nonrust-events")))["record"]
     errors = []
+    _nonrust_error_count = len(errors)
     if IMMUTABLE_ACTION_REF.fullmatch("v4") is not None:
         errors.append("floating action self-test was accepted")
+    nonrust_case('reject-floating-action', "pass" if len(errors) == _nonrust_error_count else "fail")
+    _nonrust_error_count = len(errors)
     if IMMUTABLE_ACTION_REF.fullmatch("a" * 40) is None:
         errors.append("immutable action self-test was rejected")
+    nonrust_case('accept-immutable-action', "pass" if len(errors) == _nonrust_error_count else "fail")
     action_match = ACTION_USE.match("  - uses: example/action@v1")
+    _nonrust_error_count = len(errors)
     if action_match is None or IMMUTABLE_ACTION_REF.fullmatch(action_match.group(2)):
         errors.append("dash-prefixed floating action self-test was accepted")
+    nonrust_case('reject-dash-prefixed-floating-action', "pass" if len(errors) == _nonrust_error_count else "fail")
 
     unsafe_checkout = """steps:
   - uses: actions/checkout@abc
@@ -407,22 +414,34 @@ def self_test() -> list[str]:
     with:
       persist-credentials: false
 """
+    _nonrust_error_count = len(errors)
     if not checkout_credential_errors(unsafe_checkout, "fixture.yml"):
         errors.append("checkout credential self-test accepted persisted credentials")
+    nonrust_case('reject-persisted-checkout-credentials', "pass" if len(errors) == _nonrust_error_count else "fail")
+    _nonrust_error_count = len(errors)
     if checkout_credential_errors(safe_checkout, "fixture.yml"):
         errors.append("checkout credential self-test rejected non-persisted credentials")
+    nonrust_case('accept-nonpersisted-checkout-credentials', "pass" if len(errors) == _nonrust_error_count else "fail")
+    _nonrust_error_count = len(errors)
     if len(checkout_credential_errors(cross_job_checkout, "fixture.yml")) != 1:
         errors.append("checkout credential self-test crossed step or job boundaries")
+    nonrust_case('reject-cross-job-credential-inheritance', "pass" if len(errors) == _nonrust_error_count else "fail")
+    _nonrust_error_count = len(errors)
     if len(checkout_credential_errors(same_job_checkout, "fixture.yml")) != 1:
         errors.append("checkout credential self-test crossed sibling step boundaries")
+    nonrust_case('reject-sibling-step-credential-inheritance', "pass" if len(errors) == _nonrust_error_count else "fail")
 
     unsafe_prepare = """steps:
   - run: echo \"GH_TOKEN=$TOKEN\" >> \"$GITHUB_ENV\"
 """
+    _nonrust_error_count = len(errors)
     if not prepare_environment_token_errors(unsafe_prepare, "fixture.yml"):
         errors.append("environment token self-test accepted a global token export")
+    nonrust_case('reject-global-token-export', "pass" if len(errors) == _nonrust_error_count else "fail")
+    _nonrust_error_count = len(errors)
     if prepare_environment_token_errors("steps:\n  - run: cargo check\n", "fixture.yml"):
         errors.append("environment token self-test rejected a token-free action")
+    nonrust_case('accept-token-free-action', "pass" if len(errors) == _nonrust_error_count else "fail")
 
     unsafe_global_token = """env:
   GH_TOKEN: ${{ github.token }}
@@ -435,10 +454,14 @@ jobs: {}
         env:
           GH_TOKEN: ${{ github.token }}
 """
+    _nonrust_error_count = len(errors)
     if not workflow_token_scope_errors(unsafe_global_token, "fixture.yml"):
         errors.append("workflow token self-test accepted a global repository token")
+    nonrust_case('reject-workflow-global-token', "pass" if len(errors) == _nonrust_error_count else "fail")
+    _nonrust_error_count = len(errors)
     if workflow_token_scope_errors(safe_step_token, "fixture.yml"):
         errors.append("workflow token self-test rejected a step-scoped repository token")
+    nonrust_case('accept-step-scoped-token', "pass" if len(errors) == _nonrust_error_count else "fail")
 
     safe_permissions = """permissions:
   contents: read
@@ -468,37 +491,59 @@ jobs:
         "      actions: write",
         "      actions: write\n      id-token: write",
     )
+    _nonrust_error_count = len(errors)
     if release_permission_errors(safe_permissions, "fixture.yml"):
         errors.append("release permission self-test rejected least-privilege permissions")
+    nonrust_case('accept-least-privilege-release-permissions', "pass" if len(errors) == _nonrust_error_count else "fail")
+    _nonrust_error_count = len(errors)
     if not release_permission_errors(unsafe_permissions, "fixture.yml"):
         errors.append("release permission self-test accepted workflow-wide write access")
+    nonrust_case('reject-workflow-write-permissions', "pass" if len(errors) == _nonrust_error_count else "fail")
+    _nonrust_error_count = len(errors)
     if not release_permission_errors(unsafe_build_permissions, "fixture.yml"):
         errors.append("release permission self-test accepted build-job write access")
+    nonrust_case('reject-build-job-write-permissions', "pass" if len(errors) == _nonrust_error_count else "fail")
+    _nonrust_error_count = len(errors)
     if not release_permission_errors(unsafe_build_write_all, "fixture.yml"):
         errors.append("release permission self-test accepted build-job write-all access")
+    nonrust_case('reject-build-job-write-all', "pass" if len(errors) == _nonrust_error_count else "fail")
+    _nonrust_error_count = len(errors)
     if not release_permission_errors(unsafe_commented_write, "fixture.yml"):
         errors.append("release permission self-test accepted commented or quoted write access")
+    nonrust_case('reject-commented-quoted-write-permissions', "pass" if len(errors) == _nonrust_error_count else "fail")
+    _nonrust_error_count = len(errors)
     if not release_permission_errors(unsafe_publisher_extra, "fixture.yml"):
         errors.append("release permission self-test accepted extra publisher permissions")
+    nonrust_case('reject-extra-publisher-permissions', "pass" if len(errors) == _nonrust_error_count else "fail")
 
     column_zero_comment_permissions = unsafe_build_permissions.replace(
         "    permissions:\n      contents: write", "    permissions:\n# upload\n      contents: write", 1
     )
+    _nonrust_error_count = len(errors)
     if not release_permission_errors(column_zero_comment_permissions, "fixture.yml"):
         errors.append("permission self-test stopped at a column-zero comment")
+    nonrust_case('reject-permissions-hidden-after-column-zero-comment', "pass" if len(errors) == _nonrust_error_count else "fail")
     column_zero_comment_env = unsafe_global_token.replace("env:\n", "env:\n# shared\n")
+    _nonrust_error_count = len(errors)
     if not workflow_token_scope_errors(column_zero_comment_env, "fixture.yml"):
         errors.append("token self-test stopped at a column-zero comment")
+    nonrust_case('reject-token-hidden-after-column-zero-comment', "pass" if len(errors) == _nonrust_error_count else "fail")
     for job_key in ("  notify:  # post-release", "  notify: "):
         following_writer = safe_permissions + job_key + "\n    permissions:\n      contents: write\n    steps: []\n"
+        _nonrust_error_count = len(errors)
         if not release_permission_errors(following_writer, "fixture.yml"):
             errors.append("permission self-test extended publisher rights to a following job")
+        nonrust_case('reject-following-job-publisher-inheritance' + ":" + job_key, "pass" if len(errors) == _nonrust_error_count else "fail")
 
     readonly_permissions = "permissions:\n  contents: read\njobs: {}\n"
+    _nonrust_error_count = len(errors)
     if readonly_permission_errors(readonly_permissions, "fixture.yml"):
         errors.append("read-only permission self-test rejected contents read")
+    nonrust_case('accept-read-only-contents', "pass" if len(errors) == _nonrust_error_count else "fail")
+    _nonrust_error_count = len(errors)
     if not readonly_permission_errors("jobs: {}\n", "fixture.yml"):
         errors.append("read-only permission self-test accepted missing permissions")
+    nonrust_case('reject-missing-read-only-permissions', "pass" if len(errors) == _nonrust_error_count else "fail")
     return errors
 
 

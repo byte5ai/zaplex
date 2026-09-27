@@ -120,6 +120,8 @@ run_start = next((i for i, line in enumerate(guard_step) if line.strip() == "run
 if run_start is None:
     fail("guard must have a literal shell body")
 body = "\n".join(line[10:] for line in guard_step[run_start + 1:])
+nonrust_case = __import__("runpy").run_path(str(Path(__file__).with_name("test-suite-nonrust-events")))["record"]
+
 for result, output, expected_success in [
     ("success", "true", True),
     ("success", "", False),
@@ -136,6 +138,7 @@ for result, output, expected_success in [
     )
     if (completed.returncode == 0) != expected_success:
         fail(f"change-detection guard mishandled {result=}, {output=}")
+    nonrust_case(f"change-detection:{result}:{output}")
 if not any(is_enforced_clippy(command) for command in run_commands(cargo_job)):
     fail("jobs.cargo_check must run cargo clippy --locked --bin zaplex -- -D warnings")
 

@@ -746,6 +746,8 @@ def expect_readiness_failure(name: str, check) -> None:
     try:
         check()
     except ReadinessError:
+        nonrust_case = __import__("runpy").run_path(str(Path(__file__).with_name("test-suite-nonrust-events")))["record"]
+        nonrust_case(name)
         print(f"PASS red fixture: {name}")
         return
     raise ReadinessError(f"red fixture unexpectedly passed: {name}")
@@ -763,6 +765,8 @@ def expect_readiness_failure_with_fragments(
             raise ReadinessError(
                 f"red fixture {name} omitted expected diagnostics: {missing}"
             ) from error
+        nonrust_case = __import__("runpy").run_path(str(Path(__file__).with_name("test-suite-nonrust-events")))["record"]
+        nonrust_case(name)
         print(f"PASS red fixture: {name}")
         return
     raise ReadinessError(f"red fixture unexpectedly passed: {name}")
@@ -1013,6 +1017,8 @@ def run_self_test() -> None:
                 )
             readiness.write_text(matrix_text, encoding="utf-8")
             manual_release_matrix_has_result_and_evidence_for_every_row(fixture, phase)
+            nonrust_case = __import__("runpy").run_path(str(Path(__file__).with_name("test-suite-nonrust-events")))["record"]
+            nonrust_case(f"valid-runtime-matrix-phase-{phase}")
             if phase == "b":
                 readiness.write_text(
                     matrix_text.replace("| fixture-artifact |", "| another-artifact |", 1),
@@ -1032,7 +1038,7 @@ def run_self_test() -> None:
                     encoding="utf-8",
                 )
                 expect_readiness_failure(
-                    f"duplicate_runtime_matrix_row_phase_{phase}",
+                    f"duplicate_runtime_matrix_row_phase_{phase}_{'identical' if duplicate == first_row else 'conflicting'}",
                     lambda: manual_release_matrix_has_result_and_evidence_for_every_row(fixture, phase),
                 )
         readiness.write_text(original_readiness, encoding="utf-8")

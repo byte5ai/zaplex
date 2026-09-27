@@ -4,6 +4,10 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Die native UI-Abnahme (#455/#458–#464) prüft Verbindungszeilen in zwei Themes und drei Breiten, Favoriten-Flyouts, echtes Mausverschieben sowie den Erhalt lokaler Terminals beim Dateimanagerwechsel. Der macOS-CI-Job verlangt die zugehörigen Screenshots; Layout-Testdaten ersetzen keine Live-SSH-Abnahme.
+
+- Die Testsuite-Messung (#472) erfasst auch tatsächlich ausgeführte Skript-Tests mit Fallkennungen, Laufzeit und Originalprotokollen. Reine Regelprüfungen zählen getrennt; ein Gesamtvergleich verlangt vollständige, zum jeweiligen Commit passende Rust- und Skriptbelege.
+
 - Gespeicherte Terminalentwürfe bleiben auch in vorübergehend gesperrten Remote-Panes erhalten; lokale Teamzuordnungen und Richtlinien sind wieder aus dem vorhandenen Cache lesbar. SFTP behält bei konkurrierenden Kopien fortlaufende Konfliktnamen und bereinigt eigene Symlinks anhand ihrer Identität, ohne ihrem Ziel zu folgen.
 
 - Die Coverage-Projektion (#472) grenzt auch das exakt geprüfte Server-ID-Makro ab. Recovery-Tests warten auf den Abschluss des echten Workers; Datei- und Verzeichnisfehler werden über den jeweils passenden Transferpfad geprüft.

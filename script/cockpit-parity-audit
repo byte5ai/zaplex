@@ -2544,10 +2544,13 @@ fn ignored_fixture() {}
         print(f"self-test {error}", file=sys.stderr)
         return EXIT_CONTRACT
 
-    harness = subprocess.run(
-        [sys.executable, str(root / "specs/parity/test_mutation_gate.py")],
-        cwd=root, check=False, timeout=60,
-    )
+    harness_command = [sys.executable, str(root / "specs/parity/test_mutation_gate.py")]
+    if os.environ.get("ZAPLEX_NONRUST_EVENTS"):
+        harness_command = [
+            sys.executable, str(root / "script/test-suite-nonrust"), "_unittest",
+            str(root / "specs/parity/test_mutation_gate.py"),
+        ]
+    harness = subprocess.run(harness_command, cwd=root, check=False, timeout=60)
     if harness.returncode != 0:
         return EXIT_CONTRACT
     results.append({"id": "source-mutation-harness", "status": "pass-observed"})

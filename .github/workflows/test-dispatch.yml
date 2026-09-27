@@ -50,6 +50,41 @@ env:
   CHANNEL: oss
 
 jobs:
+  nonrust_evidence:
+    name: Non-Rust suite execution evidence
+    if: ${{ inputs.coverage }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install binary-only fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fish
+          python3 -m venv "$RUNNER_TEMP/nonrust-evidence-parser"
+          "$RUNNER_TEMP/nonrust-evidence-parser/bin/python" -m pip install \
+            --only-binary=:all: --require-hashes -r script/test-suite-evidence-requirements.txt
+        shell: bash
+
+      - name: Execute the complete non-Rust suite plan
+        run: |
+          "$RUNNER_TEMP/nonrust-evidence-parser/bin/python" script/test-suite-nonrust collect \
+            "$RUNNER_TEMP/nonrust-suite-evidence" --source-root "$GITHUB_WORKSPACE"
+        shell: bash
+
+      - name: Upload non-Rust raw execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nonrust-suite-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nonrust-suite-evidence/
+          if-no-files-found: error
+          retention-days: 30
+
   test:
     name: cargo test (Linux)
     runs-on: ${{ inputs.runs_on }}

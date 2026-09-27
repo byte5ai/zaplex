@@ -9,6 +9,9 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
+nonrust_case = __import__("runpy").run_path(str(Path(__file__).with_name("test-suite-nonrust-events")))["record"]
+
+
 loader = importlib.machinery.SourceFileLoader("suite_evidence", str(Path(__file__).with_name("test-suite-evidence")))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 evidence = importlib.util.module_from_spec(spec)
@@ -49,13 +52,18 @@ with tempfile.TemporaryDirectory() as temporary:
     assert baseline['reported_skipped_tests'] == 1
     assert baseline['source_lines'] == 2 and baseline['covered_source_lines'] == 1
     assert baseline['source_line_coverage_percent'] == 50
+    nonrust_case("measure-valid-artifact-and-skipped-test")
     candidate = copy.deepcopy(baseline)
     candidate['executed_rust_tests'] = 4
     candidate['executed_test_ids'].pop()
     candidate['source_line_coverage_percent'] = 48
-    assert evidence.compare(candidate, baseline)['numeric_thresholds_met']
+    assert evidence.compare(candidate, baseline)['rust_numeric_thresholds_met']
+    assert evidence.compare(candidate, baseline)['numeric_thresholds_met'] is None
+    assert not evidence.compare(candidate, baseline)['measurement_complete']
+    nonrust_case("threshold-exact-boundary")
     candidate['source_line_coverage_percent'] = 47.99
-    assert not evidence.compare(candidate, baseline)['numeric_thresholds_met']
+    assert not evidence.compare(candidate, baseline)['rust_numeric_thresholds_met']
+    nonrust_case("threshold-coverage-loss")
     for field, value in [('source_line_ids', []), ('provenance', {**provenance, 'runner': 'other'})]:
         broken = {**candidate, field: value}
         try:
@@ -64,6 +72,7 @@ with tempfile.TemporaryDirectory() as temporary:
             pass
         else:
             raise AssertionError(f'incomparable {field} accepted')
+        nonrust_case(f"compare-incomparable:{field}")
     (root / "test-outcome.txt").write_text("failure\n")
     try:
         measure_fixture(root, source_root)
@@ -71,7 +80,9 @@ with tempfile.TemporaryDirectory() as temporary:
         pass
     else:
         raise AssertionError('failed CI accepted')
+    nonrust_case("reject-failed-ci")
     (root / "test-outcome.txt").write_text("success\n")
+    nonrust_junit_case = iter(("wrong-total", "failure-count", "skipped-failure", "duplicate-id", "nonfinite-duration", "empty-report", "case-failure"))
     for invalid in [junit.replace('tests="6"', 'tests="100"'), junit.replace('failures="0"', 'failures="1"'), junit.replace('<skipped/>', '<skipped/><failure/>'), junit.replace('name="test_1"', 'name="test_0"'), junit.replace('time="0.1"', 'time="NaN"'), '<testsuites time="0"/>', junit.replace('<testcase name="test_0" time="0.1"/>', '<testcase name="test_0" time="0.1"><failure/></testcase>')]:
         (root / "junit.xml").write_text(invalid)
         try:
@@ -80,6 +91,7 @@ with tempfile.TemporaryDirectory() as temporary:
             pass
         else:
             raise AssertionError('invalid JUnit accepted')
+        nonrust_case("reject-junit:" + next(nonrust_junit_case))
 print('suite evidence fixture checks: ok')
 
 project = evidence.PROJECTION['project_source']
@@ -87,24 +99,33 @@ with_tests = b'fn a() {}\n#[cfg(test)]\nmod tests { #[test] fn case() { assert!(
 without_tests = b'fn a() {}\nfn b() {}\n'
 assert project(with_tests)[1] == project(without_tests)[1]
 assert project(with_tests)[0] == {1: 1, 4: 2}
+nonrust_case("project-inline-tests")
 assert project(b'fn a() { panic!("changed"); }\nfn b() {}\n')[1] != project(without_tests)[1]
+nonrust_case("retain-production-fingerprint")
 for cfg in ('test', 'any(test, feature="test-util")', 'any(test, feature="integration_tests")', 'all(test, feature="unknown")'):
     source = f'#[cfg({cfg})]\nfn helper() {{}}\nfn production() {{}}\n'.encode()
     assert project(source)[0] == {3: 1}, cfg
+    nonrust_case(f"exclude-cfg:{cfg}")
 assert project(b'#[cfg(not(test))]\nfn production() {}\n')[0] == {1: 1, 2: 2}
+nonrust_case("retain-not-test-production")
 assert project(b'#[cfg(any(test, feature="unknown"))]\nfn ambiguous() {}\n')[3]
+nonrust_case("unknown-cfg-unproven")
 assert project(b'macro_rules! cases { () => { #[test] fn a() {} } }')[3]
+nonrust_case("unknown-macro-unproven")
 assert project(b'#[cfg_attr(test, derive(Clone))] struct Mixed;')[3]
+nonrust_case("unknown-derived-impl-unproven")
 # Braces/attribute-shaped strings and nested comments cannot change Rust regions.
 source = b'fn p() { let x = r##"} #[cfg(test)] fn fake() {"##; } /* outer /* inner */ end */\n#[test] fn t() {}\n'
 assert project(source)[0] == {1: 1}
 assert not project(source)[3]
+nonrust_case("literal-braces-and-nested-comments")
 try:
     project(b'fn broken( {')
 except ValueError:
     pass
 else:
     raise AssertionError('invalid Rust AST accepted')
+nonrust_case("reject-invalid-rust")
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
     base = root / 'crates/demo/src'
@@ -117,11 +138,13 @@ with tempfile.TemporaryDirectory() as temporary:
     projection.index_modules([Path('crates/demo/src/lib.rs')])
     assert projection.line('crates/demo/src/helper.rs', 1) is None
     assert projection.line('crates/demo/src/part/inline/custom.rs', 1) is not None
+    nonrust_case("module-test-and-custom-path-reachability")
     # A second production route overrides test-only reachability.
     (base / 'lib.rs').write_text('mod part;\n#[cfg(test)] mod helper;\n#[path="helper.rs"] mod also_production;\n')
     projection = evidence.PROJECTION['Projection'](root)
     projection.index_modules([Path('crates/demo/src/lib.rs')])
     assert projection.line('crates/demo/src/helper.rs', 1) is not None
+    nonrust_case("shared-module-production-route")
     # Unknown regions produce an explicit partial report and cannot pass comparison.
     (base / 'lib.rs').write_text('fn known() {}\n#[cfg(any(test,feature="unknown"))] fn uncertain() {}\n')
     provenance = {"commit": "a" * 40, "source_root": "/checkout", "run_url": "https://github.com/byte5ai/zaplex/actions/runs/1"}
@@ -139,6 +162,7 @@ with tempfile.TemporaryDirectory() as temporary:
         pass
     else:
         raise AssertionError('partial projection passed thresholds')
+    nonrust_case("partial-coverage-cannot-pass")
     for result in (SimpleNamespace(stdout='b'*40, returncode=0), SimpleNamespace(stdout='a'*40, returncode=1)):
         with patch.object(evidence.subprocess, 'run', return_value=result):
             try:
@@ -147,19 +171,24 @@ with tempfile.TemporaryDirectory() as temporary:
                 pass
             else:
                 raise AssertionError('wrong SHA or dirty checkout accepted')
+        nonrust_case(f"reject-source-provenance:{result.returncode}")
 print('Rust production projection fixture checks: ok')
 
 assert project(b'fn p() {} #[test] fn t() {}')[3]
+nonrust_case("mixed-physical-line-unproven")
 assert project(b'fn p() {} // ordinary comment\n')[3] == []
+nonrust_case("ordinary-comment-unambiguous")
 print('mixed test/production LCOV line remains unproven: ok')
 
 assert project(b'struct Data {\n#[cfg(test)] bytes: u64,\nclock: u64,\n}\n')[1] == project(b'struct Data {\nclock: u64,\n}\n')[1]
 assert not project(b'struct Data {\n#[cfg(test)] bytes: u64,\nclock: u64,\n}\n')[3]
+nonrust_case("test-field-separators")
 print('test-only field separators excluded: ok')
 
 # Platform production code remains production source, even when not instrumented
 # on this Linux run; only test-derived regions are removed.
 assert project(b'#[cfg(windows)] fn windows_production() {}\n')[0] == {1: 1}
+nonrust_case("retain-platform-production")
 
 
 # Grammar bridges retain original bytes/offsets and reattach pattern attributes
@@ -169,19 +198,26 @@ production_pattern = b'fn p(value: Data) {\nlet Data {\nproduction,\n} = value;\
 assert project(pattern)[1] == project(production_pattern)[1]
 assert project(pattern)[0] == {1: 1, 2: 2, 5: 3, 6: 4, 7: 5}
 assert not project(pattern)[3]
+nonrust_case("grammar-pattern-field")
 initializers = b'fn p() { Data {\n#[cfg(test)]\nonly_in_tests: expensive_test_value(),\nproduction: 1,\n} }\n'
 assert project(initializers)[1] == project(b'fn p() { Data {\nproduction: 1,\n} }\n')[1]
 assert not project(initializers)[3]
+nonrust_case("grammar-field-initializer")
 ambiguous_pattern = pattern.replace(b'cfg(test)', b'cfg(any(test, feature="unknown"))')
 assert project(ambiguous_pattern)[3]
+nonrust_case("grammar-unknown-pattern-cfg")
 comments_and_attributes = pattern.replace(b'#[cfg(test)]', b'#[allow(unused_variables)]\n/* between attributes */\n#[cfg(test)]\n// before field')
 assert project(comments_and_attributes)[1] == project(production_pattern)[1]
 assert not project(comments_and_attributes)[3]
+nonrust_case("grammar-pattern-comments-and-attributes")
 normal_pattern = pattern.replace(b'cfg(test)', b'cfg(unix)')
 other_pattern = pattern.replace(b'cfg(test)', b'cfg(windows)')
 assert project(normal_pattern)[1] != project(other_pattern)[1]
+nonrust_case("grammar-pattern-original-fingerprint")
 assert project(b"type Callback = dyn 'static + Fn(&mut Context) -> bool;\n")[1] != project(b"type Callback = 'static + Fn(&mut Context) -> bool;\n")[1]
 assert project(b"type Callback = dyn 'static + Fn(&mut Context) -> bool;\n")[0] == {1: 1}
+nonrust_case("grammar-dyn-original-fingerprint-and-mapping")
+nonrust_grammar_case = iter(("unrelated-function-error", "invalid-pattern-value", "invalid-dyn-type", "unclosed-cfg-attribute"))
 for broken in (
     pattern + b'fn broken( {',
     pattern.replace(b'production,', b'production: @@@,'),
@@ -194,10 +230,12 @@ for broken in (
         pass
     else:
         raise AssertionError('unrelated or malformed Rust error accepted by grammar bridge')
+    nonrust_case("grammar-reject:" + next(nonrust_grammar_case))
 # Attribute-like literals remain ordinary production bytes, never exclusions.
 literal = b'fn p() { let text = r#"#[cfg(test)] field,"#; }\n'
 assert project(literal)[0] == {1: 1}
 assert project(literal)[1] != project(literal.replace(b'test', b'unix'))[1]
+nonrust_case("grammar-attribute-like-literal")
 print('position-preserving grammar bridges and complete test field exclusion: ok')
 
 
@@ -207,16 +245,22 @@ production_arms = b'fn p(value: Kind) {\nmatch value {\nKind::Production => prod
 assert project(match_arms)[1] == project(production_arms)[1]
 assert project(match_arms)[0] == {1: 1, 2: 2, 5: 3, 6: 4, 7: 5}
 assert not project(match_arms)[3]
+nonrust_case("complete-test-match-arm")
 block_arm = match_arms.replace(b'Kind::Test => test_only(),', b'Kind::Test => {\ntest_only();\n},')
 assert project(block_arm)[1] == project(production_arms)[1]
 assert not project(block_arm)[3]
+nonrust_case("complete-block-match-arm")
 ambiguous_arm = match_arms.replace(b'cfg(test)', b'cfg(any(test, feature="unknown"))')
 assert project(ambiguous_arm)[3]
+nonrust_case("unknown-match-arm-cfg")
 assert project(match_arms.replace(b'cfg(test)', b'cfg(unix)'))[1] != project(production_arms)[1]
+nonrust_case("production-match-arm-fingerprint")
 # Adjacent production bytes still make one physical LCOV line ambiguous.
 assert project(match_arms.replace(b'test_only(),\n', b'test_only(), '))[3]
+nonrust_case("mixed-match-arm-line-unproven")
 # A test-only-looking macro body is insufficient without macro identity proof.
 assert project(b'thread_local! {\n#[cfg(test)]\nstatic ONLY_TESTS: u64 = 0;\n}\n')[3]
+nonrust_case("unresolved-thread-local-macro")
 print('complete match-arm exclusion and unresolved macro identity: ok')
 
 
@@ -236,8 +280,11 @@ mapping, _, _, diagnostics = project(macro_source, macro_relative)
 assert not diagnostics
 assert production_line in mapping
 assert all(line not in mapping for line in range(first_helper_line, last_helper_line + 1))
+nonrust_case(f"template-positive:{macro_relative}")
 assert project(macro_source)[3]
+nonrust_case(f"template-no-path:{macro_relative}")
 assert project(macro_source, 'crates/other/src/macros.rs')[3]
+nonrust_case(f"template-wrong-path:{macro_relative}")
 for old, new in (
     (b'Self::new_from_storage(ctx)', b'Self::new_from_storage(ctx /* changed */)'),
     (b'($group:ident, settings:', b'($group:ident, changed:'),
@@ -248,6 +295,7 @@ for old, new in (
     changed = macro_source[:macro_start] + macro_source[macro_start:].replace(old, new, 1)
     assert changed != macro_source
     assert project(changed, macro_relative)[3]
+    nonrust_case(f"template-mutation:{macro_relative}:{old.decode()} => {new.decode()}")
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
     source = root / macro_relative
@@ -269,6 +317,7 @@ with tempfile.TemporaryDirectory() as temporary:
     assert measured['covered_source_lines'] == 0
     assert measured['source_line_coverage_percent'] == 0
     assert measured['excluded_test_or_nonproduction_lines'] == 1
+    nonrust_case(f"template-lcov-zero-and-test-helper:{macro_relative}")
 print('reviewed production macro template, exact source binding and zero-hit denominator: ok')
 
 
@@ -287,8 +336,11 @@ mapping, _, _, diagnostics = project(macro_source, macro_relative)
 assert not diagnostics
 assert production_line in mapping
 assert all(line not in mapping for line in range(first_helper_line, last_helper_line + 1))
+nonrust_case(f"template-positive:{macro_relative}")
 assert project(macro_source)[3]
+nonrust_case(f"template-no-path:{macro_relative}")
 assert project(macro_source, 'app/src/other/ids.rs')[3]
+nonrust_case(f"template-wrong-path:{macro_relative}")
 for old, new in (
     (b'Self(id.into())', b'Self(id /* changed */.into())'),
     (b'ServerId::from_string_lossy(id)', b'ServerId::from_string_lossy(id /* changed */)'),
@@ -300,6 +352,7 @@ for old, new in (
     changed = macro_source[:macro_start] + macro_source[macro_start:].replace(old, new, 1)
     assert changed != macro_source
     assert project(changed, macro_relative)[3]
+    nonrust_case(f"template-mutation:{macro_relative}:{old.decode()} => {new.decode()}")
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
     source = root / macro_relative
@@ -321,4 +374,5 @@ with tempfile.TemporaryDirectory() as temporary:
     assert measured['covered_source_lines'] == 0
     assert measured['source_line_coverage_percent'] == 0
     assert measured['excluded_test_or_nonproduction_lines'] == 1
+    nonrust_case(f"template-lcov-zero-and-test-helper:{macro_relative}")
 print('reviewed server-ID template, full test impl exclusion and zero-hit denominator: ok')

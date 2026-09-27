@@ -2,7 +2,7 @@
 """Summarize actual CI artifacts; never infer executed tests from source annotations.
 
 An optional baseline comparison is diagnostic, not production-coverage acceptance:
-AST projection must be proven; non-Rust suites require a separate actual CI audit.
+AST projection and the paired non-Rust execution archive must both be proven.
 """
 import argparse
 import json
@@ -144,6 +144,41 @@ def measure(directory, source_root):
     }
 
 
+def attach_nonrust(summary, directory, source_root):
+    adapter = runpy.run_path(str(Path(__file__).with_name("test-suite-nonrust")))
+    nonrust = adapter["validate"](directory, source_root)
+    for key in ("commit", "run_url", "run_attempt"):
+        if not summary["provenance"].get(key) or nonrust["provenance"].get(key) != summary["provenance"][key]:
+            raise ValueError(f"Rust and non-Rust evidence differ in {key}")
+    summary["nonrust"] = nonrust
+    summary["executed_total_tests"] = summary["executed_rust_tests"] + nonrust["executed_nonrust_tests"]
+    return summary
+
+
+def compare_nonrust(candidate, baseline):
+    before, after = baseline.get("nonrust"), candidate.get("nonrust")
+    if before is None or after is None:
+        return None
+    for report in (before, after):
+        if (report.get("complete") is not True or not report.get("executed_test_ids")
+                or report.get("executed_nonrust_tests") != len(report["executed_test_ids"])
+                or len(set(report["executed_test_ids"])) != len(report["executed_test_ids"])):
+            raise ValueError("non-Rust measurement is incomplete")
+    for rust, nonrust in ((baseline, before), (candidate, after)):
+        if rust["provenance"]["commit"] != nonrust["provenance"]["commit"]:
+            raise ValueError("Rust/non-Rust source identity mismatch")
+    for key in ("runner", "python", "tools", "environment", "plan_sha256", "adapter_sha256", "events_helper_sha256"):
+        if not before["provenance"].get(key) or before["provenance"][key] != after["provenance"].get(key):
+            raise ValueError(f"incomparable non-Rust execution setting: {key}")
+    # This measurement phase changes Rust tests only. An unchanged non-Rust
+    # suite still needs two real executions with identical IDs and sources.
+    for key in ("executed_test_ids", "skipped_test_ids", "guard_ids", "suite_source_hashes"):
+        if key not in before or before[key] != after.get(key):
+            raise ValueError(f"non-Rust suite changed; independent review required: {key}")
+    return (baseline["executed_rust_tests"] + before["executed_nonrust_tests"],
+            candidate["executed_rust_tests"] + after["executed_nonrust_tests"])
+
+
 def compare(candidate, baseline):
     if any(row.get('production_projection_status') != 'pass' for row in (candidate, baseline)):
         raise ValueError('production coverage projection is unproven; partial statistics cannot pass thresholds')
@@ -160,6 +195,7 @@ def compare(candidate, baseline):
     reduction = 100 * (1 - candidate["executed_rust_tests"] / baseline["executed_rust_tests"])
     loss = baseline["source_line_coverage_percent"] - candidate["source_line_coverage_percent"]
     before, after = set(baseline["executed_test_ids"]), set(candidate["executed_test_ids"])
+    totals = compare_nonrust(candidate, baseline)
     return {
         "baseline_commit": baseline["provenance"]["commit"],
         "rust_test_reduction_percent": reduction,
@@ -167,7 +203,12 @@ def compare(candidate, baseline):
         "test_wall_seconds_saved": baseline["test_wall_seconds"] - candidate["test_wall_seconds"],
         "removed_execution_ids": sorted(before - after),
         "added_execution_ids": sorted(after - before),
-        "numeric_thresholds_met": candidate["executed_rust_tests"] * 5 <= baseline["executed_rust_tests"] * 4 and loss <= 2,
+        "rust_numeric_thresholds_met": candidate["executed_rust_tests"] * 5 <= baseline["executed_rust_tests"] * 4 and loss <= 2,
+        "measurement_complete": totals is not None,
+        "baseline_total_executed_tests": totals[0] if totals else None,
+        "candidate_total_executed_tests": totals[1] if totals else None,
+        "total_test_reduction_percent": 100 * (1 - totals[1] / totals[0]) if totals else None,
+        "numeric_thresholds_met": totals[1] * 5 <= totals[0] * 4 and loss <= 2 if totals else None,
         "acceptance": "unproven: numeric thresholds alone do not prove issue #472",
     }
 
@@ -177,9 +218,12 @@ def main():
     parser.add_argument("directory", type=Path, help="downloaded rust-suite-evidence artifact")
     parser.add_argument("--source-root", required=True, type=Path, help="clean source checkout of the exact CI commit (LCOV paths use provenance.source_root)")
     parser.add_argument("--baseline", type=Path, help="summary.json from a comparable successful baseline")
+    parser.add_argument("--nonrust", type=Path, help="paired complete non-Rust CI archive at the same source commit")
     args = parser.parse_args()
     try:
         summary = measure(args.directory, args.source_root)
+        if args.nonrust:
+            attach_nonrust(summary, args.nonrust, args.source_root)
         if args.baseline:
             summary["comparison"] = compare(summary, json.loads(args.baseline.read_text()))
     except (OSError, ValueError, KeyError, ET.ParseError, subprocess.CalledProcessError) as error:

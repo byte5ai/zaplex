@@ -2,6 +2,12 @@
 
 set -euo pipefail
 
+nonrust_case() {
+  if [ -n "${ZAPLEX_NONRUST_EVENTS:-}" ]; then
+    python3 "$(dirname "${BASH_SOURCE[0]}")/test-suite-nonrust-events" "$1"
+  fi
+}
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 classifier="$root/script/classify-release-tag"
 
@@ -20,6 +26,7 @@ assert_classification() {
   grep -qx "requires_main=$expected_requires_main" <<<"$output"
   grep -qx "prerelease=$expected_prerelease" <<<"$output"
   grep -qx "make_latest=$expected_make_latest" <<<"$output"
+  nonrust_case "classify:$tag"
 }
 
 assert_classification v1.2 stable 1.2 true false true
@@ -35,3 +42,5 @@ if "$classifier" v1.2.3-preview1 >/dev/null 2>&1; then
   echo "unsupported prerelease tag was accepted" >&2
   exit 1
 fi
+
+nonrust_case "reject:v1.2.3-preview1"

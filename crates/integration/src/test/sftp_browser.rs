@@ -392,19 +392,12 @@ pub fn test_sftp_toolbar_up() -> Builder {
         // Enter subdirectory
         .with_step(
             TestStep::new("Enter subdirectory")
-                .with_action(|app, window_id, _| {
-                    let view = sftp::sftp_browser_view(app, window_id);
-                    view.update(app, |v, ctx| {
-                        let entry = v
-                            .entries()
-                            .iter()
-                            .find(|entry| entry.name == "subdir")
-                            .unwrap()
-                            .entry_reference(0);
-                        v.handle_action(&SftpBrowserAction::OpenEntry(entry), ctx);
-                    });
-                })
-                .set_post_step_pause(std::time::Duration::from_millis(500)),
+                .with_keystrokes(&["home", "enter"])
+                .add_named_assertion("Entered subdir before returning to its parent", |app, window_id| {
+                    sftp::sftp_browser_view(app, window_id).read(app, |view, _| {
+                        async_assert!(view.entries().iter().any(|entry| entry.name == "file.txt"), "Expected the child directory listing")
+                    })
+                }),
         )
         // Click the parent directory button
         .with_step(
@@ -415,11 +408,12 @@ pub fn test_sftp_toolbar_up() -> Builder {
         .with_step(
             TestStep::new("Verify navigated back to root")
                 .add_assertion(|app, window_id| {
+                    let cursor_path = sftp::cursor_path(app, window_id);
                     let view = sftp::sftp_browser_view(app, window_id);
                     view.read(app, |v, _| {
                         async_assert!(
-                            v.entries().iter().any(|e| e.name == "subdir"),
-                            "Should see subdir directory after navigating back"
+                            v.entries().iter().any(|entry| entry.name == "subdir" && cursor_path.as_ref() == Some(&entry.path)),
+                            "The cursor must return to the departed subdir after navigating up"
                         )
                     })
                 }),

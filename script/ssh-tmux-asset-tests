@@ -4,6 +4,11 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+nonrust_case() {
+  if [ -n "${ZAPLEX_NONRUST_EVENTS:-}" ]; then
+    python3 "$repo_root/script/test-suite-nonrust-events" "$1"
+  fi
+}
 assets="$repo_root/app/assets/bundled/ssh/bash_zsh"
 test_root="$(mktemp -d)"
 trap 'rm -rf -- "$test_root"' EXIT
@@ -117,6 +122,7 @@ exercise_home() {
     )
     assert_tmux_call "$call_log" "$expected_binary"
   done
+  nonrust_case "home:$name"
 }
 
 exercise_home normal
@@ -180,6 +186,7 @@ import subprocess
 import sys
 
 repo, scratch = map(Path, sys.argv[1:])
+nonrust_case = __import__("runpy").run_path(str(repo / "script/test-suite-nonrust-events"))["record"]
 assets = repo / "app/assets/bundled/ssh"
 sources = [assets / "bash_zsh/install_tmux_and_zaplexify_linux.sh"]
 sources.extend(sorted((assets / "bash_zsh/root").glob("*.sh")))
@@ -205,6 +212,7 @@ if fish:
     fish_body = capture.read_text()
     assert fish_body == bodies[0][1], "Fish changed the embedded Bash program"
     bodies.append(("fish", fish_body))
+    nonrust_case("fish-preserves-embedded-bash-body")
 
 command = 'false "quoted" \\path 100% café\nnext\tline\r\x01'
 for name, body in bodies:
@@ -225,4 +233,5 @@ for name, body in bodies:
     assert match, (name, result.stdout)
     hook = json.loads(bytes.fromhex(match[1].decode()))
     assert hook == {"hook": "TmuxInstallFailed", "value": {"line": "17", "command": command}}, name
+    nonrust_case(f"error-helper:{name}")
 PYTHON

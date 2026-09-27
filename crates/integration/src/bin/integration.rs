@@ -399,6 +399,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_selection_last_to_ai_lines);
     register_test!(test_restored_ai_block_renders_mermaid_and_local_images);
     register_test!(test_subscription_agent_conversation_layout_evidence);
+    register_test!(test_native_workspace_connections_evidence);
+    register_test!(test_native_workspace_panes_evidence);
+    register_test!(test_native_workspace_file_managers_evidence);
 
     register_test!(test_agent_mode_pane_minimum_size);
     register_test!(test_git_prompt_chips);

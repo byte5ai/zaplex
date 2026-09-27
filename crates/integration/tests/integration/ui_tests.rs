@@ -297,6 +297,12 @@ integration_tests! {
     test_restored_ai_block_renders_mermaid_and_local_images,
     #[cfg(target_os="macos")]
     test_subscription_agent_conversation_layout_evidence,
+    #[cfg(target_os="macos")]
+    test_native_workspace_connections_evidence,
+    #[cfg(target_os="macos")]
+    test_native_workspace_panes_evidence,
+    #[cfg(target_os="macos")]
+    test_native_workspace_file_managers_evidence,
 
     // Middle-click-paste is only implemented for Linux right now.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

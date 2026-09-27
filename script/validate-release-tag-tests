@@ -2,8 +2,15 @@
 
 set -euo pipefail
 
+nonrust_case() {
+  if [ -n "${ZAPLEX_NONRUST_EVENTS:-}" ]; then
+    python3 "$(dirname "${BASH_SOURCE[0]}")/test-suite-nonrust-events" "$1"
+  fi
+}
+
 for tag in v1.0.29 v1.0.29-rc.1 v0.daemontest v1.0.0+build.5; do
   script/validate-release-tag "$tag"
+  nonrust_case "accept:$tag"
 done
 
 for tag in '' '1.0.0' 'v1.0.0;echo-pwned' 'v1.0.0$(id)' 'v../escape' 'v1.0.0@{1}'; do
@@ -11,6 +18,7 @@ for tag in '' '1.0.0' 'v1.0.0;echo-pwned' 'v1.0.0$(id)' 'v../escape' 'v1.0.0@{1}
     echo "unsafe release tag was accepted: $tag" >&2
     exit 1
   fi
+  nonrust_case "reject:$tag"
 done
 
 echo "release tag validation: ok"

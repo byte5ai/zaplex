@@ -249,6 +249,60 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Native workspace interaction and layout evidence
+        env:
+          WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS: "1"
+          ZAPLEX_INTEGRATION_TEST_ARTIFACTS_DIR: ${{ runner.temp }}/native-workspace
+          ZAPLEX_SHELL_PATH: /bin/zsh
+        run: >
+          cargo test --locked -p integration --test integration
+          ui_tests::test_native_workspace_ -- --nocapture --test-threads=1
+        shell: bash
+
+      - name: Require every native workspace capture
+        run: |
+          set -euo pipefail
+          for screenshot in \
+            native-connections-dark-250 native-connections-dark-320 native-connections-dark-480 \
+            native-connections-light-250 native-connections-light-320 native-connections-light-480 \
+            native-favorite-flyout native-panes-side-by-side native-panes-after-drag \
+            native-file-managers-normal native-file-managers-narrow \
+            native-file-manager-focused-action native-file-managers-restored-terminals; do
+            test "$(find "${{ runner.temp }}/native-workspace" -type f -name "$screenshot.png" -size +0c | wc -l | tr -d ' ')" -ge 1
+          done
+        shell: bash
+
+      - name: Bind native captures to their source and fixture scope
+        env:
+          NATIVE_ARTIFACT_PATH: ${{ runner.temp }}/native-workspace
+        run: |
+          python3 - <<'PYTHON'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["NATIVE_ARTIFACT_PATH"])
+          images = [{"path": str(path.relative_to(root)), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                    for path in sorted(root.rglob("*.png"))]
+          (root / "evidence.json").write_text(json.dumps({
+              "source_sha": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "images": images,
+              "scope": "Native app render/event assertions; deterministic labelled host/session inventory; real isolated local PTYs and files.",
+              "not_covered": ["live SSH/daemon/provider acceptance", "OS reduced motion", "restart restore", "cross-host transfers"]
+          }, indent=2) + "\n")
+          PYTHON
+        shell: bash
+
+      - name: Upload native workspace evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-workspace-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/native-workspace/
+          if-no-files-found: warn
+          retention-days: 14
+
   keymap_smoke_test:
     name: keymap validation (Linux x86_64)
     needs: changes

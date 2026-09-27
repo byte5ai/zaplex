@@ -1579,6 +1579,36 @@ impl SshManagerPanel {
         refresh_pending
     }
 
+    /// Supply deterministic layout data through the normal inventory completion
+    /// path. This never connects to a host and is not live-runtime evidence.
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn apply_layout_inventory(
+        &mut self,
+        node_id: &str,
+        inventory: crate::remote_server::session_inventory::HostSessionInventory,
+        ctx: &mut ViewContext<Self>,
+    ) -> Vec<String> {
+        assert!(self.nodes.iter().any(|node| node.id == node_id));
+        let keys = inventory
+            .sessions
+            .iter()
+            .map(|session| session_row_key(node_id, &session.session, session.route.as_ref()))
+            .chain(
+                inventory
+                    .multiplexers
+                    .sessions
+                    .iter()
+                    .map(|session| multiplexer_row_key(node_id, session)),
+            )
+            .collect();
+        self.sessions_expanded.insert(node_id.to_string());
+        let generation = self
+            .begin_session_fetch(node_id)
+            .expect("fixture has no in-flight fetch");
+        assert!(!self.complete_session_fetch(node_id, generation, Ok(inventory), ctx));
+        keys
+    }
+
     /// Fetches a server's running daemon sessions via connect-to-list and stores
     /// them in `host_session_inventories` (or records `sessions_error`).
     #[allow(unused_variables)]
