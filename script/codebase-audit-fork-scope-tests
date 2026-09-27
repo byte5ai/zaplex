@@ -92,6 +92,16 @@ class ForkScopeTest(unittest.TestCase):
         with mock.patch.dict(GENERATOR["generate"].__globals__, {"run_git": guarded}):
             self.generate()
 
+    def test_text_hunks_ignore_unpinned_binary_attributes(self):
+        expected = self.generate()
+        for attribute_file in (self.repo / ".gitattributes", self.repo / ".git/info/attributes"):
+            with self.subTest(attribute_file=attribute_file):
+                attribute_file.write_text("* -diff\n", encoding="utf-8")
+                try:
+                    self.assertEqual(self.generate(), expected)
+                finally:
+                    attribute_file.unlink()
+
     def test_git_replace_is_rejected(self):
         self.git("replace", self.target, self.base)
         with self.assertRaisesRegex(GENERATOR["InventoryError"], "replace refs"):

@@ -68,7 +68,7 @@ def generate(repo, target, upstream, base):
             patch = run_git(
                 repo, "--literal-pathspecs", "diff", "--no-color", "--no-relative",
                 "--diff-algorithm=myers", "--no-indent-heuristic",
-                "--no-ext-diff", "--no-textconv", "--no-renames",
+                "--no-ext-diff", "--no-textconv", "--no-renames", "--text",
                 "--unified=0", base, target, "--", path,
             )
             hunks = [

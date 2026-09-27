@@ -4,6 +4,10 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- SSH-Installationsfehler (#245) liefern gültige Statusmeldungen auch bei Sonderzeichen im Befehl. Fish übergibt das eingebettete Skript unverändert; portable tmux-Wrapper behandeln den Home-Pfad als Daten.
+
+- Fork-Auditbelege (#245) prüfen gespeicherte Reviewartefakte einschließlich ihrer Quellblobs statt nur Hashformate. Als binär markierte UTF-8-Dateien behalten ihre tatsächlichen Fork-Hunks im Inventar.
+
 - Terminalbilder (#245) erhalten pro Übertragung einen eigenen Cache-Schlüssel. Gleiche Kitty-Bildnummern in verschiedenen Terminals überschreiben einander nicht; verspätetes Aufräumen entfernt keine neu übertragenen Bilder.
 
 - Automatische SSH-Starts (#245) erhalten den aktuellen Eingabeentwurf sowie ausgewählte Workflows und Umgebungsdaten. Nur der zugehörige Systembefehl darf den Entwurf beim Abschluss erhalten.
