@@ -131,6 +131,20 @@ jobs:
           PYTHON
         shell: bash
 
+      - name: Record coverage dependency diagnostics
+        if: ${{ inputs.coverage }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/suite-evidence"
+          # Diagnostic resolution, not proof of every crate's effective rustc cfg.
+          cargo metadata --locked --format-version 1 --filter-platform x86_64-unknown-linux-gnu \
+            > "$RUNNER_TEMP/suite-evidence/cargo-metadata.json"
+          cargo tree --locked --workspace --exclude command-signatures-v2 \
+            --target x86_64-unknown-linux-gnu --edges features \
+            > "$RUNNER_TEMP/suite-evidence/cargo-feature-tree.txt"
+          rustc --print cfg --target x86_64-unknown-linux-gnu \
+            > "$RUNNER_TEMP/suite-evidence/rustc-target-default-cfg.txt"
+        shell: bash
+
       - name: Rust workspace coverage tests
         id: coverage_tests
         if: ${{ inputs.coverage }}
@@ -141,14 +155,26 @@ jobs:
           --profile ci --no-report
         shell: bash
 
+      - name: Export LLVM coverage regions
+        id: coverage_regions
+        if: ${{ inputs.coverage && always() }}
+        env:
+          CARGO_LLVM_COV_TARGET_DIR: ${{ runner.temp }}/suite-coverage-target
+        run: |
+          mkdir -p "$RUNNER_TEMP/suite-evidence"
+          cargo llvm-cov report --json --output-path "$RUNNER_TEMP/suite-evidence/rust-llvm-coverage.json"
+        shell: bash
+
       - name: Export coverage and execution evidence
         if: ${{ inputs.coverage && always() }}
         env:
           CARGO_LLVM_COV_TARGET_DIR: ${{ runner.temp }}/suite-coverage-target
           TEST_OUTCOME: ${{ steps.coverage_tests.outcome }}
+          REGION_EXPORT_OUTCOME: ${{ steps.coverage_regions.outcome }}
         run: |
           mkdir -p "$RUNNER_TEMP/suite-evidence"
           printf '%s\n' "$TEST_OUTCOME" > "$RUNNER_TEMP/suite-evidence/test-outcome.txt"
+          printf '%s\n' "$REGION_EXPORT_OUTCOME" > "$RUNNER_TEMP/suite-evidence/region-export-outcome.txt"
           if [ -f "$CARGO_LLVM_COV_TARGET_DIR/nextest/ci/junit.xml" ]; then
             cp "$CARGO_LLVM_COV_TARGET_DIR/nextest/ci/junit.xml" "$RUNNER_TEMP/suite-evidence/junit.xml"
           fi

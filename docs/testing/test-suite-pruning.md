@@ -51,8 +51,16 @@ unselektiert und erzeugt:
   tatsächlicher Aufruf, relevante Compilerumgebung und ursprünglicher Checkout-Pfad;
 - `junit.xml`: tatsächlich ausgeführte Tests und Laufzeiten;
 - `rust-lcov.info`: vollständige LLVM-Zeilendaten zur anschließenden Produktionsprojektion;
+- `rust-llvm-coverage.json`: vollständiger LLVM-JSON-Export mit Funktionen und Regionen aus demselben instrumentierten Lauf;
+- `cargo-metadata.json`, `cargo-feature-tree.txt` und `rustc-target-default-cfg.txt`: Abhängigkeits-/Featuredaten und Zielstandardkonfiguration als zusätzliche Diagnostik;
+- `region-export-outcome.txt`: Ergebnis des getrennten LLVM-JSON-Exports; ein Exportfehler bleibt ein fehlgeschlagener CI-Schritt;
 - `source-projection-preflight.json`: AST-Diagnose vor dem ersten Cargo-Schritt;
 - `test-outcome.txt` und bei erfolgreicher, vollständiger Messung `summary.json`.
+
+Die zusätzlichen Rohdaten lösen unklare Regionen nicht automatisch auf. Insbesondere
+beweist ein Cargo-Auflösungsgraph oder `rustc --print cfg` allein nicht die effektiven
+Features und generierten Bedingungen jeder Host-/Test-/Produktionskompilierung.
+Der bestehende Auswerter bleibt bei nicht belegbaren Regionen `unproven`.
 
 Auch bei Fehlern werden verfügbare Diagnoseartefakte hochgeladen. Der fehlgeschlagene
 Testschritt bleibt fehlgeschlagen: Es gibt kein `--ignore-run-fail`. Ein abgebrochener
