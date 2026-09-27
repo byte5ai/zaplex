@@ -6220,3 +6220,107 @@ fn replacing_remote_terminal_surface_preserves_the_pane_configuration() {
         });
     });
 }
+
+#[test]
+fn launch_config_keeps_active_tab_identity_when_a_later_tab_is_pinned() {
+    use crate::launch_configs::launch_config::{PaneMode, PaneTemplateType, TabTemplate};
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let directory = tempfile::tempdir().unwrap();
+        for placement in [
+            NewTabPlacement::AfterCurrentTab,
+            NewTabPlacement::AfterAllTabs,
+        ] {
+            app.update(|ctx| {
+                TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    settings
+                        .new_tab_placement
+                        .set_value(placement, ctx)
+                        .unwrap();
+                });
+            });
+            let workspace = mock_workspace(&mut app);
+            workspace.update(&mut app, |workspace, ctx| {
+                let template = |title: &str, is_pinned, color| TabTemplate {
+                    title: Some(title.to_string()),
+                    is_pinned,
+                    color: Some(color),
+                    layout: PaneTemplateType::PaneTemplate {
+                        cwd: directory.path().to_path_buf(),
+                        commands: Vec::new(),
+                        is_focused: Some(true),
+                        pane_mode: PaneMode::Terminal,
+                        shell: None,
+                    },
+                };
+                workspace.open_launch_config_window(
+                    WindowTemplate {
+                        active_tab_index: Some(0),
+                        tabs: vec![
+                            template("selected", false, AnsiColorIdentifier::Red),
+                            template("later pinned", true, AnsiColorIdentifier::Blue),
+                        ],
+                    },
+                    ctx,
+                );
+                assert!(workspace.tabs[0].is_pinned);
+                assert_eq!(
+                    workspace.tabs[0].selected_color,
+                    SelectedTabColor::Color(AnsiColorIdentifier::Blue)
+                );
+                let active = &workspace.tabs[workspace.active_tab_index()];
+                assert!(!active.is_pinned);
+                assert_eq!(
+                    active.selected_color,
+                    SelectedTabColor::Color(AnsiColorIdentifier::Red)
+                );
+            });
+        }
+    });
+}
+
+#[test]
+fn empty_or_invalid_launch_templates_open_a_usable_workspace() {
+    use crate::launch_configs::launch_config::{PaneTemplateType, SplitDirection, TabTemplate};
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        for tabs in [
+            Vec::new(),
+            vec![TabTemplate {
+                title: Some("invalid empty branch".to_string()),
+                is_pinned: false,
+                color: None,
+                layout: PaneTemplateType::PaneBranchTemplate {
+                    split_direction: SplitDirection::Horizontal,
+                    panes: Vec::new(),
+                },
+            }],
+        ] {
+            let window_template = WindowTemplate {
+                active_tab_index: Some(0),
+                tabs,
+            };
+            let global_resource_handles = GlobalResourceHandles::mock(&mut app);
+            let (_, workspace) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+                Workspace::new(
+                    global_resource_handles,
+                    None,
+                    NewWorkspaceSource::FromTemplate {
+                        window_template: window_template.clone(),
+                    },
+                    ctx,
+                )
+            });
+            workspace.update(&mut app, |workspace, ctx| {
+                assert_eq!(workspace.tab_count(), 1);
+                let original_group = workspace.active_tab_pane_group().id();
+                assert!(workspace.active_tab_pane_group().as_ref(ctx).pane_count() > 0);
+                workspace.open_launch_config_window(window_template, ctx);
+                assert_eq!(workspace.tab_count(), 1);
+                assert_eq!(workspace.active_tab_pane_group().id(), original_group);
+            });
+        }
+    });
+}

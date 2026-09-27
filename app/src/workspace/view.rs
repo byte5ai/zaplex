@@ -5027,11 +5027,10 @@ impl Workspace {
         // NewTabPlacement setting (append, or after the active tab) and then
         // activates the tab it inserted — so `self.active_tab_index` afterward is
         // that tab's real index. We use it directly rather than assuming tabs
-        // append, and record the real index of the config's active tab so a
-        // skipped tab before it doesn't shift focus onto the wrong one.
+        // append. Keep the active tab's stable identity because pinning a later
+        // tab can move it in front of an already inserted tab.
         let original_active = window.active_tab_index.unwrap_or_default();
-        let mut active_tab_index: Option<usize> = None;
-        let mut added = false;
+        let mut active_pane_group_id = None;
         for (original_index, tab_template) in window.tabs.iter().enumerate() {
             if !tab_template.layout.is_openable() {
                 log::warn!(
@@ -5046,7 +5045,6 @@ impl Workspace {
                 tab_template.title.clone(),
                 ctx,
             );
-            added = true;
             let inserted = self.active_tab_index;
             self.tabs[inserted].selected_color = tab_template
                 .color
@@ -5055,16 +5053,16 @@ impl Workspace {
                 .set_tab_pinned(inserted, tab_template.is_pinned, ctx)
                 .unwrap_or(inserted);
             if original_index == original_active {
-                active_tab_index = Some(inserted);
+                active_pane_group_id = Some(self.tabs[inserted].pane_group.id());
             }
         }
 
         // Focus the config's active tab. If it was itself skipped, leave the
         // last-added tab active (each add already activated the tab it inserted).
-        if added {
-            if let Some(index) = active_tab_index {
-                self.activate_tab_internal(index, ctx);
-            }
+        if let Some(index) = active_pane_group_id
+            .and_then(|id| self.tabs.iter().position(|tab| tab.pane_group.id() == id))
+        {
+            self.activate_tab_internal(index, ctx);
         }
     }
 
@@ -5311,6 +5309,17 @@ impl Workspace {
             }
             NewWorkspaceSource::FromTemplate { window_template } => {
                 self.open_launch_config_window(window_template, ctx);
+                // An empty or entirely invalid template must still produce a usable window.
+                if self.tabs.is_empty() {
+                    self.add_new_session_tab_with_default_mode(
+                        NewSessionSource::Window,
+                        None,
+                        None,
+                        None,
+                        false,
+                        ctx,
+                    );
+                }
                 self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::Session { options } => {

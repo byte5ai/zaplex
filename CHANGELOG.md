@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Startvorlagen (#245) behalten den ausgewählten Tab auch dann, wenn ein späterer Tab angepinnt wird. Leere oder vollständig ungültige Vorlagen öffnen ein nutzbares Fenster statt beim fehlenden aktiven Tab abzubrechen.
+
 - Dateiübertragungen (#245/#464) erhalten leere Ordner und halten laufende Rückrufe beim Aufräumen abgeschlossener Transfers gültig. Lokale Pfade bleiben in ihrem nativen Format erhalten; Windows-Downloads weisen Laufwerkswechsel und alternative Datenströme in entfernten Dateinamen zurück.
 
 - Mehrhost-Terminals (#245/#456) übernehmen Ausgabe, Sitzungsende und Hinweise nur von ihrer eigenen Daemon-Verbindung, auch wenn ein anderer Host dieselbe PTY-Kennung verwendet.
