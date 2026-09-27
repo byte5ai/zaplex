@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::os::windows::io::{AsRawHandle, BorrowedHandle, OwnedHandle, RawHandle};
 use std::os::windows::process::CommandExt as _;
 use std::sync::{Arc, Mutex};
 
@@ -22,6 +23,9 @@ pub enum JobObjectError {
 
     #[error("Failed to terminate job: {0}")]
     TerminateFailed(std::io::Error),
+
+    #[error("Failed to retain process identity: {0}")]
+    RetainProcessFailed(std::io::Error),
 
     #[error("Failed to resume suspended process (NTSTATUS {0:#010x})")]
     ResumeFailed(u32),
@@ -128,15 +132,22 @@ impl JobObject {
 #[derive(Debug)]
 struct ProcessGroup {
     job: win32job::Job,
+    // Prevent PID reuse after Child::output drops its handle and before group cleanup ends.
+    root_process: OwnedHandle,
 }
 
 impl ProcessGroup {
     fn for_process(process: isize) -> Result<Self, JobObjectError> {
+        // SAFETY: the spawning Child still owns this live process handle. The duplicate
+        // independently pins the process identity for the entire registry entry lifetime.
+        let root_process = unsafe { BorrowedHandle::borrow_raw(process as RawHandle) }
+            .try_clone_to_owned()
+            .map_err(JobObjectError::RetainProcessFailed)?;
         let job = JobObject::new()
             .assign_process(process)
             .kill_children_on_close()
             .build()?;
-        Ok(Self { job })
+        Ok(Self { job, root_process })
     }
 
     fn terminate(&self) -> Result<(), JobObjectError> {
@@ -189,7 +200,7 @@ pub(super) fn register_and_resume_process_group(
     process: isize,
 ) -> Result<(), JobObjectError> {
     let group = Arc::new(ProcessGroup::for_process(process)?);
-    resume_process(process)?;
+    resume_process(group.root_process.as_raw_handle() as isize)?;
     let replaced = PROCESS_GROUPS.lock().unwrap().insert(pid, group);
     if replaced.is_some() {
         log::warn!("Replaced a stale Windows process group for reused pid {pid}");
@@ -255,3 +266,7 @@ impl CommandExt for crate::r#async::Command {
         self
     }
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;

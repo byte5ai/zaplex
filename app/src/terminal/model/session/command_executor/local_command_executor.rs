@@ -286,6 +286,13 @@ impl CommandExecutor for LocalCommandExecutor {
     }
 
     fn cancel_active_commands(&self) {
+        // Windows cleanup removes the PID before releasing its identity-pinning Job Object.
+        // Hold the set lock through cancellation so an old snapshot cannot target a reused PID.
+        #[cfg(windows)]
+        let spawned_children_guard = self.spawned_children_pids.lock();
+        #[cfg(windows)]
+        let spawned_children_pids = spawned_children_guard.iter().copied();
+        #[cfg(not(windows))]
         let spawned_children_pids: Vec<_> =
             self.spawned_children_pids.lock().iter().copied().collect();
         for pid in spawned_children_pids {
