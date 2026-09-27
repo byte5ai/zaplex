@@ -123,7 +123,7 @@ Ein numerisch guter Vergleich allein schließt #472 nicht:
    Buildskripte und generierte `target`-Quellen sind explizite Policy-Ausschlüsse.
    Die Quote gilt für instrumentierte Linux-Produktionsquellen dieser Policy,
    nicht für nie kompilierte Plattformzweige.
-   Projektionspolicy **4** behandelt die quellenbasiert bestätigten Grammatiklücken
+   Projektionspolicy **5** behandelt die quellenbasiert bestätigten Grammatiklücken
    bei Attributen in Rust-Strukturmustern und der Reihenfolge `dyn 'static + Fn`.
    Die Normalisierung verlangt echte Attribut-/Schlüsselwort-Tokens sowie eine
    anschließend fehlerfrei geparste Struktur; Attribute werden wieder ihrem
@@ -136,6 +136,11 @@ Ein numerisch guter Vergleich allein schließt #472 nicht:
    Namen sowie Matcher-/Transcriber-Quellhash gebunden. Sein Templatecode zählt
    auch bei Aufrufen mit Testtypen als Produktionsquelle, wie generischer Code;
    nur der vollständige explizit testabhängige `new_with_defaults`-Block entfällt.
+   Policy 5 bindet zusätzlich `app/src/server/ids.rs::server_id_traits!` über
+   dieselben exakten Identitäts-/Quellhashbelege. Der vollständige `#[cfg(test)]`
+   `From<i64>`-Impl entfällt; alle Produktionsmethoden bleiben erhalten. Diese
+   Regel folgt der Template-Quellabdeckung, keiner aus Symbolnamen geratenen
+   Instanzzuordnung. Andere Makros werden dadurch nicht freigegeben.
    Geänderte oder unerwartete Makrostrukturen bleiben `unproven`. Nulltreffer
    bleiben im Nenner. Diese Template-Quellabdeckung belegt weder jede reale
    Instanz noch jede Konfiguration oder eingesetzte Argumentexpression.
@@ -143,7 +148,7 @@ Ein numerisch guter Vergleich allein schließt #472 nicht:
    zuordenbare Makro-/LLVM-Regionen werden weiterhin abgewiesen. Betroffene
    Coverage-Zeilen erscheinen unter `unresolved_production_lines`; der vollständige
    Prozentwert bleibt dann `null`, der Status `unproven`. Auswertungen der
-   Policies 1, 2, 3 und 4 sind wegen unterschiedlicher Policy-Hashes nicht direkt
+   Policies 1, 2, 3, 4 und 5 sind wegen unterschiedlicher Policy-Hashes nicht direkt
    vergleichbar; Baseline und Kandidat benötigen dieselbe Policy.
    `partial_known_line_coverage_percent` ist ausdrücklich nur eine Teilstatistik.
    Ein solcher Bericht kann die 2-Prozentpunkte-Grenze **nicht** erfüllen; dafür

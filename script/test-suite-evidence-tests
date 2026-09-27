@@ -270,3 +270,55 @@ with tempfile.TemporaryDirectory() as temporary:
     assert measured['source_line_coverage_percent'] == 0
     assert measured['excluded_test_or_nonproduction_lines'] == 1
 print('reviewed production macro template, exact source binding and zero-hit denominator: ok')
+
+
+# The second reviewed template retains all production methods, including DA:0,
+# while the entire cfg(test) From<i64> impl remains outside production coverage.
+macro_relative = 'app/src/server/ids.rs'
+macro_source = (Path(__file__).resolve().parent.parent / macro_relative).read_bytes()
+macro_start = macro_source.index(b'macro_rules! server_id_traits')
+helper_start = macro_source.index(b'#[cfg(test)]', macro_start)
+helper_end = macro_source.index(b'\n        }', helper_start) + len(b'\n        }')
+first_helper_line = macro_source[:helper_start].count(b'\n') + 1
+last_helper_line = macro_source[:helper_end].count(b'\n') + 1
+production_start = macro_source.index(b'fn from(id: String)', macro_start)
+production_line = macro_source[:production_start].count(b'\n') + 1
+mapping, _, _, diagnostics = project(macro_source, macro_relative)
+assert not diagnostics
+assert production_line in mapping
+assert all(line not in mapping for line in range(first_helper_line, last_helper_line + 1))
+assert project(macro_source)[3]
+assert project(macro_source, 'app/src/other/ids.rs')[3]
+for old, new in (
+    (b'Self(id.into())', b'Self(id /* changed */.into())'),
+    (b'ServerId::from_string_lossy(id)', b'ServerId::from_string_lossy(id /* changed */)'),
+    (b'($t:ty, $prefix:literal)', b'($t:path, $prefix:literal)'),
+    (b'#[cfg(test)]', b'#[cfg(unix)]'),
+    (b'#[cfg(test)]', b'#[cfg(any(test, feature="unknown"))]'),
+    (b'macro_rules! server_id_traits', b'macro_rules! another_id_traits'),
+):
+    changed = macro_source[:macro_start] + macro_source[macro_start:].replace(old, new, 1)
+    assert changed != macro_source
+    assert project(changed, macro_relative)[3]
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    source = root / macro_relative
+    source.parent.mkdir(parents=True)
+    source.write_bytes(macro_source)
+    (source.parent.parent / 'lib.rs').write_text('mod server { pub mod ids; }\n')
+    (root / 'provenance.json').write_text(json.dumps({
+        'commit': 'a' * 40, 'source_root': '/checkout',
+        'run_url': 'https://github.com/byte5ai/zaplex/actions/runs/1',
+    }))
+    (root / 'test-outcome.txt').write_text('success')
+    (root / 'junit.xml').write_text('<testsuites tests="1" failures="0" errors="0" time="1"><testsuite name="demo" tests="1" failures="0" errors="0"><testcase name="case" time="1"/></testsuite></testsuites>')
+    (root / 'rust-lcov.info').write_text(
+        f'SF:/checkout/{macro_relative}\nDA:{production_line},0\nDA:{last_helper_line},50\nend_of_record\n'
+    )
+    measured = measure_fixture(root, root)
+    assert measured['production_projection_status'] == 'pass'
+    assert measured['source_lines'] == 1
+    assert measured['covered_source_lines'] == 0
+    assert measured['source_line_coverage_percent'] == 0
+    assert measured['excluded_test_or_nonproduction_lines'] == 1
+print('reviewed server-ID template, full test impl exclusion and zero-hit denominator: ok')

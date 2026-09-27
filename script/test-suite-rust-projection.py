@@ -14,7 +14,7 @@ from tree_sitter import Language, Parser
 import tree_sitter_rust
 
 POLICY = {
-    "version": 4,
+    "version": 5,
     "parser": "tree-sitter=0.25.2,tree-sitter-rust=0.24.2",
     "target": "x86_64-unknown-linux-gnu",
     "test_only_features": ["test-util", "integration_tests"],
@@ -24,6 +24,12 @@ POLICY = {
         "name": "define_settings_group",
         "matcher_sha256": "8700868c17c97ca28bd977d0af37b4787bfd43815e8da420bba7d12cca220d44",
         "transcriber_sha256": "1f2c4c348a6dfc968a26a1805d7f18445cdb65cfa147703f1cdcce87eb862c9b",
+    },
+    "reviewed_server_id_template": {
+        "path": "app/src/server/ids.rs",
+        "name": "server_id_traits",
+        "matcher_sha256": "b7fbcd8a7a5f17a6655e0fdc8f45b0cdeb6f7393c0d5652602604a4cd6d20302",
+        "transcriber_sha256": "210fd6e8897adbdfa422aa579ed3754fb366bcd9c65ddc9e5c9be33e1f3240f0",
     },
     "excluded_paths": ["separate test files", "crates/integration", "build scripts", "generated target files"],
     "test_attributes": ["test", "tokio::test", "warpui::test", "test_case", "rstest", "proptest"],
@@ -205,9 +211,8 @@ def parse_source(source):
     return tree, selected
 
 
-def reviewed_settings_test_helper(node, source, relative):
-    """Recognize one reviewed production template, never arbitrary macro names."""
-    contract = POLICY['reviewed_settings_template']
+def reviewed_macro_transcriber(node, source, relative, contract):
+    """Bind a reviewed template to its original bytes and exact top-level identity."""
     if (relative != contract['path'] or node.type != 'macro_definition'
             or node.parent.type != 'source_file'
             or node.child_by_field_name('name').text.decode() != contract['name']):
@@ -223,6 +228,14 @@ def reviewed_settings_test_helper(node, source, relative):
                            (transcriber, contract['transcriber_sha256'])):
         if hashlib.sha256(source[part.start_byte:part.end_byte]).hexdigest() != expected:
             return None
+    return transcriber
+
+
+def reviewed_settings_test_helper(node, source, relative):
+    transcriber = reviewed_macro_transcriber(
+        node, source, relative, POLICY['reviewed_settings_template'])
+    if transcriber is None:
+        return None
     names = [part for part in descendants(transcriber)
              if part.type == 'identifier' and part.text == b'new_with_defaults']
     if len(names) != 1:
@@ -243,6 +256,24 @@ def reviewed_settings_test_helper(node, source, relative):
             or cfg_values('any(test, feature="integration_tests")') != {False}):
         return None
     return tokens[index - 6].start_byte, body.end_byte
+
+
+def reviewed_server_id_test_helper(node, source, relative):
+    transcriber = reviewed_macro_transcriber(
+        node, source, relative, POLICY['reviewed_server_id_template'])
+    if transcriber is None:
+        return None
+    tokens = list(transcriber.children)
+    expected = [b'{', b'#', b'[cfg(test)]', b'impl', b'From', b'<',
+                b'i64', b'>', b'for', b'$t']
+    if len(tokens) < 11 or [part.text for part in tokens[:10]] != expected:
+        return None
+    body = tokens[10]
+    if (body.type != 'token_tree' or body.children[0].type != '{'
+            or body.children[-1].type != '}' or cfg_values('test') != {False}):
+        return None
+    # Exclude the entire impl, including its cfg attribute and closing brace.
+    return tokens[1].start_byte, body.end_byte
 
 
 def project_source(source, relative=None):
@@ -304,12 +335,15 @@ def project_source(source, relative=None):
                 else:
                     walk(body, (*inline, name), suppressed)
             elif child.type in {'macro_definition', 'macro_invocation'}:
-                contract = POLICY['reviewed_settings_template']
-                reviewed_candidate = (child.type == 'macro_definition'
-                                      and relative == contract['path']
-                                      and child.child_by_field_name('name').text.decode() == contract['name'])
+                contracts = (POLICY['reviewed_settings_template'], POLICY['reviewed_server_id_template'])
+                reviewed_candidate = child.type == 'macro_definition' and any(
+                    relative == contract['path']
+                    and child.child_by_field_name('name').text.decode() == contract['name']
+                    for contract in contracts)
                 if not suppressed and (reviewed_candidate or re.search(rb'#\s*\[.*?(?:\btest\b|test-util|integration_tests)', child.text, re.S)):
                     test_helper = reviewed_settings_test_helper(child, source, relative)
+                    if test_helper is None:
+                        test_helper = reviewed_server_id_test_helper(child, source, relative)
                     if test_helper is not None:
                         # Test instances exercise the production template just as
                         # test types exercise generic production functions.
