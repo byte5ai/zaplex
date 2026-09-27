@@ -13996,6 +13996,12 @@ impl TerminalView {
         self.execute_pending_command((), ctx);
     }
 
+    /// Whether a routed launch can be serialized for this terminal without
+    /// changing input or launch state. Lifecycle actions check this before killing.
+    pub(crate) fn can_execute_routed_agent_launch(&self, ctx: &AppContext) -> bool {
+        !self.remote_raw_terminal && self.active_session_shell_type(ctx).is_some()
+    }
+
     /// Render a routed CLI-agent launch for this terminal's actual shell, then
     /// execute it or retain it until bootstrap completes.
     pub(crate) fn execute_routed_agent_launch_or_set_pending(

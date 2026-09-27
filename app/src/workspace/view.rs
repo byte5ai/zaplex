@@ -1011,12 +1011,12 @@ struct TransferredTabIdentity {
 /// One remote file being edited over *classic* SSH (no daemon) via a local
 /// working copy: the editor edits the copy, and each save uploads it back to
 /// the host over SFTP. Held in [`Workspace::remote_sftp_edits`], keyed by the
-/// working copy's canonical local path. Entries and their private directories live until the
-/// workspace is dropped; closing a tab stops save events but does not prune the registry yet.
+/// working copy's canonical local path. Failed or still-pending saves retain their
+/// private directory after workspace drop; confirmed copies are removed normally.
 #[cfg(all(unix, feature = "local_tty"))]
 struct RemoteSftpEdit {
-    /// Owns and removes the private local working directory with this registry entry.
-    _working_dir: tempfile::TempDir,
+    /// Cleanup is disabled from local save until the latest upload succeeds.
+    working_dir: tempfile::TempDir,
     /// SSH node id the file lives on (used in status/error toasts).
     node_label: String,
     /// Absolute path on the remote host to upload back to.
@@ -1029,6 +1029,27 @@ struct RemoteSftpEdit {
     /// A save arrived while an upload was in flight — re-upload once it finishes,
     /// so no keystroke-run is silently dropped.
     resave_pending: bool,
+}
+
+#[cfg(all(unix, feature = "local_tty"))]
+impl RemoteSftpEdit {
+    fn saved_locally(&mut self) -> bool {
+        // Keep the only saved copy even if the workspace closes before completion.
+        self.working_dir.disable_cleanup(true);
+        if self.uploading {
+            self.resave_pending = true;
+            return false;
+        }
+        self.uploading = true;
+        true
+    }
+
+    fn upload_finished(&mut self, succeeded: bool) -> bool {
+        self.uploading = false;
+        let resave = std::mem::take(&mut self.resave_pending);
+        self.working_dir.disable_cleanup(!succeeded || resave);
+        resave
+    }
 }
 
 /// Pure inversion of the daemon↔node association: find the SSH `node_id` whose
@@ -1089,7 +1110,7 @@ fn spawn_host_scope_requires_explicit_selection(
 }
 
 /// Creates a private local directory for one classic-SSH remote-edit working copy.
-/// The owning registry entry keeps it alive until the workspace is dropped and then removes it.
+/// Confirmed copies are removed on workspace drop; unconfirmed saves disable cleanup.
 #[cfg(all(unix, feature = "local_tty"))]
 fn remote_sftp_edit_working_dir() -> std::io::Result<tempfile::TempDir> {
     tempfile::Builder::new()
@@ -2126,6 +2147,8 @@ pub struct Workspace {
     /// Managed Spawn-Card attempts awaiting the daemon's authoritative
     /// SessionOpened acknowledgement, keyed by their immutable launch id.
     pending_managed_spawns: PendingManagedSpawns,
+    pending_spawn_directory_pick: Option<(uuid::Uuid, u64)>,
+    pending_agent_restarts: HashMap<EntityId, (uuid::Uuid, SessionId)>,
     /// A single scoped timer follows open live transcript documents. It stops
     /// when the final weak document handle or live route disappears.
     transcript_refresh_timer_active: bool,
@@ -4662,6 +4685,8 @@ impl Workspace {
             watched_transcripts: HashMap::new(),
             local_transcript_reads_in_flight: 0,
             pending_managed_spawns: PendingManagedSpawns::default(),
+            pending_spawn_directory_pick: None,
+            pending_agent_restarts: HashMap::new(),
             transcript_refresh_timer_active: false,
             cockpit_jump_cursor: None,
             agent_toast_stack,
@@ -4849,6 +4874,12 @@ impl Workspace {
         event: &CLIAgentSessionsModelEvent,
         ctx: &mut ViewContext<Self>,
     ) {
+        if let CLIAgentSessionsModelEvent::Started {
+            terminal_view_id, ..
+        } = event
+        {
+            self.pending_agent_restarts.remove(terminal_view_id);
+        }
         if matches!(
             event,
             CLIAgentSessionsModelEvent::Started { .. }
@@ -6401,10 +6432,38 @@ impl Workspace {
         routes
     }
 
+    fn begin_agent_restart(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<uuid::Uuid> {
+        let terminal = Self::terminal_view_handle(terminal_view_id, ctx);
+        let shell_session = terminal.as_ref().and_then(|view| {
+            let view = view.as_ref(ctx);
+            (self.workspace_contains_terminal_view(terminal_view_id, ctx)
+                && view.can_execute_routed_agent_launch(ctx))
+            .then(|| view.active_block_session_id())
+            .flatten()
+        });
+        let Some(shell_session) = shell_session else {
+            self.show_agent_launch_error(
+                "Restart requires an open pane in this window with a known terminal shell."
+                    .to_string(),
+                ctx,
+            );
+            return None;
+        };
+        let ticket = uuid::Uuid::new_v4();
+        self.pending_agent_restarts
+            .insert(terminal_view_id, (ticket, shell_session));
+        Some(ticket)
+    }
+
     fn complete_agent_restart(
         &mut self,
         plan: crate::cockpit::session_lifecycle::RestartPlan,
         terminal_view_id: EntityId,
+        ticket: uuid::Uuid,
         signal: GuardrailSendOutcome,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -6412,6 +6471,15 @@ impl Workspace {
             ResumeInvocation, SessionAccountRoute, SessionHostRoute,
         };
 
+        let Some((current_ticket, shell_session)) =
+            self.pending_agent_restarts.get(&terminal_view_id).copied()
+        else {
+            return;
+        };
+        if current_ticket != ticket {
+            return;
+        }
+        self.pending_agent_restarts.remove(&terminal_view_id);
         match signal {
             GuardrailSendOutcome::Sent => {}
             signal => {
@@ -6439,6 +6507,18 @@ impl Workspace {
             );
             return;
         };
+        if !self.workspace_contains_terminal_view(terminal_view_id, ctx)
+            || terminal_view.as_ref(ctx).active_block_session_id() != Some(shell_session)
+            || !terminal_view
+                .as_ref(ctx)
+                .can_execute_routed_agent_launch(ctx)
+        {
+            self.show_agent_launch_error(
+                "The terminal changed while its agent was stopping; restart cancelled.".to_string(),
+                ctx,
+            );
+            return;
+        }
         let agent = crate::cockpit::agent_of(plan.route.provider);
         let launch = match &plan.resume {
             ResumeInvocation::LocalShell { launch } => launch.clone(),
@@ -6490,6 +6570,29 @@ impl Workspace {
                     return;
                 }
             };
+        // The old process may already have ended, but another conversation in
+        // this same view must never be removed by its delayed kill response.
+        let config_dir_string = config_dir.map(|path| path.to_string_lossy().into_owned());
+        if CLIAgentSessionsModel::as_ref(ctx)
+            .session(terminal_view_id)
+            .is_some()
+            && Self::terminal_view_id_for_agent_session(
+                agent,
+                &plan.route.session_id,
+                config_dir_string.as_deref(),
+                account_email,
+                account_id,
+                host,
+                matches!(&plan.route.host, SessionHostRoute::Local),
+                ctx,
+            ) != Some(terminal_view_id)
+        {
+            self.show_agent_launch_error(
+                "The agent in this pane changed while stopping; restart cancelled.".to_string(),
+                ctx,
+            );
+            return;
+        }
         crate::terminal::cli_agent_sessions::CLIAgentSessionsModel::handle(ctx)
             .update(ctx, |sessions, ctx| {
                 sessions.remove_session(terminal_view_id, ctx)
@@ -6617,12 +6720,15 @@ impl Workspace {
             return;
         };
         if is_local {
+            let Some(ticket) = self.begin_agent_restart(terminal_view_id, ctx) else {
+                return;
+            };
             let signal = send_local_guardrail_signal(
                 route.pid,
                 Some(fingerprint),
                 zaplex_cockpit::GuardrailSignal::Kill,
             );
-            self.complete_agent_restart(plan, terminal_view_id, signal, ctx);
+            self.complete_agent_restart(plan, terminal_view_id, ticket, signal, ctx);
             return;
         }
 
@@ -6647,6 +6753,9 @@ impl Workspace {
                 );
                 return;
             }
+            let Some(ticket) = self.begin_agent_restart(terminal_view_id, ctx) else {
+                return;
+            };
             let client = daemon.client;
             let session_id = route.session_id.clone();
             let fingerprint = fingerprint.to_string();
@@ -6663,7 +6772,7 @@ impl Workspace {
                     .await
                 },
                 move |workspace, signal, ctx| {
-                    workspace.complete_agent_restart(plan, terminal_view_id, signal, ctx);
+                    workspace.complete_agent_restart(plan, terminal_view_id, ticket, signal, ctx);
                 },
             );
         }
@@ -10461,10 +10570,13 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::pane_group::pane::sftp_pane::SftpPane;
+        let pick_id = uuid::Uuid::new_v4();
+        self.pending_spawn_directory_pick =
+            Some((pick_id, self.spawn_card.as_ref(ctx).launch_generation()));
         #[cfg(all(unix, feature = "local_tty"))]
         self.ensure_sftp_safe_file_daemon(&node_id, ctx);
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            let pane = SftpPane::new_for_pick(node_id, start_path, ctx);
+            let pane = SftpPane::new_for_pick(node_id, start_path, pick_id, ctx);
             let smart_split_direction =
                 pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
             pane_group.add_pane_with_direction(
@@ -10474,6 +10586,17 @@ impl Workspace {
                 ctx,
             );
         });
+    }
+
+    fn accept_spawn_directory_pick(&mut self, pick_id: uuid::Uuid, ctx: &AppContext) -> bool {
+        let Some((pending_id, generation)) = self.pending_spawn_directory_pick else {
+            return false;
+        };
+        if pending_id != pick_id {
+            return false;
+        }
+        self.pending_spawn_directory_pick = None;
+        generation == self.spawn_card.as_ref(ctx).launch_generation()
     }
 
     /// Ensures a standalone SFTP pane has a workspace-owned safe-file daemon.
@@ -10740,7 +10863,7 @@ impl Workspace {
                         me.remote_sftp_edits.insert(
                             key,
                             RemoteSftpEdit {
-                                _working_dir: working_dir,
+                                working_dir,
                                 node_label: node_label.clone(),
                                 remote_path,
                                 backend,
@@ -10793,11 +10916,9 @@ impl Workspace {
         let Some(edit) = self.remote_sftp_edits.get_mut(&working_copy) else {
             return;
         };
-        if edit.uploading {
-            edit.resave_pending = true;
+        if !edit.saved_locally() {
             return;
         }
-        edit.uploading = true;
         let backend = edit.backend.clone();
         let remote_path = edit.remote_path.clone();
         let node_label = edit.node_label.clone();
@@ -10825,8 +10946,7 @@ impl Workspace {
                 // Clear the in-flight flag and see whether a save landed meanwhile.
                 let mut resave = false;
                 if let Some(edit) = me.remote_sftp_edits.get_mut(&working_copy) {
-                    edit.uploading = false;
-                    resave = std::mem::take(&mut edit.resave_pending);
+                    resave = edit.upload_finished(error.is_none());
                 }
                 match error {
                     None => {
@@ -10847,7 +10967,8 @@ impl Workspace {
                             view.add_persistent_toast(
                                 DismissibleToast::error(format!(
                                     "Couldn't save {display_name} to {node_label}: {error}. \
-                                     Your changes are kept locally; retry with another save."
+                                     Your changes are kept at {}; retry with another save.",
+                                    working_copy.display()
                                 )),
                                 ctx,
                             );
@@ -11529,12 +11650,15 @@ impl Workspace {
             terminal_view.downgrade(),
             secret,
             server.auth_type,
+            command.clone(),
             ctx,
         );
         if let Some(prepared_command) = prepared_command {
             crate::ssh_manager::secret_injector::retain_key_askpass_until_shell_ready(
                 terminal_view.read(ctx, |view, ctx| view.inactive_pty_reads_rx(ctx)),
+                terminal_view.downgrade(),
                 prepared_command,
+                command.clone(),
                 ctx,
             );
         }
@@ -11550,6 +11674,7 @@ impl Workspace {
                     terminal_view.read(ctx, |view, ctx| view.inactive_pty_reads_rx(ctx)),
                     terminal_view.downgrade(),
                     startup_command,
+                    command.clone(),
                     ctx,
                 );
             }
@@ -12034,13 +12159,16 @@ impl Workspace {
             terminal_view.downgrade(),
             secret,
             server_for_connection.auth_type,
+            cmd.clone(),
             ctx,
         );
 
         if let Some(prepared_command) = prepared_command {
             crate::ssh_manager::secret_injector::retain_key_askpass_until_shell_ready(
                 terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c)),
+                terminal_view.downgrade(),
                 prepared_command,
+                cmd.clone(),
                 ctx,
             );
         }
@@ -12056,6 +12184,7 @@ impl Workspace {
                         terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c)),
                         terminal_view.downgrade(),
                         startup_cmd,
+                        cmd.clone(),
                         ctx,
                     );
                 }
@@ -29210,7 +29339,10 @@ impl TypedActionView for Workspace {
                 // "take me to the SSH configuration" (spec v3 §1.3/S1).
                 self.toggle_left_panel_view(&LeftPanelAction::SshManager, false, ctx);
             }
-            RemoteSpawnDirPicked { path } => {
+            RemoteSpawnDirPicked { pick_id, path } => {
+                if !self.accept_spawn_directory_pick(*pick_id, ctx) {
+                    return;
+                }
                 // The SFTP picker returned a directory: fill the card's remote-dir
                 // field and re-show the (still-configured, persistent) card (#105).
                 let path = path.clone();
@@ -29220,7 +29352,10 @@ impl TypedActionView for Workspace {
                 ctx.focus(&self.spawn_card);
                 ctx.notify();
             }
-            RemoteSpawnDirPickCanceled => {
+            RemoteSpawnDirPickCanceled { pick_id } => {
+                if !self.accept_spawn_directory_pick(*pick_id, ctx) {
+                    return;
+                }
                 // The picker closed without a pick: re-show the hidden card
                 // unchanged so its selections aren't stranded (#105).
                 self.current_workspace_state.is_spawn_card_open = true;

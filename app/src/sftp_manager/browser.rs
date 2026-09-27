@@ -942,10 +942,10 @@ pub struct SftpBrowserView {
     pending_dir_move_cleanups: Vec<PendingDirMoveCleanup>,
     /// Monotonic id handed to each cross-connection directory-move batch.
     next_dir_move_batch_id: u64,
-    /// When true this browser was opened as a directory *picker* (the spawn
+    /// When set this browser was opened as a directory *picker* (the spawn
     /// card's "Browse…", #105): a pick bar's "Use this folder" returns
     /// `current_path` via `WorkspaceAction::RemoteSpawnDirPicked` and closes.
-    pick_mode: bool,
+    pick_mode: Option<uuid::Uuid>,
     /// Hover state for the pick bar's "Use this folder" button.
     pick_btn: MouseStateHandle,
     /// Set once a directory was actually picked, so `close()` doesn't also fire
@@ -1105,7 +1105,7 @@ impl SftpBrowserView {
             pending_uploads: Vec::new(),
             pending_dir_move_cleanups: Vec::new(),
             next_dir_move_batch_id: 1,
-            pick_mode: false,
+            pick_mode: None,
             pick_btn: MouseStateHandle::default(),
             pick_resolved: false,
         };
@@ -1206,8 +1206,8 @@ impl SftpBrowserView {
     /// Mark this browser as a directory *picker* opened from the spawn card's
     /// "Browse…" (#105): it shows a pick bar whose "Use this folder" returns the
     /// current directory and closes.
-    pub fn with_pick_mode(mut self) -> Self {
-        self.pick_mode = true;
+    pub fn with_pick_mode(mut self, pick_id: uuid::Uuid) -> Self {
+        self.pick_mode = Some(pick_id);
         self
     }
 
@@ -2280,7 +2280,7 @@ impl SftpBrowserView {
 
     /// Only a successfully connected browser directory may be returned to its shell.
     pub(crate) fn shell_directory_on_close(&self) -> Option<PathBuf> {
-        if self.pick_mode || !matches!(self.connection, ConnectionState::Connected) {
+        if self.pick_mode.is_some() || !matches!(self.connection, ConnectionState::Connected) {
             return None;
         }
         self.last_listed_path.clone()
@@ -6213,9 +6213,13 @@ impl TypedActionView for SftpBrowserView {
             }
             SftpBrowserAction::ChooseMoveTarget => self.copy_or_move_to_other_pane(true, true, ctx),
             SftpBrowserAction::PickCurrentDir => {
-                // Return the browsed directory to the spawn card and close (#105).
+                // Only the originating card may consume this one-shot result.
+                let Some(pick_id) = self.pick_mode.filter(|_| !self.pick_resolved) else {
+                    return;
+                };
                 self.pick_resolved = true;
                 ctx.dispatch_typed_action(&crate::WorkspaceAction::RemoteSpawnDirPicked {
+                    pick_id,
                     path: self.current_path.clone(),
                 });
                 ctx.emit(PaneEvent::Close);
@@ -6513,7 +6517,7 @@ impl View for SftpBrowserView {
             .with_main_axis_size(MainAxisSize::Max);
 
         // Pick-mode banner (#105): a prominent "use this folder" action on top.
-        if self.pick_mode {
+        if self.pick_mode.is_some() {
             col.add_child(
                 Container::new(self.render_pick_bar(appearance))
                     .with_padding_left(PANEL_PADDING)
@@ -6800,8 +6804,11 @@ impl BackingView for SftpBrowserView {
         // hidden spawn card so its selections aren't stranded (#105). Covers every
         // teardown path (F10, pane-X, dismiss) since they all route through
         // `close()`; skipped after a successful pick (`pick_resolved`).
-        if self.pick_mode && !self.pick_resolved {
-            ctx.dispatch_typed_action(&crate::WorkspaceAction::RemoteSpawnDirPickCanceled);
+        if let Some(pick_id) = self.pick_mode.filter(|_| !self.pick_resolved) {
+            self.pick_resolved = true;
+            ctx.dispatch_typed_action(&crate::WorkspaceAction::RemoteSpawnDirPickCanceled {
+                pick_id,
+            });
         }
         ctx.emit(PaneEvent::Close);
     }

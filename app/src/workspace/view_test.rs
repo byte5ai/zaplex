@@ -6453,3 +6453,287 @@ fn stale_managed_spawn_results_do_not_reopen_or_hide_the_card() {
         });
     });
 }
+
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn unconfirmed_remote_edit_saves_survive_owner_drop_and_success_restores_cleanup() {
+    for (finish, newer_save) in [
+        (None, false),
+        (Some(false), false),
+        (Some(true), false),
+        (Some(true), true),
+    ] {
+        let remote_root = tempfile::tempdir().unwrap();
+        let working_dir = remote_sftp_edit_working_dir().unwrap();
+        let working_path = working_dir.path().join("saved.txt");
+        std::fs::write(&working_path, b"latest local save").unwrap();
+        let directory = working_dir.path().to_path_buf();
+        let mut edit = RemoteSftpEdit {
+            working_dir,
+            node_label: "test-host".to_string(),
+            remote_path: PathBuf::from("/saved.txt"),
+            backend: Arc::new(crate::sftp_manager::sftp_backend::InMemorySftpBackend::new(
+                remote_root.path().to_path_buf(),
+            )),
+            uploading: false,
+            resave_pending: false,
+        };
+        assert!(edit.saved_locally());
+        if newer_save {
+            assert!(!edit.saved_locally());
+        }
+        if let Some(success) = finish {
+            assert_eq!(edit.upload_finished(success), newer_save);
+        }
+        // Workspace destruction drops the owning entry, even while upload is pending.
+        drop(edit);
+        if finish == Some(true) && !newer_save {
+            assert!(!directory.exists());
+        } else {
+            assert_eq!(std::fs::read(&working_path).unwrap(), b"latest local save");
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    let remote_root = tempfile::tempdir().unwrap();
+    let working_dir = remote_sftp_edit_working_dir().unwrap();
+    let directory = working_dir.path().to_path_buf();
+    let mut edit = RemoteSftpEdit {
+        working_dir,
+        node_label: "retry-host".to_string(),
+        remote_path: PathBuf::from("/saved.txt"),
+        backend: Arc::new(crate::sftp_manager::sftp_backend::InMemorySftpBackend::new(
+            remote_root.path().to_path_buf(),
+        )),
+        uploading: false,
+        resave_pending: false,
+    };
+    assert!(edit.saved_locally());
+    assert!(!edit.upload_finished(false));
+    assert!(edit.saved_locally());
+    assert!(!edit.saved_locally(), "a newer save is coalesced");
+    assert!(
+        edit.upload_finished(true),
+        "older success cannot confirm the newer save"
+    );
+    assert!(edit.saved_locally());
+    assert!(!edit.upload_finished(true));
+    drop(edit);
+    assert!(
+        !directory.exists(),
+        "successful retry restores normal cleanup"
+    );
+}
+
+#[test]
+fn remote_directory_picker_replies_require_the_current_card_ticket() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let old_pick = uuid::Uuid::new_v4();
+            let generation = workspace.spawn_card.as_ref(ctx).launch_generation();
+            workspace.pending_spawn_directory_pick = Some((old_pick, generation));
+            workspace.spawn_card.update(ctx, |card, ctx| {
+                card.configure(spawn_card::SpawnCardConfig::default(), ctx)
+            });
+            workspace.current_workspace_state.is_spawn_card_open = false;
+            workspace.handle_action(
+                &WorkspaceAction::RemoteSpawnDirPicked {
+                    pick_id: old_pick,
+                    path: PathBuf::from("/other-host"),
+                },
+                ctx,
+            );
+            assert!(!workspace.current_workspace_state.is_spawn_card_open);
+            assert!(workspace.pending_spawn_directory_pick.is_none());
+
+            let current_pick = uuid::Uuid::new_v4();
+            let generation = workspace.spawn_card.as_ref(ctx).launch_generation();
+            workspace.pending_spawn_directory_pick = Some((current_pick, generation));
+            workspace.handle_action(
+                &WorkspaceAction::RemoteSpawnDirPickCanceled { pick_id: old_pick },
+                ctx,
+            );
+            assert!(!workspace.current_workspace_state.is_spawn_card_open);
+            assert_eq!(
+                workspace.pending_spawn_directory_pick,
+                Some((current_pick, generation))
+            );
+            workspace.handle_action(
+                &WorkspaceAction::RemoteSpawnDirPickCanceled {
+                    pick_id: current_pick,
+                },
+                ctx,
+            );
+            assert!(workspace.current_workspace_state.is_spawn_card_open);
+            assert!(workspace.pending_spawn_directory_pick.is_none());
+            workspace.current_workspace_state.is_spawn_card_open = false;
+            workspace.handle_action(
+                &WorkspaceAction::RemoteSpawnDirPickCanceled {
+                    pick_id: current_pick,
+                },
+                ctx,
+            );
+            assert!(
+                !workspace.current_workspace_state.is_spawn_card_open,
+                "a result is consumed only once"
+            );
+        });
+    });
+}
+
+fn restart_regression_plan() -> crate::cockpit::session_lifecycle::RestartPlan {
+    use crate::cockpit::session_lifecycle::{
+        RestartPlan, ResumeInvocation, SessionAccountRoute, SessionHostRoute, SessionRoute,
+    };
+    RestartPlan {
+        route: SessionRoute {
+            provider: zaplex_cockpit::Provider::Claude,
+            session_id: "old-conversation".to_string(),
+            host: SessionHostRoute::Local,
+            account: SessionAccountRoute::Local {
+                config_dir: None,
+                account_email: None,
+            },
+            cwd: PathBuf::from("/tmp"),
+            pid: 123,
+            process_fingerprint: Some("old-process".to_string()),
+        },
+        resume: ResumeInvocation::LocalShell {
+            launch: CLIAgent::Claude
+                .resume_routed_with("old-conversation", None, None, None)
+                .unwrap(),
+        },
+        model: None,
+        effort: None,
+    }
+}
+
+#[test]
+fn restart_started_event_invalidates_the_old_kill_completion() {
+    use crate::terminal::cli_agent_sessions::{
+        CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
+    };
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let terminal = workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .unwrap();
+            let terminal_id = terminal.id();
+            let ticket = uuid::Uuid::new_v4();
+            workspace
+                .pending_agent_restarts
+                .insert(terminal_id, (ticket, SessionId::from(501u64)));
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |model, ctx| {
+                model.set_session(
+                    terminal_id,
+                    CLIAgentSession {
+                        agent: CLIAgent::Claude,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext {
+                            session_id: Some("new-conversation".to_string()),
+                            ..Default::default()
+                        },
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input: false,
+                        listener: None,
+                        plugin_version: None,
+                        remote_host: None,
+                        draft_text: Some("new agent draft".to_string()),
+                        custom_command_prefix: None,
+                    },
+                    ctx,
+                )
+            });
+            workspace.handle_cli_agent_sessions_event(
+                &CLIAgentSessionsModelEvent::Started {
+                    terminal_view_id: terminal_id,
+                    agent: CLIAgent::Claude,
+                },
+                ctx,
+            );
+            assert!(!workspace.pending_agent_restarts.contains_key(&terminal_id));
+            workspace.complete_agent_restart(
+                restart_regression_plan(),
+                terminal_id,
+                ticket,
+                GuardrailSendOutcome::Sent,
+                ctx,
+            );
+            let session = CLIAgentSessionsModel::as_ref(ctx)
+                .session(terminal_id)
+                .unwrap();
+            assert_eq!(
+                session.session_context.session_id.as_deref(),
+                Some("new-conversation")
+            );
+            assert_eq!(session.draft_text.as_deref(), Some("new agent draft"));
+        });
+    });
+}
+
+#[test]
+fn old_restart_reply_cannot_consume_a_newer_restart_ticket() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let terminal = workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .unwrap();
+            let current = (uuid::Uuid::new_v4(), SessionId::from(502u64));
+            workspace
+                .pending_agent_restarts
+                .insert(terminal.id(), current);
+            workspace.complete_agent_restart(
+                restart_regression_plan(),
+                terminal.id(),
+                uuid::Uuid::new_v4(),
+                GuardrailSendOutcome::Sent,
+                ctx,
+            );
+            assert_eq!(
+                workspace.pending_agent_restarts.get(&terminal.id()),
+                Some(&current)
+            );
+        });
+    });
+}
+
+#[test]
+fn restart_preflight_rejects_raw_or_foreign_terminal_before_signal() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let other = mock_workspace(&mut app);
+        let foreign_id = other.read(&app, |workspace, ctx| {
+            workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .unwrap()
+                .id()
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(workspace.begin_agent_restart(foreign_id, ctx).is_none());
+            let terminal = workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .unwrap();
+            terminal.update(ctx, |view, ctx| {
+                view.mark_remote_raw_terminal(SessionId::from(503u64), ctx)
+            });
+            assert!(!terminal.as_ref(ctx).can_execute_routed_agent_launch(ctx));
+            assert!(workspace.begin_agent_restart(terminal.id(), ctx).is_none());
+            assert!(workspace.pending_agent_restarts.is_empty());
+        });
+    });
+}

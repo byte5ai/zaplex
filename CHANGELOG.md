@@ -4,6 +4,14 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- SSH-Automatik (#245) wartet auf den zugehörigen Verbindungsstart. Abbruch, Verbindungsende oder ein neuer Befehl verwerfen wartende Passwort- und Startbefehle; Askpass-Dateien bleiben bis zur Anmeldung erhalten und werden bei Abbruch entfernt.
+
+- SFTP-Arbeitskopien (#245/#464) bleiben bei ausstehenden oder fehlgeschlagenen Uploads nach dem Schließen erhalten; Fehlermeldungen nennen den Wiederherstellungspfad. Erfolgreich übertragene Kopien werden wie bisher aufgeräumt.
+
+- Ordnerauswahlen (#245) bleiben an den ursprünglichen Startdialog und Host gebunden. Agent-Neustarts prüfen vor dem Beenden die Wiederaufnahmefähigkeit; verspätete Antworten entfernen keine inzwischen neu gestartete Sitzung.
+
+- Terminal-Testdaten (#245/#472) stimmen wieder mit ihren Regex-Mustern und URL-Zellgrenzen überein; negative Punktprüfungen treffen tatsächliche Satzzeichen.
+
 - SSH-Formulare (#245) sperren Änderungen während laufender Speicherung und verwerfen veraltete Dateiauswahlen. Tailscale-Importe rollen bei einem Fehler den gesamten Import zurück; alle sieben Servermenüaktionen behalten ihren Mauszustand.
 
 - Kitty-Grafiken (#245) löschen nur die angeforderten Platzierungen und erhalten weitere Referenzen, Scrollback, virtuelle Platzierungen und iTerm-Bilder. Bildschirmkoordinaten berücksichtigen gescrollte Ausgabe; auch ersetzte Animationsframes müssen innerhalb des Speicherlimits bleiben.

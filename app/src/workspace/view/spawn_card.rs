@@ -3248,27 +3248,36 @@ impl TypedActionView for SpawnCard {
                 // Same pattern as the session-config modal: the picker callback
                 // dispatches a typed action carrying the chosen path back to this
                 // view, which sets `project` in `DirectorySelected` below.
+                let generation = self.launch_generation;
+                let card_id = ctx.handle().id();
                 ctx.open_file_picker(
-                    |result, ctx| {
+                    move |result, ctx| {
                         if let Some(path_result) =
                             result.map(|paths| paths.into_iter().next()).transpose()
                         {
-                            ctx.dispatch_typed_action(&SpawnCardAction::DirectorySelected(
-                                path_result,
-                            ));
+                            ctx.dispatch_typed_action(&SpawnCardAction::DirectorySelected {
+                                card_id,
+                                generation,
+                                result: path_result,
+                            });
                         }
                     },
                     FilePickerConfiguration::new().folders_only(),
                 );
             }
-            SpawnCardAction::DirectorySelected(result) => match result {
-                Ok(path) => {
-                    self.set_selected_directory(PathBuf::from(path), ctx);
+            SpawnCardAction::DirectorySelected {
+                card_id,
+                generation,
+                result,
+            } => {
+                if *card_id != ctx.handle().id() || *generation != self.launch_generation {
+                    return;
                 }
-                Err(err) => {
-                    log::warn!("Spawn card directory picker error: {err}");
+                match result {
+                    Ok(path) => self.set_selected_directory(PathBuf::from(path), ctx),
+                    Err(err) => log::warn!("Spawn card directory picker error: {err}"),
                 }
-            },
+            }
             SpawnCardAction::ClearDirectory => {
                 self.project = None;
                 self.folder_navigation.reset(None);
@@ -3401,7 +3410,11 @@ pub enum SpawnCardAction {
     /// Open the native folder picker to choose the launch directory (local host).
     OpenDirectoryPicker,
     /// Result delivered from the folder picker (dispatched from its callback).
-    DirectorySelected(Result<String, FilePickerError>),
+    DirectorySelected {
+        card_id: warpui::EntityId,
+        generation: u64,
+        result: Result<String, FilePickerError>,
+    },
     /// Reset the launch directory to the default (agent's home / cwd).
     ClearDirectory,
     ToggleFolderHistory,

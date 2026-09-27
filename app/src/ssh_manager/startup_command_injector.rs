@@ -4,10 +4,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_broadcast::InactiveReceiver;
+use async_broadcast::{InactiveReceiver, Receiver};
+use tokio::sync::oneshot;
 use warpui::r#async::FutureExt;
 use warpui::{ViewContext, WeakViewHandle};
 
+use crate::ssh_manager::secret_injector::watch_injection_attempt;
 use crate::ssh_manager::shell_prompt::bytes_look_like_shell_prompt;
 use crate::terminal::TerminalView;
 
@@ -27,6 +29,7 @@ pub fn spawn_startup_command_injector<O>(
     pty_reads_rx: Option<InactiveReceiver<Arc<Vec<u8>>>>,
     terminal_view: WeakViewHandle<TerminalView>,
     startup_command: String,
+    expected_ssh_command: String,
     ctx: &mut ViewContext<O>,
 ) where
     O: warpui::View + 'static,
@@ -40,7 +43,18 @@ pub fn spawn_startup_command_injector<O>(
         return;
     }
 
-    let future = wait_for_startup_command(rx, startup_command, INJECT_TIMEOUT);
+    let Some(view) = terminal_view.upgrade(ctx) else {
+        return;
+    };
+    let (attempt, started, cancelled) =
+        watch_injection_attempt(&view, expected_ssh_command, rx, false, ctx);
+    let future = futures_lite::future::race(
+        wait_for_startup_command(started, startup_command, INJECT_TIMEOUT),
+        async move {
+            let _ = cancelled.await;
+            StartupCommandWaitOutcome::EndOfStream
+        },
+    );
     ctx.spawn(future, move |_owner, outcome, ctx| {
         let Some(view) = terminal_view.upgrade(ctx) else {
             log::debug!("ssh startup command injector: terminal view dropped");
@@ -59,6 +73,9 @@ pub fn spawn_startup_command_injector<O>(
                 return;
             }
         };
+        if !attempt.lock().finish() {
+            return;
+        }
         view.update(ctx, |view, ctx| {
             let mut bytes = cmd.as_bytes().to_vec();
             bytes.push(b'\n');
@@ -68,19 +85,24 @@ pub fn spawn_startup_command_injector<O>(
 }
 
 async fn wait_for_startup_command(
-    rx: InactiveReceiver<Arc<Vec<u8>>>,
+    started: oneshot::Receiver<Receiver<Arc<Vec<u8>>>>,
     startup_command: String,
     timeout: Duration,
 ) -> StartupCommandWaitOutcome {
-    match wait_for_shell_prompt(rx).with_timeout(timeout).await {
+    let wait = async move {
+        let Ok(rx) = started.await else {
+            return false;
+        };
+        wait_for_shell_prompt(rx).await
+    };
+    match wait.with_timeout(timeout).await {
         Ok(true) => StartupCommandWaitOutcome::Ready(startup_command),
         Ok(false) => StartupCommandWaitOutcome::EndOfStream,
         Err(_) => StartupCommandWaitOutcome::TimedOut,
     }
 }
 
-async fn wait_for_shell_prompt(rx: InactiveReceiver<Arc<Vec<u8>>>) -> bool {
-    let mut active = rx.activate_cloned();
+async fn wait_for_shell_prompt(mut active: Receiver<Arc<Vec<u8>>>) -> bool {
     let mut buf: Vec<u8> = Vec::with_capacity(SLIDING_WINDOW_BYTES);
     while let Ok(chunk) = active.recv().await {
         buf.extend_from_slice(&chunk);

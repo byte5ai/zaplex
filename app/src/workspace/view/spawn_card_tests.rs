@@ -1526,3 +1526,46 @@ fn launch_result_acceptance_rejects_replaced_and_cancelled_plans() {
         });
     });
 }
+
+#[test]
+fn native_directory_picker_rejects_reconfigured_or_other_cards() {
+    warpui::App::test((), |mut app| async move {
+        let make_card = || {
+            remote_claude_card(
+                provider(true),
+                Vec::new(),
+                HostChoice::Local,
+                AccountChoice::Freest,
+            )
+        };
+        let (_, card) = app.add_window(warpui::platform::WindowStyle::NotStealFocus, |_| {
+            make_card()
+        });
+        let (_, other) = app.add_window(warpui::platform::WindowStyle::NotStealFocus, |_| {
+            make_card()
+        });
+        let card_id = card.id();
+        card.update(&mut app, |card, ctx| {
+            let generation = card.launch_generation;
+            card.cancel_pending_launches();
+            card.handle_action(
+                &SpawnCardAction::DirectorySelected {
+                    card_id,
+                    generation,
+                    result: Ok("/stale-local".to_string()),
+                },
+                ctx,
+            );
+            assert!(card.project.is_none());
+            card.handle_action(
+                &SpawnCardAction::DirectorySelected {
+                    card_id: other.id(),
+                    generation: card.launch_generation,
+                    result: Ok("/other-window".to_string()),
+                },
+                ctx,
+            );
+            assert!(card.project.is_none());
+        });
+    });
+}

@@ -57,11 +57,12 @@ impl SftpPane {
     pub fn new_for_pick<V: View>(
         node_id: String,
         start_path: Option<std::path::PathBuf>,
+        pick_id: uuid::Uuid,
         ctx: &mut ViewContext<V>,
     ) -> Self {
         let id_for_view = node_id.clone();
         let browser_view = ctx.add_typed_action_view(move |ctx| {
-            SftpBrowserView::new(id_for_view.clone(), start_path, ctx).with_pick_mode()
+            SftpBrowserView::new(id_for_view.clone(), start_path, ctx).with_pick_mode(pick_id)
         });
         let pane_configuration = browser_view.as_ref(ctx).pane_configuration();
         let pane_view = ctx.add_typed_action_view(|ctx| {
