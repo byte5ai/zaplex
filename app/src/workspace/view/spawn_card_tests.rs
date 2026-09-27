@@ -307,6 +307,7 @@ fn remote_claude_card(
         history_validation: BTreeMap::new(),
         history_search_editor: None,
         bulk_launch: None,
+        launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -568,6 +569,7 @@ fn antigravity_launch_uses_cli_defaults_without_provider_metadata() {
         history_validation: BTreeMap::new(),
         history_search_editor: None,
         bulk_launch: None,
+        launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -622,6 +624,7 @@ fn confirm_payload_carries_local_selection() {
         history_validation: BTreeMap::new(),
         history_search_editor: None,
         bulk_launch: None,
+        launch_generation: 0,
         prompt: None,
         // The pure tests build the card without a `ViewContext`, so there is
         // no editor view to construct — remote-dir prefill/read is exercised
@@ -686,6 +689,7 @@ fn confirm_payload_routes_remote_launch_to_node_id() {
         history_validation: BTreeMap::new(),
         history_search_editor: None,
         bulk_launch: None,
+        launch_generation: 0,
         prompt: None,
         // The pure tests build the card without a `ViewContext`, so there is
         // no editor view to construct — remote-dir prefill/read is exercised
@@ -1021,6 +1025,7 @@ fn degraded_remote_inventory_never_drives_auto_routing() {
         history_validation: BTreeMap::new(),
         history_search_editor: None,
         bulk_launch: None,
+        launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -1059,6 +1064,7 @@ fn confirm_payload_none_when_nothing_installed() {
         history_validation: BTreeMap::new(),
         history_search_editor: None,
         bulk_launch: None,
+        launch_generation: 0,
         prompt: None,
         // The pure tests build the card without a `ViewContext`, so there is
         // no editor view to construct — remote-dir prefill/read is exercised
@@ -1110,6 +1116,7 @@ fn relative_remote_launch_directory_is_rejected() {
         history_validation: BTreeMap::new(),
         history_search_editor: None,
         bulk_launch: None,
+        launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -1254,6 +1261,7 @@ fn effort_payload_matches_cli_capability() {
         history_validation: BTreeMap::new(),
         history_search_editor: None,
         bulk_launch: None,
+        launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -1298,6 +1306,7 @@ fn claude_spawn_card_exposes_only_cli_default_effort() {
         history_validation: BTreeMap::new(),
         history_search_editor: None,
         bulk_launch: None,
+        launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -1336,6 +1345,7 @@ fn absolute_remote_launch_directory_reaches_request_unchanged() {
         history_validation: BTreeMap::new(),
         history_search_editor: None,
         bulk_launch: None,
+        launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -1377,6 +1387,7 @@ fn managed_launch_is_explicit_exact_and_does_not_claim_unsupported_settings() {
         history_validation: BTreeMap::new(),
         history_search_editor: None,
         bulk_launch: None,
+        launch_generation: 0,
         prompt: Some("must not be sent".to_string()),
         remote_dir_editor: None,
         chip_states: Default::default(),
@@ -1482,5 +1493,36 @@ fn confirm_attempt_checks_directory_and_reserves_until_cancelled() {
         app.read(|ctx| assert!(card.launch_attempt(ctx).is_none()));
         card.cancel_pending_launches();
         assert!(!card.launch_target_is_reserved(plan_id, &targets[0].0, &targets[0].1));
+    });
+}
+
+#[test]
+fn launch_result_acceptance_rejects_replaced_and_cancelled_plans() {
+    warpui::App::test((), |mut app| async move {
+        let card = remote_claude_card(
+            provider(true),
+            Vec::new(),
+            HostChoice::Local,
+            AccountChoice::Freest,
+        );
+        let (_, card) = app.add_window(warpui::platform::WindowStyle::NotStealFocus, |_| card);
+        card.update(&mut app, |card, ctx| {
+            let Some(SpawnCardEvent::LaunchBatch { plan_id, targets }) = card.launch_attempt(ctx)
+            else {
+                panic!("expected a reserved launch");
+            };
+            let target_id = &targets[0].0;
+            assert!(!card.apply_launch_result(
+                BulkLaunchPlanId(plan_id.0 + 1),
+                target_id,
+                Err("stale".to_string()),
+                ctx
+            ));
+            assert!(card.mark_launch_in_flight(plan_id, target_id, "current".to_string(), ctx));
+            assert!(card.apply_launch_result(plan_id, target_id, Ok("current".to_string()), ctx));
+            assert!(card.launch_batch_succeeded(plan_id));
+            card.cancel_pending_launches();
+            assert!(!card.apply_launch_result(plan_id, target_id, Err("late".to_string()), ctx));
+        });
     });
 }

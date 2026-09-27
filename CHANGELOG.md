@@ -4,6 +4,12 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- SSH-Starts (#245) binden Konten nur an tatsächlich geöffnete Terminals. Verspätete Startergebnisse öffnen geschlossene oder neu konfigurierte Startdialoge nicht erneut. Der klassische Verbindungstest lehnt widerrufene Hostschlüssel auch nach einer Bestätigung ab und prüft fehlende Passwörter vor jedem Netzwerkzugriff.
+
+- CLI-Agenten (#245) erhalten unter PowerShell die ursprüngliche Konto- und API-Umgebung sowie ihren Exitstatus. Fremde Anbieterereignisse verändern keine bestehende Sitzung. Fish-Dateipfade bleiben bei Backslashes und Apostrophen korrekt gequotet; Standardpfade für entfernte Shell-Historien behalten die Home-Expansion.
+
+- SFTP-Konfliktdialoge (#245/#459) umbrechen übersetzte Aktionen entsprechend dem verfügbaren Platz.
+
 - Startvorlagen (#245) behalten den ausgewählten Tab auch dann, wenn ein späterer Tab angepinnt wird. Leere oder vollständig ungültige Vorlagen öffnen ein nutzbares Fenster statt beim fehlenden aktiven Tab abzubrechen.
 
 - Dateiübertragungen (#245/#464) erhalten leere Ordner und halten laufende Rückrufe beim Aufräumen abgeschlossener Transfers gültig. Lokale Pfade bleiben in ihrem nativen Format erhalten; Windows-Downloads weisen Laufwerkswechsel und alternative Datenströme in entfernten Dateinamen zurück.

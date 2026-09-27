@@ -1354,7 +1354,9 @@ impl Session {
         );
 
         for history_file in history_files {
-            if let Some(command_history) = self.read_history_from_file(history_file.as_str()).await
+            if let Some(command_history) = self
+                .read_history_from_file(history_file.as_str(), histfile.is_none())
+                .await
             {
                 return command_history;
             }
@@ -1367,7 +1369,11 @@ impl Session {
         Vec::new()
     }
 
-    async fn read_history_from_file(&self, history_file: &str) -> Option<Vec<String>> {
+    async fn read_history_from_file(
+        &self,
+        history_file: &str,
+        is_default_path: bool,
+    ) -> Option<Vec<String>> {
         let env_vars = self
             .info
             .path
@@ -1376,9 +1382,10 @@ impl Session {
 
         let output_in_bytes = self
             .execute_command(
-                format!(
-                    "cat {}",
-                    shell_quote_arg(history_file, self.info.shell.shell_type())
+                history_file_read_command(
+                    history_file,
+                    self.info.shell.shell_type(),
+                    is_default_path,
                 )
                 .as_str(),
                 None,
@@ -1769,6 +1776,18 @@ pub mod testing {
             .map(|item| item.as_ref().into())
             .collect()
     }
+}
+
+/// Only the built-in fallback paths contain intentional home expansion. A
+/// reported HISTFILE is a literal filename, including any shell metacharacters.
+fn history_file_read_command(path: &str, shell_type: ShellType, is_default_path: bool) -> String {
+    let argument = match (is_default_path, shell_type, path.strip_prefix("~/")) {
+        (true, ShellType::Bash | ShellType::Zsh | ShellType::Fish, Some(relative)) => {
+            format!("~/{}", shell_quote_arg(relative, shell_type))
+        }
+        _ => shell_quote_arg(path, shell_type),
+    };
+    format!("cat {argument}")
 }
 
 #[cfg(test)]

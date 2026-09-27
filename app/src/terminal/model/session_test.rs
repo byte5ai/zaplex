@@ -100,3 +100,27 @@ fn test_set_env_var_emits_no_event_when_no_change() {
         });
     });
 }
+
+#[test]
+fn remote_history_defaults_expand_home_but_reported_paths_remain_literal() {
+    use super::history_file_read_command;
+    use crate::terminal::shell::ShellType;
+
+    for shell in [ShellType::Bash, ShellType::Zsh, ShellType::Fish] {
+        for path in shell.history_files() {
+            assert!(path.starts_with("~/"));
+            assert_eq!(
+                history_file_read_command(&path, shell, true),
+                format!("cat ~/'{}'", path.strip_prefix("~/").unwrap())
+            );
+            assert_eq!(
+                history_file_read_command(&path, shell, false),
+                format!("cat '{path}'")
+            );
+        }
+        assert_eq!(
+            history_file_read_command("/tmp/history; echo unwanted", shell, false),
+            "cat '/tmp/history; echo unwanted'"
+        );
+    }
+}

@@ -227,7 +227,38 @@ impl RoutedAgentLaunch {
             invocation.push_str(&powershell_quote(arg));
         }
         statements.push(invocation);
-        statements.join("; ")
+        let command = statements.join("; ");
+        let mut names = self.unset_environment.clone();
+        for (name, _) in &self.environment {
+            if !names.contains(name) {
+                names.push(name);
+            }
+        }
+        if names.is_empty() {
+            return command;
+        }
+        let saved = names
+            .iter()
+            .map(|name| format!("{} = $env:{name}", powershell_quote(name)))
+            .collect::<Vec<_>>()
+            .join("; ");
+        // Environment variables belong to the PowerShell process, even inside
+        // a script block. Restore them after completion, failure, or Ctrl-C so
+        // the next launch cannot inherit this account or lose its API settings.
+        format!(
+            "& {{ [CmdletBinding()] param(); $zaplexSavedEnvironment = @{{ {saved} }}; \
+             try {{ {command}; $zaplexStatus = $?; $zaplexExitCode = $global:LASTEXITCODE }} finally {{ \
+             foreach ($zaplexEnvName in $zaplexSavedEnvironment.Keys) {{ \
+             if ($null -eq $zaplexSavedEnvironment[$zaplexEnvName]) {{ \
+             Remove-Item -LiteralPath ('Env:' + $zaplexEnvName) -ErrorAction SilentlyContinue \
+             }} else {{ Set-Item -LiteralPath ('Env:' + $zaplexEnvName) \
+             -Value $zaplexSavedEnvironment[$zaplexEnvName] }} }} }}; \
+             $global:LASTEXITCODE = $zaplexExitCode; if (-not $zaplexStatus) {{ \
+             $ErrorActionPreference = 'SilentlyContinue'; \
+             $PSCmdlet.WriteError([System.Management.Automation.ErrorRecord]::new(\
+             [Exception]::new('Agent exited unsuccessfully'), 'zaplex-agent-exit', \
+             [System.Management.Automation.ErrorCategory]::NotSpecified, $null)) }} }}"
+        )
     }
 }
 

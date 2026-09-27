@@ -11,7 +11,8 @@ use warp_core::ui::icons::Icon;
 use warpui::elements::{
     Align, Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Dismiss, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
-    Radius, SavePosition, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Text,
+    Radius, SavePosition, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Text, Wrap,
+    WrapFill,
 };
 use warpui::platform::Cursor;
 use warpui::ui_components::{button::ButtonVariant, components::UiComponent};
@@ -431,88 +432,100 @@ fn render_copy_move_conflict(
     )
     .finish();
 
-    let overwrite_btn = render_button(
+    let overwrite_btn = render_button_with_wrap(
         &crate::t!("fm-dlg-overwrite"),
+        true,
         true,
         appearance,
         SftpBrowserAction::OverwriteConflict { all: false },
         overwrite_btn_state,
         Some("sftp_btn:dialog_confirm"),
     );
-    let skip_btn = render_button(
+    let skip_btn = render_button_with_wrap(
         &crate::t!("fm-dlg-skip"),
         false,
+        true,
         appearance,
         SftpBrowserAction::SkipConflict { all: false },
         skip_btn_state,
         Some("sftp_btn:dialog_cancel"),
     );
-    let overwrite_all_btn = render_button(
+    let overwrite_all_btn = render_button_with_wrap(
         &crate::t!("fm-dlg-overwrite-all"),
         false,
+        true,
         appearance,
         SftpBrowserAction::OverwriteConflict { all: true },
         overwrite_all_btn_state,
         Some("sftp_btn:dialog_overwrite_all"),
     );
-    let skip_all_btn = render_button(
+    let skip_all_btn = render_button_with_wrap(
         &crate::t!("fm-dlg-skip-all"),
         false,
+        true,
         appearance,
         SftpBrowserAction::SkipConflict { all: true },
         skip_all_btn_state,
         Some("sftp_btn:dialog_skip_all"),
     );
-    let rename_btn = render_button(
+    let rename_btn = render_button_with_wrap(
         &crate::t!("fm-dlg-rename-copy"),
         false,
+        true,
         appearance,
         SftpBrowserAction::RenameConflict { all: false },
         rename_btn_state,
         Some("sftp_btn:dialog_rename"),
     );
-    let newer_only_btn = render_button(
+    let newer_only_btn = render_button_with_wrap(
         &crate::t!("fm-dlg-newer-only"),
         false,
+        true,
         appearance,
         SftpBrowserAction::NewerOnlyConflict { all: false },
         newer_only_btn_state,
         Some("sftp_btn:dialog_newer_only"),
     );
-    let rename_all_btn = render_button(
+    let rename_all_btn = render_button_with_wrap(
         &crate::t!("fm-dlg-rename-copy-all"),
         false,
+        true,
         appearance,
         SftpBrowserAction::RenameConflict { all: true },
         rename_all_btn_state,
         Some("sftp_btn:dialog_rename_all"),
     );
-    let newer_only_all_btn = render_button(
+    let newer_only_all_btn = render_button_with_wrap(
         &crate::t!("fm-dlg-newer-only-all"),
         false,
+        true,
         appearance,
         SftpBrowserAction::NewerOnlyConflict { all: true },
         newer_only_all_btn_state,
         Some("sftp_btn:dialog_newer_only_all"),
     );
 
-    let primary_buttons = Flex::row()
+    // Keep every conflict action inside the dialog, including long translated labels.
+    // WrapFill supplies a finite label width instead of merely clipping an oversized child.
+    let primary_buttons = Wrap::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_alignment(MainAxisAlignment::End)
         .with_spacing(8.0)
-        .with_child(overwrite_btn)
-        .with_child(skip_btn)
-        .with_child(rename_btn)
-        .with_child(newer_only_btn)
+        .with_run_spacing(8.0)
+        .with_child(WrapFill::new(BUTTON_MIN_WIDTH, overwrite_btn).finish())
+        .with_child(WrapFill::new(BUTTON_MIN_WIDTH, skip_btn).finish())
+        .with_child(WrapFill::new(BUTTON_MIN_WIDTH, rename_btn).finish())
+        .with_child(WrapFill::new(BUTTON_MIN_WIDTH, newer_only_btn).finish())
         .finish();
-    let all_buttons = Flex::row()
+    let all_buttons = Wrap::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_alignment(MainAxisAlignment::End)
         .with_spacing(8.0)
-        .with_child(overwrite_all_btn)
-        .with_child(skip_all_btn)
-        .with_child(rename_all_btn)
-        .with_child(newer_only_all_btn)
+        .with_run_spacing(8.0)
+        .with_child(WrapFill::new(BUTTON_MIN_WIDTH, overwrite_all_btn).finish())
+        .with_child(WrapFill::new(BUTTON_MIN_WIDTH, skip_all_btn).finish())
+        .with_child(WrapFill::new(BUTTON_MIN_WIDTH, rename_all_btn).finish())
+        .with_child(WrapFill::new(BUTTON_MIN_WIDTH, newer_only_all_btn).finish())
         .finish();
     let buttons = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -1227,3 +1240,7 @@ pub fn render_dialog(
         ),
     }
 }
+
+#[cfg(test)]
+#[path = "dialogs_tests.rs"]
+mod tests;

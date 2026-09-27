@@ -101,8 +101,14 @@ fn managed_connect_registry_tracks_multiple_accounts_on_one_host_independently()
     let mut pending = PendingManagedSpawns::default();
     let first_account = registry.begin_parallel("node-a".to_string(), "host-a".to_string());
     let second_account = registry.begin_parallel("node-a".to_string(), "host-a".to_string());
-    pending.insert("launch-a".to_string(), PendingManagedSpawn::Standalone);
-    pending.insert("launch-b".to_string(), PendingManagedSpawn::Standalone);
+    pending.insert(
+        "launch-a".to_string(),
+        PendingManagedSpawn::Standalone { generation: 0 },
+    );
+    pending.insert(
+        "launch-b".to_string(),
+        PendingManagedSpawn::Standalone { generation: 0 },
+    );
 
     assert_ne!(first_account.generation, second_account.generation);
     assert!(registry.contains(&first_account));
@@ -167,10 +173,13 @@ fn assert_routed_daemon_failure_transition_is_exact(failure: RoutedDaemonStartFa
     ]);
     let failed = registry.begin_parallel("same-node".to_string(), "same-host".to_string());
     let sibling = registry.begin_parallel("same-node".to_string(), "same-host".to_string());
-    pending.insert("failed-launch".to_string(), PendingManagedSpawn::Standalone);
+    pending.insert(
+        "failed-launch".to_string(),
+        PendingManagedSpawn::Standalone { generation: 0 },
+    );
     pending.insert(
         "sibling-launch".to_string(),
-        PendingManagedSpawn::Standalone,
+        PendingManagedSpawn::Standalone { generation: 0 },
     );
 
     match failure {
@@ -6322,5 +6331,125 @@ fn empty_or_invalid_launch_templates_open_a_usable_workspace() {
                 assert_eq!(workspace.active_tab_pane_group().id(), original_group);
             });
         }
+    });
+}
+
+#[test]
+fn duplicate_ssh_open_reports_no_new_terminal() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let mut server = warp_ssh_manager::SshServerInfo::new_default("busy-node".to_string());
+            server.host = "busy.example.test".to_string();
+            let attempt = workspace
+                .ssh_connect_registry
+                .begin(server.node_id.clone(), server.host.clone())
+                .unwrap();
+            let tab_count = workspace.tabs.len();
+            let active_group = workspace.active_tab_pane_group().id();
+            assert!(!workspace.open_ssh_terminal(server.node_id.clone(), server, false, ctx));
+            assert_eq!(workspace.tabs.len(), tab_count);
+            assert_eq!(workspace.active_tab_pane_group().id(), active_group);
+            assert!(workspace.ssh_connect_is_active(&attempt));
+        });
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn rejected_daemon_account_open_reports_failure_without_classic_fallback() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let mut server =
+                warp_ssh_manager::SshServerInfo::new_default("disabled-node".to_string());
+            server.session_resilience = warp_ssh_manager::SessionResilience::Off;
+            assert!(!server.session_resilience.is_enabled());
+            let connection = warp_ssh_manager::ResolvedSshConnection {
+                secret_lookup_id: server.node_id.clone(),
+                secret_kind: warp_ssh_manager::SecretKind::Password,
+                server,
+            };
+            let tab_count = workspace.tabs.len();
+            let active_group = workspace.active_tab_pane_group().id();
+            assert!(!workspace.open_resolved_ssh_terminal_command(
+                "disabled-node".to_string(),
+                connection,
+                false,
+                None,
+                Some(remote_server::proto::AgentLaunchRoute {
+                    schema_version: 1,
+                    provider: "claude".to_string(),
+                    account_id: "account-a".to_string(),
+                }),
+                None,
+                None,
+                None,
+                ctx,
+            ));
+            assert_eq!(workspace.tabs.len(), tab_count);
+            assert_eq!(workspace.active_tab_pane_group().id(), active_group);
+        });
+    });
+}
+
+#[test]
+fn stale_managed_spawn_results_do_not_reopen_or_hide_the_card() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            for replace_config in [false, true] {
+                let generation = workspace.spawn_card.as_ref(ctx).launch_generation();
+                workspace.spawn_card.update(ctx, |card, ctx| {
+                    if replace_config {
+                        card.configure(spawn_card::SpawnCardConfig::default(), ctx);
+                    } else {
+                        card.cancel_pending_launches();
+                    }
+                });
+                for pending in [
+                    PendingManagedSpawn::Standalone { generation },
+                    PendingManagedSpawn::Batch {
+                        plan_id: spawn_card::bulk::BulkLaunchPlanId(901),
+                        target_id: spawn_card::bulk::BulkLaunchTargetId(
+                            "cancelled-account".to_string(),
+                        ),
+                    },
+                ] {
+                    for initially_open in [false, true] {
+                        for result in [Ok("started".to_string()), Err("late failure".to_string())] {
+                            workspace.current_workspace_state.is_spawn_card_open = initially_open;
+                            workspace.focus_active_tab(ctx);
+                            workspace
+                                .pending_managed_spawns
+                                .insert("late-launch".to_string(), pending.clone());
+                            assert!(workspace.complete_managed_spawn("late-launch", result, ctx));
+                            assert_eq!(
+                                workspace.current_workspace_state.is_spawn_card_open,
+                                initially_open
+                            );
+                            assert!(!workspace.spawn_card.is_focused(ctx));
+                            assert!(!workspace.pending_managed_spawns.contains("late-launch"));
+                        }
+                    }
+                }
+            }
+            let generation = workspace.spawn_card.as_ref(ctx).launch_generation();
+            workspace.apply_managed_spawn_completion(
+                PendingManagedSpawn::Standalone { generation },
+                Err("current failure".to_string()),
+                ctx,
+            );
+            assert!(workspace.current_workspace_state.is_spawn_card_open);
+            workspace.apply_managed_spawn_completion(
+                PendingManagedSpawn::Standalone { generation },
+                Ok("current success".to_string()),
+                ctx,
+            );
+            assert!(!workspace.current_workspace_state.is_spawn_card_open);
+        });
     });
 }

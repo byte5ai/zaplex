@@ -1708,7 +1708,9 @@ enum PendingManagedSpawn {
         plan_id: spawn_card::bulk::BulkLaunchPlanId,
         target_id: spawn_card::bulk::BulkLaunchTargetId,
     },
-    Standalone,
+    Standalone {
+        generation: u64,
+    },
 }
 
 #[derive(Default)]
@@ -6160,8 +6162,7 @@ impl Workspace {
                         ctx,
                     )
                 } else {
-                    self.open_ssh_terminal(node_id, server, false, ctx);
-                    true
+                    self.open_ssh_terminal(node_id, server, false, ctx)
                 };
                 if opened {
                     self.bind_active_terminal_account_with_id(
@@ -8481,8 +8482,7 @@ impl Workspace {
                             ctx,
                         )
                     } else {
-                        self.open_ssh_terminal(node_id.to_string(), server, false, ctx);
-                        true
+                        self.open_ssh_terminal(node_id.to_string(), server, false, ctx)
                     };
                     if opened {
                         self.bind_active_terminal_account_with_id(
@@ -8677,9 +8677,12 @@ impl Workspace {
     ) {
         match pending {
             PendingManagedSpawn::Batch { plan_id, target_id } => {
-                self.spawn_card.update(ctx, |card, ctx| {
-                    card.apply_launch_result(plan_id, &target_id, result.clone(), ctx);
+                let accepted = self.spawn_card.update(ctx, |card, ctx| {
+                    card.apply_launch_result(plan_id, &target_id, result.clone(), ctx)
                 });
+                if !accepted {
+                    return;
+                }
                 if self.spawn_card.as_ref(ctx).launch_batch_succeeded(plan_id) {
                     self.current_workspace_state.is_spawn_card_open = false;
                     self.focus_active_tab(ctx);
@@ -8688,7 +8691,10 @@ impl Workspace {
                     ctx.focus(&self.spawn_card);
                 }
             }
-            PendingManagedSpawn::Standalone => {
+            PendingManagedSpawn::Standalone { generation } => {
+                if self.spawn_card.as_ref(ctx).launch_generation() != generation {
+                    return;
+                }
                 if let Err(error) = result {
                     self.current_workspace_state.is_spawn_card_open = true;
                     self.show_agent_launch_error(error, ctx);
@@ -11144,13 +11150,13 @@ impl Workspace {
         // re-attempts the daemon path.
         force_classic: bool,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
         let attempt = if force_classic {
             None
         } else {
             let Some(attempt) = self.begin_ssh_connect(node_id.clone(), server.host.clone(), ctx)
             else {
-                return;
+                return false;
             };
             Some(attempt)
         };
@@ -11164,7 +11170,7 @@ impl Workspace {
             attempt,
             None,
             ctx,
-        );
+        )
     }
 
     fn open_ssh_terminal_for_split(
@@ -11236,7 +11242,7 @@ impl Workspace {
         let Some(attempt) =
             self.begin_ssh_connect(node_id.clone(), connection.server.host.clone(), ctx)
         else {
-            return true;
+            return false;
         };
         self.open_resolved_ssh_terminal_command(
             node_id,
@@ -11248,8 +11254,7 @@ impl Workspace {
             Some(attempt),
             None,
             ctx,
-        );
-        true
+        )
     }
 
     #[cfg(not(all(unix, feature = "local_tty")))]
@@ -11331,8 +11336,7 @@ impl Workspace {
             Some(attempt),
             None,
             ctx,
-        );
-        true
+        )
     }
 
     #[cfg(not(all(unix, feature = "local_tty")))]
@@ -11387,7 +11391,7 @@ impl Workspace {
         attempt: Option<SshConnectAttempt>,
         split_launch: Option<PendingSplitLaunch>,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
         let connection = match resolve_ssh_connection(&server) {
             Ok(connection) => connection,
             Err(error) => {
@@ -11403,7 +11407,7 @@ impl Workspace {
                 if let Some(attempt) = attempt.as_ref() {
                     self.finish_ssh_connect(attempt, ctx);
                 }
-                return;
+                return false;
             }
         };
         self.open_resolved_ssh_terminal_command(
@@ -11416,7 +11420,7 @@ impl Workspace {
             attempt,
             split_launch,
             ctx,
-        );
+        )
     }
 
     fn restore_classic_ssh_terminal(
@@ -11817,7 +11821,7 @@ impl Workspace {
         attempt: Option<SshConnectAttempt>,
         split_launch: Option<PendingSplitLaunch>,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
         use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshSecretStore};
 
         let server_for_connection = connection.server.clone();
@@ -11829,8 +11833,8 @@ impl Workspace {
         // instead of a local PTY running `ssh`. Falls through to the normal path
         // if the host isn't resilient or the auth isn't headless-capable.
         #[cfg(unix)]
-        if !force_classic
-            && self.try_open_daemon_ssh_terminal(
+        if !force_classic {
+            if let Some(opened) = self.try_open_daemon_ssh_terminal(
                 &node_id,
                 &connection,
                 DaemonLaunchRouting {
@@ -11840,9 +11844,9 @@ impl Workspace {
                 attempt.clone(),
                 split_launch.clone(),
                 ctx,
-            )
-        {
-            return;
+            ) {
+                return opened;
+            }
         }
         if agent_launch_route.is_some() || managed_launch.is_some() {
             self.toast_stack.update(ctx, |view, ctx| {
@@ -11857,7 +11861,7 @@ impl Workspace {
             if let Some(attempt) = attempt.as_ref() {
                 self.finish_ssh_connect(attempt, ctx);
             }
-            return;
+            return false;
         }
 
         let secret = match KeychainSecretStore.get(&secret_lookup_id, secret_kind) {
@@ -11894,7 +11898,7 @@ impl Workspace {
                     if let Some(attempt) = attempt.as_ref() {
                         self.finish_ssh_connect(attempt, ctx);
                     }
-                    return;
+                    return false;
                 }
             }
         } else {
@@ -11925,7 +11929,7 @@ impl Workspace {
                             if let Some(attempt) = attempt.as_ref() {
                                 self.finish_ssh_connect(attempt, ctx);
                             }
-                            return;
+                            return false;
                         }
                     }
                 }
@@ -11952,7 +11956,7 @@ impl Workspace {
                     if let Some(attempt) = attempt.as_ref() {
                         self.finish_ssh_connect(attempt, ctx);
                     }
-                    return;
+                    return false;
                 };
                 (pane_group, pane_id, terminal_view, Some(focus_guard), false)
             } else {
@@ -11978,7 +11982,7 @@ impl Workspace {
                     if let Some(attempt) = attempt.as_ref() {
                         self.finish_ssh_connect(attempt, ctx);
                     }
-                    return;
+                    return false;
                 };
                 (pane_group, pane_id, terminal_view, None, true)
             };
@@ -12109,6 +12113,7 @@ impl Workspace {
             view.begin_classic_ssh_readiness(ctx);
             view.execute_system_command_or_set_pending(cmd, ctx);
         });
+        true
     }
 
     #[cfg(unix)]
@@ -12173,10 +12178,10 @@ impl Workspace {
             .retain(|_, pending| pending.managed_launch_id.as_deref() != Some(launch_id));
     }
 
-    /// Native persistent remote-session path (Stage 2, Option B). Returns `true`
-    /// if the host will be opened via the daemon path (caller should stop), or
-    /// `false` to fall through to the ordinary local-PTY SSH path. v1 only takes
-    /// the daemon path for resilient hosts with headless-capable (key) auth.
+    /// Native persistent remote-session path (Stage 2, Option B). `None` permits
+    /// classic SSH fallback; `Some` reports whether the daemon path actually
+    /// created a terminal, including handled rejections. v1 only takes the daemon
+    /// path for resilient hosts with headless-capable (key) auth.
     ///
     /// The tab opens IMMEDIATELY with a visible "Connecting…" line — a click must
     /// produce a reaction now, not after the SSH handshake. The bounded preflight
@@ -12197,7 +12202,7 @@ impl Workspace {
         attempt: Option<SshConnectAttempt>,
         split_launch: Option<PendingSplitLaunch>,
         ctx: &mut ViewContext<Self>,
-    ) -> bool {
+    ) -> Option<bool> {
         use crate::remote_server::auth_context::server_api_auth_context;
         use crate::remote_server::headless_connect::{
             self, DaemonPreflight, DAEMON_BINARY_MISSING,
@@ -12224,9 +12229,9 @@ impl Workspace {
                 if let Some(attempt) = attempt.as_ref() {
                     self.finish_ssh_connect(attempt, ctx);
                 }
-                return true;
+                return Some(false);
             }
-            return false;
+            return None;
         }
         if !headless_connect::is_headless_capable(server) {
             log::info!(
@@ -12247,9 +12252,9 @@ impl Workspace {
                 if let Some(attempt) = attempt.as_ref() {
                     self.finish_ssh_connect(attempt, ctx);
                 }
-                return true;
+                return Some(false);
             }
-            return false;
+            return None;
         }
 
         let session_id = headless_connect::alloc_daemon_session_id();
@@ -12326,7 +12331,7 @@ impl Workspace {
                 if let Some(attempt) = attempt.as_ref() {
                     self.finish_ssh_connect(attempt, ctx);
                 }
-                return true;
+                return Some(false);
             };
             (pane_group, pane_id, terminal_view, Some(focus_guard), false)
         } else {
@@ -12344,7 +12349,7 @@ impl Workspace {
                 if let Some(attempt) = attempt.as_ref() {
                     self.finish_ssh_connect(attempt, ctx);
                 }
-                return true;
+                return Some(false);
             };
             let pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
             let Some(terminal_view) = pane_group
@@ -12354,7 +12359,7 @@ impl Workspace {
                 if let Some(attempt) = attempt.as_ref() {
                     self.finish_ssh_connect(attempt, ctx);
                 }
-                return true;
+                return Some(false);
             };
             (pane_group, pane_id, terminal_view, None, true)
         };
@@ -13063,7 +13068,7 @@ impl Workspace {
                 }
             },
         );
-        true
+        Some(true)
     }
 
     /// Connects a daemon-hosted session on an established ControlMaster: builds the
@@ -25437,6 +25442,8 @@ impl Workspace {
                 managed_mode,
                 managed_launch_id,
             } => {
+                self.spawn_card
+                    .update(ctx, |card, _| card.cancel_pending_launches());
                 let local_account_email = if node_id.is_none() {
                     Self::account_email_for_route(*agent, config_dir.as_deref(), &*ctx)
                 } else {
@@ -25471,8 +25478,12 @@ impl Workspace {
                             .filter(|launch_id| !launch_id.is_empty())
                         {
                             Some(launch_id) if launch_token == format!("managed:{launch_id}") => {
-                                self.pending_managed_spawns
-                                    .insert(launch_id.to_string(), PendingManagedSpawn::Standalone);
+                                self.pending_managed_spawns.insert(
+                                    launch_id.to_string(),
+                                    PendingManagedSpawn::Standalone {
+                                        generation: self.spawn_card.as_ref(ctx).launch_generation(),
+                                    },
+                                );
                             }
                             Some(launch_id) => {
                                 self.show_agent_launch_error(
@@ -29124,7 +29135,9 @@ impl TypedActionView for Workspace {
                     Ok(warp_ssh_manager::SshRepository::get_server(conn, node_id)?)
                 });
                 match server {
-                    Ok(Some(server)) => self.open_ssh_terminal(node_id.clone(), server, false, ctx),
+                    Ok(Some(server)) => {
+                        self.open_ssh_terminal(node_id.clone(), server, false, ctx);
+                    }
                     lookup @ (Ok(None) | Err(_)) => {
                         log::warn!("Couldn't resolve host {node_id} to open a terminal on");
                         let message = host_lookup_failure_message(lookup.is_err());

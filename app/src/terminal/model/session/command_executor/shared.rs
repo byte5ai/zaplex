@@ -27,8 +27,10 @@ pub enum ExecutorCommandEvent {
 pub fn shell_escape_single_quotes(command: &str, shell_type: ShellType) -> String {
     match shell_type {
         ShellType::Fish => {
-            // Backslash-escape single quotes for Fish.
-            command.replace('\'', r"\'")
+            // Fish interprets both escaped backslashes and escaped quotes inside
+            // single quotes. Escape backslashes first to keep a preceding one
+            // from neutralizing the quote escape and ending the argument.
+            command.replace('\\', r"\\").replace('\'', r"\'")
         }
         ShellType::PowerShell => {
             // In powershell we escape single quotes using two single quotes ''

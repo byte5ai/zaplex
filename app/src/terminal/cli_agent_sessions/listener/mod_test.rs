@@ -608,3 +608,94 @@ fn deepseek_structured_session_is_rich_status() {
 
     assert!(session_supports_rich_status(&session));
 }
+
+#[test]
+fn existing_listener_and_model_reject_other_provider_notifications() {
+    use crate::terminal::cli_agent_sessions::CLIAgentSessionStatus;
+    use crate::terminal::model::session::Sessions;
+
+    for agent in [CLIAgent::Codex, CLIAgent::DeepSeek] {
+        warpui::App::test((), move |mut app| async move {
+            let terminal_view_id = EntityId::new();
+            let tracked = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+            let sessions = app.add_model(|_| Sessions::new_for_test());
+            let (_sender, receiver) = async_channel::unbounded();
+            let dispatcher =
+                app.add_model(|ctx| ModelEventDispatcher::new(receiver, sessions, ctx));
+            let listener = app.add_model(|ctx| {
+                CLIAgentSessionListener::new(terminal_view_id, agent, &dispatcher, ctx)
+            });
+            tracked.update(&mut app, |model, ctx| {
+                model.register_listener(
+                    terminal_view_id,
+                    agent,
+                    Some("/own".to_owned()),
+                    None,
+                    Some("own-session".to_owned()),
+                    None,
+                    None,
+                    false,
+                    listener.clone(),
+                    ctx,
+                );
+            });
+            #[cfg(not(target_family = "wasm"))]
+            listener.update(&mut app, |listener, _| {
+                listener
+                    .codewhale_pending_approvals
+                    .insert("pending-own-tool".to_owned());
+            });
+
+            let foreign = r#"{"v":1,"agent":"claude","event":"stop","session_id":"foreign-session","cwd":"/foreign"}"#;
+            dispatcher.update(&mut app, |_, ctx| {
+                ctx.emit(ModelEvent::PluggableNotification {
+                    title: Some("warp://cli-agent".to_owned()),
+                    body: foreign.to_owned(),
+                });
+            });
+            // Direct model delivery must enforce the same provider boundary.
+            tracked.update(&mut app, |model, ctx| {
+                model.update_from_event(
+                    terminal_view_id,
+                    &parse_event(Some("warp://cli-agent"), foreign).unwrap(),
+                    ctx,
+                );
+            });
+            tracked.read(&app, |model, _| {
+                let session = model.session(terminal_view_id).unwrap();
+                assert_eq!(session.agent, agent);
+                assert_eq!(
+                    session.session_context.session_id.as_deref(),
+                    Some("own-session")
+                );
+                assert_eq!(session.session_context.cwd.as_deref(), Some("/own"));
+                assert_eq!(session.status, CLIAgentSessionStatus::InProgress);
+            });
+            #[cfg(not(target_family = "wasm"))]
+            listener.read(&app, |listener, _| {
+                assert!(listener
+                    .codewhale_pending_approvals
+                    .contains("pending-own-tool"));
+            });
+
+            dispatcher.update(&mut app, |_, ctx| {
+                ctx.emit(ModelEvent::PluggableNotification {
+                    title: Some("warp://cli-agent".to_owned()),
+                    body: format!(
+                        r#"{{"v":1,"agent":"{}","event":"stop","session_id":"own-session","cwd":"/own-next"}}"#,
+                        agent.command_prefix(),
+                    ),
+                });
+            });
+            tracked.read(&app, |model, _| {
+                let session = model.session(terminal_view_id).unwrap();
+                assert_eq!(session.status, CLIAgentSessionStatus::Success);
+                assert_eq!(session.session_context.cwd.as_deref(), Some("/own-next"));
+            });
+            #[cfg(not(target_family = "wasm"))]
+            listener.read(&app, |listener, _| {
+                assert!(listener.codewhale_pending_approvals.is_empty());
+            });
+        });
+    }
+}

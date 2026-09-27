@@ -401,6 +401,7 @@ pub struct SpawnCard {
     history_validation: BTreeMap<PathBuf, DirectoryValidation>,
     history_search_editor: Option<ViewHandle<EditorView>>,
     bulk_launch: Option<BulkLaunchLedger>,
+    launch_generation: u64,
     /// Task prompt to prefill into the launched agent after start (contextual
     /// flows); `None` for a plain "new agent" open.
     prompt: Option<String>,
@@ -631,6 +632,7 @@ impl SpawnCard {
             history_validation: BTreeMap::new(),
             history_search_editor: Some(history_search_editor),
             bulk_launch: None,
+            launch_generation: 0,
             prompt: None,
             remote_dir_editor: Some(remote_dir_editor),
             chip_states: Default::default(),
@@ -651,7 +653,7 @@ impl SpawnCard {
         self.account = AccountChoice::Freest;
         self.batch_accounts.clear();
         self.select_all_accounts = false;
-        self.bulk_launch = None;
+        self.invalidate_bulk_plan();
         self.folder_history_open = false;
         self.history_validation.clear();
         // Pre-scope host from a Conductor host/project `+`, else local. Resolve
@@ -810,6 +812,11 @@ impl SpawnCard {
 
     fn invalidate_bulk_plan(&mut self) {
         self.bulk_launch = None;
+        self.launch_generation = self.launch_generation.wrapping_add(1);
+    }
+
+    pub fn launch_generation(&self) -> u64 {
+        self.launch_generation
     }
 
     fn local_account_targets(&self) -> Vec<LaunchAccountTarget> {
@@ -1016,14 +1023,14 @@ impl SpawnCard {
         target_id: &BulkLaunchTargetId,
         result: Result<String, String>,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
         let history_host = self.history_host();
         let Some(ledger) = self.bulk_launch.as_mut() else {
-            return;
+            return false;
         };
         let already_recorded_history = ledger.any_succeeded();
         if !ledger.apply(plan_id, target_id, result) {
-            return;
+            return false;
         }
         if !already_recorded_history && ledger.any_succeeded() {
             if let Some(path) = ledger
@@ -1042,6 +1049,7 @@ impl SpawnCard {
             }
         }
         ctx.notify();
+        true
     }
 
     pub fn mark_launch_in_flight(

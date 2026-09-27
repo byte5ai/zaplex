@@ -1070,3 +1070,120 @@ fn antigravity_resume_quotes_the_conversation_id_and_does_not_invent_fork_suppor
     );
     assert_eq!(CLIAgent::Antigravity.fork_command("conversation"), None);
 }
+
+#[cfg(windows)]
+#[test]
+fn powershell_routed_launch_restores_account_and_api_environment_after_success_or_failure() {
+    for initial_home in [None, Some("C:\\Original's account")] {
+        for fail in [false, true] {
+            let mut pinned =
+                CLIAgent::Codex.routed_launch(Some(Path::new("C:\\Routed's account")), None, None);
+            pinned.program = "Invoke-ZaplexRoutingProbe".to_owned();
+            let mut default = CLIAgent::Codex.routed_launch(None, None, None);
+            default.program = pinned.program.clone();
+            let initial = initial_home
+                .map(super::powershell_quote)
+                .unwrap_or_else(|| "$null".to_owned());
+            let throw = if fail { "$true" } else { "$false" };
+            let script = format!(
+                r#"$ErrorActionPreference = 'Stop'
+$env:CODEX_HOME = {initial}
+$env:OPENAI_API_KEY = 'fixture-original-key'
+$zaplexProbeThrows = {throw}
+function Invoke-ZaplexRoutingProbe {{
+    [pscustomobject]@{{ home = $env:CODEX_HOME; api = $env:OPENAI_API_KEY }} | ConvertTo-Json -Compress
+    if ($zaplexProbeThrows) {{ throw 'fixture invocation failure' }}
+}}
+try {{ {pinned} }} catch {{ if (-not $zaplexProbeThrows) {{ throw }} }}
+[pscustomobject]@{{ home = $env:CODEX_HOME; api = $env:OPENAI_API_KEY }} | ConvertTo-Json -Compress
+$zaplexProbeThrows = $false
+{default}
+[pscustomobject]@{{ home = $env:CODEX_HOME; api = $env:OPENAI_API_KEY }} | ConvertTo-Json -Compress
+"#,
+                pinned = pinned.shell_command(ShellType::PowerShell),
+                default = default.shell_command(ShellType::PowerShell),
+            );
+            let output = command::blocking::Command::new("powershell.exe")
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    &script,
+                ])
+                .output()
+                .expect("Windows PowerShell must execute the routing fixture");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let records = String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(records.len(), 4);
+            assert_eq!(records[0]["home"], "C:\\Routed's account");
+            assert!(records[0]["api"].is_null());
+            let expected_home = serde_json::json!(initial_home);
+            for index in [1, 3] {
+                assert_eq!(records[index]["home"], expected_home);
+                assert_eq!(records[index]["api"], "fixture-original-key");
+            }
+            assert_eq!(records[2]["home"], expected_home);
+            assert!(records[2]["api"].is_null());
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn powershell_routed_launch_preserves_native_exit_status_after_environment_cleanup() {
+    for exit_code in [0, 7] {
+        let launch = super::RoutedAgentLaunch {
+            program: "cmd.exe".to_owned(),
+            args: vec![
+                "/d".to_owned(),
+                "/c".to_owned(),
+                format!("exit {exit_code}"),
+            ],
+            environment: vec![("CODEX_HOME", "routed-account".to_owned())],
+            unset_environment: vec!["OPENAI_API_KEY"],
+        };
+        let script = format!(
+            r#"$env:CODEX_HOME = 'original-account'
+$env:OPENAI_API_KEY = 'original-key'
+{command}
+$observedStatus = $?
+$observedCode = $global:LASTEXITCODE
+[pscustomobject]@{{ status = $observedStatus; code = $observedCode; home = $env:CODEX_HOME; api = $env:OPENAI_API_KEY }} | ConvertTo-Json -Compress
+"#,
+            command = launch.shell_command(ShellType::PowerShell),
+        );
+        let output = command::blocking::Command::new("powershell.exe")
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &script,
+            ])
+            .output()
+            .expect("Windows PowerShell must execute the native exit fixture");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "status restoration must not print an error"
+        );
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["status"], exit_code == 0);
+        assert_eq!(result["code"], exit_code);
+        assert_eq!(result["home"], "original-account");
+        assert_eq!(result["api"], "original-key");
+    }
+}

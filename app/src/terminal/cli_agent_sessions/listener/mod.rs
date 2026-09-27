@@ -501,6 +501,11 @@ impl CLIAgentSessionListener {
                 let Some(parsed) = me.inner.try_parse(title.as_deref(), body) else {
                     return;
                 };
+                // The terminal view rejects a second provider's registration,
+                // but its existing PTY listener receives the same notification.
+                if parsed.agent != agent {
+                    return;
+                }
                 if let Some(event) = me.inner.handle_event(parsed) {
                     #[cfg(not(target_family = "wasm"))]
                     if matches!(

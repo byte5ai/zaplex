@@ -75,3 +75,17 @@ fn escaping_does_not_add_or_remove_shell_metacharacters() {
         assert_eq!(shell_escape_single_quotes(value, shell_type), value);
     }
 }
+
+#[test]
+fn fish_quoting_preserves_backslashes_before_quotes_and_argument_end() {
+    for (value, expected) in [
+        (r"/tmp/double\\slash", r"'/tmp/double\\\\slash'"),
+        (r"/tmp/trailing\", r"'/tmp/trailing\\'"),
+        (
+            r"/tmp/\'; touch /tmp/unwanted; #",
+            r"'/tmp/\\\'; touch /tmp/unwanted; #'",
+        ),
+    ] {
+        assert_eq!(shell_quote_arg(value, ShellType::Fish), expected);
+    }
+}
