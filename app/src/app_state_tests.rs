@@ -104,3 +104,30 @@ fn test_code_pane_snapshot_with_multiple_tabs() {
     assert_eq!(tabs[2].path, None);
     assert!(matches!(source, Some(CodeSource::Link { .. })));
 }
+
+#[test]
+fn test_left_panel_snapshot_preserves_drive_wire_name() {
+    for stored_variant in ["ZapDrive", "ZaplexDrive"] {
+        let stored = format!(
+            r#"{{"left_panel_displayed_tab":"{stored_variant}","pane_group_id":"side-panel","width":287}}"#
+        );
+        let snapshot = serde_json::from_str::<LeftPanelSnapshot>(&stored)
+            .expect("old and renamed Drive snapshots must remain readable");
+        assert_eq!(
+            snapshot,
+            LeftPanelSnapshot {
+                left_panel_displayed_tab: LeftPanelDisplayedTab::ZaplexDrive,
+                pane_group_id: "side-panel".to_string(),
+                width: 287,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&snapshot).unwrap(),
+            serde_json::json!({
+                "left_panel_displayed_tab": "ZapDrive",
+                "pane_group_id": "side-panel",
+                "width": 287,
+            })
+        );
+    }
+}

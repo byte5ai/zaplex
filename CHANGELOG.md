@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.1.1] — 2026-09-23
 
+- Gespeicherte Drive-Seitenleisten (#245) bleiben nach der Umbenennung erhalten. Alte und neue Tabnamen werden gelesen; Auswahl, Pane-Zuordnung und Breite gehen beim Wiederherstellen nicht verloren.
+
 - SFTP-Integrationsprüfungen (#245) erreichen die behaupteten Schreib- und Ersetzungsfehler, statt schon an fehlenden Streaming-Methoden zu scheitern. Der Speichern-unter-Fall verschiebt den ursprünglichen Dateieintrag tatsächlich; ein Unix-spezifischer Löschfall erhält den passenden Plattformfilter.
 
 - SFTP-Prüffälle (#245) erzeugen die benötigten Overlay-Dateien und erzwingen bei Sortierung und Aktualisierung einen tatsächlichen Zeilenwechsel. Dadurch erkennen sie verlorene Cursor- und Markierungszuordnungen.

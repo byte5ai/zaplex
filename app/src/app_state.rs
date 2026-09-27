@@ -708,6 +708,7 @@ pub enum CodeReviewPaneSnapshot {
 pub enum LeftPanelDisplayedTab {
     FileTree,
     GlobalSearch,
+    #[serde(rename = "ZapDrive", alias = "ZaplexDrive")]
     ZaplexDrive,
     ConversationListView,
     SshManager,
