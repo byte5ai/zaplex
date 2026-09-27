@@ -271,7 +271,7 @@ fn merged_daemon_inventory_preserves_exact_route_per_session() {
         Some(current_route.clone()),
         &InitializeResponse {
             host_id: "current-host".to_string(),
-            server_version: "v1.0.30".to_string(),
+            server_version: current_route.server_version().to_string(),
             ..Default::default()
         },
         0,
@@ -283,7 +283,7 @@ fn merged_daemon_inventory_preserves_exact_route_per_session() {
         Some(old_route.clone()),
         &InitializeResponse {
             host_id: "old-host".to_string(),
-            server_version: "v1.0.29".to_string(),
+            server_version: old_route.server_version().to_string(),
             ..Default::default()
         },
         1,

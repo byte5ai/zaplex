@@ -90,13 +90,15 @@ impl UserWorkspaces {
     }
 
     pub fn team_from_uid(&self, team_uid: ServerId) -> Option<&Team> {
-        let _ = team_uid;
-        None
+        self.current_workspace()
+            .and_then(|w| w.teams.iter().find(|t| t.uid == team_uid))
     }
 
     pub fn team_from_uid_across_all_workspaces(&self, team_uid: ServerId) -> Option<&Team> {
-        let _ = team_uid;
-        None
+        self.workspaces
+            .iter()
+            .flat_map(|w| w.teams.iter())
+            .find(|t| t.uid == team_uid)
     }
 
     pub fn workspace_from_uid(&self, workspace_uid: WorkspaceUid) -> Option<&Workspace> {
@@ -211,11 +213,12 @@ impl UserWorkspaces {
 
     /// Return the uid of user's current team (if any) without refreshing.
     pub fn current_team_uid(&self) -> Option<ServerId> {
-        None
+        self.current_team().map(|t| t.uid)
     }
 
     pub fn current_team_mut(&mut self) -> Option<&mut Team> {
-        None
+        self.current_workspace_mut()
+            .and_then(|w| w.teams.first_mut())
     }
 
     /// Note that the team is populated with dummy data until
@@ -223,7 +226,7 @@ impl UserWorkspaces {
     /// Consider whether you need to wait for the results of the fetch before checking the
     /// values of other fields.
     pub fn current_team(&self) -> Option<&Team> {
-        None
+        self.current_workspace().and_then(|w| w.teams.first())
     }
 
     /// Note that the workspace is populated with dummy data until the initial fetch

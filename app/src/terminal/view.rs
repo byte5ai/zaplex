@@ -416,6 +416,7 @@ use crate::cockpit::settings::{CockpitContinuationMode, CockpitSettings};
 use crate::debounce::debounce;
 use crate::editor::{
     AutosuggestionType, CrdtOperation, EditorAction, EditorView, Event as EditorEvent,
+    InteractionState,
     PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
     TextOptions,
 };
@@ -6674,8 +6675,14 @@ impl TerminalView {
         if draft.is_empty() {
             return;
         }
-        self.input.update(ctx, |input, ctx| {
-            input.send_input_buffer_to_terminal_editor(Arc::new(draft), ctx);
+        let editor = self.input.as_ref(ctx).editor().clone();
+        editor.update(ctx, |editor, ctx| {
+            // Restore persisted text even while remote readiness disables user edits.
+            // Keep the sync origin so this pane's draft cannot fan out to other panes.
+            let interaction_state = editor.interaction_state(ctx);
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+            editor.set_buffer_text_for_syncing_inputs(Arc::new(draft), ctx);
+            editor.set_interaction_state(interaction_state, ctx);
         });
     }
 

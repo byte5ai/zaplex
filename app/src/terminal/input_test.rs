@@ -345,9 +345,8 @@ pub async fn add_window_with_bootstrapped_terminal_and_window_id(
     let shell_type = shell_starter_source.shell_type();
 
     let session_info = session_info
-        .unwrap_or_else(SessionInfo::new_for_test)
-        .with_session_type(BootstrapSessionType::Local)
-        .with_shell_type(shell_type);
+        .unwrap_or_else(|| SessionInfo::new_for_test().with_shell_type(shell_type))
+        .with_session_type(BootstrapSessionType::Local);
     let history_file_commands = history_file_commands.unwrap_or_default();
 
     let (window_id, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
@@ -593,6 +592,7 @@ fn select_first_command_line_of_block(
 
 #[test]
 fn clipboard_png_paste_in_cli_input_creates_thumbnail_without_inserting_a_path() {
+    let _image_context = FeatureFlag::ImageAsContext.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;

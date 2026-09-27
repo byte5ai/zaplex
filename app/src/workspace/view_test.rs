@@ -638,6 +638,7 @@ fn remote_model_discovery_preserves_exact_dynamic_metadata() {
 #[cfg(not(target_family = "wasm"))]
 #[test]
 fn remote_model_discovery_rejects_unknown_schema() {
+    crate::i18n::init(Some("en"));
     let error = match Workspace::remote_model_capabilities(
         remote_server::proto::AgentModelDiscoveryResponse {
             schema_version: 2,
@@ -5977,7 +5978,12 @@ fn cancelling_pending_adoption_retires_only_local_surface_and_keeps_retry_identi
                 .terminal_view_from_pane_id(pane, ctx)
                 .unwrap();
             previous_view.update(ctx, |view, ctx| {
+                let editor = view.input().as_ref(ctx).editor().clone();
+                let interaction_state = editor.as_ref(ctx).interaction_state(ctx);
                 view.restore_input_draft("unfinished command".to_string(), ctx);
+                assert_eq!(view.input_draft(ctx), "unfinished command");
+                assert_eq!(editor.as_ref(ctx).interaction_state(ctx), interaction_state);
+                assert!(!view.input().as_ref(ctx).ordinary_command_input_is_ready());
             });
             assert!(workspace.daemon_session_surface_is_active(session, None, ctx));
             workspace.cancel_remote_restore(&group, pane, ctx);
@@ -6036,7 +6042,12 @@ fn cancelling_fresh_daemon_open_preserves_draft_without_inventing_a_restore_iden
                 .terminal_view_from_pane_id(pane, ctx)
                 .unwrap();
             view.update(ctx, |view, ctx| {
+                let editor = view.input().as_ref(ctx).editor().clone();
+                let interaction_state = editor.as_ref(ctx).interaction_state(ctx);
                 view.restore_input_draft("unfinished command".to_string(), ctx);
+                assert_eq!(view.input_draft(ctx), "unfinished command");
+                assert_eq!(editor.as_ref(ctx).interaction_state(ctx), interaction_state);
+                assert!(!view.input().as_ref(ctx).ordinary_command_input_is_ready());
             });
             assert!(group
                 .as_ref(ctx)

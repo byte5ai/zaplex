@@ -48,7 +48,7 @@ use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::view_components::find::FindWithinBlockState;
 
-use crate::terminal::model::ansi::{self, InitShellValue};
+use crate::terminal::model::ansi::{self, Handler as _, InitShellValue, PrecmdValue};
 use crate::terminal::model::ansi::{BootstrappedValue, PreexecValue};
 use crate::terminal::model::blocks::{insert_block, TotalIndex};
 use crate::terminal::model::session::SessionInfo;
@@ -5500,6 +5500,16 @@ fn raw_remote_terminal_keeps_draft_and_accepts_only_ready_manual_input() {
     });
 }
 
+// Match the initialized shell session when preparing an executing password prompt.
+fn start_su_test_command(view: &mut TerminalView) {
+    let mut model = view.model.lock();
+    model.precmd(PrecmdValue {
+        session_id: Some(123),
+        ..Default::default()
+    });
+    model.simulate_long_running_block("su root", "Password:");
+}
+
 fn su_test_credential(secret: &str) -> OneKeyCredential {
     OneKeyCredential {
         label: "Test root password".into(),
@@ -5515,9 +5525,7 @@ fn closed_su_confirmation_ignores_delayed_credentials_and_older_requests() {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
         terminal.update(&mut app, |view, ctx| {
-            view.model
-                .lock()
-                .simulate_long_running_block("su root", "Password:");
+            start_su_test_command(view);
             let old_request = view.begin_su_root_confirmation().unwrap();
             view.close_context_menu(ctx, false);
             view.apply_su_root_credentials(
@@ -5562,9 +5570,7 @@ fn completed_su_command_cannot_write_password_to_the_next_command() {
             });
         });
         terminal.update(&mut app, |view, ctx| {
-            view.model
-                .lock()
-                .simulate_long_running_block("su root", "Password:");
+            start_su_test_command(view);
             let request = view.begin_su_root_confirmation().unwrap();
             view.su_root_password = Some(zeroize::Zeroizing::new("root-secret".into()));
             view.context_menu_state = Some(ContextMenuState {
@@ -5600,9 +5606,7 @@ fn interrupted_su_confirmation_cannot_revive_or_inject_a_password() {
         });
         for interrupt in [escape_sequences::C0::ETX, escape_sequences::C0::EOT] {
             terminal.update(&mut app, |view, ctx| {
-                view.model
-                    .lock()
-                    .simulate_long_running_block("su root", "Password:");
+                start_su_test_command(view);
                 let request = view.begin_su_root_confirmation().unwrap();
                 view.su_root_password = Some(zeroize::Zeroizing::new("root-secret".into()));
                 view.context_menu_state = Some(ContextMenuState {
@@ -5644,9 +5648,7 @@ fn live_su_confirmation_injects_the_selected_password_once() {
             });
         });
         terminal.update(&mut app, |view, ctx| {
-            view.model
-                .lock()
-                .simulate_long_running_block("su root", "Password:");
+            start_su_test_command(view);
             view.begin_su_root_confirmation().unwrap();
             view.su_root_password = Some(zeroize::Zeroizing::new("root-secret".into()));
             view.context_menu_state = Some(ContextMenuState {
