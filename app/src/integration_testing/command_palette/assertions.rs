@@ -1,5 +1,6 @@
 use crate::integration_testing::view_getters::{command_palette_view, workspace_view};
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
+use crate::search::QueryFilter;
 use warpui::async_assert;
 use warpui::keymap::DescriptionContext;
 use warpui::integration::AssertionCallback;
@@ -46,8 +47,8 @@ pub fn assert_command_palette_has_results() -> AssertionCallback {
     })
 }
 
-/// Waits for the requested action to lead the results before pressing Enter.
-/// Existing session results can remain visible while the new query is pending.
+/// Waits for the action-only query to finish with the requested action first.
+/// Enter is ignored while the mixer is loading, even if it already shows the action.
 pub fn assert_command_palette_first_action(action: String) -> AssertionCallback {
     Box::new(move |app, window_id| {
         let palette = command_palette_view(app, window_id);
@@ -56,6 +57,13 @@ pub fn assert_command_palette_first_action(action: String) -> AssertionCallback 
             let query = search_bar.query(ctx);
             let mixer = search_bar.mixer().as_ref(ctx);
             let mixer_query = mixer.current_query();
+            let is_loading = mixer.is_loading();
+            let requested_query_finished = !is_loading
+                && mixer_query.is_some_and(|query| {
+                    query.text.eq_ignore_ascii_case(&action)
+                        && query.filters.len() == 1
+                        && query.filters.contains(&QueryFilter::Actions)
+                });
             let result_types: Vec<_> = palette
                 .search_results(ctx)
                 .take(5)
@@ -75,10 +83,11 @@ pub fn assert_command_palette_first_action(action: String) -> AssertionCallback 
                 }
             });
             async_assert!(
-                first_action
-                    .as_deref()
-                    .is_some_and(|description| description.eq_ignore_ascii_case(&action)),
-                "Expected first palette action {action:?}, but got {first_action:?}; query={query:?}; mixer_query={mixer_query:?}; result_types={result_types:?}; raw_result_count={raw_result_count}"
+                requested_query_finished
+                    && first_action
+                        .as_deref()
+                        .is_some_and(|description| description.eq_ignore_ascii_case(&action)),
+                "Expected first palette action {action:?}, but got {first_action:?}; query={query:?}; mixer_query={mixer_query:?}; is_loading={is_loading}; result_types={result_types:?}; raw_result_count={raw_result_count}"
             )
         })
     })
