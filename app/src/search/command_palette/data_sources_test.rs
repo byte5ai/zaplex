@@ -2,20 +2,22 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use settings::manager::SettingsManager;
+use settings::Setting as StoredSetting;
 use watcher::HomeDirectoryWatcher;
+use warpui::elements::Empty;
 use warpui::keymap::EditableBinding;
 use warpui::platform::WindowStyle;
-use warpui::{App, Element, Empty, SingletonEntity, View};
+use warpui::{App, Element, SingletonEntity, TypedActionView, View};
 
 use super::*;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, StoredObjectMetadata, StoredObjectPermissions};
 use crate::notebooks::manager::NotebookManager;
 use crate::remote_server::manager::RemoteServerManager;
-use crate::user_config::WarpConfig;
 use crate::notebooks::{NotebookObject, NotebookObjectModel};
 use crate::server::ids::SyncId::{self};
 use crate::settings::AISettings;
+use crate::user_config::WarpConfig;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{WorkflowObject, WorkflowObjectModel};
 use crate::{
@@ -269,6 +271,10 @@ struct BindingSourceView;
 
 impl Entity for BindingSourceView {
     type Event = ();
+}
+
+impl TypedActionView for BindingSourceView {
+    type Action = ();
 }
 
 impl View for BindingSourceView {

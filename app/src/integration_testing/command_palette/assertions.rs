@@ -52,7 +52,16 @@ pub fn assert_command_palette_first_action(action: String) -> AssertionCallback 
     Box::new(move |app, window_id| {
         let palette = command_palette_view(app, window_id);
         palette.read(app, |palette, ctx| {
-            let query = palette.search_bar.as_ref(ctx).query(ctx);
+            let search_bar = palette.search_bar.as_ref(ctx);
+            let query = search_bar.query(ctx);
+            let mixer = search_bar.mixer().as_ref(ctx);
+            let mixer_query = mixer.current_query();
+            let result_types: Vec<_> = palette
+                .search_results(ctx)
+                .take(5)
+                .map(|result| result.accept_result().result_type())
+                .collect();
+            let raw_result_count = mixer.results().len();
             let first_action = palette.search_results(ctx).next().and_then(|result| {
                 if let CommandPaletteItemAction::AcceptBinding { binding } = result.accept_result() {
                     Some(
@@ -69,7 +78,7 @@ pub fn assert_command_palette_first_action(action: String) -> AssertionCallback 
                 first_action
                     .as_deref()
                     .is_some_and(|description| description.eq_ignore_ascii_case(&action)),
-                "Expected first palette action {action:?}, but got {first_action:?}; query={query:?}"
+                "Expected first palette action {action:?}, but got {first_action:?}; query={query:?}; mixer_query={mixer_query:?}; result_types={result_types:?}; raw_result_count={raw_result_count}"
             )
         })
     })

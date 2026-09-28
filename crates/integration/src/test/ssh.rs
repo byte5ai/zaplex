@@ -15,7 +15,7 @@ use warp::{
             util::with_recent_ssh_output,
         },
         terminal::{
-            assert_active_block_output_for_single_terminal_in_tab,
+            assert_active_block_output_for_single_terminal_in_tab, assert_focused_editor_in_tab,
             assert_long_running_block_executing_for_single_terminal_in_tab,
             execute_command_for_single_terminal_in_tab,
             util::{current_shell_starter_and_version, nonce, ExactLine, ExpectedExitStatus},
@@ -264,7 +264,33 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
                 builder
             };
             // Quit SSH Session once we validate zaplexificaiton works with Tmux Install
-            let builder = assert_zaplexification(builder).with_step(run_exit_command());
+            let builder = assert_zaplexification(builder)
+                .with_step(run_exit_command())
+                // Exit only sends keystrokes. Wait for SSH teardown and the local editor
+                // before typing another command, otherwise it reaches the dying session.
+                .with_step(
+                    wait_until_bootstrapped_single_pane_for_tab(0)
+                        .add_named_assertion(
+                            "Active block returned to the local session",
+                            with_recent_ssh_output(Box::new(|app, window_id| {
+                                let terminal = single_terminal_view_for_tab(app, window_id, 0);
+                                terminal.read(app, |view, ctx| {
+                                    let model = view.model.lock();
+                                    let sessions = view.sessions(ctx);
+                                    async_assert!(
+                                        model
+                                            .block_list()
+                                            .active_block()
+                                            .session_id()
+                                            .and_then(|id| sessions.get(id))
+                                            .is_some_and(|session| session.is_local()),
+                                        "SSH exit has not restored the local session"
+                                    )
+                                })
+                            })),
+                        )
+                        .add_assertion(assert_focused_editor_in_tab(0)),
+                );
 
             // Validate we can Zaplexify when Tmux is already installed
             assert_zaplexification(zaplexify(builder))
