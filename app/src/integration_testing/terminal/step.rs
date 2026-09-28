@@ -59,7 +59,7 @@ pub fn initialize_secret_regexes() -> TestStep {
 }
 
 pub fn wait_until_bootstrapped_pane(tab_index: usize, pane_index: usize) -> TestStep {
-    new_step_with_default_assertions("Wait for bootstrapping")
+    new_step_with_default_assertions_for_pane("Wait for bootstrapping", tab_index, pane_index)
         .add_named_assertion(
             "waiting for bootstrapping",
             assert_terminal_bootstrapped(tab_index, pane_index),

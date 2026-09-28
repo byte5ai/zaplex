@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use warp::integration_testing::workflow::assert_no_team_workflow_pane_open;
 use warp::{
     integration_testing::{
@@ -45,6 +47,7 @@ pub fn test_open_workflow_in_pane() -> Builder {
 
 pub fn test_create_personal_workflow_pane_from_command_palette() -> Builder {
     new_builder()
+        .with_user_defaults(HashMap::from([("EnableWarpDrive".to_string(), "true".to_string())]))
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(TestStep::new("Noop step").add_named_assertion(
             "Make sure no workflow panes are open",
@@ -62,6 +65,7 @@ pub fn test_create_personal_workflow_pane_from_command_palette() -> Builder {
 pub fn test_cached_team_membership_does_not_offer_team_workflow_creation() -> Builder {
     // Cached team membership must not re-enable the retired cloud creation actions.
     new_builder()
+        .with_user_defaults(HashMap::from([("EnableWarpDrive".to_string(), "true".to_string())]))
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(load_cached_workspace())
         .with_step(go_offline())

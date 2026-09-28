@@ -11,6 +11,8 @@ use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+#[cfg(unix)]
+use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::atomic::AtomicU8;
@@ -728,7 +730,18 @@ impl SafeFileWorker {
                             {
                                 continue;
                             }
-                            let response_message = server.handle(connection_id, request);
+                            let response_message = match catch_unwind(AssertUnwindSafe(|| {
+                                server.handle(connection_id, request)
+                            })) {
+                                Ok(response_message) => response_message,
+                                Err(panic) => {
+                                    // Publish failure before unwinding drops the response sender
+                                    // and wakes its receiver. The server is never reused.
+                                    worker_availability
+                                        .store(SAFE_FILE_WORKER_UNAVAILABLE, Ordering::Release);
+                                    resume_unwind(panic);
+                                }
+                            };
                             if let Some(response) = response {
                                 let _ = response.send(response_message);
                             } else if let Some(super::proto::safe_file_response::Result::Error(

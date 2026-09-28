@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
 use serde::Deserialize;
+use warpui::integration::{AssertionCallback, AssertionOutcome};
+
+use crate::integration_testing::view_getters::single_terminal_view_for_tab;
 
 #[derive(Deserialize)]
 pub struct ShellSshFixture {
@@ -56,4 +59,35 @@ pub fn ssh_command(shell: &str, should_use_ssh_wrapper: bool) -> String {
          -o NumberOfPasswordPrompts=1 -o ConnectTimeout=10 {user_host}",
         fixture.port,
     )
+}
+
+/// Adds bounded terminal diagnostics when an isolated SSH assertion fails.
+pub fn with_recent_ssh_output(mut assertion: AssertionCallback) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let mut outcome = assertion(app, window_id);
+        if let AssertionOutcome::Failure { message, .. } = &mut outcome {
+            let terminal = single_terminal_view_for_tab(app, window_id, 0);
+            let output = terminal.read(app, |view, _ctx| {
+                let model = view.model.lock();
+                model
+                    .block_list()
+                    .blocks()
+                    .iter()
+                    .rev()
+                    .take(3)
+                    .map(|block| {
+                        let tail: Vec<char> = block
+                            .output_to_string()
+                            .chars()
+                            .rev()
+                            .take(2048)
+                            .collect();
+                        tail.into_iter().rev().collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+            });
+            message.push_str(&format!("; recent SSH block output (newest first): {output:?}"));
+        }
+        outcome
+    })
 }

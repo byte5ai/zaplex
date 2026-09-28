@@ -544,7 +544,7 @@ pub fn test_open_and_close_settings() -> Builder {
                 .with_hover_over_saved_position("close_tab_button:1")
                 .with_click_on_saved_position("close_tab_button:1")
                 .add_assertion(assert_tab_count(1))
-                .add_assertion(assert_tab_title(0, "~")),
+                .add_assertion(assert_tab_title(0, "Local · ~")),
         )
 }
 
@@ -6456,10 +6456,15 @@ pub fn test_pane_group_state_single_pane() -> Builder {
 // TODO(CORE-2721): Block count / index Failed b/c of in-band generators
 pub fn test_pane_group_state_multi_pane() -> Builder {
     new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(
-            new_step_with_default_assertions("create 2 additional panes")
+            new_step_with_default_assertions("create the second pane")
                 .with_keystrokes(&[cmd_or_ctrl_shift("d")])
-                .with_local_split_target()
+                .with_local_split_target(),
+        )
+        .with_step(wait_until_bootstrapped_pane(0, 1))
+        .with_step(
+            new_step_with_default_assertions("create the third pane")
                 .with_keystrokes(&[cmd_or_ctrl_shift("d")])
                 .with_local_split_target(),
         )
@@ -6557,6 +6562,7 @@ pub fn test_pane_group_state_multi_pane() -> Builder {
 
 pub fn test_pane_group_state_close_pane() -> Builder {
     new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(
             new_step_with_default_assertions("create 1 additional pane")
                 .with_keystrokes(&[cmd_or_ctrl_shift("d")])
@@ -6687,6 +6693,7 @@ pub fn test_agent_mode_pane_minimum_size() -> Builder {
 // the workspace view, but we DO force zap drive open to show the dialog, so we can look for that
 pub fn test_create_folder_from_command_palette() -> Builder {
     new_builder()
+        .with_user_defaults(HashMap::from([("EnableWarpDrive".to_string(), "true".to_string())]))
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(load_cached_workspace())
         .with_step(go_offline())

@@ -1,5 +1,5 @@
 use crate::integration_testing::command_palette::assertions::{
-    assert_command_palette_has_results, assert_command_palette_is_closed,
+    assert_command_palette_first_action, assert_command_palette_is_closed,
     assert_command_palette_is_open,
 };
 use crate::util::bindings::cmd_or_ctrl_shift;
@@ -48,14 +48,14 @@ pub fn open_command_palette() -> TestStep {
 /// Test steps to run an `action` within the command palette.
 ///
 /// Returns two steps: the first opens the palette and types the action text, waiting for
-/// search results to appear (needed because async data sources like file search may delay
+/// the requested action to lead the search results (needed because async data sources like file search may delay
 /// result delivery). The second presses Enter to execute the selected action.
 pub fn open_command_palette_and_run_action(action: &str) -> Vec<TestStep> {
     vec![
         TestStep::new(format!("Type {action} in command palette").as_str())
             .with_keystrokes(&[cmd_or_ctrl_shift("p")])
             .with_typed_characters(&[action])
-            .add_assertion(assert_command_palette_has_results()),
+            .add_assertion(assert_command_palette_first_action(action.to_owned())),
         TestStep::new(format!("Run {action} in command palette").as_str())
             .with_keystrokes(&["enter"]),
     ]

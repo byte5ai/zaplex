@@ -17,7 +17,7 @@ use crate::{
     terminal::{model::rich_content::RichContentType, view::WithinBlockBanner},
 };
 
-use super::util::{ssh_command, user_host};
+use super::util::{ssh_command, user_host, with_recent_ssh_output};
 
 /// Verifies the dedicated CI fixture before sending any SSH command.
 pub fn setup_ssh_fixture() -> TestStep {
@@ -75,7 +75,7 @@ pub fn enter_local_subshell_command(shell: &str) -> TestStep {
 
 pub fn assert_subshell_banner_is_showing() -> TestStep {
     TestStep::new("Assert the Zaplexify banner is visible")
-        .add_assertion(move |app, window_id| {
+        .add_assertion(with_recent_ssh_output(Box::new(move |app, window_id| {
             let terminal_view = single_terminal_view(app, window_id);
             terminal_view.read(app, |view, _ctx| {
                 async_assert!(matches!(
@@ -87,7 +87,7 @@ pub fn assert_subshell_banner_is_showing() -> TestStep {
                     Some(WithinBlockBanner::ZaplexifyBanner(..))
                 ))
             })
-        })
+        })))
         // Wait for outstanding model events to finish before moving to the next step
         .add_named_assertion("no pending model events", assert_no_pending_model_events())
         .set_post_step_pause(Duration::from_millis(50))

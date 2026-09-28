@@ -24,12 +24,18 @@ fn secret_detection_rejects_the_entire_new_server_batch() {
 
 #[test]
 fn multiple_new_servers_are_all_validated_before_the_batch_is_returned() {
-    let servers = parse_servers(
+    let mut servers = parse_servers(
         r#"{
             "clean": {"command":"/usr/bin/true"},
             "secret": {"command":"/usr/bin/false"}
         }"#,
     );
+    // Parsing a server map does not guarantee order. Exercise rejection after a clean server.
+    servers.sort_by(|left, right| {
+        left.templatable_mcp_server
+            .name
+            .cmp(&right.templatable_mcp_server.name)
+    });
     let mut validated_names = Vec::new();
     let result = validate_parsed_servers(servers, |server| {
         validated_names.push(server.name.clone());

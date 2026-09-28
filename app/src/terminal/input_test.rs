@@ -22,6 +22,8 @@ use crate::ai::AIRequestUsageModel;
 use crate::auth::AuthManager;
 use crate::auth::AuthStateProvider;
 use crate::changelog_model::ChangelogModel;
+use crate::cockpit::settings::CockpitSettings;
+use crate::cockpit::CockpitModel;
 use crate::cloud_object::{
     model::persistence::ObjectStoreModel, GenericStringObjectFormat, JsonObjectType, ObjectType,
     Owner,
@@ -169,6 +171,12 @@ pub fn initialize_app(app: &mut App) {
         crate::ai::document::ai_document_model::AIDocumentModel::new_for_test()
     });
     app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+    // Subscription routing reads the cockpit inventory. Keep it empty so input
+    // tests do not scan the host's accounts or fetch their usage.
+    CockpitSettings::handle(app).update(app, |settings, ctx| {
+        settings.enabled.set_value(false, ctx).unwrap();
+    });
+    app.add_singleton_model(CockpitModel::new);
     app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
     app.add_singleton_model(SkillManager::new);
 

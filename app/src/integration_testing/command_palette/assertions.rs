@@ -1,6 +1,7 @@
 use crate::integration_testing::view_getters::{command_palette_view, workspace_view};
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use warpui::async_assert;
+use warpui::keymap::DescriptionContext;
 use warpui::integration::AssertionCallback;
 
 /// Asserts that the command palette is currently open.
@@ -40,6 +41,34 @@ pub fn assert_command_palette_has_results() -> AssertionCallback {
             async_assert!(
                 palette.search_results(ctx).next().is_some(),
                 "Expected command palette to have results, but it was empty"
+            )
+        })
+    })
+}
+
+/// Waits for the requested action to lead the results before pressing Enter.
+/// Existing session results can remain visible while the new query is pending.
+pub fn assert_command_palette_first_action(action: String) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let palette = command_palette_view(app, window_id);
+        palette.read(app, |palette, ctx| {
+            let first_action = palette.search_results(ctx).next().and_then(|result| {
+                if let CommandPaletteItemAction::AcceptBinding { binding } = result.accept_result() {
+                    Some(
+                        binding
+                            .description
+                            .in_context(DescriptionContext::Default)
+                            .to_owned(),
+                    )
+                } else {
+                    None
+                }
+            });
+            async_assert!(
+                first_action
+                    .as_deref()
+                    .is_some_and(|description| description.eq_ignore_ascii_case(&action)),
+                "Expected first palette action {action:?}, but got {first_action:?}"
             )
         })
     })

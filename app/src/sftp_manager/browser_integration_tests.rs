@@ -3993,9 +3993,12 @@ fn dual_pane_never_renders_global_function_bar() {
 
         assert!(left_legend.width() < combined_width);
         assert!(right_legend.width() < combined_width);
-        assert_approximately_equal(left_legend.width(), left_root.width());
-        assert_approximately_equal(right_legend.width(), right_root.width());
-        assert_approximately_equal(left_legend.max_x(), right_legend.min_x());
+        // Each legend fills the pane interior, inside its stable 2px focus border.
+        assert_approximately_equal(left_legend.min_x(), left_root.min_x() + 2.0);
+        assert_approximately_equal(left_legend.max_x(), left_root.max_x() - 2.0);
+        assert_approximately_equal(right_legend.min_x(), right_root.min_x() + 2.0);
+        assert_approximately_equal(right_legend.max_x(), right_root.max_x() - 2.0);
+        assert_approximately_equal(left_root.max_x(), right_root.min_x());
 
         let (footer_background, footer_border) = app.read(|ctx| {
             let theme = Appearance::as_ref(ctx).theme();
@@ -4079,7 +4082,7 @@ fn file_pane_body_consumes_remaining_height_above_footer() {
 
         assert!(body.height() > 0.0);
         assert_approximately_equal(body.max_y(), footer.min_y());
-        assert_approximately_equal(footer.max_y(), root.max_y());
+        assert_approximately_equal(footer.max_y(), root.max_y() - 2.0);
     });
 }
 

@@ -3548,6 +3548,10 @@ impl SftpBrowserView {
                     &control,
                     Some(&mut on_progress),
                 );
+                #[cfg(test)]
+                if let Err(error) = &result {
+                    eprintln!("Directory transfer test diagnostic: {error:?}");
+                }
                 match &result {
                     Ok(outcome) => worker_activity.set_state(queue_state_for_outcome(outcome)),
                     Err(super::sftp_ops::SftpOpsError::Cancelled) => worker_activity

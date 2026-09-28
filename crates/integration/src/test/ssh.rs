@@ -12,6 +12,7 @@ use warp::{
             assert_subshell_is_bootstrapped, enter_remote_subshell_command, enter_ssh_command,
             enter_ssh_password, run_exit_command, setup_ssh_fixture, trigger_subshell_bootstrap,
             wait_for_password_prompt,
+            util::with_recent_ssh_output,
         },
         terminal::{
             assert_active_block_output_for_single_terminal_in_tab,
@@ -26,6 +27,7 @@ use warp::{
         model::bootstrap::BootstrapStage,
         session_settings::{StartupShell, StartupShellOverride},
         shell::ShellType,
+        zaplexify::settings::UseSshTmuxWrapper,
     },
 };
 use warpui::{
@@ -44,7 +46,7 @@ fn assert_active_block_is_remote(shell: &str) -> AssertionCallback {
         .expect("Fixture shell user must exist")
         .clone();
     let host = fixture.hostname;
-    Box::new(move |app, window_id| {
+    with_recent_ssh_output(Box::new(move |app, window_id| {
         let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
         terminal_view.read(app, |view, ctx| {
             let model = view.model.lock();
@@ -90,7 +92,7 @@ fn assert_active_block_is_remote(shell: &str) -> AssertionCallback {
                 "Remote session did not have the expected host"
             )
         })
-    })
+    }))
 }
 
 /// Assertion that the MotD message is shown. How we expect it to be shown
@@ -231,6 +233,10 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
             }
 
             let builder = new_builder()
+                .with_user_defaults(HashMap::from([(
+                    UseSshTmuxWrapper::storage_key().to_owned(),
+                    "true".to_owned(),
+                )]))
                 // TODO(CORE-2333) PowerShell has no SSH wrapper.
                 .set_should_run_test(|| {
                     if !FeatureFlag::SSHTmuxWrapper.is_enabled() {
@@ -241,10 +247,14 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
                 })
                 .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
                 .with_step(setup_ssh_fixture());
-            // Install Tmux
-            let builder = zaplexify(builder).with_step(
-                accept_tmux_install().set_post_step_pause(std::time::Duration::from_secs(3)),
-            );
+            let builder = zaplexify(builder);
+            let builder = if $install_tmux {
+                builder.with_step(
+                    accept_tmux_install().set_post_step_pause(std::time::Duration::from_secs(3)),
+                )
+            } else {
+                builder
+            };
             // Quit SSH Session once we validate zaplexificaiton works with Tmux Install
             let builder = assert_zaplexification(builder).with_step(run_exit_command());
 
@@ -284,7 +294,9 @@ macro_rules! generate_long_running_block_ssh_test_for_shell {
                 .with_step(
                     TestStep::new("Assert prompt is awaiting input")
                         .add_assertion(
-                            assert_long_running_block_executing_for_single_terminal_in_tab(true, 0),
+                            with_recent_ssh_output(
+                                assert_long_running_block_executing_for_single_terminal_in_tab(true, 0),
+                            ),
                         )
                         .add_assertion(move |app, window_id| {
                             let pattern = $prompt_regex;
