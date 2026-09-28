@@ -27,7 +27,9 @@ use warp::{
         model::bootstrap::BootstrapStage,
         session_settings::{StartupShell, StartupShellOverride},
         shell::ShellType,
-        zaplexify::settings::UseSshTmuxWrapper,
+        zaplexify::settings::{
+            SshExtensionInstallMode, SshExtensionInstallModeSetting, UseSshTmuxWrapper,
+        },
     },
 };
 use warpui::{
@@ -144,8 +146,7 @@ fn verify_login_shell(shell: &str) -> TestStep {
             command.into(),
             ExpectedExitStatus::Success,
             (),
-        )
-        .add_assertion(assert_motd_shown(true /* bootstrapped */)),
+        ),
         _ => {
             // For non-bootstrapped shells, run the command directly and verify
             // the exit status.
@@ -160,7 +161,6 @@ fn verify_login_shell(shell: &str) -> TestStep {
                     expected_output,
                     0,
                 ))
-                .add_assertion(assert_motd_shown(false /* bootstrapped */))
         }
     }
 }
@@ -195,7 +195,10 @@ macro_rules! generate_can_bootstrap_legacy_ssh_test_for_shell {
                     )
                     .add_assertion(assert_active_block_is_remote($shell)),
                 )
-                .with_step(verify_login_shell($shell))
+                .with_step(
+                    verify_login_shell($shell)
+                        .add_assertion(assert_motd_shown(true /* bootstrapped */)),
+                )
         }
     };
 }
@@ -215,7 +218,12 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
                         enter_ssh_password()
                             .set_post_step_pause(std::time::Duration::from_millis(250)),
                     )
-                    .with_step(assert_ssh_zaplexification_is_offered())
+                    // Tmux bootstraps a subshell, whose RC files are not sourced again.
+                    // Login output belongs to this SSH block before the takeover.
+                    .with_step(
+                        assert_ssh_zaplexification_is_offered()
+                            .add_assertion(assert_motd_shown(false /* bootstrapped */)),
+                    )
                     .with_step(trigger_subshell_bootstrap())
             }
 
@@ -305,7 +313,10 @@ macro_rules! generate_long_running_block_ssh_test_for_shell {
                             validate_block_output(&regex, 0, 0, window_id, app)
                         }),
                 )
-                .with_step(verify_login_shell($shell))
+                .with_step(
+                    verify_login_shell($shell)
+                        .add_assertion(assert_motd_shown(false /* bootstrapped */)),
+                )
                 .with_step(TestStep::new("Exit ssh session").with_typed_characters(&["exit\n"]))
                 .with_step(new_step_with_default_assertions(
                     "Assert ssh session has completed",
@@ -350,10 +361,19 @@ pub fn test_ssh_with_shell_override() -> Builder {
             let (starter, _) = current_shell_starter_and_version();
             starter.shell_type() != ShellType::PowerShell
         })
-        .with_user_defaults(HashMap::from([(
-            StartupShellOverride::storage_key().to_owned(),
-            serde_json::to_string(&StartupShell::Zsh).expect("Can serialize setting as JSON"),
-        )]))
+        // This fixture exercises the classic SSH wrapper through a real ProxyCommand.
+        // No daemon is installed; explicitly choose its supported legacy fallback.
+        .with_user_defaults(HashMap::from([
+            (
+                StartupShellOverride::storage_key().to_owned(),
+                serde_json::to_string(&StartupShell::Zsh).expect("Can serialize setting as JSON"),
+            ),
+            (
+                SshExtensionInstallModeSetting::storage_key().to_owned(),
+                serde_json::to_string(&SshExtensionInstallMode::NeverInstall)
+                    .expect("Can serialize setting as JSON"),
+            ),
+        ]))
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(setup_ssh_fixture())
         .with_step(enter_ssh_command("bash"))
@@ -364,5 +384,8 @@ pub fn test_ssh_with_shell_override() -> Builder {
             new_step_with_default_assertions("Assert active block is part of a remote session")
                 .add_assertion(assert_active_block_is_remote("bash")),
         )
-        .with_step(verify_login_shell("bash"))
+        .with_step(
+            verify_login_shell("bash")
+                .add_assertion(assert_motd_shown(true /* bootstrapped */)),
+        )
 }
