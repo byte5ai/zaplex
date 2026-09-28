@@ -3,6 +3,7 @@ use std::time::Duration;
 use warpui::{
     async_assert, async_assert_eq,
     integration::{AssertionOutcome, TestStep},
+    View,
 };
 
 use crate::{
@@ -91,6 +92,21 @@ pub fn assert_subshell_banner_is_showing() -> TestStep {
         // Wait for outstanding model events to finish before moving to the next step
         .add_named_assertion("no pending model events", assert_no_pending_model_events())
         .set_post_step_pause(Duration::from_millis(50))
+}
+
+/// Checks that the SSH prompt enables the same shortcut for the banner or footer UI.
+pub fn assert_ssh_zaplexification_is_offered() -> TestStep {
+    TestStep::new("Assert SSH zaplexification is offered")
+        .add_assertion(with_recent_ssh_output(Box::new(move |app, window_id| {
+            let terminal = single_terminal_view(app, window_id);
+            terminal.read(app, |view, ctx| {
+                async_assert!(
+                    view.keymap_context(ctx).set.contains("SshZaplexificationBanner"),
+                    "Expected an active SSH zaplexification banner or footer"
+                )
+            })
+        })))
+        .add_named_assertion("no pending model events", assert_no_pending_model_events())
 }
 
 pub fn trigger_subshell_bootstrap() -> TestStep {

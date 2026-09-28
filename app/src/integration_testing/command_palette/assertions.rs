@@ -52,6 +52,7 @@ pub fn assert_command_palette_first_action(action: String) -> AssertionCallback 
     Box::new(move |app, window_id| {
         let palette = command_palette_view(app, window_id);
         palette.read(app, |palette, ctx| {
+            let query = palette.search_bar.as_ref(ctx).query(ctx);
             let first_action = palette.search_results(ctx).next().and_then(|result| {
                 if let CommandPaletteItemAction::AcceptBinding { binding } = result.accept_result() {
                     Some(
@@ -68,7 +69,7 @@ pub fn assert_command_palette_first_action(action: String) -> AssertionCallback 
                 first_action
                     .as_deref()
                     .is_some_and(|description| description.eq_ignore_ascii_case(&action)),
-                "Expected first palette action {action:?}, but got {first_action:?}"
+                "Expected first palette action {action:?}, but got {first_action:?}; query={query:?}"
             )
         })
     })

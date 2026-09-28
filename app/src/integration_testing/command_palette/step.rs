@@ -47,13 +47,12 @@ pub fn open_command_palette() -> TestStep {
 
 /// Test steps to run an `action` within the command palette.
 ///
-/// Returns two steps: the first opens the palette and types the action text, waiting for
-/// the requested action to lead the search results (needed because async data sources like file search may delay
-/// result delivery). The second presses Enter to execute the selected action.
+/// Opens the palette before typing so focus and binding sources can settle. Then waits
+/// for the requested action to lead the results before pressing Enter.
 pub fn open_command_palette_and_run_action(action: &str) -> Vec<TestStep> {
     vec![
+        open_command_palette(),
         TestStep::new(format!("Type {action} in command palette").as_str())
-            .with_keystrokes(&[cmd_or_ctrl_shift("p")])
             .with_typed_characters(&[action])
             .add_assertion(assert_command_palette_first_action(action.to_owned())),
         TestStep::new(format!("Run {action} in command palette").as_str())

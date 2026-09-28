@@ -577,8 +577,8 @@ pub fn test_open_and_close_theme_creator_modal() -> Builder {
                 }),
         )
         .with_step(
-            new_step_with_default_assertions("Click on cancel button to close theme creator modal")
-                .with_click_on_saved_position("theme_creator_cancel_button")
+            new_step_with_default_assertions("Click on close button to close theme editor modal")
+                .with_click_on_saved_position("theme_editor_close_button")
                 .add_assertion(move |app, window_id| {
                     let views: Vec<ViewHandle<Workspace>> = app.views_of_type(window_id).unwrap();
                     let workspace = views.first().unwrap();
@@ -6610,6 +6610,7 @@ pub fn test_agent_mode_pane_minimum_size() -> Builder {
     new_builder()
         .with_step(set_window_custom_size(40, 120))
         .with_step(add_and_save_window(WINDOW_ID_KEY))
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(
             new_step_with_default_assertions("Check the new window size")
                 .add_named_assertion_with_data_from_prior_step(

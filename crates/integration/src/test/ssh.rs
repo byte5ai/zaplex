@@ -8,7 +8,7 @@ use warp::{
     integration_testing::{
         step::new_step_with_default_assertions,
         subshell::{
-            accept_tmux_install, assert_subshell_banner_is_showing,
+            accept_tmux_install, assert_ssh_zaplexification_is_offered,
             assert_subshell_is_bootstrapped, enter_remote_subshell_command, enter_ssh_command,
             enter_ssh_password, run_exit_command, setup_ssh_fixture, trigger_subshell_bootstrap,
             wait_for_password_prompt,
@@ -215,7 +215,7 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
                         enter_ssh_password()
                             .set_post_step_pause(std::time::Duration::from_millis(250)),
                     )
-                    .with_step(assert_subshell_banner_is_showing())
+                    .with_step(assert_ssh_zaplexification_is_offered())
                     .with_step(trigger_subshell_bootstrap())
             }
 

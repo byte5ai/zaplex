@@ -18,6 +18,7 @@ users=()
 uids=()
 sshd_pid=''
 profile_installed=false
+ssh_socket_dir_created=false
 cleanup() {
   result=$?
   trap - EXIT
@@ -50,6 +51,10 @@ cleanup() {
   fi
   if [[ $profile_installed == true ]]; then sudo rm -f -- "$profile_path"; fi
   sudo rm -rf -- "$fixture_root"
+  if [[ $ssh_socket_dir_created == true ]]; then
+    # Preserve the directory if another runner process has put files in it.
+    rmdir -- "$HOME/.ssh" 2>/dev/null || true
+  fi
   exit "$result"
 }
 trap cleanup EXIT
@@ -89,6 +94,12 @@ printf 'case "$(id -u)" in\n  %s)\n    export ZAPLEX_PROFILE_LOADED=true\n    ex
 [[ ! -e $profile_path && ! -L $profile_path ]]
 sudo install -m 644 "$fixture_root/profile.sh" "$profile_path"
 profile_installed=true
+# The integration shell stores legacy SSH ControlMaster sockets in ORIGINAL_HOME/.ssh.
+# GitHub-hosted runners need not have this directory until a key has been installed.
+if [[ ! -d $HOME/.ssh ]]; then
+  mkdir -m 700 "$HOME/.ssh"
+  ssh_socket_dir_created=true
+fi
 ssh-keygen -q -t ed25519 -N '' -f "$fixture_root/host-key"
 ssh-keygen -q -t ed25519 -N '' -f "$fixture_root/client-key"
 for shell in bash zsh sh ash fish; do
@@ -97,6 +108,10 @@ for shell in bash zsh sh ash fish; do
   sudo install -d -m 700 -o "$user" -g "$user" "$user_home/.ssh"
   sudo install -m 600 -o "$user" -g "$user" "$fixture_root/client-key.pub" "$user_home/.ssh/authorized_keys"
 done
+# Keep the dedicated Zsh user independent of the runner's global completion setup.
+# Local fixture startup files still run; no shared completion permissions are changed.
+printf 'unsetopt GLOBAL_RCS\n' > "$fixture_root/zshenv"
+sudo install -m 600 -o "${users[1]}" -g "${users[1]}" "$fixture_root/zshenv" "$fixture_root/zsh/.zshenv"
 # Zsh has a separate login-profile sequence; keep its login output deterministic.
 printf 'printf "Zaplex isolated SSH login fixture\\n"\n' > "$fixture_root/zprofile"
 sudo install -m 600 -o "${users[1]}" -g "${users[1]}" "$fixture_root/zprofile" "$fixture_root/zsh/.zprofile"

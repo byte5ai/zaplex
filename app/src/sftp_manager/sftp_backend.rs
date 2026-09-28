@@ -12,6 +12,8 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 
 use dunce;
@@ -49,6 +51,11 @@ const NAMESPACE_RECORD_TEMPORARY: &str = ".namespace-write.tmp";
 const NAMESPACE_MIGRATION_TEMPORARY: &str = ".namespace-migration-write.tmp";
 const EXCHANGE_RECORD_TEMPORARY: &str = ".exchange-write.tmp";
 const ARTIFACT_RECORD_TEMPORARY: &str = ".artifact-write.tmp";
+
+// Nextest processes must not share registries backed by another test's temporary
+// directories. Reopened backends and worker threads within one process still share them.
+#[cfg(test)]
+static TEST_REGISTRY_NAMESPACE: OnceLock<uuid::Uuid> = OnceLock::new();
 
 fn hex_bytes(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -3967,6 +3974,7 @@ impl DirectoryReservationRegistry {
         #[cfg(test)]
         let registry_root = std::env::temp_dir()
             .join("zaplex-transfer-reservation-registry-tests")
+            .join(TEST_REGISTRY_NAMESPACE.get_or_init(uuid::Uuid::new_v4).to_string())
             .join(&backend_key);
         #[cfg(not(test))]
         let registry_root = warp_core::paths::secure_state_dir()

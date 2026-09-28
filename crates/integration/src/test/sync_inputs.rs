@@ -228,10 +228,18 @@ pub fn test_synced_inputs_terminal_mode_change_view_focus() -> Builder {
             .with_step(wait_until_bootstrapped_pane(0, i));
     }
 
-    builder = builder.with_step(
-        new_step_with_default_assertions("create 2nd tab")
-            .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
-    );
+    builder = builder
+        .with_step(
+            new_step_with_default_assertions("create 2nd tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(1).add_assertion(
+            |app, window_id| {
+                terminal_view(app, window_id, 1, 0).read(app, |view, ctx| {
+                    async_assert!(view.input().as_ref(ctx).editor().is_focused(ctx))
+                })
+            },
+        ));
 
     for i in 1..=3 {
         builder = builder

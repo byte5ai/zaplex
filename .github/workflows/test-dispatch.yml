@@ -21,7 +21,7 @@ on:
         required: false
         default: "warp"
       filter:
-        description: "Optional test-name filter (cargo test <filter>). Empty = all tests of the package."
+        description: "Optional test-name filter. Empty = all tests of the package."
         required: false
         default: ""
       runs_on:
@@ -141,12 +141,15 @@ jobs:
         run: rustup target add x86_64-unknown-linux-gnu
         shell: bash
 
+      - name: Install isolated Rust test runner
+        run: cargo install cargo-nextest --locked --version 0.9.146
+        shell: bash
+
       - name: Install Rust coverage tools
         if: ${{ inputs.coverage }}
         run: |
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov --locked --version 0.9.1
-          cargo install cargo-nextest --locked --version 0.9.146
         shell: bash
 
       - name: Prepare graphical test runtime
@@ -266,16 +269,31 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: cargo test
+      - name: Isolated package tests
         if: ${{ !inputs.coverage }}
         env:
           PKG: ${{ inputs.package }}
           FILTER: ${{ inputs.filter }}
         run: |
-          args=(-p "$PKG" --no-fail-fast)
+          # Match workspace coverage: each test owns its process-wide settings,
+          # feature flags and file descriptors. Libtest threads share those globals.
+          args=(--locked -p "$PKG" --profile ci --no-fail-fast)
           if [ -n "$FILTER" ]; then
             args+=("$FILTER")
           fi
-          echo "Running: cargo test ${args[*]}"
-          script/run-shell-ssh-fixtures -- xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" cargo test "${args[@]}"
+          echo "Running: cargo nextest run ${args[*]}"
+          script/run-shell-ssh-fixtures -- xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" cargo nextest run "${args[@]}"
+        shell: bash
+
+      - name: Package documentation tests
+        if: ${{ !inputs.coverage && !cancelled() }}
+        env:
+          PKG: ${{ inputs.package }}
+          FILTER: ${{ inputs.filter }}
+        run: |
+          args=(--locked --doc -p "$PKG" --no-fail-fast)
+          if [ -n "$FILTER" ]; then
+            args+=("$FILTER")
+          fi
+          cargo test "${args[@]}"
         shell: bash

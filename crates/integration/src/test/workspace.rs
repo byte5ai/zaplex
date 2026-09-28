@@ -236,6 +236,14 @@ pub fn test_focus_panes_on_hover() -> Builder {
             ),
         )
         .with_step(
+            new_step_with_default_assertions("Move the pointer into the focused second pane")
+                .with_hover_on_saved_position_fn(|app, window_id| {
+                    let terminal_view = terminal_view(app, window_id, 0, 1);
+                    terminal_view.read(app, |terminal, _| terminal.terminal_position_id())
+                })
+                .add_assertion(assert_focused_pane_index(0, 1)),
+        )
+        .with_step(
             new_step_with_default_assertions("Hover over the initial pane's terminal")
                 .with_hover_on_saved_position_fn(|app, window_id| {
                     let terminal_view = terminal_view(app, window_id, 0, 0);

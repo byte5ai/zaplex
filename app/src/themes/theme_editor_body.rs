@@ -6,7 +6,7 @@ use warp_core::ui::theme::{Fill as ThemeFill, HorizontalGradient, VerticalGradie
 use warpui::elements::{
     Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Fill, Flex, MainAxisSize, MouseStateHandle, Padding,
-    ParentElement, Radius, Rect, ScrollbarWidth, Shrinkable, Text,
+    ParentElement, Radius, Rect, SavePosition, ScrollbarWidth, Shrinkable, Text,
 };
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
@@ -795,13 +795,19 @@ impl ThemeEditorBody {
                 ThemeEditorBodyAction::RequestImage,
                 appearance,
             ))
-            .with_child(self.render_button(
-                crate::t!("common-close"),
-                self.buttons.close.clone(),
-                ButtonVariant::Secondary,
-                ThemeEditorBodyAction::RequestClose,
-                appearance,
-            ))
+            .with_child(
+                SavePosition::new(
+                    self.render_button(
+                        crate::t!("common-close"),
+                        self.buttons.close.clone(),
+                        ButtonVariant::Secondary,
+                        ThemeEditorBodyAction::RequestClose,
+                        appearance,
+                    ),
+                    "theme_editor_close_button",
+                )
+                .finish(),
+            )
             .finish();
         Flex::column()
             .with_spacing(16.0)
@@ -896,13 +902,19 @@ impl ThemeEditorBody {
                 ThemeEditorBodyAction::RequestImage,
                 appearance,
             ))
-            .with_child(self.render_button(
-                crate::t!("common-close"),
-                self.buttons.close.clone(),
-                ButtonVariant::Secondary,
-                ThemeEditorBodyAction::RequestClose,
-                appearance,
-            ))
+            .with_child(
+                SavePosition::new(
+                    self.render_button(
+                        crate::t!("common-close"),
+                        self.buttons.close.clone(),
+                        ButtonVariant::Secondary,
+                        ThemeEditorBodyAction::RequestClose,
+                        appearance,
+                    ),
+                    "theme_editor_close_button",
+                )
+                .finish(),
+            )
             .finish();
 
         let name = self.render_text_input(&self.name_editor, false, appearance);
