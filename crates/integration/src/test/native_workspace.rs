@@ -13,12 +13,14 @@ use warpui::integration::TestStep;
 
 use crate::Builder;
 
+// A 640px content height fits the macOS CI display below its menu bar and Dock.
+
 pub fn test_native_workspace_connections_evidence() -> Builder {
     let mut builder = Builder::new()
         .with_setup(|_| warp::i18n::init(Some("en")))
         .with_real_display()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(native::resize(1440., 900.))
+        .with_step(native::resize(1440., 640.))
         .with_step(native::seed_connections())
         .with_step(native::connection_layout(250., true))
         .with_step(native::seed_session_inventory());
@@ -36,7 +38,7 @@ pub fn test_native_workspace_connections_evidence() -> Builder {
         }
     }
     builder
-        .with_step(native::resize(900., 700.))
+        .with_step(native::resize(900., 640.))
         .with_step(native::connection_layout(250., true))
         .with_step(native::open_favorites())
         .with_step(native::favorite_flyout().with_take_screenshot("native-favorite-flyout.png"))
@@ -48,7 +50,7 @@ pub fn test_native_workspace_panes_evidence() -> Builder {
         .with_setup(|_| warp::i18n::init(Some("en")))
         .with_real_display()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(native::resize(1180., 760.))
+        .with_step(native::resize(1180., 640.))
         .with_step(execute_command(
             0,
             0,
@@ -83,7 +85,7 @@ pub fn test_native_workspace_file_managers_evidence() -> Builder {
         .with_setup(|_| warp::i18n::init(Some("en")))
         .with_real_display()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(native::resize(1180., 760.))
+        .with_step(native::resize(1180., 640.))
         .with_step(native::split_local_right())
         .with_step(wait_until_bootstrapped_pane(0, 0))
         .with_step(wait_until_bootstrapped_pane(0, 1))
@@ -99,7 +101,7 @@ pub fn test_native_workspace_file_managers_evidence() -> Builder {
         .with_step(
             native::file_manager_layout().with_take_screenshot("native-file-managers-normal.png"),
         )
-        .with_step(native::resize(760., 760.))
+        .with_step(native::resize(760., 640.))
         .with_step(
             native::file_manager_layout().with_take_screenshot("native-file-managers-narrow.png"),
         )

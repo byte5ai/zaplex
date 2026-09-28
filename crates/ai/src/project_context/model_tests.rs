@@ -259,10 +259,22 @@ fn fast_path_returns_empty_when_no_rules_anywhere() {
 }
 
 #[cfg(feature = "local_fs")]
+fn isolated_fast_path_cwd(tmp: &tempfile::TempDir) -> PathBuf {
+    // Keep every scanned ancestor private: parallel tests change the shared temp
+    // directory's mtime, which correctly invalidates a cache that includes it.
+    let mut cwd = tmp.path().canonicalize().unwrap();
+    for _ in 0..MAX_WALK_DEPTH {
+        cwd.push("nested");
+    }
+    std::fs::create_dir_all(&cwd).unwrap();
+    cwd
+}
+
+#[cfg(feature = "local_fs")]
 #[test]
 fn fast_path_still_valid_when_nothing_changed() {
     let tmp = tempfile::tempdir().unwrap();
-    let cwd = tmp.path().canonicalize().unwrap();
+    let cwd = isolated_fast_path_cwd(&tmp);
     std::fs::write(cwd.join("AGENTS.md"), "stable").unwrap();
 
     let entry = ProjectContextModel::scan_fast_path(&cwd);
@@ -275,7 +287,7 @@ fn fast_path_invalidated_when_rule_file_mtime_changes() {
     use filetime::{set_file_mtime, FileTime};
 
     let tmp = tempfile::tempdir().unwrap();
-    let cwd = tmp.path().canonicalize().unwrap();
+    let cwd = isolated_fast_path_cwd(&tmp);
     let rule = cwd.join("AGENTS.md");
     std::fs::write(&rule, "v1").unwrap();
 
@@ -295,7 +307,7 @@ fn fast_path_invalidated_when_new_rule_file_appears_in_walked_dir() {
     use filetime::{set_file_mtime, FileTime};
 
     let tmp = tempfile::tempdir().unwrap();
-    let cwd = tmp.path().canonicalize().unwrap();
+    let cwd = isolated_fast_path_cwd(&tmp);
 
     // First scan: no rules hit (negative cache)
     let entry = ProjectContextModel::scan_fast_path(&cwd);
