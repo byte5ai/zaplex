@@ -190,6 +190,30 @@ fn ambiguous_open_retry_requires_negotiated_logical_open_capability_and_is_bound
 }
 
 #[test]
+fn replacement_transport_gets_one_open_delivery_after_exhausted_attempts() {
+    let mut pending = PendingOpen::new(
+        OpenSessionParams::default(),
+        SizeInfo::new_without_font_metrics(24, 80),
+    );
+    // Both deliveries go to a daemon that dies before acknowledging.
+    let (logical_open_id, _, _, first_attempt) = pending.begin_attempt().unwrap();
+    assert!(pending.finish_attempt(&logical_open_id, first_attempt));
+    let (_, _, _, second_attempt) = pending.begin_attempt().unwrap();
+    assert!(pending.begin_attempt().is_none());
+
+    // The reconnect reaches a replacement daemon: exactly one more delivery,
+    // under the same logical id, and the stale callback stays rejected.
+    pending.allow_retry();
+    assert!(!pending.finish_attempt(&logical_open_id, second_attempt));
+    let (retry_id, _, _, retry_attempt) = pending.begin_attempt().unwrap();
+    assert_eq!(retry_id, logical_open_id);
+    assert_eq!(retry_attempt, second_attempt + 1);
+    assert!(pending.begin_attempt().is_none());
+    assert!(pending.finish_attempt(&retry_id, retry_attempt));
+    assert!(!pending.can_retry());
+}
+
+#[test]
 fn connected_and_reconnected_events_share_one_attach_phase() {
     let mut guard = AttachPhaseGuard::default();
     let first_transport = Arc::new(());

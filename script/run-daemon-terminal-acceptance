@@ -41,6 +41,13 @@ cleanup() {
     sudo pkill -KILL -u "$fixture_uid" 2>/dev/null || true
     sudo userdel "$fixture_user" || true
   fi
+  # Keep the daemon's own logs and profiles; the fixture home is deleted below.
+  if [[ -d "$fixture_home" ]]; then
+    mkdir -p "$output/daemon"
+    sudo find "$fixture_home" -type f \( -name '*.log' -o -name '*.log.*' -o -name '*.profraw' \) \
+      -exec cp --backup=numbered -t "$output/daemon" {} + 2>/dev/null || true
+    sudo chown -R "$(id -u):$(id -g)" "$output/daemon" 2>/dev/null || true
+  fi
   sudo rm -rf -- "$fixture_root"
   exit "$result"
 }

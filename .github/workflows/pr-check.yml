@@ -237,7 +237,7 @@ jobs:
       - name: Verify native subscription Agent screenshots
         run: |
           test "$(find "${{ runner.temp }}/subscription-agent-layout" -type f -name 'subscription-agent-normal-1180x640.png' -size +0c | wc -l | tr -d ' ')" -ge 1
-          test "$(find "${{ runner.temp }}/subscription-agent-layout" -type f -name 'subscription-agent-narrow-540x640.png' -size +0c | wc -l | tr -d ' ')" -ge 1
+          test "$(find "${{ runner.temp }}/subscription-agent-layout" -type f -name 'subscription-agent-narrow-540x670.png' -size +0c | wc -l | tr -d ' ')" -ge 1
         shell: bash
 
       - name: Upload native subscription Agent layout evidence

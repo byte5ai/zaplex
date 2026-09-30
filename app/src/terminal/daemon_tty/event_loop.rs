@@ -146,6 +146,10 @@ struct PendingOpen {
     size_info: SizeInfo,
     in_flight: Option<u64>,
     next_attempt: u64,
+    /// Delivery attempts allowed so far. A replacement transport may reach a
+    /// restarted daemon that never saw this logical open, so each reconnect
+    /// grants one more delivery with the same logical id (see `allow_retry`).
+    attempt_limit: u64,
 }
 
 struct OpenSessionClient {
@@ -164,11 +168,12 @@ impl PendingOpen {
             size_info,
             in_flight: None,
             next_attempt: 0,
+            attempt_limit: MAX_OPEN_SESSION_DELIVERY_ATTEMPTS,
         }
     }
 
     fn begin_attempt(&mut self) -> Option<(String, OpenSessionParams, SizeInfo, u64)> {
-        if self.in_flight.is_some() || self.next_attempt >= MAX_OPEN_SESSION_DELIVERY_ATTEMPTS {
+        if self.in_flight.is_some() || self.next_attempt >= self.attempt_limit {
             return None;
         }
         self.next_attempt = self.next_attempt.saturating_add(1);
@@ -190,15 +195,19 @@ impl PendingOpen {
     }
 
     fn can_retry(&self) -> bool {
-        self.in_flight.is_none() && self.next_attempt < MAX_OPEN_SESSION_DELIVERY_ATTEMPTS
+        self.in_flight.is_none() && self.next_attempt < self.attempt_limit
     }
 
     fn can_retry_ambiguous_open(&self, supports_attempt_aware_open: bool) -> bool {
         supports_attempt_aware_open && self.can_retry()
     }
 
+    /// Called when the transport is replaced. Attempts on the dead transport
+    /// may have exhausted the budget without reaching any daemon, so the
+    /// replacement always gets one delivery; the daemon deduplicates by id.
     fn allow_retry(&mut self) {
         self.in_flight = None;
+        self.attempt_limit = self.attempt_limit.max(self.next_attempt.saturating_add(1));
     }
 }
 
