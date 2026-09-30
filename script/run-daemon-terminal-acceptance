@@ -54,11 +54,23 @@ cleanup() {
 trap cleanup EXIT
 
 sudo apt-get update
-sudo apt-get install --yes --no-install-recommends openssh-server
+sudo apt-get install --yes --no-install-recommends openssh-server acl
 # A separate passwd home is essential: setting the client's HOME does not
 # change the home used by sshd on the server side.
 sudo useradd --no-create-home --home-dir "$fixture_home" --shell /bin/bash "$fixture_user"
 fixture_uid="$(id -u "$fixture_user")"
+# Debug builds read rust-embed assets from the checkout at runtime (release
+# bundles embed them). Grant the fixture user exactly those folders; without
+# this the daemon panics loading its shell bootstrap script.
+workspace="${GITHUB_WORKSPACE:?Checkout directory is required}"
+dir="$workspace/app"
+while [[ "$dir" != / ]]; do
+  sudo setfacl -m "u:$fixture_user:x" "$dir"
+  dir="$(dirname "$dir")"
+done
+for assets in app/assets app/i18n; do
+  sudo setfacl -R -m "u:$fixture_user:rX" "$workspace/$assets"
+done
 fixture_password="$(openssl rand -hex 32)"
 printf '%s:%s\n' "$fixture_user" "$fixture_password" | sudo chpasswd
 unset fixture_password
