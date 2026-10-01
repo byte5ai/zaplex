@@ -67,3 +67,9 @@ runs:
     - name: Verify worktree cleanup preserves unmerged work
       run: PYTHONDONTWRITEBYTECODE=1 python3 script/prune-worktrees-tests
       shell: bash
+
+    - name: Verify hover states survive re-renders
+      run: |
+        script/check-persistent-hover-state --self-test
+        script/check-persistent-hover-state
+      shell: bash

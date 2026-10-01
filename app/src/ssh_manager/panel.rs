@@ -568,6 +568,9 @@ pub struct SshManagerPanel {
     add_folder_btn: MouseStateHandle,
     add_server_btn: MouseStateHandle,
     toggle_all_btn: MouseStateHandle,
+    /// Hover state of the whole tree area. It must survive re-renders: a fresh
+    /// state reports a hover change on every synthetic mouse move and re-renders forever.
+    tree_mouse_state: MouseStateHandle,
     row_states: HashMap<String, MouseStateHandle>,
     /// Cached host-favorite membership plus fixed-width add/remove actions.
     favorite_host_ids: std::collections::HashSet<String>,
@@ -710,6 +713,7 @@ impl SshManagerPanel {
             add_folder_btn: MouseStateHandle::default(),
             add_server_btn: MouseStateHandle::default(),
             toggle_all_btn: MouseStateHandle::default(),
+            tree_mouse_state: MouseStateHandle::default(),
             row_states: HashMap::new(),
             favorite_host_ids: std::collections::HashSet::new(),
             favorite_actions: HashMap::new(),
@@ -3206,7 +3210,7 @@ impl SshManagerPanel {
             .with_main_axis_size(MainAxisSize::Min)
             .finish();
         // Right-click on empty space = OpenContextMenu with node None.
-        let hoverable = Hoverable::new(MouseStateHandle::default(), move |_| inner)
+        let hoverable = Hoverable::new(self.tree_mouse_state.clone(), move |_| inner)
             .on_right_click(|ctx, _, position| {
                 let offset = match ctx.element_position_by_id(SSH_PANEL_POSITION_ID) {
                     Some(bounds) => position - bounds.origin(),
