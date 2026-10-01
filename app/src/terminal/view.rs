@@ -10721,6 +10721,12 @@ impl TerminalView {
                     return;
                 }
 
+                let working_directory_changed = self
+                    .active_block_metadata
+                    .as_ref()
+                    .and_then(BlockMetadata::current_working_directory)
+                    != block_metadata.current_working_directory();
+
                 if let Some(prev_block_metadata) = self.active_block_metadata.take() {
                     // Only send event to save app state when the block is post bootstrap
                     // and working directory has changed.
@@ -10869,6 +10875,12 @@ impl TerminalView {
                     // prompt area so it's up to date.
                     ctx.notify();
                 });
+
+                // The precmd metadata is the first signal of a `cd`; the pane identity
+                // must not wait for an OSC title or the next block.
+                if working_directory_changed {
+                    self.update_pane_configuration(ctx);
+                }
             }
             ModelEvent::TerminalModeSwapped(mode) => {
                 #[cfg(feature = "local_tty")]

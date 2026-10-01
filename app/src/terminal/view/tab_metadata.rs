@@ -43,9 +43,11 @@ impl TerminalView {
     }
 
     pub fn display_working_directory(&self, ctx: &AppContext) -> Option<String> {
+        // Block metadata updates at precmd; the prompt chip is recomputed asynchronously
+        // and can still hold the previous directory.
         let raw = self
-            .prompt_chip_value(&ContextChipKind::WorkingDirectory, ctx)
-            .or_else(|| self.pwd())?;
+            .pwd()
+            .or_else(|| self.prompt_chip_value(&ContextChipKind::WorkingDirectory, ctx))?;
         let home_dir = self
             .active_block_session_id()
             .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
