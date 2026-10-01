@@ -5,8 +5,7 @@
 # (anders als zap_release.yml). Gedacht für den schnellen Test-Loop — analog zu
 # test-dispatch.yml für Rust-Tests.
 #
-# Aufruf:  gh workflow run test-dmg.yml -R byte5ai/zaplex --ref <branch> \
-#            [-f dmg_tag=v1.1.1]
+# Aufruf nach Freigabe: ci-batch.yml --ref main -f artifacts=test-dmg
 #
 # Das .dmg wird mit Developer ID signiert, über App Store Connect notarisiert
 # und mit dem Notarisierungs-Ticket versehen.
@@ -22,9 +21,9 @@
 
 name: Test DMG
 
-# ci-lint: allow-CI008  Manual workflow_dispatch only; path filters do not apply.
+# Called only by ci-batch.yml when a test DMG is explicitly requested.
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       dmg_tag:
         description: "GIT_RELEASE_TAG (bestimmt den remote-server-Pfad auf dem Ziel-Host)"
@@ -37,6 +36,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: test-dmg-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always

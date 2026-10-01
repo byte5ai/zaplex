@@ -1,0 +1,133 @@
+name: CI batch
+
+# One approved post-merge run covers the selected main commit and all its merges.
+# Christian authorizes each run with: release-approve "ci-batch.yml --ref main"
+on:
+  workflow_dispatch:
+    inputs:
+      artifacts:
+        description: Optional build artifacts (the test DMG already includes the Linux daemon)
+        type: choice
+        options: [none, test-dmg, remote-server]
+        default: none
+      dmg_tag:
+        description: Artifact version; empty uses the checked-out VERSION
+        type: string
+        default: ''
+      runtime_evidence_run_id:
+        description: Optional run containing real Cockpit runtime evidence
+        type: string
+      runtime_evidence_artifact:
+        description: Runtime evidence artifact name
+        type: string
+        default: cockpit-runtime-smoke
+      runtime_evidence_release_tag:
+        description: Optional SHA-bound draft runtime evidence release
+        type: string
+      runtime_evidence_release_asset:
+        description: Runtime evidence draft asset name
+        type: string
+        default: cockpit-runtime-smoke.zip
+      require_manual_runtime:
+        description: Require real two-host runtime evidence as well as automated parity checks
+        type: boolean
+        default: false
+      coverage:
+        description: Run the full suite with coverage, non-Rust evidence and the real Linux daemon acceptance
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-batch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    name: Validate main batch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      dmg_tag: ${{ steps.inputs.outputs.dmg_tag }}
+    steps:
+      - name: Require a main dispatch
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/main ]] || {
+            echo "CI batches must be dispatched against main." >&2
+            exit 1
+          }
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Validate artifact selection
+        id: inputs
+        env:
+          ARTIFACTS: ${{ inputs.artifacts }}
+          DMG_TAG: ${{ inputs.dmg_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$ARTIFACTS" in none|test-dmg|remote-server) ;; *) exit 1 ;; esac
+          tag="${DMG_TAG:-v$(tr -d '[:space:]' < VERSION)}"
+          script/validate-release-tag "$tag"
+          if [[ "$ARTIFACTS" == test-dmg && "$tag" != "v$(tr -d '[:space:]' < VERSION)" ]]; then
+            echo "The test DMG tag must match VERSION." >&2
+            exit 1
+          fi
+          echo "dmg_tag=$tag" >> "$GITHUB_OUTPUT"
+
+  dependency_security:
+    needs: preflight
+    uses: ./.github/workflows/dependency-security.yml
+
+  compile_checks:
+    needs: dependency_security
+    uses: ./.github/workflows/pr-check.yml
+    secrets: inherit
+
+  tests:
+    needs: compile_checks
+    uses: ./.github/workflows/test-dispatch.yml
+    with:
+      coverage: ${{ inputs.coverage }}
+    secrets: inherit
+
+  live_sftp:
+    needs: compile_checks
+    uses: ./.github/workflows/live-sftp-safety.yml
+    secrets: inherit
+
+  cockpit_parity:
+    needs: compile_checks
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/cockpit-parity-audit.yml
+    with:
+      runtime_evidence_run_id: ${{ inputs.runtime_evidence_run_id }}
+      runtime_evidence_artifact: ${{ inputs.runtime_evidence_artifact }}
+      runtime_evidence_release_tag: ${{ inputs.runtime_evidence_release_tag }}
+      runtime_evidence_release_asset: ${{ inputs.runtime_evidence_release_asset }}
+      require_manual_runtime: ${{ inputs.require_manual_runtime }}
+    secrets: inherit
+
+  test_dmg:
+    needs: [preflight, tests, live_sftp, cockpit_parity]
+    if: inputs.artifacts == 'test-dmg'
+    uses: ./.github/workflows/test-dmg.yml
+    with:
+      dmg_tag: ${{ needs.preflight.outputs.dmg_tag }}
+      fast: false
+    secrets: inherit
+
+  remote_server:
+    needs: [preflight, tests, live_sftp, cockpit_parity]
+    if: inputs.artifacts == 'remote-server'
+    uses: ./.github/workflows/build-remote-server.yml
+    with:
+      dmg_tag: ${{ needs.preflight.outputs.dmg_tag }}
+    secrets: inherit

@@ -13,72 +13,36 @@ name: no-new-cjk
 
 on:
   pull_request:
-  workflow_dispatch:
-    inputs:
-      pull_request_number:
-        description: Open PR whose current head this branch must match
-        required: true
-        type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pull_request_number }}
+  group: no-new-cjk-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   no-new-cjk:
     name: no-new-cjk
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # Recent p90 is below one minute; five minutes leaves ample startup margin.
     timeout-minutes: 5
     steps:
-      - name: Resolve exact PR comparison
-        id: comparison
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pull_request_number }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || exit 1
-            read -r base_sha head_sha pr_state < <(
-              gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
-                --jq '[.base.sha, .head.sha, .state] | @tsv'
-            )
-            [[ "$pr_state" == "open" && "$head_sha" == "$GITHUB_SHA" ]] || {
-              echo "The dispatched revision must be the current head of an open PR." >&2
-              exit 1
-            }
-          else
-            base_sha="$PR_BASE_SHA"
-          fi
-          [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
-          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
           fetch-depth: 0
 
-      - name: Check changed lines for Han characters
+      - name: Check relevant changed paths for added Han characters
         env:
-          BASE_SHA: ${{ steps.comparison.outputs.base_sha }}
-        run: script/check-no-new-cjk "$BASE_SHA"
-
-  static_checks:
-    name: static PR checks (no compilation)
-    if: github.event_name == 'workflow_dispatch'
-    needs: no-new-cjk
-    runs-on: blacksmith-4vcpu-ubuntu-2204
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - uses: ./.github/actions/static-pr-checks
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Filter inside the required job so docs-only PRs still get a status.
+          if git diff --quiet "$BASE_SHA" HEAD -- '*.rs' '*.proto' \
+            script/check-no-new-cjk .github/workflows/no-new-cjk.yml; then
+            echo "No relevant paths changed."
+            exit 0
+          fi
+          script/check-no-new-cjk "$BASE_SHA"

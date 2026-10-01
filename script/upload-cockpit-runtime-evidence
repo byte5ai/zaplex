@@ -431,5 +431,6 @@ echo "release_tag=${release_tag}"
 echo "asset=${ASSET_NAME}"
 echo "archive_sha256=${archive_sha256}"
 echo
-echo "Dispatch the strict audit with:"
-echo "gho \"\$(getpat)\" workflow run cockpit-parity-audit.yml --repo ${repository} --ref main -f runtime_evidence_release_tag=${release_tag} -f runtime_evidence_release_asset=${ASSET_NAME} -f require_manual_runtime=true"
+echo 'Ask Christian to approve this strict runtime-evidence batch with release-approve "ci-batch.yml --ref main" first.'
+echo "After approval, dispatch with:"
+echo "gho \"\$(getpat)\" workflow run ci-batch.yml --repo ${repository} --ref main -f runtime_evidence_release_tag=${release_tag} -f runtime_evidence_release_asset=${ASSET_NAME} -f require_manual_runtime=true"

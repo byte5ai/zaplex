@@ -1,51 +1,13 @@
-# PR validation pipeline — Clippy + macOS cargo check + targeted keymap tests.
-#
-# Division of labour with zap_release.yml:
-# - This workflow: runs Linux Clippy and a macOS cargo check on every build-relevant
-#   PR, plus a targeted `cargo test` that parse-validates every registered
-#   keybinding on BOTH platform variants. `cargo check` compiles the code but
-#   never parses the binding strings, so it cannot catch a malformed keybinding like `cmd-shift-o`
-#   (must be `cmd-shift-O`) that compiles yet panics during registration. The
-#   keymap-validation tests catch exactly that class. (A full window-open "does it
-#   even open" test needs the app's live singleton graph, which the unit-test
-#   harness cannot provide, so it is `#[ignore]`d rather than run here — see
-#   `test_boot_registers_all_keybindings_without_panicking`.)
-# - zap_release.yml: runs the full three-platform packaging (~3h) only on
-#   tag push / manual dispatch.
-#
-# macOS is checked separately because `#[cfg(target_os = "macos")]` code is not
-# compiled by the Linux job. Without this check, API drift in macOS-only callers
-# surfaced only during the much more expensive signed-DMG build.
-#
-# (Restored after being removed in cff5085e: the "release tag will catch it"
-# rationale failed when an LLM-assisted change broke main between releases.)
-#
-# Cost guard (changes job): cargo_check + keymap_smoke_test each burn a real
-# compile (~7-13 min billed) on every PR, including docs-only ones. The
-# `changes` job below decides, via script/needs-build-check, whether the diff
-# could possibly affect the build; the two expensive jobs then `if:`-skip
-# their steps for docs-only PRs.
-#
-# Safety property (do NOT "simplify" this into a trigger-level `paths-ignore`
-# on `on: pull_request:` — see no-new-cjk.yml's comment for the same warning):
-# this workflow still triggers on EVERY pull_request unconditionally, so the
-# `cargo check (Linux x86_64)` required-status-check context always gets a
-# check-run. A job that is skipped via its own `if:` reports conclusion
-# "skipped", which GitHub's required-status-checks treats as passing. A
-# trigger-level path filter instead makes the whole workflow never run for
-# excluded paths, so the check-run is never created at all — that leaves the
-# required check permanently "pending" and blocks merging forever. The
-# `changes` job itself always runs (it's a single cheap checkout + diff, not
-# a compile) so it can never be the thing that goes missing.
-
+# Batch validation: Linux Clippy, macOS cargo check and targeted regression tests.
+# Called after several merges; the Linux cargo-check status is not a PR requirement.
 name: PR Check
 
+# Called only by the approved post-merge batch on main.
 on:
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: pr-check-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -114,9 +76,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Keep this inside the required cargo-check job: a regression fails the
-      # required context before setup/compilation instead of failing `changes`
-      # and turning this job into a branch-protection-passing "skipped" check.
+      # Validate the gate before setup and compilation consume runner time.
       - name: Enforce compact sidebar row actions
         run: script/check-compact-row-actions
         shell: bash
@@ -126,7 +86,7 @@ jobs:
         shell: bash
 
       # Keep this inside the required job for the same reason as the row-action
-      # guard above: a broken Clippy gate must fail the required context.
+      # guard above: a broken Clippy gate must fail the batch.
       - name: Verify required Clippy gate
         run: script/pr-check-clippy-gate-tests
         shell: bash
@@ -145,7 +105,7 @@ jobs:
         run: script/dependency-security-baseline-tests
         shell: bash
 
-      # Audit contract regressions must fail this required context. Running the
+      # Audit contract regressions must fail this batch job. Running the
       # suite in `changes` would only turn this job into a passing "skipped" check.
       - name: Verify immutable codebase-audit pipeline
         run: |
