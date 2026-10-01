@@ -445,3 +445,32 @@ fn deleting_a_directory_symlink_never_deletes_its_target() {
         "deleting the symlink must not recurse into its directory target"
     );
 }
+
+#[test]
+fn completing_one_remote_recovery_keeps_other_operations_on_the_same_path_reachable() {
+    let path = PathBuf::from("/shared-target");
+    let first = RemoteRecoveryOperation {
+        operation_id: "first".into(),
+        source_preserved_after_commit: true,
+        action: RemoteRecoveryAction::Acknowledge,
+    };
+    let second = RemoteRecoveryOperation {
+        operation_id: "second".into(),
+        source_preserved_after_commit: false,
+        action: RemoteRecoveryAction::Acknowledge,
+    };
+    let mut routes = HashMap::from([(path.clone(), vec![first.clone(), second.clone()])]);
+    assert_eq!(
+        complete_remote_recovery_route(&mut routes, &path, &first),
+        vec![path.clone()]
+    );
+    assert_eq!(routes.get(&path), Some(&vec![second.clone()]));
+    // A delayed duplicate completion must not remove its replacement.
+    assert_eq!(
+        complete_remote_recovery_route(&mut routes, &path, &first),
+        vec![path.clone()]
+    );
+    assert_eq!(routes.get(&path), Some(&vec![second.clone()]));
+    assert!(complete_remote_recovery_route(&mut routes, &path, &second).is_empty());
+    assert!(!routes.contains_key(&path));
+}

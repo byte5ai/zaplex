@@ -360,6 +360,53 @@ fn unreadable_member_fails_closed_instead_of_undercounting() {
 }
 
 #[test]
+fn unreadable_or_invalid_member_stat_never_reports_a_partial_pss_total() {
+    for invalid_contents in [None, Some("invalid process stat")] {
+        let mut fs = FakeProcfs::default()
+            .with_pids(vec![42, 43])
+            .with_file("/proc/42/stat", &stat(42, 42, 9001, "shell"))
+            .with_file("/proc/42/smaps_rollup", "Pss: 10 kB\n");
+        fs = match invalid_contents {
+            Some(contents) => fs.with_file("/proc/43/stat", contents),
+            None => fs.with_failed_file("/proc/43/stat"),
+        };
+        let root = LinuxProcessIdentity {
+            pid: 42,
+            start_time_ticks: 9001,
+            process_session_id: 42,
+        };
+
+        let snapshot = collect_linux_process_session_pss(&fs, root, 81);
+
+        assert_eq!(snapshot.pss.status(), MemoryMeasurementStatus::Unavailable);
+        assert_eq!(snapshot.pss.bytes(), None);
+        assert_eq!(
+            snapshot.pss.diagnostic(),
+            Some(MemoryDiagnostic::PartialProcessTree)
+        );
+    }
+}
+
+#[test]
+fn vanished_member_stat_does_not_invalidate_surviving_process_memory() {
+    let fs = FakeProcfs::default()
+        .with_pids(vec![42, 43])
+        .with_file("/proc/42/stat", &stat(42, 42, 9001, "shell"))
+        .with_file("/proc/42/smaps_rollup", "Pss: 10 kB\n");
+    let root = LinuxProcessIdentity {
+        pid: 42,
+        start_time_ticks: 9001,
+        process_session_id: 42,
+    };
+
+    let snapshot = collect_linux_process_session_pss(&fs, root, 81);
+
+    assert_eq!(snapshot.pss.status(), MemoryMeasurementStatus::Measured);
+    assert_eq!(snapshot.pss.bytes(), Some(10 * 1024));
+    assert_eq!(snapshot.pss.diagnostic(), None);
+}
+
+#[test]
 fn diagnostics_are_fixed_codes_not_io_messages() {
     let fs = FakeProcfs::default().with_failed_file("/proc/meminfo");
 

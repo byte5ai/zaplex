@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""Summarize actual CI artifacts; never infer executed tests from source annotations.
+
+An optional baseline comparison is diagnostic, not production-coverage acceptance:
+AST projection and the paired non-Rust execution archive must both be proven.
+"""
+import argparse
+import json
+import runpy
+import subprocess
+import math
+from pathlib import Path
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+PROJECTION = runpy.run_path(str(Path(__file__).with_name("test-suite-rust-projection.py")))
+
+
+def measure(directory, source_root):
+    provenance = json.loads((directory / "provenance.json").read_text())
+    if not provenance.get("commit") or not provenance.get("run_url"):
+        raise ValueError("missing CI provenance")
+    if (directory / "test-outcome.txt").read_text().strip() != "success":
+        raise ValueError("test execution did not succeed; artifacts are diagnostic only")
+    report = ET.parse(directory / "junit.xml").getroot()
+    if report.tag != 'testsuites':
+        raise ValueError('expected Nextest testsuites root')
+    for group in [report, *report.iter('testsuite')]:
+        observed_cases = list(group.iter('testcase'))
+        for name in ('tests', 'failures', 'errors'):
+            if not re.fullmatch(r'[0-9]+', group.get(name, '')):
+                raise ValueError(f'missing or invalid JUnit {name} count')
+        if int(group.attrib['tests']) != len(observed_cases):
+            raise ValueError('JUnit declared test count disagrees with observed cases')
+        if int(group.attrib['failures']) or int(group.attrib['errors']):
+            raise ValueError('JUnit group reports a failure')
+        for name in ('skipped', 'disabled'):
+            if name in group.attrib:
+                count = group.attrib[name]
+                if not re.fullmatch(r'[0-9]+', count) or int(count) != sum(case.find('skipped') is not None for case in observed_cases):
+                    raise ValueError(f'JUnit {name} count disagrees with observed cases')
+    durations = {}
+    skipped = 0
+    seen = set()
+    for suite in report.iter("testsuite"):
+        for case in suite.findall("testcase"):
+            identity = (suite.get("name", ""), case.get("name", ""))
+            if not all(identity) or identity in seen:
+                raise ValueError("missing or duplicate test identity")
+            seen.add(identity)
+            if case.find("failure") is not None or case.find("error") is not None:
+                raise ValueError(f"failed test: {identity}")
+            if case.find("skipped") is not None:
+                skipped += 1
+                continue
+            duration = float(case.attrib["time"])
+            if not math.isfinite(duration) or duration < 0:
+                raise ValueError("invalid test duration")
+            durations[identity] = duration
+    if not durations:
+        raise ValueError("no executed tests")
+    wall_seconds = float(report.attrib["time"])
+    if not math.isfinite(wall_seconds) or wall_seconds < 0:
+        raise ValueError("invalid execution wall time")
+    if not re.fullmatch(r'[0-9a-f]{40}', provenance['commit']):
+        raise ValueError('invalid source commit')
+    observed = subprocess.run(['git', '-C', str(source_root), 'rev-parse', 'HEAD'], capture_output=True, text=True, check=True).stdout.strip()
+    if observed != provenance['commit']:
+        raise ValueError('source checkout does not match CI commit')
+    clean = subprocess.run(['git', '-C', str(source_root), 'diff', '--quiet', 'HEAD', '--', 'app', 'crates'], check=False)
+    if clean.returncode != 0:
+        raise ValueError('source checkout contains unmeasured changes')
+    tracked = set(subprocess.run(
+        ['git', '-C', str(source_root), 'ls-files', '-z', '--', 'app', 'crates'],
+        capture_output=True, text=True, check=True,
+    ).stdout.split('\0'))
+    projection, source_audit = PROJECTION['audit_sources'](source_root)
+    covered = {}
+    unresolved = {}
+    fingerprints = {}
+    excluded_lines = set()
+    original_root = Path(provenance.get('source_root', str(source_root)))
+    current = None
+    for record in (directory / "rust-lcov.info").read_text().splitlines():
+        if record.startswith("SF:"):
+            path = Path(record[3:])
+            if path.is_absolute():
+                try:
+                    path = path.relative_to(original_root)
+                except ValueError:
+                    current = None
+                    continue
+            if ".." in path.parts or path.suffix != ".rs" or path.name == "build.rs" or "target" in path.parts:
+                current = None
+                continue
+            current = path.as_posix()
+        elif record.startswith("DA:") and current is not None:
+            line, hits, *_ = record[3:].split(",")
+            line, hits = int(line), int(hits)
+            if line <= 0 or hits < 0:
+                raise ValueError("invalid LCOV line record")
+            try:
+                result = projection.line(current, line)
+            except ValueError as error:
+                unresolved[f'{current}:{line}'] = str(error)
+                continue
+            if result is None:
+                excluded_lines.add(f'{current}:{line}')
+                continue
+            if current not in tracked:
+                unresolved[f'{current}:{line}'] = 'source is not tracked at the measured revision'
+                continue
+            key, fingerprint = result
+            fingerprints[current] = fingerprint
+            covered[key] = covered.get(key, False) or hits > 0
+        elif record == "end_of_record":
+            current = None
+    if not covered and not unresolved:
+        raise ValueError("no repository source-line coverage")
+    return {
+        "provenance": provenance,
+        "executed_rust_tests": len(durations),
+        "reported_skipped_tests": skipped,
+        "test_wall_seconds": wall_seconds,
+        "summed_test_seconds": sum(durations.values()),
+        "production_projection_status": "unproven" if unresolved else "pass",
+        "production_policy_sha256": PROJECTION['POLICY_HASH'],
+        "production_source_fingerprints": fingerprints,
+        "source_lines": len(covered),
+        "covered_source_lines": sum(covered.values()),
+        "source_line_coverage_percent": None if unresolved else 100 * sum(covered.values()) / len(covered),
+        "partial_known_line_coverage_percent": 100 * sum(covered.values()) / len(covered) if covered else None,
+        "excluded_test_or_nonproduction_lines": len(excluded_lines),
+        "unresolved_production_lines": unresolved,
+        "source_audit": source_audit,
+        "slowest_tests": [
+            {"binary": identity[0], "test": identity[1], "seconds": seconds}
+            for identity, seconds in sorted(durations.items(), key=lambda row: (-row[1], row[0]))[:50]
+        ],
+        "executed_test_ids": sorted("::".join(identity) for identity in durations),
+        "source_line_ids": sorted(covered),
+        "acceptance": "unproven: non-Rust suite and assertion preservation need review",
+    }
+
+
+def attach_nonrust(summary, directory, source_root):
+    adapter = runpy.run_path(str(Path(__file__).with_name("test-suite-nonrust")))
+    nonrust = adapter["validate"](directory, source_root)
+    for key in ("commit", "run_url", "run_attempt"):
+        if not summary["provenance"].get(key) or nonrust["provenance"].get(key) != summary["provenance"][key]:
+            raise ValueError(f"Rust and non-Rust evidence differ in {key}")
+    summary["nonrust"] = nonrust
+    summary["executed_total_tests"] = summary["executed_rust_tests"] + nonrust["executed_nonrust_tests"]
+    return summary
+
+
+def compare_nonrust(candidate, baseline):
+    before, after = baseline.get("nonrust"), candidate.get("nonrust")
+    if before is None or after is None:
+        return None
+    for report in (before, after):
+        if (report.get("complete") is not True or not report.get("executed_test_ids")
+                or report.get("executed_nonrust_tests") != len(report["executed_test_ids"])
+                or len(set(report["executed_test_ids"])) != len(report["executed_test_ids"])):
+            raise ValueError("non-Rust measurement is incomplete")
+    for rust, nonrust in ((baseline, before), (candidate, after)):
+        if rust["provenance"]["commit"] != nonrust["provenance"]["commit"]:
+            raise ValueError("Rust/non-Rust source identity mismatch")
+    for key in ("runner", "python", "tools", "environment", "plan_sha256", "adapter_sha256", "events_helper_sha256"):
+        if not before["provenance"].get(key) or before["provenance"][key] != after["provenance"].get(key):
+            raise ValueError(f"incomparable non-Rust execution setting: {key}")
+    # This measurement phase changes Rust tests only. An unchanged non-Rust
+    # suite still needs two real executions with identical IDs and sources.
+    for key in ("executed_test_ids", "skipped_test_ids", "guard_ids", "suite_source_hashes"):
+        if key not in before or before[key] != after.get(key):
+            raise ValueError(f"non-Rust suite changed; independent review required: {key}")
+    return (baseline["executed_rust_tests"] + before["executed_nonrust_tests"],
+            candidate["executed_rust_tests"] + after["executed_nonrust_tests"])
+
+
+def compare(candidate, baseline):
+    if any(row.get('production_projection_status') != 'pass' for row in (candidate, baseline)):
+        raise ValueError('production coverage projection is unproven; partial statistics cannot pass thresholds')
+    for key in ('production_policy_sha256', 'production_source_fingerprints'):
+        if not baseline.get(key) or baseline[key] != candidate.get(key):
+            raise ValueError(f'production source or projection policy changed: {key}')
+    for key in ("runner", "rustc", "scope", "coverage_scope", "tools", "config_hashes", "command", "environment"):
+        if not baseline["provenance"].get(key) or baseline["provenance"][key] != candidate["provenance"].get(key):
+            raise ValueError(f"incomparable measurement setting: {key}")
+    if baseline["source_line_ids"] != candidate["source_line_ids"]:
+        raise ValueError("coverage line universe changed; map production regions before comparing")
+    if baseline["executed_rust_tests"] <= 0:
+        raise ValueError("baseline has no executed tests")
+    reduction = 100 * (1 - candidate["executed_rust_tests"] / baseline["executed_rust_tests"])
+    loss = baseline["source_line_coverage_percent"] - candidate["source_line_coverage_percent"]
+    before, after = set(baseline["executed_test_ids"]), set(candidate["executed_test_ids"])
+    totals = compare_nonrust(candidate, baseline)
+    return {
+        "baseline_commit": baseline["provenance"]["commit"],
+        "rust_test_reduction_percent": reduction,
+        "source_line_coverage_loss_percentage_points": loss,
+        "test_wall_seconds_saved": baseline["test_wall_seconds"] - candidate["test_wall_seconds"],
+        "removed_execution_ids": sorted(before - after),
+        "added_execution_ids": sorted(after - before),
+        "rust_numeric_thresholds_met": candidate["executed_rust_tests"] * 5 <= baseline["executed_rust_tests"] * 4 and loss <= 2,
+        "measurement_complete": totals is not None,
+        "baseline_total_executed_tests": totals[0] if totals else None,
+        "candidate_total_executed_tests": totals[1] if totals else None,
+        "total_test_reduction_percent": 100 * (1 - totals[1] / totals[0]) if totals else None,
+        "numeric_thresholds_met": totals[1] * 5 <= totals[0] * 4 and loss <= 2 if totals else None,
+        "acceptance": "unproven: numeric thresholds alone do not prove issue #472",
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("directory", type=Path, help="downloaded rust-suite-evidence artifact")
+    parser.add_argument("--source-root", required=True, type=Path, help="clean source checkout of the exact CI commit (LCOV paths use provenance.source_root)")
+    parser.add_argument("--baseline", type=Path, help="summary.json from a comparable successful baseline")
+    parser.add_argument("--nonrust", type=Path, help="paired complete non-Rust CI archive at the same source commit")
+    args = parser.parse_args()
+    try:
+        summary = measure(args.directory, args.source_root)
+        if args.nonrust:
+            attach_nonrust(summary, args.nonrust, args.source_root)
+        if args.baseline:
+            summary["comparison"] = compare(summary, json.loads(args.baseline.read_text()))
+    except (OSError, ValueError, KeyError, ET.ParseError, subprocess.CalledProcessError) as error:
+        parser.exit(1, f"Invalid suite evidence: {error}\n")
+    json.dump(summary, sys.stdout, indent=2, allow_nan=False)
+    print()
+
+
+if __name__ == "__main__":
+    main()

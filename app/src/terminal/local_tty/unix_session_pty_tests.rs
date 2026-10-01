@@ -1,10 +1,10 @@
-use super::{session_spawn_command, spawn_session_pty};
+use super::{session_spawn_command, spawn_command_in_pty, spawn_session_pty};
 use crate::terminal::shell::ShellType;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
@@ -231,43 +231,72 @@ fn failed_spawn_session_pty_does_not_leak_master_fds() {
 ///     path always did — so every heredoc line drew a `> `.
 #[test]
 fn spawn_session_pty_does_not_echo_the_bootstrap() {
-    let env = HashMap::new();
-    let (leader, mut child, _bootstrap_file) =
-        match spawn_session_pty(None, "/bin/bash", &env, 24, 80) {
-            Ok(pair) => pair,
-            // No bash on this machine: nothing to assert about bash's
-            // bootstrap. (The CI images all have it.)
-            Err(_) => return,
-        };
-    let mut master = std::fs::File::from(leader);
-
-    // Non-blocking master so no read below can hang.
-    let fd = master.as_raw_fd();
-    // SAFETY: toggling O_NONBLOCK on our own fd.
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFL);
-        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-    }
-
-    // Recreate the remote condition IMMEDIATELY, before the shell has
-    // finished exec'ing: on the classic-SSH path the PTY is allocated by
-    // `ssh` on the remote host with ECHO on, and `spawn_session_pty`'s
-    // local clearing has no reach there. The rcfile is what must turn it
-    // off — that is the fix under test — so this has to happen before the
-    // rcfile runs, never after it (doing it after would simply undo the
-    // fix and make the test fail for the wrong reason).
-    //
-    // Ordering: fork+exec+rcfile takes milliseconds, this ioctl
-    // microseconds, so the parent wins in practice. Should it ever lose,
-    // the failure is a visible red test, not a silent green one.
-    // SAFETY: `fd` is our live PTY leader; termios is zero-initialised and
-    // then filled by tcgetattr before use.
-    unsafe {
-        let mut tio: libc::termios = std::mem::zeroed();
-        if libc::tcgetattr(fd, &mut tio) == 0 {
-            tio.c_lflag |= libc::ECHO;
-            libc::tcsetattr(fd, libc::TCSANOW, &tio);
+    match fs::metadata("/bin/bash") {
+        Err(error) if error.kind() == ErrorKind::NotFound => return,
+        result => {
+            result.expect("inspect bash executable");
         }
+    }
+    let home = tempfile::tempdir().expect("isolated shell home");
+    let env = HashMap::from([
+        (
+            "HOME".to_string(),
+            home.path().to_string_lossy().into_owned(),
+        ),
+        ("TERM".to_string(), "xterm-256color".to_string()),
+        ("TERM_PROGRAM".to_string(), "ZaplexTerminal".to_string()),
+        ("COLORTERM".to_string(), "truecolor".to_string()),
+        ("ZAPLEX_CLIENT_VERSION".to_string(), "local".to_string()),
+        ("ZAPLEX_SESSION".to_string(), "1".to_string()),
+        ("BYOBU_DISABLE".to_string(), "1".to_string()),
+        ("LC_BYOBU".to_string(), "0".to_string()),
+    ]);
+    let prepared = session_spawn_command("/bin/bash", &env).expect("bash spawn contract");
+    // Set ECHO in the child before exec, so the real rcfile must clear it.
+    // This uses the same prepared shell command and PTY setup as the daemon,
+    // without racing the daemon parent's separate ECHO suppression.
+    let mut command = command::blocking::Command::new("/bin/sh");
+    command.args([
+        "-c",
+        "command -p stty echo || exit 1; exec \"$@\"",
+        "zaplex-bootstrap-test",
+    ]);
+    command
+        .arg(prepared.command.get_program())
+        .args(prepared.command.get_args());
+    for (key, value) in prepared.command.get_envs() {
+        match value {
+            Some(value) => {
+                command.env(key, value);
+            }
+            None => {
+                command.env_remove(key);
+            }
+        }
+    }
+    let spawned = spawn_command_in_pty(
+        command,
+        &crate::terminal::SizeInfo::new_without_font_metrics(24, 80),
+        true,
+    )
+    .expect("spawn bash on a PTY");
+    let mut child = spawned.child;
+    // SAFETY: the spawn result transfers ownership of this live master fd.
+    let mut master = unsafe { std::fs::File::from_raw_fd(spawned.result.leader_fd) };
+
+    // Pump both directions without blocking. Cloned File handles would share
+    // O_NONBLOCK too, so a writer thread's ignored write_all could drop input.
+    let fd = master.as_raw_fd();
+    // SAFETY: query/change only the flags of our owned live master fd.
+    let nonblocking = unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        flags >= 0 && libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) == 0
+    };
+    if !nonblocking {
+        let error = std::io::Error::last_os_error();
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("configure nonblocking PTY: {error}");
     }
 
     // Then wait for the rcfile to have run: it ends by emitting the
@@ -288,42 +317,65 @@ fn spawn_session_pty_does_not_echo_the_bootstrap() {
             Err(_) => break,
         }
     }
-    assert!(
-        contains(&preamble, b"\x1bP$d"),
-        "the rcfile should emit the InitShell DCS before the body is written"
-    );
+    if !contains(&preamble, b"\x1bP$d") {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("the rcfile should emit the InitShell DCS before the body is written");
+    }
 
-    // Exactly what `handle_open_session` enqueues for a bash session.
-    let body = crate::terminal::bootstrap::script_for_shell(ShellType::Bash, &crate::ASSETS);
-    // Write from a thread: the body is ~250 KB and the PTY buffer is a few
-    // KB, so a blocking write would deadlock against our own read loop.
-    let writer = {
-        let mut w = master.try_clone().expect("clone pty leader");
-        let body = body.to_vec();
-        std::thread::spawn(move || {
-            let _ = w.write_all(&body);
-        })
-    };
-
-    // Read for a bounded window; we are looking for the ABSENCE of echo,
-    // so there is no marker to wait for — drain what the shell produces.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut body =
+        crate::terminal::bootstrap::script_for_shell(ShellType::Bash, &crate::ASSETS).to_vec();
+    // The full marker never occurs in the input, so terminal echo cannot
+    // masquerade as successful execution past the entire bootstrap body.
+    body.extend_from_slice(b" printf '\\nZAPLEX_%s_%s\\n' BOOTSTRAP COMPLETE\n");
+    let completed = b"ZAPLEX_BOOTSTRAP_COMPLETE";
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut written = 0;
     let mut out = Vec::new();
     let mut buf = [0u8; 8192];
-    while Instant::now() < deadline {
+    let mut io_error = None;
+    while Instant::now() < deadline && !contains(&out, completed) {
+        if written < body.len() {
+            match master.write(&body[written..]) {
+                Ok(0) => {
+                    io_error = Some(std::io::Error::from(ErrorKind::WriteZero));
+                    break;
+                }
+                Ok(n) => written += n,
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {}
+                Err(error) => {
+                    io_error = Some(error);
+                    break;
+                }
+            }
+        }
         match master.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => out.extend_from_slice(&buf[..n]),
-            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(20));
+            Err(error)
+                if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) =>
+            {
+                std::thread::sleep(Duration::from_millis(1));
             }
-            Err(_) => break,
+            Err(error) => {
+                io_error = Some(error);
+                break;
+            }
         }
     }
-
     let _ = child.kill();
     let _ = child.wait();
-    let _ = writer.join();
+    assert!(io_error.is_none(), "bootstrap PTY I/O failed: {io_error:?}");
+    assert_eq!(
+        written,
+        body.len(),
+        "the whole bootstrap must reach the PTY"
+    );
+    assert!(
+        contains(&out, completed),
+        "the shell must execute beyond the bootstrap"
+    );
 
     let text = String::from_utf8_lossy(&out);
     // A line that exists only inside the body. Coming back means the tty

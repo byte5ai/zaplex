@@ -659,48 +659,45 @@ pub async fn get_diff_for_commit_message(
 /// plus the list of untracked, non-ignored files. Unlike
 /// [`get_diff_for_commit_message`], the tracked diff is returned verbatim (no
 /// AI-token truncation, no synthesised untracked hunks) — a human reads it.
-/// Read failures degrade to empties so an unreadable repo renders as "no
-/// changes" rather than erroring the pane.
+/// Read failures are returned so an unavailable repository cannot appear clean.
 #[cfg(feature = "local_fs")]
-pub async fn get_review_working_changes(repo_path: &Path) -> (String, Vec<String>) {
+pub async fn get_review_working_changes(repo_path: &Path) -> Result<(String, Vec<String>)> {
+    let inside_worktree = run_git_command(repo_path, &["rev-parse", "--is-inside-work-tree"]).await?;
+    anyhow::ensure!(
+        inside_worktree.trim() == "true",
+        "Review requires a Git working tree"
+    );
     let has_head = run_git_command(repo_path, &["rev-parse", "--verify", "HEAD"])
         .await
         .is_ok();
     let diff = if has_head {
         // `git diff HEAD` already covers staged + unstaged changes to tracked
         // files.
-        run_git_command(repo_path, &["diff", "HEAD"])
-            .await
-            .unwrap_or_default()
+        run_git_command(repo_path, &["diff", "HEAD"]).await?
     } else {
         // No HEAD before the first commit: `git diff` alone only shows
         // unstaged changes to already-tracked files. Files staged for the
         // initial commit (`git add`ed, never committed) show up in neither
         // `git diff` nor the untracked list below, so fold in `git diff
         // --cached` (staged vs the empty tree) as well.
-        let mut diff = run_git_command(repo_path, &["diff", "--cached"])
-            .await
-            .unwrap_or_default();
-        diff.push_str(
-            &run_git_command(repo_path, &["diff"])
-                .await
-                .unwrap_or_default(),
-        );
+        let mut diff = run_git_command(repo_path, &["diff", "--cached"]).await?;
+        diff.push_str(&run_git_command(repo_path, &["diff"]).await?);
         diff
     };
     let untracked = run_git_command(repo_path, &["ls-files", "--others", "--exclude-standard"])
-        .await
-        .unwrap_or_default()
+        .await?
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| l.to_string())
         .collect();
-    (diff, untracked)
+    Ok((diff, untracked))
 }
 
 #[cfg(not(feature = "local_fs"))]
-pub async fn get_review_working_changes(_repo_path: &Path) -> (String, Vec<String>) {
-    (String::new(), Vec::new())
+pub async fn get_review_working_changes(_repo_path: &Path) -> Result<(String, Vec<String>)> {
+    Err(anyhow!(
+        "Working-change review requires local filesystem support"
+    ))
 }
 
 /// Commits changes. If `include_unstaged` is true, stages all changes first via `git add -A`.

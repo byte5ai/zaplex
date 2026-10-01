@@ -194,16 +194,10 @@ impl PathCompletionContext for SessionContext {
             return entries.clone();
         }
 
-        // When the remote server feature is enabled but the session hasn't
-        // connected yet, the command executor may be an InBand fallback that
-        // sends escape sequences to a raw remote shell. Return empty without
-        // caching so we retry after the remote server handshake finishes.
-        if let SessionType::ZaplexifiedRemote { host_id: None } = self.session.session_type() {
-            if FeatureFlag::SshRemoteServer.is_enabled() && !self.session.is_legacy_ssh_session() {
-                return Arc::new(vec![]);
-            }
-        }
-
+        // Session contexts own an initialized executor. A missing remote host ID
+        // also occurs after skipped/failed remote-server setup, when legacy SSH
+        // uses its working ControlMaster fallback. Let the executor handle the
+        // request instead of treating that identity as a readiness signal.
         let result = self
             .list_directory_entries_internal(&directory.to_path())
             .await;

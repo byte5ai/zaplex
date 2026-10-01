@@ -30,7 +30,7 @@ interface Props {
 
 const { title, title_zh, title_ja, lede, lede_zh, lede_ja, section, section_zh, section_ja, activeSlug, headings, prev, next } = Astro.props;
 const tocItems = headings.filter((h) => h.depth === 2);
-const repo = 'https://github.com/zerx-lab/zap';
+const repo = 'https://github.com/byte5ai/zaplex';
 const editUrl = `${repo}/blob/main/website/src/content/docs/${activeSlug}.mdx`;
 ---
 <!doctype html>

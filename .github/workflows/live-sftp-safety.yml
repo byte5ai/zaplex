@@ -22,6 +22,8 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -125,5 +127,7 @@ jobs:
           cargo test --locked -p zap_sftp
           cargo test --locked -p zap_sftp --lib session::live_tests::live_sftp_prefers_known_host_key -- --ignored --exact | tee "${RUNNER_TEMP}/sftp-host-key-test.log"
           grep -q 'test result: ok. 1 passed;' "${RUNNER_TEMP}/sftp-host-key-test.log"
-          cargo test --locked -p warp --lib live_sftp_ -- --ignored
-          cargo test --locked -p warp --lib openssh_v3 -- --ignored
+          cargo test --locked -p warp --lib live_sftp_ -- --ignored | tee "${RUNNER_TEMP}/live-sftp-tests.log"
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed;' "${RUNNER_TEMP}/live-sftp-tests.log"
+          cargo test --locked -p warp --lib openssh_v3 -- --ignored | tee "${RUNNER_TEMP}/openssh-v3-tests.log"
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed;' "${RUNNER_TEMP}/openssh-v3-tests.log"

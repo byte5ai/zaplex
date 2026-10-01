@@ -881,10 +881,10 @@ fn claude_usage_cache_evicts_the_least_recently_used_transcript() {
             account_root: account_root.clone(),
             transcript: std::fs::canonicalize(&path).unwrap(),
         };
-        cache.parse_file(key.clone(), &path);
+        cache.parse_file(key.clone(), &path).unwrap();
         keys.push((key, path));
     }
-    cache.parse_file(keys[0].0.clone(), &keys[0].1);
+    cache.parse_file(keys[0].0.clone(), &keys[0].1).unwrap();
 
     let overflow = tmp.path().join("overflow.jsonl");
     write(
@@ -894,13 +894,15 @@ fn claude_usage_cache_evicts_the_least_recently_used_transcript() {
             "\n"
         ),
     );
-    cache.parse_file(
-        ClaudeUsageCacheKey {
-            account_root,
-            transcript: std::fs::canonicalize(&overflow).unwrap(),
-        },
-        &overflow,
-    );
+    cache
+        .parse_file(
+            ClaudeUsageCacheKey {
+                account_root,
+                transcript: std::fs::canonicalize(&overflow).unwrap(),
+            },
+            &overflow,
+        )
+        .unwrap();
 
     assert_eq!(cache.entries.len(), USAGE_CACHE_LIMIT);
     assert!(cache.entries.contains_key(&keys[0].0));

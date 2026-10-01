@@ -24,6 +24,7 @@
 use std::fs::Permissions;
 use std::io::ErrorKind;
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -183,13 +184,26 @@ pub fn run(identity_key: &str, runtime_filename: Option<&str>) -> anyhow::Result
             // creates a new session for the child, so the daemon is not in
             // SSH's process group and will not receive that signal.
             let exe = std::env::current_exe()?;
+            // Panics bypass the daemon's file logger; keep them next to the
+            // socket instead of discarding them.
+            let stderr = socket_path
+                .parent()
+                .and_then(|dir| {
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .mode(0o600)
+                        .open(dir.join("daemon-stderr.log"))
+                        .ok()
+                })
+                .map_or_else(Stdio::null, Stdio::from);
             let mut cmd = command::blocking::Command::new(&exe);
             cmd.arg("remote-server-daemon")
                 .arg("--identity-key")
                 .arg(identity_key)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null());
+                .stderr(stderr);
             // SAFETY: setsid(2) is async-signal-safe and has no side effects
             // other than creating a new session.  pre_exec closures run between
             // fork and exec in the child process.

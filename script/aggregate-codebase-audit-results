@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import runpy
 import stat
 import sys
 import tempfile
@@ -592,6 +593,104 @@ def validate_result(
     return findings, summary
 
 
+def validate_archived_evidence(
+    run_directory: Path,
+    assignments: dict[str, Any],
+    run_buckets: dict[str, dict[str, Any]],
+    results: dict[str, tuple[dict[str, Any], bytes]],
+) -> None:
+    # Reuse the runner's response contract without invoking its CLI or subprocesses.
+    runner = runpy.run_path(str(Path(__file__).with_name("run-codebase-audit-assignments")))
+    artifacts = (
+        ("prompts", "prompt_sha256", "inputs", "prompt.json"),
+        ("events", "events_sha256", "logs", "events.jsonl"),
+        ("stderr", "stderr_sha256", "logs", "stderr.log"),
+        ("final-messages", "final_message_sha256", "logs", "final-message.log"),
+    )
+
+    def read_artifact(directory: str, name: str, expected_hash: str | None = None) -> bytes:
+        parent = run_directory / directory
+        path = parent / name
+        try:
+            if not stat.S_ISDIR(parent.lstat().st_mode) or not stat.S_ISREG(path.lstat().st_mode):
+                raise AggregationError(f"archived evidence must use regular files: {path}")
+            raw = path.read_bytes()
+        except OSError as error:
+            raise AggregationError(f"cannot read archived evidence {path}: {error}") from error
+        if expected_hash is not None and sha256_bytes(raw) != expected_hash:
+            raise AggregationError(f"archived evidence SHA-256 mismatch: {path}")
+        return raw
+
+    sources: dict[str, list[tuple[int, bytes, str]]] = {}
+    for bucket in assignments["buckets"]:
+        bucket_id = bucket["id"]
+        range_ids = [f"{bucket_id}-range-{index:06d}" for index in range(1, len(bucket["entries"]) + 1)]
+        archived: dict[str, dict[str, bytes]] = {}
+        for artifact, hash_key, directory, suffix in artifacts:
+            raw_index = read_artifact(directory, f"{bucket_id}.{artifact}.json", run_buckets[bucket_id][hash_key])
+            try:
+                index = runner["decode_json"](raw_index, f"{bucket_id} {artifact} index")
+                if not isinstance(index, dict) or set(index) != {"schema_version", "bucket_id", "artifact", "ranges"}:
+                    raise AggregationError(f"invalid archived evidence index: {bucket_id} {artifact}")
+                if (index["schema_version"] != SCHEMA_VERSION or index["bucket_id"] != bucket_id
+                        or index["artifact"] != artifact or not isinstance(index["ranges"], list)):
+                    raise AggregationError(f"archived evidence index provenance mismatch: {bucket_id} {artifact}")
+                if canonical_json(index) != raw_index:
+                    raise AggregationError(f"archived evidence index is not canonical: {bucket_id} {artifact}")
+                rows = index["ranges"]
+                if any(not isinstance(row, dict) or set(row) != {"range_id", "sha256"} for row in rows):
+                    raise AggregationError(f"invalid archived evidence range index: {bucket_id} {artifact}")
+                if [row["range_id"] for row in rows] != range_ids:
+                    raise AggregationError(f"archived evidence range coverage mismatch: {bucket_id} {artifact}")
+                archived[artifact] = {
+                    row["range_id"]: read_artifact(directory, f"{row['range_id']}.{suffix}",
+                        require_hash(row["sha256"], "archived range hash"))
+                    for row in rows
+                }
+            except runner["RunnerError"] as error:
+                raise AggregationError(str(error)) from error
+
+        findings = []
+        for range_id, entry in zip(range_ids, bucket["entries"]):
+            try:
+                response = runner["decode_json"](archived["final-messages"][range_id], f"{range_id} final message")
+                if not isinstance(response, dict) or not isinstance(response.get("source_text"), str):
+                    raise AggregationError(f"invalid archived final message: {range_id}")
+                source = response["source_text"].encode("utf-8")
+                task = runner["RangeTask"](0, range_id, bucket_id, bucket["assignment_sha256"],
+                    entry, response["source_text"], sha256_bytes(source))
+                response = runner["validate_range_response"](response, assignments, task)
+                if archived["prompts"][range_id] != runner["prompt_for_range"](assignments, task):
+                    raise AggregationError(f"archived prompt/source mismatch: {range_id}")
+                runner["validate_event_stream"](archived["events"][range_id], range_id)
+                normalized_response = read_artifact("logs", f"{range_id}.response.json")
+                if normalized_response != runner["canonical_json"](response):
+                    raise AggregationError(f"archived normalized response mismatch: {range_id}")
+                if runner["blob_line_count"](source) != entry["range"]["end"] - entry["range"]["start"] + 1:
+                    raise AggregationError(f"archived source range length mismatch: {range_id}")
+                sources.setdefault(entry["path"], []).append((entry["range"]["start"], source, entry["blob_oid"]))
+                findings.extend(response["findings"])
+            except runner["RunnerError"] as error:
+                raise AggregationError(str(error)) from error
+        if findings != results[bucket_id][0]["findings"]:
+            raise AggregationError(f"archived findings do not match bucket result: {bucket_id}")
+
+    # Bind the reconstructed complete blobs to the assignment, not just to a
+    # self-consistent prompt/response pair. Legacy assignments cover whole files.
+    for path, ranges in sources.items():
+        ranges.sort(key=lambda row: row[0])
+        expected_start = 1
+        for start, source, _ in ranges:
+            if start != expected_start:
+                raise AggregationError(f"archived source has a gap or overlap: {path}")
+            expected_start += runner["blob_line_count"](source)
+        source = b"".join(row[1] for row in ranges)
+        object_bytes = f"blob {len(source)}\0".encode("ascii") + source
+        digest = hashlib.sha1(object_bytes).hexdigest() if len(assignments["target_sha"]) == 40 else hashlib.sha256(object_bytes).hexdigest()
+        if any(blob_oid != digest for _, _, blob_oid in ranges):
+            raise AggregationError(f"archived source Git blob identity mismatch: {path}")
+
+
 def finding_sort_key(finding: dict[str, Any]) -> tuple[Any, ...]:
     return (
         finding["path"],
@@ -716,6 +815,7 @@ def main(argv: list[str] | None = None) -> int:
         aggregate = build_aggregate(
             assignments, buckets, run_buckets, run_summary_raw, results
         )
+        validate_archived_evidence(args.run_summary.parent, assignments, run_buckets, results)
         write_output(args.output, aggregate)
     except AggregationError as error:
         print(f"codebase audit aggregation: {error}", file=sys.stderr)

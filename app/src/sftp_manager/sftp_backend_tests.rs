@@ -148,6 +148,70 @@ fn unsupported_delete_type_is_rejected_before_any_rename() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn cleanup_anchor_matches_owned_symlinks_without_following_replacements() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let link = root.path().join("link");
+    let retained = root.path().join("retained");
+    symlink("missing-target", &link).unwrap();
+    let anchor = LocalOwnershipAnchor {
+        file: open_local_cleanup_anchor(&link).unwrap(),
+        root: root.path().to_path_buf(),
+        opaque_paths: None,
+    };
+    assert_eq!(anchor.identity().unwrap().file_type, FileEntryType::Symlink);
+    assert!(anchor.matches_local_path(&link).unwrap());
+    fs::rename(&link, &retained).unwrap();
+    assert!(anchor.matches_local_path(&retained).unwrap());
+    // Even an identical link target does not make a different symlink owned.
+    symlink("missing-target", &link).unwrap();
+    assert!(!anchor.matches_local_path(&link).unwrap());
+
+    let file = root.path().join("file");
+    fs::write(&file, b"preserved").unwrap();
+    let file_anchor = LocalOwnershipAnchor {
+        file: open_local_cleanup_anchor(&file).unwrap(),
+        root: root.path().to_path_buf(),
+        opaque_paths: None,
+    };
+    let alias = root.path().join("alias");
+    symlink(&file, &alias).unwrap();
+    assert!(file_anchor.matches_local_path(&file).unwrap());
+    assert!(!file_anchor.matches_local_path(&alias).unwrap());
+    assert_eq!(fs::read(&file).unwrap(), b"preserved");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn owned_symlink_cleanup_preserves_its_directory_target() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let target = root.path().join("target");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("keep.txt"), b"preserved").unwrap();
+    let link = root.path().join("link");
+    symlink("target", &link).unwrap();
+    let backend = InMemorySftpBackend::new(root.path().to_path_buf());
+    let listed = backend.lstat(Path::new("/link")).unwrap().identity;
+    let anchor = backend
+        .ownership_anchor_for_listed_entry(Path::new("/link"), &listed)
+        .unwrap();
+
+    backend
+        .delete_entry_if_matches(Path::new("/link"), anchor, false)
+        .expect("the owned symlink must reach private cleanup and be removed");
+
+    assert_eq!(
+        fs::symlink_metadata(&link).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert_eq!(fs::read(target.join("keep.txt")).unwrap(), b"preserved");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn symlink_replacement_before_private_unlink_is_preserved() {
     use std::os::unix::fs::symlink;
 
@@ -5405,4 +5469,115 @@ async fn live_sftp_remote_safe_rename_does_not_claim_a_missing_user_source_was_r
     second_server.abort();
     let _ = second_server.await;
     fs::remove_dir_all(case_root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn sibling_rescan_retains_transferred_anchor_after_cleanup_retry_fails() {
+    let root = tempdir().unwrap();
+    let owned = root.path().join("owned.bin");
+    fs::write(&owned, b"owned").unwrap();
+    let backend = Arc::new(
+        InMemorySftpBackend::new(root.path().to_path_buf())
+            .with_sibling_recovery_failure(SiblingRecoveryFailure::ReadDirectory)
+            .with_delete_failure_matching_once("owned.bin"),
+    );
+    let anchor = backend
+        .existing_entry_ownership_anchor(Path::new("/owned.bin"))
+        .unwrap()
+        .unwrap();
+    let identity = anchor.identity().unwrap();
+    let paths = backend
+        .persist_anchor_sibling_recovery(
+            Path::new("/owned.bin"),
+            anchor,
+            &identity,
+            "owned-isolation-source",
+        )
+        .unwrap();
+    backend.clear_sibling_recovery_failure();
+    let error =
+        crate::sftp_manager::transfer_job::startup_backend_recovery_error(backend.clone(), paths);
+    let recovery_id = error.recovery_id().unwrap();
+
+    crate::sftp_manager::transfer_job::retry_recovery(recovery_id)
+        .expect_err("the first cleanup must hit the injected delete failure after anchor transfer");
+    assert_eq!(fs::read(&owned).unwrap(), b"owned");
+    crate::sftp_manager::transfer_job::retry_recovery(recovery_id)
+        .expect("the retained anchor must allow the second cleanup to finish");
+    assert!(
+        !owned.exists(),
+        "a successful retry must actually delete the owned artifact"
+    );
+    drop(backend);
+    let restarted = InMemorySftpBackend::new(root.path().to_path_buf());
+    assert!(restarted.startup_recovery_paths_for_test().is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn host_filesystem_paths_preserve_windows_volumes_and_reject_ambiguous_paths() {
+    let backend = InMemorySftpBackend::for_local_filesystem();
+    for value in [
+        r"C:\Users\alice\Documents",
+        r"D:\Downloads\file.txt",
+        r"\\server\share\folder",
+        r"\\?\C:\Users\alice",
+        r"\\?\UNC\server\share\folder",
+    ] {
+        let path = Path::new(value);
+        assert_eq!(backend.to_local(path).unwrap(), path);
+        assert_eq!(backend.to_remote(path), path);
+    }
+    for value in [
+        r"relative\file.txt",
+        r"C:relative.txt",
+        r"\current-drive-only",
+        r"C:\parent\..\outside",
+        r"\\server\share\parent\..\outside",
+        r"\\.\PhysicalDrive0",
+        r"\\?\GLOBALROOT\Device\HarddiskVolume1\file",
+    ] {
+        assert!(backend.to_local(Path::new(value)).is_err(), "{value}");
+    }
+    assert!(!backend.supports_atomic_exchange());
+    assert!(!backend.supports_identity_bound_cleanup());
+}
+
+#[cfg(windows)]
+#[test]
+fn host_filesystem_listing_and_realpath_keep_native_paths_without_relaxing_confined_roots() {
+    let directory = tempdir().unwrap();
+    let root = dunce::canonicalize(directory.path()).unwrap();
+    let file = root.join("visible.txt");
+    fs::write(&file, b"contents").unwrap();
+    let host = InMemorySftpBackend::for_local_filesystem();
+    let entries = host.list_dir(&root).unwrap();
+    assert!(entries.iter().any(|entry| entry.path == file));
+    assert_eq!(host.realpath(&file).unwrap(), file);
+    assert_eq!(host.stat(&file).unwrap().path, file);
+    assert_eq!(host.lstat(&file).unwrap().path, file);
+    let mut reader = host.open_file_reader(&file).unwrap();
+    let mut bytes = [0; 8];
+    assert_eq!(reader.read_chunk(&mut bytes).unwrap(), 8);
+    assert_eq!(&bytes, b"contents");
+
+    let confined = InMemorySftpBackend::new(root.clone());
+    assert!(confined.to_local(&file).is_err());
+    assert_eq!(confined.to_local(Path::new("/visible.txt")).unwrap(), file);
+    assert!(confined.to_local(Path::new("/../outside")).is_err());
+    assert!(host
+        .create_file_writer(&root.join("unsupported.txt"))
+        .is_err());
+    assert!(!root.join("unsupported.txt").exists());
+}
+
+#[cfg(not(unix))]
+#[test]
+fn unsupported_cleanup_anchor_refuses_before_opening_or_mutating_a_file() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("preserved.txt");
+    fs::write(&path, b"preserved").unwrap();
+    assert!(open_local_cleanup_anchor(&path).is_err());
+    assert_eq!(fs::read(path).unwrap(), b"preserved");
 }

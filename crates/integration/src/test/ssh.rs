@@ -8,13 +8,14 @@ use warp::{
     integration_testing::{
         step::new_step_with_default_assertions,
         subshell::{
-            accept_tmux_install, assert_subshell_banner_is_showing,
-            assert_subshell_is_bootstrapped, enter_ssh_command, enter_ssh_password,
-            run_exit_command, setup_gcloud_sdk, trigger_subshell_bootstrap,
+            accept_tmux_install, assert_ssh_zaplexification_is_offered,
+            assert_subshell_is_bootstrapped, enter_remote_subshell_command, enter_ssh_command,
+            enter_ssh_password, run_exit_command, setup_ssh_fixture, trigger_subshell_bootstrap,
             wait_for_password_prompt,
+            util::with_recent_ssh_output,
         },
         terminal::{
-            assert_active_block_output_for_single_terminal_in_tab,
+            assert_active_block_output_for_single_terminal_in_tab, assert_focused_editor_in_tab,
             assert_long_running_block_executing_for_single_terminal_in_tab,
             execute_command_for_single_terminal_in_tab,
             util::{current_shell_starter_and_version, nonce, ExactLine, ExpectedExitStatus},
@@ -26,6 +27,9 @@ use warp::{
         model::bootstrap::BootstrapStage,
         session_settings::{StartupShell, StartupShellOverride},
         shell::ShellType,
+        zaplexify::settings::{
+            SshExtensionInstallMode, SshExtensionInstallModeSetting, UseSshTmuxWrapper,
+        },
     },
 };
 use warpui::{
@@ -36,8 +40,15 @@ use warpui::{
 use super::new_builder;
 
 /// Verifies that the active block is part of a remote session.
-fn assert_active_block_is_remote(user: &'static str, host: &'static str) -> AssertionCallback {
-    Box::new(move |app, window_id| {
+fn assert_active_block_is_remote(shell: &str) -> AssertionCallback {
+    let fixture = warp::integration_testing::subshell::util::ssh_fixture();
+    let user = fixture
+        .users
+        .get(shell)
+        .expect("Fixture shell user must exist")
+        .clone();
+    let host = fixture.hostname;
+    with_recent_ssh_output(Box::new(move |app, window_id| {
         let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
         terminal_view.read(app, |view, ctx| {
             let model = view.model.lock();
@@ -83,13 +94,13 @@ fn assert_active_block_is_remote(user: &'static str, host: &'static str) -> Asse
                 "Remote session did not have the expected host"
             )
         })
-    })
+    }))
 }
 
 /// Assertion that the MotD message is shown. How we expect it to be shown
 /// depends on whether or not the remote shell can be bootstrapped.
 fn assert_motd_shown(bootstrapped: bool) -> AssertionCallback {
-    let motd_regex = Regex::new("Welcome to Ubuntu").expect("Regex should compile");
+    let motd_regex = Regex::new("Zaplex isolated SSH login fixture").expect("Regex should compile");
     Box::new(move |app, window_id| {
         let terminal_view = single_terminal_view(app, window_id);
         terminal_view.read(app, |view, _| {
@@ -135,22 +146,21 @@ fn verify_login_shell(shell: &str) -> TestStep {
             command.into(),
             ExpectedExitStatus::Success,
             (),
-        )
-        .add_assertion(assert_motd_shown(true /* bootstrapped */)),
+        ),
         _ => {
             // For non-bootstrapped shells, run the command directly and verify
             // the exit status.
             let nonce = nonce();
             let expected_output = ExactLine::from(format!("{nonce}: 0"));
+            let exit_status = if shell == "fish" { "$status" } else { "$?" };
 
             TestStep::new("Verify login shell")
-                .with_typed_characters(&[&format!("{command}; echo \"{nonce}\": $?")])
+                .with_typed_characters(&[&format!("{command}; echo \"{nonce}\": {exit_status}")])
                 .with_keystrokes(&["enter"])
                 .add_assertion(assert_active_block_output_for_single_terminal_in_tab(
                     expected_output,
                     0,
                 ))
-                .add_assertion(assert_motd_shown(false /* bootstrapped */))
         }
     }
 }
@@ -172,7 +182,7 @@ macro_rules! generate_can_bootstrap_legacy_ssh_test_for_shell {
                     starter.shell_type() != ShellType::PowerShell
                 })
                 .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-                .with_step(setup_gcloud_sdk())
+                .with_step(setup_ssh_fixture())
                 .with_step(enter_ssh_command($shell))
                 .with_step(wait_for_password_prompt(0 /*tab_idx*/, $shell))
                 .with_step(
@@ -183,9 +193,12 @@ macro_rules! generate_can_bootstrap_legacy_ssh_test_for_shell {
                     new_step_with_default_assertions(
                         "Assert active block is part of a remote session",
                     )
-                    .add_assertion(assert_active_block_is_remote($shell, "ubuntu-14-04")),
+                    .add_assertion(assert_active_block_is_remote($shell)),
                 )
-                .with_step(verify_login_shell($shell))
+                .with_step(
+                    verify_login_shell($shell)
+                        .add_assertion(assert_motd_shown(true /* bootstrapped */)),
+                )
         }
     };
 }
@@ -205,7 +218,12 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
                         enter_ssh_password()
                             .set_post_step_pause(std::time::Duration::from_millis(250)),
                     )
-                    .with_step(assert_subshell_banner_is_showing())
+                    // Tmux bootstraps a subshell, whose RC files are not sourced again.
+                    // Login output belongs to this SSH block before the takeover.
+                    .with_step(
+                        assert_ssh_zaplexification_is_offered()
+                            .add_assertion(assert_motd_shown(false /* bootstrapped */)),
+                    )
                     .with_step(trigger_subshell_bootstrap())
             }
 
@@ -217,12 +235,16 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
                         new_step_with_default_assertions(
                             "Assert active block is part of a remote session",
                         )
-                        .add_assertion(assert_active_block_is_remote($shell, "ubuntu-14-04")),
+                        .add_assertion(assert_active_block_is_remote($shell)),
                     )
                     .with_step(verify_login_shell($shell))
             }
 
             let builder = new_builder()
+                .with_user_defaults(HashMap::from([(
+                    UseSshTmuxWrapper::storage_key().to_owned(),
+                    "true".to_owned(),
+                )]))
                 // TODO(CORE-2333) PowerShell has no SSH wrapper.
                 .set_should_run_test(|| {
                     if !FeatureFlag::SSHTmuxWrapper.is_enabled() {
@@ -232,13 +254,43 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
                     starter.shell_type() != ShellType::PowerShell
                 })
                 .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-                .with_step(setup_gcloud_sdk());
-            // Install Tmux
-            let builder = zaplexify(builder).with_step(
-                accept_tmux_install().set_post_step_pause(std::time::Duration::from_secs(3)),
-            );
+                .with_step(setup_ssh_fixture());
+            let builder = zaplexify(builder);
+            let builder = if $install_tmux {
+                builder.with_step(
+                    accept_tmux_install().set_post_step_pause(std::time::Duration::from_secs(3)),
+                )
+            } else {
+                builder
+            };
             // Quit SSH Session once we validate zaplexificaiton works with Tmux Install
-            let builder = assert_zaplexification(builder).with_step(run_exit_command());
+            let builder = assert_zaplexification(builder)
+                .with_step(run_exit_command())
+                // Exit only sends keystrokes. Wait for SSH teardown and the local editor
+                // before typing another command, otherwise it reaches the dying session.
+                .with_step(
+                    wait_until_bootstrapped_single_pane_for_tab(0)
+                        .add_named_assertion(
+                            "Active block returned to the local session",
+                            with_recent_ssh_output(Box::new(|app, window_id| {
+                                let terminal = single_terminal_view_for_tab(app, window_id, 0);
+                                terminal.read(app, |view, ctx| {
+                                    let model = view.model.lock();
+                                    let sessions = view.sessions(ctx);
+                                    async_assert!(
+                                        model
+                                            .block_list()
+                                            .active_block()
+                                            .session_id()
+                                            .and_then(|id| sessions.get(id))
+                                            .is_some_and(|session| session.is_local()),
+                                        "SSH exit has not restored the local session"
+                                    )
+                                })
+                            })),
+                        )
+                        .add_assertion(assert_focused_editor_in_tab(0)),
+                );
 
             // Validate we can Zaplexify when Tmux is already installed
             assert_zaplexification(zaplexify(builder))
@@ -252,7 +304,7 @@ macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
 /// there is still a long-running block after entering the password, and that
 /// attempting to run `exit` returns us to the bootstrapped local shell.
 macro_rules! generate_long_running_block_ssh_test_for_shell {
-    ($fn_name:ident, $shell:literal, prompt_regex: $prompt_regex:literal) => {
+    ($fn_name:ident, $shell:literal, prompt_regex: $prompt_regex:expr) => {
         /// Ensure we can successfully ssh into a $shell remote shell and bootstrap it
         /// successfully.
         pub fn $fn_name() -> Builder {
@@ -263,28 +315,53 @@ macro_rules! generate_long_running_block_ssh_test_for_shell {
                     starter.shell_type() != ShellType::PowerShell
                 })
                 .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-                .with_step(setup_gcloud_sdk())
-                .with_step(enter_ssh_command($shell))
+                .with_step(setup_ssh_fixture())
+                // Fish is a raw SSH login test; the Bash wrapper's injected
+                // POSIX bootstrap is not a Fish program.
+                .with_step(if $shell == "fish" {
+                    enter_remote_subshell_command($shell)
+                } else {
+                    enter_ssh_command($shell)
+                })
                 .with_step(wait_for_password_prompt(0 /*tab_idx*/, $shell))
                 .with_step(enter_ssh_password())
                 .with_step(
                     TestStep::new("Assert prompt is awaiting input")
                         .add_assertion(
-                            assert_long_running_block_executing_for_single_terminal_in_tab(true, 0),
+                            with_recent_ssh_output(
+                                assert_long_running_block_executing_for_single_terminal_in_tab(true, 0),
+                            ),
                         )
                         .add_assertion(move |app, window_id| {
-                            let regex = Regex::new($prompt_regex)
-                                .expect("regex should not fail to compile");
+                            let pattern = $prompt_regex;
+                            let regex =
+                                Regex::new(&pattern).expect("regex should not fail to compile");
                             validate_block_output(&regex, 0, 0, window_id, app)
                         }),
                 )
-                .with_step(verify_login_shell($shell))
+                .with_step(
+                    verify_login_shell($shell)
+                        .add_assertion(assert_motd_shown(false /* bootstrapped */)),
+                )
                 .with_step(TestStep::new("Exit ssh session").with_typed_characters(&["exit\n"]))
                 .with_step(new_step_with_default_assertions(
                     "Assert ssh session has completed",
                 ))
         }
     };
+}
+
+fn fish_prompt_regex() -> String {
+    let fixture = warp::integration_testing::subshell::util::ssh_fixture();
+    let user = fixture
+        .users
+        .get("fish")
+        .expect("Fixture fish user must exist");
+    format!(
+        r"\n{}@{} ~> $",
+        regex::escape(user),
+        regex::escape(&fixture.hostname)
+    )
 }
 
 // Generate test methods to validate expected ssh behavior for a variety of
@@ -295,14 +372,14 @@ generate_can_bootstrap_tmux_ssh_test_for_shell!(test_tmux_ssh_into_bash, "bash",
 generate_can_bootstrap_tmux_ssh_test_for_shell!(test_tmux_ssh_into_zsh, "zsh", false);
 generate_can_bootstrap_tmux_ssh_test_for_shell!(test_install_tmux_ssh_into_bash, "bash", true);
 generate_can_bootstrap_tmux_ssh_test_for_shell!(test_install_tmux_ssh_into_zsh, "zsh", true);
-generate_long_running_block_ssh_test_for_shell!(test_ssh_into_fish, "fish", prompt_regex: r"\nfish@ubuntu-14-04 ~>$");
+generate_long_running_block_ssh_test_for_shell!(test_ssh_into_fish, "fish", prompt_regex: fish_prompt_regex());
 generate_long_running_block_ssh_test_for_shell!(test_ssh_into_sh, "sh", prompt_regex: r"\n\$ $");
 generate_long_running_block_ssh_test_for_shell!(test_ssh_into_ash, "ash", prompt_regex: r"\n\$ $");
 
 /// Tests a regression with the startup shell setting and SSH proxies.
 /// See WAR-6337 for details - if `$SHELL` is not set to a valid executable file
 /// path, SSH fails to execute proxy commands (like the one this test uses for
-/// gcloud).
+/// the isolated loopback fixture).
 pub fn test_ssh_with_shell_override() -> Builder {
     new_builder()
         // TODO(CORE-2333) PowerShell has no SSH wrapper.
@@ -310,19 +387,31 @@ pub fn test_ssh_with_shell_override() -> Builder {
             let (starter, _) = current_shell_starter_and_version();
             starter.shell_type() != ShellType::PowerShell
         })
-        .with_user_defaults(HashMap::from([(
-            StartupShellOverride::storage_key().to_owned(),
-            serde_json::to_string(&StartupShell::Zsh).expect("Can serialize setting as JSON"),
-        )]))
+        // This fixture exercises the classic SSH wrapper through a real ProxyCommand.
+        // No daemon is installed; explicitly choose its supported legacy fallback.
+        .with_user_defaults(HashMap::from([
+            (
+                StartupShellOverride::storage_key().to_owned(),
+                serde_json::to_string(&StartupShell::Zsh).expect("Can serialize setting as JSON"),
+            ),
+            (
+                SshExtensionInstallModeSetting::storage_key().to_owned(),
+                serde_json::to_string(&SshExtensionInstallMode::NeverInstall)
+                    .expect("Can serialize setting as JSON"),
+            ),
+        ]))
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(setup_gcloud_sdk())
+        .with_step(setup_ssh_fixture())
         .with_step(enter_ssh_command("bash"))
         .with_step(wait_for_password_prompt(0, "bash"))
         .with_step(enter_ssh_password())
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(
             new_step_with_default_assertions("Assert active block is part of a remote session")
-                .add_assertion(assert_active_block_is_remote("bash", "ubuntu-14-04")),
+                .add_assertion(assert_active_block_is_remote("bash")),
         )
-        .with_step(verify_login_shell("bash"))
+        .with_step(
+            verify_login_shell("bash")
+                .add_assertion(assert_motd_shown(true /* bootstrapped */)),
+        )
 }

@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# Real Linux daemon/PTY acceptance using binaries already built by workspace CI.
+# This is separate from the measured Rust suite and from native macOS acceptance.
+set -euo pipefail
+
+if [[ "${GITHUB_ACTIONS:-}" != true || "${RUNNER_OS:-}" != Linux ]]; then
+  echo "This fixture may only run on an isolated Linux GitHub Actions runner." >&2
+  exit 2
+fi
+: "${RUNNER_TEMP:?GitHub runner temporary directory is required}"
+: "${GITHUB_SHA:?Source revision is required}"
+target_dir="${CARGO_LLVM_COV_TARGET_DIR:?Existing coverage target is required}"
+binary="${target_dir}/debug/zaplex"
+integration_binary="${target_dir}/debug/integration"
+for executable in "$binary" "$integration_binary"; do
+  if [[ ! -x "$executable" ]]; then
+    echo "Required existing executable is missing: $executable (no replacement build)." >&2
+    exit 1
+  fi
+done
+
+output="${RUNNER_TEMP}/daemon-terminal-acceptance"
+mkdir -p "$output/profiles"
+touch "$output/sshd.log"
+fixture_root="$(mktemp -d /tmp/zpd-XXXXXXXX)"
+fixture_user="zpd$(basename "$fixture_root" | cut -c5- | tr '[:upper:]' '[:lower:]')"
+fixture_home="$fixture_root/home"
+fixture_uid=""
+sshd_pid=""
+cleanup() {
+  result=$?
+  trap - EXIT
+  if [[ -n "$fixture_uid" ]]; then
+    # Only processes belonging to the dedicated account created by this run.
+    sudo pkill -TERM -u "$fixture_uid" 2>/dev/null || true
+  fi
+  if [[ -n "$sshd_pid" ]]; then
+    sudo kill "$sshd_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$fixture_uid" ]]; then
+    sudo pkill -KILL -u "$fixture_uid" 2>/dev/null || true
+    sudo userdel "$fixture_user" || true
+  fi
+  # Keep the daemon's own logs and profiles; the fixture home is deleted below.
+  if [[ -d "$fixture_home" ]]; then
+    mkdir -p "$output/daemon"
+    sudo find "$fixture_home" -type f \( -name '*.log' -o -name '*.log.*' -o -name '*.profraw' \) \
+      -exec cp --backup=numbered -t "$output/daemon" {} + 2>/dev/null || true
+    sudo chown -R "$(id -u):$(id -g)" "$output/daemon" 2>/dev/null || true
+  fi
+  sudo rm -rf -- "$fixture_root"
+  exit "$result"
+}
+trap cleanup EXIT
+
+sudo apt-get update
+sudo apt-get install --yes --no-install-recommends openssh-server acl
+# A separate passwd home is essential: setting the client's HOME does not
+# change the home used by sshd on the server side.
+sudo useradd --no-create-home --home-dir "$fixture_home" --shell /bin/bash "$fixture_user"
+fixture_uid="$(id -u "$fixture_user")"
+# Debug builds read rust-embed assets from the checkout at runtime (release
+# bundles embed them). Grant the fixture user exactly those folders; without
+# this the daemon panics loading its shell bootstrap script.
+workspace="${GITHUB_WORKSPACE:?Checkout directory is required}"
+dir="$workspace/app"
+while [[ "$dir" != / ]]; do
+  sudo setfacl -m "u:$fixture_user:x" "$dir"
+  dir="$(dirname "$dir")"
+done
+for assets in app/assets app/i18n; do
+  sudo setfacl -R -m "u:$fixture_user:rX" "$workspace/$assets"
+done
+fixture_password="$(openssl rand -hex 32)"
+printf '%s:%s\n' "$fixture_user" "$fixture_password" | sudo chpasswd
+unset fixture_password
+chmod 711 "$fixture_root"
+mkdir -m 700 "$fixture_root/runtime"
+export XDG_RUNTIME_DIR="$fixture_root/runtime"
+sudo install -d -m 700 -o "$fixture_user" -g "$fixture_user" "$fixture_home"
+ssh-keygen -q -t ed25519 -N '' -f "$fixture_root/client-key"
+ssh-keygen -q -t ed25519 -N '' -f "$fixture_root/host-key"
+sudo install -m 600 -o "$fixture_user" -g "$fixture_user" "$fixture_root/client-key.pub" "$fixture_home/authorized_keys"
+port="$(python3 - <<'PY'
+import socket
+with socket.socket() as server:
+    server.bind(('127.0.0.1', 0))
+    print(server.getsockname()[1])
+PY
+)"
+printf '[127.0.0.1]:%s %s\n' "$port" "$(cat "$fixture_root/host-key.pub")" > "$fixture_root/known_hosts"
+cat > "$fixture_root/sshd_config" <<CONFIG
+Port $port
+ListenAddress 127.0.0.1
+HostKey $fixture_root/host-key
+PidFile $fixture_root/sshd.pid
+AuthorizedKeysFile $fixture_home/authorized_keys
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+UsePAM no
+PermitRootLogin no
+AllowUsers $fixture_user
+AllowAgentForwarding no
+X11Forwarding no
+Subsystem sftp internal-sftp
+SetEnv LLVM_PROFILE_FILE=$fixture_home/daemon-%p-%m.profraw
+LogLevel VERBOSE
+CONFIG
+sudo mkdir -p /run/sshd
+sudo /usr/sbin/sshd -t -f "$fixture_root/sshd_config"
+sudo /usr/sbin/sshd -E "$output/sshd.log" -f "$fixture_root/sshd_config"
+sshd_pid="$(sudo cat "$fixture_root/sshd.pid")"
+ssh -i "$fixture_root/client-key" -p "$port" \
+  -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+  -o "UserKnownHostsFile=$fixture_root/known_hosts" -o ConnectTimeout=10 \
+  "$fixture_user@127.0.0.1" true
+
+fingerprint="$(ssh-keygen -lf "$fixture_root/host-key.pub" -E sha256 | awk '{print $2}')"
+python3 - "$fixture_root" "$fixture_user" "$fixture_home" "$port" "$fingerprint" "$binary" "$integration_binary" "$output" <<'PY'
+import hashlib, json, os, pathlib, sys
+root, user, home, port, fingerprint, binary, integration, output = sys.argv[1:]
+def digest(path):
+    with open(path, 'rb') as source:
+        sha = hashlib.sha256()
+        for chunk in iter(lambda: source.read(1024 * 1024), b''):
+            sha.update(chunk)
+        return sha.hexdigest()
+config = {'username': user, 'remote_home': home, 'port': int(port), 'fingerprint': fingerprint,
+          'binary': binary, 'binary_sha256': digest(binary), 'key_path': root + '/client-key',
+          'known_hosts': root + '/known_hosts'}
+pathlib.Path(root, 'fixture.json').write_text(json.dumps(config))
+evidence = {'commit': os.environ['GITHUB_SHA'], 'run_id': os.environ['GITHUB_RUN_ID'],
+            'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'platform': 'Linux isolated runner',
+            'scope': 'real SSH daemon bootstrap, completion and same-PTY reattach; not macOS or user-host acceptance',
+            'binaries': {path: digest(path) for path in (binary, integration)},
+            'rust_suite_membership': False, 'replacement_build': False,
+            'host_key_fingerprint': fingerprint}
+pathlib.Path(output, 'provenance.json').write_text(json.dumps(evidence, indent=2) + '\n')
+PY
+export ZAPLEX_DAEMON_ACCEPTANCE_CONFIG="$fixture_root/fixture.json"
+export ZAPLEX_DAEMON_ACCEPTANCE_OUTPUT="$output"
+export ZAPLEX_INTEGRATION_TEST_ARTIFACTS_DIR="$output"
+export ZAPLEX_SHELL_PATH=/bin/bash
+export ZAPLEX_INTEGRATION=1
+export WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS=1
+# Keep these additional native/daemon observations out of the completed baseline.
+export LLVM_PROFILE_FILE="$output/profiles/client-%p-%m.profraw"
+xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' \
+  timeout --signal=TERM --kill-after=15s 300s \
+  "$integration_binary" test_daemon_terminal_acceptance 2>&1 | tee "$output/integration.log"
+python3 - "$output" <<'PY'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+observations = json.loads((root / 'observations.json').read_text())
+assert observations['pty_generation'] > 0 and observations['pty_id']
+assert observations['remote_file_manager']['shell_reported_cwd'].endswith("/acceptance/projects/FM space's directory")
+captures = {}
+for name in ('linux-daemon-tab-completion.png', 'linux-daemon-ghost-text.png', 'linux-daemon-reattached.png', 'linux-daemon-remote-file-manager.png'):
+    paths = list(root.rglob(name))
+    assert len(paths) == 1, f'Expected exactly one native capture: {name}'
+    data = paths[0].read_bytes()
+    assert data.startswith(b'\x89PNG\r\n\x1a\n') and len(data) > 100, f'Missing native capture: {name}'
+    captures[name] = hashlib.sha256(data).hexdigest()
+(root / 'captures.json').write_text(json.dumps(captures, indent=2) + '\n')
+PY

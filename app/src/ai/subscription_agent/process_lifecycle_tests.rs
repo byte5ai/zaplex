@@ -3,8 +3,8 @@ use super::*;
 #[cfg(unix)]
 use crate::ai::subscription_agent::{
     AccountIdentity, ApprovalDecision, HostIdentity, InstallationIdentity, ModelCapability,
-    SessionIdentity, SubscriptionAgent, SubscriptionEvent, SubscriptionSession, SubscriptionTarget,
-    Usage,
+    SessionIdentity, SubscriptionAgent, SubscriptionEvent, SubscriptionPrompt, SubscriptionSession,
+    SubscriptionTarget, Usage,
 };
 
 #[cfg(unix)]
@@ -203,7 +203,7 @@ cat >/dev/null
         let mut session = SubscriptionSession::open_with_launch(target, None, launch)
             .await
             .unwrap();
-        session.send_prompt("Hello").await.unwrap();
+        session.send_prompt(&"Hello".into()).await.unwrap();
 
         assert_eq!(
             session.next_event().await.unwrap(),
@@ -303,7 +303,7 @@ cat >/dev/null
                 .await
                 .unwrap();
         assert_eq!(session.identity(), Some(&resume));
-        session.send_prompt("Continue").await.unwrap();
+        session.send_prompt(&"Continue".into()).await.unwrap();
         assert_eq!(
             session.next_event().await.unwrap(),
             Some(SubscriptionEvent::SessionStarted(resume.clone()))
@@ -356,7 +356,7 @@ exit 17
         let mut session = SubscriptionSession::open(target, None, ProcessLocation::Local)
             .await
             .unwrap();
-        session.send_prompt("Crash").await.unwrap();
+        session.send_prompt(&"Crash".into()).await.unwrap();
         assert_eq!(
             session.next_event().await.unwrap(),
             Some(SubscriptionEvent::SessionStarted(
@@ -445,7 +445,7 @@ exec /bin/sh -c "$last"
         )
         .await
         .unwrap();
-        session.send_prompt("Run remotely").await.unwrap();
+        session.send_prompt(&"Run remotely".into()).await.unwrap();
 
         assert_eq!(
             session.next_event().await.unwrap(),
@@ -571,7 +571,7 @@ exec /bin/sh -c "$last"
         .await
         .unwrap();
         assert_eq!(session.identity(), Some(&resume));
-        session.send_prompt("Continue").await.unwrap();
+        session.send_prompt(&"Continue".into()).await.unwrap();
         assert_eq!(
             session.next_event().await.unwrap(),
             Some(SubscriptionEvent::ReasoningDelta("Inspecting".to_string()))
@@ -691,7 +691,7 @@ cat >/dev/null
             session.identity(),
             Some(&SessionIdentity::Codex("codex-local-thread".to_string()))
         );
-        session.send_prompt("Run locally").await.unwrap();
+        session.send_prompt(&"Run locally".into()).await.unwrap();
 
         assert_eq!(
             session.next_event().await.unwrap(),
@@ -763,7 +763,7 @@ cat >/dev/null
         let mut session = SubscriptionSession::open(target, None, ProcessLocation::Local)
             .await
             .unwrap();
-        session.send_prompt("Run").await.unwrap();
+        session.send_prompt(&"Run".into()).await.unwrap();
 
         let event = session
             .next_event()
@@ -869,5 +869,97 @@ cat >/dev/null
             error.to_string(),
             "Codex account verification (upgrade Codex if unavailable) failed: method not found"
         );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+#[serial_test::serial]
+fn read_only_and_plan_sessions_deny_unexpected_write_and_external_tool_approvals() {
+    futures_lite::future::block_on(async {
+        for plan_mode in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let executable = directory.path().join("fake-read-only-claude");
+            let responses = directory.path().join("denied-approvals");
+            let script = r#"
+IFS= read -r initialize
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"zaplex-session-initialize","response":{"account":{"accountUuid":"claude-account-42","email":"developer@example.com"},"models":[{"value":"default","displayName":"Default"}]}}}'
+IFS= read -r prompt
+printf '%s\n' '{"type":"control_request","request_id":"write-1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"must-not-write","content":"mutation"}}}'
+IFS= read -r approval
+printf '%s\n' "$approval" >> __RESPONSES__
+printf '%s\n' '{"type":"control_request","request_id":"mcp-1","request":{"subtype":"can_use_tool","tool_name":"mcp__external__mutate","input":{}}}'
+IFS= read -r approval
+printf '%s\n' "$approval" >> __RESPONSES__
+printf '%s\n' '{"type":"result","session_id":"read-only-session","is_error":false}'
+cat >/dev/null
+"#
+        .replace("__RESPONSES__", &shell_quote(&responses));
+            write_executable(&executable, &script);
+            let mut target = subscription_target(
+                SubscriptionAgent::ClaudeCode,
+                executable,
+                directory.path().to_path_buf(),
+                directory.path().to_path_buf(),
+            );
+            target.installation.version = "2.1.212 (Claude Code)".to_string();
+            let prompt = SubscriptionPrompt {
+                query: "Inspect the diff".to_string(),
+                plan_mode,
+                ..Default::default()
+            };
+            let mut session = if plan_mode {
+                SubscriptionSession::open_for_prompt(
+                    target,
+                    Some(SessionIdentity::ClaudeCode("read-only-session".to_string())),
+                    ProcessLocation::Local,
+                    &prompt,
+                )
+                .await
+                .unwrap()
+            } else {
+                SubscriptionSession::open_read_only(target, ProcessLocation::Local)
+                    .await
+                    .unwrap()
+            };
+            if plan_mode {
+                assert!(session
+                    .send_prompt(&"ordinary prompt".into())
+                    .await
+                    .is_err());
+                assert_eq!(
+                    session.identity(),
+                    Some(&SessionIdentity::ClaudeCode(
+                        "read-only-session".to_string()
+                    ))
+                );
+            }
+            session.send_prompt(&prompt).await.unwrap();
+
+            let event = session
+                .next_event()
+                .with_timeout(Duration::from_secs(3))
+                .await
+                .expect("unexpected tool approvals must be denied without waiting for a user")
+                .unwrap();
+            assert_eq!(
+                event,
+                Some(SubscriptionEvent::TurnCompleted {
+                    session: SessionIdentity::ClaudeCode("read-only-session".to_string()),
+                })
+            );
+            session.end().await.unwrap();
+            let responses = std::fs::read_to_string(responses).unwrap();
+            let frames = responses
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(frames.len(), 2);
+            for (frame, expected_id) in frames.iter().zip(["write-1", "mcp-1"]) {
+                assert_eq!(frame["response"]["request_id"], expected_id);
+                assert_eq!(frame["response"]["response"]["behavior"], "deny");
+            }
+            assert!(!directory.path().join("must-not-write").exists());
+        }
     });
 }

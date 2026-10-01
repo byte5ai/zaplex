@@ -11,6 +11,8 @@ use warpui::{notification::UserNotification, Presenter, WindowInvalidation};
 
 use crate::ai::agent::task::TaskId;
 use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
+#[cfg(all(feature = "local_tty", feature = "local_fs"))]
+use warpui::r#async::FutureExt;
 use warpui::App;
 
 use crate::pane_group::focus_state::PaneGroupFocusState;
@@ -46,16 +48,100 @@ use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::view_components::find::FindWithinBlockState;
 
-use crate::terminal::model::ansi::{self, InitShellValue};
+use crate::terminal::model::ansi::{self, InitShellValue, PrecmdValue};
 use crate::terminal::model::ansi::{BootstrappedValue, PreexecValue};
 use crate::terminal::model::blocks::{insert_block, TotalIndex};
-use crate::terminal::model::terminal_model::WithinBlock;
+use crate::terminal::model::session::SessionInfo;
+use crate::terminal::model::terminal_model::{SubshellInitializationInfo, WithinBlock};
 
 use crate::terminal::{MockTerminalManager, TerminalManager, TerminalModel};
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::test_util::{add_window_with_terminal, assert_eventually};
 
 use super::*;
+
+#[test]
+fn running_command_keeps_host_identity_in_pane_chrome() {
+    crate::i18n::init(Some("en"));
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "running");
+            view.terminal_title = "sleep 10".to_string();
+            for host in ["buildnode", "worknode"] {
+                view.pane_configuration.update(ctx, |config, ctx| {
+                    config.set_terminal_identity_host(Some(host.to_string()), ctx);
+                });
+                view.update_pane_configuration(ctx);
+                let config = view.pane_configuration.as_ref(ctx);
+                assert!(config.title().starts_with(&format!("{host} · ")));
+                assert!(!config.title().contains("sleep 10"));
+                if view.display_working_directory(ctx).is_none() {
+                    assert_eq!(
+                        config.title(),
+                        format!("{host} · {}", crate::t!("workspace-new-session-terminal"))
+                    );
+                }
+                assert!(config
+                    .title_tooltip()
+                    .is_some_and(|title| title.starts_with(&format!("{host} · "))));
+                assert!(!view.is_using_conversation_for_pane_header_title);
+            }
+        });
+    });
+}
+
+#[test]
+fn cli_agent_summary_does_not_replace_terminal_host_identity() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let listener = ctx.add_model(|ctx| {
+                CLIAgentSessionListener::new(
+                    view.view_id,
+                    CLIAgent::Claude,
+                    &view.model_events_handle,
+                    ctx,
+                )
+            });
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.set_session(
+                    view.view_id,
+                    CLIAgentSession {
+                        agent: CLIAgent::Claude,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext {
+                            summary: Some("Account setup".to_string()),
+                            ..Default::default()
+                        },
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input: false,
+                        listener: Some(listener),
+                        remote_host: Some("buildnode".to_string()),
+                        plugin_version: None,
+                        draft_text: None,
+                        custom_command_prefix: None,
+                    },
+                    ctx,
+                );
+            });
+            view.pane_configuration.update(ctx, |config, ctx| {
+                config.set_terminal_identity_host(Some("buildnode".to_string()), ctx);
+            });
+            view.update_pane_configuration(ctx);
+            assert!(view
+                .pane_configuration
+                .as_ref(ctx)
+                .title()
+                .starts_with("buildnode · "));
+        });
+    });
+}
 
 #[test]
 fn classic_ssh_phase_updates_are_allowed_only_while_unbound() {
@@ -98,15 +184,42 @@ fn only_remote_terminal_draft_changes_request_a_snapshot() {
 }
 
 #[test]
-fn only_failed_remote_readiness_exposes_retry_actions() {
-    assert!(remote_readiness_actions_visible(RemoteInputPhase::Failed));
-    assert!(!remote_readiness_actions_visible(
-        RemoteInputPhase::Cancelled
+fn failed_and_cancelled_remote_readiness_expose_retry_actions() {
+    assert!(remote_readiness_retry_visible(
+        RemoteInputPhase::Failed,
+        true
     ));
-    assert!(!remote_readiness_actions_visible(
-        RemoteInputPhase::Transport
+    assert!(remote_readiness_retry_visible(
+        RemoteInputPhase::Cancelled,
+        true
     ));
-    assert!(!remote_readiness_actions_visible(RemoteInputPhase::Corrupt));
+    assert!(!remote_readiness_retry_visible(
+        RemoteInputPhase::Transport,
+        true
+    ));
+    assert!(!remote_readiness_retry_visible(
+        RemoteInputPhase::Corrupt,
+        true
+    ));
+}
+
+#[test]
+fn pending_remote_attach_can_be_cancelled_without_exposing_retry() {
+    for phase in [
+        RemoteInputPhase::Transport,
+        RemoteInputPhase::Attach,
+        RemoteInputPhase::Replay,
+    ] {
+        assert!(remote_readiness_cancel_visible(phase, true));
+        assert!(!remote_readiness_retry_visible(phase, true));
+    }
+    for phase in [
+        RemoteInputPhase::Ready,
+        RemoteInputPhase::Cancelled,
+        RemoteInputPhase::Corrupt,
+    ] {
+        assert!(!remote_readiness_cancel_visible(phase, true));
+    }
 }
 
 #[test]
@@ -133,6 +246,102 @@ fn corrupt_remote_restore_is_terminal_and_never_reenables_normal_input() {
             assert_eq!(view.remote_input_session_id(), None);
             assert!(!view.remote_input_is_ready());
             assert!(!view.input.as_ref(ctx).ordinary_command_input_is_ready());
+        });
+    });
+}
+
+#[test]
+fn remote_readiness_footer_names_reconnects_after_initial_readiness() {
+    crate::i18n::init(Some("en"));
+    for phase in [
+        RemoteInputPhase::Transport,
+        RemoteInputPhase::Attach,
+        RemoteInputPhase::Replay,
+    ] {
+        assert_eq!(
+            remote_readiness_message(phase, true),
+            Some(crate::t!("terminal-remote-readiness-reconnecting")),
+        );
+        assert_ne!(
+            remote_readiness_message(phase, false),
+            Some(crate::t!("terminal-remote-readiness-reconnecting")),
+        );
+    }
+    assert_eq!(
+        remote_readiness_message(RemoteInputPhase::Failed, true),
+        Some(crate::t!("terminal-remote-readiness-failed")),
+    );
+    assert_eq!(
+        remote_readiness_message(RemoteInputPhase::Ready, true),
+        None
+    );
+}
+
+#[test]
+fn remote_session_notice_replaces_older_notice_and_clears_on_reconnect() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let connection_session_id = warp_core::SessionId::from(74u64);
+        let stale_session_id = warp_core::SessionId::from(75u64);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(RemoteInputPhase::Ready, Some(connection_session_id), ctx);
+            view.show_remote_session_notice("first".to_string(), Some(connection_session_id), ctx);
+            view.show_remote_session_notice("second".to_string(), Some(connection_session_id), ctx);
+            view.show_remote_session_notice("stale".to_string(), Some(stale_session_id), ctx);
+        });
+        terminal.read(&app, |view, _| {
+            assert_eq!(view.remote_session_notice(), Some("second"));
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(
+                RemoteInputPhase::Transport,
+                Some(connection_session_id),
+                ctx,
+            );
+        });
+        terminal.read(&app, |view, _| {
+            assert_eq!(view.remote_session_notice(), None);
+        });
+    });
+}
+
+#[test]
+fn remote_session_notice_failure_detail_survives_failure_and_rejects_stale_updates() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let session = warp_core::SessionId::from(76u64);
+        let stale = warp_core::SessionId::from(77u64);
+        terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(RemoteInputPhase::Transport, Some(session), ctx);
+            view.show_remote_session_notice("installing".to_string(), Some(session), ctx);
+            view.show_remote_session_error("connection timed out".to_string(), Some(session), ctx);
+            view.set_remote_input_phase(RemoteInputPhase::Failed, Some(session), ctx);
+            view.show_remote_session_error("stale error".to_string(), Some(stale), ctx);
+            view.show_remote_session_notice("late success".to_string(), Some(session), ctx);
+        });
+        terminal.read(&app, |view, _| {
+            assert_eq!(
+                view.remote_session_error.as_deref(),
+                Some("connection timed out")
+            );
+            assert_eq!(view.remote_session_notice(), None);
+            assert!(remote_readiness_retry_visible(
+                view.remote_input_phase.unwrap(),
+                true
+            ));
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.cancel_remote_input_readiness(ctx);
+            view.show_remote_session_error("late error".to_string(), Some(session), ctx);
+            view.show_remote_session_notice("late success".to_string(), Some(session), ctx);
+        });
+        terminal.read(&app, |view, _| {
+            assert!(view.remote_session_error.is_none());
+            assert_eq!(view.remote_session_notice(), None);
         });
     });
 }
@@ -3731,9 +3940,12 @@ fn cli_agent_rich_input_hint_text_mentions_active_cli_agent() {
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         for (agent, expected_hint_text) in [
-            (CLIAgent::Claude, "Enter prompt for Claude Code..."),
-            (CLIAgent::Gemini, "Enter prompt for Gemini..."),
-            (CLIAgent::Codex, "Enter prompt for Codex..."),
+            (
+                CLIAgent::Claude,
+                "Enter prompt for \u{2068}Claude Code\u{2069}...",
+            ),
+            (CLIAgent::Gemini, "Enter prompt for \u{2068}Gemini\u{2069}..."),
+            (CLIAgent::Codex, "Enter prompt for \u{2068}Codex\u{2069}..."),
             (CLIAgent::Unknown, "Tell the agent what to build..."),
         ] {
             let terminal = open_cli_agent_rich_input_for_agent(&mut app, agent);
@@ -4881,12 +5093,18 @@ fn onekey_query_no_match_returns_no_matches() {
 
 #[test]
 fn onekey_query_matches_chinese_characters() {
-    // Chinese character sequence matching: skim algorithm processes by Unicode char.
+    // Match Unicode label characters while excluding a different Unicode label.
     let candidates = vec![
-        ("production-database", "ops@db.example.com:22"),
-        ("test-server", "qa@test.example.com:22"),
+        (
+            "\u{751f}\u{4ea7}\u{6570}\u{636e}\u{5e93}",
+            "ops@db.example.com:22",
+        ),
+        (
+            "\u{6d4b}\u{8bd5}\u{670d}\u{52a1}\u{5668}",
+            "qa@test.example.com:22",
+        ),
     ];
-    let result = filter_and_sort_onekey_candidates(candidates.iter().copied(), "prod");
+    let result = filter_and_sort_onekey_candidates(candidates.iter().copied(), "\u{751f}\u{4ea7}");
     let indices = rows_indices(result);
     assert_eq!(indices, vec![0]);
 }
@@ -4944,4 +5162,747 @@ fn file_manager_start_path_falls_back_when_no_cwd() {
         dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"))
     );
     assert!(start.is_absolute());
+}
+
+#[test]
+fn file_manager_directory_quotes_literal_paths_for_each_shell() {
+    let path = PathBuf::from("/tmp/a'b $(touch nope) [x]");
+    for shell in [ShellType::Bash, ShellType::Zsh] {
+        let command = file_manager_directory_command(&path, shell).unwrap();
+        assert_eq!(
+            shell_words::split(&command).unwrap(),
+            ["cd", "--", path.to_str().unwrap()]
+        );
+    }
+    assert_eq!(
+        file_manager_directory_command(Path::new(r"/tmp/a\\b'c\"), ShellType::Fish).unwrap(),
+        r"cd -- '/tmp/a\\\\b\'c\\'"
+    );
+    assert_eq!(
+        file_manager_directory_command(&path, ShellType::PowerShell).unwrap(),
+        "Set-Location -LiteralPath '/tmp/a''b $(touch nope) [x]'"
+    );
+    for quote in ['\u{2018}', '\u{2019}', '\u{201a}', '\u{201b}'] {
+        let path = format!("/tmp/x{quote}; echo injected; {quote}");
+        assert_eq!(
+            file_manager_directory_command(Path::new(&path), ShellType::PowerShell).unwrap(),
+            format!(
+                "Set-Location -LiteralPath '/tmp/x{quote}{quote}; echo injected; {quote}{quote}'"
+            )
+        );
+    }
+    for path in ["/tmp/a\nb", "/tmp/a\rb", "/tmp/a\0b", ""] {
+        assert!(file_manager_directory_command(Path::new(path), ShellType::Bash).is_none());
+    }
+}
+
+#[test]
+fn file_manager_directory_discards_changed_session_and_superseded_navigation() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.file_manager_origin = Some(FileManagerOrigin::Session {
+                id: SessionId::from(u64::MAX),
+                directory: None,
+            });
+            view.pending_file_manager_directory = Some(PathBuf::from("/remote/only"));
+            view.apply_file_manager_directory(ctx);
+            assert!(view.pending_file_manager_directory.is_none());
+            view.pending_file_manager_directory = Some(PathBuf::from("/old/navigation"));
+            view.begin_file_manager_navigation(true, ctx);
+            assert!(view.pending_file_manager_directory.is_none());
+            view.finish_file_manager_navigation(None, ctx);
+            assert!(view.pending_file_manager_directory.is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_restore_never_binds_remote_paths_to_bootstrap_shell() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_file_manager_navigation(false, ctx);
+            view.finish_file_manager_navigation(Some(PathBuf::from("/remote/project")), ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Restoring { is_local: false })
+            ));
+            assert_eq!(
+                view.pending_file_manager_directory.as_deref(),
+                Some(Path::new("/remote/project"))
+            );
+            view.remote_input_phase = Some(RemoteInputPhase::Failed);
+            view.apply_file_manager_directory(ctx);
+            assert!(view.file_manager_origin.is_none());
+            assert!(view.pending_file_manager_directory.is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_restore_is_superseded_by_another_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_file_manager_navigation(false, ctx);
+            view.finish_file_manager_navigation(Some(PathBuf::from("/old/remote")), ctx);
+            view.handle_input_event(
+                &InputEvent::ExecuteCommand(Box::new(ExecuteCommandEvent {
+                    command: "echo newer intent".to_string(),
+                    session_id: SessionId::from(0u64),
+                    workflow_id: None,
+                    workflow_command: None,
+                    should_add_command_to_history: true,
+                    source: CommandExecutionSource::User,
+                })),
+                ctx,
+            );
+            assert!(view.file_manager_origin.is_none());
+            assert!(view.pending_file_manager_directory.is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_binds_only_matching_root_session() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let root = SessionId::from(900u64);
+            let nested = SessionId::from(901u64);
+            let legacy = SessionId::from(904u64);
+            let connection = SessionId::from((1u64 << 63) + 900);
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(root)
+                        .with_session_type(BootstrapSessionType::ZaplexifiedRemote),
+                );
+                let mut info = SessionInfo::new_for_test()
+                    .with_id(nested)
+                    .with_session_type(BootstrapSessionType::ZaplexifiedRemote);
+                info.subshell_info = Some(SubshellInitializationInfo {
+                    spawning_command: "ssh nested-host".to_string(),
+                    was_triggered_by_rc_file_snippet: false,
+                    env_var_collection_name: None,
+                    ssh_connection_info: None,
+                });
+                sessions.register_session_for_test(info);
+                // Legacy SSH is independently excluded even without subshell metadata.
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(legacy)
+                        .with_ssh_socket_path(PathBuf::from("/mock/ssh.socket")),
+                );
+            });
+            assert_ne!(connection, root);
+            view.remote_input_session_id = Some(connection);
+            view.remote_input_phase = Some(RemoteInputPhase::Ready);
+            view.is_login_shell_bootstrapped = true;
+            view.active_block_metadata = Some(BlockMetadata::new(Some(nested), None));
+            view.begin_file_manager_navigation(false, ctx);
+            assert!(view.file_manager_origin.is_none());
+            view.begin_file_manager_navigation(true, ctx);
+            assert!(view.file_manager_origin.is_none());
+            view.restore_file_manager_navigation(false, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Restoring { .. })
+            ));
+
+            view.active_block_metadata = Some(BlockMetadata::new(Some(legacy), None));
+            view.begin_file_manager_navigation(false, ctx);
+            assert!(view.file_manager_origin.is_none());
+            view.restore_file_manager_navigation(false, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Restoring { .. })
+            ));
+
+            view.active_block_metadata = Some(BlockMetadata::new(Some(root), None));
+            view.begin_file_manager_navigation(false, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Session { id, .. }) if id == root
+            ));
+            view.restore_file_manager_navigation(false, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Session { id, .. }) if id == root
+            ));
+            view.remote_input_session_id = None;
+            view.begin_file_manager_navigation(false, ctx);
+            assert!(view.file_manager_origin.is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_rejects_local_subshell_namespaces() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let root = SessionId::from(902u64);
+            let nested = SessionId::from(903u64);
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(root)
+                        .with_session_type(BootstrapSessionType::Local),
+                );
+                let mut info = SessionInfo::new_for_test()
+                    .with_id(nested)
+                    .with_session_type(BootstrapSessionType::Local);
+                info.subshell_info = Some(SubshellInitializationInfo {
+                    spawning_command: "container-shell".to_string(),
+                    was_triggered_by_rc_file_snippet: false,
+                    env_var_collection_name: None,
+                    ssh_connection_info: None,
+                });
+                sessions.register_session_for_test(info);
+            });
+            view.active_block_metadata = Some(BlockMetadata::new(Some(nested), None));
+            view.begin_file_manager_navigation(true, ctx);
+            assert!(view.file_manager_origin.is_none());
+            view.active_block_metadata = Some(BlockMetadata::new(Some(root), None));
+            view.begin_file_manager_navigation(true, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Session { id, .. }) if id == root
+            ));
+        });
+    });
+}
+
+#[test]
+fn cancelled_pending_attach_retains_draft_and_rejects_late_readiness() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let session = warp_core::SessionId::from(78u64);
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_input_draft("unfinished command".to_string(), ctx);
+            view.set_remote_input_phase(RemoteInputPhase::Replay, Some(session), ctx);
+            view.cancel_remote_input_readiness(ctx);
+            view.set_remote_input_phase(RemoteInputPhase::Ready, Some(session), ctx);
+        });
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Cancelled));
+            assert_eq!(view.input_draft(ctx), "unfinished command");
+            assert!(!view.input.as_ref(ctx).ordinary_command_input_is_ready());
+            assert!(remote_readiness_retry_visible(
+                RemoteInputPhase::Cancelled,
+                true
+            ));
+        });
+    });
+}
+
+#[test]
+fn readiness_controls_require_an_available_action_target() {
+    for phase in [
+        RemoteInputPhase::Transport,
+        RemoteInputPhase::Attach,
+        RemoteInputPhase::Replay,
+        RemoteInputPhase::Failed,
+        RemoteInputPhase::Cancelled,
+    ] {
+        assert!(!remote_readiness_retry_visible(phase, false));
+        assert!(!remote_readiness_cancel_visible(phase, false));
+    }
+}
+
+#[test]
+fn raw_remote_terminal_keeps_draft_and_accepts_only_ready_manual_input() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let writes = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let observed = writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes }
+                | Event::WriteAgentInputToPty { bytes, .. } = event
+                {
+                    observed.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+        let session = warp_core::SessionId::from(796u64);
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_input_draft("keep this draft".to_string(), ctx);
+            view.sessions.update(ctx, |sessions, _| {
+                *sessions = Sessions::new_for_test();
+            });
+            assert!(!view
+                .sessions
+                .as_ref(ctx)
+                .has_pending_or_bootstrapped_session());
+            view.model.lock().enter_raw_terminal();
+            view.set_remote_input_phase(RemoteInputPhase::Replay, Some(session), ctx);
+            view.is_slow_bootstrap_banner_open = true;
+            view.mark_remote_raw_terminal(session, ctx);
+            assert!(!view.is_slow_bootstrap_banner_open);
+            view.on_bootstrap_failed_timer_complete((), ctx);
+            assert!(!view.is_slow_bootstrap_banner_open);
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Replay));
+            view.write_agent_bytes_to_pty(
+                b"blocked agent".to_vec(),
+                &AIAgentPtyWriteMode::Raw,
+                ctx,
+            );
+            view.set_remote_input_phase(RemoteInputPhase::Raw, Some(session), ctx);
+            view.execute_system_command_or_set_pending("must not execute".to_string(), ctx);
+            view.execute_pending_command((), ctx);
+            assert!(!view.input.as_ref(ctx).ordinary_command_input_is_ready());
+            assert!(!view.is_input_box_visible(&view.model.lock(), ctx));
+            assert!(!view.remote_input_is_ready());
+            assert!(!view.remote_input_initial_start_is_pending());
+            view.typed_characters_on_terminal("manual", ctx);
+            view.control_sequence_on_terminal(b"\r", ctx);
+            view.set_remote_input_phase(RemoteInputPhase::Transport, Some(session), ctx);
+            view.typed_characters_on_terminal("blocked", ctx);
+            view.control_sequence_on_terminal(b"\r", ctx);
+            view.execute_command_or_set_pending("must not replace draft", ctx);
+            view.execute_system_command_or_set_pending("must not queue".to_string(), ctx);
+            view.execute_pending_command((), ctx);
+            view.write_agent_bytes_to_pty(
+                b"blocked reconnect agent".to_vec(),
+                &AIAgentPtyWriteMode::Raw,
+                ctx,
+            );
+            assert_eq!(view.input_draft(ctx), "keep this draft");
+            view.set_remote_input_phase(
+                RemoteInputPhase::Raw,
+                Some(warp_core::SessionId::from(797u64)),
+                ctx,
+            );
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Transport));
+            view.set_remote_input_phase(RemoteInputPhase::Raw, Some(session), ctx);
+            assert_eq!(view.input_draft(ctx), "keep this draft");
+            assert!(view.model.lock().is_raw_terminal());
+            view.typed_characters_on_terminal("after reconnect", ctx);
+            view.control_sequence_on_terminal(b"\r", ctx);
+        });
+        assert_eq!(
+            *writes.borrow(),
+            vec![
+                b"manual".to_vec(),
+                b"\r".to_vec(),
+                b"after reconnect".to_vec(),
+                b"\r".to_vec(),
+            ]
+        );
+        assert!(remote_readiness_message(RemoteInputPhase::Raw, true).is_some());
+    });
+}
+
+// Match the initialized shell session when preparing an executing password prompt.
+fn start_su_test_command(view: &mut TerminalView) {
+    let mut model = view.model.lock();
+    model.precmd(PrecmdValue {
+        session_id: Some(123),
+        ..Default::default()
+    });
+    model.simulate_long_running_block("su root", "Password:");
+}
+
+fn su_test_credential(secret: &str) -> OneKeyCredential {
+    OneKeyCredential {
+        label: "Test root password".into(),
+        subtitle: "Test host".into(),
+        secret: zeroize::Zeroizing::new(secret.to_owned()),
+        kind: OneKeyCredentialKind::Password,
+    }
+}
+
+#[test]
+fn closed_su_confirmation_ignores_delayed_credentials_and_older_requests() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            start_su_test_command(view);
+            let old_request = view.begin_su_root_confirmation().unwrap();
+            view.close_context_menu(ctx, false);
+            view.apply_su_root_credentials(
+                old_request,
+                vec![su_test_credential("old-secret")],
+                ctx,
+            );
+            assert!(view.context_menu_state.is_none());
+            assert!(view.onekey_prompt_candidates.is_empty());
+
+            let current_request = view.begin_su_root_confirmation().unwrap();
+            view.onekey_prompt_candidates = vec![OneKeyPromptCandidate {
+                label: "Current".into(),
+                subtitle: String::new(),
+                secret: zeroize::Zeroizing::new("current-secret".into()),
+                kind: OneKeyCredentialKind::Password,
+            }];
+            view.apply_su_root_credentials(
+                old_request,
+                vec![su_test_credential("old-secret")],
+                ctx,
+            );
+            assert!(view.su_root_confirmation_matches(current_request));
+            assert_eq!(&*view.onekey_prompt_candidates[0].secret, "current-secret");
+            assert!(view.context_menu_state.is_none());
+        });
+    });
+}
+
+#[test]
+fn completed_su_command_cannot_write_password_to_the_next_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let observed = writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    observed.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            start_su_test_command(view);
+            let request = view.begin_su_root_confirmation().unwrap();
+            view.su_root_password = Some(zeroize::Zeroizing::new("root-secret".into()));
+            view.context_menu_state = Some(ContextMenuState {
+                menu_type: ContextMenuType::SuRootPasswordConfirm,
+            });
+            // Do not depend on delivery of the completion event: the final write guard
+            // must inspect the live model even while UI events are still queued.
+            view.model.lock().finish_block();
+            view.model.lock().simulate_long_running_block("cat", "");
+            assert!(!view.su_root_confirmation_matches(request));
+            view.fill_su_root_password(ctx);
+            view.apply_su_root_credentials(request, vec![su_test_credential("old-secret")], ctx);
+            assert!(view.context_menu_state.is_none());
+            assert!(view.su_root_confirmation.is_none());
+        });
+        assert!(writes.borrow().is_empty());
+    });
+}
+
+#[test]
+fn interrupted_su_confirmation_cannot_revive_or_inject_a_password() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        for interrupt in [escape_sequences::C0::ETX, escape_sequences::C0::EOT] {
+            // Each interrupt starts from its own executing command and terminal grid.
+            let terminal = add_window_with_terminal(&mut app, None);
+            let observed = writes.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                    if let Event::WriteBytesToPty { bytes } = event {
+                        observed.borrow_mut().push(bytes.to_vec());
+                    }
+                });
+            });
+            terminal.update(&mut app, |view, ctx| {
+                start_su_test_command(view);
+                let request = view.begin_su_root_confirmation().unwrap();
+                view.su_root_password = Some(zeroize::Zeroizing::new("root-secret".into()));
+                view.context_menu_state = Some(ContextMenuState {
+                    menu_type: ContextMenuType::SuRootPasswordConfirm,
+                });
+                view.write_to_pty(vec![interrupt], ctx);
+                view.apply_su_root_credentials(
+                    request,
+                    vec![su_test_credential("old-secret")],
+                    ctx,
+                );
+                view.fill_su_root_password(ctx);
+                assert!(view.su_root_confirmation.is_none());
+                assert!(view.context_menu_state.is_none());
+            });
+        }
+        assert_eq!(
+            *writes.borrow(),
+            vec![
+                vec![escape_sequences::C0::ETX],
+                vec![escape_sequences::C0::EOT]
+            ]
+        );
+    });
+}
+
+#[test]
+fn live_su_confirmation_injects_the_selected_password_once() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let observed = writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    observed.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            start_su_test_command(view);
+            view.begin_su_root_confirmation().unwrap();
+            view.su_root_password = Some(zeroize::Zeroizing::new("root-secret".into()));
+            view.context_menu_state = Some(ContextMenuState {
+                menu_type: ContextMenuType::SuRootPasswordConfirm,
+            });
+            view.fill_su_root_password(ctx);
+            view.fill_su_root_password(ctx);
+            assert!(view.su_root_confirmation.is_none());
+        });
+        assert_eq!(*writes.borrow(), vec![b"root-secret\n".to_vec()]);
+    });
+}
+
+
+#[test]
+fn terminals_with_matching_kitty_ids_keep_distinct_pixels_and_animation_roots() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let first = add_window_with_terminal(&mut app, None);
+        let second = add_window_with_terminal(&mut app, None);
+        let first_asset = first.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.simulate_cmd("kitty");
+            model.process_bytes("\x1b_Ga=t,i=1,f=24,s=1,v=1;/wAA\x1b\\");
+            model.image_id_to_metadata[&1].asset_id()
+        });
+        let second_asset = second.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.simulate_cmd("kitty");
+            model.process_bytes("\x1b_Ga=T,U=1,i=1,f=24,s=1,v=1;AP8A\x1b\\");
+            model.image_id_to_metadata[&1].asset_id()
+        });
+        assert_ne!(first_asset, second_asset);
+        assert_eventually!(
+            app.read(|ctx| {
+                cached_image(AssetCache::as_ref(ctx), &first_asset).is_some()
+                    && cached_image(AssetCache::as_ref(ctx), &second_asset).is_some()
+            }),
+            "both terminal image events must reach the shared cache"
+        );
+        app.read(|ctx| {
+            assert_eq!(
+                cached_image(AssetCache::as_ref(ctx), &first_asset)
+                    .unwrap()
+                    .rgba_bytes(),
+                &[0xff, 0, 0, 0xff]
+            );
+            assert_eq!(
+                cached_image(AssetCache::as_ref(ctx), &second_asset)
+                    .unwrap()
+                    .rgba_bytes(),
+                &[0, 0xff, 0, 0xff]
+            );
+        });
+
+        first.update(&mut app, |view, _| {
+            view.model.lock().process_bytes(
+                "\x1b_Ga=f,i=1,f=24,s=1,v=1;AAD/\x1b\\",
+            );
+        });
+        assert_eventually!(
+            app.read(|ctx| matches!(
+                AssetCache::as_ref(ctx).load_asset::<ImageType>(AssetSource::Raw {
+                    id: first_asset.clone(),
+                }),
+                AssetState::Loaded { data } if matches!(&*data, ImageType::AnimatedBitmap { .. })
+            )),
+            "animation updates must address the originating terminal image"
+        );
+        app.read(|ctx| {
+            assert_eq!(
+                cached_image(AssetCache::as_ref(ctx), &first_asset)
+                    .unwrap()
+                    .rgba_bytes(),
+                &[0xff, 0, 0, 0xff]
+            );
+            assert_eq!(
+                cached_image(AssetCache::as_ref(ctx), &second_asset)
+                    .unwrap()
+                    .rgba_bytes(),
+                &[0, 0xff, 0, 0xff]
+            );
+        });
+    });
+}
+
+#[cfg(all(feature = "local_tty", feature = "local_fs"))]
+#[test]
+fn remote_directory_click_uses_the_active_shell_and_session() {
+    let _remote_server = FeatureFlag::SshRemoteServer.override_enabled(false);
+    for (shell, expected) in [
+        (ShellType::Bash, r#"cd -- '/tmp/a\b'\''[x]$()'"#),
+        (ShellType::Zsh, r#"cd -- '/tmp/a\b'\''[x]$()'"#),
+        (ShellType::Fish, r#"cd -- '/tmp/a\\b\'[x]$()'"#),
+        (
+            ShellType::PowerShell,
+            r#"Set-Location -LiteralPath '/tmp/a\b''[x]$()'"#,
+        ),
+    ] {
+        App::test((), |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+            // The standard terminal fixture bootstraps session 123 asynchronously.
+            let session_id = SessionId::from(123u64);
+            let mut history = History::handle(&app);
+            History::initialized_sessions(&mut history, &mut app, vec![session_id])
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("terminal history should initialize");
+            let input = terminal.read(&app, |view, _| view.input.clone());
+            let (tx, rx) = async_channel::unbounded();
+            app.update(|ctx| {
+                ctx.subscribe_to_view(&input, move |_, event, _| {
+                    if let InputEvent::ExecuteCommand(event) = event {
+                        tx.try_send((event.command.clone(), event.session_id))
+                            .unwrap();
+                    }
+                });
+            });
+            terminal.update(&mut app, |view, ctx| {
+                view.model
+                    .lock()
+                    .block_list_mut()
+                    .active_block_for_test()
+                    .set_session_id(session_id);
+                view.model_event_dispatcher().update(ctx, |dispatcher, _| {
+                    dispatcher.set_active_session_id(session_id);
+                });
+                view.sessions.update(ctx, |sessions, _| {
+                    sessions.register_session_for_test(
+                        SessionInfo::new_for_test()
+                            .with_id(session_id)
+                            .with_shell_type(shell)
+                            .with_session_type(BootstrapSessionType::ZaplexifiedRemote),
+                    );
+                });
+                view.active_block_metadata = None;
+                view.cd_into_remote_directory(Path::new("/tmp/no-session"), ctx);
+                view.active_block_metadata = Some(BlockMetadata::new(Some(session_id), None));
+                view.input.update(ctx, |input, ctx| {
+                    input.set_active_block_metadata(
+                        BlockMetadata::new(Some(session_id), None),
+                        false,
+                        ctx,
+                    );
+                });
+                view.cd_into_remote_directory(Path::new("/tmp/line\nfeed"), ctx);
+                view.cd_into_remote_directory(Path::new(r#"/tmp/a\b'[x]$()"#), ctx);
+            });
+            assert_eq!(
+                rx.recv()
+                    .with_timeout(Duration::from_secs(5))
+                    .await
+                    .expect("directory click should emit ExecuteCommand")
+                    .unwrap(),
+                (expected.to_string(), session_id),
+            );
+            assert!(rx.try_recv().is_err());
+        });
+    }
+}
+
+#[cfg(all(
+    feature = "local_tty",
+    feature = "local_fs",
+    not(target_family = "wasm")
+))]
+#[test]
+fn unavailable_remote_file_links_never_open_same_named_local_files() {
+    let _remote_server = FeatureFlag::SshRemoteServer.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(RemoteServerManager::new);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (tx, rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::OpenFileWithTarget { path, .. } = event {
+                    tx.try_send(path.clone()).unwrap();
+                }
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            let local = SessionId::from(930u64);
+            let remote = SessionId::from(931u64);
+            let legacy = SessionId::from(932u64);
+            let missing = SessionId::from(933u64);
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(SessionInfo::new_for_test().with_id(local));
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(remote)
+                        .with_session_type(BootstrapSessionType::ZaplexifiedRemote),
+                );
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(legacy)
+                        .with_ssh_socket_path(PathBuf::from("/tmp/test-ssh-socket"))
+                        .with_session_type(BootstrapSessionType::Local),
+                );
+            });
+            view.active_block_metadata = Some(BlockMetadata::new(Some(local), None));
+            for session in [remote, legacy, missing] {
+                view.open_file_path(PathBuf::from("/tmp/remote-file"), None, Some(session), ctx);
+                view.active_block_metadata = Some(BlockMetadata::new(Some(session), None));
+                view.open_file_path_with_target(
+                    PathBuf::from("/tmp/remote-file"),
+                    FileTarget::SystemDefault,
+                    None,
+                    ctx,
+                );
+                view.active_block_metadata = Some(BlockMetadata::new(Some(local), None));
+            }
+            view.active_block_metadata = Some(BlockMetadata::new(Some(remote), None));
+            view.open_file_path(PathBuf::from("/tmp/remote-file"), None, None, ctx);
+            view.active_block_metadata = None;
+            view.remote_input_phase = Some(RemoteInputPhase::Transport);
+            view.open_file_path(PathBuf::from("/tmp/remote-file"), None, None, ctx);
+            view.open_file_path_with_target(
+                PathBuf::from("/tmp/remote-file"),
+                FileTarget::SystemDefault,
+                None,
+                ctx,
+            );
+            view.open_file_path(PathBuf::from("/tmp/local-file"), None, Some(local), ctx);
+            view.active_block_metadata = Some(BlockMetadata::new(Some(local), None));
+            view.open_file_path_with_target(
+                PathBuf::from("/tmp/local-override"),
+                FileTarget::SystemDefault,
+                None,
+                ctx,
+            );
+        });
+        assert_eq!(
+            rx.recv()
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("local session file should still open")
+                .unwrap(),
+            PathBuf::from("/tmp/local-file"),
+        );
+        assert_eq!(
+            rx.recv()
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("local target override should still open")
+                .unwrap(),
+            PathBuf::from("/tmp/local-override"),
+        );
+        assert!(rx.try_recv().is_err());
+    });
 }

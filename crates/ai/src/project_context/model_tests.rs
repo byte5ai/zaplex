@@ -259,10 +259,22 @@ fn fast_path_returns_empty_when_no_rules_anywhere() {
 }
 
 #[cfg(feature = "local_fs")]
+fn isolated_fast_path_cwd(tmp: &tempfile::TempDir) -> PathBuf {
+    // Keep every scanned ancestor private: parallel tests change the shared temp
+    // directory's mtime, which correctly invalidates a cache that includes it.
+    let mut cwd = tmp.path().canonicalize().unwrap();
+    for _ in 0..MAX_WALK_DEPTH {
+        cwd.push("nested");
+    }
+    std::fs::create_dir_all(&cwd).unwrap();
+    cwd
+}
+
+#[cfg(feature = "local_fs")]
 #[test]
 fn fast_path_still_valid_when_nothing_changed() {
     let tmp = tempfile::tempdir().unwrap();
-    let cwd = tmp.path().canonicalize().unwrap();
+    let cwd = isolated_fast_path_cwd(&tmp);
     std::fs::write(cwd.join("AGENTS.md"), "stable").unwrap();
 
     let entry = ProjectContextModel::scan_fast_path(&cwd);
@@ -275,7 +287,7 @@ fn fast_path_invalidated_when_rule_file_mtime_changes() {
     use filetime::{set_file_mtime, FileTime};
 
     let tmp = tempfile::tempdir().unwrap();
-    let cwd = tmp.path().canonicalize().unwrap();
+    let cwd = isolated_fast_path_cwd(&tmp);
     let rule = cwd.join("AGENTS.md");
     std::fs::write(&rule, "v1").unwrap();
 
@@ -295,7 +307,7 @@ fn fast_path_invalidated_when_new_rule_file_appears_in_walked_dir() {
     use filetime::{set_file_mtime, FileTime};
 
     let tmp = tempfile::tempdir().unwrap();
-    let cwd = tmp.path().canonicalize().unwrap();
+    let cwd = isolated_fast_path_cwd(&tmp);
 
     // First scan: no rules hit (negative cache)
     let entry = ProjectContextModel::scan_fast_path(&cwd);
@@ -449,4 +461,27 @@ fn upsert_rule_case_insensitive_filename() {
         .active_rules;
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].path, PathBuf::from("/a/claude.md"));
+}
+
+#[test]
+fn removing_higher_priority_rules_reveals_updated_claude_rule() {
+    let mut rules = ProjectRules::default();
+    rules.upsert_rule(Path::new("/a/WARP.md"), "warp".into());
+    rules.upsert_rule(Path::new("/a/AGENTS.md"), "agents".into());
+    rules.upsert_rule(Path::new("/a/CLAUDE.md"), "old".into());
+    rules.upsert_rule(Path::new("/a/CLAUDE.md"), "updated".into());
+    rules.remove_rule(Path::new("/a/WARP.md")).unwrap();
+    rules.remove_rule(Path::new("/a/AGENTS.md")).unwrap();
+
+    let active = rules
+        .find_active_or_applicable_rules(Path::new("/a/file.rs"))
+        .active_rules;
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].content, "updated");
+    assert_eq!(active[0].path, Path::new("/a/CLAUDE.md"));
+    rules.remove_rule(Path::new("/a/cLaUdE.mD")).unwrap();
+    assert!(rules
+        .find_active_or_applicable_rules(Path::new("/a/file.rs"))
+        .active_rules
+        .is_empty());
 }

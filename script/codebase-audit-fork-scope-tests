@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Fork-only inventory regression fixtures; use isolated temporary Git repositories."""
+
+import json
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+
+SCRIPT = Path(__file__).with_name("generate-codebase-audit-fork-scope").resolve()
+GENERATOR = runpy.run_path(str(SCRIPT))
+
+
+class ForkScopeTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="zaplex-fork-audit-")
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name) / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q")
+        self.git("config", "user.name", "Audit fixture")
+        self.git("config", "user.email", "audit@example.invalid")
+        self.write("unchanged", b"do not read this inherited blob\n")
+        self.write("modified", b"old first\nkeep\nremove last\n")
+        self.write("deleted", b"removed contract\n")
+        self.write("becomes-binary", b"old text\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "base")
+        self.base = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-qb", "upstream")
+        self.write("upstream-new", b"copied unchanged upstream addition\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "upstream")
+        self.upstream = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-qb", "fork", self.base)
+        self.write("upstream-new", b"copied unchanged upstream addition\n")
+        self.write("owned", b"first\nsecond\n")
+        self.write("modified", b"new first\nkeep\n")
+        self.write("becomes-binary", b"\0binary\n")
+        self.write("binary", b"\0own binary")
+        (self.repo / "deleted").unlink()
+        self.git("add", "-A")
+        self.git("commit", "-qm", "fork")
+        self.target = self.git("rev-parse", "HEAD")
+
+    def git(self, *args):
+        return subprocess.check_output(
+            ["git", "-C", str(self.repo), *args], stderr=subprocess.PIPE, text=True
+        ).strip()
+
+    def write(self, path, content):
+        (self.repo / path).write_bytes(content)
+
+    def generate(self):
+        return GENERATOR["generate"](self.repo, self.target, self.upstream, self.base)
+
+    def test_ownership_hunks_deletions_and_binary_entries(self):
+        result = self.generate()
+        entries = {item["path"]: item for item in result["entries"]}
+        self.assertEqual(result["unchanged_entries_excluded"], ["unchanged", "upstream-new"])
+        self.assertEqual(entries["owned"]["review_scope"], "complete-owned-file")
+        self.assertEqual(entries["owned"]["target_line_count"], 2)
+        self.assertEqual(entries["owned"]["added_hunk_lines"], 2)
+        self.assertEqual(entries["deleted"]["review_scope"], "deleted-file-and-contract-impact")
+        self.assertIsNone(entries["deleted"]["target"])
+        self.assertEqual(entries["deleted"]["removed_hunk_lines"], 1)
+        self.assertEqual(entries["modified"]["review_scope"], "fork-hunks-and-required-context")
+        self.assertEqual(entries["modified"]["added_hunk_lines"], 1)
+        self.assertEqual(entries["modified"]["removed_hunk_lines"], 2)
+        self.assertTrue(any(hunk["new_count"] == 0 for hunk in entries["modified"]["changed_hunks"]))
+        for name in ("binary", "becomes-binary"):
+            self.assertEqual(entries[name]["review_scope"], "explicit-non-text-review")
+        self.assertIsNotNone(entries["becomes-binary"]["base"])
+        self.assertTrue(all(entry["review_status"] == "not-claimed" for entry in entries.values()))
+
+    def test_unchanged_upstream_blobs_are_never_read(self):
+        original = GENERATOR["generate"].__globals__["run_git"]
+        protected = {
+            self.git("rev-parse", self.base + ":unchanged"),
+            self.git("rev-parse", self.upstream + ":upstream-new"),
+        }
+
+        def guarded(repo, *args):
+            if args[:2] == ("cat-file", "blob"):
+                self.assertNotIn(args[2], protected)
+            return original(repo, *args)
+
+        with mock.patch.dict(GENERATOR["generate"].__globals__, {"run_git": guarded}):
+            self.generate()
+
+    def test_text_hunks_ignore_unpinned_binary_attributes(self):
+        expected = self.generate()
+        for attribute_file in (self.repo / ".gitattributes", self.repo / ".git/info/attributes"):
+            with self.subTest(attribute_file=attribute_file):
+                attribute_file.write_text("* -diff\n", encoding="utf-8")
+                try:
+                    self.assertEqual(self.generate(), expected)
+                finally:
+                    attribute_file.unlink()
+
+    def test_git_replace_is_rejected(self):
+        self.git("replace", self.target, self.base)
+        with self.assertRaisesRegex(GENERATOR["InventoryError"], "replace refs"):
+            self.generate()
+
+    def test_cli_refuses_to_overwrite_a_different_immutable_inventory(self):
+        output = Path(self.temp.name) / "inventory.json"
+        output.write_text('{"prior": true}\n')
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(self.repo),
+             "--target-sha", self.target, "--upstream-sha", self.upstream,
+             "--merge-base-sha", self.base, "--output", str(output)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing to overwrite", result.stderr)
+        self.assertEqual(json.loads(output.read_text()), {"prior": True})
+
+
+if __name__ == "__main__":
+    unittest.main()

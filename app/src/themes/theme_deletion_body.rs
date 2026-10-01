@@ -8,6 +8,7 @@ use crate::user_config::util::from_yaml;
 use std::default::Default;
 use std::fs;
 use std::fs::remove_file;
+use std::path::Path;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
     Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisSize, MouseStateHandle,
@@ -57,6 +58,17 @@ impl Default for ThemeDeletionBody {
     }
 }
 
+// Imported themes can reference original images outside the managed directory.
+// Resolve existing symlinks before checking containment; failures preserve the image.
+fn remove_theme_image(themes_dir: &Path, image_path: &Path) -> std::io::Result<()> {
+    let directory = themes_dir.canonicalize()?;
+    let image = themes_dir.join(image_path).canonicalize()?;
+    if image != directory && image.starts_with(&directory) {
+        remove_file(image)?;
+    }
+    Ok(())
+}
+
 impl ThemeDeletionBody {
     pub fn new() -> Self {
         Self {
@@ -81,8 +93,7 @@ impl ThemeDeletionBody {
                         // Only delete the image if it is in the ./warp/themes directory.
                         // We don't want to delete images from other parts of the user's filesystem.
                         if let AssetSource::LocalFile { path } = image.source() {
-                            let image_path_in_themes_dir = dir.join(path.as_str());
-                            let _ = remove_file(image_path_in_themes_dir);
+                            let _ = remove_theme_image(&dir, Path::new(path.as_str()));
                         } else {
                             log::warn!(
                                 "Attempted to delete a custom theme image with an unexpected image source"
@@ -279,3 +290,7 @@ impl TypedActionView for ThemeDeletionBody {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "theme_deletion_body_tests.rs"]
+mod tests;

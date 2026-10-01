@@ -87,7 +87,14 @@ fn independently_created_surfaces_do_not_share_bearer_credentials() {
 #[test]
 fn control_endpoint_is_a_local_unix_socket_path() {
     let address = control_address();
-    assert!(address.starts_with("/tmp/zplx-ctl-"));
+    let parent = Path::new(address).parent().unwrap();
+    assert_eq!(parent.parent(), Some(std::env::temp_dir().as_path()));
+    assert!(parent
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("zplx-ctl-"));
     assert!(address.ends_with(".sock"));
     assert!(!address.contains("://"));
 }
@@ -189,4 +196,53 @@ fn unknown_remote_account_schema_is_invalid_not_empty_loaded() {
     );
 
     assert_eq!(projected.status, RemoteAccountInventoryStatus::Invalid);
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn existing_worktree_requires_the_same_repository_and_exact_root() {
+    futures_lite::future::block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let unrelated = directory.path().join("unrelated");
+        for repo in [&source, &unrelated] {
+            std::fs::create_dir(repo).unwrap();
+            crate::util::git::run_git_command(repo, &["init", "--initial-branch=control-test"])
+                .await
+                .unwrap();
+            crate::util::git::run_git_command(
+                repo,
+                &[
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "fixture",
+                ],
+            )
+            .await
+            .unwrap();
+        }
+        let linked = directory.path().join("linked");
+        crate::util::git::run_git_command(
+            &source,
+            &["worktree", "add", "-b", "linked", linked.to_str().unwrap()],
+        )
+        .await
+        .unwrap();
+        validate_existing_worktree(&source, &linked).await.unwrap();
+        assert!(validate_existing_worktree(&source, &unrelated)
+            .await
+            .is_err());
+        let child = linked.join("ordinary-directory");
+        std::fs::create_dir(&child).unwrap();
+        assert!(validate_existing_worktree(&source, &child).await.is_err());
+    });
 }

@@ -81,6 +81,106 @@ fn claude_launch_uses_structured_protocol_and_subscription_environment() {
 }
 
 #[test]
+fn read_only_claude_launch_has_only_read_tools_and_no_external_customizations() {
+    let launch = ProcessLaunch::for_read_only_session(
+        &target(SubscriptionAgent::ClaudeCode),
+        ProcessLocation::Local,
+    )
+    .unwrap();
+
+    for pair in [
+        ["--permission-mode", "plan"],
+        ["--tools", "Read,Glob,Grep"],
+        ["--mcp-config", r#"{"mcpServers":{}}"#],
+        ["--setting-sources", ""],
+        ["--permission-prompts", "none"],
+    ] {
+        assert!(launch.args.windows(2).any(|args| args == pair));
+    }
+    for flag in [
+        "--safe-mode",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+        "--no-chrome",
+        "--no-session-persistence",
+    ] {
+        assert!(launch.args.iter().any(|argument| argument == flag));
+    }
+    assert!(!launch.args.iter().any(|argument| argument == "--resume"));
+    assert!(!launch.args.iter().any(|argument| argument == "--bare"));
+    assert_eq!(
+        launch.working_directory,
+        PathBuf::from("/workspace/with space")
+    );
+    assert!(launch
+        .environment
+        .contains(&("CLAUDE_CONFIG_DIR", "/accounts/with space".to_string())));
+    assert_eq!(
+        launch.unset_environment,
+        CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES
+    );
+}
+
+#[test]
+fn read_only_discovery_uses_the_same_restrictions_before_initialization() {
+    let selected = target(SubscriptionAgent::ClaudeCode);
+    let discovery = ProcessLaunch::for_read_only_discovery(
+        &selected.installation,
+        selected.working_directory.clone(),
+        ProcessLocation::Local,
+    )
+    .unwrap();
+    let session = ProcessLaunch::for_read_only_session(&selected, ProcessLocation::Local).unwrap();
+    let restriction_start = |launch: &ProcessLaunch| {
+        launch
+            .args
+            .iter()
+            .position(|argument| argument == "--tools")
+            .unwrap()
+    };
+    assert_eq!(
+        discovery.args[restriction_start(&discovery)..],
+        session.args[restriction_start(&session)..]
+    );
+    assert!(discovery
+        .args
+        .windows(2)
+        .any(|args| args == ["--permission-mode", "plan"]));
+    assert_eq!(discovery.environment, session.environment);
+    assert_eq!(discovery.unset_environment, session.unset_environment);
+
+    let codex = target(SubscriptionAgent::Codex);
+    assert!(ProcessLaunch::for_read_only_discovery(
+        &codex.installation,
+        codex.working_directory,
+        ProcessLocation::Local,
+    )
+    .is_err());
+}
+
+#[test]
+fn read_only_analysis_rejects_unproven_codex_and_remote_policies() {
+    let error = ProcessLaunch::for_read_only_session(
+        &target(SubscriptionAgent::Codex),
+        ProcessLocation::Local,
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("external tools cannot be reliably disabled"));
+    assert!(error.to_string().contains("select Claude Code"));
+
+    assert!(ProcessLaunch::for_read_only_session(
+        &target(SubscriptionAgent::ClaudeCode),
+        ProcessLocation::Remote {
+            ssh_argv: vec!["ssh".to_string(), "--".to_string(), "host".to_string()],
+            environment_path: None,
+        },
+    )
+    .is_err());
+}
+
+#[test]
 fn claude_discovery_scrubs_all_provider_environment_variables() {
     let installation = target(SubscriptionAgent::ClaudeCode).installation;
     let launch =
@@ -457,4 +557,55 @@ exit 127"#,
             process.terminate().await.unwrap();
         });
     }
+}
+
+#[test]
+fn plan_launch_preserves_resume_and_normal_follow_up_restores_default_policy() {
+    let mut selected = target(SubscriptionAgent::ClaudeCode);
+    selected.installation.version = "2.1.212 (Claude Code)".to_string();
+    let plan =
+        ProcessLaunch::for_plan_session(&selected, Some("native-history"), ProcessLocation::Local)
+            .unwrap();
+    for pair in [
+        ["--resume", "native-history"],
+        ["--permission-mode", "plan"],
+        ["--tools", "Read,Glob,Grep,Write,Edit"],
+        ["--mcp-config", r#"{"mcpServers":{}}"#],
+    ] {
+        assert!(plan.args.windows(2).any(|args| args == pair));
+    }
+    assert!(plan.args.contains(&"--safe-mode".to_string()));
+    assert!(plan.args.contains(&"--strict-mcp-config".to_string()));
+    assert!(!plan.args.contains(&"--no-session-persistence".to_string()));
+    let normal =
+        ProcessLaunch::for_session(&selected, Some("native-history"), ProcessLocation::Local);
+    assert!(normal
+        .args
+        .windows(2)
+        .any(|args| args == ["--permission-mode", "default"]));
+    assert!(normal
+        .args
+        .windows(2)
+        .any(|args| args == ["--resume", "native-history"]));
+    assert!(!normal.args.contains(&"--tools".to_string()));
+    for version in ["2.1.211", "2.1.212-beta.1", "unknown"] {
+        selected.installation.version = version.to_string();
+        assert!(ProcessLaunch::for_plan_session(
+            &selected,
+            Some("native-history"),
+            ProcessLocation::Local
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("2.1.212"));
+    }
+    let error = ProcessLaunch::for_plan_session(
+        &target(SubscriptionAgent::Codex),
+        Some("native-thread"),
+        ProcessLocation::Local,
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("/plan with Codex is unavailable"));
 }

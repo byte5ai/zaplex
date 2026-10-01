@@ -931,3 +931,40 @@ fn test_synchronized_output_sharing_session_split_batch() {
     };
     assert_eq!(bytes.as_slice(), b"after");
 }
+
+#[test]
+fn animation_byte_budget_covers_replacement_and_checked_aggregate_size() {
+    let limit = MAX_ANIMATION_FRAME_BYTES;
+    let lengths = [limit - 2, 2];
+    assert!(kitty_animation_frame_bytes_fit(
+        lengths.into_iter(),
+        Some(0),
+        limit - 2
+    ));
+    assert!(!kitty_animation_frame_bytes_fit(
+        lengths.into_iter(),
+        Some(0),
+        limit - 1
+    ));
+    assert!(!kitty_animation_frame_bytes_fit(
+        lengths.into_iter(),
+        Some(1),
+        3
+    ));
+    assert!(!kitty_animation_frame_bytes_fit(
+        lengths.into_iter(),
+        None,
+        1
+    ));
+    assert!(kitty_animation_frame_bytes_fit([].into_iter(), None, limit));
+    assert!(!kitty_animation_frame_bytes_fit(
+        [].into_iter(),
+        None,
+        limit + 1
+    ));
+    assert!(!kitty_animation_frame_bytes_fit(
+        [usize::MAX].into_iter(),
+        None,
+        1
+    ));
+}

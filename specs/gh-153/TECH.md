@@ -65,7 +65,7 @@ When the active Agent View conversation has subscription-agent state, `/model` m
 3. Resume acts on the session identity stored for the same conversation ID.
 4. Approval acts on the request ID stored for the same conversation ID.
 5. Ended sessions have no resume or approval action.
-6. Recoverable errors with a session may resume/restart/end; errors without a session may start over or return to shell.
+6. Recoverable errors with a resumable session may resume that exact session, start a new conversation, or end. A new conversation does not discard the old session identity. Errors without a resumable session may start a new conversation or return to shell.
 7. Lifecycle and target data are always looked up by the currently active conversation ID.
 8. Subscription `/model` never opens the legacy selector.
 

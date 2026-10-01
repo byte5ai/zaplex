@@ -330,18 +330,18 @@ impl SftpUploadPlan {
             .path()
             .to_str()
             .ok_or(SftpUploadError::InvalidBatchFilePath)?;
-        let argv = self
-            .argv
-            .iter()
+        // SFTP needs -b to propagate a failed put as a nonzero exit status.
+        // OpenSSH uses the first value of each SSH option: keep interactive
+        // authentication enabled before -b appends its own BatchMode=yes.
+        let argv = [self.argv[0].as_str(), "-oBatchMode=no", "-b", batch_path]
+            .into_iter()
+            .chain(self.argv[1..].iter().map(String::as_str))
             .map(|arg| shell_family.escape(arg).into_owned())
             .collect::<Vec<_>>()
             .join(" ");
-        let batch_path = shell_family.escape(batch_path);
         let command = match shell_family {
-            ShellFamily::Posix => format!("{argv} < {batch_path}"),
-            ShellFamily::PowerShell => {
-                format!("Get-Content -Raw -LiteralPath {batch_path} | & {argv}")
-            }
+            ShellFamily::Posix => argv,
+            ShellFamily::PowerShell => format!("& {argv}"),
         };
 
         Ok(MaterializedSftpUpload {

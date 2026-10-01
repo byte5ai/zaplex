@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""Capture actual build-free CI executions and validate their archived evidence."""
+import argparse
+import hashlib
+import importlib.metadata
+import json
+import math
+import os
+from pathlib import Path
+import platform
+import re
+import runpy
+import shutil
+import subprocess
+import sys
+import time
+import unittest
+
+HERE = Path(__file__).resolve().parent
+EVENTS = runpy.run_path(str(HERE / "test-suite-nonrust-events"))
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def archive_file(directory, relative):
+    directory = directory.resolve()
+    path = Path(relative)
+    if path.is_absolute() or ".." in path.parts or not path.parts:
+        raise ValueError("unsafe evidence path")
+    candidate = directory / path
+    if any(part.is_symlink() for part in (candidate, *candidate.parents) if part.is_relative_to(directory)):
+        raise ValueError("symlink in evidence path")
+    if not candidate.is_file() or not candidate.resolve().is_relative_to(directory.resolve()):
+        raise ValueError("missing evidence file")
+    return candidate
+
+
+def git(root, *args):
+    return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+
+
+def bind_source(root, relative):
+    path = Path(relative)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError("unsafe source path")
+    actual = root / path
+    if actual.is_symlink() or not actual.resolve().is_relative_to(root.resolve()):
+        raise ValueError("source is not a regular repository file")
+    tracked = git(root, "ls-files", "--", relative).splitlines()
+    if tracked != [relative]:
+        raise ValueError(f"measurement source is not tracked: {relative}")
+    committed = subprocess.check_output(["git", "-C", str(root), "show", f"HEAD:{relative}"])
+    if committed != actual.read_bytes():
+        raise ValueError(f"measurement source differs from HEAD: {relative}")
+    return digest(actual)
+
+
+def bind_measurement_sources(root, plan):
+    sources = {"script/test-suite-nonrust", "script/test-suite-nonrust-events",
+               "script/test-suite-nonrust-plan.json", "specs/parity/test_mutation_gate.py"}
+    sources.update(row["source"] for row in plan["suites"])
+    sources.update(plan["inventory_source_hashes"])
+    return {relative: bind_source(root, relative) for relative in sorted(sources)}
+
+
+def execution_command(suite, provenance):
+    python = provenance["python_executable"]
+    source_root = Path(provenance["source_root"])
+    command = [python if arg == "{python}" else arg for arg in suite["command"]]
+    if suite["mode"] == "unittest":
+        command = [python, str(source_root / "script/test-suite-nonrust"), "_unittest",
+                   str(source_root / suite["source"])]
+    if suite["mode"] == "cockpit":
+        command += ["--output", str(Path(provenance["output_directory"]) / f"{suite['id']}.cockpit.json")]
+    return command
+
+
+def load_plan(root):
+    plan = json.loads((root / "script/test-suite-nonrust-plan.json").read_text())
+    if plan.get("schema_version") != 1 or not plan.get("suites"):
+        raise ValueError("missing non-Rust suite inventory")
+    for relative, expected in plan["inventory_source_hashes"].items():
+        if digest(root / relative) != expected:
+            raise ValueError(f"CI inventory changed; review the suite plan: {relative}")
+    identities = [row["id"] for row in plan["suites"]]
+    if len(set(identities)) != len(identities):
+        raise ValueError("duplicate suite identity")
+    for row in plan["suites"]:
+        if not re.fullmatch(r"[a-z0-9-]+", row["id"]):
+            raise ValueError("invalid suite identity")
+        if row["mode"] not in {"guard", "unittest", "events", "cockpit"}:
+            raise ValueError("unknown suite mode")
+        if row["mode"] == "events":
+            cases = row.get("expected_case_ids", [])
+            if not cases or any(not isinstance(case, str) or not case for case in cases) or len(cases) != len(set(cases)):
+                raise ValueError(f"fixture scenario inventory missing or duplicated: {row['id']}")
+    return plan
+
+
+class ObservedResult(unittest.TextTestResult):
+    def event(self, test, status):
+        EVENTS["record"](test.id(), status)
+
+    def addSuccess(self, test):
+        super().addSuccess(test)
+        self.event(test, "pass")
+
+    def addFailure(self, test, error):
+        super().addFailure(test, error)
+        self.event(test, "fail")
+
+    def addError(self, test, error):
+        super().addError(test, error)
+        self.event(test, "fail")
+
+    def addSkip(self, test, reason):
+        super().addSkip(test, reason)
+        self.event(test, "skip")
+
+    def addExpectedFailure(self, test, error):
+        super().addExpectedFailure(test, error)
+        self.event(test, "skip")
+
+    def addUnexpectedSuccess(self, test):
+        super().addUnexpectedSuccess(test)
+        self.event(test, "fail")
+
+    def addSubTest(self, test, subtest, error):
+        super().addSubTest(test, subtest, error)
+        if error is not None:
+            self.event(test, "fail")
+
+
+class ObservedRunner(unittest.TextTestRunner):
+    resultclass = ObservedResult
+
+    def run(self, test):
+        def identities(suite):
+            if isinstance(suite, unittest.TestSuite):
+                return [identity for item in suite for identity in identities(item)]
+            return [suite.id()]
+        expected = identities(test)
+        if not expected or len(expected) != len(set(expected)):
+            raise ValueError("empty or duplicate discovered unittest cases")
+        # Discovery is a completeness cross-check, never the executed count.
+        with Path(os.environ["ZAPLEX_NONRUST_DISCOVERY"]).open("a") as stream:
+            stream.write(json.dumps(expected) + "\n")
+        return super().run(test)
+
+
+def run_unittest(path):
+    unittest.TextTestRunner = ObservedRunner
+    unittest.runner.TextTestRunner = ObservedRunner
+    sys.argv = [str(path), "-v"]
+    sys.path.insert(0, str(path.parent))
+    runpy.run_path(str(path), run_name="__main__")
+
+
+def read_cases(events, discovery, mode, expected, cockpit=None):
+    rows = [json.loads(line) for line in events.read_text().splitlines()]
+    if mode == "cockpit":
+        report = json.loads(cockpit.read_text())
+        if report.get("schema_version") != 1 or report.get("status") != "pass":
+            raise ValueError("Cockpit self-test did not complete")
+        actual_cases = report.get("cases", [])
+        if (not expected or len(actual_cases) != len(expected)
+                or {row.get("id"): row.get("status") for row in actual_cases} != expected):
+            raise ValueError("Cockpit fixture inventory differs from fixed plan")
+        for row in actual_cases:
+            if row["id"] == "source-mutation-harness":
+                continue  # Container only; its observed unittest children count.
+            if row.get("status") not in {"pass-observed", "expected-failure-observed"} and row != {"id": "runtime-missing-is-not-run", "status": "not-run-observed"}:
+                raise ValueError("invalid Cockpit fixture result")
+            rows.append({"id": row["id"], "status": "pass"})
+    seen = set()
+    for row in rows:
+        if (not isinstance(row.get("id"), str) or not row["id"] or row["id"] in seen
+                or row.get("status") not in {"pass", "fail", "skip"}):
+            raise ValueError("invalid or duplicate executed non-Rust case")
+        seen.add(row["id"])
+    if mode == "guard":
+        if rows:
+            raise ValueError("a policy guard emitted test cases")
+    elif not rows:
+        raise ValueError("no executed non-Rust cases")
+    if mode == "events" and seen != set(expected):
+        raise ValueError("executed fixture cases differ from the fixed scenario plan")
+    if mode in {"unittest", "cockpit"}:
+        lists = [json.loads(line) for line in discovery.read_text().splitlines()]
+        discovered = [identity for group in lists for identity in group]
+        if not discovered or len(discovered) != len(set(discovered)):
+            raise ValueError("missing or duplicate unittest discovery")
+        observed_framework = {row['id'] for row in rows if row['id'].startswith('__main__.')}
+        if observed_framework != set(discovered):
+            raise ValueError("unittest execution is incomplete")
+    return rows
+
+
+def ripgrep_capabilities():
+    executable = shutil.which("rg")
+    if executable is None:
+        raise ValueError("required non-Rust fixture tool is missing: rg")
+    probe = subprocess.run(
+        [executable, "--no-config", "--pcre2", "--quiet", "(?<=zaplex-)fixture"],
+        input="zaplex-fixture\n", text=True, capture_output=True, timeout=10,
+    )
+    if probe.returncode != 0:
+        raise ValueError(
+            f"ripgrep requires working PCRE2 support ({executable}): {probe.stderr.strip()}"
+        )
+    return {
+        "executable": str(Path(executable).resolve()),
+        "version": subprocess.check_output([executable, "--version"], text=True).strip(),
+        "pcre2_probe": "lookbehind matched",
+    }
+
+
+def collect(root, directory):
+    root = root.resolve()
+    plan = load_plan(root)
+    if sys.flags.optimize or os.environ.get("PYTHONOPTIMIZE") not in (None, "", "0"):
+        raise ValueError("Python assertions must remain enabled")
+    missing_tools = [tool for tool in plan["required_tools"] if shutil.which(tool) is None]
+    if missing_tools:
+        raise ValueError(f"required non-Rust fixture tools are missing: {', '.join(missing_tools)}")
+    rg_capabilities = ripgrep_capabilities()
+    if git(root, "status", "--porcelain", "--untracked-files=no"):
+        raise ValueError("non-Rust measurement needs an unchanged source checkout")
+    if not os.environ.get("GITHUB_RUN_ID") or not os.environ.get("GITHUB_RUN_ATTEMPT"):
+        raise ValueError("CI run identity required for an acceptance artifact")
+    if directory.exists():
+        raise ValueError("evidence output directory must be new")
+    source_hashes = bind_measurement_sources(root, plan)
+    if os.environ.get("GITHUB_SHA") != git(root, "rev-parse", "HEAD"):
+        raise ValueError("checkout differs from the dispatched CI commit")
+    directory.mkdir(parents=True)
+    provenance = {
+        "commit": git(root, "rev-parse", "HEAD"), "tree": git(root, "rev-parse", "HEAD^{tree}"),
+        "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+        "run_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+        "runner": {key: os.environ.get(key) for key in ("RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion")},
+        "python": platform.python_version(), "python_executable": sys.executable,
+        "tools": {**{tool: subprocess.check_output([tool, "--version"], text=True).splitlines()[0]
+                     for tool in ("bash", "git", "fish")},
+                  "rg": {key: value for key, value in rg_capabilities.items() if key != "executable"},
+                  **{name: importlib.metadata.version(name) for name in ("tree-sitter", "tree-sitter-rust")}},
+        "tool_paths": {"rg": rg_capabilities["executable"]},
+        "environment": {key: os.environ.get(key) for key in ("LANG", "LC_ALL", "CHANNEL", "PYTHONOPTIMIZE")},
+        "source_root": str(root), "output_directory": str(directory),
+        "source_hashes": source_hashes, "plan_sha256": digest(root / "script/test-suite-nonrust-plan.json"),
+        "adapter_sha256": digest(Path(__file__)), "events_helper_sha256": digest(HERE / "test-suite-nonrust-events"),
+    }
+    (directory / "plan.json").write_bytes((root / "script/test-suite-nonrust-plan.json").read_bytes())
+    (directory / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
+    suites = []
+    for suite in plan["suites"]:
+        identity = suite["id"]
+        events = directory / f"{identity}.events.jsonl"
+        discovery = directory / f"{identity}.discovery.jsonl"
+        events.touch(); discovery.touch()
+        command = execution_command(suite, provenance)
+        cockpit = directory / f"{identity}.cockpit.json"
+        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "ZAPLEX_NONRUST_EVENTS": str(events),
+               "ZAPLEX_NONRUST_DISCOVERY": str(discovery)}
+        start = time.monotonic()
+        stdout = directory / f"{identity}.stdout.log"
+        stderr = directory / f"{identity}.stderr.log"
+        problem = None
+        with stdout.open("wb") as output, stderr.open("wb") as errors:
+            try:
+                status = subprocess.run(command, cwd=root, env=env, stdout=output, stderr=errors,
+                                        timeout=suite.get("timeout_seconds", 180)).returncode
+            except (OSError, subprocess.TimeoutExpired) as error:
+                status = None
+                problem = str(error)
+        try:
+            cases = read_cases(events, discovery, suite["mode"], suite.get("expected_case_ids", suite.get("expected_case_statuses")), cockpit)
+        except (OSError, ValueError, KeyError) as error:
+            cases = []
+            problem = str(error)
+        artifacts = [events, discovery, stdout, stderr]
+        if cockpit.is_file():
+            artifacts.append(cockpit)
+        row = {"id": identity, "mode": suite["mode"], "command": command,
+               "source_sha256": digest(root / suite["source"]), "exit_code": status,
+               "seconds": time.monotonic() - start, "cases": cases, "error": problem,
+               "artifacts": {path.name: digest(path) for path in artifacts}}
+        suites.append(row)
+        print(f"{identity}: exit={status}, observed cases={len(cases)}, error={problem}", flush=True)
+    changed = bool(git(root, "status", "--porcelain", "--untracked-files=no"))
+    report = {"schema_version": 1, "provenance": provenance, "source_unchanged": not changed, "suites": suites}
+    (directory / "results.json").write_text(json.dumps(report, indent=2) + "\n")
+    summary = validate(directory, root)
+    (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return summary
+
+
+def validate(directory, root):
+    report = json.loads((directory / "results.json").read_text())
+    provenance = json.loads((directory / "provenance.json").read_text())
+    plan_path = archive_file(directory, "plan.json")
+    plan = json.loads(plan_path.read_text())
+    if (report.get("schema_version") != 1 or not report.get("source_unchanged")
+            or report.get("provenance") != provenance or digest(plan_path) != provenance.get("plan_sha256")):
+        raise ValueError("invalid non-Rust provenance or changed source")
+    if not re.fullmatch(r"[0-9a-f]{40}", provenance.get("commit", "")):
+        raise ValueError("invalid non-Rust commit")
+    if git(root, "rev-parse", "HEAD") != provenance["commit"]:
+        raise ValueError("non-Rust source checkout differs from CI commit")
+    if git(root, "status", "--porcelain", "--untracked-files=no"):
+        raise ValueError("source checkout has unmeasured changes")
+    if (plan != load_plan(root) or digest(Path(__file__)) != provenance.get("adapter_sha256")
+            or digest(HERE / "test-suite-nonrust-events") != provenance.get("events_helper_sha256")
+            or bind_measurement_sources(root, plan) != provenance.get("source_hashes")):
+        raise ValueError("non-Rust suite plan or adapter differs from measured source")
+    if (not re.fullmatch(r"[1-9][0-9]*", str(provenance.get("run_id", "")))
+            or not re.fullmatch(r"[1-9][0-9]*", str(provenance.get("run_attempt", "")))
+            or not re.fullmatch(r"https://github.com/[^/]+/[^/]+/actions/runs/" + str(provenance["run_id"]), provenance.get("run_url", ""))
+            or provenance.get("tree") != git(root, "rev-parse", "HEAD^{tree}")
+            or not provenance.get("runner", {}).get("RUNNER_OS")
+            or not provenance.get("runner", {}).get("RUNNER_ARCH")):
+        raise ValueError("incomplete CI execution provenance")
+    expected = {suite["id"]: suite for suite in plan["suites"]}
+    if len(report["suites"]) != len(expected) or {row["id"] for row in report["suites"]} != set(expected):
+        raise ValueError("missing, duplicate or unknown non-Rust suite")
+    identities = []; skipped = []; seconds = 0; guards = []
+    for row in report["suites"]:
+        suite = expected[row["id"]]
+        if (row["mode"] != suite["mode"] or row["exit_code"] != 0 or row["error"] is not None
+                or row["command"] != execution_command(suite, provenance)):
+            raise ValueError(f"non-Rust suite did not succeed: {row['id']}")
+        if not math.isfinite(row["seconds"]) or row["seconds"] < 0:
+            raise ValueError("invalid suite duration")
+        if row["source_sha256"] != digest(root / suite["source"]):
+            raise ValueError("non-Rust suite source changed")
+        for relative, expected_hash in row["artifacts"].items():
+            if digest(archive_file(directory, relative)) != expected_hash:
+                raise ValueError("non-Rust raw artifact changed")
+        identity = row["id"]
+        required = {f"{identity}.{suffix}" for suffix in ("events.jsonl", "discovery.jsonl", "stdout.log", "stderr.log")}
+        if suite["mode"] == "cockpit":
+            required.add(f"{identity}.cockpit.json")
+        if set(row["artifacts"]) != required:
+            raise ValueError("missing or unexpected non-Rust raw evidence")
+        cases = read_cases(directory / f"{identity}.events.jsonl", directory / f"{identity}.discovery.jsonl",
+                           suite["mode"], suite.get("expected_case_ids", suite.get("expected_case_statuses")), directory / f"{identity}.cockpit.json")
+        if cases != row["cases"] or any(case["status"] == "fail" for case in cases):
+            raise ValueError("non-Rust case results differ from their raw evidence or failed")
+        for case in cases:
+            (skipped if case["status"] == "skip" else identities).append(f"{identity}::{case['id']}")
+        if suite["mode"] == "guard":
+            guards.append(identity)
+        seconds += row["seconds"]
+    return {"complete": True, "provenance": provenance, "executed_nonrust_tests": len(identities),
+            "executed_test_ids": sorted(identities), "skipped_test_ids": sorted(skipped),
+            "guard_ids": guards, "sequential_suite_seconds": seconds,
+            "suite_source_hashes": {row["id"]: row["source_sha256"] for row in report["suites"]}}
+
+
+def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "_unittest":
+        run_unittest(Path(sys.argv[2]).resolve())
+        return
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("collect", "validate"))
+    parser.add_argument("directory", type=Path)
+    parser.add_argument("--source-root", type=Path, default=HERE.parent)
+    args = parser.parse_args()
+    try:
+        result = collect(args.source_root, args.directory.resolve()) if args.command == "collect" else validate(args.directory.resolve(), args.source_root)
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
+        parser.exit(1, f"Invalid non-Rust evidence: {error}\n")
+    print(json.dumps(result, indent=2, allow_nan=False))
+
+
+if __name__ == "__main__":
+    main()

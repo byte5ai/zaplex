@@ -256,7 +256,7 @@ LiteRootNode {
                                 Spanned {
                                     span: Span {
                                         start: 55,
-                                        end: 64,
+                                        end: 66,
                                     },
                                     item: "$ZAPLEX_VAR",
                                 },

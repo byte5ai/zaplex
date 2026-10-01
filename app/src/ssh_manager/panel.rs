@@ -9,14 +9,15 @@
 //! - Right-click a folder: New folder / New server / Rename / Delete
 //! - Right-click empty space: New folder / New server
 //!
-//! Visual polish follows the constants in `app/src/drive/index.rs` (ITEM_FONT_SIZE=14 / indent 16 /
-//! row padding 4×8).
+//! Visual polish follows the spacing rhythm in `app/src/drive/index.rs` (16 px indentation and
+//! compact row padding).
 
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+use diesel::{sqlite::SqliteConnection, Connection};
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
@@ -54,6 +55,7 @@ use settings::Setting;
 use zaplex_cockpit::{Favorite, FavoriteKind};
 
 use crate::cockpit::favorites::FavoritesStore;
+use crate::cockpit::tailscale::TailscaleHost;
 use crate::editor::{
     EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
 };
@@ -64,6 +66,7 @@ use crate::ssh_manager::{
     credential_operation_message, endpoint_validation_message, SshTreeChangedEvent,
     SshTreeChangedNotifier,
 };
+use crate::terminal::view::{terminal_identity, TerminalIdentity};
 use crate::ui_components::compact_row_action::CompactRowAction;
 use crate::ui_components::modal_frame;
 use crate::view_components::action_button::{ActionButton, DangerPrimaryTheme, NakedTheme};
@@ -83,7 +86,7 @@ const PANEL_HORIZONTAL_PADDING: f32 = 8.0;
 const CONTEXT_MENU_WIDTH: f32 = 200.0;
 const CONTEXT_MENU_ITEM_PADDING_V: f32 = 7.0;
 const CONTEXT_MENU_ITEM_PADDING_H: f32 = 12.0;
-const MAX_CONTEXT_MENU_ITEMS: usize = 6;
+const MAX_CONTEXT_MENU_ITEMS: usize = 7;
 const SSH_PANEL_POSITION_ID: &str = "ssh_manager_panel_root";
 const DELETE_CONFIRM_BODY_MAX_HEIGHT: f32 = 320.0;
 const TAILSCALE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -230,15 +233,22 @@ fn connected_hosts_by_registry_node(
     grouped
 }
 
-fn daemon_session_title(session: &SessionInfo) -> String {
-    if !session.title.is_empty() {
-        return session.title.clone();
-    }
+fn daemon_session_identity(host: &str, session: &SessionInfo) -> TerminalIdentity {
     let short_id: String = session.session_id.chars().take(8).collect();
-    crate::t!(
+    let fallback = crate::t!(
         "workspace-left-panel-ssh-manager-session-fallback",
         id = short_id
-    )
+    );
+    let mut identity = terminal_identity(host, Some(&session.cwd), &fallback);
+    if !session.title.trim().is_empty() {
+        identity.full = if session.cwd.trim().is_empty() {
+            session.title.clone()
+        } else {
+            format!("{}\n{}", session.title, identity.full)
+        };
+        identity.short = session.title.clone();
+    }
+    identity
 }
 
 fn session_row_details(
@@ -259,9 +269,9 @@ fn session_row_details(
                 Text::new_inline(
                     title,
                     appearance.ui_font_family(),
-                    appearance.ui_font_subheading(),
+                    appearance.ui_font_body(),
                 )
-                .with_color(theme.main_text_color(theme.background()).into())
+                .with_color(theme.main_text_color(theme.surface_2()).into())
                 .with_clip(ClipConfig::ellipsis())
                 .finish(),
                 &format!("ssh-manager-session:{key}:title"),
@@ -275,9 +285,9 @@ fn session_row_details(
                 Text::new(
                     metadata,
                     appearance.ui_font_family(),
-                    appearance.ui_font_body(),
+                    appearance.ui_font_footnote(),
                 )
-                .with_color(theme.sub_text_color(theme.background()).into())
+                .with_color(theme.sub_text_color(theme.surface_2()).into())
                 .finish(),
                 &format!("ssh-manager-session:{key}:metadata"),
             )
@@ -475,6 +485,8 @@ pub enum SshManagerPanelEvent {
         pty_session_id: String,
         pty_generation: u64,
         daemon_route: Option<remote_server::transport::DaemonRuntimeRoute>,
+        expected_host_id: Option<String>,
+        expected_daemon_runtime: Option<remote_server::transport::DaemonRuntimeRoute>,
     },
     OpenMultiplexerSession {
         node_id: String,
@@ -1261,40 +1273,7 @@ impl SshManagerPanel {
                     .collect::<Vec<_>>();
                 tokio::task::spawn_blocking(move || {
                     warp_ssh_manager::with_conn(|conn| {
-                        let mut existing = std::collections::HashSet::new();
-                        for node in SshRepository::list_nodes(conn)? {
-                            if matches!(node.kind, NodeKind::Server) {
-                                if let Some(info) = SshRepository::get_server(conn, &node.id)? {
-                                    existing.insert(info.host);
-                                }
-                            }
-                        }
-                        let mut count = 0usize;
-                        for candidate in &candidates {
-                            let host = candidate.connect_host().to_string();
-                            if host.is_empty() || existing.contains(&host) {
-                                continue;
-                            }
-                            let info = SshServerInfo {
-                                node_id: String::new(),
-                                host: host.clone(),
-                                port: 22,
-                                username: String::new(),
-                                auth_type: AuthType::Key,
-                                key_path: None,
-                                credential_id: None,
-                                startup_command: None,
-                                notes: Some(format!("Discovered via Tailscale ({})", candidate.os)),
-                                last_connected_at: None,
-                                session_resilience: warp_ssh_manager::SessionResilience::default(),
-                                ring_ceiling_mb: 0,
-                            };
-                            let name = unique_name(conn, parent.as_deref(), &candidate.hostname)?;
-                            SshRepository::create_server(conn, parent.as_deref(), &name, &info)?;
-                            existing.insert(host);
-                            count += 1;
-                        }
-                        Ok(count)
+                        import_tailscale_hosts(conn, parent.as_deref(), &candidates)
                     })
                 })
                 .await
@@ -1600,6 +1579,36 @@ impl SshManagerPanel {
         refresh_pending
     }
 
+    /// Supply deterministic layout data through the normal inventory completion
+    /// path. This never connects to a host and is not live-runtime evidence.
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn apply_layout_inventory(
+        &mut self,
+        node_id: &str,
+        inventory: crate::remote_server::session_inventory::HostSessionInventory,
+        ctx: &mut ViewContext<Self>,
+    ) -> Vec<String> {
+        assert!(self.nodes.iter().any(|node| node.id == node_id));
+        let keys = inventory
+            .sessions
+            .iter()
+            .map(|session| session_row_key(node_id, &session.session, session.route.as_ref()))
+            .chain(
+                inventory
+                    .multiplexers
+                    .sessions
+                    .iter()
+                    .map(|session| multiplexer_row_key(node_id, session)),
+            )
+            .collect();
+        self.sessions_expanded.insert(node_id.to_string());
+        let generation = self
+            .begin_session_fetch(node_id)
+            .expect("fixture has no in-flight fetch");
+        assert!(!self.complete_session_fetch(node_id, generation, Ok(inventory), ctx));
+        keys
+    }
+
     /// Fetches a server's running daemon sessions via connect-to-list and stores
     /// them in `host_session_inventories` (or records `sessions_error`).
     #[allow(unused_variables)]
@@ -1671,6 +1680,21 @@ impl SshManagerPanel {
         daemon_route: Option<remote_server::transport::DaemonRuntimeRoute>,
         ctx: &mut ViewContext<Self>,
     ) {
+        let Some(session) = self
+            .host_session_inventories
+            .get(&node_id)
+            .and_then(|inventory| {
+                inventory.sessions.iter().find(|session| {
+                    session.session.session_id == pty_session_id
+                        && session.session.generation == pty_generation
+                        && session.route == daemon_route
+                })
+            })
+        else {
+            return;
+        };
+        let expected_host_id = session.host_id.clone();
+        let expected_daemon_runtime = session.daemon_runtime.clone();
         // Resolve OneKey → effective auth so the adopt connects with the same
         // username/key_path the listing + connect paths use — otherwise an
         // OneKey-key host would target a different ControlMaster / fail auth.
@@ -1680,6 +1704,8 @@ impl SshManagerPanel {
                 pty_session_id,
                 pty_generation,
                 daemon_route,
+                expected_host_id,
+                expected_daemon_runtime,
             }),
             Ok(None) => {
                 self.sessions_error.insert(
@@ -2259,7 +2285,7 @@ impl SshManagerPanel {
         appearance: &warp_core::ui::appearance::Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let icon_color = theme.sub_text_color(theme.background());
+        let icon_color = theme.sub_text_color(theme.surface_2());
 
         let make_btn = |icon: crate::ui_components::icons::Icon,
                         state: MouseStateHandle,
@@ -2344,8 +2370,8 @@ impl SshManagerPanel {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let muted = theme.sub_text_color(theme.background());
-        let main = theme.main_text_color(theme.background());
+        let muted = theme.sub_text_color(theme.surface_2());
+        let main = theme.main_text_color(theme.surface_2());
         let accent = theme.accent().into_solid();
         let icon_color = muted;
 
@@ -2526,8 +2552,8 @@ impl SshManagerPanel {
             return Empty::new().finish();
         }
 
-        let muted = theme.sub_text_color(theme.background());
-        let main = theme.main_text_color(theme.background());
+        let muted = theme.sub_text_color(theme.surface_2());
+        let main = theme.main_text_color(theme.surface_2());
 
         let mut col = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
@@ -2618,8 +2644,8 @@ impl SshManagerPanel {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let icon_color = theme.sub_text_color(theme.background());
-        let muted = theme.sub_text_color(theme.background());
+        let icon_color = theme.sub_text_color(theme.surface_2());
+        let muted = theme.sub_text_color(theme.surface_2());
 
         // Collapsed-state chevron (▶) vs expanded-state (▼) — is_expanded comes straight from the view-model.
         let expanded = self.candidates.as_ref(app).is_expanded();
@@ -2781,7 +2807,7 @@ impl SshManagerPanel {
         let CandidateRowColors { main, muted } = colors;
         let theme = appearance.theme();
         let icon = crate::ui_components::icons::Icon::Key
-            .to_warpui_icon(theme.sub_text_color(theme.background()))
+            .to_warpui_icon(theme.sub_text_color(theme.surface_2()))
             .finish();
         let icon_el = ConstrainedBox::new(icon)
             .with_width(ITEM_ICON_SIZE)
@@ -2860,7 +2886,7 @@ impl SshManagerPanel {
         } else {
             let plus_icon = ConstrainedBox::new(
                 crate::ui_components::icons::Icon::Plus
-                    .to_warpui_icon(theme.sub_text_color(theme.background()))
+                    .to_warpui_icon(theme.sub_text_color(theme.surface_2()))
                     .finish(),
             )
             .with_width(ITEM_ICON_SIZE)
@@ -2927,7 +2953,7 @@ impl SshManagerPanel {
     fn render_session_row(
         &self,
         key: &str,
-        title: String,
+        identity: TerminalIdentity,
         metadata: Option<String>,
         indent: f32,
         appearance: &warp_core::ui::appearance::Appearance,
@@ -2940,7 +2966,7 @@ impl SshManagerPanel {
             .get(key)
             .cloned()
             .unwrap_or_default();
-        let details = session_row_details(title, metadata, key, appearance);
+        let details = session_row_details(identity.short, metadata, key, appearance);
         let row_key = key.to_string();
         let primary = Hoverable::new(state, move |mouse| {
             let mut row = Container::new(details)
@@ -2950,7 +2976,28 @@ impl SshManagerPanel {
             if mouse.is_hovered() || focused {
                 row = row.with_background(internal_colors::fg_overlay_3(theme));
             }
-            row.finish()
+            let mut stack = Stack::new().with_child(row.finish());
+            if mouse.is_hovered() {
+                let tooltip = ConstrainedBox::new(
+                    appearance
+                        .ui_builder()
+                        .tool_tip(identity.full)
+                        .build()
+                        .finish(),
+                )
+                .with_max_width(400.0)
+                .finish();
+                stack.add_positioned_overlay_child(
+                    tooltip,
+                    OffsetPositioning::offset_from_parent(
+                        Vector2F::new(0.0, 3.0),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::BottomLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                );
+            }
+            stack.finish()
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
@@ -2989,7 +3036,7 @@ impl SshManagerPanel {
         appearance: &warp_core::ui::appearance::Appearance,
     ) -> Vec<Box<dyn Element>> {
         let theme = appearance.theme();
-        let muted: pathfinder_color::ColorU = theme.sub_text_color(theme.background()).into();
+        let muted: pathfinder_color::ColorU = theme.sub_text_color(theme.surface_2()).into();
         let depth = self.depths.get(&node.id).copied().unwrap_or(0);
         // Server names follow one fixed disclosure slot, without a leading icon.
         // Section labels align with the host; session content is one level in.
@@ -3001,9 +3048,13 @@ impl SshManagerPanel {
 
         let message = |text: String, color: pathfinder_color::ColorU| -> Box<dyn Element> {
             Container::new(
-                Text::new(text, appearance.ui_font_family(), appearance.ui_font_body())
-                    .with_color(color)
-                    .finish(),
+                Text::new(
+                    text,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_footnote(),
+                )
+                .with_color(color)
+                .finish(),
             )
             .with_padding_top(ITEM_PADDING_VERTICAL)
             .with_padding_bottom(ITEM_PADDING_VERTICAL)
@@ -3015,7 +3066,7 @@ impl SshManagerPanel {
 
         let mut rows = vec![message(
             crate::t!("workspace-left-panel-ssh-manager-zaplex-sessions"),
-            theme.main_text_color(theme.background()).into(),
+            muted,
         )];
         let host_inventory = self.host_session_inventories.get(&node.id);
         if self.sessions_loading.contains_key(&node.id) && host_inventory.is_none() {
@@ -3049,7 +3100,7 @@ impl SshManagerPanel {
                 let key = session_row_key(&node.id, session, routed_session.route.as_ref());
                 rows.push(self.render_session_row(
                     &key,
-                    daemon_session_title(session),
+                    daemon_session_identity(&node.name, session),
                     None,
                     session_indent,
                     appearance,
@@ -3070,7 +3121,7 @@ impl SshManagerPanel {
             if !inventory.sessions.is_empty() || !inventory.warnings.is_empty() {
                 rows.push(message(
                     crate::t!("workspace-left-panel-ssh-manager-multiplexer-heading"),
-                    theme.main_text_color(theme.background()).into(),
+                    muted,
                 ));
                 for warning in &inventory.warnings {
                     rows.push(message(
@@ -3096,7 +3147,10 @@ impl SshManagerPanel {
                     );
                     rows.push(self.render_session_row(
                         &key,
-                        title,
+                        TerminalIdentity {
+                            full: title.clone(),
+                            short: title,
+                        },
                         Some(metadata),
                         session_indent,
                         appearance,
@@ -3114,7 +3168,7 @@ impl SshManagerPanel {
         // empty-state — showing both at once reads as a contradiction.
         if self.nodes.is_empty() && !self.adding_mode {
             let theme = appearance.theme();
-            let muted = theme.sub_text_color(theme.background());
+            let muted = theme.sub_text_color(theme.surface_2());
             col.add_child(
                 Container::new(
                     Text::new_inline(
@@ -3187,7 +3241,7 @@ impl SshManagerPanel {
             .map(|rs| rs.node_id == node.id)
             .unwrap_or(false);
 
-        let icon_color = theme.sub_text_color(theme.background());
+        let icon_color = theme.sub_text_color(theme.surface_2());
         let icon_el = tree_row_leading_icon(node.kind).map(|icon| {
             ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
                 .with_width(ITEM_ICON_SIZE)
@@ -3238,7 +3292,7 @@ impl SshManagerPanel {
                     border_color: Some(theme.accent().into()),
                     border_width: Some(1.0),
                     border_radius: Some(CornerRadius::with_all(Radius::Pixels(3.0))),
-                    font_size: Some(appearance.ui_font_subheading()),
+                    font_size: Some(appearance.ui_font_body_large()),
                     ..Default::default()
                 })
                 .build()
@@ -3248,9 +3302,9 @@ impl SshManagerPanel {
             Text::new_inline(
                 node.name.clone(),
                 appearance.ui_font_family(),
-                appearance.ui_font_subheading(),
+                appearance.ui_font_body_large(),
             )
-            .with_color(theme.main_text_color(theme.background()).into())
+            .with_color(theme.main_text_color(theme.surface_2()).into())
             .with_clip(ClipConfig::ellipsis())
             .finish()
         };
@@ -3288,7 +3342,7 @@ impl SshManagerPanel {
             row_flex = row_flex.with_child(
                 warpui::elements::ConstrainedBox::new(
                     crate::ui_components::icons::Icon::Lightning
-                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .to_warpui_icon(theme.sub_text_color(theme.surface_2()))
                         .finish(),
                 )
                 .with_width(mark_size)
@@ -3354,7 +3408,7 @@ impl SshManagerPanel {
                 .finish();
         }
 
-        let hoverable = Hoverable::new(state, move |_| {
+        let hoverable = Hoverable::new(state, move |mouse| {
             let mut c = Container::new(row)
                 .with_padding_top(ITEM_PADDING_VERTICAL)
                 .with_padding_bottom(ITEM_PADDING_VERTICAL)
@@ -3363,6 +3417,8 @@ impl SshManagerPanel {
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
             if is_selected {
                 c = c.with_background(internal_colors::fg_overlay_3(theme));
+            } else if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_1(theme));
             }
             c.finish()
         })
@@ -3589,7 +3645,7 @@ impl SshManagerPanel {
                 appearance.ui_font_family(),
                 appearance.ui_font_subheading(),
             )
-            .with_color(theme.main_text_color(theme.background()).into())
+            .with_color(theme.main_text_color(theme.surface_2()).into())
             .finish();
             let row_action = action.clone();
             let item = Hoverable::new(state, move |mouse| {
@@ -3970,6 +4026,7 @@ impl View for SshManagerPanel {
                 .with_child(Shrinkable::new(1.0, scrollable_content).finish())
                 .finish(),
         )
+        .with_background(appearance.theme().surface_2())
         .finish();
 
         let positioned_panel = SavePosition::new(panel_content, SSH_PANEL_POSITION_ID).finish();
@@ -4212,6 +4269,50 @@ fn list_server_hosts() -> Vec<String> {
     .unwrap_or_else(|e| {
         log::warn!("ssh_manager: failed to list server hosts for candidates: {e:?}");
         Vec::new()
+    })
+}
+
+/// Import one discovery result atomically, including its sync-version changes.
+fn import_tailscale_hosts(
+    conn: &mut SqliteConnection,
+    parent: Option<&str>,
+    candidates: &[TailscaleHost],
+) -> anyhow::Result<usize> {
+    conn.transaction(|conn| {
+        let mut existing = std::collections::HashSet::new();
+        for node in SshRepository::list_nodes(conn)? {
+            if matches!(node.kind, NodeKind::Server) {
+                if let Some(info) = SshRepository::get_server(conn, &node.id)? {
+                    existing.insert(info.host);
+                }
+            }
+        }
+        let mut count = 0usize;
+        for candidate in candidates {
+            let host = candidate.connect_host().to_string();
+            if host.is_empty() || existing.contains(&host) {
+                continue;
+            }
+            let info = SshServerInfo {
+                node_id: String::new(),
+                host: host.clone(),
+                port: 22,
+                username: String::new(),
+                auth_type: AuthType::Key,
+                key_path: None,
+                credential_id: None,
+                startup_command: None,
+                notes: Some(format!("Discovered via Tailscale ({})", candidate.os)),
+                last_connected_at: None,
+                session_resilience: warp_ssh_manager::SessionResilience::default(),
+                ring_ceiling_mb: 0,
+            };
+            let name = unique_name(conn, parent, &candidate.hostname)?;
+            SshRepository::create_server(conn, parent, &name, &info)?;
+            existing.insert(host);
+            count += 1;
+        }
+        Ok(count)
     })
 }
 

@@ -18,6 +18,8 @@ use crate::sftp_manager::types::FileEntry;
 
 struct InstrumentedBackend {
     inner: InMemorySftpBackend,
+    recovery_results: Mutex<BTreeMap<PathBuf, Vec<Result<RecoveryOutcome, &'static str>>>>,
+    recovered_outcomes: Mutex<BTreeMap<PathBuf, RecoveryOutcome>>,
     supports_exchange: bool,
     durable_exchange_recovery: bool,
     supports_cleanup: bool,
@@ -53,11 +55,18 @@ struct InstrumentedBackend {
     occupy_after_missing_probe: Option<(PathBuf, Vec<u8>, Arc<AtomicBool>)>,
     fail_identity_after_rename: Option<PathBuf>,
     rename_completed: AtomicBool,
+    fail_second_quarantine_read: bool,
+    quarantine_reads: AtomicU64,
+    fail_identity_after_publication: Option<PathBuf>,
+    publication_read_started: AtomicBool,
+    publication_metadata_ready: AtomicBool,
 }
 
 impl InstrumentedBackend {
     fn new(root: &Path) -> Self {
         Self {
+            recovery_results: Mutex::new(BTreeMap::new()),
+            recovered_outcomes: Mutex::new(BTreeMap::new()),
             inner: InMemorySftpBackend::new(root.to_path_buf()),
             supports_exchange: true,
             durable_exchange_recovery: false,
@@ -94,6 +103,11 @@ impl InstrumentedBackend {
             occupy_after_missing_probe: None,
             fail_identity_after_rename: None,
             rename_completed: AtomicBool::new(false),
+            fail_second_quarantine_read: false,
+            quarantine_reads: AtomicU64::new(0),
+            fail_identity_after_publication: None,
+            publication_read_started: AtomicBool::new(false),
+            publication_metadata_ready: AtomicBool::new(false),
         }
     }
 
@@ -450,6 +464,46 @@ impl BackendFileReader for InstrumentedReader {
 }
 
 impl SftpBackend for InstrumentedBackend {
+    fn retry_unresolved_recovery(&self, path: &Path) -> Result<Option<Vec<PathBuf>>, SftpOpsError> {
+        let result = {
+            let mut results = self.recovery_results.lock().unwrap();
+            match results.get_mut(path) {
+                Some(steps) if !steps.is_empty() => Some(steps.remove(0)),
+                Some(_) | None => None,
+            }
+        };
+        let Some(result) = result else {
+            return Ok(None);
+        };
+        let outcome = result.map_err(|message| SftpOpsError::Operation(message.to_string()))?;
+        fs::remove_file(self.local_path(path))?;
+        self.recovered_outcomes
+            .lock()
+            .unwrap()
+            .insert(path.to_path_buf(), outcome);
+        Ok(Some(Vec::new()))
+    }
+
+    fn take_recovery_source_preserved(&self, path: &Path) -> bool {
+        let mut outcomes = self.recovered_outcomes.lock().unwrap();
+        if outcomes.get(path) == Some(&RecoveryOutcome::DestinationCommittedSourcePreserved) {
+            outcomes.remove(path);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn take_recovery_source_restored(&self, path: &Path) -> bool {
+        let mut outcomes = self.recovered_outcomes.lock().unwrap();
+        if outcomes.get(path) == Some(&RecoveryOutcome::SourceRestored) {
+            outcomes.remove(path);
+            true
+        } else {
+            false
+        }
+    }
+
     fn supports_atomic_exchange(&self) -> bool {
         self.supports_exchange
     }
@@ -716,10 +770,27 @@ impl SftpBackend for InstrumentedBackend {
     }
 
     fn regular_file_mode(&self, path: &Path) -> Result<Option<u32>, SftpOpsError> {
-        self.inner.regular_file_mode(path)
+        let mode = self.inner.regular_file_mode(path)?;
+        // Publication hashing reads the payload before its mode; the next snapshot
+        // starts only after that complete publication identity has been accepted.
+        if self.fail_identity_after_publication.as_deref() == Some(path)
+            && self.publication_read_started.load(Ordering::SeqCst)
+        {
+            self.publication_metadata_ready
+                .store(true, Ordering::SeqCst);
+        }
+        Ok(mode)
     }
 
     fn stable_identity(&self, path: &Path) -> Result<StableEntryIdentity, SftpOpsError> {
+        if self
+            .publication_metadata_ready
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(SftpOpsError::Operation(
+                "injected committed destination metadata failure".to_string(),
+            ));
+        }
         if path.to_string_lossy().contains(".zaplex-transfer-") {
             self.stage_identity_calls.fetch_add(1, Ordering::SeqCst);
         }
@@ -780,6 +851,17 @@ impl SftpBackend for InstrumentedBackend {
     }
 
     fn open_file_reader(&self, path: &Path) -> Result<Box<dyn BackendFileReader>, SftpOpsError> {
+        if self.fail_second_quarantine_read
+            && path.to_string_lossy().contains(".zaplex-source-")
+            && self.quarantine_reads.fetch_add(1, Ordering::SeqCst) == 1
+        {
+            return Err(SftpOpsError::Operation(
+                "injected second quarantine read failure".to_string(),
+            ));
+        }
+        if self.fail_identity_after_publication.as_deref() == Some(path) {
+            self.publication_read_started.store(true, Ordering::SeqCst);
+        }
         Ok(Box::new(InstrumentedReader {
             inner: self.inner.open_file_reader(path)?,
             read_bytes: self.read_bytes.clone(),
@@ -1726,7 +1808,6 @@ fn progress_eta_and_pause_are_observable() {
 #[test]
 fn verification_hash_honors_cancel_and_reports_progress() {
     let source = tempdir().unwrap();
-    let target = tempdir().unwrap();
     fs::write(
         source.path().join("source.bin"),
         vec![0x75; STREAM_CHUNK_SIZE * 3],
@@ -1736,23 +1817,21 @@ fn verification_hash_honors_cancel_and_reports_progress() {
     let source_backend =
         Arc::new(InstrumentedBackend::new(source.path()).cancelling_reads(control.clone()));
     let read_bytes = source_backend.read_bytes.clone();
-    let transfer = TransferJob {
-        source_backend,
-        target_backend: backend(target.path()),
-        source_path: PathBuf::from("/source.bin"),
-        target_path: PathBuf::from("/target.bin"),
-        operation: TransferOperation::Copy,
-        conflict: ConflictDecision::Overwrite,
-    };
     let mut samples = Vec::new();
 
-    run_transfer(
-        &transfer,
+    capture_publication_snapshot_controlled(
+        &*source_backend,
+        Path::new("/source.bin"),
+        (STREAM_CHUNK_SIZE * 3) as u64,
         &control,
-        Some(&mut |progress| samples.push(progress)),
+        &mut Some(&mut |progress| samples.push(progress)),
     )
     .expect_err("cancelling during source verification must stop the hash");
 
+    assert!(
+        read_bytes.load(Ordering::SeqCst) > 0,
+        "the verification read must start"
+    );
     assert!(
         read_bytes.load(Ordering::SeqCst) <= STREAM_CHUNK_SIZE as u64,
         "verification must check cancellation between bounded reads"
@@ -2001,8 +2080,10 @@ fn review13_file_move_revalidates_source_after_finalizing_before_quarantine() {
         conflict: ConflictDecision::Overwrite,
     };
 
-    run_transfer(&transfer, &control, None)
+    let error = run_transfer(&transfer, &control, None)
         .expect_err("the source replacement must stop before quarantine mutation");
+    assert!(!error.destination_committed());
+    assert!(!target.path().join("target.bin").exists());
 
     assert_eq!(fs::read(&source_path).unwrap(), b"source");
     assert_eq!(fs::read(&original).unwrap(), b"source");
@@ -2027,7 +2108,7 @@ fn review13_directory_move_revalidates_source_after_finalizing_before_quarantine
         }
     });
 
-    run_directory_transfer(
+    let error = run_directory_transfer(
         &directory_job(
             backend(source.path()),
             backend(target.path()),
@@ -2039,6 +2120,8 @@ fn review13_directory_move_revalidates_source_after_finalizing_before_quarantine
     )
     .expect_err("the directory replacement must stop before quarantine mutation");
 
+    assert!(!error.destination_committed());
+    assert!(!target.path().join("target").exists());
     assert_eq!(fs::read(source_path.join("a.bin")).unwrap(), b"source");
     assert_eq!(fs::read(original.join("a.bin")).unwrap(), b"source");
 }
@@ -5150,4 +5233,360 @@ fn review18_directory_isolation_restores_a_replacement_swapped_after_the_final_g
         !source_backend.startup_recovery_paths_for_test().is_empty(),
         "the ambiguous directory isolation must remain globally recoverable"
     );
+}
+
+#[test]
+fn committed_move_retains_source_recovery_after_quarantine_read_failure() {
+    for (directory, overwrite) in [(false, false), (true, false), (false, true), (true, true)] {
+        let source = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let source_path = if directory { "/source" } else { "/source.bin" };
+        let target_path = if directory { "/target" } else { "/target.bin" };
+        let source_payload = if directory {
+            "source/payload.bin"
+        } else {
+            "source.bin"
+        };
+        let target_payload = if directory {
+            "target/payload.bin"
+        } else {
+            "target.bin"
+        };
+        if directory {
+            fs::create_dir(source.path().join("source")).unwrap();
+        }
+        fs::write(source.path().join(source_payload), b"owned source").unwrap();
+        if overwrite {
+            if directory {
+                fs::create_dir(target.path().join("target")).unwrap();
+            }
+            fs::write(target.path().join(target_payload), b"old target").unwrap();
+        }
+        let mut backend = InstrumentedBackend::new(source.path());
+        backend.fail_second_quarantine_read = true;
+        let backend = Arc::new(backend);
+        // Independent-backup recovery exercises the non-durable exchange contract.
+        let mut target_backend = InstrumentedBackend::new(target.path());
+        target_backend.inner = InMemorySftpBackend::new(target.path().to_path_buf())
+            .with_delete_failure_matching_once("zaplex-backup");
+        let transfer = TransferJob {
+            source_backend: backend.clone(),
+            target_backend: Arc::new(target_backend),
+            source_path: PathBuf::from(source_path),
+            target_path: PathBuf::from(target_path),
+            operation: TransferOperation::Move,
+            conflict: ConflictDecision::Overwrite,
+        };
+
+        let result = if directory {
+            run_directory_transfer(&transfer, &TransferControl::default(), None)
+        } else {
+            run_transfer(&transfer, &TransferControl::default(), None)
+        };
+        let error =
+            result.expect_err("a read error after quarantine must retain recovery authority");
+        assert!(
+            error
+                .to_string()
+                .contains("injected second quarantine read failure"),
+            "{error}"
+        );
+        assert_eq!(backend.quarantine_reads.load(Ordering::SeqCst), 2);
+        assert!(error.destination_committed(), "{error}");
+        assert!(error
+            .recovery_paths()
+            .iter()
+            .any(|path| path == Path::new(source_path)));
+        assert!(error
+            .recovery_paths()
+            .iter()
+            .any(|path| path.to_string_lossy().contains(".zaplex-source-")));
+        assert!(!source
+            .path()
+            .join(source_path.trim_start_matches('/'))
+            .exists());
+        assert_eq!(
+            fs::read(target.path().join(target_payload)).unwrap(),
+            b"owned source"
+        );
+        if overwrite {
+            assert!(error
+                .recovery_paths()
+                .iter()
+                .any(|path| path.to_string_lossy().contains("zaplex-backup")));
+            let stage_marker = if directory {
+                "zaplex-tree"
+            } else {
+                "zaplex-transfer"
+            };
+            assert!(error
+                .recovery_paths()
+                .iter()
+                .any(|path| path.to_string_lossy().contains(stage_marker)));
+            let retry_error = retry_recovery(error.recovery_id().unwrap())
+                .expect_err("the retained backup must hit the one-shot cleanup failure");
+            assert!(retry_error.to_string().contains("injected cleanup failure"));
+            assert!(!source
+                .path()
+                .join(source_path.trim_start_matches('/'))
+                .exists());
+        }
+        assert_eq!(
+            retry_recovery(error.recovery_id().unwrap()).unwrap(),
+            RecoveryOutcome::SourceRestored
+        );
+        assert_eq!(
+            fs::read(source.path().join(source_payload)).unwrap(),
+            b"owned source"
+        );
+        assert_eq!(
+            fs::read(target.path().join(target_payload)).unwrap(),
+            b"owned source"
+        );
+        assert!(transfer_artifacts(source.path(), "zaplex-source").is_empty());
+        assert!(transfer_artifacts(target.path(), "zaplex-backup").is_empty());
+        assert!(transfer_artifacts(target.path(), "zaplex-transfer").is_empty());
+        assert!(transfer_artifacts(target.path(), "zaplex-tree").is_empty());
+    }
+}
+
+#[test]
+fn committed_destination_metadata_failure_reports_file_and_directory_paths() {
+    for directory in [false, true] {
+        let source = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let source_path = if directory { "/source" } else { "/source.bin" };
+        let target_path = if directory { "/target" } else { "/target.bin" };
+        let source_payload = if directory {
+            "source/payload.bin"
+        } else {
+            "source.bin"
+        };
+        let target_payload = if directory {
+            "target/payload.bin"
+        } else {
+            "target.bin"
+        };
+        if directory {
+            fs::create_dir(source.path().join("source")).unwrap();
+        }
+        fs::write(source.path().join(source_payload), b"published payload").unwrap();
+        let mut backend = InstrumentedBackend::new(target.path());
+        backend.fail_identity_after_publication = Some(Path::new("/").join(target_payload));
+        let transfer = TransferJob {
+            source_backend: Arc::new(InMemorySftpBackend::new(source.path().to_path_buf())),
+            target_backend: Arc::new(backend),
+            source_path: PathBuf::from(source_path),
+            target_path: PathBuf::from(target_path),
+            operation: TransferOperation::Move,
+            conflict: ConflictDecision::Overwrite,
+        };
+
+        let result = if directory {
+            run_directory_transfer(&transfer, &TransferControl::default(), None)
+        } else {
+            run_transfer(&transfer, &TransferControl::default(), None)
+        };
+        let error =
+            result.expect_err("post-commit metadata failure must report the installed target");
+        assert!(
+            error
+                .to_string()
+                .contains("Capturing committed destination failed"),
+            "{error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("injected committed destination metadata failure"),
+            "{error}"
+        );
+        assert!(error.destination_committed(), "{error}");
+        assert!(error
+            .recovery_paths()
+            .iter()
+            .any(|path| path == Path::new(target_path)));
+        assert_eq!(
+            fs::read(source.path().join(source_payload)).unwrap(),
+            b"published payload"
+        );
+        assert_eq!(
+            fs::read(target.path().join(target_payload)).unwrap(),
+            b"published payload"
+        );
+        assert!(transfer_artifacts(source.path(), "zaplex-source").is_empty());
+    }
+}
+
+#[test]
+fn displaced_cleanup_failure_keeps_independent_backup_in_recovery() {
+    for directory in [false, true] {
+        let source = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let source_path = if directory { "/source" } else { "/source.bin" };
+        let target_path = if directory { "/target" } else { "/target.bin" };
+        let source_payload = if directory {
+            "source/payload.bin"
+        } else {
+            "source.bin"
+        };
+        let target_payload = if directory {
+            "target/payload.bin"
+        } else {
+            "target.bin"
+        };
+        let stage_marker = if directory {
+            "zaplex-tree"
+        } else {
+            "zaplex-transfer"
+        };
+        if directory {
+            fs::create_dir(source.path().join("source")).unwrap();
+            fs::create_dir(target.path().join("target")).unwrap();
+        }
+        fs::write(source.path().join(source_payload), b"new").unwrap();
+        fs::write(target.path().join(target_payload), b"old").unwrap();
+        // Durable exchange backends intentionally do not create an independent backup.
+        let mut target_backend = InstrumentedBackend::new(target.path());
+        target_backend.inner = InMemorySftpBackend::new(target.path().to_path_buf())
+            .with_delete_failure_matching_once(stage_marker);
+        let transfer = TransferJob {
+            source_backend: backend(source.path()),
+            target_backend: Arc::new(target_backend),
+            source_path: PathBuf::from(source_path),
+            target_path: PathBuf::from(target_path),
+            operation: TransferOperation::Copy,
+            conflict: ConflictDecision::Overwrite,
+        };
+        let result = if directory {
+            run_directory_transfer(&transfer, &TransferControl::default(), None)
+        } else {
+            run_transfer(&transfer, &TransferControl::default(), None)
+        };
+        let error = result.unwrap_err();
+        assert!(error.destination_committed(), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("displaced target cleanup failed"),
+            "{error}"
+        );
+        assert!(error
+            .recovery_paths()
+            .iter()
+            .any(|path| path.to_string_lossy().contains("zaplex-backup")));
+        assert_eq!(
+            retry_recovery(error.recovery_id().unwrap()).unwrap(),
+            RecoveryOutcome::CleanupCompleted
+        );
+        assert_eq!(
+            fs::read(target.path().join(target_payload)).unwrap(),
+            b"new"
+        );
+        assert_eq!(
+            fs::read(source.path().join(source_payload)).unwrap(),
+            b"new"
+        );
+        assert!(transfer_artifacts(target.path(), "zaplex-backup").is_empty());
+        assert!(transfer_artifacts(target.path(), stage_marker).is_empty());
+    }
+}
+
+#[test]
+fn recovery_outcomes_survive_later_errors_within_and_across_filesystems() {
+    for split_filesystems in [false, true] {
+        for (first, second, expected) in [
+            (
+                RecoveryOutcome::SourceRestored,
+                RecoveryOutcome::CleanupCompleted,
+                RecoveryOutcome::SourceRestored,
+            ),
+            (
+                RecoveryOutcome::DestinationCommittedSourcePreserved,
+                RecoveryOutcome::SourceRestored,
+                RecoveryOutcome::DestinationCommittedSourcePreserved,
+            ),
+            (
+                RecoveryOutcome::SourceRestored,
+                RecoveryOutcome::DestinationCommittedSourcePreserved,
+                RecoveryOutcome::DestinationCommittedSourcePreserved,
+            ),
+        ] {
+            let source = tempdir().unwrap();
+            let target = tempdir().unwrap();
+            let source_backend = Arc::new(InstrumentedBackend::new(source.path()));
+            let target_backend = if split_filesystems {
+                Arc::new(InstrumentedBackend::new(target.path()))
+            } else {
+                source_backend.clone()
+            };
+            let first_path = PathBuf::from("/a-first");
+            let second_path = PathBuf::from("/b-second");
+            let failing_path = PathBuf::from("/z-fail");
+            for (backend, path, steps) in [
+                (&source_backend, &first_path, vec![Ok(first)]),
+                (&target_backend, &second_path, vec![Ok(second)]),
+                (
+                    &target_backend,
+                    &failing_path,
+                    vec![
+                        Err("injected later recovery failure"),
+                        Ok(RecoveryOutcome::CleanupCompleted),
+                    ],
+                ),
+            ] {
+                fs::write(backend.local_path(path), b"retained artifact").unwrap();
+                backend
+                    .recovery_results
+                    .lock()
+                    .unwrap()
+                    .insert(path.clone(), steps);
+            }
+            let mut ownership = PathOwnership::empty(Path::new("/"));
+            ownership.unresolved.insert(first_path.clone());
+            if !split_filesystems {
+                ownership
+                    .unresolved
+                    .extend([second_path.clone(), failing_path.clone()]);
+            }
+            let error =
+                ownership_recovery_error("retry fixture", source_backend.clone(), ownership, true);
+            let recovery_id = error.recovery_id().unwrap();
+            if split_filesystems {
+                let mut ownership = PathOwnership::empty(Path::new("/"));
+                ownership
+                    .unresolved
+                    .extend([second_path.clone(), failing_path.clone()]);
+                recovery_actions()
+                    .lock()
+                    .unwrap()
+                    .get_mut(&recovery_id)
+                    .unwrap()
+                    .units
+                    .push(CleanupRecoveryUnit::Unresolved {
+                        backend: target_backend.clone(),
+                        ownership,
+                    });
+            }
+
+            let error = retry_recovery(recovery_id).expect_err("later path must fail once");
+            assert!(error
+                .to_string()
+                .contains("injected later recovery failure"));
+            assert!(!source_backend.local_path(&first_path).exists());
+            assert!(!target_backend.local_path(&second_path).exists());
+            assert!(target_backend.local_path(&failing_path).exists());
+            assert!(!source_backend.take_recovery_source_preserved(&first_path));
+            assert!(!source_backend.take_recovery_source_restored(&first_path));
+            assert!(!target_backend.take_recovery_source_preserved(&second_path));
+            assert!(!target_backend.take_recovery_source_restored(&second_path));
+
+            assert_eq!(retry_recovery(recovery_id).unwrap(), expected);
+            assert!(!target_backend.local_path(&failing_path).exists());
+            assert!(!recovery_actions()
+                .lock()
+                .unwrap()
+                .contains_key(&recovery_id));
+        }
+    }
 }

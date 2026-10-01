@@ -556,3 +556,76 @@ fn pending_connected_host_is_serialized_as_loading_with_partial_status() {
         "removed"
     );
 }
+
+#[test]
+fn local_session_without_account_inventory_remains_partial_and_locally_labeled() {
+    let snapshot = CockpitSnapshot {
+        accounts: Vec::new(),
+        generated_at: generated_at(),
+        health: ScanHealth::Loaded,
+    };
+    let mut local = session("local-agy", SessionState::Monitor);
+    local.provider = Provider::Antigravity;
+    local.account_email = None;
+    local.config_dir = None;
+    let fleet = FleetTree {
+        hosts: vec![host(
+            "this machine",
+            true,
+            None,
+            AgentInventoryStatus::Ready,
+            vec![local],
+        )],
+        needs_me: 0,
+    };
+
+    let document = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet, &[]);
+
+    assert_eq!(document.exit_code(), EXIT_PARTIAL);
+    assert_eq!(document.sources.local.status, SourceStatus::Degraded);
+    assert_eq!(document.sources.remote_hosts.status, SourceStatus::Loaded);
+    assert_eq!(document.accounts.len(), 1);
+    assert_eq!(document.accounts[0].host_id, "local");
+    assert_eq!(document.accounts[0].label, "Antigravity");
+    assert_eq!(document.accounts[0].health, "degraded");
+    assert_eq!(document.accounts[0].usage_provenance, "unknown");
+    assert_eq!(document.accounts[0].sessions.len(), 1);
+}
+
+#[test]
+fn explicit_unknown_account_root_is_not_replaced_by_matching_email() {
+    let snapshot = CockpitSnapshot {
+        accounts: vec![account_at("/different/account/root", Vec::new())],
+        generated_at: generated_at(),
+        health: ScanHealth::Loaded,
+    };
+    let local = session("old-account-session", SessionState::Waiting);
+    let fleet = FleetTree {
+        hosts: vec![host(
+            "local",
+            true,
+            None,
+            AgentInventoryStatus::Ready,
+            vec![local],
+        )],
+        needs_me: 1,
+    };
+
+    let document = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet, &[]);
+
+    assert_eq!(document.exit_code(), EXIT_PARTIAL);
+    assert_eq!(document.accounts.len(), 2);
+    let known = document
+        .accounts
+        .iter()
+        .find(|account| account.health == "loaded")
+        .unwrap();
+    assert!(known.sessions.is_empty());
+    let unknown = document
+        .accounts
+        .iter()
+        .find(|account| account.health == "degraded")
+        .unwrap();
+    assert_eq!(unknown.sessions.len(), 1);
+    assert_eq!(document.attention[0].account_id, unknown.id);
+}

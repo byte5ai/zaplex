@@ -4,6 +4,11 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+nonrust_case() {
+  if [ -n "${ZAPLEX_NONRUST_EVENTS:-}" ]; then
+    python3 "$repo_root/script/test-suite-nonrust-events" "$1"
+  fi
+}
 assets="$repo_root/app/assets/bundled/ssh/bash_zsh"
 test_root="$(mktemp -d)"
 trap 'rm -rf -- "$test_root"' EXIT
@@ -73,29 +78,36 @@ assert_tmux_call() {
 exercise_home() {
   local name="$1"
   local case_root="$test_root/$name"
-  local home="$case_root/zaplex home"
+  local case_home="$case_root/zaplex home"
   local call_log="$case_root/tmux-call"
-  local expected_binary="$home/.warp/tmux/local/bin/tmux"
+  local expected_binary="$case_home/.warp/tmux/local/bin/tmux"
 
   if [ "$name" = "normal" ]; then
-    home="$case_root/home"
-    expected_binary="$home/.warp/tmux/local/bin/tmux"
+    case_home="$case_root/home"
+    expected_binary="$case_home/.warp/tmux/local/bin/tmux"
   fi
 
-  mkdir -p "$case_root" "$home"
+  if [ "$name" = "shell-metacharacters" ]; then
+    case_home="$case_root/"'$(touch injected) "quoted"\path'
+    expected_binary="$case_home/.warp/tmux/local/bin/tmux"
+  fi
+
+  mkdir -p "$case_root" "$case_home"
 
   (
     cd "$case_root"
-    HOME="$home" \
+    HOME="$case_home" \
       PATH="$fake_bin:/usr/bin:/bin" \
       TMUX_CALL_LOG="$call_log" \
       TMUX_TEST_BINARY="$tmux_test_binary" \
       bash "$assets/install_tmux_and_zaplexify_linux.sh" >/dev/null
   )
 
-  [ -x "$home/.warp/tmux/execute_tmux.sh" ] ||
+  [ -x "$case_home/.warp/tmux/execute_tmux.sh" ] ||
     fail "portable wrapper was not created below HOME ($name)"
   assert_tmux_call "$call_log" "$expected_binary"
+
+  [ ! -e "$case_root/injected" ] || fail "wrapper evaluated literal HOME bytes"
 
   local detector
   for detector in zaplexify_ssh_session.sh zaplexify_ssh_session_mac.sh; do
@@ -103,17 +115,19 @@ exercise_home() {
     : > "${call_log}.args"
     (
       cd "$case_root"
-      HOME="$home" \
+      HOME="$case_home" \
         PATH="$fake_bin:/usr/bin:/bin" \
         TMUX_CALL_LOG="$call_log" \
         bash "$assets/$detector" >/dev/null
     )
     assert_tmux_call "$call_log" "$expected_binary"
   done
+  nonrust_case "home:$name"
 }
 
 exercise_home normal
 exercise_home spaced
+exercise_home shell-metacharacters
 
 for script in "$assets"/*.sh "$assets"/root/*.sh; do
   bash -n "$script" || fail "$script is not valid Bash syntax"
@@ -157,3 +171,67 @@ extraction_line="$(grep -n -m1 'tar -xf tmux.tar.gz' "$portable_installer" | cut
 [ -n "$verification_line" ] && [ -n "$extraction_line" ] &&
   [ "$verification_line" -lt "$extraction_line" ] ||
   fail "portable archive must be integrity-checked before extraction"
+
+
+# Decode the actual shell literals, then exercise only their error helpers in an
+# isolated temporary HOME. No installer, network, or package-manager runs here.
+python3 - "$repo_root" "$test_root" <<'PYTHON'
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+
+repo, scratch = map(Path, sys.argv[1:])
+nonrust_case = __import__("runpy").run_path(str(repo / "script/test-suite-nonrust-events"))["record"]
+assets = repo / "app/assets/bundled/ssh"
+sources = [assets / "bash_zsh/install_tmux_and_zaplexify_linux.sh"]
+sources.extend(sorted((assets / "bash_zsh/root").glob("*.sh")))
+bodies = []
+for source in sources:
+    script = source.read_text()
+    literal = script.removeprefix("INSTALL_TMUX=").split("\n\nbash", 1)[0]
+    words = shlex.split(literal)
+    assert len(words) == 1, source
+    bodies.append((source.name, words[0]))
+
+# Fish has different single-quote escaping. Capture its Bash argument through a
+# shell function instead of allowing the embedded installer to execute.
+fish = shutil.which("fish")
+if fish:
+    capture = scratch / "fish-installer-body"
+    subprocess.run(
+        [fish, "-c", 'function bash; printf "%s" "$argv[2]" > "$TMUX_CAPTURE"; return 1; end; source "$argv[1]"',
+         str(assets / "fish/install_tmux_and_zaplexify_linux.sh")],
+        env={**os.environ, "TMUX_CAPTURE": str(capture)},
+        check=False,
+    )
+    fish_body = capture.read_text()
+    assert fish_body == bodies[0][1], "Fish changed the embedded Bash program"
+    bodies.append(("fish", fish_body))
+    nonrust_case("fish-preserves-embedded-bash-body")
+
+command = 'false "quoted" \\path 100% café\nnext\tline\r\x01'
+for name, body in bodies:
+    # Also validate the command representation used by the product's PTY path.
+    flattened = re.sub(r"(?m)^ *#.*", "", body)
+    flattened = re.sub(r"^\n*", "", flattened)
+    flattened = re.sub(r"\n+\s*", "\n", flattened)
+    flattened = re.sub(r"(; ?|\{|do|then|else|in)\n", r"\1 ", flattened)
+    flattened = flattened.replace("\n", ";") + "\n"
+    subprocess.run(["bash", "-n"], input=flattened, text=True, check=True)
+    helper = body.split("\ntrap ", 1)[0]
+    result = subprocess.run(
+        ["bash", "-c", helper + '\n_on_error 17 "$1"', "tmux-error-fixture", command],
+        env={**os.environ, "HOME": str(scratch / "error-helper-home")},
+        stdout=subprocess.PIPE, check=True,
+    )
+    match = re.fullmatch(rb"\x1bP\$d([0-9a-f]+)\x9c", result.stdout)
+    assert match, (name, result.stdout)
+    hook = json.loads(bytes.fromhex(match[1].decode()))
+    assert hook == {"hook": "TmuxInstallFailed", "value": {"line": "17", "command": command}}, name
+    nonrust_case(f"error-helper:{name}")
+PYTHON

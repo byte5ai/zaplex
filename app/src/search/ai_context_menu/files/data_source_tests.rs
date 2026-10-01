@@ -406,6 +406,7 @@ fn test_path_proximity_ranking() {
 
 #[test]
 fn test_directory_search_support() {
+    crate::i18n::init(Some("en"));
     use crate::search::ai_context_menu::files::search_item::FileSearchItem;
     use fuzzy_match::FuzzyMatchResult;
 

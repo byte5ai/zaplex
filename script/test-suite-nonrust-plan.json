@@ -1,0 +1,583 @@
+{
+  "schema_version": 1,
+  "scope": "Linux build-free PR test suites plus measurement-adapter regressions; policy guards separate; each suite once per acceptance revision",
+  "inventory_source_hashes": {
+    ".github/actions/static-pr-checks/action.yml": "dc907253cc4863caea3d470aa00688749927949578cf3fdbd38cbea949a909cf",
+    ".github/workflows/pr-check.yml": "818d38e01642b3f3251689bed05302d7236e69b1c013cc08ed9d3a8439b0d0d8"
+  },
+  "required_tools": [
+    "bash",
+    "git",
+    "fish",
+    "rg",
+    "python3"
+  ],
+  "excluded_non_test_operations": {
+    "script/test-suite-evidence-requirements.txt": "binary-only dependency installation, not a test",
+    "script/needs-build-check": "CI change scheduling; no test case, the seven actual outcome fixtures execute its required-job contract"
+  },
+  "suites": [
+    {
+      "id": "docker-supply-chain",
+      "source": "script/check-docker-supply-chain",
+      "mode": "events",
+      "command": [
+        "{python}",
+        "script/check-docker-supply-chain",
+        "--self-test"
+      ],
+      "timeout_seconds": 180,
+      "expected_case_ids": [
+        "valid.Dockerfile",
+        "mutable-base.Dockerfile",
+        "unpinned-base.Dockerfile",
+        "head-download.Dockerfile",
+        "pipe-to-shell.Dockerfile",
+        "unchecked-extract.Dockerfile",
+        "check-after-extract.Dockerfile",
+        "movable-git-install.sh",
+        "unpinned-binstall.sh"
+      ]
+    },
+    {
+      "id": "release-supply-chain",
+      "source": "script/check-release-supply-chain",
+      "mode": "events",
+      "command": [
+        "{python}",
+        "script/check-release-supply-chain",
+        "--self-test"
+      ],
+      "timeout_seconds": 180,
+      "expected_case_ids": [
+        "reject-floating-action",
+        "accept-immutable-action",
+        "reject-dash-prefixed-floating-action",
+        "reject-persisted-checkout-credentials",
+        "accept-nonpersisted-checkout-credentials",
+        "reject-cross-job-credential-inheritance",
+        "reject-sibling-step-credential-inheritance",
+        "reject-global-token-export",
+        "accept-token-free-action",
+        "reject-workflow-global-token",
+        "accept-step-scoped-token",
+        "accept-least-privilege-release-permissions",
+        "reject-workflow-write-permissions",
+        "reject-build-job-write-permissions",
+        "reject-build-job-write-all",
+        "reject-commented-quoted-write-permissions",
+        "reject-extra-publisher-permissions",
+        "reject-permissions-hidden-after-column-zero-comment",
+        "reject-token-hidden-after-column-zero-comment",
+        "accept-read-only-contents",
+        "reject-missing-read-only-permissions",
+        "reject-following-job-publisher-inheritance:  notify:  # post-release",
+        "reject-following-job-publisher-inheritance:  notify: "
+      ]
+    },
+    {
+      "id": "release-tag-inputs",
+      "source": "script/validate-release-tag-tests",
+      "mode": "events",
+      "command": [
+        "bash",
+        "script/validate-release-tag-tests"
+      ],
+      "timeout_seconds": 180,
+      "expected_case_ids": [
+        "accept:v1.0.29",
+        "accept:v1.0.29-rc.1",
+        "accept:v0.daemontest",
+        "accept:v1.0.0+build.5",
+        "reject:",
+        "reject:1.0.0",
+        "reject:v1.0.0;echo-pwned",
+        "reject:v1.0.0$(id)",
+        "reject:v../escape",
+        "reject:v1.0.0@{1}"
+      ]
+    },
+    {
+      "id": "fork-links",
+      "source": "script/fork-link-contract-tests",
+      "mode": "guard",
+      "command": [
+        "{python}",
+        "script/fork-link-contract-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "linux-container-security",
+      "source": "script/check-linux-dev-container-security",
+      "mode": "guard",
+      "command": [
+        "{python}",
+        "script/check-linux-dev-container-security"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "ssh-tmux-assets",
+      "source": "script/ssh-tmux-asset-tests",
+      "mode": "events",
+      "command": [
+        "bash",
+        "script/ssh-tmux-asset-tests"
+      ],
+      "timeout_seconds": 180,
+      "expected_case_ids": [
+        "home:normal",
+        "home:spaced",
+        "home:shell-metacharacters",
+        "error-helper:install_tmux_and_zaplexify_linux.sh",
+        "error-helper:install_tmux_and_zaplexify_apt.sh",
+        "error-helper:install_tmux_and_zaplexify_dnf.sh",
+        "error-helper:install_tmux_and_zaplexify_pacman.sh",
+        "error-helper:install_tmux_and_zaplexify_yum.sh",
+        "error-helper:install_tmux_and_zaplexify_zypper.sh",
+        "fish-preserves-embedded-bash-body",
+        "error-helper:fish"
+      ]
+    },
+    {
+      "id": "release-tag-classification",
+      "source": "script/classify-release-tag-tests",
+      "mode": "events",
+      "command": [
+        "bash",
+        "script/classify-release-tag-tests"
+      ],
+      "timeout_seconds": 180,
+      "expected_case_ids": [
+        "classify:v1.2",
+        "classify:v1.2.3",
+        "classify:v1.2.3-rc1",
+        "classify:v1.2.3-alpha1",
+        "classify:v1.2.3-beta2",
+        "classify:v1.2.3-dev3",
+        "classify:v1.2.dev4",
+        "classify:v1.2.rc2",
+        "reject:v1.2.3-preview1"
+      ]
+    },
+    {
+      "id": "version-updater",
+      "source": "script/set-version-tests",
+      "mode": "events",
+      "command": [
+        "{python}",
+        "script/set-version-tests"
+      ],
+      "timeout_seconds": 180,
+      "expected_case_ids": [
+        "valid-version-update-is-atomic",
+        "invalid-prerelease-preserves-all-files"
+      ]
+    },
+    {
+      "id": "release-readiness-fixtures",
+      "source": "script/check-v1-release-readiness",
+      "mode": "events",
+      "command": [
+        "{python}",
+        "script/check-v1-release-readiness",
+        "--self-test"
+      ],
+      "timeout_seconds": 180,
+      "expected_case_ids": [
+        "partial_version_bump_names_every_stale_bundle_source",
+        "readiness_protocol_version_matches_the_artifact",
+        "release_metadata_rejects_an_unrecorded_v1_base",
+        "shipped_release_copy_contains_no_rc_beta_or_preview_markers",
+        "release_tree_does_not_contain_rc_handoff_document",
+        "release_workflows_bundle_version_matched_remote_server",
+        "stable_release_workflow_requires_main",
+        "remote_server_cache_tracks_app_sources",
+        "macos_distribution_rejects_certificate_only_pkcs12_import",
+        "release_artifact_names_match_autoupdaters",
+        "live_sftp_commit_boundaries_have_a_real_protocol_gate",
+        "first_ten_user_risks_have_mitigation_recovery_and_validation",
+        "manual_release_matrix_has_result_and_evidence_for_every_row",
+        "valid-runtime-matrix-phase-a",
+        "duplicate_runtime_matrix_row_phase_a_identical",
+        "duplicate_runtime_matrix_row_phase_a_conflicting",
+        "valid-runtime-matrix-phase-b",
+        "runtime_matrix_rejects_mixed_artifacts",
+        "duplicate_runtime_matrix_row_phase_b_identical",
+        "duplicate_runtime_matrix_row_phase_b_conflicting",
+        "risk-register_missing-start",
+        "risk-register_missing-end",
+        "risk-register_duplicate-start",
+        "risk-register_duplicate-end",
+        "risk-register_reversed",
+        "runtime-matrix_missing-start",
+        "runtime-matrix_missing-end",
+        "runtime-matrix_duplicate-start",
+        "runtime-matrix_duplicate-end",
+        "runtime-matrix_reversed",
+        "planned_red_tests_require_executable_evidence",
+        "open_issue_red_tests_require_executable_evidence",
+        "legacy_open_issues_require_executable_evidence",
+        "clipboard_thumbnail_rejects_temporary_path_regression"
+      ]
+    },
+    {
+      "id": "release-readiness-policy",
+      "source": "script/check-v1-release-readiness",
+      "mode": "guard",
+      "command": [
+        "{python}",
+        "script/check-v1-release-readiness",
+        "--phase-a"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "macos-bundle-fixtures",
+      "source": "script/test-macos-bundle",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/test-macos-bundle"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "cockpit-matrix",
+      "source": "script/cockpit-parity-audit",
+      "mode": "guard",
+      "command": [
+        "{python}",
+        "script/cockpit-parity-audit",
+        "validate"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "cockpit-fixtures",
+      "source": "script/cockpit-parity-audit",
+      "mode": "cockpit",
+      "command": [
+        "{python}",
+        "script/cockpit-parity-audit",
+        "self-test"
+      ],
+      "timeout_seconds": 180,
+      "expected_case_statuses": {
+        "provider-regression": "expected-failure-observed",
+        "host-regression": "expected-failure-observed",
+        "status-regression": "expected-failure-observed",
+        "remote-provider-cross-boundary": "expected-failure-observed",
+        "remote-host-cross-boundary": "expected-failure-observed",
+        "remote-status-cross-boundary": "expected-failure-observed",
+        "suite-command-regression": "expected-failure-observed",
+        "missing-test-regression": "expected-failure-observed",
+        "duplicate-test-binding-regression": "expected-failure-observed",
+        "mandatory-test-regression": "expected-failure-observed",
+        "suite-name-filter-regression": "expected-failure-observed",
+        "source-suite-discovery-regression": "expected-failure-observed",
+        "source-suite-exclusion-regression": "expected-failure-observed",
+        "same-leaf-wrong-module-regression": "expected-failure-observed",
+        "ignored-test-regression": "expected-failure-observed",
+        "commented-test-annotation-regression": "expected-failure-observed",
+        "zero-test-suite-regression": "expected-failure-observed",
+        "runtime-missing-is-not-run": "not-run-observed",
+        "runtime-valid": "pass-observed",
+        "runtime-provider-regression": "expected-failure-observed",
+        "runtime-host-regression": "expected-failure-observed",
+        "runtime-status-regression": "expected-failure-observed",
+        "runtime-screenshot-regression": "expected-failure-observed",
+        "runtime-json-duplicate-key-regression": "expected-failure-observed",
+        "runtime-png-metadata-regression": "expected-failure-observed",
+        "runtime-report-redaction-regression": "expected-failure-observed",
+        "runtime-archive-size-regression": "expected-failure-observed",
+        "source-mutation-harness": "pass-observed"
+      }
+    },
+    {
+      "id": "suite-evidence-fixtures",
+      "source": "script/test-suite-evidence-tests",
+      "mode": "events",
+      "command": [
+        "{python}",
+        "script/test-suite-evidence-tests"
+      ],
+      "timeout_seconds": 180,
+      "expected_case_ids": [
+        "measure-valid-artifact-and-skipped-test",
+        "threshold-exact-boundary",
+        "threshold-coverage-loss",
+        "compare-incomparable:source_line_ids",
+        "compare-incomparable:provenance",
+        "reject-failed-ci",
+        "reject-junit:wrong-total",
+        "reject-junit:failure-count",
+        "reject-junit:skipped-failure",
+        "reject-junit:duplicate-id",
+        "reject-junit:nonfinite-duration",
+        "reject-junit:empty-report",
+        "reject-junit:case-failure",
+        "project-inline-tests",
+        "retain-production-fingerprint",
+        "exclude-cfg:test",
+        "exclude-cfg:any(test, feature=\"test-util\")",
+        "exclude-cfg:any(test, feature=\"integration_tests\")",
+        "exclude-cfg:all(test, feature=\"unknown\")",
+        "retain-not-test-production",
+        "unknown-cfg-unproven",
+        "unknown-macro-unproven",
+        "unknown-derived-impl-unproven",
+        "literal-braces-and-nested-comments",
+        "reject-invalid-rust",
+        "module-test-and-custom-path-reachability",
+        "shared-module-production-route",
+        "partial-coverage-cannot-pass",
+        "reject-source-provenance:0",
+        "reject-source-provenance:1",
+        "mixed-physical-line-unproven",
+        "ordinary-comment-unambiguous",
+        "test-field-separators",
+        "retain-platform-production",
+        "grammar-pattern-field",
+        "grammar-field-initializer",
+        "grammar-unknown-pattern-cfg",
+        "grammar-pattern-comments-and-attributes",
+        "grammar-pattern-original-fingerprint",
+        "grammar-dyn-original-fingerprint-and-mapping",
+        "grammar-reject:unrelated-function-error",
+        "grammar-reject:invalid-pattern-value",
+        "grammar-reject:invalid-dyn-type",
+        "grammar-reject:unclosed-cfg-attribute",
+        "grammar-attribute-like-literal",
+        "complete-test-match-arm",
+        "complete-block-match-arm",
+        "unknown-match-arm-cfg",
+        "production-match-arm-fingerprint",
+        "mixed-match-arm-line-unproven",
+        "unresolved-thread-local-macro",
+        "template-positive:crates/settings/src/macros.rs",
+        "template-no-path:crates/settings/src/macros.rs",
+        "template-wrong-path:crates/settings/src/macros.rs",
+        "template-mutation:crates/settings/src/macros.rs:Self::new_from_storage(ctx) => Self::new_from_storage(ctx /* changed */)",
+        "template-mutation:crates/settings/src/macros.rs:($group:ident, settings: => ($group:ident, changed:",
+        "template-mutation:crates/settings/src/macros.rs:feature = \"integration_tests\" => feature = \"unknown\"",
+        "template-mutation:crates/settings/src/macros.rs:#[cfg(any(test, feature = \"integration_tests\"))] => #[cfg(unix)]",
+        "template-mutation:crates/settings/src/macros.rs:macro_rules! define_settings_group => macro_rules! another_group",
+        "template-lcov-zero-and-test-helper:crates/settings/src/macros.rs",
+        "template-positive:app/src/server/ids.rs",
+        "template-no-path:app/src/server/ids.rs",
+        "template-wrong-path:app/src/server/ids.rs",
+        "template-mutation:app/src/server/ids.rs:Self(id.into()) => Self(id /* changed */.into())",
+        "template-mutation:app/src/server/ids.rs:ServerId::from_string_lossy(id) => ServerId::from_string_lossy(id /* changed */)",
+        "template-mutation:app/src/server/ids.rs:($t:ty, $prefix:literal) => ($t:path, $prefix:literal)",
+        "template-mutation:app/src/server/ids.rs:#[cfg(test)] => #[cfg(unix)]",
+        "template-mutation:app/src/server/ids.rs:#[cfg(test)] => #[cfg(any(test, feature=\"unknown\"))]",
+        "template-mutation:app/src/server/ids.rs:macro_rules! server_id_traits => macro_rules! another_id_traits",
+        "template-lcov-zero-and-test-helper:app/src/server/ids.rs"
+      ]
+    },
+    {
+      "id": "fork-scope-fixtures",
+      "source": "script/codebase-audit-fork-scope-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/codebase-audit-fork-scope-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "prune-worktrees-fixtures",
+      "source": "script/prune-worktrees-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/prune-worktrees-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "compact-row-policy",
+      "source": "script/check-compact-row-actions",
+      "mode": "guard",
+      "command": [
+        "script/check-compact-row-actions"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "remote-installer-fixtures",
+      "source": "script/remote-server-install-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/remote-server-install-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "clippy-gate-fixtures",
+      "source": "script/pr-check-clippy-gate-tests",
+      "mode": "events",
+      "command": [
+        "{python}",
+        "script/pr-check-clippy-gate-tests"
+      ],
+      "timeout_seconds": 180,
+      "expected_case_ids": [
+        "change-detection:success:true",
+        "change-detection:success:",
+        "change-detection:success:invalid",
+        "change-detection:failure:true",
+        "change-detection:failure:false",
+        "change-detection:cancelled:true",
+        "change-detection:skipped:"
+      ]
+    },
+    {
+      "id": "license-policy",
+      "source": "script/check_license_config_sync",
+      "mode": "guard",
+      "command": [
+        "script/check_license_config_sync"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "license-policy-fixtures",
+      "source": "script/check-license-config-sync-tests",
+      "mode": "events",
+      "command": [
+        "{python}",
+        "script/check-license-config-sync-tests"
+      ],
+      "timeout_seconds": 180,
+      "expected_case_ids": [
+        "matching-license-sets",
+        "license-in-about-only",
+        "license-in-deny-only"
+      ]
+    },
+    {
+      "id": "dependency-security-policy",
+      "source": "script/dependency-security-baseline-tests",
+      "mode": "guard",
+      "command": [
+        "{python}",
+        "script/dependency-security-baseline-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "codebase-audit-inventory-tests",
+      "source": "script/codebase-audit-inventory-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/codebase-audit-inventory-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "codebase-audit-assignments-tests",
+      "source": "script/codebase-audit-assignments-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/codebase-audit-assignments-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "run-codebase-audit-assignments-tests",
+      "source": "script/run-codebase-audit-assignments-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/run-codebase-audit-assignments-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "aggregate-codebase-audit-results-tests",
+      "source": "script/aggregate-codebase-audit-results-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/aggregate-codebase-audit-results-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "codebase-audit-verification-assignments-tests",
+      "source": "script/codebase-audit-verification-assignments-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/codebase-audit-verification-assignments-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "run-codebase-audit-verification-assignments-tests",
+      "source": "script/run-codebase-audit-verification-assignments-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/run-codebase-audit-verification-assignments-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "codebase-audit-crosscut-evidence-tests",
+      "source": "script/codebase-audit-crosscut-evidence-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/codebase-audit-crosscut-evidence-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "codebase-audit-crosscut-assignments-tests",
+      "source": "script/codebase-audit-crosscut-assignments-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/codebase-audit-crosscut-assignments-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "run-codebase-audit-crosscut-assignments-tests",
+      "source": "script/run-codebase-audit-crosscut-assignments-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/run-codebase-audit-crosscut-assignments-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "aggregate-codebase-audit-verification-results-tests",
+      "source": "script/aggregate-codebase-audit-verification-results-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/aggregate-codebase-audit-verification-results-tests"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "id": "nonrust-adapter-fixtures",
+      "source": "script/test-suite-nonrust-tests",
+      "mode": "unittest",
+      "command": [
+        "{python}",
+        "script/test-suite-nonrust-tests"
+      ],
+      "timeout_seconds": 180
+    }
+  ]
+}

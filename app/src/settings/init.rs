@@ -19,7 +19,7 @@ use crate::{
         session_settings::{SessionSettings, SessionSettingsChangedEvent},
         settings::TerminalSettings,
         shared_session::settings::SharedSessionSettings,
-        zaplexify::settings::ZaplexifySettings,
+        zaplexify::settings::{EnableSshZaplexification, ZaplexifySettings},
         BlockListSettings,
     },
     undo_close::UndoCloseSettings,
@@ -119,8 +119,12 @@ pub fn init(
     startup_toml_parse_error: Option<user_preferences::Error>,
     ctx: &mut AppContext,
 ) -> UserDefaultsOnStartup {
+    use warp_core::user_preferences::GetUserPreferences as _;
+
     ctx.add_singleton_model(|_| SettingsInitializer::new());
 
+    report_if_error!(migrate_legacy_native_ssh_setting(ctx.private_user_preferences())
+        .map_err(|error| anyhow::anyhow!(error)));
     register_all_settings(ctx);
 
     // One-time migration: copy public settings from the platform-native store
@@ -377,7 +381,9 @@ pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_p
                     user_preferences::toml_backed::TomlBackedUserPreferences::new(
                         super::user_preferences_toml_file_path(),
                     );
-                let prefs = prefs.with_retired_values(RETIRED_PUBLIC_SETTINGS_FILE_VALUES);
+                let prefs = prefs
+                    .with_document_migration(migrate_legacy_zaplexify_settings)
+                    .with_retired_values(RETIRED_PUBLIC_SETTINGS_FILE_VALUES);
                 if let Some(err) = &parse_error {
                     log::warn!("Settings file has syntax errors and could not be parsed: {err}");
                 }
@@ -385,6 +391,92 @@ pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_p
             } else {
                 (init_platform_native_preferences(), None)
             }
+        }
+    }
+}
+
+fn read_native_ssh_migration_value(
+    preferences: &dyn user_preferences::UserPreferences,
+) -> Result<Option<String>, user_preferences::Error> {
+    match preferences.read_value("EnableSshZaplexification")? {
+        Some(value) => Ok(Some(value)),
+        None => preferences.read_value("EnableSshWarpification"),
+    }
+}
+
+/// Retire the native alias only after the replacement can be read back.
+fn migrate_legacy_native_ssh_setting(
+    preferences: &dyn user_preferences::UserPreferences,
+) -> Result<(), user_preferences::Error> {
+    const OLD_KEY: &str = "EnableSshWarpification";
+    const NEW_KEY: &str = "EnableSshZaplexification";
+    let Some(legacy) = preferences.read_value(OLD_KEY)? else {
+        return Ok(());
+    };
+    if preferences.read_value(NEW_KEY)?.is_none() {
+        preferences.write_value(NEW_KEY, legacy.clone())?;
+        if preferences.read_value(NEW_KEY)?.as_deref() != Some(legacy.as_str()) {
+            return Err(user_preferences::Error::Unknown(anyhow::anyhow!(
+                "SSH setting migration did not retain the replacement value"
+            )));
+        }
+    }
+    preferences.remove_value(OLD_KEY)
+}
+
+/// Preserve explicit pre-rename SSH/subshell choices before settings registration.
+/// This only changes the loaded document; the next normal write persists it.
+fn migrate_legacy_zaplexify_settings(document: &mut toml_edit::DocumentMut) {
+    const RENAMED_SETTINGS: [(&str, &str, &str); 8] = [
+        ("ssh", "enable_legacy_ssh_wrapper", "enable_legacy_ssh_wrapper"),
+        ("ssh", "enable_ssh_auto_discovery", "enable_ssh_auto_discovery"),
+        ("ssh", "ssh_hosts_denylist", "ssh_hosts_denylist"),
+        ("ssh", "enable_ssh_warpification", "enable_ssh_zaplexification"),
+        ("ssh", "use_ssh_tmux_wrapper", "use_ssh_tmux_wrapper"),
+        ("ssh", "ssh_extension_install_mode", "ssh_extension_install_mode"),
+        ("subshells", "added_subshell_commands", "added_subshell_commands"),
+        ("subshells", "subshell_commands_denylist", "subshell_commands_denylist"),
+    ];
+
+    for (section, old_key, new_key) in RENAMED_SETTINGS {
+        let Some(value) = document
+            .get("warpify")
+            .and_then(toml_edit::Item::as_table)
+            .and_then(|table| table.get(section))
+            .and_then(toml_edit::Item::as_table)
+            .and_then(|table| table.get(old_key))
+            .cloned()
+        else {
+            continue;
+        };
+
+        // Do not replace malformed explicitly configured parents with tables.
+        let mut target = document.as_table_mut();
+        let mut can_migrate = true;
+        for segment in ["zaplexify", section] {
+            if !target.contains_key(segment) {
+                target.insert(segment, toml_edit::Item::Table(toml_edit::Table::new()));
+            }
+            if !target.get(segment).is_some_and(toml_edit::Item::is_table) {
+                can_migrate = false;
+                break;
+            }
+            target = target.get_mut(segment).unwrap().as_table_mut().unwrap();
+        }
+        if !can_migrate {
+            continue;
+        }
+        if !target.contains_key(new_key) {
+            target.insert(new_key, value);
+        }
+        // Remove the old key even when the new one won, so a later user reset
+        // cannot resurrect the legacy value on restart.
+        if let Some(old_table) = document
+            .get_mut("warpify")
+            .and_then(|item| item.get_mut(section))
+            .and_then(toml_edit::Item::as_table_mut)
+        {
+            old_table.remove(old_key);
         }
     }
 }
@@ -439,13 +531,36 @@ fn migrate_native_settings_to_settings_file(ctx: &mut AppContext) {
         .map(str::to_owned)
         .collect();
 
+    // Check the renamed SSH setting before any TOML write. An unreadable opt-out
+    // must not become a default-on value or mark migration complete.
+    let native_ssh_value = if storage_keys.iter().any(|key| key == "EnableSshZaplexification") {
+        match read_native_ssh_migration_value(ctx.private_user_preferences()) {
+            Ok(value) => value,
+            Err(error) => {
+                ZaplexifySettings::handle(ctx).update(ctx, |settings, _| {
+                    settings.enable_ssh_zaplexification =
+                        EnableSshZaplexification::new(Some(false));
+                });
+                report_if_error!(Err::<(), _>(anyhow::anyhow!(error)
+                    .context("Could not migrate the native SSH preference")));
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     // Read each public setting's value from the native store.
     let native_prefs = ctx.private_user_preferences();
     let values_to_migrate: Vec<(String, String)> = storage_keys
         .into_iter()
         .filter_map(|key| {
-            let value = native_prefs.read_value(&key).unwrap_or_default()?;
-            Some((key, value))
+            let value = if key == "EnableSshZaplexification" {
+                native_ssh_value.clone()
+            } else {
+                native_prefs.read_value(&key).unwrap_or_default()
+            };
+            Some((key, value?))
         })
         .collect();
 

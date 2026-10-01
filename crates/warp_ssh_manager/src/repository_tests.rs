@@ -304,7 +304,7 @@ fn invalid_sync_version_is_reported_without_fallback() {
 
     let mut conn = setup_in_memory();
     conn.batch_execute(
-        "INSERT INTO sync_meta (key, value) VALUES ('sync_version', 'not-a-version');",
+        "UPDATE sync_meta SET value = 'not-a-version' WHERE key = 'sync_version';",
     )
     .unwrap();
 

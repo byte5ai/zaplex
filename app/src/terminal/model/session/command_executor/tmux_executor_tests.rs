@@ -1,7 +1,7 @@
 use crate::terminal::{model::session::ExecuteCommandOptions, shell::ShellType};
 
 use super::*;
-use warpui::App;
+use warpui::{r#async::FutureExt, App};
 
 async fn execute_test_command<F>(
     executor: Arc<TmuxCommandExecutor>,
@@ -42,7 +42,7 @@ fn assert_command_output_result_fn(
 #[test]
 fn test_emits_successful_command_output() {
     App::test((), |_app| async move {
-        let (executor_command_tx, _) = async_channel::unbounded();
+        let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
         let executor = Arc::new(TmuxCommandExecutor::new(executor_command_tx));
 
         let task_executor = async_executor::LocalExecutor::new();
@@ -53,6 +53,12 @@ fn test_emits_successful_command_output() {
             assert_command_output_result_fn("foo", true),
         ));
         let handle_command_output_future = task_executor.spawn(async move {
+            executor_command_rx
+                .recv()
+                .with_timeout(std::time::Duration::from_secs(5))
+                .await
+                .expect("command dispatch must complete")
+                .expect("command must reach the PTY dispatcher");
             let test_command_id = executor
                 .in_flight_commands
                 .lock()

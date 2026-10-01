@@ -3,31 +3,28 @@ use std::time::Duration;
 use warpui::{
     async_assert, async_assert_eq,
     integration::{AssertionOutcome, TestStep},
+    View,
 };
 
 use crate::{
     integration_testing::{
         step::assert_no_pending_model_events,
         terminal::{
-            assert_long_running_block_executing_for_single_terminal_in_tab,
-            execute_command_for_single_terminal_in_tab, util::ExpectedExitStatus,
-            validate_block_output, wait_until_bootstrapped_pane,
+            assert_long_running_block_executing_for_single_terminal_in_tab, validate_block_output,
+            wait_until_bootstrapped_pane,
         },
         view_getters::{single_terminal_view, terminal_view},
     },
     terminal::{model::rich_content::RichContentType, view::WithinBlockBanner},
 };
 
-use super::util::{ssh_command, user_host};
+use super::util::{ssh_command, user_host, with_recent_ssh_output};
 
-/// Sets environment variables needed by the Google Cloud SDK.
-pub fn setup_gcloud_sdk() -> TestStep {
-    execute_command_for_single_terminal_in_tab(
-        0,
-        "export CLOUDSDK_CONFIG=\"$ORIGINAL_HOME/.config/gcloud\"".into(),
-        ExpectedExitStatus::Success,
-        (),
-    )
+/// Verifies the dedicated CI fixture before sending any SSH command.
+pub fn setup_ssh_fixture() -> TestStep {
+    TestStep::new("Validate isolated SSH fixture").with_action(|_, _, _| {
+        super::util::ssh_fixture();
+    })
 }
 
 /// Initiates an SSH connection, executing the necessary command and then
@@ -51,7 +48,7 @@ pub fn enter_remote_subshell_command(shell: &str) -> TestStep {
 
 /// Waits for a password prompt.
 pub fn wait_for_password_prompt(tab_index: usize, shell: &str) -> TestStep {
-    let user_host = user_host(shell);
+    let user_host = regex::escape(&user_host(shell));
     let regex = Regex::new(&format!("{user_host}'s password:[\\s]*$"))
         .expect("regex should not fail to compile");
     TestStep::new("Wait for password prompt")
@@ -65,7 +62,7 @@ pub fn wait_for_password_prompt(tab_index: usize, shell: &str) -> TestStep {
         })
 }
 
-/// Enters the password for the user in the SSH testing VM.
+/// Enters the password for the dedicated ephemeral SSH fixture user.
 pub fn enter_ssh_password() -> TestStep {
     TestStep::new("Enter ssh password").with_typed_characters(&["password\n"])
 }
@@ -79,7 +76,7 @@ pub fn enter_local_subshell_command(shell: &str) -> TestStep {
 
 pub fn assert_subshell_banner_is_showing() -> TestStep {
     TestStep::new("Assert the Zaplexify banner is visible")
-        .add_assertion(move |app, window_id| {
+        .add_assertion(with_recent_ssh_output(Box::new(move |app, window_id| {
             let terminal_view = single_terminal_view(app, window_id);
             terminal_view.read(app, |view, _ctx| {
                 async_assert!(matches!(
@@ -91,10 +88,25 @@ pub fn assert_subshell_banner_is_showing() -> TestStep {
                     Some(WithinBlockBanner::ZaplexifyBanner(..))
                 ))
             })
-        })
+        })))
         // Wait for outstanding model events to finish before moving to the next step
         .add_named_assertion("no pending model events", assert_no_pending_model_events())
         .set_post_step_pause(Duration::from_millis(50))
+}
+
+/// Checks that the SSH prompt enables the same shortcut for the banner or footer UI.
+pub fn assert_ssh_zaplexification_is_offered() -> TestStep {
+    TestStep::new("Assert SSH zaplexification is offered")
+        .add_assertion(with_recent_ssh_output(Box::new(move |app, window_id| {
+            let terminal = single_terminal_view(app, window_id);
+            terminal.read(app, |view, ctx| {
+                async_assert!(
+                    view.keymap_context(ctx).set.contains("SshZaplexificationBanner"),
+                    "Expected an active SSH zaplexification banner or footer"
+                )
+            })
+        })))
+        .add_named_assertion("no pending model events", assert_no_pending_model_events())
 }
 
 pub fn trigger_subshell_bootstrap() -> TestStep {

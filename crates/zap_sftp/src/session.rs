@@ -377,6 +377,102 @@ fn preferred_host_key_algorithms(
     Ok(supported)
 }
 
+// OpenSSH known_hosts host patterns use only '*' and '?' wildcards. Brackets
+// in a port-qualified endpoint are literal characters, not character classes.
+fn host_pattern_matches(pattern: &str, host: &str) -> bool {
+    let pattern = pattern.as_bytes();
+    let host = host.as_bytes();
+    let (mut p, mut h) = (0, 0);
+    let mut star = None;
+    let mut retry = 0;
+    while h < host.len() {
+        if p < pattern.len() && (pattern[p] == b'?' || pattern[p].eq_ignore_ascii_case(&host[h])) {
+            p += 1;
+            h += 1;
+        } else if p < pattern.len() && pattern[p] == b'*' {
+            star = Some(p);
+            p += 1;
+            retry = h;
+        } else if let Some(last_star) = star {
+            retry += 1;
+            h = retry;
+            p = last_star + 1;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == b'*' {
+        p += 1;
+    }
+    p == pattern.len()
+}
+
+fn reject_revoked_host_key(
+    session: &ssh2::Session,
+    contents: &str,
+    host: &str,
+    port: u16,
+    key: &[u8],
+) -> Result<(), SftpError> {
+    let endpoint = format!("[{host}]:{port}");
+    for line in contents.lines() {
+        let mut fields = line.split_whitespace();
+        if fields.next() != Some("@revoked") {
+            continue;
+        }
+        let (Some(hosts), Some(algorithm), Some(encoded)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        if base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .ok()
+            .as_deref()
+            != Some(key)
+        {
+            continue;
+        }
+        let mut matched = false;
+        for pattern in hosts.split(',') {
+            let (negated, pattern) = match pattern.strip_prefix('!') {
+                Some(pattern) => (true, pattern),
+                None => (false, pattern),
+            };
+            let matches = if pattern.starts_with('|') {
+                let mut candidate = session.known_hosts()?;
+                candidate.read_str(
+                    &format!("{pattern} {algorithm} {encoded}"),
+                    KnownHostFileKind::OpenSSH,
+                )?;
+                match check_host_endpoint(&candidate, host, port, key) {
+                    CheckResult::Match => true,
+                    CheckResult::NotFound => false,
+                    CheckResult::Mismatch | CheckResult::Failure => {
+                        return Err(SftpError::ConnectionFailed(
+                            "The revoked SSH host key could not be checked safely".to_string(),
+                        ));
+                    }
+                }
+            } else {
+                host_pattern_matches(pattern, &endpoint)
+                    || (port == 22 && host_pattern_matches(pattern, host))
+            };
+            if matches && negated {
+                matched = false;
+                break;
+            }
+            matched |= matches;
+        }
+        if matched {
+            return Err(SftpError::ConnectionFailed(
+                "The SSH host key is revoked in known_hosts".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn check_known_host_key(
     session: &ssh2::Session,
     contents: &str,
@@ -387,6 +483,7 @@ fn check_known_host_key(
     let Some(algorithm) = public_key_algorithm(key) else {
         return Ok(CheckResult::Failure);
     };
+    reject_revoked_host_key(session, contents, host, port, key)?;
     let mut same_algorithm = false;
     for candidate in matching_known_host_keys(session, contents, host, port)? {
         if public_key_algorithm(&candidate) == Some(algorithm) {

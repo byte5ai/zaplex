@@ -35,6 +35,12 @@ on:
         required: false
         default: false
 
+      coverage:
+        description: "Collect full Rust workspace LCOV, executed test results, and timing for suite pruning."
+        type: boolean
+        required: false
+        default: false
+
 permissions:
   contents: read
 
@@ -45,12 +51,76 @@ env:
   CHANNEL: oss
 
 jobs:
+  nonrust_evidence:
+    name: Non-Rust suite execution evidence
+    if: ${{ inputs.coverage }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install binary-only fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fish
+          # Ubuntu 22.04's ripgrep package lacks the PCRE2 engine used by our guards.
+          rg_archive="$RUNNER_TEMP/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$rg_archive" \
+            https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz
+          printf '%s  %s\n' '4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e' "$rg_archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/nonrust-tools/bin"
+          tar -xzf "$rg_archive" --directory "$RUNNER_TEMP/nonrust-tools/bin" \
+            --strip-components=1 ripgrep-14.1.1-x86_64-unknown-linux-musl/rg
+          printf '%s\n' "$RUNNER_TEMP/nonrust-tools/bin" >> "$GITHUB_PATH"
+          python3 -m venv "$RUNNER_TEMP/nonrust-evidence-parser"
+          "$RUNNER_TEMP/nonrust-evidence-parser/bin/python" -m pip install \
+            --only-binary=:all: --require-hashes -r script/test-suite-evidence-requirements.txt
+        shell: bash
+
+      - name: Execute the complete non-Rust suite plan
+        run: |
+          "$RUNNER_TEMP/nonrust-evidence-parser/bin/python" script/test-suite-nonrust collect \
+            "$RUNNER_TEMP/nonrust-suite-evidence" --source-root "$GITHUB_WORKSPACE"
+        shell: bash
+
+      - name: Upload non-Rust raw execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nonrust-suite-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nonrust-suite-evidence/
+          if-no-files-found: error
+          retention-days: 30
+
   test:
     name: cargo test (Linux)
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install binary-only source parser
+        if: ${{ inputs.coverage }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/suite-evidence-parser"
+          "$RUNNER_TEMP/suite-evidence-parser/bin/python" -m pip install \
+            --only-binary=:all: --require-hashes -r script/test-suite-evidence-requirements.txt
+        shell: bash
+
+      - name: Inspect production projection before compiling
+        if: ${{ inputs.coverage }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/suite-evidence"
+          "$RUNNER_TEMP/suite-evidence-parser/bin/python" script/test-suite-rust-projection.py \
+            --root "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/suite-evidence/source-projection-preflight.json"
+        shell: bash
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -72,15 +142,159 @@ jobs:
         run: rustup target add x86_64-unknown-linux-gnu
         shell: bash
 
-      - name: cargo test
+      - name: Install isolated Rust test runner
+        run: cargo install cargo-nextest --locked --version 0.9.146
+        shell: bash
+
+      - name: Install Rust coverage tools
+        if: ${{ inputs.coverage }}
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked --version 0.9.1
+        shell: bash
+
+      - name: Prepare graphical test runtime
+        run: |
+          runtime_dir=$(mktemp -d "$RUNNER_TEMP/zaplex-test-runtime.XXXXXX")
+          chmod 700 "$runtime_dir"
+          printf 'XDG_RUNTIME_DIR=%s\n' "$runtime_dir" >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Record coverage provenance
+        if: ${{ inputs.coverage }}
+        env:
+          RUNNER_LABEL: ${{ inputs.runs_on }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/suite-evidence"
+          python3 - <<'PYTHON'
+          import hashlib, json, os, pathlib, subprocess
+          evidence = {
+              "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "run_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "runner": os.environ["RUNNER_LABEL"],
+              "source_root": os.environ["GITHUB_WORKSPACE"],
+              "tools": {"cargo-llvm-cov": "0.9.1", "cargo-nextest": "0.9.146", "tree-sitter": "0.25.2", "tree-sitter-rust": "0.24.2"},
+              "command": ["script/run-shell-ssh-fixtures", "--", "xvfb-run", "--auto-servernum", "--server-args=-screen 0 1920x1080x24", "cargo", "llvm-cov", "nextest", "--locked", "--workspace", "--exclude", "command-signatures-v2", "--profile", "ci", "--no-report"],
+              "environment": {name: os.environ.get(name) for name in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTUP_TOOLCHAIN", "CHANNEL")},
+              "config_hashes": {str(path): hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+                                for path in [pathlib.Path("Cargo.lock"), pathlib.Path("Cargo.toml"), pathlib.Path("app/Cargo.toml"), pathlib.Path(".config/nextest.toml"), pathlib.Path(".github/workflows/test-dispatch.yml"), pathlib.Path("script/linux/install_test_deps"), pathlib.Path("script/run-shell-ssh-fixtures"), pathlib.Path("crates/integration/tests/common/mod.rs"), pathlib.Path(".cargo/config.toml"), pathlib.Path("script/test-suite-rust-projection.py"), pathlib.Path("script/test-suite-evidence-requirements.txt"), *sorted(pathlib.Path("crates").glob("*/Cargo.toml")), *sorted(pathlib.Path(".").glob("rust-toolchain*"))]},
+              "rustc": subprocess.check_output(["rustc", "--version"], text=True).strip(),
+              "scope": "Rust workspace; exclude command-signatures-v2; default features; nextest ci profile",
+              "coverage_scope": "Linux Rust production-source projection; test-only feature/module regions excluded; ambiguous covered regions unproven; Rust-only suite",
+          }
+          pathlib.Path(os.environ["RUNNER_TEMP"], "suite-evidence", "provenance.json").write_text(json.dumps(evidence, indent=2) + "\n")
+          PYTHON
+        shell: bash
+
+      - name: Record coverage dependency diagnostics
+        if: ${{ inputs.coverage }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/suite-evidence"
+          # Diagnostic resolution, not proof of every crate's effective rustc cfg.
+          cargo metadata --locked --format-version 1 --filter-platform x86_64-unknown-linux-gnu \
+            > "$RUNNER_TEMP/suite-evidence/cargo-metadata.json"
+          cargo tree --locked --workspace --exclude command-signatures-v2 \
+            --target x86_64-unknown-linux-gnu --edges features \
+            > "$RUNNER_TEMP/suite-evidence/cargo-feature-tree.txt"
+          rustc --print cfg --target x86_64-unknown-linux-gnu \
+            > "$RUNNER_TEMP/suite-evidence/rustc-target-default-cfg.txt"
+        shell: bash
+
+      - name: Rust workspace coverage tests
+        id: coverage_tests
+        if: ${{ inputs.coverage }}
+        env:
+          CARGO_LLVM_COV_TARGET_DIR: ${{ runner.temp }}/suite-coverage-target
+        run: >
+          script/run-shell-ssh-fixtures --
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24"
+          cargo llvm-cov nextest --locked --workspace --exclude command-signatures-v2
+          --profile ci --no-report
+        shell: bash
+
+      - name: Export LLVM coverage regions
+        id: coverage_regions
+        if: ${{ inputs.coverage && always() }}
+        env:
+          CARGO_LLVM_COV_TARGET_DIR: ${{ runner.temp }}/suite-coverage-target
+        run: |
+          mkdir -p "$RUNNER_TEMP/suite-evidence"
+          cargo llvm-cov report --json --output-path "$RUNNER_TEMP/suite-evidence/rust-llvm-coverage.json"
+        shell: bash
+
+      - name: Export coverage and execution evidence
+        if: ${{ inputs.coverage && always() }}
+        env:
+          CARGO_LLVM_COV_TARGET_DIR: ${{ runner.temp }}/suite-coverage-target
+          TEST_OUTCOME: ${{ steps.coverage_tests.outcome }}
+          REGION_EXPORT_OUTCOME: ${{ steps.coverage_regions.outcome }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/suite-evidence"
+          printf '%s\n' "$TEST_OUTCOME" > "$RUNNER_TEMP/suite-evidence/test-outcome.txt"
+          printf '%s\n' "$REGION_EXPORT_OUTCOME" > "$RUNNER_TEMP/suite-evidence/region-export-outcome.txt"
+          # nextest store.dir is workspace-relative, independent of Cargo's target-dir.
+          junit_path="$GITHUB_WORKSPACE/target/nextest/ci/junit.xml"
+          if [ -f "$junit_path" ]; then
+            cp "$junit_path" "$RUNNER_TEMP/suite-evidence/junit.xml"
+          else
+            echo "::error::nextest JUnit report missing at $junit_path"
+          fi
+          cargo llvm-cov report --lcov --output-path "$RUNNER_TEMP/suite-evidence/rust-lcov.info"
+          "$RUNNER_TEMP/suite-evidence-parser/bin/python" script/test-suite-evidence "$RUNNER_TEMP/suite-evidence" \
+            --source-root "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/suite-evidence/summary.json"
+        shell: bash
+
+      - name: Upload Rust suite evidence
+        if: ${{ inputs.coverage && always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rust-suite-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/suite-evidence/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Real Linux daemon terminal acceptance
+        if: ${{ inputs.coverage && steps.coverage_tests.outcome == 'success' }}
+        env:
+          CARGO_LLVM_COV_TARGET_DIR: ${{ runner.temp }}/suite-coverage-target
+        run: script/run-daemon-terminal-acceptance
+        shell: bash
+
+      - name: Upload Linux daemon terminal evidence
+        if: ${{ inputs.coverage && always() && steps.coverage_tests.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-daemon-terminal-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/daemon-terminal-acceptance/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Isolated package tests
+        if: ${{ !inputs.coverage }}
         env:
           PKG: ${{ inputs.package }}
           FILTER: ${{ inputs.filter }}
         run: |
-          args=(-p "$PKG" --no-fail-fast)
+          # Match workspace coverage: each test owns its process-wide settings,
+          # feature flags and file descriptors. Libtest threads share those globals.
+          args=(--locked -p "$PKG" --profile ci --no-fail-fast)
           if [ -n "$FILTER" ]; then
             args+=("$FILTER")
           fi
-          echo "Running: cargo test ${args[*]}"
+          echo "Running: cargo nextest run ${args[*]}"
+          script/run-shell-ssh-fixtures -- xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" cargo nextest run "${args[@]}"
+        shell: bash
+
+      - name: Package documentation tests
+        if: ${{ !inputs.coverage && !cancelled() }}
+        env:
+          PKG: ${{ inputs.package }}
+          FILTER: ${{ inputs.filter }}
+        run: |
+          args=(--locked --doc -p "$PKG" --no-fail-fast)
+          if [ -n "$FILTER" ]; then
+            args+=("$FILTER")
+          fi
           cargo test "${args[@]}"
         shell: bash

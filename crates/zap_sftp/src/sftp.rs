@@ -5,8 +5,7 @@
 //! author: logic
 //! date: 2026-05-31
 
-use std::borrow::Cow;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -76,44 +75,17 @@ impl Sftp {
         Ok(())
     }
 
-    /// Atomically replace a remote path through the authenticated SSH session.
-    ///
-    /// OpenSSH uses SFTP v3, whose standard rename request cannot replace an
-    /// existing destination. The staged file is always a sibling of the
-    /// destination, so POSIX `mv` publishes it with one same-filesystem rename.
+    /// Replace the exact remote path using OpenSSH's POSIX rename extension.
+    /// Servers without the extension fail before any mutation is requested.
     pub fn replace_atomically(&self, src: &Path, dst: &Path) -> Result<(), SftpError> {
-        let command = atomic_replace_command(src, dst)?;
-        let mut channel = self.session.channel_session().map_err(|error| {
-            SftpError::General(format!(
-                "Atomic replacement is unavailable because the SSH command channel could not be opened: {error}"
-            ))
-        })?;
-        channel.exec(&command).map_err(|error| {
-            SftpError::General(format!(
-                "Atomic replacement is unavailable because /bin/mv could not be started: {error}"
-            ))
-        })?;
-
-        let mut stdout = Vec::new();
-        channel.read_to_end(&mut stdout)?;
-        let mut stderr = Vec::new();
-        channel.stderr().read_to_end(&mut stderr)?;
-        channel.wait_close()?;
-        let exit_status = channel.exit_status()?;
-        if exit_status == 0 {
-            return Ok(());
-        }
-
-        let diagnostic = String::from_utf8_lossy(&stderr);
-        let diagnostic = diagnostic.trim();
-        let detail = if diagnostic.is_empty() {
-            String::new()
-        } else {
-            format!(": {diagnostic}")
-        };
-        Err(SftpError::General(format!(
-            "Atomic replacement through /bin/mv failed with exit status {exit_status}{detail}"
-        )))
+        // ssh2 0.9's rename API only exposes standard SFTP rename; its flags do not
+        // select posix-rename@openssh.com. Use a separate subsystem channel so the
+        // extension cannot interfere with requests on the shared SFTP channel.
+        let mut channel = self.session.channel_session()?;
+        channel.subsystem("sftp")?;
+        let result = posix_replace(&mut channel, src, dst);
+        let _ = channel.close();
+        result
     }
 
     /// Get file metadata (follow symlinks)
@@ -158,33 +130,139 @@ impl Sftp {
     }
 }
 
-fn atomic_replace_command(src: &Path, dst: &Path) -> Result<String, SftpError> {
-    let src = atomic_replace_operand(src)?;
-    let dst = atomic_replace_operand(dst)?;
-    let script = shell_escape::unix::escape(Cow::Borrowed(
-        r#"if [ -d "$2" ]; then echo "destination is a directory" >&2; exit 73; fi; exec /bin/mv -f "$1" "$2""#,
-    ));
-    Ok(format!(
-        "/bin/sh -c {script} zaplex-atomic-replace {src} {dst}"
-    ))
-}
+// OpenSSH PROTOCOL, section "posix-rename@openssh.com": the extension invokes
+// rename(oldpath, newpath), never mv's directory-target interpretation.
+const POSIX_RENAME_EXTENSION: &[u8] = b"posix-rename@openssh.com";
+const MAX_RENAME_PACKET: usize = 64 * 1024;
 
-fn atomic_replace_operand(path: &Path) -> Result<String, SftpError> {
-    let path = path.to_str().ok_or_else(|| {
-        SftpError::General("Atomic replacement requires a UTF-8 remote path".to_string())
-    })?;
-    if path.is_empty() {
-        return Err(SftpError::General(
-            "Atomic replacement requires a non-empty remote path".to_string(),
-        ));
+fn posix_replace(
+    channel: &mut (impl Read + Write),
+    src: &Path,
+    dst: &Path,
+) -> Result<(), SftpError> {
+    let mut request = vec![200]; // SSH_FXP_EXTENDED
+    request.extend_from_slice(&1_u32.to_be_bytes());
+    append_sftp_string(&mut request, POSIX_RENAME_EXTENSION)?;
+    for path in [src, dst] {
+        let path = path
+            .to_str()
+            .filter(|path| !path.is_empty() && !path.contains('\0'))
+            .ok_or_else(|| {
+                SftpError::General(
+                    "Atomic replacement requires a non-empty UTF-8 path without NUL".to_string(),
+                )
+            })?;
+        append_sftp_string(&mut request, path.as_bytes())?;
     }
 
-    let operand = if path.starts_with('/') || path.starts_with("./") || path.starts_with("../") {
-        Cow::Borrowed(path)
-    } else {
-        Cow::Owned(format!("./{path}"))
-    };
-    Ok(shell_escape::unix::escape(operand).into_owned())
+    write_sftp_packet(channel, &[1, 0, 0, 0, 3])?; // SSH_FXP_INIT, version 3
+    let hello = read_sftp_packet(channel)?;
+    let mut hello = hello.as_slice();
+    if hello.first() != Some(&2) {
+        // SSH_FXP_VERSION
+        return Err(SftpError::General(
+            "Invalid SFTP version response".to_string(),
+        ));
+    }
+    hello = &hello[1..];
+    if take_sftp_u32(&mut hello)? != 3 {
+        return Err(SftpError::General(
+            "Atomic replacement requires SFTP version 3".to_string(),
+        ));
+    }
+    let mut supported = false;
+    while !hello.is_empty() {
+        let name = take_sftp_string(&mut hello)?;
+        let version = take_sftp_string(&mut hello)?;
+        if name == POSIX_RENAME_EXTENSION && version == b"1" {
+            supported = true;
+        }
+    }
+    if !supported {
+        return Err(SftpError::General(
+            "Server does not support posix-rename@openssh.com version 1".to_string(),
+        ));
+    }
+    write_sftp_packet(channel, &request)?;
+    let response = read_sftp_packet(channel)?;
+    let mut response = response.as_slice();
+    if response.first() != Some(&101) {
+        // SSH_FXP_STATUS
+        return Err(SftpError::General(
+            "Invalid atomic rename response".to_string(),
+        ));
+    }
+    response = &response[1..];
+    if take_sftp_u32(&mut response)? != 1 {
+        return Err(SftpError::General(
+            "Atomic rename response ID does not match".to_string(),
+        ));
+    }
+    let status = take_sftp_u32(&mut response)?;
+    let message = take_sftp_string(&mut response)?;
+    let _language = take_sftp_string(&mut response)?;
+    if !response.is_empty() {
+        return Err(SftpError::General(
+            "Unexpected atomic rename response payload".to_string(),
+        ));
+    }
+    if status != 0 {
+        return Err(SftpError::General(format!(
+            "Atomic remote rename failed with SFTP status {status}: {}",
+            String::from_utf8_lossy(message)
+        )));
+    }
+    Ok(())
+}
+
+fn append_sftp_string(packet: &mut Vec<u8>, bytes: &[u8]) -> Result<(), SftpError> {
+    if bytes.len() > MAX_RENAME_PACKET || packet.len() + 4 + bytes.len() > MAX_RENAME_PACKET {
+        return Err(SftpError::General(
+            "Atomic rename request is too large".to_string(),
+        ));
+    }
+    packet.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    packet.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn write_sftp_packet(channel: &mut impl Write, packet: &[u8]) -> Result<(), SftpError> {
+    channel.write_all(&(packet.len() as u32).to_be_bytes())?;
+    channel.write_all(packet)?;
+    channel.flush()?;
+    Ok(())
+}
+
+fn read_sftp_packet(channel: &mut impl Read) -> Result<Vec<u8>, SftpError> {
+    let mut length = [0; 4];
+    channel.read_exact(&mut length)?;
+    let length = u32::from_be_bytes(length) as usize;
+    if length == 0 || length > MAX_RENAME_PACKET {
+        return Err(SftpError::General(
+            "Invalid SFTP response length".to_string(),
+        ));
+    }
+    let mut packet = vec![0; length];
+    channel.read_exact(&mut packet)?;
+    Ok(packet)
+}
+
+fn take_sftp_u32(packet: &mut &[u8]) -> Result<u32, SftpError> {
+    let mut value = [0; 4];
+    packet.read_exact(&mut value)?;
+    Ok(u32::from_be_bytes(value))
+}
+
+fn take_sftp_string<'a>(packet: &mut &'a [u8]) -> Result<&'a [u8], SftpError> {
+    let length = take_sftp_u32(packet)? as usize;
+    if length > packet.len() {
+        return Err(SftpError::General(
+            "Truncated SFTP response string".to_string(),
+        ));
+    }
+    let (value, remainder) = packet.split_at(length);
+    *packet = remainder;
+    Ok(value)
 }
 
 #[cfg(test)]

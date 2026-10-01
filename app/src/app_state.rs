@@ -184,8 +184,8 @@ impl<Owner: Clone> DaemonPtyClaims<Owner> {
 
 lazy_static! {
     /// Sidecar for route data whose lifetime follows the stable terminal UUID.
-    /// SQLite owns durability; this map only bridges snapshot construction and
-    /// restoration without changing the broadly constructed TerminalPaneSnapshot.
+    /// SQLite owns durability; snapshots copy this map's values before entering
+    /// the writer queue, and restoration repopulates the live registry.
     static ref REMOTE_TERMINAL_IDENTITIES: RwLock<HashMap<PaneUuid, RemoteTerminalIdentity>> =
         RwLock::new(HashMap::new());
     static ref FAILED_REMOTE_TERMINAL_RESTORES: RwLock<HashSet<PaneUuid>> =
@@ -467,7 +467,7 @@ pub struct LeafSnapshot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LeafContents {
-    Terminal(TerminalPaneSnapshot),
+    Terminal(Box<TerminalPaneSnapshot>),
     Notebook(NotebookPaneSnapshot),
     /// A read-only image viewer pane backed by a local file.
     Image {
@@ -579,10 +579,30 @@ pub struct AmbientAgentPaneSnapshot {
     pub task_id: Option<AmbientAgentTaskId>,
 }
 
+/// Remote restore metadata captured with a pane, before it is sent to the SQLite writer.
+/// The writer must never resolve this data from mutable UI registries.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RemoteTerminalPaneState {
+    pub identity: Option<RemoteTerminalIdentity>,
+    pub failed_restore: bool,
+    pub temporary_file_manager: Option<TemporaryFileManagerSnapshot>,
+}
+
+impl RemoteTerminalPaneState {
+    pub(crate) fn capture(uuid: &[u8]) -> Self {
+        Self {
+            identity: remote_terminal_identity(uuid),
+            failed_restore: failed_remote_terminal_restore(uuid),
+            temporary_file_manager: temporary_file_manager_replacement(uuid),
+        }
+    }
+}
+
 /// Snapshot of the contents of a terminal pane.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TerminalPaneSnapshot {
     pub uuid: Vec<u8>,
+    pub remote_state: RemoteTerminalPaneState,
     pub cwd: Option<String>,
     pub cli_agent_binding: Option<PersistedCLIAgentBinding>,
     pub shell_launch_data: Option<ShellLaunchData>,
@@ -688,6 +708,7 @@ pub enum CodeReviewPaneSnapshot {
 pub enum LeftPanelDisplayedTab {
     FileTree,
     GlobalSearch,
+    #[serde(rename = "ZapDrive", alias = "ZaplexDrive")]
     ZaplexDrive,
     ConversationListView,
     SshManager,

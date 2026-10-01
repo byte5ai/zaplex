@@ -28,7 +28,7 @@ set -e
 mtd_enabled=$(git config --bool --get engineering-standards.main-tree-discipline 2>/dev/null || echo true)
 
 if [ "$mtd_enabled" != "false" ] && [ "${ALLOW_MAIN_TREE_BRANCH:-}" != "1" ]; then
-  main_tree=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')
+  main_tree=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{sub(/^worktree /, ""); print; exit}')
   current_tree=$(git rev-parse --show-toplevel 2>/dev/null)
   current_branch=$(git branch --show-current 2>/dev/null)
 

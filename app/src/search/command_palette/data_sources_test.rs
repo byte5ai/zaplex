@@ -1,14 +1,23 @@
+use std::sync::Arc;
+
 use chrono::Utc;
 use settings::manager::SettingsManager;
-use warpui::{App, SingletonEntity};
+use settings::Setting as StoredSetting;
+use watcher::HomeDirectoryWatcher;
+use warpui::elements::Empty;
+use warpui::keymap::EditableBinding;
+use warpui::platform::WindowStyle;
+use warpui::{App, Element, SingletonEntity, TypedActionView, View};
 
 use super::*;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, StoredObjectMetadata, StoredObjectPermissions};
 use crate::notebooks::manager::NotebookManager;
+use crate::remote_server::manager::RemoteServerManager;
 use crate::notebooks::{NotebookObject, NotebookObjectModel};
 use crate::server::ids::SyncId::{self};
 use crate::settings::AISettings;
+use crate::user_config::WarpConfig;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{WorkflowObject, WorkflowObjectModel};
 use crate::{
@@ -256,4 +265,110 @@ fn test_drive_data_source_correctly_filters_notebook_filter() {
             assert!(results[0].accessibility_label().starts_with("Notebook:"));
         });
     })
+}
+
+struct BindingSourceView;
+
+impl Entity for BindingSourceView {
+    type Event = ();
+}
+
+impl TypedActionView for BindingSourceView {
+    type Action = ();
+}
+
+impl View for BindingSourceView {
+    fn ui_name() -> &'static str {
+        "BindingSourceView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+#[test]
+fn active_action_query_refreshes_when_available_bindings_change() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(WarpConfig::mock);
+        CockpitSettings::register(&mut app);
+        CockpitSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.enabled.set_value(false, ctx).unwrap();
+        });
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(RemoteServerManager::new);
+        app.add_singleton_model(CockpitModel::new);
+        app.add_singleton_model(|_| ActiveSession::default());
+        app.add_singleton_model(CLIAgentInstallModel::new);
+        #[cfg(feature = "local_tty")]
+        crate::terminal::available_shells::register(&mut app);
+
+        app.update(|ctx| {
+            ctx.register_editable_bindings([EditableBinding::new(
+                "test:open_theme_picker",
+                "Open Theme Picker",
+                (),
+            )]);
+        });
+        let (window_id, view) =
+            app.add_window(WindowStyle::NotStealFocus, |_| BindingSourceView);
+        let binding_source = app.add_model(|_| BindingSource::None);
+        let session_source = app.add_model(|_| SessionSource::None);
+        let store = app.add_model(|ctx| {
+            DataSourceStore::new(binding_source.clone(), session_source, ctx)
+        });
+        let mixer = app.add_model(|_| CommandPaletteMixer::new());
+        store.update(&mut app, |store, ctx| {
+            store.active_mixer = Some(mixer.clone());
+            mixer.update(ctx, |mixer, ctx| {
+                mixer.add_sync_source(store.actions_data_source.clone(), [QueryFilter::Actions]);
+                mixer.run_query(
+                    Query {
+                        filters: HashSet::from([QueryFilter::Actions]),
+                        text: "Open Theme Picker".into(),
+                    },
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| assert!(mixer.as_ref(ctx).results().is_empty()));
+
+        // The query is already running when the deferred binding inventory arrives.
+        // No new keystroke or explicit query rerun should be necessary.
+        binding_source.update(&mut app, |source, ctx| {
+            *source = BindingSource::View {
+                window_id,
+                view_id: view.id(),
+                binding_filter_fn: None,
+            };
+            ctx.notify();
+        });
+        app.read(|ctx| {
+            let results = mixer.as_ref(ctx).results();
+            assert_eq!(results.len(), 1);
+            assert!(matches!(
+                results[0].accept_result(),
+                CommandPaletteItemAction::AcceptBinding { binding }
+                    if binding.name == "test:open_theme_picker"
+            ));
+        });
+
+        // A context change must also remove actions that are no longer available.
+        binding_source.update(&mut app, |source, ctx| {
+            *source = BindingSource::View {
+                window_id,
+                view_id: view.id(),
+                binding_filter_fn: Some(Arc::new(|_| false)),
+            };
+            ctx.notify();
+        });
+        app.read(|ctx| {
+            assert!(mixer.as_ref(ctx).results().is_empty());
+            assert_eq!(
+                mixer.as_ref(ctx).current_query().unwrap().text,
+                "Open Theme Picker"
+            );
+        });
+    });
 }

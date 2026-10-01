@@ -32,6 +32,7 @@ pub mod ssh_file_upload;
 pub(crate) mod ssh_remote_server_choice_view;
 pub(crate) mod ssh_remote_server_failed_banner;
 mod tab_metadata;
+pub(crate) use tab_metadata::{terminal_identity, TerminalIdentity};
 #[cfg(any(test, feature = "integration_tests"))]
 mod testing;
 mod tooltips;
@@ -57,7 +58,9 @@ use crate::ai::predict::prompt_suggestions::{
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
 use crate::search::slash_command_menu::static_commands::commands;
-use crate::ssh_manager::onekey::{load_saved_ssh_credentials, OneKeyCredentialKind};
+use crate::ssh_manager::onekey::{
+    OneKeyCredential, OneKeyCredentialKind, load_saved_ssh_credentials,
+};
 use crate::ssh_manager::password_prompt::bytes_look_like_password_prompt;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
@@ -413,6 +416,7 @@ use crate::cockpit::settings::{CockpitContinuationMode, CockpitSettings};
 use crate::debounce::debounce;
 use crate::editor::{
     AutosuggestionType, CrdtOperation, EditorAction, EditorView, Event as EditorEvent,
+    InteractionState,
     PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
     TextOptions,
 };
@@ -1878,6 +1882,8 @@ pub(crate) enum RemoteInputPhase {
     Transport,
     Attach,
     Replay,
+    /// Direct PTY input without shell integration; the command editor stays gated.
+    Raw,
     Ready,
     Failed,
     Corrupt,
@@ -1894,8 +1900,49 @@ fn remote_input_phase_update_matches(
     }
 }
 
-fn remote_readiness_actions_visible(phase: RemoteInputPhase) -> bool {
-    phase == RemoteInputPhase::Failed
+fn remote_readiness_retry_visible(phase: RemoteInputPhase, has_restore_identity: bool) -> bool {
+    has_restore_identity
+        && matches!(
+            phase,
+            RemoteInputPhase::Failed | RemoteInputPhase::Cancelled
+        )
+}
+
+fn remote_readiness_cancel_visible(
+    phase: RemoteInputPhase,
+    has_cancellable_connection: bool,
+) -> bool {
+    has_cancellable_connection
+        && matches!(
+            phase,
+            RemoteInputPhase::Transport
+                | RemoteInputPhase::Attach
+                | RemoteInputPhase::Replay
+                | RemoteInputPhase::Failed
+        )
+}
+
+/// Footer copy for a remote readiness phase. Once a pane has been ready, the
+/// transient phases describe a reconnect rather than a first start.
+fn remote_readiness_message(
+    phase: RemoteInputPhase,
+    has_reached_initial_ready: bool,
+) -> Option<String> {
+    Some(match phase {
+        RemoteInputPhase::Transport | RemoteInputPhase::Attach | RemoteInputPhase::Replay
+            if has_reached_initial_ready =>
+        {
+            crate::t!("terminal-remote-readiness-reconnecting")
+        }
+        RemoteInputPhase::Transport => crate::t!("terminal-remote-readiness-transport"),
+        RemoteInputPhase::Attach => crate::t!("terminal-remote-readiness-attach"),
+        RemoteInputPhase::Replay => crate::t!("terminal-remote-readiness-replay"),
+        RemoteInputPhase::Raw => crate::t!("terminal-remote-readiness-raw"),
+        RemoteInputPhase::Ready => return None,
+        RemoteInputPhase::Failed => crate::t!("terminal-remote-readiness-failed"),
+        RemoteInputPhase::Corrupt => crate::t!("terminal-remote-readiness-corrupt"),
+        RemoteInputPhase::Cancelled => crate::t!("terminal-remote-readiness-cancelled"),
+    })
 }
 
 fn remote_input_draft_change_needs_snapshot(phase: Option<RemoteInputPhase>) -> bool {
@@ -1903,6 +1950,8 @@ fn remote_input_draft_change_needs_snapshot(phase: Option<RemoteInputPhase>) -> 
 }
 
 const CLASSIC_SSH_READY_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a connection/restore success notice stays visible above the grid.
+const REMOTE_SESSION_NOTICE_DURATION: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug)]
 pub enum LongRunningCommandAgentInteractionState {
@@ -2324,6 +2373,12 @@ impl DropTargetData for TerminalDropTargetData {
     }
 }
 
+struct SuRootPasswordConfirmation {
+    request_id: u64,
+    session_id: SessionId,
+    block_id: BlockId,
+}
+
 struct OneKeyPromptCandidate {
     label: String,
     subtitle: String,
@@ -2390,6 +2445,8 @@ pub struct TerminalView {
     /// Stashes the root password when a su root password prompt is detected, to be injected once the user confirms.
     pub(crate) su_root_password: Option<zeroize::Zeroizing<String>>,
     su_root_onekey_candidates: Vec<usize>,
+    su_root_confirmation: Option<SuRootPasswordConfirmation>,
+    next_su_root_confirmation_id: u64,
 
     /// The search bar at the top of the terminal view.
     find_bar: ViewHandle<Find<TerminalFindModel>>,
@@ -2445,6 +2502,10 @@ pub struct TerminalView {
     /// next `AfterBlockCompleted`, at which point `Event::PendingCommandCompleted`
     /// is emitted so subscribers know the command has finished.
     awaiting_pending_command_completion: bool,
+    /// The exact shell session and directory hidden by the file manager.
+    file_manager_origin: Option<FileManagerOrigin>,
+    /// Applied at the next idle prompt, never written into a running process.
+    pending_file_manager_directory: Option<PathBuf>,
     /// When true, enter agent view after pending setup commands complete
     /// (i.e. after `PendingCommandCompleted` is emitted). Set by
     /// `pane_tree_from_template_recursive` when a tab config has both
@@ -2754,10 +2815,20 @@ pub struct TerminalView {
     /// Explicit readiness for a remote pane. The input editor keeps its draft,
     /// while normal submissions stay blocked until this reaches Ready.
     remote_input_phase: Option<RemoteInputPhase>,
+    /// Persists through reconnect phases without relocking the terminal model.
+    remote_raw_terminal: bool,
+    remote_restore_pane_uuid: Option<Vec<u8>>,
     /// Remains true after initial input readiness so transient reconnect phases
     /// cannot make an established daemon pane look like a new pending start.
     remote_input_has_reached_initial_ready: bool,
     remote_input_session_id: Option<warp_core::SessionId>,
+    /// Transient connection/restore status shown as an overlay instead of being
+    /// written into the terminal grid. A newer notice replaces an older one.
+    remote_session_notice: Option<String>,
+    /// Failure details stay visible with Retry/Cancel until this pane is retired.
+    remote_session_error: Option<String>,
+    /// Bumped per notice so an expiry timer only clears its own notice.
+    remote_session_notice_generation: u64,
     remote_restore_retry_button: ViewHandle<ActionButton>,
     remote_restore_cancel_button: ViewHandle<ActionButton>,
 }
@@ -2787,6 +2858,45 @@ pub struct BlockSelectionDetails {
     delta: BlockSelectionDelta,
     is_cmd_down: bool,
     is_shift_down: bool,
+}
+
+enum FileManagerOrigin {
+    /// A persisted replacement is bound only once its own restored shell is ready.
+    Restoring { is_local: bool },
+    Session {
+        id: SessionId,
+        directory: Option<PathBuf>,
+    },
+}
+
+fn file_manager_directory_command(path: &Path, shell: ShellType) -> Option<String> {
+    let path = path.to_str()?;
+    // Control bytes can terminate a PTY command even inside shell quotes.
+    if path.is_empty() || path.chars().any(char::is_control) {
+        return None;
+    }
+    Some(match shell {
+        ShellType::Bash | ShellType::Zsh => {
+            format!("cd -- {}", shell_words::quote(path))
+        }
+        ShellType::Fish => {
+            let quoted = path.replace('\\', "\\\\").replace('\'', "\\'");
+            format!("cd -- '{quoted}'")
+        }
+        ShellType::PowerShell => {
+            let mut quoted = String::with_capacity(path.len());
+            for character in path.chars() {
+                quoted.push(character);
+                if matches!(
+                    character,
+                    '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}'
+                ) {
+                    quoted.push(character);
+                }
+            }
+            format!("Set-Location -LiteralPath '{quoted}'")
+        }
+    })
 }
 
 impl TerminalView {
@@ -3815,10 +3925,10 @@ impl TerminalView {
             .or_default();
 
         ctx.subscribe_to_model(&AssetCache::handle(ctx), |me, _, event, _| match event {
-            AssetCacheEvent::ImagesEvicted { image_ids } => {
+            AssetCacheEvent::ImagesEvicted { asset_ids } => {
                 let mut terminal_model = me.model.lock();
-                for &image_id in image_ids {
-                    terminal_model.remove_image_id_to_metadata_entry(image_id);
+                for asset_id in asset_ids {
+                    terminal_model.remove_image_asset_metadata(asset_id);
                 }
             }
         });
@@ -3910,6 +4020,8 @@ impl TerminalView {
             ssh_secret_auto_injection_in_flight: false,
             su_root_password: None,
             su_root_onekey_candidates: Vec::new(),
+            su_root_confirmation: None,
+            next_su_root_confirmation_id: 0,
             context_menu,
             hovered_secret: None,
             open_secret_tool_tip: None,
@@ -3931,6 +4043,8 @@ impl TerminalView {
             bootstrap_start: None,
             is_login_shell_bootstrapped: false,
             awaiting_pending_command_completion: false,
+            file_manager_origin: None,
+            pending_file_manager_directory: None,
             enter_agent_view_after_pending_commands: false,
             enter_agent_view_after_ssh_bootstrap: false,
             slow_bootstrap_banner,
@@ -3946,8 +4060,13 @@ impl TerminalView {
             sessions,
             remote_server_shimmer_handle: ShimmeringTextStateHandle::new(),
             remote_input_phase: None,
+            remote_raw_terminal: false,
+            remote_restore_pane_uuid: None,
             remote_input_has_reached_initial_ready: false,
             remote_input_session_id: None,
+            remote_session_notice: None,
+            remote_session_error: None,
+            remote_session_notice_generation: 0,
             remote_restore_retry_button,
             remote_restore_cancel_button,
             active_block_metadata: None,
@@ -5205,11 +5324,8 @@ impl TerminalView {
                         );
                     });
                 }
-                // When the active conversation is invalidated, fall back to the original pane title
-                self.pane_configuration.update(ctx, |pane_config, ctx| {
-                    pane_config.set_title(self.terminal_title.clone(), ctx);
-                });
-                self.is_using_conversation_for_pane_header_title = false;
+                // Recompute pane identity after clearing conversation metadata.
+                self.update_pane_configuration(ctx);
             }
             BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. } => {
                 self.update_pane_configuration(ctx);
@@ -6385,12 +6501,153 @@ impl TerminalView {
         }
     }
 
+    fn file_manager_session_matches_target(&self, is_local: bool, ctx: &AppContext) -> bool {
+        let Some(id) = self.active_block_session_id() else {
+            return false;
+        };
+        let Some(session) = self.sessions.as_ref(ctx).get(id) else {
+            return false;
+        };
+        if self.active_session_is_local(ctx) != Some(is_local) {
+            return false;
+        }
+        if is_local {
+            // Subshells can use a different filesystem namespace (for example containers).
+            session.subshell_info().is_none()
+        } else {
+            // Match TerminalModel::init_shell's daemon-root classification. The
+            // daemon connection ID and shell session ID are separate namespaces.
+            self.remote_input_session_id.is_some()
+                && session.subshell_info().is_none()
+                && !session.is_legacy_ssh_session()
+        }
+    }
+
+    pub(crate) fn begin_file_manager_navigation(
+        &mut self,
+        is_local: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.cancel_file_manager_directory(ctx);
+        if !self.file_manager_session_matches_target(is_local, ctx) {
+            return;
+        }
+        self.file_manager_origin =
+            self.active_block_session_id()
+                .map(|id| FileManagerOrigin::Session {
+                    id,
+                    directory: self.active_session_cwd(ctx),
+                });
+    }
+
+    /// The caller verifies the persisted file-manager namespace against the
+    /// original terminal's persisted host identity before arming this binding.
+    pub(crate) fn restore_file_manager_navigation(
+        &mut self,
+        is_local: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.cancel_file_manager_directory(ctx);
+        self.file_manager_origin = Some(FileManagerOrigin::Restoring { is_local });
+        self.apply_file_manager_directory(ctx);
+    }
+
+    pub(crate) fn cancel_file_manager_directory(&mut self, ctx: &mut ViewContext<Self>) {
+        self.pending_file_manager_directory = None;
+        self.file_manager_origin = None;
+        self.input.update(ctx, |input, _| {
+            input.cancel_pending_file_manager_directory();
+        });
+    }
+
+    pub(crate) fn finish_file_manager_navigation(
+        &mut self,
+        path: Option<PathBuf>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if path.is_none() || self.file_manager_origin.is_none() {
+            self.cancel_file_manager_directory(ctx);
+            return;
+        }
+        self.pending_file_manager_directory = path;
+        self.input.update(ctx, |input, _| {
+            input.preserve_pending_file_manager_draft();
+        });
+        self.apply_file_manager_directory(ctx);
+    }
+
+    fn apply_file_manager_directory(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.remote_input_has_failed() {
+            self.cancel_file_manager_directory(ctx);
+            return;
+        }
+        if let Some(FileManagerOrigin::Restoring { is_local }) = self.file_manager_origin {
+            // Remote restoration first creates a local bootstrap shell. Never
+            // bind its session or send a remote path to that temporary shell.
+            if !self.file_manager_session_matches_target(is_local, ctx)
+                || (!is_local && !self.remote_input_is_ready())
+                || !self.is_login_shell_bootstrapped
+            {
+                return;
+            }
+            let Some(id) = self.active_block_session_id() else {
+                return;
+            };
+            self.file_manager_origin = Some(FileManagerOrigin::Session {
+                id,
+                directory: self.active_session_cwd(ctx),
+            });
+        }
+        let Some(FileManagerOrigin::Session { id, directory }) = &self.file_manager_origin else {
+            return;
+        };
+        // Once bound, subshell exits and reconnects cannot retarget the request.
+        if self.active_block_session_id() != Some(*id) {
+            self.cancel_file_manager_directory(ctx);
+            return;
+        }
+        let Some(path) = self.pending_file_manager_directory.as_ref() else {
+            return;
+        };
+        if directory.as_ref() == Some(path) {
+            self.cancel_file_manager_directory(ctx);
+            return;
+        }
+        if self.remote_input_phase.is_some() && !self.remote_input_is_ready() {
+            return;
+        }
+        let Some(shell) = self.active_session_shell_type(ctx) else {
+            return;
+        };
+        let Some(command) = file_manager_directory_command(path, shell) else {
+            self.cancel_file_manager_directory(ctx);
+            return;
+        };
+        if self.input.update(ctx, |input, ctx| {
+            input.try_execute_command_preserving_draft(&command, ctx)
+        }) {
+            self.pending_file_manager_directory = None;
+            self.file_manager_origin = None;
+        }
+    }
+
     pub fn input(&self) -> &ViewHandle<Input> {
         &self.input
     }
 
     pub(crate) fn input_draft(&self, ctx: &AppContext) -> String {
         self.input.as_ref(ctx).buffer_text(ctx)
+    }
+
+    pub(crate) fn set_remote_restore_pane_uuid(&mut self, uuid: Vec<u8>) {
+        self.remote_restore_pane_uuid = Some(uuid);
+    }
+
+    fn has_remote_restore_identity(&self) -> bool {
+        self.remote_restore_pane_uuid
+            .as_deref()
+            .and_then(crate::app_state::remote_terminal_identity)
+            .is_some()
     }
 
     pub(crate) fn remote_input_is_ready(&self) -> bool {
@@ -6418,8 +6675,14 @@ impl TerminalView {
         if draft.is_empty() {
             return;
         }
-        self.input.update(ctx, |input, ctx| {
-            input.send_input_buffer_to_terminal_editor(Arc::new(draft), ctx);
+        let editor = self.input.as_ref(ctx).editor().clone();
+        editor.update(ctx, |editor, ctx| {
+            // Restore persisted text even while remote readiness disables user edits.
+            // Keep the sync origin so this pane's draft cannot fan out to other panes.
+            let interaction_state = editor.interaction_state(ctx);
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+            editor.set_buffer_text_for_syncing_inputs(Arc::new(draft), ctx);
+            editor.set_interaction_state(interaction_state, ctx);
         });
     }
 
@@ -6448,9 +6711,12 @@ impl TerminalView {
 
     pub(crate) fn mark_corrupt_remote_restore(&mut self, ctx: &mut ViewContext<Self>) {
         self.remote_input_phase = Some(RemoteInputPhase::Corrupt);
+        self.remote_session_notice = None;
+        self.remote_session_error = None;
         self.remote_input_session_id = None;
         self.input.update(ctx, |input, ctx| {
             input.cancel_pending_system_command();
+            input.clear_file_manager_directory_input();
             input.set_ordinary_command_input_ready(false, ctx);
         });
         ctx.notify();
@@ -6458,9 +6724,33 @@ impl TerminalView {
 
     pub(crate) fn cancel_remote_input_readiness(&mut self, ctx: &mut ViewContext<Self>) {
         self.remote_input_phase = Some(RemoteInputPhase::Cancelled);
+        self.remote_session_notice = None;
+        self.remote_session_error = None;
         self.remote_input_session_id = None;
         self.input.update(ctx, |input, ctx| {
             input.cancel_pending_system_command();
+            input.clear_file_manager_directory_input();
+            input.set_ordinary_command_input_ready(false, ctx);
+        });
+        ctx.notify();
+    }
+
+    pub(crate) fn mark_remote_raw_terminal(
+        &mut self,
+        connection_session_id: warp_core::SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !remote_input_phase_update_matches(
+            self.remote_input_session_id,
+            Some(connection_session_id),
+        ) {
+            return;
+        }
+        self.remote_raw_terminal = true;
+        self.is_slow_bootstrap_banner_open = false;
+        self.input.update(ctx, |input, ctx| {
+            input.cancel_pending_system_command();
+            input.clear_file_manager_directory_input();
             input.set_ordinary_command_input_ready(false, ctx);
         });
         ctx.notify();
@@ -6485,23 +6775,38 @@ impl TerminalView {
             log::warn!("Ignored unbound or stale remote input phase for a daemon-bound terminal");
             return;
         }
+        if phase == RemoteInputPhase::Raw {
+            if let Some(session_id) = connection_session_id {
+                self.mark_remote_raw_terminal(session_id, ctx);
+            }
+        }
         let became_ready = phase == RemoteInputPhase::Ready
             && self.remote_input_phase != Some(RemoteInputPhase::Ready);
         let became_failed = phase == RemoteInputPhase::Failed
             && self.remote_input_phase != Some(RemoteInputPhase::Failed);
-        if phase == RemoteInputPhase::Ready {
+        if matches!(phase, RemoteInputPhase::Ready | RemoteInputPhase::Raw) {
             self.remote_input_has_reached_initial_ready = true;
         }
         self.remote_input_phase = Some(phase);
         if connection_session_id.is_some() {
             self.remote_input_session_id = connection_session_id;
         }
+        if phase != RemoteInputPhase::Ready {
+            self.remote_session_notice = None;
+        }
+        if phase == RemoteInputPhase::Transport || became_ready {
+            self.remote_session_error = None;
+        }
         self.input.update(ctx, |input, ctx| {
             if matches!(
                 phase,
-                RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
+                RemoteInputPhase::Failed
+                    | RemoteInputPhase::Corrupt
+                    | RemoteInputPhase::Cancelled
+                    | RemoteInputPhase::Raw
             ) {
                 input.cancel_pending_system_command();
+                input.clear_file_manager_directory_input();
             }
             input.set_ordinary_command_input_ready(phase == RemoteInputPhase::Ready, ctx);
         });
@@ -6509,6 +6814,7 @@ impl TerminalView {
             self.focus_terminal(ctx);
         }
         if became_ready {
+            self.apply_file_manager_directory(ctx);
             if ctx.is_self_or_child_focused() {
                 self.redetermine_global_focus(ctx);
             }
@@ -6524,6 +6830,69 @@ impl TerminalView {
             });
         }
         ctx.notify();
+    }
+
+    /// Shows a connection/restore status outside the terminal grid. The
+    /// notice replaces any previous one and expires on its own, so repeated
+    /// reconnects never stack messages.
+    pub(crate) fn show_remote_session_notice(
+        &mut self,
+        message: String,
+        connection_session_id: Option<warp_core::SessionId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.remote_input_has_failed() {
+            return;
+        }
+        if !remote_input_phase_update_matches(self.remote_input_session_id, connection_session_id) {
+            return;
+        }
+        self.remote_session_notice_generation =
+            self.remote_session_notice_generation.wrapping_add(1);
+        let generation = self.remote_session_notice_generation;
+        self.remote_session_notice = Some(message);
+        let _ = ctx.spawn(
+            async {
+                Timer::after(REMOTE_SESSION_NOTICE_DURATION).await;
+            },
+            move |view, (), ctx| {
+                if view.remote_session_notice_generation == generation {
+                    view.remote_session_notice = None;
+                    ctx.notify();
+                }
+            },
+        );
+        ctx.notify();
+    }
+
+    pub(crate) fn show_remote_session_error(
+        &mut self,
+        message: String,
+        connection_session_id: Option<warp_core::SessionId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if matches!(
+            self.remote_input_phase,
+            Some(RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled)
+        ) || !remote_input_phase_update_matches(
+            self.remote_input_session_id,
+            connection_session_id,
+        ) {
+            return;
+        }
+        self.remote_session_notice = None;
+        self.remote_session_error = Some(message);
+        ctx.notify();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_session_error(&self) -> Option<&str> {
+        self.remote_session_error.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_session_notice(&self) -> Option<&str> {
+        self.remote_session_notice.as_deref()
     }
 
     pub(crate) fn control_context(&self) -> Option<&crate::control_surface::ControlPtyContext> {
@@ -6721,7 +7090,7 @@ impl TerminalView {
     }
 
     pub fn is_input_box_visible(&self, model: &TerminalModel, app: &AppContext) -> bool {
-        if model.is_read_only() {
+        if model.is_raw_terminal() || model.is_read_only() {
             return false;
         }
         if self.has_active_cli_agent_input_session(app) {
@@ -6915,6 +7284,7 @@ impl TerminalView {
     /// Shuts down the pty and event loop, terminating the shell process.
     /// Also marks this view as manually shut down for telemetry attribution.
     pub fn shutdown_pty(&mut self, ctx: &mut ViewContext<Self>) {
+        self.cancel_su_root_confirmation(ctx);
         self.manual_pty_shutdown_requested = true;
         ctx.emit(Event::ShutdownPty);
     }
@@ -7357,6 +7727,12 @@ impl TerminalView {
         // Lock the model once and hold it throughout the function
         let model = self.model.lock();
 
+        // Raw input still goes through the transport gate while reconnecting; it
+        // must never be diverted into the hidden integrated editor.
+        if model.is_raw_terminal() {
+            return true;
+        }
+
         // If the active block hasn't started yet, we don't want to write to the pty.
         // Note that we check block started and NOT block.is_long_running(), because
         // the block starts on enter but only becomes long running on receiving Preexec.
@@ -7450,7 +7826,12 @@ impl TerminalView {
         data: B,
         ctx: &mut ViewContext<Self>,
     ) {
-        ctx.emit(Event::WriteBytesToPty { bytes: data.into() });
+        let bytes = data.into();
+        if bytes.contains(&escape_sequences::C0::ETX) || bytes.contains(&escape_sequences::C0::EOT)
+        {
+            self.cancel_su_root_confirmation(ctx);
+        }
+        ctx.emit(Event::WriteBytesToPty { bytes });
     }
 
     /// Exposes the PTY output broadcast receiver for non-recording subscribers (currently the SSH manager's
@@ -7503,6 +7884,9 @@ impl TerminalView {
         mode: &AIAgentPtyWriteMode,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.remote_raw_terminal {
+            return;
+        }
         ctx.emit(Event::WriteAgentInputToPty {
             bytes: data.into(),
             mode: *mode,
@@ -7570,7 +7954,7 @@ impl TerminalView {
         // detected SSH command is active (for host-key/password prompts);
         // command-editor submission remains gated throughout.
         if self.remote_input_phase.is_some_and(|phase| {
-            phase != RemoteInputPhase::Ready
+            !matches!(phase, RemoteInputPhase::Ready | RemoteInputPhase::Raw)
                 && (self.remote_input_session_id.is_some()
                     || matches!(
                         phase,
@@ -7638,6 +8022,9 @@ impl TerminalView {
     }
 
     pub fn set_pending_command(&self, exec: &str, ctx: &mut ViewContext<Self>) {
+        if self.remote_raw_terminal {
+            return;
+        }
         self.input.update(ctx, |input, ctx| {
             input.set_pending_command(exec, ctx);
         })
@@ -8002,6 +8389,9 @@ impl TerminalView {
         key_event: Option<SshKeyEvent>,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.remote_raw_terminal {
+            return;
+        }
         if self.zaplexify_state.ssh_block_state().is_some() {
             if key_event.is_some_and(|key| key.is_ctrl_c()) {
                 send_telemetry_from_ctx!(TelemetryEvent::SshTmuxZaplexifyBlockDismissed, ctx);
@@ -9589,6 +9979,9 @@ impl TerminalView {
                 ctx.request_user_attention();
             }
             ModelEvent::Exit { reason } => {
+                self.cancel_su_root_confirmation(ctx);
+                self.input
+                    .update(ctx, |input, _| input.clear_file_manager_directory_input());
                 if self.remote_input_phase.is_some() {
                     self.set_remote_input_phase(
                         RemoteInputPhase::Failed,
@@ -9968,6 +10361,7 @@ impl TerminalView {
                 cloud_workflow_id,
                 cloud_env_var_collection_id,
             }) => {
+                self.cancel_su_root_confirmation(ctx);
                 // To automatically zaplexify a subshell, we run the relevant command to open the
                 // subshell and create a future to delay bootstrapping the subshell long enough for
                 // the command to complete. We receive AfterBlockCompleted if the subshell command
@@ -10327,6 +10721,12 @@ impl TerminalView {
                     return;
                 }
 
+                let working_directory_changed = self
+                    .active_block_metadata
+                    .as_ref()
+                    .and_then(BlockMetadata::current_working_directory)
+                    != block_metadata.current_working_directory();
+
                 if let Some(prev_block_metadata) = self.active_block_metadata.take() {
                     // Only send event to save app state when the block is post bootstrap
                     // and working directory has changed.
@@ -10475,6 +10875,12 @@ impl TerminalView {
                     // prompt area so it's up to date.
                     ctx.notify();
                 });
+
+                // The precmd metadata is the first signal of a `cd`; the pane identity
+                // must not wait for an OSC title or the next block.
+                if working_directory_changed {
+                    self.update_pane_configuration(ctx);
+                }
             }
             ModelEvent::TerminalModeSwapped(mode) => {
                 #[cfg(feature = "local_tty")]
@@ -10715,13 +11121,13 @@ impl TerminalView {
             ModelEvent::CompletionsFinished(_data) => {}
             ModelEvent::SendCompletionsPrompt => {}
             ModelEvent::ImageReceived {
-                image_id,
+                asset_id,
                 image_data,
                 image_protocol,
             } => {
                 AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
                     asset_cache.insert_raw_asset_bytes::<ImageType>(
-                        image_id.to_string(),
+                        asset_id.clone(),
                         &image_data[..],
                         ctx,
                     );
@@ -10734,13 +11140,13 @@ impl TerminalView {
                     ctx
                 );
             }
-            ModelEvent::AnimatedImageReceived { image_id, frames } => {
+            ModelEvent::AnimatedImageReceived { asset_id, frames } => {
                 AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
-                    let Some(asset) = build_animated_image(asset_cache, *image_id, frames) else {
+                    let Some(asset) = build_animated_image(asset_cache, asset_id, frames) else {
                         return;
                     };
 
-                    asset_cache.insert_asset::<ImageType>(image_id.to_string(), asset, ctx);
+                    asset_cache.insert_asset::<ImageType>(asset_id.clone(), asset, ctx);
                 });
                 ctx.notify();
             }
@@ -10795,6 +11201,7 @@ impl TerminalView {
                 }
             }
             ModelEvent::ExitShell { session_id } => {
+                self.cancel_su_root_confirmation(ctx);
                 // Drop the remote server client for this session before the
                 // user's outer ssh tunnel starts closing. The last
                 // `Arc<RemoteServerClient>` carries an owned `Child` for the
@@ -10975,16 +11382,24 @@ impl TerminalView {
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let phase = self.remote_input_phase?;
-        let message = match phase {
-            RemoteInputPhase::Transport => crate::t!("terminal-remote-readiness-transport"),
-            RemoteInputPhase::Attach => crate::t!("terminal-remote-readiness-attach"),
-            RemoteInputPhase::Replay => crate::t!("terminal-remote-readiness-replay"),
-            RemoteInputPhase::Ready => return None,
-            RemoteInputPhase::Failed => crate::t!("terminal-remote-readiness-failed"),
-            RemoteInputPhase::Corrupt => crate::t!("terminal-remote-readiness-corrupt"),
-            RemoteInputPhase::Cancelled => crate::t!("terminal-remote-readiness-cancelled"),
+        let has_restore_identity = self.has_remote_restore_identity();
+        let has_cancellable_connection =
+            has_restore_identity || self.remote_input_session_id.is_some();
+        let message = if phase == RemoteInputPhase::Failed {
+            self.remote_session_error.clone().or_else(|| {
+                remote_readiness_message(phase, self.remote_input_has_reached_initial_ready)
+            })?
+        } else {
+            remote_readiness_message(phase, self.remote_input_has_reached_initial_ready)?
         };
-        let content = if matches!(
+        let content = if phase == RemoteInputPhase::Raw {
+            Text::new(
+                message.clone(),
+                appearance.monospace_font_family(),
+                appearance.monospace_font_size() - 2.,
+            )
+            .finish()
+        } else if matches!(
             phase,
             RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
         ) {
@@ -11003,15 +11418,20 @@ impl TerminalView {
                 app,
             )
         };
-        let content = if remote_readiness_actions_visible(phase) {
+        let content = if remote_readiness_retry_visible(phase, has_restore_identity)
+            || remote_readiness_cancel_visible(phase, has_cancellable_connection)
+        {
             let message = Flex::row()
                 .with_child(Shrinkable::new(1., content).finish())
                 .finish();
-            let actions = Flex::row()
-                .with_spacing(8.)
-                .with_child(ChildView::new(&self.remote_restore_retry_button).finish())
-                .with_child(ChildView::new(&self.remote_restore_cancel_button).finish())
-                .finish();
+            let mut actions = Flex::row().with_spacing(8.);
+            if remote_readiness_retry_visible(phase, has_restore_identity) {
+                actions.add_child(ChildView::new(&self.remote_restore_retry_button).finish());
+            }
+            if remote_readiness_cancel_visible(phase, has_cancellable_connection) {
+                actions.add_child(ChildView::new(&self.remote_restore_cancel_button).finish());
+            }
+            let actions = actions.finish();
             Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .with_spacing(8.)
@@ -11026,6 +11446,35 @@ impl TerminalView {
                 .with_padding_left(*PADDING_LEFT)
                 .with_vertical_padding(8.)
                 .finish(),
+        )
+    }
+
+    fn render_remote_session_notice(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+        // Failed panes show their persistent detail beside the recovery actions.
+        let message = if self.remote_input_phase == Some(RemoteInputPhase::Failed) {
+            return None;
+        } else {
+            self.remote_session_error
+                .as_ref()
+                .or(self.remote_session_notice.as_ref())?
+        };
+        let theme = appearance.theme();
+        Some(
+            Container::new(
+                Text::new(
+                    message.clone(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.main_text_color(theme.surface_2()).into())
+                .finish(),
+            )
+            .with_horizontal_padding(10.)
+            .with_vertical_padding(6.)
+            .with_background(theme.surface_2())
+            .with_border(Border::all(1.).with_border_fill(theme.outline()))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .finish(),
         )
     }
 
@@ -11141,6 +11590,9 @@ impl TerminalView {
         delivered_directly_by_control_surface: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.remote_raw_terminal {
+            return;
+        }
         let Some(notification) = parse_event(title, body) else {
             return;
         };
@@ -12094,12 +12546,12 @@ fn build_onboarding_keybindings(ctx: &AppContext) -> OnboardingKeybindings {
 /// only the frames transmitted after it travel with the event.
 fn build_animated_image(
     asset_cache: &AssetCache,
-    image_id: u32,
+    asset_id: &str,
     frames: &[(Vec<u8>, u32)],
 ) -> Option<ImageType> {
     let mut images: Vec<(Arc<StaticImage>, u32)> = Vec::new();
 
-    if let Some(root) = cached_image(asset_cache, image_id) {
+    if let Some(root) = cached_image(asset_cache, asset_id) {
         images.push((root, DEFAULT_FRAME_GAP_MS));
     }
 
@@ -12107,7 +12559,7 @@ fn build_animated_image(
         match ImageType::try_from_bytes(data) {
             Ok(ImageType::StaticBitmap { image }) => images.push((image, *gap_ms)),
             Ok(_) | Err(_) => {
-                log::warn!("Could not decode an animation frame of kitty image {image_id}");
+                log::warn!("Could not decode an animation frame of kitty image {asset_id}");
             }
         }
     }
@@ -12134,9 +12586,9 @@ fn build_animated_image(
 
 /// The decoded image the asset cache holds for an image id. Once an animation
 /// has been built for it, its first frame is that same image.
-fn cached_image(asset_cache: &AssetCache, image_id: u32) -> Option<Arc<StaticImage>> {
+fn cached_image(asset_cache: &AssetCache, asset_id: &str) -> Option<Arc<StaticImage>> {
     let AssetState::Loaded { data } = asset_cache.load_asset::<ImageType>(AssetSource::Raw {
-        id: image_id.to_string(),
+        id: asset_id.to_string(),
     }) else {
         return None;
     };
@@ -13511,6 +13963,10 @@ impl TerminalView {
 
     /// Executes a command that was submitted by the user and not yet sent to the shell.
     pub fn execute_pending_command(&mut self, _: (), ctx: &mut ViewContext<Self>) {
+        if self.remote_raw_terminal {
+            return;
+        }
+        self.apply_file_manager_directory(ctx);
         let had_pending = self.input.read(ctx, |input, _| input.has_pending_command());
         self.input.update(ctx, |input, ctx| {
             input.execute_pending_command(ctx);
@@ -13540,18 +13996,29 @@ impl TerminalView {
         command: String,
         ctx: &mut ViewContext<Self>,
     ) {
-        if matches!(
-            self.remote_input_phase,
-            Some(
-                RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
+        if self.remote_raw_terminal
+            || matches!(
+                self.remote_input_phase,
+                Some(
+                    RemoteInputPhase::Failed
+                        | RemoteInputPhase::Corrupt
+                        | RemoteInputPhase::Cancelled
+                        | RemoteInputPhase::Raw
+                )
             )
-        ) {
+        {
             return;
         }
         self.input.update(ctx, |input, _| {
             input.set_pending_system_command(command);
         });
         self.execute_pending_command((), ctx);
+    }
+
+    /// Whether a routed launch can be serialized for this terminal without
+    /// changing input or launch state. Lifecycle actions check this before killing.
+    pub(crate) fn can_execute_routed_agent_launch(&self, ctx: &AppContext) -> bool {
+        !self.remote_raw_terminal && self.active_session_shell_type(ctx).is_some()
     }
 
     /// Render a routed CLI-agent launch for this terminal's actual shell, then
@@ -13561,6 +14028,9 @@ impl TerminalView {
         launch: &cli_agent::RoutedAgentLaunch,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
+        if self.remote_raw_terminal {
+            return false;
+        }
         let Some(shell_type) = self.active_session_shell_type(ctx) else {
             return false;
         };
@@ -13758,7 +14228,10 @@ impl TerminalView {
 
             // If we did actually bootstrap, or if the session is no longer usable
             // (e.g.: the shell process terminated), don't show a banner.
-            if model.is_read_only() || model.is_active_block_bootstrapped() {
+            if model.is_raw_terminal()
+                || model.is_read_only()
+                || model.is_active_block_bootstrapped()
+            {
                 return;
             }
 
@@ -15929,9 +16402,74 @@ impl TerminalView {
         self.ssh_secret_auto_injection_in_flight = in_flight;
     }
 
+    fn begin_su_root_confirmation(&mut self) -> Option<u64> {
+        let (session_id, block_id) = {
+            let model = self.model.lock();
+            let block = model.block_list().active_block();
+            if !block.is_executing() {
+                return None;
+            }
+            (block.session_id()?, block.id().clone())
+        };
+        let request_id = self.next_su_root_confirmation_id;
+        self.next_su_root_confirmation_id = request_id.wrapping_add(1);
+        self.su_root_confirmation = Some(SuRootPasswordConfirmation {
+            request_id,
+            session_id,
+            block_id,
+        });
+        Some(request_id)
+    }
+
+    fn su_root_confirmation_matches(&self, request_id: u64) -> bool {
+        let Some(confirmation) = self.su_root_confirmation.as_ref() else {
+            return false;
+        };
+        if confirmation.request_id != request_id {
+            return false;
+        }
+        let model = self.model.lock();
+        let block = model.block_list().active_block();
+        block.is_executing()
+            && block.session_id() == Some(confirmation.session_id)
+            && block.id() == &confirmation.block_id
+    }
+
+    fn cancel_su_root_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
+        if matches!(
+            self.context_menu_state.map(|state| state.menu_type),
+            Some(ContextMenuType::SuRootPasswordConfirm)
+        ) {
+            self.close_context_menu(ctx, false);
+        } else if self.su_root_confirmation.take().is_some() {
+            self.su_root_password = None;
+            self.su_root_onekey_candidates.clear();
+            self.onekey_prompt_candidates.clear();
+        }
+    }
+
     /// Pops up a confirmation menu after detecting a su root password prompt.
-    pub(crate) fn show_su_root_confirm_menu(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn show_su_root_confirm_menu(
+        &mut self,
+        source_session_id: SessionId,
+        source_block_id: &BlockId,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if self.context_menu_state.is_some() {
+            self.su_root_password = None;
+            return;
+        }
+        let Some(request_id) = self.begin_su_root_confirmation() else {
+            self.su_root_password = None;
+            return;
+        };
+        let confirmation = self
+            .su_root_confirmation
+            .as_ref()
+            .expect("just created confirmation");
+        if confirmation.session_id != source_session_id || &confirmation.block_id != source_block_id
+        {
+            self.cancel_su_root_confirmation(ctx);
             return;
         }
         self.su_root_onekey_candidates.clear();
@@ -15959,57 +16497,70 @@ impl TerminalView {
                     return;
                 }
             };
-            if view.context_menu_state.is_some()
-                && !matches!(
-                    view.context_menu_state.map(|state| state.menu_type),
-                    Some(ContextMenuType::SuRootPasswordConfirm)
-                )
-            {
-                return;
-            }
-            view.onekey_prompt_candidates = credentials
-                .into_iter()
-                .map(|credential| OneKeyPromptCandidate {
-                    label: credential.label,
-                    subtitle: credential.subtitle,
-                    secret: credential.secret,
-                    kind: credential.kind,
-                })
-                .collect();
-            view.su_root_onekey_candidates = view
-                .onekey_prompt_candidates
-                .iter()
-                .enumerate()
-                .filter_map(|(index, candidate)| {
-                    matches!(candidate.kind, OneKeyCredentialKind::Password).then_some(index)
-                })
-                .collect();
-            if view.su_root_password.is_none() && view.su_root_onekey_candidates.is_empty() {
-                return;
-            }
-            let items = view.build_su_root_password_menu_items();
-            if matches!(
-                view.context_menu_state.map(|state| state.menu_type),
-                Some(ContextMenuType::SuRootPasswordConfirm)
-            ) {
-                ctx.update_view(&view.context_menu, |context_menu, ctx| {
-                    context_menu.set_items(items, ctx);
-                    context_menu.select_next(ctx);
-                });
-            } else if view.context_menu_state.is_none() {
-                view.show_context_menu(
-                    ContextMenuState {
-                        menu_type: ContextMenuType::SuRootPasswordConfirm,
-                    },
-                    items,
-                    ctx,
-                );
-                ctx.update_view(&view.context_menu, |context_menu, ctx| {
-                    context_menu.select_next(ctx);
-                });
-            }
-            ctx.notify();
+            view.apply_su_root_credentials(request_id, credentials, ctx);
         });
+    }
+
+    fn apply_su_root_credentials(
+        &mut self,
+        request_id: u64,
+        credentials: Vec<OneKeyCredential>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // A closed or replaced menu must never be revived by a delayed keychain response.
+        if !self.su_root_confirmation_matches(request_id) {
+            return;
+        }
+        if self.context_menu_state.is_some()
+            && !matches!(
+                self.context_menu_state.map(|state| state.menu_type),
+                Some(ContextMenuType::SuRootPasswordConfirm)
+            )
+        {
+            return;
+        }
+        self.onekey_prompt_candidates = credentials
+            .into_iter()
+            .map(|credential| OneKeyPromptCandidate {
+                label: credential.label,
+                subtitle: credential.subtitle,
+                secret: credential.secret,
+                kind: credential.kind,
+            })
+            .collect();
+        self.su_root_onekey_candidates = self
+            .onekey_prompt_candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| {
+                matches!(candidate.kind, OneKeyCredentialKind::Password).then_some(index)
+            })
+            .collect();
+        if self.su_root_password.is_none() && self.su_root_onekey_candidates.is_empty() {
+            return;
+        }
+        let items = self.build_su_root_password_menu_items();
+        if matches!(
+            self.context_menu_state.map(|state| state.menu_type),
+            Some(ContextMenuType::SuRootPasswordConfirm)
+        ) {
+            ctx.update_view(&self.context_menu, |context_menu, ctx| {
+                context_menu.set_items(items, ctx);
+                context_menu.select_next(ctx);
+            });
+        } else if self.context_menu_state.is_none() {
+            self.show_context_menu(
+                ContextMenuState {
+                    menu_type: ContextMenuType::SuRootPasswordConfirm,
+                },
+                items,
+                ctx,
+            );
+            ctx.update_view(&self.context_menu, |context_menu, ctx| {
+                context_menu.select_next(ctx);
+            });
+        }
+        ctx.notify();
     }
 
     fn build_su_root_password_menu_items(&self) -> Vec<MenuItem<TerminalAction>> {
@@ -16067,6 +16618,17 @@ impl TerminalView {
         password: &zeroize::Zeroizing<String>,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !matches!(
+            self.context_menu_state.map(|state| state.menu_type),
+            Some(ContextMenuType::SuRootPasswordConfirm)
+        ) || !self
+            .su_root_confirmation
+            .as_ref()
+            .is_some_and(|confirmation| self.su_root_confirmation_matches(confirmation.request_id))
+        {
+            self.cancel_su_root_confirmation(ctx);
+            return;
+        }
         let mut bytes: zeroize::Zeroizing<Vec<u8>> =
             zeroize::Zeroizing::new(password.as_bytes().to_vec());
         bytes.push(b'\n');
@@ -16640,10 +17202,14 @@ impl TerminalView {
     /// run `cd <dir>` in that remote shell session.
     #[cfg(all(feature = "local_tty", feature = "local_fs"))]
     fn cd_into_remote_directory(&mut self, path: &std::path::Path, ctx: &mut ViewContext<Self>) {
-        // Shell-escape the path to prevent command injection by the remote shell when it contains characters like `"`, `$(...)`, or backticks.
-        let quoted_dir = shell_words::quote(&path.to_string_lossy()).into_owned();
+        let Some(shell) = self.active_session_shell_type(ctx) else {
+            return;
+        };
+        let Some(command) = file_manager_directory_command(path, shell) else {
+            return;
+        };
         self.input.update(ctx, |input, ctx| {
-            input.try_execute_command(format!("cd -- {quoted_dir}").as_str(), ctx);
+            input.try_execute_command(&command, ctx);
         });
     }
 
@@ -16700,6 +17266,11 @@ impl TerminalView {
                 }
                 return;
             }
+            // Historical and reconnecting SSH sessions can outlive their manager
+            // host mapping. Their paths must never fall back to the local host.
+            if !self.can_open_session_path_locally(target_session_id, ctx) {
+                return;
+            }
         }
 
         let settings = EditorSettings::as_ref(ctx);
@@ -16710,6 +17281,26 @@ impl TerminalView {
             target,
             line_col: line_and_column_num,
         });
+    }
+
+    #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+    fn can_open_session_path_locally(
+        &self,
+        session_id: Option<SessionId>,
+        ctx: &AppContext,
+    ) -> bool {
+        match session_id {
+            Some(id) => self
+                .sessions
+                .as_ref(ctx)
+                .get(id)
+                .is_some_and(|session| session.is_local() && !session.is_legacy_ssh_session()),
+            None => {
+                self.remote_input_phase.is_none()
+                    && self.remote_input_session_id.is_none()
+                    && !self.model.lock().is_zaplexified_ssh()
+            }
+        }
     }
 
     #[cfg(feature = "local_fs")]
@@ -16740,6 +17331,11 @@ impl TerminalView {
                     line_col: line_and_column_num,
                 });
             }
+            return;
+        }
+
+        #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+        if !self.can_open_session_path_locally(self.active_block_session_id(), ctx) {
             return;
         }
 
@@ -17196,6 +17792,7 @@ impl TerminalView {
     }
 
     fn clear_buffer(&mut self, ctx: &mut ViewContext<Self>) {
+        self.cancel_su_root_confirmation(ctx);
         let agent_view_state = self.agent_view_controller.as_ref(ctx).agent_view_state();
         let is_fullscreen_agent_view = agent_view_state.is_fullscreen();
         let is_ambient_agent = self.ambient_agent_view_model.as_ref(ctx).is_ambient_agent();
@@ -19009,6 +19606,12 @@ impl TerminalView {
     }
 
     fn close_context_menu(&mut self, ctx: &mut ViewContext<Self>, should_redetermine_focus: bool) {
+        // Also invalidate a request whose credential lookup has not opened its menu yet.
+        if self.su_root_confirmation.take().is_some() {
+            self.su_root_password = None;
+            self.su_root_onekey_candidates.clear();
+            self.onekey_prompt_candidates.clear();
+        }
         if let Some(state) = self.context_menu_state.take() {
             if matches!(state.menu_type, ContextMenuType::OneKeyPrompt) {
                 self.onekey_prompt_candidates.clear();
@@ -19339,6 +19942,10 @@ impl TerminalView {
             InputEvent::PageUp => self.page_up(ctx),
             InputEvent::PageDown => self.page_down(ctx),
             InputEvent::ExecuteCommand(event) => {
+                // A newer command takes precedence over a deferred directory change.
+                if self.pending_file_manager_directory.is_some() {
+                    self.cancel_file_manager_directory(ctx);
+                }
                 self.update_scroll_position_locking(
                     ScrollPositionUpdate::AfterCommandExecutionStarted,
                     ctx,
@@ -20712,7 +21319,7 @@ impl TerminalView {
 
     /// Returns the CLI agent currently active in this terminal, if any.
     pub fn active_cli_agent(&self, ctx: &AppContext) -> Option<super::CLIAgent> {
-        if !FeatureFlag::HoaCodeReview.is_enabled() {
+        if self.remote_raw_terminal || !FeatureFlag::HoaCodeReview.is_enabled() {
             return None;
         }
 
@@ -20723,7 +21330,8 @@ impl TerminalView {
 
     /// Returns `true` if CLI agent rich input is currently open.
     pub fn is_cli_agent_rich_input_open(&self, ctx: &AppContext) -> bool {
-        CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id)
+        !self.remote_raw_terminal
+            && CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id)
     }
 
     /// Appends `text` to CLI agent rich input and focuses it.
@@ -20946,6 +21554,16 @@ impl TerminalView {
             .as_ref()
             .and_then(BlockMetadata::current_working_directory)
             .map(|pwd| pwd.to_string())
+    }
+
+    /// The working directory, only while the active session runs on a remote
+    /// host. A classic SSH pane that fell back to its local shell reports None.
+    pub fn pwd_if_remote<C: ModelAsRef>(&self, ctx: &C) -> Option<String> {
+        if self.active_session_is_local(ctx) == Some(false) {
+            self.pwd()
+        } else {
+            None
+        }
     }
 
     pub fn pwd_if_local(&self, ctx: &AppContext) -> Option<String> {
@@ -24119,7 +24737,10 @@ impl TypedActionView for TerminalView {
             CtrlC => self.handle_ctrl_c_input_event(0, ctx),
             ClearSelectionsWhenShellMode => self.clear_selections_when_shell_mode(ctx),
             ContextMenu(context_action) => self.context_menu_action(context_action, ctx),
-            Close => ctx.emit(Event::CloseRequested),
+            Close => {
+                self.cancel_su_root_confirmation(ctx);
+                ctx.emit(Event::CloseRequested);
+            }
             SplitRight(chosen_shell) => {
                 ctx.emit(Event::Pane(PaneEvent::SplitRight(chosen_shell.to_owned())))
             }
@@ -24956,21 +25577,43 @@ impl View for TerminalView {
                 let remote_input_is_gated = self
                     .remote_input_phase
                     .is_some_and(|phase| phase != RemoteInputPhase::Ready);
-                if self.is_input_box_visible(&model, app) || remote_input_is_gated {
-                    column.add_child(self.render_input());
+                let input_box_visible = self.is_input_box_visible(&model, app);
+                let mut floating_readiness_footer = None;
+                if input_box_visible || (remote_input_is_gated && !is_alt_screen_active) {
+                    if !model.is_raw_terminal() {
+                        column.add_child(self.render_input());
+                    }
                     if let Some(footer) = self.render_remote_input_readiness_footer(appearance, app)
                     {
                         column.add_child(footer);
                     }
+                } else if remote_input_is_gated {
+                    // A fullscreen TUI keeps its grid size while the remote
+                    // session reconnects: the status floats above the grid.
+                    floating_readiness_footer =
+                        self.render_remote_input_readiness_footer(appearance, app);
                 } else if self.show_remote_server_loading_footer(&model, app) {
                     column.add_child(
                         self.render_remote_server_loading_footer(&model, appearance, app),
                     );
                 }
 
-                let stack = Stack::new()
+                let mut stack = Stack::new()
                     .with_constrain_absolute_children()
                     .with_child(column.finish());
+                if let Some(footer) = floating_readiness_footer {
+                    stack.add_positioned_child(
+                        Container::new(footer)
+                            .with_background(appearance.theme().surface_2())
+                            .finish(),
+                        OffsetPositioning::offset_from_parent(
+                            vec2f(0., 0.),
+                            ParentOffsetBounds::ParentByPosition,
+                            ParentAnchor::BottomLeft,
+                            ChildAnchor::BottomLeft,
+                        ),
+                    );
+                }
                 if matches!(input_mode, InputMode::Waterfall) && !is_alt_screen_active {
                     self.render_waterfall_mode_background(&model, stack, app)
                 } else {
@@ -24991,6 +25634,18 @@ impl View for TerminalView {
             .is_some()
         {
             stack.add_child(self.render_ambient_agent_progress(appearance, app));
+        }
+
+        if let Some(notice) = self.render_remote_session_notice(appearance) {
+            stack.add_positioned_child(
+                notice,
+                OffsetPositioning::offset_from_parent(
+                    vec2f(-12., 12.),
+                    ParentOffsetBounds::ParentByPosition,
+                    ParentAnchor::TopRight,
+                    ChildAnchor::TopRight,
+                ),
+            );
         }
 
         self.maybe_render_onboarding_callout(

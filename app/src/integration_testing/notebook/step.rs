@@ -100,9 +100,16 @@ pub fn enter_notebook_edit_mode_and_set_markdown(
     TestStep::new("Enter notebook edit mode and set Markdown").with_action(
         move |app, window_id, _| {
             let notebook = notebook_view(app, window_id, tab_index, pane_index);
-            notebook.update(app, |notebook, ctx| notebook.toggle_mode(ctx));
             let editor = notebook_editor(app, window_id, tab_index, pane_index);
+            // Opening a local notebook can already grant edit access.
+            if !editor.read(app, |editor, ctx| editor.is_editable(ctx)) {
+                notebook.update(app, |notebook, ctx| notebook.toggle_mode(ctx));
+            }
             editor.update(app, |editor, ctx| {
+                assert!(
+                    editor.is_editable(ctx),
+                    "Notebook must grant edit access before input"
+                );
                 editor.reset_with_markdown(&markdown, ctx);
             });
         },

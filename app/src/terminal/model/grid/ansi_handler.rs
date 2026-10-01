@@ -1369,7 +1369,7 @@ impl ansi::Handler for GridHandler {
         self.ansi_handler_state
             .event_proxy
             .send_terminal_event(Event::ImageReceived {
-                image_id,
+                asset_id: image_id.to_string(),
                 image_data: image.data,
                 image_protocol: ImageProtocol::ITerm,
             });
@@ -1728,7 +1728,19 @@ impl GridHandler {
     fn delete_cell(&self, col: u32, row: u32) -> Option<AbsolutePoint> {
         let col = cell_index(col)?;
         let row = cell_index(row)?;
-        Some(AbsolutePoint::from_point(Point::new(row, col), self))
+        Some(AbsolutePoint::from_point(
+            Point::new(self.history_size() + row, col),
+            self,
+        ))
+    }
+
+    /// Image identities still referenced by this grid, including scrollback.
+    pub fn placed_image_ids(&self) -> HashSet<u32> {
+        self.images
+            .placements_for_id_range(0, u32::MAX)
+            .into_iter()
+            .map(|(image_id, _)| image_id)
+            .collect()
     }
 
     /// Removes every placement drawn at `z_index`, returning what was removed so
@@ -1743,11 +1755,6 @@ impl GridHandler {
     pub fn evict_placements_in_id_range(&mut self, start: u32, end: u32) {
         let placements = self.images.placements_for_id_range(start, end);
         self.images.evict_placements(&placements);
-    }
-
-    /// Removes every placement of an image that is not in `live`.
-    pub fn evict_images_absent_from(&mut self, live: &HashSet<u32>) {
-        self.images.evict_images_absent_from(live);
     }
 
     fn handle_completed_kitty_action_internal(
@@ -1778,7 +1785,7 @@ impl GridHandler {
                 self.ansi_handler_state
                     .event_proxy
                     .send_terminal_event(Event::ImageReceived {
-                        image_id: action.image_id,
+                        asset_id: metadata.asset_id.clone(),
                         image_data: action.image.data,
                         image_protocol: ImageProtocol::Kitty,
                     });
@@ -1814,7 +1821,7 @@ impl GridHandler {
                     self.ansi_handler_state
                         .event_proxy
                         .send_terminal_event(Event::ImageReceived {
-                            image_id: action.image_id,
+                            asset_id: metadata.asset_id.clone(),
                             image_data: action.image.data,
                             image_protocol: ImageProtocol::Kitty,
                         });
@@ -1855,7 +1862,7 @@ impl GridHandler {
                 self.ansi_handler_state
                     .event_proxy
                     .send_terminal_event(Event::ImageReceived {
-                        image_id: action.image_id,
+                        asset_id: metadata.asset_id.clone(),
                         image_data: action.image.data,
                         image_protocol: ImageProtocol::Kitty,
                     });
@@ -2004,14 +2011,20 @@ impl GridHandler {
                 });
             }
             KittyAction::QuerySupport(_) => {}
-            KittyAction::Delete {
-                delete_placements_only,
-                deletion_type,
-            } => {
-                // Only the positional specifiers are handled here: they are the
-                // ones that need this grid's cursor and placement geometry. The
-                // rest are applied to every grid by the terminal model.
+            KittyAction::Delete { deletion_type, .. } => {
+                // Screen-relative deletion uses the active grid, not old output blocks.
+                // Identity and z-index deletion are handled by the terminal model.
                 let placements = match deletion_type {
+                    DeletionType::All => {
+                        let start =
+                            AbsolutePoint::from_point(Point::new(self.history_size(), 0), self).row;
+                        let end = AbsolutePoint::from_point(
+                            Point::new(self.history_size() + self.visible_rows(), 0),
+                            self,
+                        )
+                        .row;
+                        self.images.placements_in_rows(start..end)
+                    }
                     DeletionType::AtCursor => {
                         let cursor = AbsolutePoint::from_point(self.cursor_point(), self);
                         self.images.placements_at_point(cursor.col, cursor.row)
@@ -2044,21 +2057,14 @@ impl GridHandler {
                     DeletionType::Frames { .. } => {
                         return Err(InvalidKittyAction::UnsupportedAction.into())
                     }
-                    DeletionType::All
-                    | DeletionType::ById { .. }
+                    DeletionType::ById { .. }
                     | DeletionType::ByNumber { .. }
                     | DeletionType::ZIndex(_)
                     | DeletionType::IdRange { .. } => return Ok(()),
                 };
 
-                // An uppercase specifier frees the image data as well, so the
-                // model must forget the metadata it looks placements up by.
-                if !delete_placements_only {
-                    for (image_id, _) in &placements {
-                        metadata.remove(image_id);
-                    }
-                }
-
+                // Image data is released by TerminalModel after it checks
+                // references in every grid and virtual placement.
                 self.images.evict_placements(&placements);
             }
             // Animation actions carry no placement: the terminal model applies

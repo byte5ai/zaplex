@@ -11,8 +11,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 /// - AGENTS.md — community standard (recognized by opencode / Cursor / Cline, etc.).
 /// - CLAUDE.md — Claude Code native convention; enables seamless one-click migration for projects from Claude Code.
 ///
-/// To extend with new names, simply adjust this array (insertion position = priority); `RuleAtPath`
-/// is implemented as a priority-indexed slot array, no if-else logic needed.
+/// Keep this priority list aligned with the slots in `RuleAtPath` and its mutation methods.
 ///
 /// Defined outside `cfg_if` so paths without the `local_fs` feature compiled (WASM / tests) can reference it.
 pub(crate) const RULES_FILE_PATTERN: &[&str] = &["WARP.md", "AGENTS.md", "CLAUDE.md"];
@@ -76,11 +75,15 @@ struct RuleAtPath {
     parent_path: PathBuf,
     warp_md: Option<ProjectRule>,
     agents_md: Option<ProjectRule>,
+    claude_md: Option<ProjectRule>,
 }
 
 impl RuleAtPath {
     fn respected_rule(&self) -> Option<&ProjectRule> {
-        self.warp_md.as_ref().or(self.agents_md.as_ref())
+        self.warp_md
+            .as_ref()
+            .or(self.agents_md.as_ref())
+            .or(self.claude_md.as_ref())
     }
 }
 
@@ -159,6 +162,8 @@ impl ProjectRules {
             rule.warp_md.take()
         } else if file_name.to_lowercase() == "agents.md" {
             rule.agents_md.take()
+        } else if file_name.eq_ignore_ascii_case("claude.md") {
+            rule.claude_md.take()
         } else {
             None
         }
@@ -191,6 +196,8 @@ impl ProjectRules {
                     rule.warp_md = rule_file;
                 } else if file_name.to_lowercase() == "agents.md" {
                     rule.agents_md = rule_file;
+                } else if file_name.eq_ignore_ascii_case("claude.md") {
+                    rule.claude_md = rule_file;
                 }
             }
             None => {
@@ -202,6 +209,8 @@ impl ProjectRules {
                     rule.warp_md = rule_file;
                 } else if file_name.to_lowercase() == "agents.md" {
                     rule.agents_md = rule_file;
+                } else if file_name.eq_ignore_ascii_case("claude.md") {
+                    rule.claude_md = rule_file;
                 }
                 self.rules.push(rule);
             }
@@ -304,6 +313,12 @@ impl ProjectContextModel {
                                 })
                                 .chain(rule_files.rules.iter().filter_map(|rule| {
                                     rule.agents_md.as_ref().map(|rule| ProjectRulePath {
+                                        project_root: root_clone.clone(),
+                                        path: rule.path.clone(),
+                                    })
+                                }))
+                                .chain(rule_files.rules.iter().filter_map(|rule| {
+                                    rule.claude_md.as_ref().map(|rule| ProjectRulePath {
                                         project_root: root_clone.clone(),
                                         path: rule.path.clone(),
                                     })

@@ -32,8 +32,13 @@ if [[ -z "$PREV_TAG" ]]; then
         exit 1
     fi
     if ! PREV_TAG=$(gh api "repos/byte5ai/zaplex/releases/latest" --jq .tag_name 2>/dev/null); then
-        # Distinguish "no published release yet" from an unavailable API.
-        gh api "repos/byte5ai/zaplex/releases?per_page=1" --silent >/dev/null
+        # Match the release workflow: endpoint failure must not erase existing history.
+        stable_tags="$(gh api --paginate "repos/byte5ai/zaplex/releases?per_page=100" \
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')"
+        [[ -z "$stable_tags" ]] || {
+            echo "Latest release lookup failed despite existing stable releases." >&2
+            exit 1
+        }
         PREV_TAG=""
     fi
 fi

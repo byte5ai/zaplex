@@ -1,0 +1,69 @@
+name: Static PR checks
+description: Run repository policy and packaging fixtures without compiling application code.
+runs:
+  using: composite
+  steps:
+    - name: Verify Docker supply-chain policy
+      run: script/check-docker-supply-chain --self-test
+      shell: bash
+
+    - name: Verify release supply-chain policy
+      run: script/check-release-supply-chain --self-test
+      shell: bash
+
+    - name: Validate release input rejection
+      run: script/validate-release-tag-tests
+      shell: bash
+
+    - name: Verify fork-facing repository links
+      run: script/fork-link-contract-tests
+      shell: bash
+
+    - name: Verify Linux development container security
+      run: script/check-linux-dev-container-security
+      shell: bash
+
+    - name: Verify SSH tmux installer assets
+      run: script/ssh-tmux-asset-tests
+      shell: bash
+
+    - name: Validate release tag classification
+      run: script/classify-release-tag-tests
+      shell: bash
+
+    - name: Verify atomic release version updater
+      run: script/set-version-tests
+      shell: bash
+
+    - name: Verify release-readiness fixtures
+      run: script/check-v1-release-readiness --self-test
+      shell: bash
+
+    - name: Verify release metadata consistency
+      run: script/check-v1-release-readiness --phase-a
+      shell: bash
+
+    - name: Verify macOS packaging split
+      run: python3 script/test-macos-bundle
+      shell: bash
+
+    - name: Verify Cockpit matrix and mutation-gate fixtures
+      run: |
+        script/cockpit-parity-audit validate
+        script/cockpit-parity-audit self-test
+      shell: bash
+
+    - name: Verify suite-evidence parser fixtures
+      run: |
+        python3 -m venv "$RUNNER_TEMP/suite-evidence-parser"
+        "$RUNNER_TEMP/suite-evidence-parser/bin/python" -m pip install --only-binary=:all: --require-hashes -r script/test-suite-evidence-requirements.txt
+        PYTHONDONTWRITEBYTECODE=1 "$RUNNER_TEMP/suite-evidence-parser/bin/python" script/test-suite-evidence-tests
+      shell: bash
+
+    - name: Verify fork-only audit inventory fixtures
+      run: PYTHONDONTWRITEBYTECODE=1 python3 script/codebase-audit-fork-scope-tests
+      shell: bash
+
+    - name: Verify worktree cleanup preserves unmerged work
+      run: PYTHONDONTWRITEBYTECODE=1 python3 script/prune-worktrees-tests
+      shell: bash

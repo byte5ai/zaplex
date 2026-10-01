@@ -86,3 +86,10 @@ fn invalid_theme_color_input_fails_without_a_fallback_color() {
     assert!(parse_theme_color_input("rgb(12, 34)").is_err());
     assert!(parse_theme_color_input("#not-a-color").is_err());
 }
+
+#[test]
+fn unicode_theme_color_input_returns_an_error_without_panicking() {
+    for input in ["#aé12345", "aé12345", "#é1234", "#🎨1234", "rgb(é, 1, 2)"] {
+        assert!(parse_theme_color_input(input).is_err(), "accepted {input}");
+    }
+}

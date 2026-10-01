@@ -5,6 +5,8 @@
 from pathlib import Path
 import re
 import shlex
+import os
+import subprocess
 import sys
 
 
@@ -96,8 +98,47 @@ if f"name: {REQUIRED_CONTEXT}" not in cargo_job_text:
     fail(f"jobs.cargo_check must keep required context {REQUIRED_CONTEXT!r}")
 if "needs: changes" not in cargo_job_text:
     fail("jobs.cargo_check must depend on the build-relevance detector")
-if "if: needs.changes.outputs.needs_build == 'true'" not in cargo_job_text:
-    fail("jobs.cargo_check must keep the needs_build gate")
+required_condition = "if: always() && (needs.changes.result != 'success' || needs.changes.outputs.needs_build != 'false')"
+if required_condition not in cargo_job_text:
+    fail("jobs.cargo_check must fail closed unless changes successfully declares docs-only")
+
+# Execute the actual first-step guard with dependency outcomes; never invoke Cargo.
+step_start = next((i for i, line in enumerate(cargo_job)
+                   if line.strip() == "- name: Require successful change detection"), None)
+if step_start is None:
+    fail("required job is missing its change-detection guard")
+if any(line.lstrip().startswith("- ") for line in cargo_job[:step_start]):
+    fail("change-detection guard must precede checkout and compilation")
+step_end = next((i for i in range(step_start + 1, len(cargo_job))
+                 if cargo_job[i].startswith("      - ")), len(cargo_job))
+guard_step = cargo_job[step_start:step_end]
+if "CHANGES_RESULT: ${{ needs.changes.result }}" not in "\n".join(guard_step):
+    fail("guard must use the real dependency result")
+if "NEEDS_BUILD: ${{ needs.changes.outputs.needs_build }}" not in "\n".join(guard_step):
+    fail("guard must use the real build-relevance output")
+run_start = next((i for i, line in enumerate(guard_step) if line.strip() == "run: |"), None)
+if run_start is None:
+    fail("guard must have a literal shell body")
+body = "\n".join(line[10:] for line in guard_step[run_start + 1:])
+nonrust_case = __import__("runpy").run_path(str(Path(__file__).with_name("test-suite-nonrust-events")))["record"]
+
+for result, output, expected_success in [
+    ("success", "true", True),
+    ("success", "", False),
+    ("success", "invalid", False),
+    ("failure", "true", False),
+    ("failure", "false", False),
+    ("cancelled", "true", False),
+    ("skipped", "", False),
+]:
+    completed = subprocess.run(
+        ["bash", "-c", body],
+        env={**os.environ, "CHANGES_RESULT": result, "NEEDS_BUILD": output},
+        capture_output=True, text=True, timeout=5,
+    )
+    if (completed.returncode == 0) != expected_success:
+        fail(f"change-detection guard mishandled {result=}, {output=}")
+    nonrust_case(f"change-detection:{result}:{output}")
 if not any(is_enforced_clippy(command) for command in run_commands(cargo_job)):
     fail("jobs.cargo_check must run cargo clippy --locked --bin zaplex -- -D warnings")
 

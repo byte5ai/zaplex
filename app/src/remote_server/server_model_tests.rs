@@ -2161,7 +2161,8 @@ fn dormant_inventory_reconciles_foreground_binding_to_history() {
         ..Default::default()
     }];
 
-    model.reconcile_and_overlay_agent_bindings(conn, &mut dormant);
+    let live_agents = super::live_agent_identities(&dormant);
+    model.reconcile_and_overlay_agent_bindings(conn, &mut dormant, &live_agents);
 
     assert_eq!(dormant[0].pty_session_id, "pty-1");
     assert_eq!(dormant[0].pty_session_generation, 7);
@@ -2170,6 +2171,108 @@ fn dormant_inventory_reconciles_foreground_binding_to_history() {
         .agent_pty_bindings
         .foreground_for_pty("pty-1", 7)
         .is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn peer_account_projection_does_not_retire_another_peers_live_binding() {
+    let legacy = AgentSessionInfo {
+        session_id: "shared-agent".to_string(),
+        provider: "codex".to_string(),
+        account_email: "agent@example.com".to_string(),
+        config_dir: "/home/agent/.codex".to_string(),
+        state: "active".to_string(),
+        ..Default::default()
+    };
+    let opaque = AgentSessionInfo {
+        account_id: "opaque-account".to_string(),
+        config_dir: String::new(),
+        ..legacy.clone()
+    };
+    let mut routes = super::super::agent_account::AccountRouteCache::default();
+    routes.replace_for_test(
+        "codex",
+        "opaque-account",
+        Some(legacy.config_dir.clone().into()),
+    );
+    let live_agents =
+        super::live_agent_identities_for_routes(&[legacy.clone()], routes.routes_for_test());
+    assert_eq!(live_agents.len(), 2);
+
+    for (bound, peer_projection) in [(&opaque, &legacy), (&legacy, &opaque)] {
+        let mut model = test_model();
+        let owner = uuid::Uuid::new_v4();
+        let peer = uuid::Uuid::new_v4();
+        for (connection, projection) in [(owner, bound), (peer, peer_projection)] {
+            let mut features = HashSet::from([FEATURE_AGENT_PTY_BINDING_V2.to_string()]);
+            if !projection.account_id.is_empty() {
+                features.insert(FEATURE_AGENT_ACCOUNT_ROUTING_V1.to_string());
+            }
+            model.connection_features.insert(connection, features);
+        }
+        model
+            .agent_pty_bindings
+            .register_pty("pty-1", 7, "test-host-id", owner.as_u128());
+        let identity = super::live_agent_identities(&[bound.clone()])
+            .into_iter()
+            .next()
+            .unwrap();
+        let response = model.execute_bind_agent_pty(
+            owner,
+            BindAgentPty {
+                agent: Some(super::agent_identity_to_proto(&identity)),
+                pty_session_id: "pty-1".to_string(),
+                pty_session_generation: 7,
+                handoff_from: None,
+                host_id: "test-host-id".to_string(),
+            },
+            &live_agents,
+        );
+        assert_eq!(
+            AgentPtyBindingStatus::try_from(response.status),
+            Ok(AgentPtyBindingStatus::Bound)
+        );
+        let mut projected = vec![peer_projection.clone()];
+        model.reconcile_and_overlay_agent_bindings(peer, &mut projected, &live_agents);
+        assert!(
+            model
+                .agent_pty_bindings
+                .binding_for(&identity)
+                .unwrap()
+                .foreground
+        );
+        assert!(model
+            .validate_fresh_agent_attach(owner, &identity, &live_agents)
+            .is_ok());
+
+        model.reconcile_and_overlay_agent_bindings(peer, &mut [], &HashSet::new());
+        assert!(
+            !model
+                .agent_pty_bindings
+                .binding_for(&identity)
+                .unwrap()
+                .foreground
+        );
+    }
+
+    routes.replace_for_test(
+        "codex",
+        "ambiguous-account",
+        Some(legacy.config_dir.clone().into()),
+    );
+    // replace_for_test replaces the entire route map; explicitly combine two ids.
+    let mut duplicate_routes = routes.routes_for_test().clone();
+    routes.replace_for_test(
+        "codex",
+        "opaque-account",
+        Some(legacy.config_dir.clone().into()),
+    );
+    duplicate_routes.extend(routes.routes_for_test().clone());
+    let ambiguous = super::live_agent_identities_for_routes(&[legacy], &duplicate_routes);
+    assert_eq!(ambiguous.len(), 1);
+    assert!(ambiguous
+        .iter()
+        .all(|identity| identity.account_id.is_none()));
 }
 
 #[cfg(unix)]
@@ -4423,6 +4526,63 @@ mod daemon_session {
                 FEATURE_LOGICAL_OPEN_ATTEMPT_V1.to_string(),
             ]),
         );
+    }
+
+    #[test]
+    fn stale_managed_project_does_not_block_an_unrelated_launch_route() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let connection = uuid::Uuid::new_v4();
+            let (sender, receiver) = async_channel::unbounded();
+            let directory = tempfile::tempdir().unwrap();
+            let original = directory.path().join("original");
+            let unrelated = directory.path().join("unrelated");
+            std::fs::create_dir(&original).unwrap();
+            std::fs::create_dir(&unrelated).unwrap();
+            let original = std::fs::canonicalize(original).unwrap();
+            let unrelated = std::fs::canonicalize(unrelated).unwrap();
+            model.update(&mut app, |model, ctx| {
+                model.register_connection(connection, sender, ctx);
+                model.handle_message(connection, open_in(original.to_str().unwrap()), ctx);
+            });
+            let session_id = recv_session_opened(&receiver).await.unwrap();
+            model.update(&mut app, |model, ctx| {
+                use crate::remote_server::managed_fleet::{
+                    ManagedLaunchKey, ManagedLaunchPlan, ManagedProjectIdentity,
+                    ManagedSessionMetadata,
+                };
+                let plan = |path: &std::path::Path, launch_id: &str| {
+                    ManagedLaunchPlan::interactive_agent(
+                        launch_id,
+                        ManagedLaunchKey::new(
+                            &model.host_id,
+                            "opaque-account",
+                            path.to_str().unwrap(),
+                            "claude",
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap()
+                    .with_project_identity(ManagedProjectIdentity::capture(path).unwrap())
+                };
+                let original_plan = plan(&original, "original-launch");
+                let unrelated_plan = plan(&unrelated, "unrelated-launch");
+                model.sessions.get_mut(&session_id).unwrap().managed =
+                    Some(ManagedSessionMetadata::new(original_plan.clone(), None));
+                std::fs::rename(&original, directory.path().join("moved")).unwrap();
+                assert!(!original_plan.project_identity_is_current());
+                assert!(model
+                    .existing_managed_launch(&unrelated_plan, None)
+                    .unwrap()
+                    .is_none());
+                assert_eq!(
+                    model.existing_managed_launch(&original_plan, None),
+                    Err("project-identity-changed")
+                );
+                model.sessions.get_mut(&session_id).unwrap().managed = None;
+                model.handle_message(connection, close_msg(&session_id), ctx);
+            });
+        });
     }
 
     #[test]

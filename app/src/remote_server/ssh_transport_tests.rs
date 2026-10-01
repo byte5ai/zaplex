@@ -79,3 +79,17 @@ fn downloaded_remote_server_tarball_accepts_matching_digest() {
 
     verify_remote_server_tarball(&archive_path, &expected_sha256).unwrap();
 }
+
+#[test]
+fn listed_current_runtime_pins_version_without_becoming_a_historical_route() {
+    let transport = SshTransport::new(PathBuf::from("/tmp/control"), static_auth_context())
+        .with_expected_current_version("v1.0.30".to_string());
+    assert!(transport.daemon_runtime_route().is_none());
+    assert_eq!(
+        transport.server_version_requirement(),
+        ServerVersionRequirement::Exact("v1.0.30".to_string())
+    );
+    assert!(!transport
+        .remote_proxy_command()
+        .contains("--runtime-filename"));
+}

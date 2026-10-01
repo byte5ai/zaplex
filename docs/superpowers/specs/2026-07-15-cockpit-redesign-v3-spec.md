@@ -389,8 +389,10 @@ view.rs:17759). Pinning ist provider-spezifisch: `CLAUDE_CONFIG_DIR` **bzw.**
 
 **Soll (X1):** Der bestehende Algorithmus bleibt die Wahrheit. Die Spawn-Card zeigt
 die **eine ruhige Auto-Zeile** (Kachel · Anzeigename · Plan · bindendes-Fenster-% ·
-„Ändern"); „Ändern" öffnet die Kontoliste mit Auslastung. Skip-Regel = „fast voll"
-≥ 85 % im bindenden Fenster (ein Vokabular, §1.2). Spawn-Card-Strings vollständig
+„Ändern"); „Ändern" öffnet die Kontoliste mit Auslastung. „Fast voll"
+≥ 85 % ist ausschließlich die visuelle Marke (§1.2), keine Skip-Regel.
+Der Router priorisiert nach Bindungsfenster und Arbeitszustand; auch bei
+ausschließlich überfüllten Konten bleibt das freieste Konto auswählbar. Spawn-Card-Strings vollständig
 DE („Konto", „Freiestes", nicht „Account"/„Freest" — de/warp.ftl:92-109 nachziehen).
 
 ---

@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Regression fixtures for actual non-Rust execution and archive validation."""
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import tempfile
+import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+HERE = Path(__file__).resolve().parent
+ADAPTER = runpy.run_path(str(HERE / "test-suite-nonrust"))
+EVIDENCE = runpy.run_path(str(HERE / "test-suite-evidence"))
+
+
+class NonRustEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.events = self.root / "events.jsonl"
+        self.discovery = self.root / "discovery.jsonl"
+        self.events.write_text("")
+        self.discovery.write_text("")
+
+    def read(self, mode="events", expected=("case",), cockpit=None):
+        return ADAPTER["read_cases"](self.events, self.discovery, mode, expected, cockpit)
+
+    def write_events(self, rows):
+        self.events.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    def child(self, body):
+        source = self.root / "fixture.py"
+        source.write_text(body)
+        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "ZAPLEX_NONRUST_EVENTS": str(self.events),
+               "ZAPLEX_NONRUST_DISCOVERY": str(self.discovery)}
+        return subprocess.run([sys.executable, str(HERE / "test-suite-nonrust"), "_unittest", str(source)],
+                              env=env, capture_output=True, text=True, timeout=20)
+
+    def test_ripgrep_without_pcre2_fails_before_measurement(self):
+        function = ADAPTER["ripgrep_capabilities"]
+        probe = SimpleNamespace(returncode=2, stderr="PCRE2 is not available")
+        with patch.object(function.__globals__["shutil"], "which", return_value="/fixture/rg"), \
+                patch.object(function.__globals__["subprocess"], "run", return_value=probe) as run:
+            with self.assertRaisesRegex(ValueError, "requires working PCRE2"):
+                function()
+            self.assertEqual(run.call_args.args[0], ["/fixture/rg", "--no-config", "--pcre2", "--quiet", "(?<=zaplex-)fixture"])
+            self.assertEqual(run.call_args.kwargs["input"], "zaplex-fixture\n")
+
+    def test_ripgrep_capability_records_selected_binary_and_full_features(self):
+        function = ADAPTER["ripgrep_capabilities"]
+        probe = SimpleNamespace(returncode=0, stderr="")
+        version = "ripgrep 14.1.1\nfeatures:+pcre2\n"
+        with patch.object(function.__globals__["shutil"], "which", return_value="/fixture/rg"), \
+                patch.object(function.__globals__["subprocess"], "run", return_value=probe), \
+                patch.object(function.__globals__["subprocess"], "check_output", return_value=version) as output:
+            result = function()
+            self.assertEqual(result, {"executable": "/fixture/rg", "version": version.strip(), "pcre2_probe": "lookbehind matched"})
+            self.assertEqual(output.call_args.args[0], ["/fixture/rg", "--version"])
+
+    def test_framework_execution_records_real_ids_and_skips(self):
+        result = self.child('''import unittest
+class Cases(unittest.TestCase):
+    def test_pass(self): self.assertEqual(2 + 2, 4)
+    @unittest.skip("fixture")
+    def test_skip(self): raise AssertionError("must not execute")
+if __name__ == "__main__": unittest.main()
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = self.read("unittest", None)
+        self.assertEqual(rows, [{"id": "__main__.Cases.test_pass", "status": "pass"},
+                                {"id": "__main__.Cases.test_skip", "status": "skip"}])
+        self.assertIn("Ran 2 tests", result.stderr)
+
+    def test_failing_subtest_never_becomes_parent_success(self):
+        result = self.child('''import unittest
+class Cases(unittest.TestCase):
+    def test_bad(self):
+        with self.subTest(value=1): self.assertEqual(1, 2)
+if __name__ == "__main__": unittest.main()
+''')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.read("unittest", None), [{"id": "__main__.Cases.test_bad", "status": "fail"}])
+
+    def test_early_successful_exit_has_no_execution_evidence(self):
+        result = self.child("raise SystemExit(0)\n")
+        self.assertEqual(result.returncode, 0)
+        with self.assertRaises(ValueError):
+            self.read("unittest", None)
+
+    def test_discovered_but_unexecuted_case_is_rejected(self):
+        self.write_events([{"id": "__main__.Cases.one", "status": "pass"}])
+        self.discovery.write_text(json.dumps(["__main__.Cases.one", "__main__.Cases.two"]) + "\n")
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            self.read("unittest", None)
+
+    def test_missing_custom_case_is_rejected(self):
+        self.write_events([{"id": "case", "status": "pass"}])
+        with self.assertRaises(ValueError):
+            self.read(expected=("case", "missing"))
+
+    def test_duplicate_events_are_rejected(self):
+        self.write_events([{"id": "case", "status": "pass"}] * 2)
+        with self.assertRaises(ValueError):
+            self.read()
+
+    def test_guard_cannot_inflate_test_count(self):
+        self.write_events([{"id": "case", "status": "pass"}])
+        with self.assertRaises(ValueError):
+            self.read("guard", None)
+
+    def test_truncated_event_is_rejected(self):
+        self.events.write_text('{"id": "case"')
+        with self.assertRaises(ValueError):
+            self.read()
+
+    def test_cockpit_container_is_not_a_second_test(self):
+        self.write_events([{"id": "__main__.Child.actual", "status": "pass"}])
+        self.discovery.write_text('["__main__.Child.actual"]\n')
+        statuses = {"source-mutation-harness": "pass-observed", "negative-fixture": "expected-failure-observed",
+                    "runtime-missing-is-not-run": "not-run-observed"}
+        report = self.root / "cockpit.json"
+        report.write_text(json.dumps({"schema_version": 1, "status": "pass",
+                                     "cases": [{"id": name, "status": status} for name, status in statuses.items()]}))
+        rows = self.read("cockpit", statuses, report)
+        self.assertEqual({row['id'] for row in rows}, {"__main__.Child.actual", "negative-fixture", "runtime-missing-is-not-run"})
+
+    def test_missing_cockpit_case_is_rejected(self):
+        self.write_events([{"id": "__main__.Child.actual", "status": "pass"}])
+        self.discovery.write_text('["__main__.Child.actual"]\n')
+        report = self.root / "cockpit.json"
+        report.write_text('{"schema_version": 1, "status": "pass", "cases": []}')
+        with self.assertRaises(ValueError):
+            self.read("cockpit", {"required": "pass-observed"}, report)
+
+    def test_source_must_be_tracked_even_when_worktree_diff_is_clean(self):
+        (self.root / "untracked.py").write_text("pass\n")
+        function = ADAPTER["bind_source"]
+        with patch.dict(function.__globals__, git=lambda *args: ""):
+            with self.assertRaisesRegex(ValueError, "not tracked"):
+                function(self.root, "untracked.py")
+
+    def test_missing_symlink_and_parent_escape_artifacts_are_rejected(self):
+        real = self.root / "real"
+        real.write_text("evidence")
+        (self.root / "link").symlink_to(real)
+        for relative in ("missing", "link", "../outside", "/absolute"):
+            with self.subTest(relative=relative), self.assertRaises(ValueError):
+                ADAPTER["archive_file"](self.root, relative)
+
+    def archive_fixture(self):
+        identity = "fixture"
+        source = self.root / "fixture.py"
+        source.write_text("pass\n")
+        suite = {"id": identity, "mode": "events", "source": "fixture.py",
+                 "command": ["{python}", "fixture.py"], "expected_case_ids": ["case"]}
+        plan = {"schema_version": 1, "suites": [suite]}
+        (self.root / "plan.json").write_text(json.dumps(plan))
+        artifacts = {}
+        for suffix, text in {"events.jsonl": '{"id": "case", "status": "pass"}\n',
+                             "discovery.jsonl": "", "stdout.log": "fixture completed\n", "stderr.log": ""}.items():
+            path = self.root / f"{identity}.{suffix}"
+            path.write_text(text)
+            artifacts[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        provenance = {"commit": "a" * 40, "tree": "b" * 40, "run_id": "123", "run_attempt": "1",
+                      "run_url": "https://github.com/example/repository/actions/runs/123",
+                      "runner": {"RUNNER_OS": "Linux", "RUNNER_ARCH": "X64"},
+                      "python_executable": sys.executable, "source_root": str(self.root), "output_directory": str(self.root),
+                      "plan_sha256": ADAPTER["digest"](self.root / "plan.json"),
+                      "adapter_sha256": ADAPTER["digest"](HERE / "test-suite-nonrust"),
+                      "events_helper_sha256": ADAPTER["digest"](HERE / "test-suite-nonrust-events"), "source_hashes": {"fixture.py": ADAPTER["digest"](source)}}
+        report = {"schema_version": 1, "source_unchanged": True, "provenance": provenance,
+                  "suites": [{"id": identity, "mode": "events", "command": [sys.executable, "fixture.py"],
+                              "source_sha256": ADAPTER["digest"](source), "exit_code": 0, "error": None, "seconds": 0.1,
+                              "artifacts": artifacts, "cases": [{"id": "case", "status": "pass"}]}]}
+        return plan, report
+
+    def validate_fixture(self, plan, report):
+        (self.root / "provenance.json").write_text(json.dumps(report["provenance"]))
+        (self.root / "results.json").write_text(json.dumps(report))
+        def git_fixture(root, *args):
+            if args == ("rev-parse", "HEAD"): return "a" * 40
+            if args == ("rev-parse", "HEAD^{tree}"): return "b" * 40
+            if args == ("status", "--porcelain", "--untracked-files=no"): return ""
+            raise AssertionError(args)
+        function = ADAPTER["validate"]
+        with patch.dict(function.__globals__, git=git_fixture, load_plan=lambda root: plan,
+                        bind_measurement_sources=lambda root, plan: {"fixture.py": ADAPTER["digest"](self.root / "fixture.py")}):
+            return function(self.root, self.root)
+
+    def test_complete_archive_is_reparsed_and_counted(self):
+        plan, report = self.archive_fixture()
+        measured = self.validate_fixture(plan, report)
+        self.assertTrue(measured["complete"])
+        self.assertEqual(measured["executed_nonrust_tests"], 1)
+        self.assertEqual(measured["executed_test_ids"], ["fixture::case"])
+
+    def test_changed_raw_log_cannot_pass(self):
+        plan, report = self.archive_fixture()
+        (self.root / "fixture.stdout.log").write_text("changed")
+        with self.assertRaises(ValueError): self.validate_fixture(plan, report)
+
+    def test_missing_raw_log_cannot_pass(self):
+        plan, report = self.archive_fixture()
+        (self.root / "fixture.stderr.log").unlink()
+        with self.assertRaises(ValueError): self.validate_fixture(plan, report)
+
+    def test_failed_exit_cannot_pass_even_with_success_events(self):
+        plan, report = self.archive_fixture()
+        report["suites"][0]["exit_code"] = 1
+        with self.assertRaises(ValueError): self.validate_fixture(plan, report)
+
+    def test_changed_command_cannot_pass(self):
+        plan, report = self.archive_fixture()
+        report["suites"][0]["command"] = ["true"]
+        with self.assertRaises(ValueError): self.validate_fixture(plan, report)
+
+    def test_missing_suite_cannot_pass(self):
+        plan, report = self.archive_fixture()
+        report["suites"] = []
+        with self.assertRaises(ValueError): self.validate_fixture(plan, report)
+
+    def test_changed_helper_hash_cannot_pass(self):
+        plan, report = self.archive_fixture()
+        report["provenance"]["events_helper_sha256"] = "0" * 64
+        with self.assertRaises(ValueError): self.validate_fixture(plan, report)
+
+    def test_summary_cannot_override_reparsed_case_events(self):
+        plan, report = self.archive_fixture()
+        report["suites"][0]["cases"][0]["id"] = "invented"
+        with self.assertRaises(ValueError): self.validate_fixture(plan, report)
+
+    def comparison_fixture(self):
+        nonrust = {"complete": True, "executed_nonrust_tests": 2, "executed_test_ids": ["one", "two"],
+                   "skipped_test_ids": [], "guard_ids": ["guard"], "suite_source_hashes": {"suite": "hash"},
+                   "provenance": {"commit": "a" * 40, **{key: "same" for key in
+                                   ("runner", "python", "tools", "environment", "plan_sha256", "adapter_sha256", "events_helper_sha256")}}}
+        baseline = {"executed_rust_tests": 5, "nonrust": nonrust, "provenance": {"commit": "a" * 40}}
+        candidate = copy.deepcopy(baseline)
+        candidate["executed_rust_tests"] = 4
+        return baseline, candidate
+
+    def test_unchanged_nonrust_tests_stay_in_both_denominators(self):
+        baseline, candidate = self.comparison_fixture()
+        before, after = EVIDENCE["compare_nonrust"](candidate, baseline)
+        self.assertEqual((before, after), (7, 6))
+        self.assertFalse(after * 5 <= before * 4)
+
+    def test_tool_location_can_differ_but_pcre2_capabilities_must_match(self):
+        baseline, candidate = self.comparison_fixture()
+        for report, path in ((baseline, "/runner-one/bin/rg"), (candidate, "/runner-two/bin/rg")):
+            provenance = report["nonrust"]["provenance"]
+            provenance["tool_paths"] = {"rg": path}
+            provenance["tools"] = {"rg": {"version": "ripgrep 14.1.1\nfeatures:+pcre2", "pcre2_probe": "lookbehind matched"}}
+        self.assertEqual(EVIDENCE["compare_nonrust"](candidate, baseline), (7, 6))
+        candidate["nonrust"]["provenance"]["tools"]["rg"]["version"] = "ripgrep 14.1.1\nfeatures:-pcre2"
+        with self.assertRaisesRegex(ValueError, "tools"):
+            EVIDENCE["compare_nonrust"](candidate, baseline)
+
+    def test_missing_nonrust_evidence_cannot_form_a_total(self):
+        baseline, candidate = self.comparison_fixture()
+        del candidate["nonrust"]
+        self.assertIsNone(EVIDENCE["compare_nonrust"](candidate, baseline))
+
+    def test_pairing_requires_same_commit_run_and_attempt(self):
+        provenance = {"commit": "a" * 40, "run_url": "https://github.com/example/repo/actions/runs/123", "run_attempt": "1"}
+        function = EVIDENCE["attach_nonrust"]
+        for key, wrong in (("commit", "b" * 40), ("run_url", "https://github.com/example/repo/actions/runs/124"), ("run_attempt", "2")):
+            nonrust = {"provenance": {**provenance, key: wrong}, "executed_nonrust_tests": 2}
+            fake = SimpleNamespace(run_path=lambda path: {"validate": lambda directory, root: nonrust})
+            with self.subTest(key=key), patch.dict(function.__globals__, runpy=fake):
+                with self.assertRaisesRegex(ValueError, key):
+                    function({"provenance": provenance, "executed_rust_tests": 5}, self.root, self.root)
+
+    def test_matching_artifacts_form_the_combined_denominator(self):
+        provenance = {"commit": "a" * 40, "run_url": "https://github.com/example/repo/actions/runs/123", "run_attempt": "1"}
+        nonrust = {"provenance": provenance, "executed_nonrust_tests": 2}
+        fake = SimpleNamespace(run_path=lambda path: {"validate": lambda directory, root: nonrust})
+        function = EVIDENCE["attach_nonrust"]
+        with patch.dict(function.__globals__, runpy=fake):
+            result = function({"provenance": provenance, "executed_rust_tests": 5}, self.root, self.root)
+        self.assertEqual(result["executed_total_tests"], 7)
+
+    def test_different_source_commit_cannot_be_combined(self):
+        baseline, candidate = self.comparison_fixture()
+        candidate["nonrust"]["provenance"]["commit"] = "b" * 40
+        with self.assertRaises(ValueError): EVIDENCE["compare_nonrust"](candidate, baseline)
+
+    def test_unchanged_nonrust_claim_needs_same_ids_and_sources(self):
+        baseline, candidate = self.comparison_fixture()
+        candidate["nonrust"]["suite_source_hashes"] = {"suite": "changed"}
+        with self.assertRaises(ValueError): EVIDENCE["compare_nonrust"](candidate, baseline)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

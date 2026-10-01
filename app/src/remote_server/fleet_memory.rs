@@ -331,9 +331,11 @@ fn linux_process_session_members(
         .map_err(|_| MemoryDiagnostic::ReadFailed)?;
     let mut members = Vec::new();
     for pid in pids {
-        let Ok(stat) = read_process_stat(reader, pid) else {
-            // Processes outside this PTY can disappear while /proc is scanned.
-            // A vanished entry cannot remain a live session member to signal.
+        let Some(stat) = read_process_stat_optional(reader, pid)
+            .map_err(|_| MemoryDiagnostic::PartialProcessTree)?
+        else {
+            // Only vanished entries can safely be omitted. An unreadable stat
+            // could belong to this session and must not yield a partial total.
             continue;
         };
         if stat.process_session_id == root.process_session_id {
@@ -351,7 +353,6 @@ fn linux_process_session_members(
     Ok(members)
 }
 
-#[cfg(target_os = "linux")]
 fn read_process_stat_optional(
     reader: &impl ProcfsReader,
     pid: u32,
@@ -361,13 +362,16 @@ fn read_process_stat_optional(
         Ok(contents) => parse_process_stat(&contents).map(Some),
         // A task can exit between /proc enumeration and reading its stat file;
         // procfs may report ESRCH for that race instead of ENOENT.
-        Err(error)
-            if error.kind() == io::ErrorKind::NotFound
-                || error.raw_os_error() == Some(libc::ESRCH) =>
-        {
-            Ok(None)
+        Err(error) => {
+            if error.kind() == io::ErrorKind::NotFound {
+                return Ok(None);
+            }
+            #[cfg(target_os = "linux")]
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(None);
+            }
+            Err(MemoryDiagnostic::ReadFailed)
         }
-        Err(_) => Err(MemoryDiagnostic::ReadFailed),
     }
 }
 

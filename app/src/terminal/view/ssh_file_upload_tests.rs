@@ -12,7 +12,10 @@ fn remote_pwd_is_not_evaluated_by_local_shell() {
     let marker = temp_dir.path().join("injected.txt");
     let local_file = temp_dir.path().join("local file.txt");
     std::fs::write(&local_file, b"payload").unwrap();
-    std::fs::write(&fake_sftp, "#!/bin/sh\n/bin/cat > \"$CAPTURE\"\n").unwrap();
+    std::fs::write(
+        &fake_sftp,
+        "#!/bin/sh\n[ \"$1\" = '-oBatchMode=no' ] || exit 91\n[ \"$2\" = '-b' ] || exit 92\n/bin/cat \"$3\" > \"$CAPTURE\"\nexit \"$UPLOAD_EXIT\"\n",
+    ).unwrap();
     std::fs::set_permissions(&fake_sftp, std::fs::Permissions::from_mode(0o700)).unwrap();
 
     let remote_pwd = "/remote/$(printf injected > \"$MARKER\")".to_string();
@@ -38,6 +41,7 @@ fn remote_pwd_is_not_evaluated_by_local_shell() {
         .env("PATH", temp_dir.path())
         .env("CAPTURE", &capture)
         .env("MARKER", &marker)
+        .env("UPLOAD_EXIT", "0")
         .output()
         .unwrap();
     assert!(
@@ -45,6 +49,17 @@ fn remote_pwd_is_not_evaluated_by_local_shell() {
         "fake sftp failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(!marker.exists());
+    let failed = command::blocking::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(upload.command())
+        .env("PATH", temp_dir.path())
+        .env("CAPTURE", &capture)
+        .env("MARKER", &marker)
+        .env("UPLOAD_EXIT", "7")
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(7));
     assert!(!marker.exists());
 
     let batch = std::fs::read_to_string(capture).unwrap();
@@ -120,4 +135,27 @@ fn sftp_argv_rejects_option_injection_and_invalid_ports() {
             Err(SftpUploadError::InvalidPort)
         ));
     }
+}
+
+#[test]
+fn powershell_upload_passes_utf8_batch_file_directly_to_sftp() {
+    let plan = SftpUploadPlan::new(
+        &["/local/café file.txt".to_string()],
+        "user@example.test",
+        None,
+        Some("/remote/Grüße"),
+    )
+    .unwrap();
+    let upload = plan.materialize(ShellFamily::PowerShell).unwrap();
+    assert_eq!(std::fs::read(upload.batch_path()).unwrap(), plan.batch());
+    assert_eq!(
+        upload.command(),
+        format!(
+            "& sftp -oBatchMode`=no -b {} user`@example.test",
+            ShellFamily::PowerShell.escape(upload.batch_path().to_str().unwrap()),
+        )
+    );
+    let path = upload.batch_path();
+    drop(upload);
+    assert!(!path.exists());
 }

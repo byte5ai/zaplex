@@ -210,6 +210,33 @@ lazy_static! {
     ];
 }
 
+/// Preserve the old native opt-out if startup migration could not persist it.
+/// TOML compatibility is handled before settings registration by settings::init.
+fn read_enable_ssh_zaplexification(
+    preferences: &dyn warpui_extras::user_preferences::UserPreferences,
+) -> EnableSshZaplexification {
+    if !preferences.is_settings_file() {
+        match preferences.read_value("EnableSshZaplexification") {
+            Ok(None) => match preferences.read_value("EnableSshWarpification") {
+                Ok(Some(value)) => {
+                    return EnableSshZaplexification::new(serde_json::from_str(&value).ok());
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::error!("Could not read legacy SSH setting: {error}");
+                    return EnableSshZaplexification::new(Some(false));
+                }
+            },
+            Ok(Some(_)) => {}
+            Err(error) => {
+                log::error!("Could not read SSH setting: {error}");
+                return EnableSshZaplexification::new(Some(false));
+            }
+        }
+    }
+    EnableSshZaplexification::new(EnableSshZaplexification::read_from_preferences(preferences))
+}
+
 /// There are two impl blocks for SubshellSettings. This block is an inlined version of the
 /// define_settings_group! macro, which is the basic template for user-defaults-backed settings.
 /// I have separated this stuff from the other impl block, which contains the subshell-specific
@@ -230,7 +257,9 @@ impl ZaplexifySettings {
             subshell_command_denylist,
             parsed_ssh_hosts_denylist: Self::parse_ssh_hosts_denylist(&ssh_hosts_denylist),
             ssh_hosts_denylist,
-            enable_ssh_zaplexification: EnableSshZaplexification::new_from_storage(ctx),
+            enable_ssh_zaplexification: read_enable_ssh_zaplexification(
+                EnableSshZaplexification::preferences_for_setting(ctx),
+            ),
             use_ssh_tmux_wrapper: UseSshTmuxWrapper::new_from_storage(ctx),
             ssh_extension_install_mode: SshExtensionInstallModeSetting::new_from_storage(ctx),
         }

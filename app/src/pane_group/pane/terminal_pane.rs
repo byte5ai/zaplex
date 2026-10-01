@@ -15,7 +15,7 @@ use crate::{
     app_state::{
         release_daemon_pty_claim_for_terminal_view, remove_remote_terminal_identity,
         remove_temporary_file_manager_replacement, update_remote_terminal_pane_state,
-        AmbientAgentPaneSnapshot, LeafContents, TerminalPaneSnapshot,
+        AmbientAgentPaneSnapshot, LeafContents, RemoteTerminalPaneState, TerminalPaneSnapshot,
     },
     pane_group::{self, Direction, Event::OpenConversationHistory, PaneGroup},
     persistence::{BlockCompleted, ModelEvent},
@@ -33,6 +33,10 @@ use crate::{
 #[cfg(feature = "local_fs")]
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
 
+#[cfg(feature = "local_tty")]
+use crate::terminal::{available_shells::AvailableShells, shell::ShellType, ShellLaunchData};
+#[cfg(feature = "local_tty")]
+use warp_core::command::ExitCode;
 use warp_core::execution_mode::AppExecutionMode;
 
 use super::{
@@ -100,6 +104,9 @@ impl TerminalPane {
         model_event_sender: Option<SyncSender<ModelEvent>>,
         ctx: &mut ViewContext<PaneGroup>,
     ) -> Self {
+        terminal_view.update(ctx, |view, _| {
+            view.set_remote_restore_pane_uuid(uuid.clone());
+        });
         let pane_configuration = terminal_view.as_ref(ctx).pane_configuration().to_owned();
         let view = ctx.add_typed_action_view(|ctx| {
             let pane_id = PaneId::from_terminal_pane_ctx(ctx);
@@ -365,8 +372,9 @@ impl PaneContent for TerminalPane {
                 });
             }
 
-            LeafContents::Terminal(TerminalPaneSnapshot {
+            LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                 uuid: self.uuid.clone(),
+                remote_state: RemoteTerminalPaneState::capture(&self.uuid),
                 cwd: None,
                 cli_agent_binding: None,
                 is_active,
@@ -377,7 +385,7 @@ impl PaneContent for TerminalPane {
                 active_profile_id: None,
                 conversation_ids_to_restore: vec![],
                 active_conversation_id: None,
-            })
+            }))
         } else if view.model.lock().is_conversation_transcript_viewer() {
             // Conversation transcript viewers (opened from the conversation list)
             // can be restored via the ambient agent task if one exists.
@@ -388,8 +396,9 @@ impl PaneContent for TerminalPane {
                     task_id,
                 })
             } else {
-                LeafContents::Terminal(TerminalPaneSnapshot {
+                LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                     uuid: self.uuid.clone(),
+                    remote_state: RemoteTerminalPaneState::capture(&self.uuid),
                     cwd: None,
                     cli_agent_binding: None,
                     is_active,
@@ -400,7 +409,7 @@ impl PaneContent for TerminalPane {
                     active_profile_id: None,
                     conversation_ids_to_restore: vec![],
                     active_conversation_id: None,
-                })
+                }))
             }
         } else {
             let llm_model_override =
@@ -434,8 +443,9 @@ impl PaneContent for TerminalPane {
             let cli_agent_binding = CLIAgentSessionsModel::as_ref(app)
                 .local_binding_for_restore(view.id(), cwd.as_deref());
 
-            LeafContents::Terminal(TerminalPaneSnapshot {
+            LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                 uuid: self.uuid.clone(),
+                remote_state: RemoteTerminalPaneState::capture(&self.uuid),
                 cwd,
                 cli_agent_binding,
                 is_active,
@@ -446,7 +456,7 @@ impl PaneContent for TerminalPane {
                 active_profile_id,
                 conversation_ids_to_restore,
                 active_conversation_id,
-            })
+            }))
         }
     }
 
@@ -805,12 +815,47 @@ fn handle_terminal_view_event(
                 });
             }
             Event::CopyFileToRemote { command, upload_id } => {
-                let new_pane_id = group.insert_terminal_pane(
-                    Direction::Right,
-                    pane_id,
-                    None, /*chosen_shell*/
-                    ctx,
-                );
+                // The upload plan contains host-native paths and OS-specific shell syntax.
+                // Never run it in a user-default WSL/container or incompatible shell.
+                #[cfg(feature = "local_tty")]
+                let chosen_shell = {
+                    let shell = AvailableShells::handle(ctx).read(ctx, |shells, _| {
+                        shells.get_available_shells().find(|shell| {
+                            matches!(shell.get_valid_shell_path_and_type(),
+                                Some(ShellLaunchData::Executable { shell_type, .. })
+                                    if if cfg!(windows) {
+                                        shell_type == ShellType::PowerShell
+                                    } else {
+                                        matches!(shell_type, ShellType::Bash | ShellType::Zsh | ShellType::Fish)
+                                    })
+                        }).cloned()
+                    });
+                    let Some(shell) = shell else {
+                        if let Some(view) = group.terminal_view_from_pane_id(terminal_pane_id, ctx)
+                        {
+                            let upload = view.read(ctx, |view, _| view.ssh_file_upload().clone());
+                            upload.update(ctx, |upload, ctx| {
+                                upload.file_upload_finished(*upload_id, &ExitCode::from(1), ctx);
+                            });
+                        }
+                        ctx.emit(pane_group::Event::ShowToast {
+                            message: if cfg!(windows) {
+                                "File upload requires an installed native PowerShell.".to_string()
+                            } else {
+                                "File upload requires an installed native Bash, Zsh, or Fish shell."
+                                    .to_string()
+                            },
+                            flavor: ToastFlavor::Error,
+                            pane_id: Some(pane_id),
+                        });
+                        return;
+                    };
+                    Some(shell)
+                };
+                #[cfg(not(feature = "local_tty"))]
+                let chosen_shell = None;
+                let new_pane_id =
+                    group.insert_terminal_pane(Direction::Right, pane_id, chosen_shell, ctx);
 
                 group.hide_pane_for_job(new_pane_id.into(), ctx);
 

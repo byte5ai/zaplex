@@ -11,7 +11,7 @@ use warp::{
         subshell::{
             assert_subshell_banner_is_showing, assert_subshell_is_bootstrapped,
             enter_local_subshell_command, enter_remote_subshell_command, enter_ssh_password,
-            setup_gcloud_sdk, trigger_subshell_bootstrap, util::ssh_command,
+            setup_ssh_fixture, trigger_subshell_bootstrap, util::ssh_command,
             wait_for_password_prompt,
         },
         terminal::wait_until_bootstrapped_single_pane_for_tab,
@@ -69,7 +69,7 @@ macro_rules! generate_can_bootstrap_remote_subshell_for_shell {
                         .expect("Can serialize Vec<String> to string"),
                 )]))
                 .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-                .with_step(setup_gcloud_sdk())
+                .with_step(setup_ssh_fixture())
                 .with_step(enter_remote_subshell_command($shell))
                 .with_step(wait_for_password_prompt(0 /*tab_idx*/, $shell))
                 .with_step(

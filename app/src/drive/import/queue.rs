@@ -19,7 +19,7 @@ use crate::{
 use super::nodes::{self, FileId};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(super) struct ImportGeneration(ClientId);
+pub struct ImportGeneration(ClientId);
 
 impl ImportGeneration {
     pub(super) fn new() -> Self {

@@ -196,11 +196,6 @@ integration_tests! {
     #[ignore = "Affected by agent_view feature flag UI changes"]
     test_up_arrow_history_enters_shift_tab_for_workflow,
 
-    test_websocket_begins_on_startup,
-    test_websocket_does_not_begin_on_startup,
-    test_websocket_begins_after_joining_a_team,
-    test_websocket_begins_after_creating_an_object,
-
     test_secret_is_obfuscated_on_copy,
     test_secret_tooltip_respects_safe_mode_setting,
     test_copy_secret_respects_safe_mode_setting,
@@ -232,7 +227,7 @@ integration_tests! {
 
     test_open_workflow_in_pane,
     test_create_personal_workflow_pane_from_command_palette,
-    test_create_team_workflow_pane_from_command_palette,
+    test_cached_team_membership_does_not_offer_team_workflow_creation,
 
     // TODO(alokedesai): Fix this on the latest version of Bash.
     #[ignore]
@@ -302,6 +297,12 @@ integration_tests! {
     test_restored_ai_block_renders_mermaid_and_local_images,
     #[cfg(target_os="macos")]
     test_subscription_agent_conversation_layout_evidence,
+    #[cfg(target_os="macos")]
+    test_native_workspace_connections_evidence,
+    #[cfg(target_os="macos")]
+    test_native_workspace_panes_evidence,
+    #[cfg(target_os="macos")]
+    test_native_workspace_file_managers_evidence,
 
     // Middle-click-paste is only implemented for Linux right now.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

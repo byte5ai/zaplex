@@ -14,6 +14,7 @@ use tokio::io::{AsyncRead, ReadBuf};
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 
 use super::*;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
 
 struct SyntheticLargeReader {
     remaining: u64,
@@ -241,15 +242,47 @@ fn spawn_safe_file_test_client(
                 Err(remote_server::protocol::ProtocolError::UnexpectedEof) => break,
                 Err(error) => panic!("safe-file test transport failed: {error}"),
             };
-            let Some(client_message::Message::SafeFile(request)) = message.message else {
-                panic!("safe-file test received an unexpected request");
+            let response = match message.message {
+                Some(client_message::Message::SafeFile(request)) => {
+                    server_message::Message::SafeFileResponse(server.handle(connection_id, request))
+                }
+                Some(client_message::Message::ListDirectory(request)) => {
+                    let entries = fs::read_dir(&request.path)
+                        .unwrap()
+                        .map(|entry| {
+                            let entry = entry.unwrap();
+                            let metadata = entry.metadata().unwrap();
+                            remote_server::proto::DirEntry {
+                                name: entry.file_name().to_string_lossy().into_owned(),
+                                is_dir: metadata.is_dir(),
+                                kind: if metadata.is_dir() {
+                                    FileSystemEntryKind::Directory as i32
+                                } else {
+                                    FileSystemEntryKind::File as i32
+                                },
+                                size_bytes: Some(metadata.len()),
+                                modified_epoch_millis: None,
+                            }
+                        })
+                        .collect();
+                    server_message::Message::ListDirectoryResponse(
+                        remote_server::proto::ListDirectoryResponse {
+                            result: Some(list_directory_response::Result::Success(
+                                remote_server::proto::ListDirectorySuccess {
+                                    entries,
+                                    canonical_path: request.path,
+                                },
+                            )),
+                        },
+                    )
+                }
+                _ => panic!("safe-file test received an unexpected request"),
             };
-            let response = server.handle(connection_id, request);
             remote_server::protocol::write_server_message(
                 &mut writer,
                 &ServerMessage {
                     request_id: message.request_id,
-                    message: Some(server_message::Message::SafeFileResponse(response)),
+                    message: Some(response),
                 },
             )
             .await
@@ -265,156 +298,144 @@ fn spawn_safe_file_test_client(
 }
 
 #[cfg(unix)]
-#[test]
-fn rename_existing_sibling_is_rejected_without_mutation() {
-    warpui::r#async::block_on(async {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("config.yaml.bak");
-        let destination = directory.path().join("config.yaml");
-        fs::write(&source, b"backup").unwrap();
-        fs::write(&destination, b"live").unwrap();
-        let (client, executor, server_task) =
-            spawn_safe_file_test_client(directory.path().join("journal"));
+#[tokio::test]
+async fn rename_existing_sibling_is_rejected_without_mutation() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("config.yaml.bak");
+    let destination = directory.path().join("config.yaml");
+    fs::write(&source, b"backup").unwrap();
+    fs::write(&destination, b"live").unwrap();
+    let (client, executor, server_task) =
+        spawn_safe_file_test_client(directory.path().join("journal"));
 
-        let result = rename_remote_path_with_safe_file(
-            client.clone(),
-            source.to_string_lossy().into_owned(),
-            "config.yaml".to_string(),
-            SafeFileEntryKind::Regular,
-        )
-        .await;
+    let result = rename_remote_path_with_safe_file(
+        client.clone(),
+        source.to_string_lossy().into_owned(),
+        "config.yaml".to_string(),
+        SafeFileEntryKind::Regular,
+    )
+    .await;
 
-        assert!(result.is_err());
-        assert_eq!(fs::read(&source).unwrap(), b"backup");
-        assert_eq!(fs::read(&destination).unwrap(), b"live");
-        drop(client);
-        drop(executor);
-        server_task.abort();
-    });
+    assert!(result.is_err());
+    assert_eq!(fs::read(&source).unwrap(), b"backup");
+    assert_eq!(fs::read(&destination).unwrap(), b"live");
+    drop(client);
+    drop(executor);
+    server_task.abort();
 }
 
 #[cfg(unix)]
-#[test]
-fn rename_existing_directory_is_rejected_without_nesting_source() {
-    warpui::r#async::block_on(async {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("source");
-        let destination = directory.path().join("destination");
-        fs::create_dir(&source).unwrap();
-        fs::create_dir(&destination).unwrap();
-        fs::write(source.join("source.txt"), b"source").unwrap();
-        fs::write(destination.join("destination.txt"), b"destination").unwrap();
-        let (client, executor, server_task) =
-            spawn_safe_file_test_client(directory.path().join("journal"));
+#[tokio::test]
+async fn rename_existing_directory_is_rejected_without_nesting_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source");
+    let destination = directory.path().join("destination");
+    fs::create_dir(&source).unwrap();
+    fs::create_dir(&destination).unwrap();
+    fs::write(source.join("source.txt"), b"source").unwrap();
+    fs::write(destination.join("destination.txt"), b"destination").unwrap();
+    let (client, executor, server_task) =
+        spawn_safe_file_test_client(directory.path().join("journal"));
 
-        let result = rename_remote_path_with_safe_file(
-            client.clone(),
-            source.to_string_lossy().into_owned(),
-            "destination".to_string(),
-            SafeFileEntryKind::Directory,
-        )
-        .await;
+    let result = rename_remote_path_with_safe_file(
+        client.clone(),
+        source.to_string_lossy().into_owned(),
+        "destination".to_string(),
+        SafeFileEntryKind::Directory,
+    )
+    .await;
 
-        assert!(result.is_err());
-        assert_eq!(fs::read(source.join("source.txt")).unwrap(), b"source");
-        assert_eq!(
-            fs::read(destination.join("destination.txt")).unwrap(),
-            b"destination"
-        );
-        assert!(!destination.join("source").exists());
-        drop(client);
-        drop(executor);
-        server_task.abort();
-    });
+    assert!(result.is_err());
+    assert_eq!(fs::read(source.join("source.txt")).unwrap(), b"source");
+    assert_eq!(
+        fs::read(destination.join("destination.txt")).unwrap(),
+        b"destination"
+    );
+    assert!(!destination.join("source").exists());
+    drop(client);
+    drop(executor);
+    server_task.abort();
 }
 
-#[test]
-fn incomplete_download_preserves_existing_target_and_removes_its_sidecar() {
-    warpui::r#async::block_on(async {
-        let directory = tempfile::tempdir().unwrap();
-        let destination = directory.path().join("download.bin");
-        fs::write(&destination, b"existing bytes").unwrap();
-        let mut download = AtomicDownloadFile::new(&destination).unwrap();
-        let sidecar = download.temporary.path().to_path_buf();
-        download
-            .output
-            .write_all(b"partial replacement")
-            .await
-            .unwrap();
+#[tokio::test]
+async fn incomplete_download_preserves_existing_target_and_removes_its_sidecar() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("download.bin");
+    fs::write(&destination, b"existing bytes").unwrap();
+    let mut download = AtomicDownloadFile::new(&destination).unwrap();
+    let sidecar = download.temporary.path().to_path_buf();
+    download
+        .output
+        .write_all(b"partial replacement")
+        .await
+        .unwrap();
 
-        drop(download);
+    drop(download);
 
-        assert_eq!(fs::read(destination).unwrap(), b"existing bytes");
-        assert!(!sidecar.exists());
-    });
+    assert_eq!(fs::read(destination).unwrap(), b"existing bytes");
+    assert!(!sidecar.exists());
 }
 
-#[test]
-fn commit_without_overwrite_consent_preserves_existing_target() {
-    warpui::r#async::block_on(async {
-        let directory = tempfile::tempdir().unwrap();
-        let destination = directory.path().join("download.bin");
-        fs::write(&destination, b"existing bytes").unwrap();
-        let mut download = AtomicDownloadFile::new(&destination).unwrap();
-        let sidecar = download.temporary.path().to_path_buf();
-        download
-            .output
-            .write_all(b"complete replacement")
-            .await
-            .unwrap();
+#[tokio::test]
+async fn commit_without_overwrite_consent_preserves_existing_target() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("download.bin");
+    fs::write(&destination, b"existing bytes").unwrap();
+    let mut download = AtomicDownloadFile::new(&destination).unwrap();
+    let sidecar = download.temporary.path().to_path_buf();
+    download
+        .output
+        .write_all(b"complete replacement")
+        .await
+        .unwrap();
 
-        assert!(download.commit(&destination).await.is_err());
+    assert!(download.commit(&destination).await.is_err());
 
-        assert_eq!(fs::read(destination).unwrap(), b"existing bytes");
-        assert!(!sidecar.exists());
-    });
+    assert_eq!(fs::read(destination).unwrap(), b"existing bytes");
+    assert!(!sidecar.exists());
 }
 
-#[test]
-fn explicit_overwrite_revalidates_and_replaces_existing_target() {
-    warpui::r#async::block_on(async {
-        let directory = tempfile::tempdir().unwrap();
-        let destination = directory.path().join("download.bin");
-        fs::write(&destination, b"existing bytes").unwrap();
-        let identity = local_download_target_identity(&destination)
-            .unwrap()
-            .unwrap();
-        let mut download = AtomicDownloadFile::new(&destination).unwrap();
-        download
-            .output
-            .write_all(b"complete replacement")
-            .await
-            .unwrap();
+#[tokio::test]
+async fn explicit_overwrite_revalidates_and_replaces_existing_target() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("download.bin");
+    fs::write(&destination, b"existing bytes").unwrap();
+    let identity = local_download_target_identity(&destination)
+        .unwrap()
+        .unwrap();
+    let mut download = AtomicDownloadFile::new(&destination).unwrap();
+    download
+        .output
+        .write_all(b"complete replacement")
+        .await
+        .unwrap();
 
-        download
-            .commit_overwriting(&destination, &identity)
-            .await
-            .unwrap();
+    download
+        .commit_overwriting(&destination, &identity)
+        .await
+        .unwrap();
 
-        assert_eq!(fs::read(destination).unwrap(), b"complete replacement");
-    });
+    assert_eq!(fs::read(destination).unwrap(), b"complete replacement");
 }
 
-#[test]
-fn explicit_overwrite_rejects_a_changed_target() {
-    warpui::r#async::block_on(async {
-        let directory = tempfile::tempdir().unwrap();
-        let destination = directory.path().join("download.bin");
-        fs::write(&destination, b"original").unwrap();
-        let identity = local_download_target_identity(&destination)
-            .unwrap()
-            .unwrap();
-        fs::remove_file(&destination).unwrap();
-        fs::write(&destination, b"replacement target").unwrap();
-        let mut download = AtomicDownloadFile::new(&destination).unwrap();
-        download.output.write_all(b"downloaded").await.unwrap();
+#[tokio::test]
+async fn explicit_overwrite_rejects_a_changed_target() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("download.bin");
+    fs::write(&destination, b"original").unwrap();
+    let identity = local_download_target_identity(&destination)
+        .unwrap()
+        .unwrap();
+    fs::remove_file(&destination).unwrap();
+    fs::write(&destination, b"replacement target").unwrap();
+    let mut download = AtomicDownloadFile::new(&destination).unwrap();
+    download.output.write_all(b"downloaded").await.unwrap();
 
-        assert!(download
-            .commit_overwriting(&destination, &identity)
-            .await
-            .is_err());
-        assert_eq!(fs::read(destination).unwrap(), b"replacement target");
-    });
+    assert!(download
+        .commit_overwriting(&destination, &identity)
+        .await
+        .is_err());
+    assert_eq!(fs::read(destination).unwrap(), b"replacement target");
 }
 
 #[tokio::test]
@@ -445,47 +466,45 @@ async fn explicit_overwrite_rejects_change_after_revalidation_and_restores_newer
 }
 
 #[cfg(unix)]
-#[test]
-fn completed_download_replaces_destination_symlink_without_touching_referent() {
+#[tokio::test]
+async fn completed_download_replaces_destination_symlink_without_touching_referent() {
     use std::os::unix::fs::symlink;
 
-    warpui::r#async::block_on(async {
-        let directory = tempfile::tempdir().unwrap();
-        let referent = directory.path().join("outside.bin");
-        let destination = directory.path().join("download.bin");
-        fs::write(&referent, b"outside bytes").unwrap();
-        symlink(&referent, &destination).unwrap();
-        let conflicts = scan_local_download_conflicts(&[PendingDownloadFile {
-            remote_path: "/remote/download.bin".to_string(),
-            local_path: destination.clone(),
-            display_name: "download.bin".to_string(),
-            total_bytes: 16,
-        }])
+    let directory = tempfile::tempdir().unwrap();
+    let referent = directory.path().join("outside.bin");
+    let destination = directory.path().join("download.bin");
+    fs::write(&referent, b"outside bytes").unwrap();
+    symlink(&referent, &destination).unwrap();
+    let conflicts = scan_local_download_conflicts(&[PendingDownloadFile {
+        remote_path: "/remote/download.bin".to_string(),
+        local_path: destination.clone(),
+        display_name: "download.bin".to_string(),
+        total_bytes: 16,
+    }])
+    .unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].identity.kind, LocalDownloadTargetKind::Symlink);
+    let identity = local_download_target_identity(&destination)
+        .unwrap()
         .unwrap();
-        assert_eq!(conflicts.len(), 1);
-        assert_eq!(conflicts[0].identity.kind, LocalDownloadTargetKind::Symlink);
-        let identity = local_download_target_identity(&destination)
-            .unwrap()
-            .unwrap();
-        let mut download = AtomicDownloadFile::new(&destination).unwrap();
-        download
-            .output
-            .write_all(b"downloaded bytes")
-            .await
-            .unwrap();
+    let mut download = AtomicDownloadFile::new(&destination).unwrap();
+    download
+        .output
+        .write_all(b"downloaded bytes")
+        .await
+        .unwrap();
 
-        download
-            .commit_overwriting(&destination, &identity)
-            .await
-            .unwrap();
+    download
+        .commit_overwriting(&destination, &identity)
+        .await
+        .unwrap();
 
-        assert_eq!(fs::read(&referent).unwrap(), b"outside bytes");
-        assert!(!fs::symlink_metadata(&destination)
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        assert_eq!(fs::read(destination).unwrap(), b"downloaded bytes");
-    });
+    assert_eq!(fs::read(&referent).unwrap(), b"outside bytes");
+    assert!(!fs::symlink_metadata(&destination)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read(destination).unwrap(), b"downloaded bytes");
 }
 
 #[cfg(unix)]
@@ -656,4 +675,142 @@ fn skip_and_overwrite_keep_their_conflict_semantics() {
     assert_eq!(skipped.len(), 1);
     assert_eq!(skipped[0].final_remote_path, "/remote/new.txt");
     assert_eq!(overwritten.len(), 2);
+}
+
+#[test]
+fn clearing_completed_transfers_preserves_indices_until_all_callbacks_finish() {
+    warpui::App::test((), |mut app| async move {
+        crate::test_util::settings::initialize_settings_for_tests(&mut app);
+        crate::appearance::register(&mut app);
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+        let (_, browser) = app.add_window(
+            warpui::platform::WindowStyle::NotStealFocus,
+            ServerFileBrowserView::new,
+        );
+        browser.update(&mut app, |browser, ctx| {
+            let task = |name: &str, status| ServerFileUploadTask {
+                local_path: PathBuf::from(name),
+                file_name: name.to_string(),
+                final_remote_path: format!("/remote/{name}"),
+                staging_remote_path: format!("/staging/{name}"),
+                total_bytes: 4,
+                uploaded_bytes: Arc::new(AtomicU64::new(4)),
+                status,
+            };
+            browser.upload_batches.push(ServerFileUploadBatch {
+                staging_root: "/staging".to_string(),
+                staging_batch_handle: None,
+                staging_handles: HashMap::new(),
+                remote_directory: "/remote".to_string(),
+                conflict_policy: UploadConflictPolicy::OverwriteAll,
+                directory_roots: Vec::new(),
+                phase: UploadBatchPhase::Uploading,
+                tasks: vec![
+                    task("done", UploadTaskStatus::Completed),
+                    task("active", UploadTaskStatus::Uploading),
+                ],
+                next_task_index: 2,
+            });
+            browser.active_upload_batch_index = Some(0);
+            browser.upload_pipeline_claimed = true;
+            browser.clear_completed_uploads(ctx);
+            assert_eq!(browser.upload_batches[0].tasks.len(), 2);
+            assert_eq!(browser.upload_batches[0].tasks[1].file_name, "active");
+            browser.active_upload_batch_index = None;
+            browser.clear_completed_uploads(ctx);
+            assert_eq!(
+                browser.upload_batches[0].tasks.len(),
+                2,
+                "staging/promotion still owns the pipeline"
+            );
+            browser.upload_pipeline_claimed = false;
+            browser.active_download_batch_index = Some(0);
+            browser.clear_completed_uploads(ctx);
+            assert_eq!(
+                browser.upload_batches[0].tasks.len(),
+                2,
+                "a download callback still owns its indices"
+            );
+            browser.active_download_batch_index = None;
+            browser.upload_batches[0].tasks[1].status = UploadTaskStatus::Completed;
+            browser.clear_completed_uploads(ctx);
+            assert!(browser.upload_batches.is_empty());
+        });
+    });
+}
+
+#[cfg(windows)]
+#[test]
+fn download_names_cannot_switch_windows_drives_or_write_alternate_streams() {
+    for name in ["D:relative", "C:", "file.txt:stream", "file.txt::$DATA"] {
+        assert!(
+            validate_download_entry_name(name).is_err(),
+            "accepted {name:?}"
+        );
+    }
+    assert!(validate_download_entry_name("ordinary.txt").is_ok());
+    // Remote rename syntax remains independent of the local Windows filesystem.
+    assert!(validate_remote_entry_name("file:remote-name").is_ok());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn directory_download_manifest_preserves_empty_paths_without_preflight_writes() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source");
+    fs::create_dir_all(source.join("nested/empty")).unwrap();
+    fs::create_dir(source.join("empty-root")).unwrap();
+    fs::write(source.join("file.txt"), b"data").unwrap();
+    let destination = directory.path().join("download");
+    let (client, executor, server_task) =
+        spawn_safe_file_test_client(directory.path().join("journal"));
+    let plan = collect_download_files(
+        client.clone(),
+        source.to_string_lossy().into_owned(),
+        destination.clone(),
+        "source".to_string(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(plan.files.len(), 1);
+    assert!(plan.directories.contains(&destination));
+    assert!(plan.directories.contains(&destination.join("nested/empty")));
+    assert!(plan.directories.contains(&destination.join("empty-root")));
+    assert!(
+        !destination.exists(),
+        "enumeration/cancel must not create directories"
+    );
+    prepare_download_directories(&plan.directories).unwrap();
+    assert!(destination.join("nested/empty").is_dir());
+    assert!(destination.join("empty-root").is_dir());
+    assert!(!destination.join("file.txt").exists());
+
+    let empty_destination = directory.path().join("only-empty");
+    let empty = collect_download_files(
+        client.clone(),
+        source.join("empty-root").to_string_lossy().into_owned(),
+        empty_destination.clone(),
+        "empty-root".to_string(),
+    )
+    .await
+    .unwrap();
+    assert!(empty.files.is_empty());
+    assert_eq!(empty.directories, vec![empty_destination.clone()]);
+    assert!(!empty_destination.exists());
+    prepare_download_directories(&empty.directories).unwrap();
+    assert!(empty_destination.is_dir());
+    drop(client);
+    drop(executor);
+    server_task.abort();
+}
+
+#[test]
+fn directory_download_rechecks_conflicts_before_creating_empty_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let fresh = directory.path().join("fresh");
+    let changed = directory.path().join("changed");
+    fs::write(&changed, b"new file in the destination").unwrap();
+    assert!(prepare_download_directories(&[fresh.clone(), changed.clone()]).is_err());
+    assert!(!fresh.exists());
+    assert_eq!(fs::read(changed).unwrap(), b"new file in the destination");
 }

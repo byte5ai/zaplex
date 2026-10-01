@@ -7,6 +7,7 @@ use crate::ai::llms::LLMPreferences;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
 use crate::ai::AIRequestUsageModel;
+use crate::app_state::TerminalPaneSnapshot;
 use crate::auth::UserUid;
 use crate::cloud_object::model::persistence::ObjectStoreModel;
 use crate::cloud_object::model::view::ObjectStoreViewModel;
@@ -78,8 +79,9 @@ fn terminal_snapshot_leaf(uuid: Vec<u8>) -> PaneNodeSnapshot {
     PaneNodeSnapshot::Leaf(LeafSnapshot {
         is_focused: false,
         custom_vertical_tabs_title: None,
-        contents: LeafContents::Terminal(TerminalPaneSnapshot {
+        contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
             uuid,
+            remote_state: Default::default(),
             cwd: Some("/tmp".to_string()),
             cli_agent_binding: None,
             shell_launch_data: None,
@@ -90,7 +92,7 @@ fn terminal_snapshot_leaf(uuid: Vec<u8>) -> PaneNodeSnapshot {
             active_profile_id: None,
             conversation_ids_to_restore: Vec::new(),
             active_conversation_id: None,
-        }),
+        })),
     })
 }
 
@@ -100,8 +102,14 @@ fn managed_connect_registry_tracks_multiple_accounts_on_one_host_independently()
     let mut pending = PendingManagedSpawns::default();
     let first_account = registry.begin_parallel("node-a".to_string(), "host-a".to_string());
     let second_account = registry.begin_parallel("node-a".to_string(), "host-a".to_string());
-    pending.insert("launch-a".to_string(), PendingManagedSpawn::Standalone);
-    pending.insert("launch-b".to_string(), PendingManagedSpawn::Standalone);
+    pending.insert(
+        "launch-a".to_string(),
+        PendingManagedSpawn::Standalone { generation: 0 },
+    );
+    pending.insert(
+        "launch-b".to_string(),
+        PendingManagedSpawn::Standalone { generation: 0 },
+    );
 
     assert_ne!(first_account.generation, second_account.generation);
     assert!(registry.contains(&first_account));
@@ -166,10 +174,13 @@ fn assert_routed_daemon_failure_transition_is_exact(failure: RoutedDaemonStartFa
     ]);
     let failed = registry.begin_parallel("same-node".to_string(), "same-host".to_string());
     let sibling = registry.begin_parallel("same-node".to_string(), "same-host".to_string());
-    pending.insert("failed-launch".to_string(), PendingManagedSpawn::Standalone);
+    pending.insert(
+        "failed-launch".to_string(),
+        PendingManagedSpawn::Standalone { generation: 0 },
+    );
     pending.insert(
         "sibling-launch".to_string(),
-        PendingManagedSpawn::Standalone,
+        PendingManagedSpawn::Standalone { generation: 0 },
     );
 
     match failure {
@@ -283,9 +294,9 @@ fn restore_collision_removes_only_the_duplicate_terminal_leaf() {
     assert!(matches!(
         restored,
         PaneNodeSnapshot::Leaf(LeafSnapshot {
-            contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+            contents: LeafContents::Terminal(terminal),
             ..
-        }) if uuid == vec![2; 16]
+        }) if terminal.uuid == vec![2; 16]
     ));
 }
 
@@ -328,9 +339,9 @@ fn corrupt_remote_restore_is_daemon_backed_on_every_platform_and_keeps_siblings(
     assert!(branch.children.iter().any(|(_, child)| matches!(
         child,
         PaneNodeSnapshot::Leaf(LeafSnapshot {
-            contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+            contents: LeafContents::Terminal(terminal),
             ..
-        }) if uuid == &sibling_uuid
+        }) if terminal.uuid == sibling_uuid
     )));
 }
 
@@ -628,6 +639,7 @@ fn remote_model_discovery_preserves_exact_dynamic_metadata() {
 #[cfg(not(target_family = "wasm"))]
 #[test]
 fn remote_model_discovery_rejects_unknown_schema() {
+    crate::i18n::init(Some("en"));
     let error = match Workspace::remote_model_capabilities(
         remote_server::proto::AgentModelDiscoveryResponse {
             schema_version: 2,
@@ -1069,10 +1081,31 @@ fn startup_directory_recovery_is_visible_and_retryable_without_sftp_browser() {
     use crate::sftp_manager::sftp_backend::{
         DirectoryReservationFailure, InMemorySftpBackend, SftpBackend,
     };
-    use crate::sftp_manager::transfer_queue::{QueuedTransferState, TransferQueue};
+    use crate::sftp_manager::transfer_queue::{
+        QueuedTransferState, RecoveryWorkerSpawner, TransferQueue,
+    };
     use std::path::Path;
     use std::time::Duration;
-    use warpui::r#async::Timer;
+    use warpui::r#async::FutureExt as _;
+
+    struct ObservedRecoverySpawner(async_channel::Sender<()>);
+
+    impl RecoveryWorkerSpawner for ObservedRecoverySpawner {
+        fn spawn(
+            &self,
+            name: String,
+            worker: Box<dyn FnOnce() + Send>,
+        ) -> Result<(), std::io::Error> {
+            let completed = self.0.clone();
+            std::thread::Builder::new()
+                .name(name)
+                .spawn(move || {
+                    worker();
+                    let _ = completed.try_send(());
+                })
+                .map(|_| ())
+        }
+    }
 
     let root = tempfile::tempdir().unwrap();
     let backend = InMemorySftpBackend::new(root.path().to_path_buf())
@@ -1091,9 +1124,12 @@ fn startup_directory_recovery_is_visible_and_retryable_without_sftp_browser() {
         Arc::new(InMemorySftpBackend::new(root.path().to_path_buf()));
     assert_eq!(restarted.startup_recovery_paths().len(), 1);
 
+    let (completed_tx, completed_rx) = async_channel::bounded(1);
     App::test((), |mut app| async move {
         initialize_app_with_transfer_queue(&mut app, move |ctx| {
-            TransferQueue::new_with_startup_backend_for_test(restarted, ctx)
+            let mut queue = TransferQueue::new_with_startup_backend_for_test(restarted, ctx);
+            queue.set_recovery_worker_spawner(Arc::new(ObservedRecoverySpawner(completed_tx)));
+            queue
         });
         let workspace = mock_workspace(&mut app);
         let transfer_id = TransferQueue::handle(&app).read(&app, |queue, _| {
@@ -1116,21 +1152,22 @@ fn startup_directory_recovery_is_visible_and_retryable_without_sftp_browser() {
         workspace.update(&mut app, |workspace, ctx| {
             workspace.handle_action(&WorkspaceAction::RetryTransferRecovery(transfer_id), ctx);
         });
-        for _ in 0..50 {
-            Timer::after(Duration::from_millis(20)).await;
-            let terminal = TransferQueue::handle(&app).read(&app, |queue, _| {
-                queue.activity(transfer_id).is_some_and(|activity| {
-                    matches!(activity.state, QueuedTransferState::Completed)
-                        && !activity.recovery_retryable
-                })
-            });
-            if terminal {
-                return;
-            }
-        }
+        let completed = completed_rx
+            .recv()
+            .with_timeout(Duration::from_secs(10))
+            .await;
         let activity =
             TransferQueue::handle(&app).read(&app, |queue, _| queue.activity(transfer_id));
-        panic!("workspace retry did not complete the restart recovery: {activity:?}");
+        assert!(
+            matches!(completed, Ok(Ok(()))),
+            "workspace recovery worker did not finish: {completed:?}; {activity:?}"
+        );
+        let activity = activity.expect("startup recovery activity must remain visible");
+        assert!(
+            matches!(activity.state, QueuedTransferState::Completed)
+                && !activity.recovery_retryable,
+            "completed recovery worker left an unsuccessful activity: {activity:?}"
+        );
     });
 }
 
@@ -1201,42 +1238,6 @@ fn open_worktree_sidecar(workspace: &ViewHandle<Workspace>, app: &mut App) {
                 menu.set_selected_by_index(worktree_index, view_ctx);
             });
     });
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-#[ignore = "depends on decommissioned PersistedWorkspace"]
-fn test_worktree_sidecar_hover_takes_precedence_over_selection() {
-    unimplemented!(
-        "PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended"
-    );
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-#[ignore = "depends on decommissioned PersistedWorkspace"]
-fn test_worktree_sidecar_pointer_entry_does_not_select_top_repo() {
-    unimplemented!(
-        "PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended"
-    );
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-#[ignore = "depends on decommissioned PersistedWorkspace"]
-fn test_worktree_sidecar_close_via_select_item_executes_from_workspace() {
-    unimplemented!(
-        "PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended"
-    );
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-#[ignore = "depends on decommissioned PersistedWorkspace"]
-fn test_worktree_sidecar_search_editor_enter_executes_selection() {
-    unimplemented!(
-        "PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended"
-    );
 }
 
 /// RAII guard that removes tab config TOML files whose name starts with
@@ -1429,8 +1430,13 @@ fn reopen_closed_session_menu_item(
 
 fn favorite_host_submenu() -> MenuItem<WorkspaceAction> {
     super::favorite_host_menu_item(
-        &zaplex_cockpit::Favorite::new(zaplex_cockpit::FavoriteKind::Host, "node-dev", "example-host"),
+        &zaplex_cockpit::Favorite::new(
+            zaplex_cockpit::FavoriteKind::Host,
+            "node-dev",
+            "example-host",
+        ),
         &[("node-dev".to_string(), "example-host".to_string())],
+        false,
         false,
     )
 }
@@ -1492,12 +1498,61 @@ fn connections_registry_drives_favorite_launch_menu() {
         });
 
         let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(&app);
-        let menu_items = favorites_store.read(&app, |store, _| {
+        let (menu_items, unreadable_registry_items) = favorites_store.read(&app, |store, _| {
             assert_eq!(store.items().len(), 1);
             assert_eq!(store.items()[0].label, "stale-display-name");
             assert!(store.contains(zaplex_cockpit::FavoriteKind::Host, &favorite_server.id));
-            super::favorites_menu_items_from_sources(store, registered_hosts)
+            (
+                super::favorites_menu_items_from_sources(store, registered_hosts, false),
+                super::favorites_menu_items_from_sources(store, Vec::new(), true),
+            )
         });
+
+        assert!(unreadable_registry_items.iter().any(|item| matches!(
+            item,
+            MenuItem::Item(fields)
+                if fields.label() == crate::t!("workspace-host-registry-unavailable")
+                    && fields.is_disabled()
+        )));
+        let failed_favorite = unreadable_registry_items
+            .iter()
+            .find_map(|item| {
+                if let MenuItem::Submenu { fields, menu } = item {
+                    Some((fields, menu))
+                } else {
+                    None
+                }
+            })
+            .expect("the favorite remains visible when its registry cannot be read");
+        assert_eq!(failed_favorite.0.label(), "stale-display-name");
+        assert!(failed_favorite.0.on_select_action().is_none());
+        assert!(failed_favorite.0.is_split_submenu_primary_disabled());
+        let MenuItem::Item(reason) = &failed_favorite.1.items()[0] else {
+            panic!("unavailable favorite must explain the registry failure");
+        };
+        assert_eq!(
+            reason.label(),
+            crate::t!("workspace-host-registry-unavailable")
+        );
+
+        // A failed registry read must not offer deleting the favorite as if
+        // its host had been removed.
+        let unreadable_registry_removals = unreadable_registry_items
+            .iter()
+            .filter_map(|item| match item {
+                MenuItem::Submenu { menu, .. } => menu.items().last(),
+                MenuItem::Item(_)
+                | MenuItem::Separator
+                | MenuItem::ItemsRow { .. }
+                | MenuItem::Header { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(unreadable_registry_removals.len(), 1);
+        let MenuItem::Item(remove) = unreadable_registry_removals[0] else {
+            panic!("the favorite flyout must end with its removal item");
+        };
+        assert!(remove.is_disabled());
+        assert!(remove.on_select_action().is_none());
 
         let favorite_submenus = menu_items
             .iter()
@@ -1535,6 +1590,19 @@ fn connections_registry_drives_favorite_launch_menu() {
             }) if node_id == &favorite_server.id && host == "renamed-remote"
         ));
     });
+}
+
+#[test]
+fn host_lookup_failure_distinguishes_registry_errors_from_removed_hosts() {
+    crate::i18n::init(Some("en"));
+    assert_eq!(
+        super::host_lookup_failure_message(false),
+        crate::t!("workspace-left-panel-ssh-manager-session-host-missing")
+    );
+    assert_eq!(
+        super::host_lookup_failure_message(true),
+        crate::t!("workspace-host-registry-unavailable")
+    );
 }
 
 #[test]
@@ -1594,13 +1662,14 @@ fn new_agent_submenu_opens_spawn_card_without_launching() {
 }
 
 #[test]
-fn unavailable_host_registry_keeps_favorite_remove_available() {
+fn missing_host_in_readable_registry_keeps_favorite_remove_available() {
     let favorite = zaplex_cockpit::Favorite::new(
         zaplex_cockpit::FavoriteKind::Host,
         "deleted-node",
         "old-example-host",
     );
-    let mut items = super::favorite_host_menu_items(std::slice::from_ref(&favorite), &[], false);
+    let mut items =
+        super::favorite_host_menu_items(std::slice::from_ref(&favorite), &[], false, false);
     assert_eq!(items.len(), 1);
     let MenuItem::Submenu { fields, menu } = items.pop().unwrap() else {
         panic!("a stale favorite must remain visible as a submenu");
@@ -1638,7 +1707,8 @@ fn protected_favorite_store_disables_stale_removal() {
         "deleted-node",
         "old-example-host",
     );
-    let MenuItem::Submenu { menu, .. } = super::favorite_host_menu_item(&favorite, &[], true)
+    let MenuItem::Submenu { menu, .. } =
+        super::favorite_host_menu_item(&favorite, &[], true, false)
     else {
         panic!("the protected stale favorite must remain visible");
     };
@@ -1656,7 +1726,8 @@ fn removed_favorite_host_is_disabled_and_never_routed() {
         "removed-node",
         "removed-host",
     );
-    let MenuItem::Submenu { menu, .. } = super::favorite_host_menu_item(&favorite, &[], false)
+    let MenuItem::Submenu { menu, .. } =
+        super::favorite_host_menu_item(&favorite, &[], false, false)
     else {
         panic!("a removed favorite must remain explicitly removable");
     };
@@ -1669,7 +1740,149 @@ fn removed_favorite_host_is_disabled_and_never_routed() {
 #[test]
 fn automatic_host_registration_never_adds_menu_favorite() {
     let registered_hosts = vec![("node-dev".to_string(), "example-host".to_string())];
-    assert!(super::favorite_host_menu_items(&[], &registered_hosts, false).is_empty());
+    assert!(super::favorite_host_menu_items(&[], &registered_hosts, false, false).is_empty());
+}
+
+#[test]
+fn split_picker_marks_only_the_current_host_and_preserves_routes() {
+    use super::SplitLaunchDestination;
+
+    crate::i18n::init(Some("en"));
+    let current = SplitLaunchDestination::Remote {
+        node_id: "second".into(),
+    };
+    let items = super::split_launch_menu_items(
+        Some(vec![
+            ("first".into(), "same-name".into()),
+            ("second".into(), "same-name".into()),
+        ]),
+        Some(&current),
+    );
+    let choices = items
+        .iter()
+        .filter_map(|item| {
+            if let MenuItem::Item(fields) = item {
+                Some(fields)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(choices.len(), 3);
+    assert_eq!(
+        choices[0].label(),
+        crate::t!("cockpit-spawn-card-host-local")
+    );
+    assert_eq!(
+        choices[0].on_select_action(),
+        Some(&SplitLaunchDestination::Local)
+    );
+    assert_eq!(choices[1].label(), "same-name");
+    assert_eq!(
+        choices[1].on_select_action(),
+        Some(&SplitLaunchDestination::Remote {
+            node_id: "first".into()
+        })
+    );
+    assert_eq!(
+        choices[2].label(),
+        format!("same-name · {}", crate::t!("common-current"))
+    );
+    assert_eq!(choices[2].on_select_action(), Some(&current));
+
+    let local =
+        super::split_launch_menu_items(Some(Vec::new()), Some(&SplitLaunchDestination::Local));
+    let MenuItem::Item(local) = &local[0] else {
+        panic!("local launch remains available");
+    };
+    assert_eq!(
+        local.label(),
+        format!(
+            "{} · {}",
+            crate::t!("cockpit-spawn-card-host-local"),
+            crate::t!("common-current")
+        )
+    );
+}
+
+#[test]
+fn split_picker_uses_the_visible_file_manager_host_instead_of_the_covered_terminal() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            for (target, expected) in [
+                (
+                    pane_group::FileManagerTarget::Local {
+                        start_path: directory.path().to_path_buf(),
+                    },
+                    SplitLaunchDestination::Local,
+                ),
+                (
+                    pane_group::FileManagerTarget::Remote {
+                        node_id: "visible-file-host".to_string(),
+                        start_path: Some(PathBuf::from("/srv")),
+                    },
+                    SplitLaunchDestination::Remote {
+                        node_id: "visible-file-host".to_string(),
+                    },
+                ),
+            ] {
+                workspace.add_terminal_tab(false, ctx);
+                let group = workspace.active_tab_pane_group().clone();
+                let terminal = group.as_ref(ctx).focused_pane_id(ctx);
+                workspace
+                    .ssh_pane_nodes
+                    .insert(terminal, "covered-host".to_string());
+                workspace
+                    .ssh_tab_nodes
+                    .insert(group.id(), "legacy-tab-host".to_string());
+                let visible = group.update(ctx, |group, ctx| {
+                    group.open_file_manager_in_place(terminal, target, ctx);
+                    group.focused_pane_id(ctx)
+                });
+                assert_ne!(visible, terminal);
+                assert!(group
+                    .as_ref(ctx)
+                    .terminal_view_from_pane_id(visible, ctx)
+                    .is_none());
+                assert_eq!(
+                    workspace.split_launch_source_host(&group, visible, ctx),
+                    Some(expected),
+                );
+            }
+        });
+    });
+}
+
+#[test]
+fn split_picker_distinguishes_unreadable_registry_from_empty_registry() {
+    use super::SplitLaunchDestination;
+
+    crate::i18n::init(Some("en"));
+    let failed = super::split_launch_menu_items(None, None);
+    let empty = super::split_launch_menu_items(Some(Vec::new()), None);
+    assert_eq!(empty.len(), 1);
+    assert_eq!(failed.len(), 3);
+    let MenuItem::Item(local) = &failed[0] else {
+        panic!("local launch remains available");
+    };
+    assert_eq!(local.label(), crate::t!("cockpit-spawn-card-host-local"));
+    assert_eq!(
+        local.on_select_action(),
+        Some(&SplitLaunchDestination::Local)
+    );
+    let MenuItem::Item(error) = &failed[2] else {
+        panic!("registry failure must stay visible");
+    };
+    assert_eq!(
+        error.label(),
+        crate::t!("workspace-host-registry-unavailable")
+    );
+    assert!(error.is_disabled());
+    assert!(error.on_select_action().is_none());
 }
 
 #[test]
@@ -3563,6 +3776,42 @@ fn closing_new_session_menu_restores_focus_only_when_the_menu_owned_it() {
 }
 
 #[test]
+fn cancelling_split_launch_menu_returns_focus_to_the_active_tab() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            let pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
+            let target = pane_group
+                .as_ref(ctx)
+                .recapture_split_target(pane_id, Direction::Right)
+                .expect("the focused pane is visible");
+            workspace.open_split_launch_menu(pane_group, target, None, ctx);
+        });
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.split_launch_menu.is_focused(ctx));
+            assert!(workspace.pending_split_launch.is_some());
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.split_launch_menu.update(ctx, |_, ctx| {
+                ctx.emit(MenuEvent::Close {
+                    via_select_item: false,
+                });
+            });
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(!workspace.split_launch_menu.is_focused(ctx));
+            assert!(workspace.pending_split_launch.is_none());
+            assert!(workspace.show_split_launch_menu.is_none());
+        });
+    });
+}
+
+#[test]
 fn test_open_tab_config_with_params_does_not_use_worktree_branch_as_implicit_title() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -3747,24 +3996,6 @@ fn test_unified_new_session_menu_includes_reopen_closed_session() {
             assert!(!reopen_item.is_disabled());
         });
     });
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-#[ignore = "depends on the decommissioned PersistedWorkspace"]
-fn test_worktree_sidecar_search_editor_proxies_navigation_and_escape() {
-    unimplemented!(
-        "PersistedWorkspace has been decommissioned, worktree sidecar repository list testing is paused"
-    );
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-#[ignore = "depends on the decommissioned PersistedWorkspace"]
-fn test_worktree_sidecar_hides_linked_worktrees_from_repo_list() {
-    unimplemented!(
-        "PersistedWorkspace has been decommissioned, worktree sidecar repository list testing is paused"
-    );
 }
 
 #[test]
@@ -5342,12 +5573,9 @@ fn exact_daemon_claim_focuses_covered_and_undo_closed_shell() {
                 let shell = group.as_ref(ctx).daemon_connection_pane(conn, ctx).unwrap();
                 let pane_uuid = match group.as_ref(ctx).snapshot(ctx) {
                     crate::app_state::PaneNodeSnapshot::Leaf(crate::app_state::LeafSnapshot {
-                        contents:
-                            crate::app_state::LeafContents::Terminal(
-                                crate::app_state::TerminalPaneSnapshot { uuid, .. },
-                            ),
+                        contents: crate::app_state::LeafContents::Terminal(terminal),
                         ..
-                    }) => uuid,
+                    }) => terminal.uuid,
                     _ => panic!("expected one terminal leaf"),
                 };
                 assert!(group.as_ref(ctx).set_terminal_remote_identity(
@@ -5565,9 +5793,9 @@ fn conflicting_remote_restore_degrades_duplicate_without_persisting_its_identity
                 let owner_pane = group.as_ref(ctx).daemon_connection_pane(conn, ctx).unwrap();
                 let owner_uuid = match group.as_ref(ctx).snapshot(ctx) {
                     PaneNodeSnapshot::Leaf(LeafSnapshot {
-                        contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+                        contents: LeafContents::Terminal(terminal),
                         ..
-                    }) => uuid,
+                    }) => terminal.uuid,
                     _ => panic!("expected one terminal leaf"),
                 };
                 let duplicate: PaneId = group
@@ -5585,9 +5813,9 @@ fn conflicting_remote_restore_degrades_duplicate_without_persisting_its_identity
                         .into_iter()
                         .find_map(|(_, child)| match child {
                             PaneNodeSnapshot::Leaf(LeafSnapshot {
-                                contents: LeafContents::Terminal(TerminalPaneSnapshot { uuid, .. }),
+                                contents: LeafContents::Terminal(terminal),
                                 ..
-                            }) if uuid != owner_uuid => Some(uuid),
+                            }) if terminal.uuid != owner_uuid => Some(terminal.uuid),
                             PaneNodeSnapshot::Leaf(_) | PaneNodeSnapshot::Branch(_) => None,
                         })
                         .expect("the split should contain the duplicate terminal"),
@@ -5690,5 +5918,856 @@ fn conflicting_remote_restore_degrades_duplicate_without_persisting_its_identity
             assert_eq!(group.as_ref(ctx).focused_pane_id(ctx), owner_pane);
         });
         crate::app_state::release_daemon_pty_claim_for_connection(conn);
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn listed_daemon_adoption_requires_complete_matching_handshake_identity() {
+    let runtime = remote_server::transport::DaemonRuntimeRoute::new(
+        remote_server::setup::daemon_runtime_filename("sock"),
+        "v1.0.30".to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        listed_daemon_adoption_identity(Some("host-a"), Some(&runtime), None),
+        Some(("host-a".to_string(), runtime.clone())),
+    );
+    assert!(listed_daemon_adoption_identity(None, Some(&runtime), None).is_none());
+    assert!(listed_daemon_adoption_identity(Some(""), Some(&runtime), None).is_none());
+    assert!(listed_daemon_adoption_identity(Some("host-a"), None, None).is_none());
+    let old = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.29.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap();
+    assert!(listed_daemon_adoption_identity(Some("host-a"), Some(&old), None).is_none());
+    assert!(listed_daemon_adoption_identity(Some("host-a"), Some(&runtime), Some(&old)).is_none());
+    assert_eq!(
+        listed_daemon_adoption_identity(Some("host-a"), Some(&old), Some(&old)),
+        Some(("host-a".to_string(), old)),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cancelling_pending_adoption_retires_only_local_surface_and_keeps_retry_identity() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let session = SessionId::from(794u64);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    daemon_request: Some(crate::terminal::daemon_tty::DaemonSessionRequest {
+                        connection_session_id: session,
+                        open_params: Default::default(),
+                        adopt_pty_session_id: Some("retained-pty".to_string()),
+                        adopt_pty_generation: Some(9),
+                        expected_host_id: Some("retained-host".to_string()),
+                        expected_agent_binding: None,
+                        install_progress_rx: None,
+                        host_label: "saved.example.test".to_string(),
+                    }),
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let group = workspace.active_tab_pane_group().clone();
+            let pane = group.as_ref(ctx).focused_pane_id(ctx);
+            let identity = RemoteTerminalIdentity {
+                registry_node_id: "retained-node".to_string(),
+                host: "saved.example.test".to_string(),
+                transport: RemoteTerminalTransport::Daemon {
+                    daemon_host_id: "retained-host".to_string(),
+                    daemon_runtime: Some(PersistedDaemonRuntime {
+                        runtime_filename: "server-v1.0.29.sock".to_string(),
+                        server_version: "v1.0.29".to_string(),
+                    }),
+                    pty_session_id: "retained-pty".to_string(),
+                    pty_generation: 9,
+                },
+                current_working_directory: None,
+                input_draft: String::new(),
+            };
+            assert!(group
+                .as_ref(ctx)
+                .set_terminal_remote_identity(pane, identity.clone()));
+            let previous_view = group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(pane, ctx)
+                .unwrap();
+            previous_view.update(ctx, |view, ctx| {
+                let editor = view.input().as_ref(ctx).editor().clone();
+                let interaction_state = editor.as_ref(ctx).interaction_state(ctx);
+                view.restore_input_draft("unfinished command".to_string(), ctx);
+                assert_eq!(view.input_draft(ctx), "unfinished command");
+                assert_eq!(editor.as_ref(ctx).interaction_state(ctx), interaction_state);
+                assert!(!view.input().as_ref(ctx).ordinary_command_input_is_ready());
+            });
+            assert!(workspace.daemon_session_surface_is_active(session, None, ctx));
+            workspace.cancel_remote_restore(&group, pane, ctx);
+            // The asynchronous transport completion checks this same predicate
+            // before registering a connection, so a cancelled attach cannot return.
+            assert!(!workspace.daemon_session_surface_is_active(session, None, ctx));
+            let current_view = group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(pane, ctx)
+                .unwrap();
+            assert_ne!(current_view.id(), previous_view.id());
+            assert!(current_view.as_ref(ctx).remote_input_has_failed());
+            let (_, retained, draft) = group
+                .as_ref(ctx)
+                .remote_terminal_restore_state(pane, ctx)
+                .unwrap();
+            assert_eq!(draft, "unfinished command");
+            assert_eq!(retained.transport, identity.transport);
+            assert_eq!(retained.registry_node_id, identity.registry_node_id);
+            assert_eq!(retained.input_draft, draft);
+        });
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn cancelling_fresh_daemon_open_preserves_draft_without_inventing_a_restore_identity() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let session = SessionId::from(795u64);
+        let (group, pane, view) = workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    daemon_request: Some(crate::terminal::daemon_tty::DaemonSessionRequest {
+                        connection_session_id: session,
+                        open_params: Default::default(),
+                        adopt_pty_session_id: None,
+                        adopt_pty_generation: None,
+                        expected_host_id: None,
+                        expected_agent_binding: None,
+                        install_progress_rx: None,
+                        host_label: "pending.example.test".to_string(),
+                    }),
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let group = workspace.active_tab_pane_group().clone();
+            let pane = group.as_ref(ctx).focused_pane_id(ctx);
+            let view = group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(pane, ctx)
+                .unwrap();
+            view.update(ctx, |view, ctx| {
+                let editor = view.input().as_ref(ctx).editor().clone();
+                let interaction_state = editor.as_ref(ctx).interaction_state(ctx);
+                view.restore_input_draft("unfinished command".to_string(), ctx);
+                assert_eq!(view.input_draft(ctx), "unfinished command");
+                assert_eq!(editor.as_ref(ctx).interaction_state(ctx), interaction_state);
+                assert!(!view.input().as_ref(ctx).ordinary_command_input_is_ready());
+            });
+            assert!(group
+                .as_ref(ctx)
+                .remote_terminal_restore_state(pane, ctx)
+                .is_none());
+            assert!(workspace.daemon_session_surface_is_active(session, None, ctx));
+            let tabs_before = workspace.tabs.len();
+            workspace.cancel_remote_restore(&group, pane, ctx);
+            assert_eq!(workspace.tabs.len(), tabs_before);
+            assert!(!workspace.daemon_session_surface_is_active(session, None, ctx));
+            (group, pane, view)
+        });
+        // Inspect after the manager deregistration event has reached subscribers.
+        view.read(&app, |view, ctx| {
+            assert!(view.remote_input_has_failed());
+            assert!(view.remote_input_session_id().is_none());
+            assert_eq!(view.input_draft(ctx), "unfinished command");
+        });
+        group.read(&app, |group, ctx| {
+            assert_eq!(
+                group.terminal_view_from_pane_id(pane, ctx).unwrap().id(),
+                view.id()
+            );
+            assert!(group.remote_terminal_restore_state(pane, ctx).is_none());
+        });
+    });
+}
+
+#[test]
+fn moving_another_pane_invalidates_pending_split_targets_and_results() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let group = workspace.active_tab_pane_group().clone();
+            group.update(ctx, |group, ctx| {
+                let source = group.focused_pane_id(ctx);
+                let sibling: PaneId = group
+                    .add_terminal_pane_ignoring_default_session_mode(Direction::Right, None, ctx)
+                    .into();
+                let target = group
+                    .recapture_split_target(source, Direction::Down)
+                    .unwrap();
+                let (result, _, guard) = group
+                    .insert_local_terminal_for_split(target, None, ctx)
+                    .unwrap();
+                let pending = group
+                    .recapture_split_target(source, Direction::Right)
+                    .unwrap();
+                assert!(group.split_target_is_valid(pending));
+                assert!(group.split_result_is_current(guard, result));
+
+                let moved = group.remove_pane_for_move(&sibling, ctx).unwrap();
+
+                assert!(group.visible_pane_ids().contains(&source));
+                assert!(group.visible_pane_ids().contains(&result));
+                assert!(!group.split_target_is_valid(pending));
+                assert!(!group.split_result_is_current(guard, result));
+                drop(moved);
+            });
+        });
+    });
+}
+
+#[test]
+fn file_manager_round_trip_does_not_revalidate_an_old_split_target() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let group = workspace.active_tab_pane_group().clone();
+            group.update(ctx, |group, ctx| {
+                let source = group.focused_pane_id(ctx);
+                let pending = group
+                    .recapture_split_target(source, Direction::Right)
+                    .unwrap();
+                group.open_file_manager_in_place(
+                    source,
+                    crate::pane_group::FileManagerTarget::Local {
+                        start_path: std::env::temp_dir(),
+                    },
+                    ctx,
+                );
+                let replacement = group.focused_pane_id(ctx);
+                assert_ne!(replacement, source);
+                assert!(!group.split_target_is_valid(pending));
+
+                group.close_pane(replacement, ctx);
+
+                assert!(group.visible_pane_ids().contains(&source));
+                assert!(!group.split_target_is_valid(pending));
+                let refreshed = group
+                    .recapture_split_target(source, Direction::Right)
+                    .unwrap();
+                assert!(group.split_target_is_valid(refreshed));
+            });
+        });
+    });
+}
+
+#[test]
+fn hiding_and_showing_a_neighbor_invalidates_captured_split_layouts() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let group = workspace.active_tab_pane_group().clone();
+            group.update(ctx, |group, ctx| {
+                let source = group.focused_pane_id(ctx);
+                let neighbor: PaneId = group
+                    .add_terminal_pane_ignoring_default_session_mode(Direction::Right, None, ctx)
+                    .into();
+                let pending = group
+                    .recapture_split_target(source, Direction::Right)
+                    .unwrap();
+                group.hide_pane_for_job(neighbor, ctx);
+                assert!(!group.split_target_is_valid(pending));
+                let while_hidden = group
+                    .recapture_split_target(source, Direction::Right)
+                    .unwrap();
+                assert!(group.split_target_is_valid(while_hidden));
+
+                group.show_pane_for_job(neighbor, ctx);
+
+                assert!(group.visible_pane_ids().contains(&source));
+                assert!(group.visible_pane_ids().contains(&neighbor));
+                assert!(!group.split_target_is_valid(pending));
+                assert!(!group.split_target_is_valid(while_hidden));
+            });
+        });
+    });
+}
+
+#[test]
+fn replacing_remote_terminal_surface_preserves_the_pane_configuration() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let group = workspace.active_tab_pane_group().clone();
+            group.update(ctx, |group, ctx| {
+                let pane_id = group.focused_pane_id(ctx);
+                let configuration = group.pane_by_id(pane_id).unwrap().pane_configuration();
+                configuration.update(ctx, |configuration, ctx| {
+                    configuration.set_custom_vertical_tabs_title("Production logs", ctx);
+                });
+                assert!(group.set_terminal_identity_host(
+                    pane_id,
+                    Some("production.example.test".to_string()),
+                    ctx,
+                ));
+                let old_view = group.terminal_view_from_pane_id(pane_id, ctx).unwrap();
+
+                let replacement = group
+                    .replace_remote_terminal_surface(
+                        pane_id,
+                        None,
+                        "unfinished command".to_string(),
+                        true,
+                        ctx,
+                    )
+                    .unwrap();
+
+                assert_ne!(old_view.id(), replacement.view.id());
+                assert_eq!(
+                    replacement.view.as_ref(ctx).pane_configuration().id(),
+                    configuration.id()
+                );
+                assert_eq!(
+                    group.pane_by_id(pane_id).unwrap().pane_configuration().id(),
+                    configuration.id()
+                );
+                assert_eq!(
+                    configuration.as_ref(ctx).terminal_identity_host(),
+                    Some("production.example.test")
+                );
+                assert_eq!(
+                    configuration.as_ref(ctx).custom_vertical_tabs_title(),
+                    Some("Production logs")
+                );
+                replacement.view.update(ctx, |view, ctx| {
+                    view.update_pane_configuration(ctx);
+                });
+                assert!(configuration
+                    .as_ref(ctx)
+                    .title()
+                    .contains("production.example.test"));
+            });
+        });
+    });
+}
+
+#[test]
+fn launch_config_keeps_active_tab_identity_when_a_later_tab_is_pinned() {
+    use crate::launch_configs::launch_config::{PaneMode, PaneTemplateType, TabTemplate};
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let directory = tempfile::tempdir().unwrap();
+        for placement in [
+            NewTabPlacement::AfterCurrentTab,
+            NewTabPlacement::AfterAllTabs,
+        ] {
+            app.update(|ctx| {
+                TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    settings
+                        .new_tab_placement
+                        .set_value(placement, ctx)
+                        .unwrap();
+                });
+            });
+            let workspace = mock_workspace(&mut app);
+            workspace.update(&mut app, |workspace, ctx| {
+                let template = |title: &str, is_pinned, color| TabTemplate {
+                    title: Some(title.to_string()),
+                    is_pinned,
+                    color: Some(color),
+                    layout: PaneTemplateType::PaneTemplate {
+                        cwd: directory.path().to_path_buf(),
+                        commands: Vec::new(),
+                        is_focused: Some(true),
+                        pane_mode: PaneMode::Terminal,
+                        shell: None,
+                    },
+                };
+                workspace.open_launch_config_window(
+                    WindowTemplate {
+                        active_tab_index: Some(0),
+                        tabs: vec![
+                            template("selected", false, AnsiColorIdentifier::Red),
+                            template("later pinned", true, AnsiColorIdentifier::Blue),
+                        ],
+                    },
+                    ctx,
+                );
+                assert!(workspace.tabs[0].is_pinned);
+                assert_eq!(
+                    workspace.tabs[0].selected_color,
+                    SelectedTabColor::Color(AnsiColorIdentifier::Blue)
+                );
+                let active = &workspace.tabs[workspace.active_tab_index()];
+                assert!(!active.is_pinned);
+                assert_eq!(
+                    active.selected_color,
+                    SelectedTabColor::Color(AnsiColorIdentifier::Red)
+                );
+            });
+        }
+    });
+}
+
+#[test]
+fn empty_or_invalid_launch_templates_open_a_usable_workspace() {
+    use crate::launch_configs::launch_config::{PaneTemplateType, SplitDirection, TabTemplate};
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        for tabs in [
+            Vec::new(),
+            vec![TabTemplate {
+                title: Some("invalid empty branch".to_string()),
+                is_pinned: false,
+                color: None,
+                layout: PaneTemplateType::PaneBranchTemplate {
+                    split_direction: SplitDirection::Horizontal,
+                    panes: Vec::new(),
+                },
+            }],
+        ] {
+            let window_template = WindowTemplate {
+                active_tab_index: Some(0),
+                tabs,
+            };
+            let global_resource_handles = GlobalResourceHandles::mock(&mut app);
+            let (_, workspace) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+                Workspace::new(
+                    global_resource_handles,
+                    None,
+                    NewWorkspaceSource::FromTemplate {
+                        window_template: window_template.clone(),
+                    },
+                    ctx,
+                )
+            });
+            workspace.update(&mut app, |workspace, ctx| {
+                assert_eq!(workspace.tab_count(), 1);
+                let original_group = workspace.active_tab_pane_group().id();
+                assert!(workspace.active_tab_pane_group().as_ref(ctx).pane_count() > 0);
+                workspace.open_launch_config_window(window_template, ctx);
+                assert_eq!(workspace.tab_count(), 1);
+                assert_eq!(workspace.active_tab_pane_group().id(), original_group);
+            });
+        }
+    });
+}
+
+#[test]
+fn duplicate_ssh_open_reports_no_new_terminal() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let mut server = warp_ssh_manager::SshServerInfo::new_default("busy-node".to_string());
+            server.host = "busy.example.test".to_string();
+            let attempt = workspace
+                .ssh_connect_registry
+                .begin(server.node_id.clone(), server.host.clone())
+                .unwrap();
+            let tab_count = workspace.tabs.len();
+            let active_group = workspace.active_tab_pane_group().id();
+            assert!(!workspace.open_ssh_terminal(server.node_id.clone(), server, false, ctx));
+            assert_eq!(workspace.tabs.len(), tab_count);
+            assert_eq!(workspace.active_tab_pane_group().id(), active_group);
+            assert!(workspace.ssh_connect_is_active(&attempt));
+        });
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn rejected_daemon_account_open_reports_failure_without_classic_fallback() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let mut server =
+                warp_ssh_manager::SshServerInfo::new_default("disabled-node".to_string());
+            server.session_resilience = warp_ssh_manager::SessionResilience::Off;
+            assert!(!server.session_resilience.is_enabled());
+            let connection = warp_ssh_manager::ResolvedSshConnection {
+                secret_lookup_id: server.node_id.clone(),
+                secret_kind: warp_ssh_manager::SecretKind::Password,
+                server,
+            };
+            let tab_count = workspace.tabs.len();
+            let active_group = workspace.active_tab_pane_group().id();
+            assert!(!workspace.open_resolved_ssh_terminal_command(
+                "disabled-node".to_string(),
+                connection,
+                false,
+                None,
+                Some(remote_server::proto::AgentLaunchRoute {
+                    schema_version: 1,
+                    provider: "claude".to_string(),
+                    account_id: "account-a".to_string(),
+                }),
+                None,
+                None,
+                None,
+                ctx,
+            ));
+            assert_eq!(workspace.tabs.len(), tab_count);
+            assert_eq!(workspace.active_tab_pane_group().id(), active_group);
+        });
+    });
+}
+
+#[test]
+fn stale_managed_spawn_results_do_not_reopen_or_hide_the_card() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            for replace_config in [false, true] {
+                let generation = workspace.spawn_card.as_ref(ctx).launch_generation();
+                workspace.spawn_card.update(ctx, |card, ctx| {
+                    if replace_config {
+                        card.configure(spawn_card::SpawnCardConfig::default(), ctx);
+                    } else {
+                        card.cancel_pending_launches();
+                    }
+                });
+                for pending in [
+                    PendingManagedSpawn::Standalone { generation },
+                    PendingManagedSpawn::Batch {
+                        plan_id: spawn_card::bulk::BulkLaunchPlanId(901),
+                        target_id: spawn_card::bulk::BulkLaunchTargetId(
+                            "cancelled-account".to_string(),
+                        ),
+                    },
+                ] {
+                    for initially_open in [false, true] {
+                        for result in [Ok("started".to_string()), Err("late failure".to_string())] {
+                            workspace.current_workspace_state.is_spawn_card_open = initially_open;
+                            workspace.focus_active_tab(ctx);
+                            workspace
+                                .pending_managed_spawns
+                                .insert("late-launch".to_string(), pending.clone());
+                            assert!(workspace.complete_managed_spawn("late-launch", result, ctx));
+                            assert_eq!(
+                                workspace.current_workspace_state.is_spawn_card_open,
+                                initially_open
+                            );
+                            assert!(!workspace.spawn_card.is_focused(ctx));
+                            assert!(!workspace.pending_managed_spawns.contains("late-launch"));
+                        }
+                    }
+                }
+            }
+            let generation = workspace.spawn_card.as_ref(ctx).launch_generation();
+            workspace.apply_managed_spawn_completion(
+                PendingManagedSpawn::Standalone { generation },
+                Err("current failure".to_string()),
+                ctx,
+            );
+            assert!(workspace.current_workspace_state.is_spawn_card_open);
+            workspace.apply_managed_spawn_completion(
+                PendingManagedSpawn::Standalone { generation },
+                Ok("current success".to_string()),
+                ctx,
+            );
+            assert!(!workspace.current_workspace_state.is_spawn_card_open);
+        });
+    });
+}
+
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn unconfirmed_remote_edit_saves_survive_owner_drop_and_success_restores_cleanup() {
+    for (finish, newer_save) in [
+        (None, false),
+        (Some(false), false),
+        (Some(true), false),
+        (Some(true), true),
+    ] {
+        let remote_root = tempfile::tempdir().unwrap();
+        let working_dir = remote_sftp_edit_working_dir().unwrap();
+        let working_path = working_dir.path().join("saved.txt");
+        std::fs::write(&working_path, b"latest local save").unwrap();
+        let directory = working_dir.path().to_path_buf();
+        let mut edit = RemoteSftpEdit {
+            working_dir,
+            node_label: "test-host".to_string(),
+            remote_path: PathBuf::from("/saved.txt"),
+            backend: Arc::new(crate::sftp_manager::sftp_backend::InMemorySftpBackend::new(
+                remote_root.path().to_path_buf(),
+            )),
+            uploading: false,
+            resave_pending: false,
+        };
+        assert!(edit.saved_locally());
+        if newer_save {
+            assert!(!edit.saved_locally());
+        }
+        if let Some(success) = finish {
+            assert_eq!(edit.upload_finished(success), newer_save);
+        }
+        // Workspace destruction drops the owning entry, even while upload is pending.
+        drop(edit);
+        if finish == Some(true) && !newer_save {
+            assert!(!directory.exists());
+        } else {
+            assert_eq!(std::fs::read(&working_path).unwrap(), b"latest local save");
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    let remote_root = tempfile::tempdir().unwrap();
+    let working_dir = remote_sftp_edit_working_dir().unwrap();
+    let directory = working_dir.path().to_path_buf();
+    let mut edit = RemoteSftpEdit {
+        working_dir,
+        node_label: "retry-host".to_string(),
+        remote_path: PathBuf::from("/saved.txt"),
+        backend: Arc::new(crate::sftp_manager::sftp_backend::InMemorySftpBackend::new(
+            remote_root.path().to_path_buf(),
+        )),
+        uploading: false,
+        resave_pending: false,
+    };
+    assert!(edit.saved_locally());
+    assert!(!edit.upload_finished(false));
+    assert!(edit.saved_locally());
+    assert!(!edit.saved_locally(), "a newer save is coalesced");
+    assert!(
+        edit.upload_finished(true),
+        "older success cannot confirm the newer save"
+    );
+    assert!(edit.saved_locally());
+    assert!(!edit.upload_finished(true));
+    drop(edit);
+    assert!(
+        !directory.exists(),
+        "successful retry restores normal cleanup"
+    );
+}
+
+#[test]
+fn remote_directory_picker_replies_require_the_current_card_ticket() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let old_pick = uuid::Uuid::new_v4();
+            let generation = workspace.spawn_card.as_ref(ctx).launch_generation();
+            workspace.pending_spawn_directory_pick = Some((old_pick, generation));
+            workspace.spawn_card.update(ctx, |card, ctx| {
+                card.configure(spawn_card::SpawnCardConfig::default(), ctx)
+            });
+            workspace.current_workspace_state.is_spawn_card_open = false;
+            workspace.handle_action(
+                &WorkspaceAction::RemoteSpawnDirPicked {
+                    pick_id: old_pick,
+                    path: PathBuf::from("/other-host"),
+                },
+                ctx,
+            );
+            assert!(!workspace.current_workspace_state.is_spawn_card_open);
+            assert!(workspace.pending_spawn_directory_pick.is_none());
+
+            let current_pick = uuid::Uuid::new_v4();
+            let generation = workspace.spawn_card.as_ref(ctx).launch_generation();
+            workspace.pending_spawn_directory_pick = Some((current_pick, generation));
+            workspace.handle_action(
+                &WorkspaceAction::RemoteSpawnDirPickCanceled { pick_id: old_pick },
+                ctx,
+            );
+            assert!(!workspace.current_workspace_state.is_spawn_card_open);
+            assert_eq!(
+                workspace.pending_spawn_directory_pick,
+                Some((current_pick, generation))
+            );
+            workspace.handle_action(
+                &WorkspaceAction::RemoteSpawnDirPickCanceled {
+                    pick_id: current_pick,
+                },
+                ctx,
+            );
+            assert!(workspace.current_workspace_state.is_spawn_card_open);
+            assert!(workspace.pending_spawn_directory_pick.is_none());
+            workspace.current_workspace_state.is_spawn_card_open = false;
+            workspace.handle_action(
+                &WorkspaceAction::RemoteSpawnDirPickCanceled {
+                    pick_id: current_pick,
+                },
+                ctx,
+            );
+            assert!(
+                !workspace.current_workspace_state.is_spawn_card_open,
+                "a result is consumed only once"
+            );
+        });
+    });
+}
+
+fn restart_regression_plan() -> crate::cockpit::session_lifecycle::RestartPlan {
+    use crate::cockpit::session_lifecycle::{
+        RestartPlan, ResumeInvocation, SessionAccountRoute, SessionHostRoute, SessionRoute,
+    };
+    RestartPlan {
+        route: SessionRoute {
+            provider: zaplex_cockpit::Provider::Claude,
+            session_id: "old-conversation".to_string(),
+            host: SessionHostRoute::Local,
+            account: SessionAccountRoute::Local {
+                config_dir: None,
+                account_email: None,
+            },
+            cwd: PathBuf::from("/tmp"),
+            pid: 123,
+            process_fingerprint: Some("old-process".to_string()),
+        },
+        resume: ResumeInvocation::LocalShell {
+            launch: CLIAgent::Claude
+                .resume_routed_with("old-conversation", None, None, None)
+                .unwrap(),
+        },
+        model: None,
+        effort: None,
+    }
+}
+
+#[test]
+fn restart_started_event_invalidates_the_old_kill_completion() {
+    use crate::terminal::cli_agent_sessions::{
+        CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
+    };
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let terminal = workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .unwrap();
+            let terminal_id = terminal.id();
+            let ticket = uuid::Uuid::new_v4();
+            workspace
+                .pending_agent_restarts
+                .insert(terminal_id, (ticket, SessionId::from(501u64)));
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |model, ctx| {
+                model.set_session(
+                    terminal_id,
+                    CLIAgentSession {
+                        agent: CLIAgent::Claude,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext {
+                            session_id: Some("new-conversation".to_string()),
+                            ..Default::default()
+                        },
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input: false,
+                        listener: None,
+                        plugin_version: None,
+                        remote_host: None,
+                        draft_text: Some("new agent draft".to_string()),
+                        custom_command_prefix: None,
+                    },
+                    ctx,
+                )
+            });
+            workspace.handle_cli_agent_sessions_event(
+                &CLIAgentSessionsModelEvent::Started {
+                    terminal_view_id: terminal_id,
+                    agent: CLIAgent::Claude,
+                },
+                ctx,
+            );
+            assert!(!workspace.pending_agent_restarts.contains_key(&terminal_id));
+            workspace.complete_agent_restart(
+                restart_regression_plan(),
+                terminal_id,
+                ticket,
+                GuardrailSendOutcome::Sent,
+                ctx,
+            );
+            let session = CLIAgentSessionsModel::as_ref(ctx)
+                .session(terminal_id)
+                .unwrap();
+            assert_eq!(
+                session.session_context.session_id.as_deref(),
+                Some("new-conversation")
+            );
+            assert_eq!(session.draft_text.as_deref(), Some("new agent draft"));
+        });
+    });
+}
+
+#[test]
+fn old_restart_reply_cannot_consume_a_newer_restart_ticket() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let terminal = workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .unwrap();
+            let current = (uuid::Uuid::new_v4(), SessionId::from(502u64));
+            workspace
+                .pending_agent_restarts
+                .insert(terminal.id(), current);
+            workspace.complete_agent_restart(
+                restart_regression_plan(),
+                terminal.id(),
+                uuid::Uuid::new_v4(),
+                GuardrailSendOutcome::Sent,
+                ctx,
+            );
+            assert_eq!(
+                workspace.pending_agent_restarts.get(&terminal.id()),
+                Some(&current)
+            );
+        });
+    });
+}
+
+#[test]
+fn restart_preflight_rejects_raw_or_foreign_terminal_before_signal() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let other = mock_workspace(&mut app);
+        let foreign_id = other.read(&app, |workspace, ctx| {
+            workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .unwrap()
+                .id()
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(workspace.begin_agent_restart(foreign_id, ctx).is_none());
+            let terminal = workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .focused_session_view(ctx)
+                .unwrap();
+            terminal.update(ctx, |view, ctx| {
+                view.mark_remote_raw_terminal(SessionId::from(503u64), ctx)
+            });
+            assert!(!terminal.as_ref(ctx).can_execute_routed_agent_launch(ctx));
+            assert!(workspace.begin_agent_restart(terminal.id(), ctx).is_none());
+            assert!(workspace.pending_agent_restarts.is_empty());
+        });
     });
 }

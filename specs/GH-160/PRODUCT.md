@@ -15,6 +15,11 @@ does not introduce a new navigation model.
 
 Figma: none provided. The binding visual reference is
 [`docs/ui/cockpit-sidebar-connections.html`](../../docs/ui/cockpit-sidebar-connections.html).
+It embeds the anonymized [interactive workspace reference](../../docs/ui/premium-workspace.html)
+from the 2026-09-20 design iteration, versioned on 2026-09-23. Use the
+[comparison guide](../../docs/ui/README.md) to compare the already integrated implementation
+with that artifact; neither the mockup nor this synchronization proves native acceptance.
+The previous static illustrations are superseded, not alternative approved layouts.
 
 ## Goals
 
@@ -217,7 +222,9 @@ Figma: none provided. The binding visual reference is
 
 33. **Terminal identity is short, real, and pane-local.** The automatic pane title is
     `Host · project-or-directory`, with full host/path available accessibly. Missing metadata uses
-    an honest host/session fallback, and only actual collisions add a restrained disambiguator.
+    an honest host/session fallback. Actual short-title collisions expose the full path; identical
+    full identities add a stable suffix derived from the persistent session identity. Moving or
+    restoring a pane does not change that suffix; non-colliding titles stay short.
     The automatic tab title follows the focused pane through the existing title-priority rules;
     an explicit title wins until removed. Account panes retain their native Cockpit identity.
 
@@ -246,7 +253,11 @@ Figma: none provided. The binding visual reference is
     the session, host, working directory, input draft, and process. F10 or mode close returns to the
     terminal rather than closing the session. Two File Manager panes form the familiar MC workflow,
     but any number of panes and destinations in other tabs remain valid; no global File Manager tab
-    exists.
+    exists. Closing after navigation adopts the last successfully opened directory in the owning
+    shell (#469), including after layout restore. An idle shell changes directory immediately; a
+    running process is left untouched and the change waits for a ready prompt. The input draft is
+    retained. A newer shell command or reopening the File Manager supersedes a deferred change.
+    A changed session/host or failed connection must never redirect a foreign path into another shell.
 
 38. **The File Manager function bar is one stable row per pane.** F3/F4/F5/F6 and their actions are
     visible in every File Manager pane; only the focused pane enables them. Unfocused panes keep the
@@ -272,8 +283,14 @@ Figma: none provided. The binding visual reference is
     retain their explicit secure input. Transport, attach, replay, and ready phases are distinguished
     where known. Every start ends in ready, a concrete retryable/cancellable error, or cancellation;
     cancellation never terminates the remote work. Reopening the same already-visible session focuses
-    it instead of creating a duplicate. Replay text alone is not proof of readiness. A restored pane
-    whose saved remote identity is corrupt remains visibly present with its siblings, names the
+    it instead of creating a duplicate. Replay text alone is not proof of readiness.
+    An exactly identified existing PTY whose original shell-start metadata has been lost may finish
+    in an explicitly labelled simple terminal mode. The same process and saved input draft remain;
+    typing and pasting go directly to the terminal after replay completes. Integrated command input,
+    completion, automatic directory changes, and agent/startup automation stay unavailable. A later
+    reconnect gates manual input again without losing the mode or editing the hidden draft. New
+    sessions and ambiguous identities cannot use this fallback to bypass their startup checks.
+    A restored pane whose saved remote identity is corrupt remains visibly present with its siblings, names the
     damaged restore honestly, exposes no actions that cannot work without that identity, and never
     falls back to a local shell on any platform. Retrying or cancelling a valid daemon restore also
     retains a daemon-backed fail-closed surface on every platform and never starts a local process.
@@ -294,10 +311,12 @@ Figma: none provided. The binding visual reference is
     roles only; no hard-coded colors or decorative pane borders are introduced. Both usage windows
     are stacked across the account-card width, and large account panes preserve existing session
     actions and cost/token provenance without repeating provider identity.
+    The live tree and account area scroll independently inside the existing Cockpit sidebar;
+    large session inventories must not push the account section out of view.
 
 ## Verbindliche Bedienungs- und Refresh-Korrekturen
 
-- Die Cockpit-Überschrift lautet „KI-Sessions“. Gezählt werden die angezeigten Agent-Container; reine Shell-Sessions liegen unter Verbindungen und sind von hier aus direkt erreichbar. Exakte bekannte Modell-IDs bleiben sichtbar.
+- Die Cockpit-Überschrift lautet „KI-Sessions“. Gezählt werden die angezeigten Agent-Container; reine Shell-Sessions liegen unter Verbindungen, erreichbar über die vorhandene Sidebar-Navigation. Kein zusätzlicher Cockpit-Link dupliziert diesen Wechsel. Exakte bekannte Modell-IDs bleiben sichtbar.
 - Die Hostzeile unter Verbindungen zeigt bei resilienten Hosts dauerhaft sichtbare Aufklapp- und Refresh-Aktionen. Refresh öffnet den Recovery-Bereich bei Bedarf. Hostnamen erhalten die gesamte verbleibende Breite mit Ellipse. Verbindungs- und Refresh-Status nutzen feste Symbolplätze; laufende Aktualisierungen schieben vorhandene Sessionzeilen nicht nach unten.
 - Zaplex- und tmux/byobu-Sessions haben denselben primären Klickbereich und dieselbe Öffnen-Aktion. Pfeiltasten navigieren sichtbare Zeilen; Enter öffnet/aktiviert, Links/Rechts klappen auf oder zu, Cmd/Ctrl-R aktualisiert den ausgewählten Host. Eingabefelder und geöffnete Menüs behalten ihre eigene Tastaturbedienung.
 - Übernommene Sessions zeigen tatsächlichen Verbindungs-/Installationsfortschritt. Die bestehende Startfrist von 60 Sekunden bleibt erhalten und beendet keine entfernte Session.

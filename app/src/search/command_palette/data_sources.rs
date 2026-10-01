@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::settings::CockpitSettings;
 use crate::drive::settings::WarpDriveSettings;
-use crate::search::action::CommandBindingDataSource;
+use crate::search::action::{CommandBindingDataSource, Event as ActionDataSourceEvent};
 use crate::search::binding_source::BindingSource;
 use crate::search::command_palette::cockpit::DataSource as CockpitDataSource;
 use crate::search::command_palette::files;
@@ -51,6 +51,10 @@ impl DataSourceStore {
     ) -> Self {
         let actions_data_source =
             ctx.add_model(|ctx| CommandBindingDataSource::new(binding_source.clone(), ctx));
+
+        ctx.subscribe_to_model(&actions_data_source, |me, event, ctx| match event {
+            ActionDataSourceEvent::IndexUpdated => me.rerun_active_query(ctx),
+        });
 
         let sessions_data_source =
             ctx.add_model(|_| navigation::DataSource::new(active_session_handle));

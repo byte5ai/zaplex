@@ -12,7 +12,7 @@ fn test_data_dir_path() {
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(data_dir(), home_dir.join(".local/share/zap"));
         } else if #[cfg(windows)] {
-            assert_eq!(data_dir(), home_dir.join("AppData\\Roaming\\zap\\Zaplex\\data"));
+            assert_eq!(data_dir(), home_dir.join("AppData\\Roaming\\zaplex\\Zaplex\\data"));
         } else {
             unimplemented!("Need to update tests for current platform!");
         }
@@ -29,7 +29,7 @@ fn test_config_local_dir_path() {
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(config_local_dir(), home_dir.join(".config/zap"));
         } else if #[cfg(windows)] {
-            assert_eq!(config_local_dir(), home_dir.join("AppData\\Local\\zap\\Zaplex\\config"));
+            assert_eq!(config_local_dir(), home_dir.join("AppData\\Local\\zaplex\\Zaplex\\config"));
         } else {
             unimplemented!("Need to update tests for current platform!");
         }
@@ -72,7 +72,7 @@ fn test_cache_dir_path() {
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(cache_dir(), home_dir.join(".cache/zap"));
         } else if #[cfg(windows)] {
-            assert_eq!(cache_dir(), home_dir.join("AppData\\Local\\zap\\Zaplex\\cache"));
+            assert_eq!(cache_dir(), home_dir.join("AppData\\Local\\zaplex\\Zaplex\\cache"));
         } else {
             unimplemented!("Need to update tests for current platform!");
         }
@@ -89,7 +89,7 @@ fn test_state_dir_path() {
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(state_dir(), home_dir.join(".local/state/zap"));
         } else if #[cfg(windows)] {
-            assert_eq!(state_dir(), home_dir.join("AppData\\Local\\zap\\Zaplex\\data"));
+            assert_eq!(state_dir(), home_dir.join("AppData\\Local\\zaplex\\Zaplex\\data"));
         } else {
             unimplemented!("Need to update tests for current platform!");
         }

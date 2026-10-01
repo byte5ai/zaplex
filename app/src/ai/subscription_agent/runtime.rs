@@ -3,13 +3,19 @@ use super::{
     discover_capabilities, query_cli_version, route_target, AccountIdentity, AgentCapability,
     AgentLifecycle, HostIdentity, InstallationIdentity, ProcessLocation, ResponseEventAdapter,
     RoutePreferences, RouteResult, SessionIdentity, SubscriptionAgent,
-    SubscriptionAuthenticationError, SubscriptionLocationPreference, SubscriptionSession,
-    SubscriptionSessionRegistry, SubscriptionTarget, LOCAL_SUBSCRIPTION_HOST_ID,
+    SubscriptionAuthenticationError, SubscriptionLocationPreference, SubscriptionPrompt,
+    SubscriptionSession, SubscriptionSessionRegistry, SubscriptionTarget,
+    LOCAL_SUBSCRIPTION_HOST_ID,
 };
-use crate::ai::agent::{api, AIAgentInput, AIIdentifiers};
+use crate::ai::agent::{api, AIAgentContext, AIAgentInput, AIIdentifiers, UserQueryMode};
 use crate::ai::api_error::AIApiError;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, SessionContext};
+use crate::ai::facts::{AIFact, AIFactObjectModel};
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::model::persistence::ObjectStoreModel;
+use crate::cloud_object::StoredObject;
 use crate::cockpit::CockpitModel;
+use crate::code_review::comments::AttachedReviewCommentTarget;
 use crate::remote_server::manager::{ConnectedDaemon, RemoteServerManager};
 use crate::report_if_error;
 use crate::terminal::ssh::util::InteractiveSshCommand;
@@ -106,7 +112,7 @@ pub(crate) struct SubscriptionDispatch {
     conversation_id: String,
     task_id: String,
     needs_create_task: bool,
-    prompt: String,
+    prompt: SubscriptionPrompt,
     working_directory: PathBuf,
 }
 
@@ -306,7 +312,8 @@ pub(crate) fn subscription_dispatch_info(
         .context("subscription agent conversation is not in local history")?;
     let task_id = conversation.get_root_task_id().to_string();
     let needs_create_task = conversation.compute_active_tasks().is_empty();
-    let prompt = prompt_from_inputs(&params.input)?;
+    let user_rules = subscription_user_rules(params.is_memory_enabled, ctx);
+    let prompt = prompt_from_inputs(&params.input, &user_rules)?;
     let registry = SubscriptionSessionRegistry::as_ref(ctx).clone();
     let (candidates, preferences, working_directory) = match runtime_candidates(
         &conversation_id_string,
@@ -363,7 +370,7 @@ fn selected_authentication_error<'a>(
         .find(|(agent, account, error)| {
             *agent == preferred_agent
                 && match preferences.account_identity.as_ref() {
-                    Some(selected) => selected == account,
+                    Some(selected) => selected.same_route(account),
                     None => preferences
                         .account_id
                         .as_ref()
@@ -667,83 +674,103 @@ pub(crate) async fn generate_subscription_output(
         prompt,
         working_directory,
     } = dispatch;
-    let candidates =
-        resolve_runtime_candidates(candidates, &preferences, &registry, &conversation_id)
-            .await
-            .map_err(api::ConvertToAPITypeError::Other)?;
-    let preflight_target = registry
-        .lifecycle(&conversation_id)
-        .filter(AgentLifecycle::accepts_prompt)
-        .and_then(|_| registry.target(&conversation_id));
-    registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Starting);
-    if let Some(target) = preflight_target {
-        checked_target_location(&target, &candidates, &registry, &conversation_id)
-            .map_err(api::ConvertToAPITypeError::Other)?;
-    }
-    registry.invalidate_target(&conversation_id);
-    // Revalidate the CLI version, account and exact model before every turn. A
-    // daemon restart changes the transport, not the native provider session.
-    let target = discover_routed_target(
-        &candidates,
-        &preferences,
-        &registry,
-        &conversation_id,
-        &working_directory,
-    )
-    .await
-    .map_err(api::ConvertToAPITypeError::Other)?;
-    let location = checked_target_location(&target, &candidates, &registry, &conversation_id)
-        .map_err(api::ConvertToAPITypeError::Other)?;
-    let resume = validated_resume_session(&registry, &conversation_id, &target)
-        .map_err(api::ConvertToAPITypeError::Other)?;
-    registry.remember_target(&conversation_id, &target);
-    registry.set_target(conversation_id.clone(), target.clone());
-    let mut session = match with_timeout(
-        "subscription agent initialization",
-        SubscriptionSession::open(target.clone(), resume, location),
-    )
-    .await
-    {
-        Ok(session) => session,
-        Err(error) => {
-            registry.set_lifecycle(
-                conversation_id.clone(),
-                runtime_error_lifecycle(
-                    &registry,
-                    &conversation_id,
-                    target.installation.agent,
-                    error.to_string(),
-                ),
-            );
-            return Err(api::ConvertToAPITypeError::Other(
-                classify_subscription_error(error),
-            ));
-        }
-    };
-    if let Some(identity) = session.identity().cloned() {
-        registry.store(conversation_id.clone(), target.clone(), identity);
-    }
-    if let Err(error) = with_timeout(
-        "subscription agent prompt delivery",
-        session.send_prompt(&prompt),
-    )
-    .await
-    {
-        end_session(&mut session, &registry, &conversation_id).await;
-        registry.set_lifecycle(
-            conversation_id.clone(),
-            runtime_error_lifecycle(
+    let mut cancellation = cancellation_rx.fuse();
+    let (mut session, target) = {
+        // Cancellation must win before discovery or initialization can deliver a prompt.
+        // Dropping the pending initialization also drops its kill-on-drop CLI process.
+        let initialize = async {
+            let candidates =
+                resolve_runtime_candidates(candidates, &preferences, &registry, &conversation_id)
+                    .await
+                    .map_err(api::ConvertToAPITypeError::Other)?;
+            let preflight_target = registry
+                .lifecycle(&conversation_id)
+                .filter(AgentLifecycle::accepts_prompt)
+                .and_then(|_| registry.target(&conversation_id));
+            registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Starting);
+            if let Some(target) = preflight_target {
+                checked_target_location(&target, &candidates, &registry, &conversation_id)
+                    .map_err(api::ConvertToAPITypeError::Other)?;
+            }
+            registry.invalidate_target(&conversation_id);
+            // Revalidate the CLI version, account and exact model before every turn. A
+            // daemon restart changes the transport, not the native provider session.
+            let target = discover_routed_target(
+                &candidates,
+                &preferences,
                 &registry,
                 &conversation_id,
-                target.installation.agent,
-                error.to_string(),
-            ),
-        );
-        return Err(api::ConvertToAPITypeError::Other(
-            classify_subscription_error(error),
-        ));
-    }
-    registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Responding);
+                &working_directory,
+            )
+            .await
+            .map_err(api::ConvertToAPITypeError::Other)?;
+            let location =
+                checked_target_location(&target, &candidates, &registry, &conversation_id)
+                    .map_err(api::ConvertToAPITypeError::Other)?;
+            let resume = validated_resume_session(&registry, &conversation_id, &target)
+                .map_err(api::ConvertToAPITypeError::Other)?;
+            registry.remember_target(&conversation_id, &target);
+            registry.set_target(conversation_id.clone(), target.clone());
+            let mut session = match with_timeout(
+                "subscription agent initialization",
+                SubscriptionSession::open_for_prompt(target.clone(), resume, location, &prompt),
+            )
+            .await
+            {
+                Ok(session) => session,
+                Err(error) => {
+                    registry.set_lifecycle(
+                        conversation_id.clone(),
+                        runtime_error_lifecycle(
+                            &registry,
+                            &conversation_id,
+                            target.installation.agent,
+                            error.to_string(),
+                        ),
+                    );
+                    return Err(api::ConvertToAPITypeError::Other(
+                        classify_subscription_error(error),
+                    ));
+                }
+            };
+            if let Some(identity) = session.identity().cloned() {
+                registry.store(conversation_id.clone(), target.clone(), identity);
+            }
+            if let Err(error) = with_timeout(
+                "subscription agent prompt delivery",
+                session.send_prompt(&prompt),
+            )
+            .await
+            {
+                end_session(&mut session, &registry, &conversation_id).await;
+                registry.set_lifecycle(
+                    conversation_id.clone(),
+                    runtime_error_lifecycle(
+                        &registry,
+                        &conversation_id,
+                        target.installation.agent,
+                        error.to_string(),
+                    ),
+                );
+                return Err(api::ConvertToAPITypeError::Other(
+                    classify_subscription_error(error),
+                ));
+            }
+            registry.set_lifecycle(conversation_id.clone(), AgentLifecycle::Responding);
+
+            Ok::<_, api::ConvertToAPITypeError>((session, target))
+        }
+        .fuse();
+        futures_util::pin_mut!(initialize);
+        futures_util::select_biased! {
+            _ = cancellation => {
+                registry.clear_approvals(&conversation_id);
+                mark_cancelled(&registry, &conversation_id);
+                return Ok(Box::pin(futures::stream::empty()));
+            }
+            initialized = initialize => initialized?,
+        }
+    };
 
     let context_window = target.model.context_window;
     let stream = async_stream::stream! {
@@ -752,9 +779,8 @@ pub(crate) async fn generate_subscription_output(
         if needs_create_task {
             yield Ok(adapter.create_task());
         }
-        yield Ok(adapter.persist_user_query(prompt));
+        yield Ok(adapter.persist_user_query(prompt.query));
         yield Ok(adapter.target(&target));
-        let cancellation = cancellation_rx.fuse();
         futures_util::pin_mut!(cancellation);
         loop {
             let event = {
@@ -1013,14 +1039,180 @@ async fn with_timeout<T>(action: &str, future: impl Future<Output = Result<T>>) 
     }
 }
 
-fn prompt_from_inputs(inputs: &[AIAgentInput]) -> Result<String> {
-    let prompt = inputs
+fn subscription_user_rules(enabled: bool, ctx: &AppContext) -> Vec<(Option<String>, String)> {
+    if !enabled {
+        return Vec::new();
+    }
+    let store = ObjectStoreModel::as_ref(ctx);
+    let mut rules: Vec<_> = store
+        .get_all_objects_of_type::<GenericStringObjectId, AIFactObjectModel>()
+        .filter(|fact| !fact.is_trashed(store))
+        .map(|fact| match &fact.model().string_model {
+            AIFact::Memory(memory) => (memory.name.clone(), memory.content.clone()),
+        })
+        .collect();
+    rules.sort();
+    rules
+}
+
+fn prompt_from_inputs(
+    inputs: &[AIAgentInput],
+    user_rules: &[(Option<String>, String)],
+) -> Result<SubscriptionPrompt> {
+    let query = inputs
         .iter()
         .filter_map(AIAgentInput::user_query)
         .collect::<Vec<_>>()
         .join("\n\n");
-    if prompt.is_empty() {
+    if query.is_empty() {
         bail!("this in-app action has no prompt supported by the subscription-agent protocol");
+    }
+    let mut prompt = SubscriptionPrompt {
+        query,
+        plan_mode: inputs.iter().any(|input| {
+            matches!(
+                input,
+                AIAgentInput::UserQuery {
+                    user_query_mode: UserQueryMode::Plan,
+                    ..
+                }
+            )
+        }),
+        ..Default::default()
+    };
+    if prompt.plan_mode {
+        // Mode selection happens before launch, not through a second CLI slash
+        // command. Keep the original /plan text only for local conversation UI.
+        prompt.native_query = Some(
+            inputs
+                .iter()
+                .filter_map(|input| {
+                    if let AIAgentInput::UserQuery { query, .. } = input {
+                        Some(query.clone())
+                    } else {
+                        input.user_query()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        );
+    }
+    let mut attached_context = Vec::new();
+    if !user_rules.is_empty() {
+        attached_context.push(serde_json::json!({ "user_rules": user_rules }));
+    }
+    for input in inputs {
+        let mut context = Vec::new();
+        for item in input.context().unwrap_or_default() {
+            match item {
+                AIAgentContext::Image(image) => prompt.images.push(image.clone()),
+                item => context.push(item),
+            }
+        }
+        if !context.is_empty() {
+            attached_context.push(serde_json::json!({ "context": context }));
+        }
+        match input {
+            AIAgentInput::InvokeSkill {
+                skill, user_query, ..
+            } => {
+                attached_context.push(serde_json::json!({
+                    "invoked_skill": {
+                        "name": skill.name,
+                        "path": skill.path,
+                        "content": skill.content,
+                    },
+                }));
+                if let Some(user_query) = user_query {
+                    if !user_query.referenced_attachments.is_empty() {
+                        attached_context.push(serde_json::json!({
+                            "referenced_attachments": user_query.referenced_attachments,
+                        }));
+                    }
+                }
+            }
+            AIAgentInput::CodeReview {
+                review_comments, ..
+            } => {
+                let comments: Vec<_> = review_comments.comments.iter().map(|comment| {
+                    let target = match &comment.target {
+                        AttachedReviewCommentTarget::Line { absolute_file_path, line, content } => {
+                            serde_json::json!({
+                                "file_path": absolute_file_path,
+                                "line_index_zero_based": line.line_number().map(|line| line.as_usize()),
+                                "diff_content": content.content,
+                                "lines_added": content.lines_added.as_usize(),
+                                "lines_removed": content.lines_removed.as_usize(),
+                            })
+                        }
+                        AttachedReviewCommentTarget::File { absolute_file_path } => {
+                            serde_json::json!({ "file_path": absolute_file_path })
+                        }
+                        AttachedReviewCommentTarget::General => serde_json::json!({ "diff_set": true }),
+                    };
+                    serde_json::json!({
+                        "id": comment.id.to_string(),
+                        "comment": comment.content,
+                        "target": target,
+                        "base": comment.base,
+                        "head": comment.head,
+                    })
+                }).collect();
+                attached_context.push(serde_json::json!({
+                    "review_comments": comments,
+                    "diff_set": review_comments.diff_set,
+                }));
+            }
+            AIAgentInput::FetchReviewComments { repo_path, .. } => {
+                attached_context.push(serde_json::json!({ "review_repository": repo_path }));
+            }
+            AIAgentInput::UserQuery { .. }
+            | AIAgentInput::AutoCodeDiffQuery { .. }
+            | AIAgentInput::TriggerPassiveSuggestion { .. }
+            | AIAgentInput::ResumeConversation { .. }
+            | AIAgentInput::InitProjectRules { .. }
+            | AIAgentInput::CreateNewProject { .. }
+            | AIAgentInput::CloneRepository { .. }
+            | AIAgentInput::SummarizeConversation { .. }
+            | AIAgentInput::StartFromAmbientRunPrompt { .. }
+            | AIAgentInput::ActionResult { .. }
+            | AIAgentInput::MessagesReceivedFromAgents { .. }
+            | AIAgentInput::EventsFromAgents { .. }
+            | AIAgentInput::PassiveSuggestionResult { .. } => {}
+        }
+        if let AIAgentInput::UserQuery {
+            referenced_attachments,
+            running_command,
+            ..
+        } = input
+        {
+            if !referenced_attachments.is_empty() {
+                attached_context.push(serde_json::json!({
+                    "referenced_attachments": referenced_attachments,
+                }));
+            }
+            if let Some(command) = running_command {
+                attached_context.push(serde_json::json!({
+                    "running_command": {
+                        "command": command.command,
+                        "block_id": command.block_id.to_string(),
+                        "grid_contents": command.grid_contents,
+                        "cursor": command.cursor,
+                        "requested_command_id": command.requested_command_id.as_ref().map(ToString::to_string),
+                        "is_alt_screen_active": command.is_alt_screen_active,
+                    },
+                }));
+            }
+        } else if let Some(attachments) = input.attachments().filter(|items| !items.is_empty()) {
+            attached_context.push(serde_json::json!({ "attachments": attachments }));
+        }
+    }
+    if !attached_context.is_empty() {
+        // Keep user-selected data separate from the query and from native image blocks.
+        prompt.context = format!(
+            "Attached context (JSON data supplied with the user's query):\n{}",
+            serde_json::to_string(&attached_context)?,
+        );
     }
     Ok(prompt)
 }

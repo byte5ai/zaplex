@@ -12,6 +12,10 @@ fn repository() -> RepositoryContext {
 
 fn target(number: u64) -> GitHubTarget {
     GitHubTarget {
+        revision: Some(crate::cockpit::github_flows::PullRequestRevision {
+            head: "a".repeat(40),
+            base: "b".repeat(40),
+        }),
         repository: repository(),
         number,
     }

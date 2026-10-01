@@ -1,0 +1,545 @@
+"""AST-based, fail-closed projection of Linux Rust source into production lines.
+
+This is a source projection, not a Rust build or a claim of executed coverage.
+"""
+import hashlib
+import bisect
+import itertools
+import json
+from pathlib import Path
+import re
+from types import SimpleNamespace
+
+from tree_sitter import Language, Parser
+import tree_sitter_rust
+
+POLICY = {
+    "version": 5,
+    "parser": "tree-sitter=0.25.2,tree-sitter-rust=0.24.2",
+    "target": "x86_64-unknown-linux-gnu",
+    "test_only_features": ["test-util", "integration_tests"],
+    "production_features": [],
+    "reviewed_settings_template": {
+        "path": "crates/settings/src/macros.rs",
+        "name": "define_settings_group",
+        "matcher_sha256": "8700868c17c97ca28bd977d0af37b4787bfd43815e8da420bba7d12cca220d44",
+        "transcriber_sha256": "1f2c4c348a6dfc968a26a1805d7f18445cdb65cfa147703f1cdcce87eb862c9b",
+    },
+    "reviewed_server_id_template": {
+        "path": "app/src/server/ids.rs",
+        "name": "server_id_traits",
+        "matcher_sha256": "b7fbcd8a7a5f17a6655e0fdc8f45b0cdeb6f7393c0d5652602604a4cd6d20302",
+        "transcriber_sha256": "210fd6e8897adbdfa422aa579ed3754fb366bcd9c65ddc9e5c9be33e1f3240f0",
+    },
+    "excluded_paths": ["separate test files", "crates/integration", "build scripts", "generated target files"],
+    "test_attributes": ["test", "tokio::test", "warpui::test", "test_case", "rstest", "proptest"],
+}
+POLICY_HASH = hashlib.sha256(json.dumps(POLICY, sort_keys=True).encode()).hexdigest()
+COMMENT_TYPES = {"line_comment", "block_comment"}
+TEST_PATH = re.compile(r"(^|/)(test|tests|mod_test)\.rs$|(_test|_tests)\.rs$|/tests/")
+RUST_LANGUAGE = Language(tree_sitter_rust.language())
+
+
+def cfg_values(text):
+    """Possible values in production; unknown normal features remain unknown."""
+    tokens = re.findall(r'"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z_0-9]*|[(),=]', text)
+    if re.sub(r'\s+', '', ''.join(tokens)) != re.sub(r'\s+', '', text):
+        raise ValueError(f"unsupported cfg expression: {text}")
+    index = 0
+
+    def parse():
+        nonlocal index
+        if index >= len(tokens):
+            raise ValueError("truncated cfg")
+        key = tokens[index]
+        index += 1
+        if index < len(tokens) and tokens[index] == '(':
+            index += 1
+            values = []
+            while index < len(tokens) and tokens[index] != ')':
+                values.append(parse())
+                if index < len(tokens) and tokens[index] == ',':
+                    index += 1
+                elif index < len(tokens) and tokens[index] != ')':
+                    raise ValueError("invalid cfg arguments")
+            if index == len(tokens):
+                raise ValueError("unclosed cfg")
+            index += 1
+            if key == 'not' and len(values) == 1:
+                return {not value for value in values[0]}
+            if key in {'all', 'any'}:
+                operation = all if key == 'all' else any
+                return {operation(row) for row in itertools.product(*values)}
+            raise ValueError(f"unsupported cfg operator: {key}")
+        if index < len(tokens) and tokens[index] == '=':
+            index += 1
+            if index == len(tokens):
+                raise ValueError("missing cfg value")
+            value = json.loads(tokens[index])
+            index += 1
+            if key == 'feature' and value in POLICY['test_only_features']:
+                return {False}
+            if key == 'feature' and value in POLICY['production_features']:
+                return {True}
+            known = {'target_os': 'linux', 'target_family': 'unix', 'target_arch': 'x86_64', 'target_pointer_width': '64'}
+            return {value == known[key]} if key in known else {False, True}
+        known = {'test': False, 'unix': True, 'windows': False, 'debug_assertions': True}
+        return {known[key]} if key in known else {False, True}
+
+    result = parse()
+    if index != len(tokens):
+        raise ValueError("trailing cfg tokens")
+    return result
+
+
+def attribute_text(node):
+    return node.named_children[0].text.decode()
+
+
+def attribute_excludes(node):
+    text = attribute_text(node)
+    if text.split('(', 1)[0].strip() in POLICY['test_attributes']:
+        return True
+    if text.startswith('cfg('):
+        if not re.search(r'\btest\b|"(?:test-util|integration_tests)"', text):
+            return False
+        values = cfg_values(text[4:-1])
+        if values == {False}:
+            return True
+        if len(values) > 1 and re.search(r'\btest\b|"(?:test-util|integration_tests)"', text):
+            raise ValueError(f"ambiguous production cfg: {text}")
+    if text.startswith('cfg_attr('):
+        # Lints do not change generated executable code. Other test-dependent
+        # attributes (notably derive) need explicit region evidence from LLVM.
+        if re.search(r'\btest\b|"(?:test-util|integration_tests)"', text) and not re.search(r',\s*(allow|warn|deny|forbid|expect)\(', text):
+            raise ValueError(f"test-dependent generated code: {text}")
+    return False
+
+
+def descendants(node):
+    pending = [node]
+    while pending:
+        current = pending.pop()
+        yield current
+        pending.extend(reversed(current.children))
+
+
+def parse_source(source):
+    """Bridge two known grammar gaps without changing source offsets or cfg meaning."""
+    parser = Parser(RUST_LANGUAGE)
+    original = parser.parse(source)
+    if not original.root_node.has_error:
+        return original, {}
+    attributes = {}
+    dyn_tokens = {}
+
+    def masked(nodes):
+        data = bytearray(source)
+        for node in nodes:
+            for index in range(node.start_byte, node.end_byte):
+                if data[index] not in (10, 13):
+                    data[index] = 32
+        return bytes(data)
+
+    provisional = original
+    provisional_source = source
+    # One broken pattern can hide a later attribute in parser error recovery.
+    # Bounded reparsing exposes those tokens; no ERROR node itself is ignored.
+    for _ in range(8):
+        before = (len(attributes), len(dyn_tokens))
+        for node in descendants(provisional.root_node):
+            attribute = None
+            if (node.type == 'attribute_item' and not node.has_error
+                    and source[node.start_byte:node.end_byte] == node.text):
+                attribute = node
+            if node.type == '#' and node.parent.is_error:
+                # Only an actual lexer token can start recovery, never text in
+                # a string/comment. Require a complete standalone attribute.
+                fragment = parser.parse(source[node.start_byte:node.start_byte + 4096])
+                first = fragment.root_node.named_children[0] if fragment.root_node.named_children else None
+                if first is not None and first.type == 'attribute_item' and first.start_byte == 0 and not first.has_error:
+                    attribute = SimpleNamespace(
+                        start_byte=node.start_byte,
+                        end_byte=node.start_byte + first.end_byte,
+                        named_children=first.named_children,
+                    )
+            if attribute is not None:
+                text = attribute_text(attribute)
+                if text.startswith(('cfg(', 'cfg_attr(', 'allow(', 'warn(', 'deny(', 'forbid(', 'expect(')):
+                    attributes[attribute.start_byte] = attribute
+            # Accept only the lifetime + Fn-type shape affected by the dyn
+            # grammar gap. Original dyn bytes stay in the source fingerprint.
+            if node.is_error and node.text == b'dyn' and node.parent.type == 'type_item':
+                bound = node.parent.child_by_field_name('type')
+                if (bound is not None and bound.type == 'bounded_type'
+                        and [part.type for part in bound.named_children] == ['lifetime', 'function_type']
+                        and not source[node.end_byte:bound.start_byte].strip()):
+                    dyn_tokens[node.start_byte] = node
+        if before == (len(attributes), len(dyn_tokens)):
+            break
+        provisional_source = masked([*attributes.values(), *dyn_tokens.values()])
+        provisional = parser.parse(provisional_source)
+
+    # The provisional tree only locates attributes positively inside struct
+    # patterns. Restore every other attribute before the accepting parse.
+    attributes = sorted(attributes.values(), key=lambda attribute: attribute.start_byte)
+    trivia_source = bytearray(provisional_source)
+    for node in descendants(provisional.root_node):
+        if node.type in COMMENT_TYPES:
+            trivia_source[node.start_byte:node.end_byte] = b' ' * (node.end_byte - node.start_byte)
+    selected = {}
+    for pattern in descendants(provisional.root_node):
+        if pattern.type != 'struct_pattern' or pattern.has_error:
+            continue
+        fields = [child for child in pattern.named_children if child.type == 'field_pattern']
+        for attribute in attributes:
+            if not pattern.start_byte < attribute.start_byte < attribute.end_byte < pattern.end_byte:
+                continue
+            for field in fields:
+                if (attribute.end_byte <= field.start_byte
+                        and not trivia_source[attribute.end_byte:field.start_byte].strip()):
+                    selected.setdefault(field.start_byte, []).append(attribute)
+                    break
+    normalized = [attribute for group in selected.values() for attribute in group]
+    tree = parser.parse(masked(normalized + list(dyn_tokens.values())))
+    if tree.root_node.has_error:
+        raise ValueError("Rust AST contains an error or missing node")
+    actual_fields = {node.start_byte for node in descendants(tree.root_node)
+                     if node.type == 'field_pattern' and node.parent.type == 'struct_pattern'}
+    if not set(selected).issubset(actual_fields):
+        raise ValueError('normalized attribute has no proven struct-pattern field')
+    return tree, selected
+
+
+def reviewed_macro_transcriber(node, source, relative, contract):
+    """Bind a reviewed template to its original bytes and exact top-level identity."""
+    if (relative != contract['path'] or node.type != 'macro_definition'
+            or node.parent.type != 'source_file'
+            or node.child_by_field_name('name').text.decode() != contract['name']):
+        return None
+    rules = [part for part in node.named_children if part.type == 'macro_rule']
+    if len(rules) != 1:
+        return None
+    matcher = rules[0].child_by_field_name('left')
+    transcriber = rules[0].child_by_field_name('right')
+    if matcher is None or transcriber is None:
+        return None
+    for part, expected in ((matcher, contract['matcher_sha256']),
+                           (transcriber, contract['transcriber_sha256'])):
+        if hashlib.sha256(source[part.start_byte:part.end_byte]).hexdigest() != expected:
+            return None
+    return transcriber
+
+
+def reviewed_settings_test_helper(node, source, relative):
+    transcriber = reviewed_macro_transcriber(
+        node, source, relative, POLICY['reviewed_settings_template'])
+    if transcriber is None:
+        return None
+    names = [part for part in descendants(transcriber)
+             if part.type == 'identifier' and part.text == b'new_with_defaults']
+    if len(names) != 1:
+        return None
+    name = names[0]
+    tokens = list(name.parent.children)
+    index = tokens.index(name)
+    if index < 6 or index + 4 >= len(tokens):
+        return None
+    expected = [b'#', b'[cfg(any(test, feature = "integration_tests"))]',
+                b'#', b'[allow(dead_code)]', b'pub', b'fn', b'new_with_defaults',
+                b'(_ctx: &mut warpui::ModelContext<Self>)', b'->', b'Self']
+    if [part.text for part in tokens[index - 6:index + 4]] != expected:
+        return None
+    body = tokens[index + 4]
+    if (body.type != 'token_tree' or body.children[0].type != '{'
+            or body.children[-1].type != '}'
+            or cfg_values('any(test, feature="integration_tests")') != {False}):
+        return None
+    return tokens[index - 6].start_byte, body.end_byte
+
+
+def reviewed_server_id_test_helper(node, source, relative):
+    transcriber = reviewed_macro_transcriber(
+        node, source, relative, POLICY['reviewed_server_id_template'])
+    if transcriber is None:
+        return None
+    tokens = list(transcriber.children)
+    expected = [b'{', b'#', b'[cfg(test)]', b'impl', b'From', b'<',
+                b'i64', b'>', b'for', b'$t']
+    if len(tokens) < 11 or [part.text for part in tokens[:10]] != expected:
+        return None
+    body = tokens[10]
+    if (body.type != 'token_tree' or body.children[0].type != '{'
+            or body.children[-1].type != '}' or cfg_values('test') != {False}):
+        return None
+    # Exclude the entire impl, including its cfg attribute and closing brace.
+    return tokens[1].start_byte, body.end_byte
+
+
+def project_source(source, relative=None):
+    tree, pattern_attributes = parse_source(source)
+    excluded = []
+    comments = []
+    modules = []
+    diagnostics = []
+
+    def walk(node, inline=(), inherited=False):
+        pending = []
+        for child in node.named_children:
+            if child.type in COMMENT_TYPES:
+                comments.append((child.start_byte, child.end_byte))
+                continue
+            if child.type == 'attribute_item':
+                pending.append(child)
+                continue
+            if child.type == 'inner_attribute_item':
+                if attribute_excludes(child):
+                    excluded.append((node.start_byte, node.end_byte))
+                    inherited = True
+                continue
+            pending.extend(pattern_attributes.get(child.start_byte, []))
+            # Field initializers and match arms own their attributes as children
+            # rather than siblings. Exclude the entire value/body, not just the
+            # field identifier or arm pattern followed by test-only execution.
+            if child.type in {'field_initializer', 'match_arm'}:
+                pending.extend(part for part in child.named_children if part.type == 'attribute_item')
+            try:
+                # An enclosing cfg(test) proves the complete item test-only,
+                # regardless of any derives or other attributes on that item.
+                cfgs = [attr for attr in pending if attribute_text(attr).startswith('cfg(')]
+                suppressed = inherited or any(attribute_excludes(attr) for attr in cfgs)
+                suppressed = suppressed or any(attribute_excludes(attr) for attr in pending)
+            except ValueError as error:
+                diagnostics.append((child.start_point.row + 1, child.end_point.row + 1, str(error)))
+                suppressed = inherited
+            start = pending[0].start_byte if pending else child.start_byte
+            if suppressed:
+                end = child.end_byte
+                separator = child.next_sibling
+                if separator is not None and separator.type in {',', ';'}:
+                    end = separator.end_byte
+                excluded.append((start, end))
+            if child.type == 'mod_item':
+                name = child.child_by_field_name('name').text.decode()
+                body = child.child_by_field_name('body')
+                if body is None:
+                    custom = None
+                    for attr in pending:
+                        value = attribute_text(attr)
+                        if value.startswith('path'):
+                            match = re.fullmatch(r'path\s*=\s*("(?:\\.|[^"\\])*")', value)
+                            if match is None:
+                                raise ValueError("unsupported module path attribute")
+                            custom = json.loads(match[1])
+                    modules.append((inline, name, custom, suppressed))
+                else:
+                    walk(body, (*inline, name), suppressed)
+            elif child.type in {'macro_definition', 'macro_invocation'}:
+                contracts = (POLICY['reviewed_settings_template'], POLICY['reviewed_server_id_template'])
+                reviewed_candidate = child.type == 'macro_definition' and any(
+                    relative == contract['path']
+                    and child.child_by_field_name('name').text.decode() == contract['name']
+                    for contract in contracts)
+                if not suppressed and (reviewed_candidate or re.search(rb'#\s*\[.*?(?:\btest\b|test-util|integration_tests)', child.text, re.S)):
+                    test_helper = reviewed_settings_test_helper(child, source, relative)
+                    if test_helper is None:
+                        test_helper = reviewed_server_id_test_helper(child, source, relative)
+                    if test_helper is not None:
+                        # Test instances exercise the production template just as
+                        # test types exercise generic production functions.
+                        excluded.append(test_helper)
+                    elif reviewed_candidate:
+                        diagnostics.append((child.start_point.row + 1, child.end_point.row + 1,
+                                            'reviewed production macro template changed or is ambiguous'))
+                    elif child.type == 'macro_invocation' and child.child_by_field_name('macro').text in {b'cfg_if', b'cfg_if::cfg_if'}:
+                        tokens = [part for part in child.named_children[-1].children[1:-1] if part.type not in COMMENT_TYPES]
+                        possible = True
+                        index = 0
+                        while index < len(tokens):
+                            first = tokens[index]
+                            if first.text == b'else':
+                                index += 1
+                                first = tokens[index]
+                            if first.text == b'if':
+                                if index + 3 >= len(tokens) or tokens[index + 1].text != b'#':
+                                    raise ValueError('unsupported cfg_if structure')
+                                condition = tokens[index + 2].text.decode()
+                                match = re.fullmatch(r'\[\s*cfg\((.*)\)\s*\]', condition, re.S)
+                                if not match:
+                                    raise ValueError('unsupported cfg_if condition')
+                                values = cfg_values(match[1])
+                                body = tokens[index + 3]
+                                index += 4
+                            else:
+                                values, body = {True}, first
+                                index += 1
+                            if not body.text.startswith(b'{'):
+                                raise ValueError('unsupported cfg_if body')
+                            if not possible or values == {False}:
+                                excluded.append((first.start_byte, body.end_byte))
+                            elif re.search(rb'#\s*\[.*?(?:\btest\b|test-util|integration_tests)', body.text, re.S):
+                                diagnostics.append((body.start_point.row + 1, body.end_point.row + 1, 'nested test-dependent macro requires expansion'))
+                            if values == {True}:
+                                possible = False
+                    else:
+                        diagnostics.append((child.start_point.row + 1, child.end_point.row + 1, 'test items generated inside an unexpanded macro'))
+            elif not suppressed:
+                walk(child, inline, False)
+            pending = []
+        if pending:
+            raise ValueError("unattached Rust attributes")
+
+    walk(tree.root_node)
+    masked = bytearray(source)
+    for start, end in excluded + comments:
+        for index in range(start, end):
+            if masked[index] not in (10, 13):
+                masked[index] = 32
+    lines = {}
+    canonical = []
+    for number, line in enumerate(bytes(masked).decode().splitlines(), 1):
+        content = line.strip()
+        if content:
+            canonical.append(content)
+            lines[number] = len(canonical)
+    # LCOV merges all regions on one physical line. If a test-only item shares
+    # that line with production, its hit cannot prove production execution.
+    starts = [0] + [match.end() for match in re.finditer(b'\n', source)]
+    for start, end in excluded:
+        first = bisect.bisect_right(starts, start)
+        last = bisect.bisect_right(starts, max(start, end - 1))
+        for number in range(first, last + 1):
+            if number in lines:
+                diagnostics.append((number, number, 'test and production share one LCOV source line'))
+    fingerprint = hashlib.sha256('\n'.join(canonical).encode()).hexdigest()
+    return lines, fingerprint, modules, diagnostics
+
+
+class Projection:
+    def __init__(self, root):
+        self.root = root.resolve()
+        self.cache = {}
+        self.line_counts = {}
+        self.errors = {}
+        self.test_files = set()
+        self.production_files = set()
+
+    def analyze(self, relative):
+        if relative not in self.cache:
+            path = (self.root / relative).resolve()
+            if not path.is_relative_to(self.root) or not path.is_file():
+                raise ValueError(f"missing or external Rust source: {relative}")
+            try:
+                data = path.read_bytes()
+                self.line_counts[relative] = len(data.splitlines())
+                self.cache[relative] = project_source(data, relative)
+            except ValueError as error:
+                raise ValueError(f'{relative}: {error}') from error
+        return self.cache[relative]
+
+    def index_modules(self, roots):
+        pending = [(str(path), False) for path in roots]
+        visited = set()
+        while pending:
+            relative, excluded = pending.pop()
+            if (relative, excluded) in visited:
+                continue
+            visited.add((relative, excluded))
+            (self.test_files if excluded else self.production_files).add(relative)
+            # Test-only subtrees have no production metrics and need not be parsed.
+            if excluded:
+                continue
+            if TEST_PATH.search(relative) or relative.startswith('crates/integration/'):
+                self.test_files.add(relative)
+                self.production_files.discard(relative)
+                continue
+            try:
+                _, _, modules, _ = self.analyze(relative)
+            except ValueError as error:
+                self.errors[relative] = str(error)
+                continue
+            path = Path(relative)
+            default_base = path.parent if path.name in {'lib.rs', 'main.rs', 'mod.rs'} else path.with_suffix('')
+            for inline, name, custom, suppressed in modules:
+                if custom is not None:
+                    possibilities = [(default_base if inline else path.parent).joinpath(*inline, custom)]
+                else:
+                    base = default_base.joinpath(*inline)
+                    possibilities = [base / f'{name}.rs', base / name / 'mod.rs']
+                existing = [item for item in possibilities if (self.root / item).is_file()]
+                # Platform/config-conditional modules may not exist in this target.
+                if not existing:
+                    continue
+                if len(existing) != 1:
+                    raise ValueError(f"ambiguous external Rust module: {relative}:{name}")
+                child = existing[0].as_posix()
+                pending.append((child, suppressed))
+                if suppressed:
+                    # Descendant source files remain test-only unless also reached
+                    # through a production module; no filename guessing is needed.
+                    directory = existing[0].parent if existing[0].name == 'mod.rs' else existing[0].with_suffix('')
+                    if (self.root / directory).is_dir():
+                        self.test_files.update(p.relative_to(self.root).as_posix() for p in (self.root / directory).rglob('*.rs'))
+
+    def line(self, relative, number):
+        if relative in self.test_files and relative not in self.production_files:
+            return None
+        if TEST_PATH.search(relative) or relative.startswith('crates/integration/'):
+            # Conventional test filenames are a declared exclusion policy, not
+            # inferred executed-test savings.
+            return None
+        if relative not in self.production_files:
+            raise ValueError(f'Rust source has no proven production module route: {relative}')
+        mapping, fingerprint, _, diagnostics = self.analyze(relative)
+        for start, end, reason in diagnostics:
+            if start <= number <= end:
+                raise ValueError(f'{relative}:{number}: {reason}')
+        if number > self.line_counts[relative]:
+            raise ValueError(f"LCOV line outside source: {relative}:{number}")
+        ordinal = mapping.get(number)
+        return (f'{relative}:{ordinal}', fingerprint) if ordinal is not None else None
+
+
+def crate_roots(root):
+    # Conventional roots and explicitly named src/bin targets used by this
+    # workspace. Never promote each LCOV source file to a crate root.
+    roots = []
+    packages = [root / 'app', *sorted((root / 'crates').glob('*'))]
+    for package in packages:
+        for name in ('src/lib.rs', 'src/main.rs'):
+            path = package / name
+            if path.is_file():
+                roots.append(path.relative_to(root))
+        for path in sorted((package / 'src/bin').glob('*.rs')):
+            roots.append(path.relative_to(root))
+    return roots
+
+
+def audit_sources(root):
+    projection = Projection(root)
+    projection.index_modules(crate_roots(projection.root))
+    diagnostics = {
+        path: [{'start': first, 'end': last, 'reason': reason} for first, last, reason in rows]
+        for path, (_, _, _, rows) in projection.cache.items() if rows
+    }
+    return projection, {
+        'policy': POLICY,
+        'policy_sha256': POLICY_HASH,
+        'production_files': len(projection.production_files),
+        'test_only_files': len(projection.test_files - projection.production_files),
+        'ast_errors': projection.errors,
+        'unresolved_regions': diagnostics,
+        'status': 'needs-review' if projection.errors or diagnostics else 'pass',
+        'note': 'Static source classification only; no tests or coverage measurement executed.',
+    }
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    _, report = audit_sources(args.root)
+    args.output.write_text(json.dumps(report, indent=2) + '\n')
+    print(json.dumps(report, indent=2))

@@ -157,6 +157,7 @@ pub fn render_context_menu(
             | SftpBrowserAction::GoBack
             | SftpBrowserAction::GoForward
             | SftpBrowserAction::Refresh
+            | SftpBrowserAction::RetryConnection
             | SftpBrowserAction::SelectEntry(_)
             | SftpBrowserAction::ToggleMark(_)
             | SftpBrowserAction::MarkAndAdvance
@@ -387,6 +388,7 @@ mod tests {
     /// Rendering does not panic after triggering ContextMenu via browser view
     #[test]
     fn test_render_context_menu_via_browser() {
+        use crate::remote_server::manager::RemoteServerManager;
         use crate::settings_view::keybindings::KeybindingChangedNotifier;
         use crate::test_util::settings::initialize_settings_for_tests;
         use warp_core::ui::appearance::Appearance;
@@ -395,8 +397,12 @@ mod tests {
             initialize_settings_for_tests(&mut app);
             app.add_singleton_model(|_| Appearance::mock());
             app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+            app.add_singleton_model(RemoteServerManager::new);
             app.add_singleton_model(|_| crate::workspace::ToastStack);
             app.add_singleton_model(|_| crate::sftp_manager::transfer_queue::TransferQueue::new());
+            app.add_singleton_model(|_| {
+                crate::sftp_manager::fm_registry::FileManagerRegistry::new()
+            });
 
             let temp_db = std::env::temp_dir().join("warp_sftp_ctx_test.sqlite");
             let _ = warp_ssh_manager::set_database_path(temp_db);

@@ -30,7 +30,7 @@ pub struct ProcessProbe {
 pub enum ProcessPresence {
     /// The process exists and its current-boot identity matches the registry.
     VerifiedLive,
-    /// The process exists, but the registry lacks a usable identity binding.
+    /// The process exists or its presence is unknown; no usable identity binding exists.
     UnverifiedLive,
     /// The registry is from a previous boot or its pid now belongs to another process.
     StaleRegistration,
@@ -182,7 +182,8 @@ pub fn probe_registered_process(
     }
 
     let precise_start = precise_process_start(pid);
-    let process_is_live = precise_start.is_some() || process_exists(pid);
+    // Unsupported or unreadable probes do not prove that a process exited.
+    let process_is_live = precise_start.is_some() || process_exists(pid).unwrap_or(true);
     if !process_is_live {
         return ProcessProbe {
             presence: ProcessPresence::Absent,
@@ -411,17 +412,24 @@ fn precise_process_start(_pid: u32) -> Option<PreciseProcessStart> {
     None
 }
 
-fn process_exists(pid: u32) -> bool {
+fn process_exists(pid: u32) -> Option<bool> {
     #[cfg(unix)]
     {
         // SAFETY: signal 0 checks existence/permission without sending a signal.
         let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-        rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+        if rc == 0 {
+            return Some(true);
+        }
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::EPERM) => Some(true),
+            Some(libc::ESRCH) => Some(false),
+            _ => None,
+        }
     }
     #[cfg(not(unix))]
     {
         let _ = pid;
-        false
+        None
     }
 }
 

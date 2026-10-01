@@ -320,6 +320,8 @@ impl TestDriver {
                         "Test reached timeout after {}s; terminating...",
                         timeout.as_secs()
                     );
+                    #[cfg(target_os = "macos")]
+                    print_process_sample();
                     std::process::exit(2);
                 });
         }
@@ -741,6 +743,28 @@ fn video_recording_enabled_for_test(test_name: &str) -> bool {
         return true;
     }
     value.split(',').any(|name| name.trim() == test_name)
+}
+
+/// Prints a stack sample of this process before the timeout watchdog exits, so
+/// a blocked main thread shows up in the test log with its call stack.
+#[cfg(target_os = "macos")]
+// The disallowed-type rationale is about Windows console windows; this is macOS-only.
+#[allow(clippy::disallowed_types)]
+fn print_process_sample() {
+    let report_path = std::env::temp_dir().join(format!(
+        "integration-timeout-{}.sample.txt",
+        std::process::id()
+    ));
+    let sampled = std::process::Command::new("/usr/bin/sample")
+        .arg(std::process::id().to_string())
+        .arg("3")
+        .arg("-file")
+        .arg(&report_path)
+        .status();
+    match sampled.and_then(|_| std::fs::read_to_string(&report_path)) {
+        Ok(report) => eprintln!("{report}"),
+        Err(err) => log::warn!("Could not sample the timed-out test process: {err}"),
+    }
 }
 
 /// Given a value retrieved from catching an unwinding panic, returns

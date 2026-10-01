@@ -356,10 +356,14 @@ fn resolve_scoped_host(
     // Fallback: resolve by display label (only when no id was supplied).
     if scoped_id.is_none() {
         if let Some(name) = scoped_name {
-            if let Some(pos) = hosts.iter().position(|h| h.name == name) {
-                return HostChoice::Remote(pos);
-            }
-            return HostChoice::Unselected;
+            let mut matches = hosts
+                .iter()
+                .enumerate()
+                .filter(|(_, host)| host.name == name);
+            return match (matches.next(), matches.next()) {
+                (Some((index, _)), None) => HostChoice::Remote(index),
+                (None, None) | (None, Some(_)) | (Some(_), Some(_)) => HostChoice::Unselected,
+            };
         }
     }
     HostChoice::Local
@@ -397,6 +401,7 @@ pub struct SpawnCard {
     history_validation: BTreeMap<PathBuf, DirectoryValidation>,
     history_search_editor: Option<ViewHandle<EditorView>>,
     bulk_launch: Option<BulkLaunchLedger>,
+    launch_generation: u64,
     /// Task prompt to prefill into the launched agent after start (contextual
     /// flows); `None` for a plain "new agent" open.
     prompt: Option<String>,
@@ -627,6 +632,7 @@ impl SpawnCard {
             history_validation: BTreeMap::new(),
             history_search_editor: Some(history_search_editor),
             bulk_launch: None,
+            launch_generation: 0,
             prompt: None,
             remote_dir_editor: Some(remote_dir_editor),
             chip_states: Default::default(),
@@ -640,13 +646,14 @@ impl SpawnCard {
     /// Takes a `ViewContext` because a remote-scoped open may prefill the
     /// remote-dir editor buffer (touching an editor view needs ctx).
     pub fn configure(&mut self, cfg: SpawnCardConfig, ctx: &mut ViewContext<Self>) {
+        self.folder_history.refresh();
         self.model.clear();
         self.effort.clear();
         self.managed_mode = ManagedLaunchMode::Ordinary;
         self.account = AccountChoice::Freest;
         self.batch_accounts.clear();
         self.select_all_accounts = false;
-        self.bulk_launch = None;
+        self.invalidate_bulk_plan();
         self.folder_history_open = false;
         self.history_validation.clear();
         // Pre-scope host from a Conductor host/project `+`, else local. Resolve
@@ -796,13 +803,20 @@ impl SpawnCard {
         result: DirectoryValidation,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !self.folder_validation.apply(request, result) {
+            return;
+        }
         self.history_validation.insert(request.path.clone(), result);
-        self.folder_validation.apply(request, result);
         ctx.notify();
     }
 
     fn invalidate_bulk_plan(&mut self) {
         self.bulk_launch = None;
+        self.launch_generation = self.launch_generation.wrapping_add(1);
+    }
+
+    pub fn launch_generation(&self) -> u64 {
+        self.launch_generation
     }
 
     fn local_account_targets(&self) -> Vec<LaunchAccountTarget> {
@@ -922,13 +936,29 @@ impl SpawnCard {
         }
     }
 
+    fn directory_is_ready(&self, directory: Result<Option<PathBuf>, RemoteCwdError>) -> bool {
+        match directory {
+            Err(RemoteCwdError::RelativePath) => false,
+            Ok(None) => self.managed_mode == ManagedLaunchMode::Ordinary,
+            Ok(Some(_)) => self.folder_validation.is_valid(),
+        }
+    }
+
+    fn can_launch(&self, app: &AppContext) -> bool {
+        self.selected_agent_is_available()
+            && self.host_is_ready()
+            && self.model_is_ready()
+            && self.managed_mode_is_valid()
+            && self.account_is_ready()
+            && self.directory_is_ready(if matches!(self.host, HostChoice::Remote(_)) {
+                self.selected_remote_cwd(app)
+            } else {
+                Ok(self.project.clone())
+            })
+    }
+
     fn build_bulk_plan(&self, app: &AppContext) -> Option<BulkLaunchPlan> {
-        if !self.selected_agent_is_available()
-            || !self.host_is_ready()
-            || !self.model_is_ready()
-            || !self.account_is_ready()
-            || !self.managed_mode_is_valid()
-        {
+        if !self.can_launch(app) {
             return None;
         }
         let cwd = self.selected_directory(app);
@@ -957,16 +987,34 @@ impl SpawnCard {
     }
 
     fn launch_attempt(&mut self, app: &AppContext) -> Option<SpawnCardEvent> {
+        if !self.can_launch(app) {
+            return None;
+        }
         if self.bulk_launch.is_none() {
             let plan = self.build_bulk_plan(app)?;
             self.bulk_launch = Some(BulkLaunchLedger::new(plan));
         }
-        let ledger = self.bulk_launch.as_ref()?;
-        let targets = ledger.targets_for_attempt();
+        let ledger = self.bulk_launch.as_mut()?;
+        let targets = ledger.reserve_attempt();
         (!targets.is_empty()).then_some(SpawnCardEvent::LaunchBatch {
             plan_id: ledger.plan.id,
             targets,
         })
+    }
+
+    pub fn cancel_pending_launches(&mut self) {
+        self.invalidate_bulk_plan();
+    }
+
+    pub fn launch_target_is_reserved(
+        &self,
+        plan_id: BulkLaunchPlanId,
+        target_id: &BulkLaunchTargetId,
+        target: &BulkLaunchTarget,
+    ) -> bool {
+        self.bulk_launch
+            .as_ref()
+            .is_some_and(|ledger| ledger.is_reserved(plan_id, target_id, target))
     }
 
     pub fn apply_launch_result(
@@ -975,14 +1023,14 @@ impl SpawnCard {
         target_id: &BulkLaunchTargetId,
         result: Result<String, String>,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
         let history_host = self.history_host();
         let Some(ledger) = self.bulk_launch.as_mut() else {
-            return;
+            return false;
         };
         let already_recorded_history = ledger.any_succeeded();
         if !ledger.apply(plan_id, target_id, result) {
-            return;
+            return false;
         }
         if !already_recorded_history && ledger.any_succeeded() {
             if let Some(path) = ledger
@@ -1001,6 +1049,7 @@ impl SpawnCard {
             }
         }
         ctx.notify();
+        true
     }
 
     pub fn mark_launch_in_flight(
@@ -1440,6 +1489,7 @@ impl SpawnCard {
             return false;
         }
         self.host = host;
+        self.history_validation.clear();
         if matches!(host, HostChoice::Unselected | HostChoice::Local) {
             self.managed_mode = ManagedLaunchMode::Ordinary;
         } else {
@@ -3000,15 +3050,7 @@ impl SpawnCard {
 
         // Confirm + cancel. Confirm renders inert (dimmed, no click handler) when
         // no supported agent CLI is installed — there is nothing it could launch.
-        let can_launch = self.selected_agent_is_available()
-            && self.host_is_ready()
-            && self.model_is_ready()
-            && self.managed_mode_is_valid()
-            && self.account_is_ready()
-            && self.selected_remote_cwd(app).is_ok()
-            && (self.managed_mode == ManagedLaunchMode::Ordinary
-                || self.selected_directory(app).is_some())
-            && (self.selected_directory(app).is_none() || self.folder_validation.is_valid());
+        let can_launch = self.can_launch(app);
         let confirm: Box<dyn Element> = if can_launch {
             let label = self
                 .bulk_launch
@@ -3206,27 +3248,36 @@ impl TypedActionView for SpawnCard {
                 // Same pattern as the session-config modal: the picker callback
                 // dispatches a typed action carrying the chosen path back to this
                 // view, which sets `project` in `DirectorySelected` below.
+                let generation = self.launch_generation;
+                let card_id = ctx.handle().id();
                 ctx.open_file_picker(
-                    |result, ctx| {
+                    move |result, ctx| {
                         if let Some(path_result) =
                             result.map(|paths| paths.into_iter().next()).transpose()
                         {
-                            ctx.dispatch_typed_action(&SpawnCardAction::DirectorySelected(
-                                path_result,
-                            ));
+                            ctx.dispatch_typed_action(&SpawnCardAction::DirectorySelected {
+                                card_id,
+                                generation,
+                                result: path_result,
+                            });
                         }
                     },
                     FilePickerConfiguration::new().folders_only(),
                 );
             }
-            SpawnCardAction::DirectorySelected(result) => match result {
-                Ok(path) => {
-                    self.set_selected_directory(PathBuf::from(path), ctx);
+            SpawnCardAction::DirectorySelected {
+                card_id,
+                generation,
+                result,
+            } => {
+                if *card_id != ctx.handle().id() || *generation != self.launch_generation {
+                    return;
                 }
-                Err(err) => {
-                    log::warn!("Spawn card directory picker error: {err}");
+                match result {
+                    Ok(path) => self.set_selected_directory(PathBuf::from(path), ctx),
+                    Err(err) => log::warn!("Spawn card directory picker error: {err}"),
                 }
-            },
+            }
             SpawnCardAction::ClearDirectory => {
                 self.project = None;
                 self.folder_navigation.reset(None);
@@ -3285,6 +3336,7 @@ impl TypedActionView for SpawnCard {
                 }
             }
             SpawnCardAction::Close => {
+                self.invalidate_bulk_plan();
                 ctx.emit(SpawnCardEvent::Close);
             }
         }
@@ -3358,7 +3410,11 @@ pub enum SpawnCardAction {
     /// Open the native folder picker to choose the launch directory (local host).
     OpenDirectoryPicker,
     /// Result delivered from the folder picker (dispatched from its callback).
-    DirectorySelected(Result<String, FilePickerError>),
+    DirectorySelected {
+        card_id: warpui::EntityId,
+        generation: u64,
+        result: Result<String, FilePickerError>,
+    },
     /// Reset the launch directory to the default (agent's home / cwd).
     ClearDirectory,
     ToggleFolderHistory,
@@ -3375,4 +3431,4 @@ pub enum SpawnCardAction {
 
 #[cfg(test)]
 #[path = "spawn_card_tests.rs"]
-mod tests;
+pub(crate) mod tests;

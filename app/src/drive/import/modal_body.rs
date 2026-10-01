@@ -71,14 +71,14 @@ enum ImportState {
 pub enum ImportModalBodyAction {
     RetryFile(FileId),
     OpenFilePicker,
-    FilePickerCancelled,
-    PathsSelected(Vec<String>),
-    FilePickerError(FilePickerError),
+    FilePickerCancelled(ImportGeneration),
+    PathsSelected(ImportGeneration, Vec<String>),
+    FilePickerError(ImportGeneration, FilePickerError),
     ClickedToOpenTarget(String),
 }
 
 pub enum ImportModalBodyEvent {
-    OpenFilePicker,
+    OpenFilePicker(ImportGeneration),
     UploadCompleted,
     AllFileSavedLocally,
     UploadSelected,
@@ -171,6 +171,10 @@ impl ImportModalBody {
                 ctx.emit(ImportModalBodyEvent::UploadCompleted);
             }
         }
+    }
+
+    pub(super) fn accepts_picker_result(&self, generation: ImportGeneration) -> bool {
+        generation == self.current_generation && matches!(self.state, ImportState::Loading)
     }
 
     pub fn set_new_target(&mut self, owner: Owner, initial_folder_id: Option<SyncId>) {
@@ -537,16 +541,26 @@ impl TypedActionView for ImportModalBody {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             ImportModalBodyAction::OpenFilePicker => {
+                if !matches!(self.state, ImportState::Upload) {
+                    return;
+                }
+                self.reset(ctx);
                 self.state = ImportState::Loading;
-                ctx.emit(ImportModalBodyEvent::OpenFilePicker);
+                ctx.emit(ImportModalBodyEvent::OpenFilePicker(self.current_generation));
                 ctx.notify();
             }
-            ImportModalBodyAction::FilePickerCancelled => {
+            ImportModalBodyAction::FilePickerCancelled(generation) => {
+                if !self.accepts_picker_result(*generation) {
+                    return;
+                }
                 self.state = ImportState::Upload;
                 ctx.emit(ImportModalBodyEvent::UploadSelected);
                 ctx.notify();
             }
-            ImportModalBodyAction::FilePickerError(err) => {
+            ImportModalBodyAction::FilePickerError(generation, err) => {
+                if !self.accepts_picker_result(*generation) {
+                    return;
+                }
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
@@ -572,9 +586,12 @@ impl TypedActionView for ImportModalBody {
                     hashed_id.clone(),
                 ));
             }
-            ImportModalBodyAction::PathsSelected(paths) => {
+            ImportModalBodyAction::PathsSelected(generation, paths) => {
+                if !self.accepts_picker_result(*generation) {
+                    return;
+                }
                 self.state = ImportState::PathLoaded;
-                let generation = self.current_generation;
+                let generation = *generation;
 
                 let paths_cloned = paths.clone();
                 let handle = ctx.spawn(

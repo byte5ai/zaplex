@@ -189,20 +189,7 @@
         "warp",
         "--lib",
         "--no-fail-fast",
-        "workspace::view::tests::",
-        "--",
-        "--skip",
-        "test_worktree_sidecar_hover_takes_precedence_over_selection",
-        "--skip",
-        "test_worktree_sidecar_pointer_entry_does_not_select_top_repo",
-        "--skip",
-        "test_worktree_sidecar_close_via_select_item_executes_from_workspace",
-        "--skip",
-        "test_worktree_sidecar_search_editor_enter_executes_selection",
-        "--skip",
-        "test_worktree_sidecar_search_editor_proxies_navigation_and_escape",
-        "--skip",
-        "test_worktree_sidecar_hides_linked_worktrees_from_repo_list"
+        "workspace::view::tests::"
       ],
       "timeout_seconds": 5400
     },
@@ -1054,10 +1041,10 @@
     },
     {
       "id": "reduced-motion",
-      "path": "docs/ui/cockpit-sidebar-connections.html",
+      "path": "docs/ui/premium-workspace.html",
       "required_regex": [
-        "prefers-reduced-motion: reduce",
-        "animation: none"
+        "prefers-reduced-motion\\s*:\\s*reduce",
+        "animation\\s*:\\s*none\\b"
       ]
     }
   ],

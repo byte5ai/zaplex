@@ -91,8 +91,9 @@ fn test_config_from_snapshot_flattens_single_pane() {
                 PaneNodeSnapshot::Leaf(LeafSnapshot {
                     is_focused: true,
                     custom_vertical_tabs_title: None,
-                    contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                    contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                         uuid: vec![],
+                        remote_state: Default::default(),
                         cwd: Some("/some/dir".into()),
                         cli_agent_binding: None,
                         is_active: true,
@@ -103,7 +104,7 @@ fn test_config_from_snapshot_flattens_single_pane() {
                         active_profile_id: None,
                         conversation_ids_to_restore: vec![],
                         active_conversation_id: None,
-                    }),
+                    })),
                 }),
             ),
         ],
@@ -132,8 +133,9 @@ fn test_config_from_snapshot_filters_panes() {
                 PaneNodeSnapshot::Leaf(LeafSnapshot {
                     is_focused: true,
                     custom_vertical_tabs_title: None,
-                    contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                    contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                         uuid: vec![],
+                        remote_state: Default::default(),
                         cwd: Some("/path/to/dir".into()),
                         cli_agent_binding: None,
                         is_active: true,
@@ -144,7 +146,7 @@ fn test_config_from_snapshot_filters_panes() {
                         active_profile_id: None,
                         conversation_ids_to_restore: vec![],
                         active_conversation_id: None,
-                    }),
+                    })),
                 }),
             ),
             (
@@ -163,8 +165,9 @@ fn test_config_from_snapshot_filters_panes() {
                 PaneNodeSnapshot::Leaf(LeafSnapshot {
                     is_focused: false,
                     custom_vertical_tabs_title: None,
-                    contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                    contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                         uuid: vec![],
+                        remote_state: Default::default(),
                         cwd: Some("/some/dir".into()),
                         cli_agent_binding: None,
                         is_active: true,
@@ -175,7 +178,7 @@ fn test_config_from_snapshot_filters_panes() {
                         active_profile_id: None,
                         conversation_ids_to_restore: vec![],
                         active_conversation_id: None,
-                    }),
+                    })),
                 }),
             ),
         ],
@@ -234,8 +237,9 @@ fn test_config_from_snapshot_preserves_tab_pin() {
     let mut state = single_tab_snapshot(PaneNodeSnapshot::Leaf(LeafSnapshot {
         is_focused: true,
         custom_vertical_tabs_title: None,
-        contents: LeafContents::Terminal(TerminalPaneSnapshot {
+        contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
             uuid: vec![],
+            remote_state: Default::default(),
             cwd: Some("/path/to/dir".into()),
             cli_agent_binding: None,
             is_active: true,
@@ -246,7 +250,7 @@ fn test_config_from_snapshot_preserves_tab_pin() {
             active_profile_id: None,
             conversation_ids_to_restore: vec![],
             active_conversation_id: None,
-        }),
+        })),
     }));
     state.windows[0].tabs[0].is_pinned = true;
 
@@ -272,8 +276,9 @@ fn test_config_with_active_tab_index() {
                         PaneNodeSnapshot::Leaf(LeafSnapshot {
                             is_focused: true,
                             custom_vertical_tabs_title: None,
-                            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                            contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                                 uuid: vec![],
+                                remote_state: Default::default(),
                                 cwd: Some("/path/to/dir".into()),
                                 cli_agent_binding: None,
                                 is_active: true,
@@ -284,7 +289,7 @@ fn test_config_with_active_tab_index() {
                                 active_profile_id: None,
                                 conversation_ids_to_restore: vec![],
                                 active_conversation_id: None,
-                            }),
+                            })),
                         }),
                     )],
                 }),
@@ -340,8 +345,9 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
                         PaneNodeSnapshot::Leaf(LeafSnapshot {
                             is_focused: true,
                             custom_vertical_tabs_title: None,
-                            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                            contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                                 uuid: vec![],
+                                remote_state: Default::default(),
                                 cwd: Some("/path/to/dir".into()),
                                 cli_agent_binding: None,
                                 is_active: true,
@@ -352,7 +358,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
                                 active_profile_id: None,
                                 conversation_ids_to_restore: vec![],
                                 active_conversation_id: None,
-                            }),
+                            })),
                         }),
                     )],
                 }),
@@ -383,8 +389,9 @@ fn test_config_with_active_tab_being_filtered() {
                         PaneNodeSnapshot::Leaf(LeafSnapshot {
                             is_focused: true,
                             custom_vertical_tabs_title: None,
-                            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                            contents: LeafContents::Terminal(Box::new(TerminalPaneSnapshot {
                                 uuid: vec![],
+                                remote_state: Default::default(),
                                 cwd: Some("/path/to/dir".into()),
                                 cli_agent_binding: None,
                                 is_active: true,
@@ -395,7 +402,7 @@ fn test_config_with_active_tab_being_filtered() {
                                 active_profile_id: None,
                                 conversation_ids_to_restore: vec![],
                                 active_conversation_id: None,
-                            }),
+                            })),
                         }),
                     )],
                 }),

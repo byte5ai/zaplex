@@ -80,3 +80,20 @@ pub fn open_sftp_pane_with_mock(
 
     (window_id, temp_dir)
 }
+
+/// The cursor is distinct from the multi-file mark set. Observe its actual
+/// backend entry after navigating to a parent directory.
+pub fn cursor_path(app: &App, window_id: WindowId) -> Option<PathBuf> {
+    sftp_browser_view(app, window_id).read(app, |view, _| {
+        view.cursor_entry_index()
+            .and_then(|index| view.entries().get(index))
+            .map(|entry| entry.path.clone())
+    })
+}
+
+/// Returns the saved geometry ID for a row in this browser instance.
+pub fn row_position_id(app: &App, window_id: WindowId, index: usize) -> String {
+    sftp_browser_view(app, window_id).read(app, |view, _| {
+        view.layout_position_id_for_test(&format!("row:{index}"))
+    })
+}

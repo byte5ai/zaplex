@@ -196,12 +196,15 @@ pub enum WorkspaceAction {
     /// the spawn card's "Browse…"): fill the spawn card's remote-dir field with
     /// `path`, re-show the card, and close the picker (#105).
     RemoteSpawnDirPicked {
+        pick_id: uuid::Uuid,
         path: std::path::PathBuf,
     },
     /// The SFTP directory picker was closed without a pick (cancel / pane close):
     /// re-show the hidden spawn card unchanged so its selections aren't stranded
     /// (#105).
-    RemoteSpawnDirPickCanceled,
+    RemoteSpawnDirPickCanceled {
+        pick_id: uuid::Uuid,
+    },
     /// Open the local file-manager pane (FM pane-mode P1) rooted at `start_path`.
     OpenLocalFileManager {
         start_path: std::path::PathBuf,
@@ -1302,7 +1305,7 @@ impl WorkspaceAction {
             // persisted separately (SQLite), so this isn't app-state either.
             ManageSshHost { .. } => false,
             // Fills a transient modal field / re-shows a modal; not app state.
-            RemoteSpawnDirPicked { .. } | RemoteSpawnDirPickCanceled => false,
+            RemoteSpawnDirPicked { .. } | RemoteSpawnDirPickCanceled { .. } => false,
             // actions that are related to updating user settings or
             // managing some ui elements (like closing/opening modals)
             // that don't reflect on actual workspace and don't need to

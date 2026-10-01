@@ -18,6 +18,23 @@ pub(crate) async fn discover_capabilities(
     location: ProcessLocation,
 ) -> Result<AgentCapability> {
     let launch = ProcessLaunch::for_discovery(&installation, working_directory, location);
+    discover_with_launch(installation, launch).await
+}
+
+pub(crate) async fn discover_read_only_capabilities(
+    installation: InstallationIdentity,
+    working_directory: PathBuf,
+    location: ProcessLocation,
+) -> Result<AgentCapability> {
+    let launch =
+        ProcessLaunch::for_read_only_discovery(&installation, working_directory, location)?;
+    discover_with_launch(installation, launch).await
+}
+
+async fn discover_with_launch(
+    installation: InstallationIdentity,
+    launch: ProcessLaunch,
+) -> Result<AgentCapability> {
     let mut process = JsonLineProcess::spawn(&launch)?;
     let result = match installation.agent {
         SubscriptionAgent::ClaudeCode => discover_claude(&mut process, installation).await,

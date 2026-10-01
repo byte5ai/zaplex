@@ -11,7 +11,10 @@ use crate::ai::mcp::{
     gallery::MCPGalleryManager, templatable_manager::TemplatableMCPServerManager,
 };
 use crate::ai::skills::SkillManager;
+use crate::ai::subscription_agent::SubscriptionSessionRegistry;
 use crate::code_review::git_status_update::GitStatusUpdateModel;
+#[cfg(feature = "local_tty")]
+use crate::terminal::available_shells;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 use warpui::{platform::WindowStyle, App, ViewHandle, WindowId};
@@ -72,6 +75,7 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(|_| History::default());
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+    app.add_singleton_model(|_| SubscriptionSessionRegistry::default());
     app.add_singleton_model(BlocklistAIPermissions::new);
     app.add_singleton_model(UndoCloseStack::new);
     app.add_singleton_model(crate::cockpit::favorites::FavoritesStore::new_for_test);
@@ -79,6 +83,8 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(AIRequestUsageModel::new_for_test);
     app.add_singleton_model(|_| KeybindingChangedNotifier::new());
     app.add_singleton_model(TerminalKeybindings::new);
+    #[cfg(feature = "local_tty")]
+    available_shells::register(app);
     app.add_singleton_model(|_| ActiveSession::default());
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AuthManager::new_for_test);

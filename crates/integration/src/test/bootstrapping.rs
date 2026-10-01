@@ -10,7 +10,7 @@ use warp::{
             input_is_empty,
         },
         step::new_step_with_default_assertions,
-        tab::tab_title_step,
+        tab::shell_title_step,
         terminal::{
             assert_active_block_command_for_single_terminal_in_tab,
             assert_long_running_block_executing_for_single_terminal_in_tab,
@@ -282,7 +282,7 @@ PROMPT_COMMAND=('printf "\033]0;TEST_TAB_TITLE\a"' 'echo hello')
             ExpectedExitStatus::Success,
             (),
         ))
-        .with_step(tab_title_step(
+        .with_step(shell_title_step(
             "Assert the user's tab title used",
             "TEST_TAB_TITLE".to_string(),
         ))
@@ -350,7 +350,7 @@ PROMPT_COMMAND=('printf "\033]0;SHAKA WHEN THE WALLS FELL\a"' 'custom_prompt')
             ExpectedExitStatus::Success,
             (),
         ))
-        .with_step(tab_title_step(
+        .with_step(shell_title_step(
             "Assert the user's tab title used",
             "SHAKA WHEN THE WALLS FELL".to_string(),
         ))

@@ -385,8 +385,7 @@ fn test_on_session_share_ended_restores_size_after_viewer_driven_resize() {
 }
 
 #[test]
-fn test_on_session_share_ended_inserts_tombstone_for_ambient_session_under_ambient_agent_setup_v2()
-{
+fn test_on_session_share_ended_does_not_finish_ambient_conversation() {
     App::test((), |mut app| async move {
         let terminal = terminal_view_for_viewer(&mut app);
         let initial_block_height_items = terminal.read(&app, |view, _| {
@@ -403,8 +402,14 @@ fn test_on_session_share_ended_inserts_tombstone_for_ambient_session_under_ambie
         terminal.read(&app, |view, _| {
             let final_block_height_items =
                 view.model.lock().block_list().block_heights().items().len();
-            // Shared session ended banner + conversation ended tombstone.
-            assert_eq!(final_block_height_items, initial_block_height_items + 2);
+            // A disconnected share does not imply the ambient conversation finished.
+            // Its tombstone is inserted when the conversation status becomes final.
+            assert_eq!(final_block_height_items, initial_block_height_items + 1);
+            assert!(!view.has_inserted_conversation_ended_tombstone);
+            assert!(matches!(
+                view.inline_banners_state.shared_session_banner_state,
+                SharedSessionBanners::LastShared { .. }
+            ));
         });
     });
 }

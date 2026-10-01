@@ -5,6 +5,9 @@ use super::{
     PersistedCLIAgentBinding,
 };
 use crate::ai::blocklist::{InputConfig, InputType};
+use crate::ai::subscription_agent::{
+    CLAUDE_PROVIDER_MANAGED_BY_HOST, CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES,
+};
 use crate::terminal::CLIAgent;
 use std::collections::HashMap;
 use warp_terminal::shell::ShellType;
@@ -1132,6 +1135,23 @@ fn local_restore_binding_preserves_provider_session_cwd_and_account() {
     );
 }
 
+fn expected_claude_resume_command(session_id: &str) -> String {
+    let mut words = vec!["env".to_owned()];
+    for name in CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES {
+        words.extend(["-u".to_owned(), name.to_owned()]);
+    }
+    words.push(format!(
+        "{}={}",
+        CLAUDE_PROVIDER_MANAGED_BY_HOST.0, CLAUDE_PROVIDER_MANAGED_BY_HOST.1
+    ));
+    words.extend([
+        "claude".to_owned(),
+        "--resume".to_owned(),
+        shell_words::quote(session_id).into_owned(),
+    ]);
+    words.join(" ")
+}
+
 #[test]
 fn local_restore_binding_uses_terminal_cwd_fallback() {
     let terminal_view_id = EntityId::new();
@@ -1149,7 +1169,7 @@ fn local_restore_binding_uses_terminal_cwd_fallback() {
     assert_eq!(binding.account, None);
     assert_eq!(
         binding.resume_command().as_deref(),
-        Some("env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u AWS_BEARER_TOKEN_BEDROCK -u CLAUDE_CODE_USE_BEDROCK claude --resume session-1")
+        Some(expected_claude_resume_command("session-1").as_str())
     );
 }
 
@@ -1197,7 +1217,7 @@ fn persisted_restore_binding_round_trips_and_rejects_control_characters() {
     assert_eq!(restored, binding);
     assert_eq!(
         restored.resume_command().as_deref(),
-        Some("env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u AWS_BEARER_TOKEN_BEDROCK -u CLAUDE_CODE_USE_BEDROCK claude --resume 'session with spaces'")
+        Some(expected_claude_resume_command("session with spaces").as_str())
     );
 
     let invalid = PersistedCLIAgentBinding {

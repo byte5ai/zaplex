@@ -73,7 +73,7 @@ pub(crate) fn route_target(
         (true, _, _) => None,
         (false, Some(identity), _) => capabilities
             .iter()
-            .find(|capability| capability.installation.account == *identity),
+            .find(|capability| capability.installation.account.same_route(identity)),
         (false, None, Some(account_id)) => capabilities
             .iter()
             .find(|capability| capability.installation.account.id == account_id),

@@ -19,10 +19,12 @@ use std::process::{Output, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::terminal::model::ansi::{DProtoHook, PendingHook};
 use crate::terminal::shell::ShellType;
 use async_io::Async;
 use futures::io::{AsyncReadExt, AsyncWriteExt};
 use nix::sys::termios::{self, LocalFlags, SetArg};
+use vte::{Params, Parser, Perform};
 use warpui::ModelSpawner;
 use zaplex_remote_session::server::output_ring::OutputRing;
 
@@ -36,7 +38,7 @@ pub(super) const RING_CEILING_BYTES: usize = 4 * 1024 * 1024;
 /// Upper bound on the bytes accumulated while capturing a session's bootstrap
 /// preamble (T1.3). The Zaplexify handshake completes within the first few KiB,
 /// so this is far more than any real bootstrap; if a session emits this much
-/// output before its client reports the boundary (an unbootstrappable shell, or
+/// output before its handshake completes (an unbootstrappable shell, or
 /// a chatty pre-prompt), capture is abandoned rather than growing unbounded.
 pub(super) const BOOTSTRAP_PREAMBLE_CAP_BYTES: usize = 512 * 1024;
 
@@ -138,10 +140,10 @@ pub(super) struct Session {
 ///    here. If the handshake never completes within `cap` bytes (an
 ///    unbootstrappable shell, or an unusually chatty pre-prompt), capture is
 ///    abandoned to bound RAM.
-/// 2. **Freeze** — the client that *opened* the session reports the byte offset
-///    at which its terminal model became bootstrapped; the prefix is truncated
-///    to there and frozen. Only the opener defines the boundary (idempotent
-///    afterwards).
+/// 2. **Freeze** — the daemon recognizes a complete root-shell handshake and
+///    freezes the prefix through its final terminator without a client round trip.
+///    Older clients may still explicitly report the boundary; either path is
+///    idempotent after freezing.
 /// 3. **Serve** — [`Self::frozen`] yields the bytes for an adopt's
 ///    `SessionAttached`; the daemon starts that adopt's replay at the preamble's
 ///    end so the two never overlap.
@@ -151,6 +153,8 @@ pub(super) struct BootstrapPreamble {
     capturing: bool,
     /// Upper bound on captured bytes before abandoning (see the module constant).
     cap: usize,
+    parser: Parser,
+    handshake: BootstrapHandshake,
 }
 
 impl BootstrapPreamble {
@@ -159,20 +163,43 @@ impl BootstrapPreamble {
             bytes: Vec::new(),
             capturing: true,
             cap,
+            parser: Parser::new(),
+            handshake: BootstrapHandshake::default(),
         }
     }
 
-    /// Mirrors a chunk of session output while still capturing. Abandons capture
-    /// (dropping what was collected) if the accumulated bytes exceed the cap, so
-    /// a session that never reports a boundary can't grow this without bound.
+    /// Mirrors output until the complete root handshake is observed. Process
+    /// byte-by-byte so a large chunk containing a short handshake plus normal
+    /// output cannot discard the handshake merely because the chunk exceeds cap.
     pub(super) fn capture(&mut self, bytes: &[u8]) {
         if !self.capturing {
             return;
         }
-        self.bytes.extend_from_slice(bytes);
-        if self.bytes.len() > self.cap {
-            self.bytes = Vec::new();
-            self.capturing = false;
+        for &byte in bytes {
+            if self.bytes.len() == self.cap {
+                self.bytes = Vec::new();
+                self.capturing = false;
+                self.handshake = BootstrapHandshake::default();
+                return;
+            }
+            self.bytes.push(byte);
+            self.handshake.byte = byte;
+            // VTE ends DCS/OSC at ESC, before seeing the second byte of ST.
+            // Commit only a real ESC-backslash, never an interrupted sequence.
+            if let Some(action) = self.handshake.pending.take() {
+                if byte == b'\\' {
+                    self.handshake.commit(action);
+                } else {
+                    self.handshake.ambiguous = true;
+                }
+            }
+            self.parser.advance(&mut self.handshake, byte);
+            if self.handshake.complete {
+                self.bytes.shrink_to_fit();
+                self.capturing = false;
+                self.handshake = BootstrapHandshake::default();
+                return;
+            }
         }
     }
 
@@ -190,15 +217,22 @@ impl BootstrapPreamble {
         if !self.capturing {
             return;
         }
-        let end_seq = end_seq as usize;
+        let Ok(end_seq) = usize::try_from(end_seq) else {
+            self.bytes = Vec::new();
+            self.capturing = false;
+            self.handshake = BootstrapHandshake::default();
+            return;
+        };
         if end_seq > self.bytes.len() {
             self.bytes = Vec::new();
             self.capturing = false;
+            self.handshake = BootstrapHandshake::default();
             return;
         }
         self.bytes.truncate(end_seq);
         self.bytes.shrink_to_fit();
         self.capturing = false;
+        self.handshake = BootstrapHandshake::default();
     }
 
     /// The frozen preamble bytes, or `None` while still capturing or if capture
@@ -213,11 +247,166 @@ impl BootstrapPreamble {
     }
 }
 
+/// Only observes lifecycle hooks; it never executes terminal commands or writes
+/// to the PTY. Framing and payload decoding are shared with the terminal parser.
+#[derive(Default)]
+struct BootstrapHandshake {
+    byte: u8,
+    dcs_marker: Option<char>,
+    dcs_data: Vec<u8>,
+    pending: Option<BootstrapHookAction>,
+    kv_hook: Option<PendingHook>,
+    root_shell: Option<ShellType>,
+    ambiguous: bool,
+    complete: bool,
+}
+
+enum BootstrapHookAction {
+    Hook(DProtoHook),
+    Start(String),
+    Update(String, String),
+    End,
+}
+
+impl BootstrapHandshake {
+    fn receive(&mut self, action: BootstrapHookAction) {
+        match self.byte {
+            0x1b => self.pending = Some(action),
+            0x07 | 0x9c => self.commit(action),
+            // CAN/SUB abort the frame; VTE still calls its end callback.
+            _ => self.ambiguous = true,
+        }
+    }
+
+    fn decode(&mut self, marker: char, bytes: &[u8]) {
+        let decoded;
+        let data = if marker == 'd' {
+            let Ok(value) = hex::decode(bytes) else {
+                return;
+            };
+            decoded = value;
+            decoded.as_slice()
+        } else {
+            bytes
+        };
+        if let Ok(hook) = serde_json::from_slice::<DProtoHook>(data) {
+            // Like the terminal, accept unencoded InitShell but never an
+            // unencoded Bootstrapped payload (its fields can contain escapes).
+            if marker == 'd' || matches!(hook, DProtoHook::InitShell { .. }) {
+                self.receive(BootstrapHookAction::Hook(hook));
+            }
+        }
+    }
+
+    fn commit(&mut self, action: BootstrapHookAction) {
+        if self.ambiguous {
+            return;
+        }
+        match action {
+            BootstrapHookAction::Hook(hook) => {
+                if self.kv_hook.is_some() {
+                    self.ambiguous = true;
+                } else {
+                    self.observe(hook);
+                }
+            }
+            BootstrapHookAction::Start(name) => {
+                if self.kv_hook.is_some() {
+                    self.ambiguous = true;
+                } else if matches!(name.as_str(), "InitShell" | "Bootstrapped") {
+                    self.kv_hook = PendingHook::create(&name);
+                }
+            }
+            BootstrapHookAction::Update(key, value) => {
+                if let Some(hook) = self.kv_hook.as_mut() {
+                    hook.update(key, value);
+                }
+            }
+            BootstrapHookAction::End => {
+                if let Some(hook) = self.kv_hook.take() {
+                    self.observe(hook.finish());
+                }
+            }
+        }
+    }
+
+    fn observe(&mut self, hook: DProtoHook) {
+        if let DProtoHook::InitShell { value } = hook {
+            if self.root_shell.is_some() || value.is_subshell || value.session_id.as_u64() == 0 {
+                // Bootstrapped carries no portable session id. Never pair a
+                // nested shell's completion with the root shell's InitShell.
+                self.ambiguous = true;
+            } else {
+                self.root_shell = ShellType::from_name(&value.shell);
+                self.ambiguous = self.root_shell.is_none();
+            }
+        } else if let DProtoHook::Bootstrapped { value } = hook {
+            self.complete =
+                self.root_shell.is_some() && self.root_shell == ShellType::from_name(&value.shell);
+        }
+    }
+}
+
+impl Perform for BootstrapHandshake {
+    fn hook(&mut self, params: &Params, intermediates: &[u8], ignore: bool, marker: char) {
+        self.dcs_data.clear();
+        self.dcs_marker = (!ignore
+            && intermediates == b"$"
+            && params.iter().all(|param| param == [0])
+            && matches!(marker, 'd' | 'f'))
+        .then_some(marker);
+    }
+
+    fn put(&mut self, byte: u8) {
+        if self.dcs_marker.is_some() {
+            self.dcs_data.push(byte);
+        }
+    }
+
+    fn unhook(&mut self) {
+        if let Some(marker) = self.dcs_marker.take() {
+            let data = std::mem::take(&mut self.dcs_data);
+            self.decode(marker, &data);
+        }
+    }
+
+    fn osc_dispatch(&mut self, params: &[&[u8]], _: bool) {
+        if params.first() != Some(&b"9278".as_slice()) {
+            return;
+        }
+        match params.get(1).copied() {
+            Some(b"d") | Some(b"f") if params.len() == 3 => {
+                self.decode(params[1][0] as char, params[2]);
+            }
+            Some(b"k") => match params.get(2).copied() {
+                Some(b"A") if params.len() == 4 => {
+                    if let Ok(name) = std::str::from_utf8(params[3]) {
+                        self.receive(BootstrapHookAction::Start(name.to_owned()));
+                    }
+                }
+                Some(b"B") if params.len() >= 5 => {
+                    if let Ok(key) = std::str::from_utf8(params[3]) {
+                        let value = params[4..]
+                            .iter()
+                            .map(|part| String::from_utf8_lossy(part))
+                            .collect::<Vec<_>>()
+                            .join(";");
+                        self.receive(BootstrapHookAction::Update(key.to_owned(), value));
+                    }
+                }
+                Some(b"C") if params.len() == 3 => self.receive(BootstrapHookAction::End),
+                _ => (),
+            },
+            _ => (),
+        }
+    }
+}
+
 /// Plans an `AttachSession` reply's replay window and bootstrap preamble (T1.3).
 ///
 /// Returns `(base_seq, replay, preamble)`:
-/// - On a **fresh adopt** (`last_seq == 0`) whose ring has evicted seq 0
-///   (`base_seq() > 0`) *and* has a frozen preamble: the preamble is served and
+/// - On a **fresh adopt** (`last_seq == 0`) whose replay omits seq 0 through
+///   ring eviction or the attach-size limit *and* has a frozen preamble: it is served and
 ///   the replay starts at the preamble's end (`replay_from(preamble.len())`), so
 ///   preamble `[0, P)` and replay `[≥P, end)` never overlap. When the ring's
 ///   oldest byte is past `P` the client sees a genuine gap after the preamble and
@@ -239,7 +428,7 @@ pub(super) fn plan_attach(
     let tail_start = ring
         .end_seq()
         .saturating_sub(ATTACH_REPLAY_MAX_BYTES as u64);
-    if client_supports_preamble && last_seq == 0 && ring.base_seq() > 0 {
+    if client_supports_preamble && last_seq == 0 && (ring.base_seq() > 0 || tail_start > 0) {
         if let Some(preamble) = preamble.frozen() {
             let replay_start = (preamble.len() as u64).max(tail_start);
             let (base_seq, replay) = ring.replay_from(replay_start);
@@ -753,3 +942,7 @@ fn restore_echo_flag(fd: i32, echo_was_enabled: bool) -> std::io::Result<()> {
     }
     termios::tcsetattr(fd, SetArg::TCSANOW, &current).map_err(std::io::Error::other)
 }
+
+#[cfg(test)]
+#[path = "session_host_bootstrap_tests.rs"]
+mod bootstrap_tests;

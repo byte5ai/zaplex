@@ -521,6 +521,9 @@ pub struct TerminalModel {
     /// shell from sending us bootstrapping messages, but we can ignore them. This value is always
     /// cleared at the next precmd, because it is only relevant for the block where it was set.
     ignore_bootstrapping_messages: bool,
+    /// A confirmed daemon PTY whose original integration metadata is unavailable.
+    /// It remains a plain terminal for this model's lifetime, including reconnects.
+    raw_terminal: bool,
 
     /// One-shot latch (T1.3): the daemon-session adopt path arms this just before
     /// re-feeding the captured bootstrap-handshake preamble, so the client arms
@@ -1203,6 +1206,7 @@ impl TerminalModel {
             active_shell_launch_data: None,
             pending_session_info: None,
             ignore_bootstrapping_messages: false,
+            raw_terminal: false,
             suppress_next_bootstrap_write: false,
             bootstrap_delivered_server_side: false,
             session_startup_path,
@@ -1558,6 +1562,21 @@ impl TerminalModel {
         self.event_proxy.are_any_events_pending()
     }
 
+    pub(crate) fn is_raw_terminal(&self) -> bool {
+        self.raw_terminal
+    }
+
+    /// Keeps the same daemon PTY usable without inventing a bootstrapped shell.
+    pub(crate) fn enter_raw_terminal(&mut self) {
+        if self.raw_terminal {
+            return;
+        }
+        self.raw_terminal = true;
+        self.pending_session_info = None;
+        self.block_list.enter_raw_terminal();
+        self.event_proxy.send_wakeup_event();
+    }
+
     pub fn ignore_bootstrapping_messages(&mut self) {
         self.ignore_bootstrapping_messages = true;
     }
@@ -1681,7 +1700,13 @@ impl TerminalModel {
     }
 
     pub fn terminal_input_state(&self) -> TerminalInputState {
-        if !self.block_list().is_bootstrapped() {
+        if self.raw_terminal {
+            if self.is_alt_screen_active() {
+                TerminalInputState::AltScreen
+            } else {
+                TerminalInputState::LongRunningCommand
+            }
+        } else if !self.block_list().is_bootstrapped() {
             TerminalInputState::NotBootstrapped
         } else if self.is_alt_screen_active() {
             TerminalInputState::AltScreen
@@ -1761,8 +1786,9 @@ impl TerminalModel {
         &mut self.block_list
     }
 
-    pub fn remove_image_id_to_metadata_entry(&mut self, image_id: u32) {
-        self.image_id_to_metadata.remove(&image_id);
+    pub fn remove_image_asset_metadata(&mut self, asset_id: &str) {
+        self.image_id_to_metadata
+            .retain(|_, metadata| metadata.asset_id() != asset_id);
     }
 
     /// Runs `evict` against every grid that can hold images: the alternate screen
@@ -1778,21 +1804,19 @@ impl TerminalModel {
     }
 
     /// Removes a kitty image's placements, or only the given placement, and
-    /// frees the stored image data when `delete_image_data` is set.
+    /// frees unreferenced image data when `delete_image_data` is set.
     fn delete_kitty_image(
         &mut self,
         image_id: u32,
         placement_id: Option<u32>,
         delete_image_data: bool,
     ) {
-        if delete_image_data {
-            // Freeing the image data frees every placement of the image: one
-            // left in a grid would draw nothing once the metadata is gone.
-            self.image_id_to_metadata.remove(&image_id);
-            self.for_each_image_grid(|grid| grid.evict_image(image_id));
+        if !matches!(
+            self.image_id_to_metadata.get(&image_id),
+            Some(StoredImageMetadata::Kitty(_))
+        ) {
             return;
         }
-
         // Virtual (`U=1`) placements live in the metadata rather than any grid.
         if let Some(StoredImageMetadata::Kitty(metadata)) =
             self.image_id_to_metadata.get_mut(&image_id)
@@ -1809,6 +1833,29 @@ impl TerminalModel {
             Some(placement_id) => grid.evict_placement(image_id, placement_id),
             None => grid.evict_image(image_id),
         });
+        if delete_image_data {
+            self.free_kitty_image_if_unreferenced(image_id);
+        }
+    }
+
+    fn placed_kitty_image_ids(&self) -> HashSet<u32> {
+        let mut ids = self.alt_screen.grid_handler().placed_image_ids();
+        for block in self.block_list().blocks() {
+            ids.extend(block.grid_handler().placed_image_ids());
+        }
+        ids
+    }
+
+    fn free_kitty_image_if_unreferenced(&mut self, image_id: u32) {
+        let Some(StoredImageMetadata::Kitty(metadata)) = self.image_id_to_metadata.get(&image_id)
+        else {
+            return;
+        };
+        if metadata.virtual_placements.is_empty()
+            && !self.placed_kitty_image_ids().contains(&image_id)
+        {
+            self.image_id_to_metadata.remove(&image_id);
+        }
     }
 
     /// The id of the newest image transmitted under the given `I=` number. Ids
@@ -1871,19 +1918,22 @@ impl TerminalModel {
                             .ok_or(KittyError::from(StorageError::UnknownId {
                                 id: frame_number,
                             }))?;
-                        metadata.frames.get_mut(index)
+                        Some(index)
                     }
                     None => None,
                 };
 
+                if !kitty_animation_frame_bytes_fit(
+                    metadata.frames.iter().map(|(data, _)| data.len()),
+                    edited,
+                    image.data.len(),
+                ) {
+                    return Err(InvalidKittyAction::UnsupportedAction.into());
+                }
                 match edited {
-                    Some(frame) => *frame = (image.data, gap_ms),
+                    Some(index) => metadata.frames[index] = (image.data, gap_ms),
                     None => {
-                        let stored_bytes: usize =
-                            metadata.frames.iter().map(|(data, _)| data.len()).sum();
-                        if metadata.frames.len() >= MAX_ANIMATION_FRAMES
-                            || stored_bytes + image.data.len() > MAX_ANIMATION_FRAME_BYTES
-                        {
+                        if metadata.frames.len() >= MAX_ANIMATION_FRAMES {
                             return Err(InvalidKittyAction::UnsupportedAction.into());
                         }
                         metadata.frames.push((image.data, gap_ms));
@@ -1927,7 +1977,10 @@ impl TerminalModel {
         };
 
         self.event_proxy
-            .send_terminal_event(Event::AnimatedImageReceived { image_id, frames });
+            .send_terminal_event(Event::AnimatedImageReceived {
+                asset_id: metadata.asset_id.clone(),
+                frames,
+            });
 
         Ok(())
     }
@@ -2689,6 +2742,10 @@ pub enum HandlerEvent {
 }
 
 impl ansi::Handler for TerminalModel {
+    fn should_handle_shell_hooks(&self) -> bool {
+        !self.raw_terminal
+    }
+
     fn set_title(&mut self, title: Option<String>) {
         // Don't set the tab title if the title event is for a running in-band command.
         if self.block_list().is_writing_or_executing_in_band_command() {
@@ -3109,8 +3166,6 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn bootstrapped(&mut self, value: BootstrappedValue) {
-        self.block_list.bootstrapped(value.clone());
-
         let pending_session_info = match self.pending_session_info.take() {
             Some(session_info) => session_info,
             None => {
@@ -3121,6 +3176,8 @@ impl ansi::Handler for TerminalModel {
                 return;
             }
         };
+
+        self.block_list.bootstrapped(value.clone());
 
         let rcfiles_duration_seconds = match (value.rcfiles_start_time, value.rcfiles_end_time) {
             (Some(start_time), Some(end_time)) => Some((end_time - start_time).into()),
@@ -3828,6 +3885,20 @@ impl ansi::Handler for TerminalModel {
                     return;
                 }
 
+                let positional_delete_candidates = match &action {
+                    KittyAction::Delete {
+                        delete_placements_only: false,
+                        deletion_type:
+                            DeletionType::All
+                            | DeletionType::AtCursor
+                            | DeletionType::AtPoint { .. }
+                            | DeletionType::AtPointZ { .. }
+                            | DeletionType::Column(_)
+                            | DeletionType::Row(_),
+                    } => self.placed_kitty_image_ids(),
+                    _ => HashSet::new(),
+                };
+
                 match &action {
                     KittyAction::StoreOnly(action) => {
                         self.image_id_to_metadata.insert(
@@ -3872,22 +3943,6 @@ impl ansi::Handler for TerminalModel {
                         let delete_image_data = !delete_placements_only;
 
                         match deletion_type {
-                            DeletionType::All => {
-                                if delete_image_data {
-                                    self.image_id_to_metadata.clear();
-                                } else {
-                                    // `d=a` removes placements only, and virtual
-                                    // (`U=1`) placements live in the metadata
-                                    // rather than any grid.
-                                    for metadata in self.image_id_to_metadata.values_mut() {
-                                        if let StoredImageMetadata::Kitty(metadata) = metadata {
-                                            metadata.virtual_placements.clear();
-                                        }
-                                    }
-                                }
-
-                                self.for_each_image_grid(|grid| grid.evict_all_images());
-                            }
                             DeletionType::ById {
                                 image_id,
                                 placement_id,
@@ -3918,49 +3973,42 @@ impl ansi::Handler for TerminalModel {
                             DeletionType::IdRange { start, end } => {
                                 let range = *start..=*end;
 
-                                if delete_image_data {
-                                    self.image_id_to_metadata
-                                        .retain(|image_id, _| !range.contains(image_id));
+                                let mut candidates = Vec::new();
+                                for (image_id, metadata) in &mut self.image_id_to_metadata {
+                                    if range.contains(image_id) {
+                                        if let StoredImageMetadata::Kitty(metadata) = metadata {
+                                            metadata.virtual_placements.clear();
+                                            candidates.push(*image_id);
+                                        }
+                                    }
                                 }
-
                                 self.for_each_image_grid(|grid| {
                                     grid.evict_placements_in_id_range(*start, *end)
                                 });
+                                if delete_image_data {
+                                    for image_id in candidates {
+                                        self.free_kitty_image_if_unreferenced(image_id);
+                                    }
+                                }
                             }
                             DeletionType::ZIndex(z_index) => {
                                 let mut evicted = vec![];
                                 self.for_each_image_grid(|grid| {
                                     evicted.extend(grid.evict_placements_with_z(*z_index))
                                 });
-                                let mut affected: Vec<u32> =
+                                let affected: Vec<u32> =
                                     evicted.into_iter().map(|(image_id, _)| image_id).collect();
-
-                                // Virtual (`U=1`) placements carry their own z
-                                // and live in the metadata rather than any grid.
-                                for (image_id, metadata) in self.image_id_to_metadata.iter_mut() {
-                                    if let StoredImageMetadata::Kitty(metadata) = metadata {
-                                        let before = metadata.virtual_placements.len();
-                                        metadata
-                                            .virtual_placements
-                                            .retain(|_, placement| placement.z_index != *z_index);
-                                        if metadata.virtual_placements.len() != before {
-                                            affected.push(*image_id);
-                                        }
-                                    }
-                                }
 
                                 if delete_image_data {
                                     for image_id in affected {
-                                        // Freeing an image frees every placement
-                                        // of it, not just the matched ones.
-                                        self.image_id_to_metadata.remove(&image_id);
-                                        self.for_each_image_grid(|grid| grid.evict_image(image_id));
+                                        self.free_kitty_image_if_unreferenced(image_id);
                                     }
                                 }
                             }
                             // The positional specifiers need a cursor and cell
                             // geometry, so the grid handler applies them.
-                            DeletionType::AtCursor
+                            DeletionType::All
+                            | DeletionType::AtCursor
                             | DeletionType::AtPoint { .. }
                             | DeletionType::AtPointZ { .. }
                             | DeletionType::Column(_)
@@ -3998,23 +4046,11 @@ impl ansi::Handler for TerminalModel {
                     None => {}
                 };
 
-                // An uppercase positional delete frees image data based on what
-                // the active grid held, but other placements of the freed
-                // images would draw as blank gaps. Sweep them out of the grids
-                // this delete can reach (the alt screen when active, the block
-                // grids otherwise — the same reach as every delete above).
-                if let KittyAction::Delete {
-                    delete_placements_only: false,
-                    deletion_type:
-                        DeletionType::AtCursor
-                        | DeletionType::AtPoint { .. }
-                        | DeletionType::AtPointZ { .. }
-                        | DeletionType::Column(_)
-                        | DeletionType::Row(_),
-                } = &action
-                {
-                    let live: HashSet<u32> = self.image_id_to_metadata.keys().copied().collect();
-                    self.for_each_image_grid(|grid| grid.evict_images_absent_from(&live));
+                // A grid knows which placements to delete, but only the model
+                // can prove that no other grid or virtual placement still uses
+                // the image data. Unaffected candidates remain referenced.
+                for image_id in positional_delete_candidates {
+                    self.free_kitty_image_if_unreferenced(image_id);
                 }
             }
             Err(err) => {
@@ -4150,6 +4186,21 @@ pub enum ExitReason {
     ProcessKilled,
     /// Shell could not be found/determined
     ShellNotFound,
+}
+
+/// Validate the aggregate budget before appending or replacing any frame.
+fn kitty_animation_frame_bytes_fit(
+    frame_lengths: impl Iterator<Item = usize>,
+    edited_index: Option<usize>,
+    incoming_bytes: usize,
+) -> bool {
+    frame_lengths
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != edited_index)
+        .try_fold(incoming_bytes, |total, (_, length)| {
+            total.checked_add(length)
+        })
+        .is_some_and(|total| total <= MAX_ANIMATION_FRAME_BYTES)
 }
 
 #[cfg(test)]

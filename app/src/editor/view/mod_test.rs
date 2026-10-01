@@ -4514,3 +4514,41 @@ mod vim_handler_tests;
 
 #[path = "marked_text_tests.rs"]
 mod marked_text_tests;
+
+#[cfg(feature = "voice_input")]
+#[test]
+fn stale_voice_result_preserves_newer_editor_session_and_clears_cancelled_owner() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new_with_base_text("draft", Default::default(), ctx)
+        });
+        editor.update(&mut app, |editor, ctx| {
+            editor.voice_input_state = voice::VoiceInputState::Listening { session_id: 2 };
+            editor.handle_voice_session_result(
+                voice_input::VoiceSessionResult::Aborted {
+                    session_id: 1,
+                    session_duration_ms: None,
+                },
+                ctx,
+            );
+            assert!(matches!(
+                editor.voice_input_state,
+                voice::VoiceInputState::Listening { session_id: 2 }
+            ));
+            // The global session is already gone. Its owner's late result still clears the UI.
+            editor.handle_voice_session_result(
+                voice_input::VoiceSessionResult::Aborted {
+                    session_id: 2,
+                    session_duration_ms: None,
+                },
+                ctx,
+            );
+            assert!(matches!(
+                editor.voice_input_state,
+                voice::VoiceInputState::Stopped
+            ));
+            assert_eq!(editor.buffer_text(ctx), "draft");
+        });
+    });
+}

@@ -12,7 +12,8 @@ mistake missing evidence for success.
 Zaplex has two explicit, complementary gates:
 
 1. The automated parity gate validates fresh reference revisions, the versioned provider/account/
-   host/status matrix, focused Rust suites, and normal/narrow/reduced-motion screenshots.
+   host/status matrix, focused Rust suites, actual production-code mutation probes, and
+   normal/narrow/reduced-motion screenshots.
 2. The runtime release gate validates a sanitized evidence bundle captured with the exact Zaplex
    revision on a real two-host topology: the local host plus one connected remote host.
 
@@ -56,8 +57,10 @@ transport are not available there.
 
 1. Relevant pull requests and manual workflow dispatches run `cargo check`, the focused Cockpit and
    daemon suites, reference synchronization/probes, negative gate self-tests, and UI screenshots.
-2. Provider, host, status, missing/ignored/zero-execution-test, and runtime-evidence mutations fail
-   deterministically.
+2. Deliberate provider, host, and status changes in production code fail the exact existing
+   behavior tests after successful unchanged baselines. Compiler failures and empty filters do not
+   count as detected regressions. Separate validator self-tests reject missing/ignored/zero-execution
+   test evidence and invalid runtime bundles.
 3. The assembled report contains the Zaplex revision, both reference branches/SHAs, audit time,
    automated component results, and the explicit runtime state.
 4. A documented command validates a real runtime bundle and can require a pass for a release.

@@ -329,3 +329,63 @@ fn remote_transcript_route_must_still_match_one_available_inventory_session() {
     stale_route.account_id = "account-2".into();
     assert!(!remote_transcript_route_is_current(&tree, &stale_route));
 }
+
+#[test]
+fn account_alias_editor_keeps_existing_account_label_instead_of_pane_title() {
+    let account = zaplex_cockpit::Account {
+        provider: Provider::Claude,
+        key: "claude:work".into(),
+        config_dir: "/work/.claude".into(),
+        label: "Deployment account".into(),
+        provider_account_id: None,
+        email: Some("work@example.test".into()),
+        org: None,
+        role: None,
+        plan_tier: None,
+        is_default: false,
+    };
+    let usage = zaplex_cockpit::build_account_usage(
+        account,
+        Vec::new(),
+        Utc::now(),
+        0,
+        0,
+        &zaplex_cockpit::PricingTable::default(),
+    );
+    assert_eq!(
+        super::account_alias_editor_seed(&[usage.clone()], "claude:work").as_deref(),
+        Some("Deployment account")
+    );
+    assert_eq!(
+        super::account_alias_editor_seed(&[usage], "removed-account"),
+        None
+    );
+}
+
+#[test]
+fn first_status_sort_places_waiting_before_working_and_idle() {
+    let mut states = [
+        SessionState::Idle,
+        SessionState::Monitor,
+        SessionState::Active,
+        SessionState::Waiting,
+    ];
+    let ascending = super::SortColumn::Status.default_ascending();
+    states.sort_by(|a, b| {
+        let order = super::state_rank(*a).cmp(&super::state_rank(*b));
+        if ascending {
+            order
+        } else {
+            order.reverse()
+        }
+    });
+    assert_eq!(
+        states,
+        [
+            SessionState::Waiting,
+            SessionState::Active,
+            SessionState::Monitor,
+            SessionState::Idle
+        ]
+    );
+}

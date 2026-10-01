@@ -392,19 +392,12 @@ pub fn test_sftp_toolbar_up() -> Builder {
         // Enter subdirectory
         .with_step(
             TestStep::new("Enter subdirectory")
-                .with_action(|app, window_id, _| {
-                    let view = sftp::sftp_browser_view(app, window_id);
-                    view.update(app, |v, ctx| {
-                        let entry = v
-                            .entries()
-                            .iter()
-                            .find(|entry| entry.name == "subdir")
-                            .unwrap()
-                            .entry_reference(0);
-                        v.handle_action(&SftpBrowserAction::OpenEntry(entry), ctx);
-                    });
-                })
-                .set_post_step_pause(std::time::Duration::from_millis(500)),
+                .with_keystrokes(&["home", "enter"])
+                .add_named_assertion("Entered subdir before returning to its parent", |app, window_id| {
+                    sftp::sftp_browser_view(app, window_id).read(app, |view, _| {
+                        async_assert!(view.entries().iter().any(|entry| entry.name == "file.txt"), "Expected the child directory listing")
+                    })
+                }),
         )
         // Click the parent directory button
         .with_step(
@@ -415,11 +408,12 @@ pub fn test_sftp_toolbar_up() -> Builder {
         .with_step(
             TestStep::new("Verify navigated back to root")
                 .add_assertion(|app, window_id| {
+                    let cursor_path = sftp::cursor_path(app, window_id);
                     let view = sftp::sftp_browser_view(app, window_id);
                     view.read(app, |v, _| {
                         async_assert!(
-                            v.entries().iter().any(|e| e.name == "subdir"),
-                            "Should see subdir directory after navigating back"
+                            v.entries().iter().any(|entry| entry.name == "subdir" && cursor_path.as_ref() == Some(&entry.path)),
+                            "The cursor must return to the departed subdir after navigating up"
                         )
                     })
                 }),
@@ -440,7 +434,9 @@ pub fn test_sftp_click_file_row_selects() -> Builder {
         ]))
         .with_step(
             TestStep::new("Click on first file row")
-                .with_click_on_saved_position("sftp_row:0")
+                .with_click_on_saved_position_fn(|app, window_id| {
+                    sftp::row_position_id(app, window_id, 0)
+                })
                 .set_post_step_pause(std::time::Duration::from_millis(300)),
         )
         .with_step(
@@ -465,12 +461,12 @@ pub fn test_sftp_right_click_opens_menu() -> Builder {
             false.to_string(),
         )]))
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(open_sftp_with_mock_step(&[
-            ("menu_file.txt", b"content"),
-        ]))
+        .with_step(open_sftp_with_mock_step(&[("menu_file.txt", b"content")]))
         .with_step(
             TestStep::new("Right-click on file row")
-                .with_right_click_on_saved_position("sftp_row:0")
+                .with_right_click_on_saved_position_fn(|app, window_id| {
+                    sftp::row_position_id(app, window_id, 0)
+                })
                 .set_post_step_pause(std::time::Duration::from_millis(500)),
         )
         .with_step(
@@ -501,7 +497,9 @@ pub fn test_sftp_ctx_menu_delete() -> Builder {
         // Right-click to open menu
         .with_step(
             TestStep::new("Right-click on file")
-                .with_right_click_on_saved_position("sftp_row:0")
+                .with_right_click_on_saved_position_fn(|app, window_id| {
+                    sftp::row_position_id(app, window_id, 0)
+                })
                 .set_post_step_pause(std::time::Duration::from_millis(500)),
         )
         // Click delete menu item
@@ -553,12 +551,12 @@ pub fn test_sftp_ctx_menu_rename() -> Builder {
             false.to_string(),
         )]))
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(open_sftp_with_mock_step(&[
-            ("old_name.txt", b"content"),
-        ]))
+        .with_step(open_sftp_with_mock_step(&[("old_name.txt", b"content")]))
         .with_step(
             TestStep::new("Right-click on file")
-                .with_right_click_on_saved_position("sftp_row:0")
+                .with_right_click_on_saved_position_fn(|app, window_id| {
+                    sftp::row_position_id(app, window_id, 0)
+                })
                 .set_post_step_pause(std::time::Duration::from_millis(500)),
         )
         .with_step(

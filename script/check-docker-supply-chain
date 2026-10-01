@@ -123,10 +123,13 @@ def validate(path: Path) -> list[str]:
 
 
 def self_test() -> list[str]:
+    nonrust_case = __import__("runpy").run_path(str(Path(__file__).with_name("test-suite-nonrust-events")))["record"]
     failures = []
     valid_errors = validate(FIXTURES / "valid.Dockerfile")
     if valid_errors:
         failures.append(f"valid fixture was rejected: {'; '.join(valid_errors)}")
+
+    nonrust_case("valid.Dockerfile", "fail" if failures else "pass")
 
     invalid_fixtures = {
         "mutable-base.Dockerfile": "mutable base-image tag",
@@ -142,6 +145,7 @@ def self_test() -> list[str]:
         errors = validate(FIXTURES / fixture)
         if not any(expected in error for error in errors):
             failures.append(f"{fixture} did not report {expected!r}: {errors}")
+        nonrust_case(fixture, "pass" if any(expected in error for error in errors) else "fail")
     return failures
 
 

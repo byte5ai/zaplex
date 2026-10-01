@@ -312,3 +312,15 @@ fn identical_live_process_reaches_signal_backend_once() {
     assert_eq!(acquire_calls.get(), 1);
     assert_eq!(dispatch_calls.get(), 1);
 }
+
+#[cfg(not(unix))]
+#[test]
+fn unsupported_presence_probe_keeps_current_process_unverified_and_not_cleanable() {
+    let pid = std::process::id();
+    assert_eq!(process_exists(pid), None);
+    let probe = probe_registered_process(pid, None, chrono::Utc::now().timestamp_millis());
+    assert_eq!(probe.presence, ProcessPresence::UnverifiedLive);
+    assert!(probe.presence.is_live());
+    assert!(!probe.presence.allows_registry_cleanup());
+    assert_eq!(probe.fingerprint, None);
+}

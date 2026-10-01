@@ -81,7 +81,8 @@ impl ThemeCreatorModal {
                     left: 24.,
                     right: 24.,
                 }),
-                height: Some(0.),
+                // The scrollable editor needs a viewport below the modal header.
+                height: Some(650.),
                 ..Default::default()
             })
             .with_background_opacity(100)

@@ -336,6 +336,14 @@ async fn test_connection_with_factory_policy(
     command_factory: &dyn WorkspaceCommandFactory,
 ) -> ConnectionTestResult {
     let start = instant::Instant::now();
+    if matches!(server.auth_type, AuthType::Password | AuthType::OneKey) && password.is_none() {
+        return ConnectionTestResult {
+            status: ConnectionStatus::Offline,
+            latency_ms: None,
+            error_message: Some("Password not provided".to_string()),
+            unknown_host_key: None,
+        };
+    }
     let pinned_host_key = if let Some(expected_host_key) = expected_host_key {
         match pin_confirmed_host_key(server, expected_host_key, command_factory).await {
             Ok(pinned_host_key) => Some(pinned_host_key),
@@ -463,13 +471,27 @@ fn build_host_key_probe_args(server: &SshServerInfo) -> Vec<String> {
     args
 }
 
+fn host_key_rejection(stderr: &str) -> Option<&'static str> {
+    if stderr.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
+        Some("SSH host key changed; connection blocked")
+    } else if stderr.contains("REVOKED HOST KEY DETECTED")
+        || stderr.lines().any(|line| {
+            line.starts_with("Host key ") && line.contains(" revoked by file ")
+        })
+    {
+        Some("SSH host key revoked; connection blocked")
+    } else {
+        None
+    }
+}
+
 fn classify_host_key_probe(
     server: &SshServerInfo,
     output: &std::process::Output,
 ) -> Result<HostKeyProbeOutcome, String> {
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
-        return Err("SSH host key changed; connection blocked".to_string());
+    if let Some(error) = host_key_rejection(&stderr) {
+        return Err(error.to_string());
     }
     if stderr.contains("Host key verification failed")
         || stderr.contains("authenticity of host")
@@ -569,6 +591,17 @@ async fn pin_confirmed_host_key(
         return Err("SSH endpoint changed before host-key confirmation".to_string());
     }
 
+    // Recheck the configured trust stores before replacing UserKnownHostsFile
+    // with the temporary pin. A key may have been revoked since the prompt.
+    let args = build_host_key_probe_args(server);
+    let output = tokio::time::timeout(
+        TEST_TIMEOUT,
+        run_ssh_test_capture(&args, None, command_factory),
+    )
+    .await
+    .map_err(|_| "Connection timeout".to_string())??;
+    classify_host_key_probe(server, &output)?;
+
     let (pinned_host_key, fingerprint) =
         capture_host_key(server, &expected.fingerprint, command_factory).await?;
     if fingerprint == expected.fingerprint {
@@ -606,8 +639,8 @@ async fn capture_host_key(
     .await
     .map_err(|_| "SSH host-key capture timed out".to_string())??;
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
-        return Err("SSH host key changed; connection blocked".to_string());
+    if let Some(error) = host_key_rejection(&stderr) {
+        return Err(error.to_string());
     }
 
     let fingerprint_args = vec![

@@ -6,11 +6,36 @@ use super::{
     ProcessLocation, RoutePreferences, RouteResult, SubscriptionAgent,
     SubscriptionLocationPreference, SubscriptionSessionRegistry, SubscriptionTarget,
 };
+use crate::ai::agent::{
+    AIAgentAttachment, AIAgentContext, AIAgentInput, AgentReviewCommentBatch, AnyFileContent,
+    CurrentHead, DiffBase, DiffSetHunk, FileContext, ImageContext, InvokeSkillUserQuery,
+    RunningCommand, UserQueryMode,
+};
+use crate::ai::facts::{AIFact, AIFactObject, AIFactObjectModel, AIMemory};
 use crate::ai::subscription_agent::{ModelCapability, SessionIdentity};
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::ObjectStoreModel;
+use crate::cloud_object::model::view::ObjectStoreViewModel;
+use crate::cloud_object::update_manager::UpdateManager;
+use crate::cloud_object::{StoredObjectMetadata, StoredObjectPermissions};
+use crate::code::editor::line::EditorLineLocation;
+use crate::code_review::comments::{
+    AttachedReviewComment, AttachedReviewCommentTarget, LineDiffContent,
+};
+use crate::notebooks::manager::NotebookManager;
 use crate::remote_server::client::RemoteServerClient;
 use crate::remote_server::proto::{AgentAccountInfo, AgentAccountInventory};
 use crate::remote_server::transport::DaemonRuntimeRoute;
+use crate::server::ids::SyncId;
+use crate::server_time::ServerTimestamp;
+use crate::settings::AISettings;
+use crate::system::SystemStats;
+use crate::terminal::model::block::BlockId;
 use crate::terminal::ssh::util::InteractiveSshCommand;
+use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::NetworkStatus;
+use settings::manager::SettingsManager;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::sync::Arc;
@@ -18,6 +43,7 @@ use warp_ssh_manager::{
     AuthType, ResolvedSshConnection, SecretKind, SessionResilience, SshServerInfo,
 };
 use warpui::r#async::executor;
+use warpui::{App, SingletonEntity};
 use zaplex_cockpit::{Account, AccountStatus, AccountUsage, Provider, UsageProvenance};
 
 fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
@@ -460,9 +486,11 @@ fn authentication_error_blocks_only_the_exact_selected_account() {
         None
     );
 
+    let mut signed_out_alias = signed_out;
+    signed_out_alias.display_name = "Changed display label".into();
     let signed_out_selected = RoutePreferences {
         agent: Some(SubscriptionAgent::ClaudeCode),
-        account_identity: Some(signed_out),
+        account_identity: Some(signed_out_alias),
         ..Default::default()
     };
     assert_eq!(
@@ -781,7 +809,7 @@ fn dispatch_with_a_changed_preflight_target_leaves_starting_and_keeps_selection(
                 conversation_id: "conversation".to_string(),
                 task_id: "task".to_string(),
                 needs_create_task: false,
-                prompt: "must not run on another target".to_string(),
+                prompt: "must not run on another target".into(),
                 working_directory: selected.working_directory.clone(),
             };
             let (_sender, receiver) = futures::channel::oneshot::channel();
@@ -924,7 +952,7 @@ fn dispatch_revalidates_a_preflight_target_and_reports_discovery_failure() {
             conversation_id: "conversation".to_string(),
             task_id: "task".to_string(),
             needs_create_task: false,
-            prompt: "must revalidate the target".to_string(),
+            prompt: "must revalidate the target".into(),
             working_directory: selected.working_directory,
         };
         let (_sender, receiver) = futures::channel::oneshot::channel();
@@ -1016,7 +1044,7 @@ done
         conversation_id: "conversation".to_string(),
         task_id: "task".to_string(),
         needs_create_task: false,
-        prompt: "must not silently start another native session".to_string(),
+        prompt: "must not silently start another native session".into(),
         working_directory: selected.working_directory.clone(),
     };
     let (_sender, receiver) = futures::channel::oneshot::channel();
@@ -1139,7 +1167,7 @@ fn dispatch_preserves_the_preferred_cli_probe_error_when_another_agent_resolves(
             conversation_id: "conversation".to_string(),
             task_id: "task".to_string(),
             needs_create_task: false,
-            prompt: "keep the selected CLI diagnosis".to_string(),
+            prompt: "keep the selected CLI diagnosis".into(),
             working_directory: selected.working_directory.clone(),
         };
         let (_sender, receiver) = futures::channel::oneshot::channel();
@@ -1216,4 +1244,405 @@ fn remote_probe_failure_does_not_block_a_different_selected_account_with_the_sam
         assert_eq!(resolved[0].installation.account, selected_account);
         assert_eq!(registry.lifecycle("conversation"), None);
     });
+}
+
+#[test]
+fn cancelled_dispatch_never_starts_discovery() {
+    futures_lite::future::block_on(async {
+        let registry = SubscriptionSessionRegistry::default();
+        let selected = target(SubscriptionAgent::ClaudeCode);
+        let dispatch = super::SubscriptionDispatch {
+            candidates: super::RuntimeCandidates::Ready(Vec::new()),
+            preferences: RoutePreferences::default(),
+            registry: registry.clone(),
+            conversation_id: "cancelled".into(),
+            task_id: "task".into(),
+            needs_create_task: false,
+            prompt: "must not send".into(),
+            working_directory: selected.working_directory,
+        };
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        sender.send(()).unwrap();
+        let mut stream = super::generate_subscription_output(dispatch, receiver)
+            .await
+            .expect("cancellation must win even over missing candidates");
+        assert!(futures_util::StreamExt::next(&mut stream).await.is_none());
+        assert_eq!(registry.lifecycle("cancelled"), Some(AgentLifecycle::Ready));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn cancellation_during_session_initialization_never_delivers_a_prompt() {
+    futures_lite::future::block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-claude");
+        let ready = directory.path().join("session-initialize-received");
+        let release = directory.path().join("release-initialize");
+        let prompt = directory.path().join("unexpected-prompt");
+        let capability = serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "request_id": "zaplex-initialize",
+                "response": {
+                    "account": {"accountUuid": "provider-1"},
+                    "models": [{"value": "default"}],
+                },
+            },
+        });
+        let mut session_capability = capability.clone();
+        session_capability["response"]["request_id"] = "zaplex-session-initialize".into();
+        let script = r#"#!/bin/sh
+case "$1" in
+    --version) printf '%s\n' 1.0; exit 0 ;;
+esac
+IFS= read -r initialize
+case "$initialize" in
+    *zaplex-session-initialize*)
+        : > __READY__
+        while [ ! -e __RELEASE__ ]; do sleep 0.01; done
+        printf '%s\n' __SESSION__
+        if IFS= read -r prompt; then printf '%s\n' "$prompt" > __PROMPT__; fi
+        ;;
+    *zaplex-initialize*)
+        printf '%s\n' __DISCOVERY__
+        while IFS= read -r unused; do :; done
+        ;;
+    *) exit 91 ;;
+esac
+"#
+        .replace("__READY__", &shell_words::quote(ready.to_str().unwrap()))
+        .replace(
+            "__RELEASE__",
+            &shell_words::quote(release.to_str().unwrap()),
+        )
+        .replace("__PROMPT__", &shell_words::quote(prompt.to_str().unwrap()))
+        .replace(
+            "__SESSION__",
+            &shell_words::quote(&session_capability.to_string()),
+        )
+        .replace(
+            "__DISCOVERY__",
+            &shell_words::quote(&capability.to_string()),
+        );
+        std::fs::write(&executable, script).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let registry = SubscriptionSessionRegistry::default();
+        let mut selected = target(SubscriptionAgent::ClaudeCode);
+        selected.installation.executable = executable;
+        selected.installation.account.provider_account_id = Some("provider-1".into());
+        selected.model.id = "default".into();
+        let dispatch = super::SubscriptionDispatch {
+            candidates: super::RuntimeCandidates::Ready(vec![super::RuntimeCandidate {
+                installation: selected.installation,
+                location: ProcessLocation::Local,
+            }]),
+            preferences: RoutePreferences::default(),
+            registry: registry.clone(),
+            conversation_id: "cancelled".into(),
+            task_id: "task".into(),
+            needs_create_task: false,
+            prompt: "must not reach the provider".into(),
+            working_directory: directory.path().to_path_buf(),
+        };
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        let (result, ()) = futures_util::join!(
+            super::generate_subscription_output(dispatch, receiver),
+            async {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while !ready.exists() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "session initialization was not reached"
+                    );
+                    warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
+                }
+                sender.send(()).unwrap();
+                std::fs::write(&release, b"continue").unwrap();
+            }
+        );
+        let mut stream = result.expect("cancelled initialization returns an empty stream");
+        assert!(futures_util::StreamExt::next(&mut stream).await.is_none());
+        assert!(
+            !prompt.exists(),
+            "the cancelled prompt was delivered to the CLI"
+        );
+        assert_eq!(registry.lifecycle("cancelled"), Some(AgentLifecycle::Ready));
+    });
+}
+
+#[test]
+fn subscription_prompt_preserves_attached_context_and_separates_native_images() {
+    let image = ImageContext {
+        data: "aW1hZ2U=".to_string(),
+        mime_type: "image/png".to_string(),
+        file_name: "diagram.png".to_string(),
+        is_figma: false,
+    };
+    let file = FileContext::new(
+        "/workspace/source.rs".to_string(),
+        AnyFileContent::StringContent("let answer = 42;".to_string()),
+        None,
+        None,
+    );
+    let input = AIAgentInput::UserQuery {
+        query: "Explain @note".to_string(),
+        context: vec![
+            AIAgentContext::SelectedText("selected terminal output".to_string()),
+            AIAgentContext::File(file.clone()),
+            AIAgentContext::SelectedText(String::new()),
+            AIAgentContext::Image(image.clone()),
+        ]
+        .into(),
+        static_query_type: None,
+        referenced_attachments: [(
+            "@note".to_string(),
+            AIAgentAttachment::PlainText("referenced note".to_string()),
+        )]
+        .into(),
+        user_query_mode: UserQueryMode::Normal,
+        running_command: Some(RunningCommand {
+            command: "top".to_string(),
+            block_id: BlockId::new(),
+            grid_contents: "live terminal contents".to_string(),
+            cursor: "cursor".to_string(),
+            requested_command_id: None,
+            is_alt_screen_active: true,
+        }),
+        intended_agent: None,
+    };
+    let mut plain_input = input.clone();
+    if let AIAgentInput::UserQuery {
+        context,
+        referenced_attachments,
+        running_command,
+        ..
+    } = &mut plain_input {
+        *context = Vec::new().into();
+        referenced_attachments.clear();
+        *running_command = None;
+    }
+    let plain_prompt = super::prompt_from_inputs(&[plain_input], &[]).unwrap();
+    assert_eq!(plain_prompt.query, "Explain @note");
+    assert!(plain_prompt.context.is_empty());
+    assert!(plain_prompt.images.is_empty());
+
+    let prompt = super::prompt_from_inputs(&[input], &[]).unwrap();
+    assert_eq!(prompt.query, "Explain @note");
+    assert_eq!(prompt.images, vec![image]);
+    let (_, json) = prompt.context.split_once('\n').unwrap();
+    let context: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        context[0]["context"][0],
+        serde_json::json!({"SelectedText": "selected terminal output"})
+    );
+    assert_eq!(context[0]["context"][1], serde_json::json!({"File": file}));
+    assert_eq!(context[0]["context"].as_array().unwrap().len(), 3);
+    assert_eq!(context[0]["context"][2], serde_json::json!({"SelectedText": ""}));
+    assert_eq!(
+        context[1]["referenced_attachments"]["@note"],
+        serde_json::json!({"PlainText": "referenced note"})
+    );
+    assert_eq!(
+        context[2]["running_command"]["grid_contents"],
+        "live terminal contents"
+    );
+    assert_eq!(context[2]["running_command"]["is_alt_screen_active"], true);
+    assert!(!prompt.context.contains("aW1hZ2U="));
+}
+
+#[test]
+fn subscription_prompt_preserves_skill_and_review_payloads() {
+    let skill = ai::skills::ParsedSkill {
+        path: "/bundled/review/SKILL.md".into(),
+        name: "review".to_string(),
+        description: "Review changes".to_string(),
+        content: "Read the changes before responding.".to_string(),
+        line_range: None,
+        provider: ai::skills::SkillProvider::Zaplex,
+        scope: ai::skills::SkillScope::Bundled,
+    };
+    let comment = AttachedReviewComment {
+        id: Default::default(),
+        content: "Handle an empty result".to_string(),
+        target: AttachedReviewCommentTarget::Line {
+            absolute_file_path: "/workspace/main.rs".into(),
+            line: EditorLineLocation::Current {
+                line_number: 4.into(),
+                line_range: 4.into()..5.into(),
+            },
+            content: LineDiffContent::from_content("+let result = query();"),
+        },
+        last_update_time: chrono::Local::now(),
+        base: Some(DiffBase::UncommittedChanges),
+        head: Some(CurrentHead::BranchName("feature".to_string())),
+        outdated: false,
+        origin: Default::default(),
+    };
+    let hunk = DiffSetHunk {
+        line_range: 4.into()..5.into(),
+        diff_content: "+let result = query();".to_string(),
+        lines_added: 1,
+        lines_removed: 0,
+    };
+    let inputs = [
+        AIAgentInput::InvokeSkill {
+            context: Vec::new().into(),
+            skill: skill.clone(),
+            user_query: Some(InvokeSkillUserQuery {
+                query: "@note".to_string(),
+                referenced_attachments: [(
+                    "@note".to_string(),
+                    AIAgentAttachment::PlainText("Review the parser".to_string()),
+                )]
+                .into(),
+            }),
+        },
+        AIAgentInput::CodeReview {
+            context: Vec::new().into(),
+            review_comments: AgentReviewCommentBatch {
+                comments: vec![comment.clone()],
+                diff_set: [("/workspace/main.rs".to_string(), vec![hunk.clone()])].into(),
+            },
+        },
+        AIAgentInput::FetchReviewComments {
+            context: Vec::new().into(),
+            repo_path: "/workspace/other-repository".to_string(),
+        },
+    ];
+    let prompt = super::prompt_from_inputs(&inputs, &[]).unwrap();
+    assert!(prompt
+        .query
+        .starts_with("/review @note\n\nAddress these comments"));
+    assert!(!prompt.query.contains(&skill.content));
+    let (_, json) = prompt.context.split_once('\n').unwrap();
+    let context: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert_eq!(context[0]["invoked_skill"]["content"], skill.content);
+    assert_eq!(
+        context[0]["invoked_skill"]["path"],
+        "/bundled/review/SKILL.md"
+    );
+    assert_eq!(
+        context[1]["referenced_attachments"]["@note"],
+        serde_json::json!({"PlainText": "Review the parser"})
+    );
+    assert_eq!(context[2]["review_comments"][0]["comment"], comment.content);
+    assert_eq!(
+        context[2]["review_comments"][0]["target"]["line_index_zero_based"],
+        4
+    );
+    assert_eq!(
+        context[2]["review_comments"][0]["target"]["file_path"],
+        "/workspace/main.rs"
+    );
+    assert_eq!(
+        context[2]["review_comments"][0]["base"],
+        serde_json::json!(comment.base)
+    );
+    assert_eq!(
+        context[2]["review_comments"][0]["head"],
+        serde_json::json!(comment.head)
+    );
+    assert_eq!(
+        context[2]["diff_set"]["/workspace/main.rs"][0],
+        serde_json::json!(hunk)
+    );
+    assert_eq!(
+        context[3]["review_repository"],
+        "/workspace/other-repository"
+    );
+}
+
+#[test]
+fn subscription_user_rules_respect_opt_out_trash_and_stable_order() {
+    App::test((), |mut app| async move {
+        // The disabled path must not even require access to the rule store.
+        assert!(app
+            .read(|app| super::subscription_user_rules(false, app))
+            .is_empty());
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(|_| SystemStats::new());
+        app.add_singleton_model(|ctx| UserWorkspaces::mock(vec![], ctx));
+        app.add_singleton_model(ObjectStoreModel::mock);
+        app.add_singleton_model(|ctx| UpdateManager::new(None, ctx));
+        app.add_singleton_model(|_| UserProfiles::new(Vec::new()));
+        app.add_singleton_model(ObjectStoreViewModel::new);
+        app.add_singleton_model(NotebookManager::mock);
+        app.add_singleton_model(|_| SettingsManager::default());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.update(crate::settings::init_and_register_user_preferences);
+        app.update(AISettings::register_and_subscribe_to_events);
+        ObjectStoreModel::handle(&app).update(&mut app, |model, _| {
+            for (id, name, content, trashed) in [
+                (1, Some("zebra"), "Last rule", false),
+                (2, Some("alpha"), "First named rule", false),
+                (3, None, "Unnamed rule", false),
+                (4, Some("deleted"), "Do not send", true),
+            ] {
+                let mut metadata = StoredObjectMetadata::mock();
+                if trashed {
+                    metadata.trashed_ts =
+                        Some(ServerTimestamp::from_unix_timestamp_micros(10).unwrap());
+                }
+                let fact = AIFactObject::new(
+                    SyncId::ServerId(id.into()),
+                    AIFactObjectModel::new(AIFact::Memory(AIMemory {
+                        name: name.map(str::to_string),
+                        content: content.to_string(),
+                        is_autogenerated: false,
+                        suggested_logging_id: None,
+                    })),
+                    metadata,
+                    StoredObjectPermissions::mock_personal(),
+                );
+                model.add_object(fact.id, fact);
+            }
+        });
+        assert!(app
+            .read(|app| super::subscription_user_rules(false, app))
+            .is_empty());
+        let rules = app.read(|app| super::subscription_user_rules(true, app));
+        assert_eq!(
+            rules,
+            vec![
+                (None, "Unnamed rule".to_string()),
+                (Some("alpha".to_string()), "First named rule".to_string()),
+                (Some("zebra".to_string()), "Last rule".to_string()),
+            ]
+        );
+        let input = AIAgentInput::CreateNewProject {
+            query: "Create a project".to_string(),
+            context: Vec::new().into(),
+        };
+        let prompt = super::prompt_from_inputs(&[input], &rules).unwrap();
+        let (_, json) = prompt.context.split_once('\n').unwrap();
+        let context: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(context[0]["user_rules"], serde_json::json!(rules));
+        assert!(!prompt.context.contains("Do not send"));
+    });
+}
+
+#[test]
+fn subscription_prompt_preserves_plan_mode_separately_from_display_text() {
+    for (mode, expected_plan, expected_query) in [
+        (UserQueryMode::Plan, true, "/plan inspect this"),
+        (UserQueryMode::Normal, false, "inspect this"),
+    ] {
+        let input = AIAgentInput::UserQuery {
+            query: "inspect this".to_string(),
+            context: Vec::new().into(),
+            static_query_type: None,
+            referenced_attachments: Default::default(),
+            user_query_mode: mode,
+            running_command: None,
+            intended_agent: None,
+        };
+        let prompt = super::prompt_from_inputs(&[input], &[]).unwrap();
+        assert_eq!(prompt.plan_mode, expected_plan);
+        assert_eq!(prompt.query, expected_query);
+        assert_eq!(prompt.query_for_agent(), "inspect this");
+        let frame = super::super::ClaudeProtocol::user_message(&prompt, Some("native-history"));
+        assert_eq!(frame["message"]["content"][0]["text"], "inspect this");
+        assert_eq!(frame["session_id"], "native-history");
+    }
 }

@@ -2,6 +2,16 @@ use super::*;
 use std::path::PathBuf;
 
 #[test]
+fn only_failed_connections_offer_a_connection_retry() {
+    assert!(connection_retry_available(&ConnectionState::Failed(
+        "connection failed".to_string()
+    )));
+    assert!(!connection_retry_available(&ConnectionState::Connecting));
+    assert!(!connection_retry_available(&ConnectionState::Connected));
+    assert!(!connection_retry_available(&ConnectionState::Disconnected));
+}
+
+#[test]
 fn only_successfully_installed_navigation_commits_request_a_snapshot() {
     assert!(navigation_commit_needs_snapshot(true, true));
     assert!(!navigation_commit_needs_snapshot(true, false));
@@ -166,7 +176,7 @@ fn test_normalize_remote_path_mixed() {
 #[test]
 fn test_build_rename_path_basic() {
     let original = PathBuf::from("/home/user/old.txt");
-    let result = build_rename_path(&original, "new.txt");
+    let result = build_rename_path(&original, "new.txt", false);
     assert_eq!(result, Some(PathBuf::from("/home/user/new.txt")));
 }
 
@@ -174,7 +184,7 @@ fn test_build_rename_path_basic() {
 #[test]
 fn test_build_rename_path_no_parent() {
     let original = PathBuf::from("old.txt");
-    let result = build_rename_path(&original, "new.txt");
+    let result = build_rename_path(&original, "new.txt", false);
     assert_eq!(result, Some(PathBuf::from("new.txt")));
 }
 
@@ -182,7 +192,7 @@ fn test_build_rename_path_no_parent() {
 #[test]
 fn test_build_rename_path_normalizes() {
     let original = PathBuf::from("/home/user/old.txt");
-    let result = build_rename_path(&original, "new.txt").unwrap();
+    let result = build_rename_path(&original, "new.txt", false).unwrap();
     assert!(!result.to_string_lossy().contains('\\'));
 }
 
@@ -190,10 +200,10 @@ fn test_build_rename_path_normalizes() {
 #[test]
 fn test_build_rename_path_rejects_traversal() {
     let original = PathBuf::from("/home/user/old.txt");
-    assert_eq!(build_rename_path(&original, "../etc/passwd"), None);
-    assert_eq!(build_rename_path(&original, "/etc/passwd"), None);
-    assert_eq!(build_rename_path(&original, "sub/name"), None);
-    assert_eq!(build_rename_path(&original, ""), None);
+    assert_eq!(build_rename_path(&original, "../etc/passwd", false), None);
+    assert_eq!(build_rename_path(&original, "/etc/passwd", false), None);
+    assert_eq!(build_rename_path(&original, "sub/name", false), None);
+    assert_eq!(build_rename_path(&original, "", false), None);
 }
 
 // ============================================================
@@ -204,7 +214,7 @@ fn test_build_rename_path_rejects_traversal() {
 #[test]
 fn test_build_new_folder_path_basic() {
     let parent = PathBuf::from("/home/user");
-    let result = build_new_folder_path(&parent, "new_dir");
+    let result = build_new_folder_path(&parent, "new_dir", false);
     assert_eq!(result, Some(PathBuf::from("/home/user/new_dir")));
 }
 
@@ -212,7 +222,7 @@ fn test_build_new_folder_path_basic() {
 #[test]
 fn test_build_new_folder_path_normalizes() {
     let parent = PathBuf::from("/home/user");
-    let result = build_new_folder_path(&parent, "test").unwrap();
+    let result = build_new_folder_path(&parent, "test", false).unwrap();
     assert!(!result.to_string_lossy().contains('\\'));
 }
 
@@ -220,10 +230,10 @@ fn test_build_new_folder_path_normalizes() {
 #[test]
 fn test_build_new_folder_path_rejects_traversal() {
     let parent = PathBuf::from("/home/user");
-    assert_eq!(build_new_folder_path(&parent, "../etc"), None);
-    assert_eq!(build_new_folder_path(&parent, "/etc"), None);
-    assert_eq!(build_new_folder_path(&parent, "sub/name"), None);
-    assert_eq!(build_new_folder_path(&parent, ""), None);
+    assert_eq!(build_new_folder_path(&parent, "../etc", false), None);
+    assert_eq!(build_new_folder_path(&parent, "/etc", false), None);
+    assert_eq!(build_new_folder_path(&parent, "sub/name", false), None);
+    assert_eq!(build_new_folder_path(&parent, "", false), None);
 }
 
 // ============================================================
@@ -234,7 +244,7 @@ fn test_build_new_folder_path_rejects_traversal() {
 #[test]
 fn test_build_upload_remote_path_basic() {
     let current = PathBuf::from("/home/user");
-    let result = build_upload_remote_path(&current, "upload.txt");
+    let result = build_upload_remote_path(&current, "upload.txt", false);
     assert_eq!(result, Some(PathBuf::from("/home/user/upload.txt")));
 }
 
@@ -242,7 +252,7 @@ fn test_build_upload_remote_path_basic() {
 #[test]
 fn test_build_upload_remote_path_normalizes() {
     let current = PathBuf::from("/home/user");
-    let result = build_upload_remote_path(&current, "file.txt");
+    let result = build_upload_remote_path(&current, "file.txt", false);
     assert!(result.is_some());
     assert!(!result.unwrap().to_string_lossy().contains('\\'));
 }
@@ -251,9 +261,15 @@ fn test_build_upload_remote_path_normalizes() {
 #[test]
 fn test_build_upload_remote_path_rejects_dangerous() {
     let current = PathBuf::from("/home/user");
-    assert_eq!(build_upload_remote_path(&current, "../etc/passwd"), None);
-    assert_eq!(build_upload_remote_path(&current, ""), None);
-    assert_eq!(build_upload_remote_path(&current, "/etc/passwd"), None);
+    assert_eq!(
+        build_upload_remote_path(&current, "../etc/passwd", false),
+        None
+    );
+    assert_eq!(build_upload_remote_path(&current, "", false), None);
+    assert_eq!(
+        build_upload_remote_path(&current, "/etc/passwd", false),
+        None
+    );
 }
 
 #[test]
@@ -266,23 +282,23 @@ fn safe_name_helpers_accept_embedded_double_dots() {
         Some(parent.join("notes..txt"))
     );
     assert_eq!(
-        build_rename_path(&original, "v1..v2"),
+        build_rename_path(&original, "v1..v2", false),
         Some(parent.join("v1..v2"))
     );
     assert_eq!(
-        build_new_folder_path(&parent, "archive.tar..gz"),
+        build_new_folder_path(&parent, "archive.tar..gz", false),
         Some(parent.join("archive.tar..gz"))
     );
     assert_eq!(
-        build_upload_remote_path(&parent, "notes..txt"),
+        build_upload_remote_path(&parent, "notes..txt", false),
         Some(parent.join("notes..txt"))
     );
 
     for unsafe_name in ["", ".", "..", "child/name", "child\\name", "/absolute"] {
         assert_eq!(safe_join_name(&parent, unsafe_name), None);
-        assert_eq!(build_rename_path(&original, unsafe_name), None);
-        assert_eq!(build_new_folder_path(&parent, unsafe_name), None);
-        assert_eq!(build_upload_remote_path(&parent, unsafe_name), None);
+        assert_eq!(build_rename_path(&original, unsafe_name, false), None);
+        assert_eq!(build_new_folder_path(&parent, unsafe_name, false), None);
+        assert_eq!(build_upload_remote_path(&parent, unsafe_name, false), None);
     }
 }
 
@@ -431,66 +447,234 @@ fn function_bar_actions_require_the_focused_compatible_pane() {
     assert!(function_bar_action_enabled(&move_action, true, true));
 }
 
-// ============================================================
-// SftpBrowserAction enum tests
-// ============================================================
-
-/// Test the SftpBrowserAction::CancelTransfer variant
 #[test]
-fn test_action_cancel_transfer() {
-    let action = SftpBrowserAction::CancelTransfer(42, None);
-    assert!(matches!(
-        action,
-        SftpBrowserAction::CancelTransfer(42, None)
-    ));
+fn parent_navigation_rejects_failed_and_superseded_listings_without_moving_selection() {
+    use super::super::browser_integration_tests::{create_connected_view, initialize_app};
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[("departed/keep.txt", b"keep"), ("alpha/file.txt", b"a")],
+        );
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::NavigateTo(PathBuf::from("/departed")),
+                ctx,
+            );
+            let parent_entries = view
+                .sftp
+                .as_ref()
+                .unwrap()
+                .list_dir(Path::new("/"))
+                .unwrap();
+            let before_path = view.current_path.clone();
+            let before_cursor = view.cursor;
+            let before_entries = view
+                .entries
+                .iter()
+                .map(FileEntry::entry_identity)
+                .collect::<Vec<_>>();
+            let before_history = view.path_history.clone();
+            let before_history_index = view.history_index;
+            let pending = || NavigationCommit {
+                path: PathBuf::from("/"),
+                history: vec![
+                    PathBuf::from("/"),
+                    PathBuf::from("/departed"),
+                    PathBuf::from("/"),
+                ],
+                history_index: 2,
+                departed_directory: Some(PathBuf::from("/departed")),
+            };
+            view.refresh_generation = 10;
+            view.is_loading = true;
+            view.on_dir_listed_with_navigation(
+                9,
+                Some(pending()),
+                Ok(Ok(parent_entries.clone())),
+                ctx,
+            );
+            assert!(
+                view.is_loading,
+                "a stale response must not finish the current request"
+            );
+            assert_eq!(view.current_path, before_path);
+            assert_eq!(view.cursor, before_cursor);
+            assert_eq!(view.path_history, before_history);
+            assert_eq!(view.history_index, before_history_index);
+            assert_eq!(
+                view.entries
+                    .iter()
+                    .map(FileEntry::entry_identity)
+                    .collect::<Vec<_>>(),
+                before_entries
+            );
+
+            view.on_dir_listed_with_navigation(
+                10,
+                Some(pending()),
+                Ok(Err(super::super::sftp_ops::SftpOpsError::Operation(
+                    "listing denied".into(),
+                ))),
+                ctx,
+            );
+            assert!(!view.is_loading);
+            assert_eq!(view.current_path, before_path);
+            assert_eq!(view.cursor, before_cursor);
+            assert_eq!(view.path_history, before_history);
+            assert_eq!(view.history_index, before_history_index);
+            assert_eq!(
+                view.entries
+                    .iter()
+                    .map(FileEntry::entry_identity)
+                    .collect::<Vec<_>>(),
+                before_entries
+            );
+
+            view.refresh_generation = 11;
+            view.on_dir_listed_with_navigation(11, Some(pending()), Ok(Ok(parent_entries)), ctx);
+            assert_eq!(view.current_path, PathBuf::from("/"));
+            let selected = view
+                .cursor_entry_index()
+                .and_then(|index| view.entries.get(index));
+            assert_eq!(selected.map(|entry| entry.name.as_str()), Some("departed"));
+        });
+    });
 }
 
-/// Test the SftpBrowserAction::ConfirmMove variant
 #[test]
-fn test_action_confirm_move() {
-    let action = SftpBrowserAction::ConfirmMove;
-    assert!(matches!(action, SftpBrowserAction::ConfirmMove));
-}
-
-/// Test the SftpBrowserAction::SetSearchFilter variant
-#[test]
-fn test_action_set_search_filter() {
-    let action = SftpBrowserAction::SetSearchFilter("test".into());
-    assert!(matches!(action, SftpBrowserAction::SetSearchFilter(_)));
-}
-
-/// Test the SftpBrowserAction::ClearSearchFilter variant
-#[test]
-fn test_action_clear_search_filter() {
-    let action = SftpBrowserAction::ClearSearchFilter;
-    assert!(matches!(action, SftpBrowserAction::ClearSearchFilter));
-}
-
-/// Test the SftpBrowserAction::DownloadSaveAs variant
-#[test]
-fn test_action_download_save_as() {
-    let entry = EntryReference {
-        listing_generation: 1,
-        identity: EntryIdentity {
-            path: PathBuf::from("/remote/file.txt"),
-            backend: super::super::types::StableEntryIdentity {
-                file_type: FileEntryType::File,
-                size: 42,
-                object_id: "file".to_string(),
-                revision: "1".to_string(),
-            },
-        },
+fn escape_dismisses_focused_overlays_through_real_key_routing() {
+    use crate::pane_group::focus_state::PaneGroupFocusState;
+    use crate::pane_group::pane::PaneId;
+    use crate::sftp_manager::browser_integration_tests::{
+        create_connected_view, initialize_app, key_down, presenter_for_window, rerender,
     };
-    let action = SftpBrowserAction::DownloadSaveAs {
-        entry: entry.clone(),
-        resolved_target_size: None,
-        local_path: "/tmp/file.txt".into(),
-    };
-    assert!(matches!(
-        action,
-        SftpBrowserAction::DownloadSaveAs {
-            entry: actual,
-            ..
-        } if actual == entry
-    ));
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view, _directory) =
+            create_connected_view(&mut app, &[("keep.txt", b"keep")]);
+        let pane_id = PaneId::dummy_pane_id();
+        let focus_state = app.add_model(|_| PaneGroupFocusState::new(pane_id, None, true));
+        view.update(&mut app, |view, ctx| {
+            view.set_focus_handle(PaneFocusHandle::new(pane_id, focus_state), ctx);
+            view.focus_contents(ctx);
+            view.dialog = Some(Dialog::CloseTransferPanelConfirm);
+            view.context_menu = Some(ContextMenuState::new(
+                view.entry_reference(0).unwrap(),
+                Vector2F::new(100.0, 100.0),
+            ));
+        });
+        let (presenter, invalidation) = presenter_for_window(&app, window_id);
+        rerender(&mut app, presenter.clone(), invalidation.clone());
+        key_down(&mut app, window_id, presenter.clone(), "shift-escape");
+        view.read(&app, |view, _| {
+            assert!(view.context_menu.is_some());
+            assert!(view.dialog.is_some());
+        });
+        assert!(key_down(&mut app, window_id, presenter.clone(), "escape"));
+        view.read(&app, |view, _| {
+            assert!(view.context_menu.is_none(), "the context menu closes first");
+            assert!(
+                view.dialog.is_some(),
+                "one Escape must not also close the dialog"
+            );
+        });
+        rerender(&mut app, presenter.clone(), invalidation.clone());
+        assert!(key_down(&mut app, window_id, presenter.clone(), "escape"));
+        view.read(&app, |view, _| assert!(view.dialog.is_none()));
+
+        // Host-key prompts use the separate disconnected rendering branch.
+        view.update(&mut app, |view, _| {
+            view.connection = ConnectionState::Failed("host key confirmation required".to_string());
+            view.dialog = Some(Dialog::ConfirmUnknownHostKey {
+                host: "example.invalid".to_string(),
+                port: 22,
+                fingerprint_sha256: "SHA256:test".to_string(),
+                key_type: "ssh-ed25519".to_string(),
+            });
+            view.has_focus_within = false;
+        });
+        rerender(&mut app, presenter.clone(), invalidation.clone());
+        key_down(&mut app, window_id, presenter.clone(), "escape");
+        view.read(&app, |view, _| assert!(view.dialog.is_some()));
+        view.update(&mut app, |view, _| view.has_focus_within = true);
+        rerender(&mut app, presenter.clone(), invalidation);
+        assert!(key_down(&mut app, window_id, presenter, "escape"));
+        view.read(&app, |view, _| assert!(view.dialog.is_none()));
+        assert_eq!(
+            std::fs::read(_directory.path().join("keep.txt")).unwrap(),
+            b"keep"
+        );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn local_navigation_keeps_literal_backslash_names_distinct_from_nested_paths() {
+    use crate::sftp_manager::browser_integration_tests::initialize_app;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let directory = tempfile::tempdir().unwrap();
+        let literal = directory.path().join(r"a\b");
+        let nested = directory.path().join("a/b");
+        std::fs::create_dir_all(literal.join("child")).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(literal.join("literal.txt"), b"literal").unwrap();
+        std::fs::write(nested.join("nested.txt"), b"nested").unwrap();
+        let (_, browser) = app.add_window(warpui::platform::WindowStyle::NotStealFocus, |ctx| {
+            SftpBrowserView::new_local(directory.path().to_path_buf(), ctx)
+        });
+        browser.update(&mut app, |browser, ctx| {
+            browser.navigate_to(literal.clone(), ctx);
+            assert_eq!(browser.current_path, literal);
+            assert!(browser
+                .entries
+                .iter()
+                .any(|entry| entry.name == "literal.txt"));
+            assert!(!browser
+                .entries
+                .iter()
+                .any(|entry| entry.name == "nested.txt"));
+            browser.navigate_to(literal.join("child"), ctx);
+            browser.go_up(ctx);
+            assert_eq!(browser.current_path, literal);
+            assert_eq!(
+                build_new_folder_path(&literal, "new", true),
+                Some(literal.join("new"))
+            );
+            assert_eq!(
+                build_rename_path(&literal.join("old"), "new", true),
+                Some(literal.join("new"))
+            );
+            assert_eq!(
+                build_upload_remote_path(&literal, "upload", true),
+                Some(literal.join("upload"))
+            );
+        });
+        assert_eq!(std::fs::read(nested.join("nested.txt")).unwrap(), b"nested");
+    });
+}
+
+#[cfg(windows)]
+#[test]
+fn local_path_formatting_preserves_windows_verbatim_disk_and_unc_prefixes() {
+    for value in [r"\\?\C:\work\child", r"\\?\UNC\server\share\child"] {
+        let path = Path::new(value);
+        assert_eq!(
+            normalize_browser_path(path, true).as_os_str(),
+            path.as_os_str()
+        );
+        assert_eq!(
+            build_new_folder_path(path, "new", true),
+            Some(path.join("new"))
+        );
+    }
+    let remote = Path::new(r"\srv\work\child");
+    assert_eq!(
+        normalize_browser_path(remote, false),
+        normalize_remote_path(remote)
+    );
 }

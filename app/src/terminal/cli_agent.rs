@@ -29,6 +29,7 @@ use crate::ai::subscription_agent::{
 use crate::code::editor::line::EditorLineLocation;
 use crate::code_review::comments::AttachedReviewCommentTarget;
 use crate::server::telemetry::CLIAgentType;
+use crate::terminal::model::session::command_executor::shell_quote_arg;
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use warp_completer::parsers::simple::top_level_command;
@@ -179,13 +180,20 @@ impl RoutedAgentLaunch {
     /// Serialize at the terminal boundary, after the active shell is known.
     pub(crate) fn shell_command(&self, shell_type: ShellType) -> String {
         match shell_type {
-            ShellType::Bash | ShellType::Zsh => self.unix_shell_command(),
-            ShellType::Fish => self.unix_shell_command(),
+            ShellType::Bash | ShellType::Zsh | ShellType::Fish => {
+                self.unix_shell_command(shell_type)
+            }
             ShellType::PowerShell => self.powershell_command(),
         }
     }
 
-    fn unix_shell_command(&self) -> String {
+    fn unix_shell_command(&self, shell_type: ShellType) -> String {
+        let quote = |value: &str| match shell_type {
+            ShellType::Fish => shell_quote_arg(value, shell_type),
+            ShellType::Bash | ShellType::Zsh | ShellType::PowerShell => {
+                shell_words::quote(value).into_owned()
+            }
+        };
         let mut command = String::new();
         if !self.unset_environment.is_empty() || !self.environment.is_empty() {
             command.push_str("env");
@@ -197,14 +205,14 @@ impl RoutedAgentLaunch {
                 command.push(' ');
                 command.push_str(name);
                 command.push('=');
-                command.push_str(&shell_words::quote(value));
+                command.push_str(&quote(value));
             }
             command.push(' ');
         }
-        command.push_str(&shell_words::quote(&self.program));
+        command.push_str(&quote(&self.program));
         for arg in &self.args {
             command.push(' ');
-            command.push_str(&shell_words::quote(arg));
+            command.push_str(&quote(arg));
         }
         command
     }
@@ -227,7 +235,38 @@ impl RoutedAgentLaunch {
             invocation.push_str(&powershell_quote(arg));
         }
         statements.push(invocation);
-        statements.join("; ")
+        let command = statements.join("; ");
+        let mut names = self.unset_environment.clone();
+        for (name, _) in &self.environment {
+            if !names.contains(name) {
+                names.push(name);
+            }
+        }
+        if names.is_empty() {
+            return command;
+        }
+        let saved = names
+            .iter()
+            .map(|name| format!("{} = $env:{name}", powershell_quote(name)))
+            .collect::<Vec<_>>()
+            .join("; ");
+        // Environment variables belong to the PowerShell process, even inside
+        // a script block. Restore them after completion, failure, or Ctrl-C so
+        // the next launch cannot inherit this account or lose its API settings.
+        format!(
+            "& {{ [CmdletBinding()] param(); $zaplexSavedEnvironment = @{{ {saved} }}; \
+             try {{ {command}; $zaplexStatus = $?; $zaplexExitCode = $global:LASTEXITCODE }} finally {{ \
+             foreach ($zaplexEnvName in $zaplexSavedEnvironment.Keys) {{ \
+             if ($null -eq $zaplexSavedEnvironment[$zaplexEnvName]) {{ \
+             Remove-Item -LiteralPath ('Env:' + $zaplexEnvName) -ErrorAction SilentlyContinue \
+             }} else {{ Set-Item -LiteralPath ('Env:' + $zaplexEnvName) \
+             -Value $zaplexSavedEnvironment[$zaplexEnvName] }} }} }}; \
+             $global:LASTEXITCODE = $zaplexExitCode; if (-not $zaplexStatus) {{ \
+             $ErrorActionPreference = 'SilentlyContinue'; \
+             $PSCmdlet.WriteError([System.Management.Automation.ErrorRecord]::new(\
+             [Exception]::new('Agent exited unsuccessfully'), 'zaplex-agent-exit', \
+             [System.Management.Automation.ErrorCategory]::NotSpecified, $null)) }} }}"
+        )
     }
 }
 

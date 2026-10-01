@@ -2549,6 +2549,12 @@ impl BlockList {
             })
     }
 
+    /// Displays a continuous output grid without a shell-integration lifecycle.
+    pub(super) fn enter_raw_terminal(&mut self) {
+        self.active_block_mut().enter_raw_terminal();
+        self.update_active_block_height();
+    }
+
     pub fn is_bootstrapped(&self) -> bool {
         self.bootstrap_stage.is_bootstrapped()
     }

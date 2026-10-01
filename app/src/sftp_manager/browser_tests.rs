@@ -11,6 +11,7 @@ use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{SingletonEntity, TypedActionView};
 
+use crate::remote_server::manager::RemoteServerManager;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 
@@ -33,6 +34,7 @@ fn initialize_app(app: &mut warpui::App) {
     app.add_singleton_model(|_| ToastStack);
     app.add_singleton_model(|_| super::fm_registry::FileManagerRegistry::new());
     app.add_singleton_model(|_| super::transfer_queue::TransferQueue::new());
+    app.add_singleton_model(RemoteServerManager::new);
 
     // The SSH manager needs a SQLite path; use a temporary file so that failed queries don't panic
     let temp_db = std::env::temp_dir().join("warp_sftp_test.sqlite");
@@ -59,6 +61,65 @@ fn review9_partial_transfer_toast_is_not_a_full_skip_or_success_message() {
         partial.contains('2'),
         "transferred file count must be visible"
     );
+}
+
+#[test]
+fn retry_after_host_key_dialog_cancel_starts_a_fresh_connection_attempt() {
+    crate::i18n::init(Some("en"));
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        let cancelled_error = "host key confirmation cancelled";
+
+        view.update(&mut app, |view, ctx| {
+            view.connection = ConnectionState::Failed(cancelled_error.to_string());
+            view.dialog = Some(Dialog::ConfirmUnknownHostKey {
+                host: "test.invalid".to_string(),
+                port: 22,
+                fingerprint_sha256: "SHA256:test".to_string(),
+                key_type: "ssh-ed25519".to_string(),
+            });
+            view.handle_action(&SftpBrowserAction::CloseDialog, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.dialog.is_none());
+            assert!(matches!(
+                &view.connection,
+                ConnectionState::Failed(message) if message == cancelled_error
+            ));
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::RetryConnection, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(
+                !matches!(
+                    &view.connection,
+                    ConnectionState::Failed(message) if message == cancelled_error
+                ),
+                "retry must run the connection path instead of leaving the cancelled failure untouched"
+            );
+        });
+    });
+}
+
+#[test]
+fn stale_connection_retry_does_not_restart_an_in_flight_or_connected_browser() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.connection = ConnectionState::Connecting;
+            view.handle_action(&SftpBrowserAction::RetryConnection, ctx);
+            assert!(matches!(view.connection, ConnectionState::Connecting));
+            view.connection = ConnectionState::Connected;
+            view.handle_action(&SftpBrowserAction::RetryConnection, ctx);
+            assert!(matches!(view.connection, ConnectionState::Connected));
+        });
+    });
 }
 
 /// Creates a SftpBrowserView and places it in a window
@@ -1671,6 +1732,7 @@ fn test_render_all_overlays_combined() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("x-overlay", false)]);
 
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::DragFilesEnter, ctx);
@@ -2270,28 +2332,30 @@ fn test_sort_keeps_cursor_on_its_file() {
         let (_, view) = create_view(&mut app);
         view.update(&mut app, |view, _| {
             view.entries = vec![
-                sized_entry("a_big.txt", false, 900, None),
-                sized_entry("b_small.txt", false, 10, None),
+                sized_entry("a_small.txt", false, 10, None),
+                sized_entry("b_big.txt", false, 900, None),
             ];
         });
 
-        // Park the cursor on the SMALL file (row 1 in name order).
+        // Park the cursor on the BIG file (row 1 in name order).
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::CursorDown, ctx);
         });
         view.read(&app, |view, _| {
-            assert_eq!(view.cursor_entry_index(), Some(1), "on b_small.txt");
+            assert_eq!(view.cursor_entry_index(), Some(1), "on b_big.txt");
         });
 
-        // Sort by size (descending first): the small file moves to the end.
+        // Sort by size (descending first): the big file moves from row 1 to row 0.
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::SortBy(SortColumn::Size), ctx);
         });
         view.read(&app, |view, _| {
+            assert_eq!(view.visible_indices(), vec![1, 0], "sort must move the file");
+            assert_eq!(view.cursor, 0, "cursor must follow the file to its new row");
             assert_eq!(
                 view.cursor_entry_index(),
                 Some(1),
-                "cursor still on b_small.txt, wherever it now sits"
+                "cursor still on b_big.txt, wherever it now sits"
             );
         });
     });
@@ -2304,7 +2368,15 @@ fn queued_delete_never_retargets_after_sort() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
-        view.update(&mut app, |view, _| {
+        let root = tempfile::tempdir().unwrap();
+        view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(
+                std::sync::Arc::new(super::sftp_backend::InMemorySftpBackend::new(
+                    root.path().to_path_buf(),
+                )),
+                PathBuf::from("/"),
+                ctx,
+            );
             view.entries = vec![
                 sized_entry("a_small.txt", false, 10, None),
                 sized_entry("b_large.txt", false, 900, None),
@@ -2515,9 +2587,9 @@ fn refresh_preserves_marks_for_stable_entries() {
             view.mark_index_for_test(2); // gamma
         });
 
-        // Refresh returns a different input order, drops gamma, adds zeta. After
-        // sort: alpha(0), beta(1), zeta(2). beta stays marked (now index 1),
-        // gamma's mark is gone, zeta is unmarked.
+        // Refresh returns a different input order, drops gamma, and inserts a
+        // new first row. beta moves from index 1 to index 2; an index-based
+        // mark would incorrectly select alpha. gamma and new files stay unmarked.
         view.update(&mut app, |view, ctx| {
             view.refresh_generation = view.refresh_generation.wrapping_add(1);
             let gen = view.refresh_generation;
@@ -2525,13 +2597,18 @@ fn refresh_preserves_marks_for_stable_entries() {
                 entry("zeta", false),
                 entry("beta", false),
                 entry("alpha", false),
+                entry("aardvark", false),
             ];
             view.on_dir_listed(gen, Ok(Ok(listing)), ctx);
         });
 
         view.read(&app, |view, _| {
             let names: Vec<_> = view.entries.iter().map(|e| e.name.clone()).collect();
-            assert_eq!(names, vec!["alpha", "beta", "zeta"], "re-sorted listing");
+            assert_eq!(
+                names,
+                vec!["aardvark", "alpha", "beta", "zeta"],
+                "refresh must move the surviving marked file to a different index"
+            );
             let marked: std::collections::HashSet<String> = view
                 .entries
                 .iter()
@@ -2582,6 +2659,61 @@ fn refresh_closes_open_context_menu() {
             assert!(
                 view.context_menu.is_none(),
                 "starting a refresh must close the context menu"
+            );
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_close_uses_connected_current_path_only() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.current_path = PathBuf::from("/srv/last-opened");
+            view.connection = ConnectionState::Connected;
+            assert!(view.shell_directory_on_close().is_none());
+            view.on_dir_listed(view.refresh_generation, Ok(Ok(Vec::new())), ctx);
+            assert_eq!(
+                view.shell_directory_on_close(),
+                Some(PathBuf::from("/srv/last-opened"))
+            );
+            view.connection = ConnectionState::Disconnected;
+            assert!(view.shell_directory_on_close().is_none());
+            view.connection = ConnectionState::Failed("connection lost".to_string());
+            assert!(view.shell_directory_on_close().is_none());
+        });
+    });
+}
+
+#[test]
+fn file_manager_directory_initial_listing_failure_never_changes_shell_directory() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.current_path = PathBuf::from("/missing/restored-directory");
+            view.connection = ConnectionState::Connected;
+            view.on_dir_listed(
+                view.refresh_generation,
+                Ok(Err(super::sftp_ops::SftpOpsError::Operation(
+                    "missing directory".to_string(),
+                ))),
+                ctx,
+            );
+            assert!(view.shell_directory_on_close().is_none());
+            view.current_path = PathBuf::from("/successfully-opened");
+            view.on_dir_listed(view.refresh_generation, Ok(Ok(Vec::new())), ctx);
+            view.on_dir_listed(
+                view.refresh_generation,
+                Ok(Err(super::sftp_ops::SftpOpsError::Operation(
+                    "permission denied".to_string(),
+                ))),
+                ctx,
+            );
+            assert_eq!(
+                view.shell_directory_on_close(),
+                Some(PathBuf::from("/successfully-opened"))
             );
         });
     });

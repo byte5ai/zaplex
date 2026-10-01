@@ -292,6 +292,10 @@ pub struct GitHubIssueDetail {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitHubPullRequestDetail {
+    #[serde(rename = "headRefOid")]
+    pub head_ref_oid: String,
+    #[serde(rename = "baseRefOid")]
+    pub base_ref_oid: String,
     pub number: u64,
     pub title: String,
     #[serde(default)]
@@ -329,7 +333,7 @@ pub fn analysis_accounts(snapshot: &CockpitSnapshot) -> Vec<GitHubAnalysisAccoun
     snapshot
         .accounts
         .iter()
-        .filter(|usage| matches!(usage.account.provider, Provider::Claude | Provider::Codex))
+        .filter(|usage| usage.account.provider == Provider::Claude)
         .map(|usage| GitHubAnalysisAccount {
             key: usage.account.key.clone(),
             label: usage.account.label.clone(),
@@ -487,7 +491,8 @@ pub fn pr_view_command(repository: &RepositoryContext, number: u64) -> GitHubCom
         "--repo".to_string(),
         repository.slug.clone(),
         "--json".to_string(),
-        "number,title,body,author,headRefName,baseRefName,isDraft,state,url".to_string(),
+        "number,title,body,author,headRefName,baseRefName,headRefOid,baseRefOid,isDraft,state,url"
+            .to_string(),
     ])
 }
 
@@ -506,6 +511,100 @@ pub fn pr_diff_command(repository: &RepositoryContext, number: u64) -> GitHubCom
 pub struct GitHubTarget {
     pub repository: RepositoryContext,
     pub number: u64,
+    /// Present only after a PR analysis has frozen both sides of its diff.
+    pub revision: Option<PullRequestRevision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestRevision {
+    pub head: String,
+    pub base: String,
+}
+
+impl PullRequestRevision {
+    fn from_detail(detail: &GitHubPullRequestDetail) -> Result<Self, GitHubFlowError> {
+        let revision = Self {
+            head: detail.head_ref_oid.clone(),
+            base: detail.base_ref_oid.clone(),
+        };
+        if !revision.is_valid() {
+            return Err(GitHubFlowError::InvalidOutput(
+                "GitHub returned an invalid PR revision".into(),
+            ));
+        }
+        Ok(revision)
+    }
+
+    fn is_valid(&self) -> bool {
+        [&self.head, &self.base]
+            .into_iter()
+            .all(|sha| sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    }
+}
+
+fn require_pr_revision(target: &GitHubTarget) -> Result<&PullRequestRevision, GitHubFlowError> {
+    target
+        .revision
+        .as_ref()
+        .filter(|revision| revision.is_valid())
+        .ok_or_else(|| {
+            GitHubFlowError::InvalidOutput(
+                "Reanalyze the pull request before submitting a review or merge".into(),
+            )
+        })
+}
+
+fn validate_pr_revision(
+    target: &GitHubTarget,
+    detail: &GitHubPullRequestDetail,
+) -> Result<(), GitHubFlowError> {
+    let expected = require_pr_revision(target)?;
+    let current = PullRequestRevision::from_detail(detail)?;
+    if detail.number != target.number || &current != expected || detail.state != "OPEN" {
+        return Err(GitHubFlowError::TargetChanged {
+            expected: format!(
+                "{}#{} at {} against {}",
+                target.repository.slug, target.number, expected.head, expected.base
+            ),
+            actual: format!(
+                "{}#{} at {} against {} ({})",
+                target.repository.slug, detail.number, current.head, current.base, detail.state
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn github_api_command(repository: &RepositoryContext, suffix: &str) -> GitHubCommand {
+    let parts: Vec<_> = repository.slug.split('/').collect();
+    let (host, owner, repo) = match parts.as_slice() {
+        [owner, repo] => ("github.com", *owner, *repo),
+        [host, owner, repo] => (*host, *owner, *repo),
+        _ => ("github.com", "", ""),
+    };
+    GitHubCommand::new([
+        "api".to_string(),
+        "--hostname".into(),
+        host.into(),
+        format!("repos/{owner}/{repo}/{suffix}"),
+    ])
+}
+
+fn pinned_pr_diff_command(
+    repository: &RepositoryContext,
+    revision: &PullRequestRevision,
+) -> GitHubCommand {
+    let mut command = github_api_command(
+        repository,
+        &format!("compare/{}...{}", revision.base, revision.head),
+    );
+    command.args.extend([
+        "--method".into(),
+        "GET".into(),
+        "--header".into(),
+        "Accept: application/vnd.github.diff".into(),
+    ]);
+    command
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -564,17 +663,28 @@ impl GitHubOperation {
                 decision,
                 body,
             } => format!(
-                "Submit {:?} review on {}#{}{}",
+                "Submit {:?} review on {}#{} at {}{}",
                 decision,
                 target.repository.slug,
                 target.number,
+                target
+                    .revision
+                    .as_ref()
+                    .map(|revision| revision.head.as_str())
+                    .unwrap_or("unverified revision"),
                 body.as_deref()
                     .map(|body| format!("\n\n{body}"))
                     .unwrap_or_default()
             ),
             Self::MergePullRequest { target } => format!(
-                "Squash-merge pull request {}#{}",
-                target.repository.slug, target.number
+                "Squash-merge pull request {}#{} at {}",
+                target.repository.slug,
+                target.number,
+                target
+                    .revision
+                    .as_ref()
+                    .map(|revision| revision.head.as_str())
+                    .unwrap_or("unverified revision")
             ),
         }
     }
@@ -643,26 +753,33 @@ impl GitHubOperation {
                 decision,
                 body,
             } => {
-                let decision = match decision {
-                    PrReviewDecision::Approve => "--approve",
-                    PrReviewDecision::Comment => "--comment",
-                    PrReviewDecision::RequestChanges => "--request-changes",
+                let Ok(revision) = require_pr_revision(target) else {
+                    return Vec::new();
                 };
-                let mut args = vec![
-                    "pr".to_string(),
-                    "review".to_string(),
-                    target.number.to_string(),
-                    "--repo".to_string(),
-                    target.repository.slug.clone(),
-                    decision.to_string(),
-                ];
-                if body.is_some() {
-                    args.extend(["--body-file".to_string(), "-".to_string()]);
-                }
-                vec![GitHubCommand {
-                    args,
-                    stdin: body.clone(),
-                }]
+                let event = match decision {
+                    PrReviewDecision::Approve => "APPROVE",
+                    PrReviewDecision::Comment => "COMMENT",
+                    PrReviewDecision::RequestChanges => "REQUEST_CHANGES",
+                };
+                let mut command = github_api_command(
+                    &target.repository,
+                    &format!("pulls/{}/reviews", target.number),
+                );
+                command.args.extend([
+                    "--method".into(),
+                    "POST".into(),
+                    "--input".into(),
+                    "-".into(),
+                ]);
+                command.stdin = Some(
+                    serde_json::json!({
+                        "commit_id": revision.head,
+                        "event": event,
+                        "body": body.as_deref().unwrap_or_default(),
+                    })
+                    .to_string(),
+                );
+                vec![command]
             }
             Self::MergePullRequest { target } => vec![GitHubCommand::new([
                 "pr".to_string(),
@@ -671,6 +788,12 @@ impl GitHubOperation {
                 "--repo".to_string(),
                 target.repository.slug.clone(),
                 "--squash".to_string(),
+                "--match-head-commit".to_string(),
+                target
+                    .revision
+                    .as_ref()
+                    .map(|revision| revision.head.clone())
+                    .unwrap_or_default(),
             ])],
         }
     }
@@ -695,7 +818,12 @@ impl ConfirmedGitHubOperation {
         accepted: bool,
         displayed_confirmation: &str,
     ) -> Option<Self> {
-        (accepted && operation.confirmation_text() == displayed_confirmation)
+        let revision_valid = match &operation {
+            GitHubOperation::ReviewPullRequest { target, .. }
+            | GitHubOperation::MergePullRequest { target } => require_pr_revision(target).is_ok(),
+            _ => true,
+        };
+        (accepted && revision_valid && operation.confirmation_text() == displayed_confirmation)
             .then_some(Self(operation))
     }
 }
@@ -863,20 +991,30 @@ pub async fn load_issue_detail(
 
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 pub async fn load_pull_request_analysis_input(
-    target: &GitHubTarget,
+    target: &mut GitHubTarget,
 ) -> Result<(GitHubPullRequestDetail, String), GitHubFlowError> {
-    let (detail, diff) = futures::join!(
-        run_gh_command(
-            &target.repository,
-            pr_view_command(&target.repository, target.number),
-        ),
-        run_gh_command(
-            &target.repository,
-            pr_diff_command(&target.repository, target.number),
-        ),
-    );
-    let raw = detail?;
-    let diff = diff?;
+    let detail = load_pull_request_detail(target).await?;
+    let revision = PullRequestRevision::from_detail(&detail)?;
+    // The compare endpoint accepts immutable commit ids. No mutable PR diff can
+    // slip between independent metadata requests while the branch changes.
+    let diff = run_gh_command(
+        &target.repository,
+        pinned_pr_diff_command(&target.repository, &revision),
+    )
+    .await?;
+    target.revision = Some(revision);
+    Ok((detail, diff))
+}
+
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+async fn load_pull_request_detail(
+    target: &GitHubTarget,
+) -> Result<GitHubPullRequestDetail, GitHubFlowError> {
+    let raw = run_gh_command(
+        &target.repository,
+        pr_view_command(&target.repository, target.number),
+    )
+    .await?;
     let detail: GitHubPullRequestDetail = serde_json::from_str(&raw).map_err(|error| {
         GitHubFlowError::InvalidOutput(format!(
             "GitHub returned malformed pull-request JSON: {error}"
@@ -888,7 +1026,7 @@ pub async fn load_pull_request_analysis_input(
             actual: format!("{}#{}", target.repository.slug, detail.number),
         });
     }
-    Ok((detail, diff))
+    Ok(detail)
 }
 
 pub fn quick_issue_analysis_prompt(repository: &RepositoryContext) -> String {
@@ -951,18 +1089,22 @@ pub async fn run_structured_analysis(
     prompt: &str,
 ) -> Result<String, GitHubFlowError> {
     use crate::ai::subscription_agent::{
-        discover_capabilities, query_cli_version, route_target, AccountIdentity, ApprovalDecision,
-        HostIdentity, InstallationIdentity, ProcessLocation, RoutePreferences, RouteResult,
-        SubscriptionAgent, SubscriptionEvent, SubscriptionSession,
+        discover_read_only_capabilities, query_cli_version, route_target, AccountIdentity,
+        ApprovalDecision, HostIdentity, InstallationIdentity, ProcessLocation, RoutePreferences,
+        RouteResult, SubscriptionAgent, SubscriptionEvent, SubscriptionSession,
     };
 
     repository.revalidate()?;
     let (agent, executable_name) = match account.provider {
         Provider::Claude => (SubscriptionAgent::ClaudeCode, "claude"),
-        Provider::Codex => (SubscriptionAgent::Codex, "codex"),
+        Provider::Codex => {
+            return Err(GitHubFlowError::CommandUnavailable(
+                "Read-only GitHub analysis currently requires Claude Code: Codex MCP/apps/plugin isolation is not verified.".to_string(),
+            ));
+        }
         Provider::Antigravity => {
             return Err(GitHubFlowError::CommandUnavailable(
-                "GitHub analysis requires Claude Code or Codex".to_string(),
+                "Read-only GitHub analysis requires Claude Code".to_string(),
             ));
         }
     };
@@ -994,7 +1136,7 @@ pub async fn run_structured_analysis(
     .await
     .map_err(|error| GitHubFlowError::CommandUnavailable(error.to_string()))?;
     let account_identity = installation.account.clone();
-    let capability = discover_capabilities(
+    let capability = discover_read_only_capabilities(
         installation,
         repository.worktree.clone(),
         ProcessLocation::Local,
@@ -1027,11 +1169,11 @@ pub async fn run_structured_analysis(
             ));
         }
     };
-    let mut session = SubscriptionSession::open(target, None, ProcessLocation::Local)
+    let mut session = SubscriptionSession::open_read_only(target, ProcessLocation::Local)
         .await
-        .map_err(|error| GitHubFlowError::CommandFailed(error.to_string()))?;
+        .map_err(|error| GitHubFlowError::CommandUnavailable(error.to_string()))?;
     session
-        .send_prompt(prompt)
+        .send_prompt(&prompt.into())
         .await
         .map_err(|error| GitHubFlowError::CommandFailed(error.to_string()))?;
     let mut text = String::new();
@@ -1106,6 +1248,11 @@ pub async fn execute_confirmed(
 ) -> Result<Vec<String>, GitHubFlowError> {
     let operation = confirmed.0;
     let repository = operation.repository().clone();
+    if let GitHubOperation::ReviewPullRequest { target, .. }
+    | GitHubOperation::MergePullRequest { target } = &operation
+    {
+        validate_pr_revision(target, &load_pull_request_detail(target).await?)?;
+    }
     let mut outputs = Vec::new();
     for command in operation.commands() {
         // Sequential by design: CloseIssue's comment must succeed before close.

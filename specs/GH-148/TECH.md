@@ -28,6 +28,12 @@ Zaplex starts the selected official `claude` executable with piped stdin/stdout 
 
 `CLAUDE_CONFIG_DIR` is pinned to the selected account directory. `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed. Startup sends the structured `initialize` control request. The response supplies the account summary, exact model identities, effort capabilities, and native session metadata. Incoming `can_use_tool` control requests become approval events; decisions are returned as `control_response` frames. Interrupt and model changes use control requests supported by the initialized protocol.
 
+### Native plan mode
+
+`/plan` keeps its visible command text but sends only the underlying query to the CLI. Claude Code 2.1.212 or later starts with `--permission-mode plan`, safe mode, a limited native tool list, no external MCP configuration, no inherited settings sources, and no slash commands or browser integration. Structured permission requests are denied. The provider can maintain its native plan document under that policy; repository write approval is never granted. An existing native session ID is preserved, and the next ordinary prompt uses the normal permission path.
+
+Older Claude versions and Codex plan requests fail explicitly before the prompt process starts. Codex plan mode remains unavailable until equivalent tool restrictions can be enforced; this is a capability limit, not a successful plan execution.
+
 ### Codex
 
 Zaplex starts `codex app-server --listen stdio://` with piped stdin/stdout through the `command` crate. `CODEX_HOME` is pinned to the selected account directory and `OPENAI_API_KEY` is removed.

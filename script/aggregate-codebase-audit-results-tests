@@ -11,6 +11,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import runpy
 from pathlib import Path
 import subprocess
 import sys
@@ -26,6 +27,7 @@ SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 assert SPEC is not None
 AGGREGATOR = importlib.util.module_from_spec(SPEC)
 LOADER.exec_module(AGGREGATOR)
+RUNNER = runpy.run_path(str(SCRIPT.with_name("run-codebase-audit-assignments")))
 
 
 class CodebaseAuditAggregatorTest(unittest.TestCase):
@@ -40,6 +42,7 @@ class CodebaseAuditAggregatorTest(unittest.TestCase):
         self.write_json(self.assignments_path, self.assignments)
         self.results = self.build_results(self.assignments)
         self.write_results(self.results)
+        self.write_archived_evidence()
         self.run_summary_path = self.root / "run.json"
         self.run_summary = self.build_run_summary(self.results)
         self.write_json(self.run_summary_path, self.run_summary)
@@ -48,7 +51,8 @@ class CodebaseAuditAggregatorTest(unittest.TestCase):
         return hashlib.sha1(value.encode("utf-8")).hexdigest()
 
     def assignment_entry(self, path, start, end, ownership="fork-owned"):
-        object_id = self.oid(path)
+        source = self.source(path)
+        object_id = hashlib.sha1(f"blob {len(source)}\0".encode("ascii") + source).hexdigest()
         return {
             "manifest_sha256": "a" * 64,
             "target_sha": "1" * 40,
@@ -62,6 +66,48 @@ class CodebaseAuditAggregatorTest(unittest.TestCase):
             "range": {"start": start, "end": end},
             "ownership": ownership,
         }
+
+    def source(self, path):
+        return b"line\n" * (6 if path == "a.rs" else 2)
+
+    def write_archived_evidence(self):
+        (self.root / "inputs").mkdir()
+        (self.root / "logs").mkdir()
+        for bucket in self.assignments["buckets"]:
+            indexes = {name: [] for name in ("prompts", "events", "stderr", "final-messages")}
+            for index, entry in enumerate(bucket["entries"], start=1):
+                range_id = f"{bucket['id']}-range-{index:06d}"
+                source = RUNNER["range_bytes"](self.source(entry["path"]), entry["range"]["start"], entry["range"]["end"])
+                task = RUNNER["RangeTask"](index, range_id, bucket["id"], bucket["assignment_sha256"], entry,
+                    source.decode("utf-8"), AGGREGATOR.sha256_bytes(source))
+                response = {
+                    "schema_version": 1,
+                    **RUNNER["bucket_provenance"](self.assignments, bucket["id"], bucket["assignment_sha256"]),
+                    "range_id": range_id,
+                    "reviewed_range": entry,
+                    "source_sha256": task.source_sha256,
+                    "source_text": task.source_text,
+                    "findings": self.results[bucket["id"]]["findings"],
+                }
+                final = AGGREGATOR.canonical_json(response)
+                self.write_json(self.root / "logs" / f"{range_id}.response.json", response)
+                for name, directory, suffix, raw in (
+                    ("prompts", "inputs", "prompt.json", RUNNER["prompt_for_range"](self.assignments, task)),
+                    ("events", "logs", "events.jsonl", b'{"type":"turn.completed"}\n'),
+                    ("stderr", "logs", "stderr.log", b""),
+                    ("final-messages", "logs", "final-message.log", final),
+                ):
+                    (self.root / directory / f"{range_id}.{suffix}").write_bytes(raw)
+                    indexes[name].append({"range_id": range_id, "sha256": AGGREGATOR.sha256_bytes(raw)})
+            for name, rows in indexes.items():
+                directory = "inputs" if name == "prompts" else "logs"
+                self.write_json(self.root / directory / f"{bucket['id']}.{name}.json", {
+                    "schema_version": 1, "bucket_id": bucket["id"], "artifact": name, "ranges": rows,
+                })
+
+    def index_hash(self, bucket_id, name):
+        directory = "inputs" if name == "prompts" else "logs"
+        return AGGREGATOR.sha256_bytes((self.root / directory / f"{bucket_id}.{name}.json").read_bytes())
 
     def build_assignments(self):
         bucket_entries = [
@@ -160,10 +206,10 @@ class CodebaseAuditAggregatorTest(unittest.TestCase):
             "buckets": [
                 {
                     "id": bucket_id,
-                    "prompt_sha256": str(index) * 64,
-                    "events_sha256": str(index + 3) * 64,
-                    "stderr_sha256": str(index + 6) * 64,
-                    "final_message_sha256": chr(ord("a") + index - 1) * 64,
+                    "prompt_sha256": self.index_hash(bucket_id, "prompts"),
+                    "events_sha256": self.index_hash(bucket_id, "events"),
+                    "stderr_sha256": self.index_hash(bucket_id, "stderr"),
+                    "final_message_sha256": self.index_hash(bucket_id, "final-messages"),
                     "response_sha256": AGGREGATOR.sha256_bytes(
                         AGGREGATOR.canonical_json(results[bucket_id])
                     ),
@@ -552,6 +598,91 @@ class CodebaseAuditAggregatorTest(unittest.TestCase):
                 results = copy.deepcopy(self.results)
                 mutate(results["bucket-1"]["findings"][0])
                 self.assert_result_rejected(results, message)
+
+    def test_rejects_missing_changed_and_symlinked_archived_evidence(self):
+        paths = (
+            self.root / "inputs/bucket-1.prompts.json",
+            self.root / "inputs/bucket-1-range-000001.prompt.json",
+            self.root / "logs/bucket-1-range-000001.events.jsonl",
+            self.root / "logs/bucket-1-range-000001.stderr.log",
+            self.root / "logs/bucket-1-range-000001.final-message.log",
+            self.root / "logs/bucket-1-range-000001.response.json",
+        )
+        for path in paths:
+            original = path.read_bytes()
+            for mutation in ("missing", "changed", "symlink"):
+                with self.subTest(path=path.name, mutation=mutation):
+                    path.unlink()
+                    if mutation == "changed":
+                        path.write_bytes(original + b"changed")
+                    elif mutation == "symlink":
+                        target = self.root / "outside-artifact"
+                        target.write_bytes(original)
+                        path.symlink_to(target)
+                    output = self.root / "evidence-rejected.json"
+                    result = self.run_aggregator(output)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(output.exists())
+                    if path.is_symlink() or path.exists():
+                        path.unlink()
+                    path.write_bytes(original)
+
+    def test_rejects_rehashed_failed_events_and_range_traversal(self):
+        index_path = self.root / "logs/bucket-1.events.json"
+        index_original = index_path.read_bytes()
+        events_path = self.root / "logs/bucket-1-range-000001.events.jsonl"
+        events_original = events_path.read_bytes()
+        for mutation in ("failed-event", "range-traversal"):
+            with self.subTest(mutation=mutation):
+                index = json.loads(index_original)
+                if mutation == "failed-event":
+                    events = b'{"type":"turn.failed"}\n'
+                    events_path.write_bytes(events)
+                    index["ranges"][0]["sha256"] = AGGREGATOR.sha256_bytes(events)
+                else:
+                    index["ranges"][0]["range_id"] = "../../outside"
+                self.write_json(index_path, index)
+                summary = self.build_run_summary(self.results)
+                self.write_json(self.run_summary_path, summary)
+                output = self.root / "rehashed-evidence-rejected.json"
+                result = self.run_aggregator(output)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("failure" if mutation == "failed-event" else "range coverage mismatch", result.stderr)
+                self.assertFalse(output.exists())
+                index_path.write_bytes(index_original)
+                events_path.write_bytes(events_original)
+
+    def test_rejects_rehashed_source_substitution_and_hidden_findings(self):
+        bucket = self.assignments["buckets"][0]
+        range_id = "bucket-1-range-000001"
+        final_path = self.root / "logs" / f"{range_id}.final-message.log"
+        original = json.loads(final_path.read_bytes())
+        for mutation in ("source", "findings"):
+            with self.subTest(mutation=mutation):
+                response = copy.deepcopy(original)
+                if mutation == "source":
+                    response["source_text"] = response["source_text"].replace("line", "evil")
+                    response["source_sha256"] = AGGREGATOR.sha256_bytes(response["source_text"].encode())
+                else:
+                    response["findings"] = []
+                task = RUNNER["RangeTask"](0, range_id, bucket["id"], bucket["assignment_sha256"],
+                    bucket["entries"][0], response["source_text"], response["source_sha256"])
+                self.write_json(self.root / "logs" / f"{range_id}.response.json", response)
+                for artifact, directory, suffix, raw in (
+                    ("prompts", "inputs", "prompt.json", RUNNER["prompt_for_range"](self.assignments, task)),
+                    ("final-messages", "logs", "final-message.log", AGGREGATOR.canonical_json(response)),
+                ):
+                    (self.root / directory / f"{range_id}.{suffix}").write_bytes(raw)
+                    index_path = self.root / directory / f"bucket-1.{artifact}.json"
+                    index = json.loads(index_path.read_bytes())
+                    index["ranges"][0]["sha256"] = AGGREGATOR.sha256_bytes(raw)
+                    self.write_json(index_path, index)
+                self.write_json(self.run_summary_path, self.build_run_summary(self.results))
+                output = self.root / "substituted-evidence-rejected.json"
+                result = self.run_aggregator(output)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Git blob identity mismatch" if mutation == "source" else "findings do not match", result.stderr)
+                self.assertFalse(output.exists())
 
     def test_atomic_publish_race_and_existing_target_never_overwrite(self):
         buckets = AGGREGATOR.validate_assignments(self.assignments)

@@ -53,3 +53,20 @@ pub fn move_pane_by_indices(
         });
     })
 }
+
+/// Completes the host picker opened by a split shortcut using the real local row.
+pub trait LocalSplitTarget {
+    fn with_local_split_target(self) -> Self;
+}
+
+impl LocalSplitTarget for TestStep {
+    fn with_local_split_target(self) -> Self {
+        self.with_click_on_saved_position_fn(|_, _| {
+            format!(
+                "{} · {}",
+                crate::t!("cockpit-spawn-card-host-local"),
+                crate::t!("common-current")
+            )
+        })
+    }
+}

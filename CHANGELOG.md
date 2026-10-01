@@ -2,6 +2,178 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.1.1] — 2026-09-23
+
+- Die Integrationssuite (#472) initialisiert englische Texte vor dem Start und bedient beim Teilen eines Panes den echten Hostpicker. SSH-Prüfungen nutzen eigene kurzlebige Konten auf einem lokalen CI-SSH-Server; Passwortanmeldung, Shell-Bootstrap und ProxyCommand bleiben Teil der Prüfung.
+
+- Notebook- und Drive-Prüfungen (#245/#472) erhalten bereits gewährten Bearbeitungszugriff und prüfen die aktuellen persönlichen Aktionen. Gespeicherte Teamdaten dürfen entfernte Cloud-Menüs nicht wieder aktivieren; OSC-Shelltitel werden getrennt von der sichtbaren Host-/Verzeichnisanzeige geprüft.
+
+- Der Dateimanager (#458/#464) reserviert seine Fokusumrandung in jedem Zustand. Dadurch bleiben Funktionsbuttons beim Aktivieren eines Panes an derselben Position und ein begonnener Klick auf eine deaktivierte Aktion wird nicht nachträglich ausgeführt.
+
+- Die CI-Testaufbauten (#472) initialisieren den Remote-Sitzungsmanager, prüfen die aktuellen lokalen Drive-Menüs und verwenden echte temporäre Dateien für die Linux-Zwischenablage. Passwort-Unterbrechungen werden jeweils an einer eigenen laufenden Shell geprüft; die Sicherheitsassertionen bleiben erhalten.
+
+- Ein separater CI-Abnahmetest (#456/#471) nutzt einen echten Daemon und ein isoliertes SSH-Konto für Tab-Vervollständigung, Ghosttext und Wiederaufnahme derselben PTY-Generation. Er verwendet bereits gebaute Programme und hält seine Profile von der Baseline-Coverage getrennt.
+
+- Der Skript-Messjob (#472) installiert und prüft `ripgrep` ausdrücklich. Die Konfliktdialog-Fixture erhält den produktiven Overlay-Aufbau, damit ihre unveränderten Geometrie- und Klickprüfungen echte Buttonpositionen finden.
+
+- Die native Dateimanager-Abnahme (#469) prüft nach F10 das von der ursprünglichen Shell gemeldete Verzeichnis, auch bei Leerzeichen und Apostrophen im Pfad. Sitzungsidentität und Eingabeentwurf müssen erhalten bleiben.
+
+- Die native UI-Abnahme (#455/#458–#464) prüft Verbindungszeilen in zwei Themes und drei Breiten, Favoriten-Flyouts, echtes Mausverschieben sowie den Erhalt lokaler Terminals beim Dateimanagerwechsel. Der macOS-CI-Job verlangt die zugehörigen Screenshots; Layout-Testdaten ersetzen keine Live-SSH-Abnahme.
+
+- Die Testsuite-Messung (#472) erfasst auch tatsächlich ausgeführte Skript-Tests mit Fallkennungen, Laufzeit und Originalprotokollen. Reine Regelprüfungen zählen getrennt; ein Gesamtvergleich verlangt vollständige, zum jeweiligen Commit passende Rust- und Skriptbelege.
+
+- Gespeicherte Terminalentwürfe bleiben auch in vorübergehend gesperrten Remote-Panes erhalten; lokale Teamzuordnungen und Richtlinien sind wieder aus dem vorhandenen Cache lesbar. SFTP behält bei konkurrierenden Kopien fortlaufende Konfliktnamen und bereinigt eigene Symlinks anhand ihrer Identität, ohne ihrem Ziel zu folgen.
+
+- Die Coverage-Projektion (#472) grenzt auch das exakt geprüfte Server-ID-Makro ab. Recovery-Tests warten auf den Abschluss des echten Workers; Datei- und Verzeichnisfehler werden über den jeweils passenden Transferpfad geprüft.
+
+- Der vollständige Rust-CI-Lauf (#472) erhält eine grafische Testumgebung und den korrekten JUnit-Export. Neun beschädigte SQLite-Testdateien sind aus der geprüften Historie wiederhergestellt; verwaiste Einträge gelöschter Cloud-Tests entfallen ohne Anrechnung als Testeinsparung.
+
+- Die CI-Fehlerkorrektur erhält CLAUDE.md-Regeln auch im laufenden Projektindex und bewahrt beim mehrzeiligen Einfügen in Überschriften die Absatzstruktur einschließlich Undo/Redo. Testaufbauten halten Logger-Runtimes am Leben und initialisieren benötigte Modelle, Sprache und asynchrone Dateioperationen.
+
+- Die Coverage-Projektion (#472) erkennt das exakt geprüfte Settings-Makro als Produktions-Template und nimmt nur dessen testexklusiven Konstruktor aus. Veränderte Makros bleiben ungeklärt; ungetroffene Produktionszeilen bleiben Teil der Messung.
+
+- Die CI-Compilefehler im SSH-Dateipicker, der Einstellungsübernahme und den Bootstrap-/Terminalbild-Tests sind korrigiert (#472). Schwache View-Referenzen, Fehlermeldungen und vorhandene Testaussagen bleiben erhalten.
+
+- Der gemeinsame Dialogtest (#472) prüft Cockpit- und SSH-Dialoge mit echten Presenter-Ereignissen, erhaltenen Eingabeentwürfen und gesperrten Hintergrundaktionen. Der Auditrunner-Test berücksichtigt kanonische temporäre Pfade.
+
+- Die Lockdatei entfernt einen verwaisten ndarray-Eintrag aus der ORT-Aktualisierung (#472). Die festgeschriebene Abhängigkeitsauflösung funktioniert wieder ohne Versionsänderungen.
+
+- Die vorbereitete Coverage-CI (#472) archiviert zusätzlich vollständige LLVM-Funktions-/Regionsdaten und Abhängigkeitsdiagnostik. Exportfehler bleiben sichtbar fehlgeschlagen; die bestehende Abnahme wird nicht gelockert.
+
+- Die Coverage-Quellprojektion (#472) schließt testabhängige Match-Arme mitsamt ihrem ausgeführten Körper aus. Makroauflösung, generierte Derives und unbekannte Featurebedingungen bleiben ohne zusätzliche Belege ausdrücklich unbewiesen.
+
+- Die Coverage-Quellprojektion (#472/#245) verarbeitet bekannte Rust-Patternattribute und Trait-Lifetime-Schreibweisen ohne Verlust von Positionen oder Originalhashes. Testabhängige Feldwerte bleiben ausgeschlossen; andere unklare Regionen verhindern weiterhin eine unbelegte Gesamtquote.
+
+- Gespeicherte Drive-Seitenleisten (#245) bleiben nach der Umbenennung erhalten. Alte und neue Tabnamen werden gelesen; Auswahl, Pane-Zuordnung und Breite gehen beim Wiederherstellen nicht verloren.
+
+- SFTP-Integrationsprüfungen (#245) erreichen die behaupteten Schreib- und Ersetzungsfehler, statt schon an fehlenden Streaming-Methoden zu scheitern. Der Speichern-unter-Fall verschiebt den ursprünglichen Dateieintrag tatsächlich; ein Unix-spezifischer Löschfall erhält den passenden Plattformfilter.
+
+- SFTP-Prüffälle (#245) erzeugen die benötigten Overlay-Dateien und erzwingen bei Sortierung und Aktualisierung einen tatsächlichen Zeilenwechsel. Dadurch erkennen sie verlorene Cursor- und Markierungszuordnungen.
+
+- Der Fish-SSH-Wrapper (#245) aktiviert die vorhandene Aufräummeldung entfernter Bash-/Zsh-Shells. Windows-Prozessgruppen halten ihre ursprüngliche Prozessidentität bis zum Ende der Bereinigung fest; ein gleichzeitiger Abbruch kann keine wiederverwendete Prozessnummer treffen.
+
+- Website-Installationspfade (#245) führen zu den aktuellen Zaplex-Releases und zur Installationsanleitung. Historische Entwürfe und Übergabepläne sind als solche gekennzeichnet; die SSH-Diagnose nennt die tatsächlich ausgewertete Debug-Variable.
+
+- Theme-Farben (#245) weisen ungültige Unicode-Hexwerte als Eingabefehler zurück, statt beim Parsen abzustürzen. Das Löschen eines importierten Themes erhält Bilddateien außerhalb des eigenen Theme-Verzeichnisses, auch hinter Symlinks.
+
+- Gespeicherte Einführungstipps (#245) behalten alte Drive-Namen und die übrigen erledigten Tipps. Die eigenständige Workspace-Vorschau bietet ihre Theme- und Recovery-Optionen auch ohne externe Entwurfssteuerung an.
+
+- Cockpit-Abnahmeberichte (#160/#169/#245) akzeptieren nur Test- und Laufzeitbelege des geprüften Commits. Screenshot-Prüfungen erkennen auch CRC-gültige, aber beschädigte PNG-Bilddaten und begrenzen die Dekompression. Der geerbte Windows-Installer verwendet denselben Sitzungs-Mutexnamen wie die App.
+
+- Umbenannte SSH- und Editoreinstellungen (#245) erhalten frühere Abschaltungen, Sperrlisten und Editorwahlen. Neue explizite Werte gewinnen; ein Zurücksetzen reaktiviert keine alten Werte. Native Lesefehler brechen die Erstübernahme ab, ohne Einstellungen zu überschreiben.
+
+- Die Reviewansicht (#245) zeigt Fehler beim Lesen eines Git-Repositories an, statt ein unlesbares Repository als unverändert darzustellen. Zaplex erkennt seine eigene macOS-App als Editor.
+
+- `/plan` (#245) aktiviert bei unterstütztem Claude Code einen eingeschränkten nativen Planmodus und erhält die Sitzung für die nächste normale Anfrage. Der sichtbare Befehl wird nicht nochmals an die CLI weitergereicht; nicht zuverlässig abgesicherte Codex-Planaufrufe werden ausdrücklich abgewiesen.
+
+- Die Signiervorbereitung (#245) erhält vorhandene Keychain-Pfade samt Leerzeichen und stellt die Suchliste wieder her. Temporäre Signierdateien liegen in einem privaten Verzeichnis; geerbte Pfade werden beim Aufräumen nicht angefasst. Der Changelog-Generator behandelt einen fehlgeschlagenen Release-Abruf nicht als leere Historie.
+
+- CLI-Agenten (#245) erhalten aufgerufene Skill-Inhalte, benannte Anhänge und Reviewkommentare mit Diff-Kontext. Globale Regeln werden unter dem bestehenden Einwilligungsschalter übertragen; gelöschte Regeln bleiben ausgeschlossen.
+
+- Spracheingabe (#245) lässt sich nur vom zugehörigen Editor abbrechen. Verspätete Aufnahmeergebnisse verändern keine neuere Sitzung; korrigierte Suchtestdaten verwenden die tatsächlichen Bytepositionen.
+
+- Drive-Importe (#245) verwerfen verspätete Dateiauswahlen nach Schließen oder Zielwechsel. Sammelexporte lehnen vorhandene Symlinks als Zielunterordner ab und erhalten bestehende Dateien.
+
+- Die Bereinigung alter Linux-Zugangsdaten (#245) akzeptiert frühere Dateirechte nach Prüfung und Reparatur. Eine doppelte Testmodul-Deklaration und ein verfälschter Unicode-Erwartungswert sind korrigiert.
+
+- Headless-Agenten (#245) erhalten ausgewählten Text, Dateikontext, Referenzen und laufende Befehlsausgabe zusammen mit der Anfrage. Bilder gehen als native Bilddaten an Claude/Codex; die angezeigte Anfrage bleibt unverändert.
+
+- Aufeinanderfolgende Logdatei-Generationen (#245) verlieren ihre Ausgabe nicht mehr durch verspätetes Schließen des Vorgängers. ONNX-Aufrufe passen zum vorhandenen ORT-Lockstand; veraltete Windows-Pfade, Lexerpositionen und ein verwaister WASM-Modulfilter sind korrigiert.
+
+- Die Freigabematrix (#245) bindet alle Laufzeitbelege an dasselbe Artefakt und prüft die Protokollversion. Der Übersetzungscheck erkennt mehrzeilige Literale und hält seine temporären Dateien in einem eigenen Verzeichnis.
+
+- Audit-Verifikation (#245) verlangt die archivierten Originalprotokolle und zum Commit passende Quellen. Wiederaufnahmen prüfen bestehende Belege erneut; ausgeschlossene sensible Dateien bleiben als offene Prüflücke sichtbar. Die Freigabematrix weist doppelte Zeilen und fehlerhafte Abschnittsgrenzen zurück.
+
+- Terminal-Dateilinks (#245) öffnen während Remote-Reconnect oder nach dem Entfernen einer Session keine gleichnamige lokale Datei. Verzeichnislinks verwenden die tatsächliche Shell; Unicode-Suchfälle sind in den bestehenden Testdaten wiederhergestellt.
+
+- SSH-Installationsfehler (#245) liefern gültige Statusmeldungen auch bei Sonderzeichen im Befehl. Fish übergibt das eingebettete Skript unverändert; portable tmux-Wrapper behandeln den Home-Pfad als Daten.
+
+- Fork-Auditbelege (#245) prüfen gespeicherte Reviewartefakte einschließlich ihrer Quellblobs statt nur Hashformate. Als binär markierte UTF-8-Dateien behalten ihre tatsächlichen Fork-Hunks im Inventar.
+
+- Terminalbilder (#245) erhalten pro Übertragung einen eigenen Cache-Schlüssel. Gleiche Kitty-Bildnummern in verschiedenen Terminals überschreiben einander nicht; verspätetes Aufräumen entfernt keine neu übertragenen Bilder.
+
+- Automatische SSH-Starts (#245) erhalten den aktuellen Eingabeentwurf sowie ausgewählte Workflows und Umgebungsdaten. Nur der zugehörige Systembefehl darf den Entwurf beim Abschluss erhalten.
+
+- SSH-Dateiuploads (#245/#464) geben SFTP-Fehler zuverlässig als Fehlerstatus weiter und verwenden eine passende native Shell. PowerShell übergibt die UTF-8-Batchdatei direkt an SFTP.
+
+- SSH-Automatik (#245) wartet auf den zugehörigen Verbindungsstart. Abbruch, Verbindungsende oder ein neuer Befehl verwerfen wartende Passwort- und Startbefehle; Askpass-Dateien bleiben bis zur Anmeldung erhalten und werden bei Abbruch entfernt.
+
+- SFTP-Arbeitskopien (#245/#464) bleiben bei ausstehenden oder fehlgeschlagenen Uploads nach dem Schließen erhalten; Fehlermeldungen nennen den Wiederherstellungspfad. Erfolgreich übertragene Kopien werden wie bisher aufgeräumt.
+
+- Ordnerauswahlen (#245) bleiben an den ursprünglichen Startdialog und Host gebunden. Agent-Neustarts prüfen vor dem Beenden die Wiederaufnahmefähigkeit; verspätete Antworten entfernen keine inzwischen neu gestartete Sitzung.
+
+- Terminal-Testdaten (#245/#472) stimmen wieder mit ihren Regex-Mustern und URL-Zellgrenzen überein; negative Punktprüfungen treffen tatsächliche Satzzeichen.
+
+- SSH-Formulare (#245) sperren Änderungen während laufender Speicherung und verwerfen veraltete Dateiauswahlen. Tailscale-Importe rollen bei einem Fehler den gesamten Import zurück; alle sieben Servermenüaktionen behalten ihren Mauszustand.
+
+- Kitty-Grafiken (#245) löschen nur die angeforderten Platzierungen und erhalten weitere Referenzen, Scrollback, virtuelle Platzierungen und iTerm-Bilder. Bildschirmkoordinaten berücksichtigen gescrollte Ausgabe; auch ersetzte Animationsframes müssen innerhalb des Speicherlimits bleiben.
+
+- Fish-Agentenstarts (#245) erhalten Backslashes und Apostrophe in Konto-, Programm- und Sitzungsargumenten.
+
+- SSH-Starts (#245) binden Konten nur an tatsächlich geöffnete Terminals. Verspätete Startergebnisse öffnen geschlossene oder neu konfigurierte Startdialoge nicht erneut. Der klassische Verbindungstest lehnt widerrufene Hostschlüssel auch nach einer Bestätigung ab und prüft fehlende Passwörter vor jedem Netzwerkzugriff.
+
+- CLI-Agenten (#245) erhalten unter PowerShell die ursprüngliche Konto- und API-Umgebung sowie ihren Exitstatus. Fremde Anbieterereignisse verändern keine bestehende Sitzung. Fish-Dateipfade bleiben bei Backslashes und Apostrophen korrekt gequotet; Standardpfade für entfernte Shell-Historien behalten die Home-Expansion.
+
+- SFTP-Konfliktdialoge (#245/#459) umbrechen übersetzte Aktionen entsprechend dem verfügbaren Platz.
+
+- Startvorlagen (#245) behalten den ausgewählten Tab auch dann, wenn ein späterer Tab angepinnt wird. Leere oder vollständig ungültige Vorlagen öffnen ein nutzbares Fenster statt beim fehlenden aktiven Tab abzubrechen.
+
+- Dateiübertragungen (#245/#464) erhalten leere Ordner und halten laufende Rückrufe beim Aufräumen abgeschlossener Transfers gültig. Lokale Pfade bleiben in ihrem nativen Format erhalten; Windows-Downloads weisen Laufwerkswechsel und alternative Datenströme in entfernten Dateinamen zurück.
+
+- Mehrhost-Terminals (#245/#456) übernehmen Ausgabe, Sitzungsende und Hinweise nur von ihrer eigenen Daemon-Verbindung, auch wenn ein anderer Host dieselbe PTY-Kennung verwendet.
+
+- Lokale Dateiansichten unter Windows (#245) erhalten absolute Laufwerks- und UNC-Pfade; abgeschottete Testdateisysteme bleiben getrennt. Escape schließt im fokussierten Dateimanager zuerst das Kontextmenü, anschließend den Dialog. SFTP-Wiederherstellung behält mehrere offene Vorgänge am selben Pfad und bereits erreichte Wiederherstellungsergebnisse über spätere Fehler und erneute Versuche hinweg.
+
+- Der Startdialog (#245) prüft die Startfreigabe auch bei Enter, reserviert Ziele vor asynchroner Prüfung und verwirft verspätete Starts nach Auswahlwechsel oder Schließen. Ordnerhistorien mehrerer Workspaces bleiben erhalten; mehrdeutige Hostnamen werden nicht automatisch zugeordnet. Stop-/Kill-Bestätigungen nehmen am gemeinsamen Modal-Fokus und Schließen teil.
+
+- Der Themeeditor (#245) verwirft verspätete Bildverarbeitung nach Vorlagenwechsel oder Schließen der Vorschau. Die Command-Palette bietet GitHub-Analysen nur bei einem tatsächlich unterstützten lokalen Claude-Konto an.
+
+- Pane-Ziele (#245/#460/#462) werden nach Verschieben, Ausblenden und Dateimanager-Wechsel ungültig. Cockpit- und Dateimanager-Kopfzeilen leiten ihre Drag-/Tab-Aktionen an die Pane-Gruppe weiter; Remote-Wiederverbindung erhält die gemeinsame Titel- und Hostkonfiguration.
+
+- Der Daemon (#245) erhält Agentenzuordnungen bei Inventarabfragen älterer Clients. Ein veralteter Projektpfad einer anderen Session blockiert neue, unabhängige Starts nicht mehr.
+
+- Root-Passwortbestätigungen (#245) bleiben an den ursprünglichen Befehl und die Sitzung gebunden. Abbruch, Blockende und Schließen verwerfen auch noch ausstehende Antworten aus dem Schlüsselspeicher; diese können kein geschlossenes Menü erneut öffnen.
+
+- SSH-Vertrauen (#245): `@revoked`-Hostschlüssel werden vor Anmeldung und manueller Bestätigung abgewiesen. Aliase, Hashes, Hostmuster und Portgrenzen bleiben berücksichtigt.
+
+- Einstellungen (#245) speichern die gewählte Seite mit sprachunabhängigen Schlüsseln und lesen frühere Namen weiter. Externe SSH-Einstellungen aktualisieren die Dropdown-Bedienbarkeit sofort; bei mehreren CLI-Agenten verspricht der Reparaturknopf keinen bereits gewählten Anbieter.
+
+- Kontrollschnittstelle und Quellidentität (#245): Bereits vorhandene Worktrees müssen zum angeforderten Repository gehören. Gepackte Git-Referenzen werden für die eingebettete Commit-ID mitbeobachtet; der folgende Commit bleibt damit als Änderung erkennbar.
+
+- Subscription-Agenten (#245) behalten bei geänderten Anzeigenamen ihre exakte Kontoauswahl. Ein Abbruch während Discovery oder Sitzungsinitialisierung beendet den Start, bevor ein weiterer Prompt zugestellt wird.
+
+- SFTP-Speichern (#245) verwendet die bestätigte POSIX-Rename-Erweiterung des Servers statt eines Shell-Move mit Verzeichnisrennen. Wiederherstellung nach Überschreiben behält alle verifizierten Backup- und verdrängten Zieldateien bis zum erfolgreichen Aufräumen.
+
+- CI-/Release-Korrekturen (#245/#468) lassen den Pflichtcheck bei fehlgeschlagenen Vorprüfungen scheitern, binden fertige Daemon-Caches an den Quellcommit und verlangen tatsächlich ausgeführte Live-SFTP-Tests. Vorhandene Release-Tags müssen zum gebauten Commit gehören; Fehler beim Abruf des letzten Releases werden nicht mehr als leere Release-Historie gewertet.
+
+- Cockpit-Audit (#245): Fehler beim Lesen der Nutzungshistorie sperren die automatische Auswahl scheinbar freier Konten. OAuth-Limits bleiben an Konto und Zugangsdaten gebunden; der erste vollständige Scan erzeugt keinen Startton. Bare-Git-Repositories bleiben getrennte Projekte, und unbekannte Prozesszustände gelten nicht mehr als beendete Sessions.
+
+- GitHub-Analysen (#245) binden Diff, Bestätigung und Review an konkrete Commits; ein Merge verlangt weiterhin denselben Head. Die Analyse nutzt eine getrennte lokale Claude-Sitzung mit ausschließlich Lesewerkzeugen und ohne geerbte Erweiterungen. Codex steht für diese Analyse vorerst nicht zur Auswahl, solange externe Schreibwerkzeuge nicht sicher abgeschaltet werden können.
+
+- Weitere Cockpit-Korrekturen (#245) erhalten Konten-Aliase beim Bearbeiten, zeigen wartende Sessions zuerst und wenden Einstellungen sofort an. Lokale Scanfehler und nicht belegte RAM-Werte bleiben sichtbar unvollständig. Auch der CLI-Export meldet bei lokalen Sessions ohne Kontoinventar nur Teilerfolg.
+
+- Dateiübertragungen (#245) behalten nach bereits veröffentlichtem Ziel bei späteren Lese- und Prüfungsfehlern ihren tatsächlichen Zustand und die benötigten Wiederherstellungspfade. Ein fehlgeschlagener Aufräum-Retry verliert seinen übernommenen Eigentumsnachweis nicht mehr.
+
+- Unvollständige Prozessmessungen zeigen keinen vermeintlich vollständigen Speicherverbrauch. Beim Aufräumen eigener Remote-Dateien bleibt eine nicht eindeutig zuordenbare Löschung als Wiederherstellungsfall sichtbar (#245).
+
+- Worktree-Bereinigung (#245) erhält ungemergte lokale Commits auch bei fehlendem Remote-Branch, bricht nach Fetchfehlern ab und prüft das Ziel nach der Bestätigung erneut. Der Commit-Schutz erkennt Hauptverzeichnisse mit Leerzeichen im Pfad korrekt.
+
+- Remote-Speicherstände (#245) erfassen Host-, Daemon- und PTY-Identität, Wiederherstellungsfehler und den temporären Dateimanager gemeinsam mit der Pane. Späteres Schließen oder Wechseln der Pane kann diese bereits vorgemerkten Daten nicht mehr verändern. Ein Rollback der Remote-Pane-Migration entfernt zugehörige Dateimanager-Knoten vollständig und erhält Terminalgeschwister.
+
+- SSH-Wiederaufnahme (#456): Der Daemon sichert vollständige Shell-Startmeldungen unabhängig vom Client. Bestehende Sitzungen mit verlorenem Startpräfix bleiben über einen gekennzeichneten einfachen Terminalmodus bedienbar; Prozesse, PTY und Eingabeentwurf bleiben erhalten, automatische Befehle bleiben gesperrt.
+
+- Aufgelistete Remote-Sessions behalten ihre bestätigte Host- und Daemon-Version beim Wiederöffnen ohne aktive Verbindung. Wiederherstellbare Sessions lassen sich während des Attach-Vorgangs abbrechen und danach erneut verbinden. Auch ein neuer Verbindungsversuch vor bestätigter PTY kann lokal abgebrochen werden, ohne den Entwurf zu verlieren oder entfernte Arbeit zu beenden (#456).
+
+- Sessionzeilen ohne eigenen Titel zeigen Host und tatsächliches Arbeitsverzeichnis; der vollständige Pfad bleibt im Tooltip sichtbar (#455). Die Auswahl nach `..` ist zusätzlich über Maus-/Tastaturereignisse und veraltete oder fehlgeschlagene Verzeichnisantworten abgesichert (#458).
+
+- Issue-Nachprüfung: Der Split-Picker kennzeichnet den aktuellen Host und meldet Registry-Ausfälle (#460); Favoriten verwechseln Lesefehler nicht mit entfernten Hosts (#463). Dateiaktionen sind nur bei tatsächlichem Fokus in der Dateimanager-Pane aktiv (#464). Verbindungs-, Fehler- und Wiederherstellungshinweise bleiben außerhalb des Terminalrasters (#470). Pfad-Completion funktioniert auch mit dem Legacy-SSH-Fallback nach übersprungener oder fehlgeschlagener Remote-Server-Einrichtung (#471).
+
+- Dateimanager-Rückkehr (#469) übernimmt das besuchte Verzeichnis in die zugehörige Shell und erhält Eingabeentwürfe; laufende Prozesse bleiben unberührt. Kollidierende Pane-Titel bleiben anhand von Pfad und stabiler Session-Kennung unterscheidbar (#461). Ungültige Drag-Ziele verändern weder Layout noch Undo-Zustand (#462). Transfers prüfen nach Konfliktdialogen ihr Ziel erneut und überschreiben nachträglich angelegte Dateien nicht ohne Zustimmung (#464).
+
+- Review-Korrekturen zu #467/#468: SQLite-Migrationen übernehmen einen konsistenten Datenstand einschließlich WAL und bleiben nach Fehlern wiederholbar. Fehler bei der Datenbankinitialisierung brechen den Start mit Diagnose ab, statt Arbeit ohne Speicherung zuzulassen. CI-Buildschritte erhalten keine unnötigen Repository-Schreibrechte; neue Release-Tags werden an den gebauten Commit gebunden.
+
+- UI-Korrekturen zu #459: Sessionbaum und Konten scrollen unabhängig; Sidebar-Typografie, Theme-Kontraste und Favoriten-Flyouts sind vereinheitlicht. Automatische Terminaltitel behalten Host und Verzeichnis auch bei laufenden Agenten. SFTP-Dialoge geben übersetzten Aktionen genügend Platz und bieten nach Verbindungsfehlern einen erneuten Versuch. Start- und Reconnect-Meldungen erscheinen erst nach tatsächlicher Shell-Bereitschaft.
+
 ## [1.1.0] — 2026-09-21
 
 - **Premium-Workspace für UI #459:** Terminal- und Dateimanager-Panes bewahren ihre Host-Identität in Mehrhost-Tabs; Cockpit und Verbindungen zeigen die zugehörigen Sessions. Ein Klick auf einen Favoriten-Host öffnet die Verbindung im neuen Tab, während das separate Aktions-Flyout neue Agenten sowie Bearbeiten und Entfernen anbietet. Restore erhält Host-, Pane- und Dateimanager-Modus; Shell-Bereitschaft und Eingabeentwürfe bleiben beim Wiederverbinden sichtbar und sicher, Dateioperationen an das gewählte Ziel gebunden.

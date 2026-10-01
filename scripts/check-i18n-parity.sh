@@ -24,10 +24,13 @@ DE=app/i18n/de/warp.ftl
 # indented attribute/continuation lines).
 keys() { grep -oE '^[a-z0-9][a-z0-9_-]* =' "$1" | sed 's/ =$//' | sort -u; }
 
-keys "$EN" > /tmp/i18n_en_keys.$$
-keys "$DE" > /tmp/i18n_de_keys.$$
+i18n_tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/zaplex-i18n.XXXXXXXX")"
+trap 'rm -rf -- "$i18n_tmp_dir"' EXIT
+
+keys "$EN" > "$i18n_tmp_dir/en_keys"
+keys "$DE" > "$i18n_tmp_dir/de_keys"
 # EN-only = present in EN, absent in DE.
-comm -23 /tmp/i18n_en_keys.$$ /tmp/i18n_de_keys.$$ > /tmp/i18n_missing.$$
+comm -23 "$i18n_tmp_dir/en_keys" "$i18n_tmp_dir/de_keys" > "$i18n_tmp_dir/missing"
 
 # Surfaces that must be fully German (the user-facing chrome).
 CRITICAL_PREFIXES=(
@@ -52,10 +55,9 @@ while IFS= read -r key; do
       "$p"*) critical_missing+="  $key"$'\n'; break ;;
     esac
   done
-done < /tmp/i18n_missing.$$
+done < "$i18n_tmp_dir/missing"
 
-total_missing=$(wc -l < /tmp/i18n_missing.$$ | tr -d ' ')
-rm -f /tmp/i18n_en_keys.$$ /tmp/i18n_de_keys.$$ /tmp/i18n_missing.$$
+total_missing=$(wc -l < "$i18n_tmp_dir/missing" | tr -d ' ')
 
 echo "i18n parity: ${total_missing} EN key(s) not yet in DE (long tail on EN fallback — informational)."
 

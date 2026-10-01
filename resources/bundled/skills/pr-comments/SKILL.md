@@ -22,9 +22,7 @@ Fetch all review comments from the current branch's GitHub PR and display them v
    - `base_branch`
    - `comments`
 
-3. Stop and wait for the user. After displaying each batch of comments, you MUST ask the user how they would like to proceed. Do NOT take any further action until the user provides explicit instructions unless the user explicitly asks you to.
-Do NOT make code changes in response to the fetched comments unless the user tells you to. Do NOT impersonate the user by submitting review responses.
-Your role when fetching and displaying comments is purely informational — present the comments and wait for direction.
+3. This skill presents comments; the user decides what happens next. After displaying a batch, ask how they want to proceed unless their current request already authorizes the next action. Make code changes or submit review replies only within that authorization: a reply from this session speaks for the user on GitHub.
 
 ## What the Script Handles
 
@@ -46,7 +44,7 @@ If the script fails to fetch comments, follow these steps to fetch comments dire
 
 4. Use the GitHub /repos/{owner_login}/{repo_name}/pulls/{pr_number}/reviews endpoint with a filter to fetch code reviews with comment text.
 
-5. Invoke the `insert_code_review_comments` tool to send the comments to the user. Include all PR-, review-, file- and line-level comments. If there are no comments on the PR, use the tool to return an empty list. DO NOT read out the comment contents without the tool.
+5. Invoke the `insert_code_review_comments` tool to send the comments to the user. Include all PR-, review-, file- and line-level comments. If there are no comments on the PR, use the tool to return an empty list. Show the comments through the tool rather than as plain text, so they appear in the code-review view.
 
 Ensure the pager is not used by clearing the GH_PAGER environment variable. For example, on MacOS using zsh, use:
 ```sh
@@ -57,7 +55,7 @@ $ GH_PAGER="" gh api /repos/{owner_login}/{repo_name}/pulls/{pr_number}/reviews 
 ```
 Adapt the instructions above for the user's operating system and shell. Then invoke the `insert_code_review_comments` tool.
 
-6. After displaying comments, follow step 3 of the Procedure above: stop and ask the user how they want to proceed. Do NOT take any action on the comments without explicit user direction.
+6. After displaying comments, continue with step 3 of the Procedure above.
 
 ## Requirements
 

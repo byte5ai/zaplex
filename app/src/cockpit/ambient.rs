@@ -21,6 +21,7 @@
 //! platform-agnostic.
 
 use warpui::{Entity, ModelContext, SingletonEntity};
+use zaplex_cockpit::{AgentInventoryStatus, FleetTree, HostAvailability, ScanHealth};
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::settings::CockpitSettings;
@@ -126,6 +127,21 @@ pub struct AttentionDriver {
     initialized: bool,
 }
 
+/// A pending or incomplete scan cannot establish a calm baseline. In particular,
+/// publishing local results before remote RPCs finish must not manufacture a
+/// startup edge when the first remote waiting sessions arrive.
+fn attention_baseline_ready(health: &ScanHealth, inventory: &FleetTree) -> bool {
+    health.is_loaded()
+        && inventory.hosts.iter().all(|host| match host.availability {
+            HostAvailability::Removed => true,
+            HostAvailability::Unverified => false,
+            HostAvailability::Available => matches!(
+                host.inventory_status,
+                AgentInventoryStatus::Ready | AgentInventoryStatus::Unsupported
+            ),
+        })
+}
+
 impl AttentionDriver {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         // Every cockpit reconcile emits `Updated`; needs_me may have changed.
@@ -146,7 +162,9 @@ impl AttentionDriver {
     }
 
     fn on_cockpit_update(&mut self, ctx: &mut ModelContext<Self>) {
-        let now = CockpitModel::as_ref(ctx).needs_me();
+        let model = CockpitModel::as_ref(ctx);
+        let now = model.needs_me();
+        let baseline_ready = attention_baseline_ready(&model.snapshot().health, model.inventory());
         // The passive surface always tracks the truth, DND or not — including on
         // the very first refresh.
         set_attention(now);
@@ -156,11 +174,19 @@ impl AttentionDriver {
         // fleet already waiting at launch is shown, not sounded).
         let dnd = *CockpitSettings::as_ref(ctx).attention_dnd;
         let sound_on = *CockpitSettings::as_ref(ctx).attention_sound;
-        if should_chime_on_update(self.initialized, self.prev_needs_me, now, dnd || !sound_on) {
+        if self.record_update(now, baseline_ready, dnd || !sound_on) {
             play_chime();
         }
+    }
+
+    fn record_update(&mut self, now: usize, baseline_ready: bool, suppressed: bool) -> bool {
+        let chime = baseline_ready
+            && should_chime_on_update(self.initialized, self.prev_needs_me, now, suppressed);
         self.prev_needs_me = now;
-        self.initialized = true;
+        // An incomplete refresh also breaks an existing baseline: recovery is
+        // not evidence that the fleet genuinely crossed from calm to waiting.
+        self.initialized = baseline_ready;
+        chime
     }
 }
 
@@ -172,7 +198,76 @@ impl SingletonEntity for AttentionDriver {}
 
 #[cfg(test)]
 mod tests {
-    use super::{should_chime, should_chime_on_update};
+    use super::*;
+
+    #[test]
+    fn pending_then_first_complete_scan_only_seeds_the_baseline() {
+        let mut driver = AttentionDriver {
+            prev_needs_me: 0,
+            initialized: false,
+        };
+        let inventory = FleetTree::default();
+        assert!(!driver.record_update(
+            0,
+            attention_baseline_ready(&ScanHealth::Pending, &inventory),
+            false
+        ));
+        assert!(!driver.initialized);
+        assert!(!driver.record_update(
+            3,
+            attention_baseline_ready(&ScanHealth::Loaded, &inventory),
+            false
+        ));
+        assert!(!driver.record_update(0, true, false));
+        assert!(driver.record_update(1, true, false));
+    }
+
+    #[test]
+    fn incomplete_scan_and_recovery_do_not_manufacture_an_attention_edge() {
+        let mut driver = AttentionDriver {
+            prev_needs_me: 0,
+            initialized: false,
+        };
+        assert!(!attention_baseline_ready(
+            &ScanHealth::Degraded("read failed".into()),
+            &FleetTree::default()
+        ));
+        assert!(!driver.record_update(0, false, false));
+        assert!(!driver.record_update(2, true, false));
+        assert!(!driver.record_update(0, false, false));
+        assert!(!driver.record_update(2, true, false));
+        assert!(!driver.record_update(0, true, false));
+        assert!(driver.record_update(1, true, false));
+    }
+
+    #[test]
+    fn first_remote_inventory_must_finish_before_the_baseline_is_ready() {
+        let mut inventory = zaplex_cockpit::fold_inventory(
+            "local",
+            Vec::new(),
+            vec![(
+                zaplex_cockpit::RemoteHost {
+                    label: "remote".into(),
+                    host_id: "host-1".into(),
+                    registry_node_id: None,
+                    inventory_status: AgentInventoryStatus::Pending,
+                },
+                Vec::new(),
+            )],
+        );
+        assert!(!attention_baseline_ready(&ScanHealth::Loaded, &inventory));
+        for host in &mut inventory.hosts {
+            host.inventory_status = AgentInventoryStatus::Ready;
+        }
+        assert!(attention_baseline_ready(&ScanHealth::Loaded, &inventory));
+        inventory
+            .hosts
+            .iter_mut()
+            .find(|host| !host.is_local)
+            .unwrap()
+            .inventory_status = AgentInventoryStatus::Unavailable;
+        assert!(!attention_baseline_ready(&ScanHealth::Loaded, &inventory));
+    }
 
     #[test]
     fn first_update_never_chimes_even_when_already_waiting() {

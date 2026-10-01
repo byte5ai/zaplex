@@ -62,6 +62,7 @@ def run_updater(fixture: Path, version: str) -> subprocess.CompletedProcess[str]
 
 
 def main() -> int:
+    nonrust_case = __import__("runpy").run_path(str(Path(__file__).with_name("test-suite-nonrust-events")))["record"]
     root = Path(__file__).resolve().parent.parent
     old_version = (root / "VERSION").read_text(encoding="utf-8").strip()
     major, minor, patch = (int(part) for part in old_version.split("."))
@@ -104,12 +105,16 @@ def main() -> int:
             if marker not in text:
                 raise RuntimeError(f"{relative_path} lacks {marker!r}")
 
+        nonrust_case("valid-version-update-is-atomic")
+
         before_invalid = hashes(fixture)
         invalid = run_updater(fixture, f"{new_version}-rc1")
         if invalid.returncode == 0:
             raise RuntimeError("set-version accepted a prerelease version")
         if hashes(fixture) != before_invalid:
             raise RuntimeError("failed validation changed version-bearing files")
+
+        nonrust_case("invalid-prerelease-preserves-all-files")
 
     print("PASS script/set-version updates every release source atomically")
     return 0

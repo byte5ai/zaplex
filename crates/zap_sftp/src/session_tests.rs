@@ -1044,11 +1044,11 @@ fn matching_pins_ignore_unrelated_large_inventory_and_keep_aliases_and_ports() {
 }
 
 #[test]
-fn marked_entries_are_not_promoted_to_positive_host_key_pins() {
+fn certificate_authority_entries_are_not_promoted_to_positive_host_key_pins() {
     let session = Session::new().unwrap();
     let key = synthetic_host_key("ssh-ed25519", 1);
     let line = known_hosts_line("sftp.example", "ssh-ed25519", &key);
-    let contents = format!("@revoked {line}@cert-authority {line}");
+    let contents = format!("@cert-authority {line}");
     assert!(matches!(
         check_known_host_key(&session, &contents, "sftp.example", 22, &key).unwrap(),
         CheckResult::NotFound
@@ -1070,4 +1070,90 @@ fn matching_pins_preserve_short_aliases_and_non_utf8_comments() {
         vec![key]
     );
     assert_eq!(fs::read(path).unwrap(), contents);
+}
+
+#[test]
+fn revoked_key_overrides_positive_pin_and_all_confirmation_modes() {
+    let session = Session::new().unwrap();
+    let key = synthetic_host_key("ssh-ed25519", 1);
+    let pin = known_hosts_line("sftp.example", "ssh-ed25519", &key);
+    let confirmation = HostKeyConfirmation::new(
+        "sftp.example".to_string(),
+        22,
+        host_key_fingerprint_sha256(&key),
+    );
+    let replacement = HostKeyConfirmation::replacement(
+        "sftp.example".to_string(),
+        22,
+        host_key_fingerprint_sha256(&key),
+    );
+    for contents in [
+        format!("@revoked {pin}"),
+        format!("{pin}@revoked {pin}"),
+        format!("@revoked {pin}{pin}"),
+    ] {
+        for confirmation in [None, Some(&confirmation), Some(&replacement)] {
+            let authentication_attempts = AtomicUsize::new(0);
+            let verification = check_known_host_key(&session, &contents, "sftp.example", 22, &key)
+                .and_then(|checked| {
+                    enforce_host_key_policy(
+                        checked,
+                        "sftp.example",
+                        22,
+                        host_key_fingerprint_sha256(&key),
+                        "ED25519".to_string(),
+                        confirmation,
+                    )
+                })
+                .map(|_| ());
+            let error = authenticate_after_host_key_check(verification, || {
+                authentication_attempts.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap_err();
+            assert!(error.to_string().contains("revoked"));
+            assert_eq!(authentication_attempts.load(Ordering::SeqCst), 0);
+        }
+    }
+}
+
+#[test]
+fn revoked_key_matching_respects_alias_patterns_hashes_and_ports() {
+    let session = Session::new().unwrap();
+    let key = synthetic_host_key("ssh-ed25519", 1);
+    for (hosts, port, revoked) in [
+        ("alias.example,sftp.example", 22, true),
+        ("SFTP.EXAMPLE", 22, true),
+        ("*.example", 22, true),
+        ("s?tp.*", 22, true),
+        ("other*", 22, false),
+        ("*,!sftp.example", 22, false),
+        ("!sftp.example,*", 22, false),
+        ("!other.example", 22, false),
+        ("sftp.example", 2222, false),
+        ("[sftp.example]:2222", 22, false),
+        ("[sftp.example]:2222", 2222, true),
+        ("[sftp.example]:22", 22, true),
+        ("[*.example]:2222", 2222, true),
+        (HASHED_TARGET, 22, true),
+        (HASHED_OTHER, 22, false),
+        (HASHED_TARGET, 2222, false),
+    ] {
+        let contents = known_hosts_line(&format!("@revoked {hosts}"), "ssh-ed25519", &key);
+        let result = check_known_host_key(&session, &contents, "sftp.example", port, &key);
+        assert_eq!(
+            result.is_err(),
+            revoked,
+            "incorrect revocation decision for {hosts}:{port}"
+        );
+    }
+    let contents = known_hosts_line(
+        "@revoked *",
+        "ssh-ed25519",
+        &synthetic_host_key("ssh-ed25519", 2),
+    );
+    assert!(matches!(
+        check_known_host_key(&session, &contents, "sftp.example", 22, &key).unwrap(),
+        CheckResult::NotFound
+    ));
 }

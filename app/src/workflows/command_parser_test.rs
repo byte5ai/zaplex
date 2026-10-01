@@ -179,13 +179,13 @@ fn test_compute_workflow_display_data_for_linked_history_command() {
     );
     assert_eq!(
         display_data.replaced_ranges,
-        vec![36.into()..58.into(), 155.into()..188.into()]
+        vec![38.into()..60.into(), 157.into()..190.into()]
     );
     assert_eq!(
         display_data.argument_index_to_char_range_map,
         HashMap::from([
-            (0.into(), vec![36.into()..58.into()]),
-            (1.into(), vec![155.into()..188.into()])
+            (0.into(), vec![38.into()..60.into()]),
+            (1.into(), vec![157.into()..190.into()])
         ])
     );
 }

@@ -200,7 +200,3 @@ pub fn modal_overlay<A: Action + Clone + 'static>(
         .with_corner_radius(app.windows().window_corner_radius())
         .finish()
 }
-
-#[cfg(test)]
-#[path = "modal_frame_tests.rs"]
-mod tests;

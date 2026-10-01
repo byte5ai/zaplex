@@ -1,10 +1,14 @@
 use base64::engine::general_purpose::STANDARD as BASE64;
 use warp_core::features::FeatureFlag;
 
+use crate::terminal::model::ansi::Handler as _;
+use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::image_map::StoredImageMetadata;
 use crate::terminal::model::index::Point;
+use crate::terminal::model::iterm_image::{ITermImage, ITermImageMetadata};
 use crate::terminal::model::kitty::MAX_ANIMATION_FRAMES;
 use crate::terminal::model::TerminalModel;
+use pathfinder_geometry::vector::Vector2F;
 
 /// Builds a single-chunk kitty graphics APC message.
 fn kitty_apc(control_data: &str, payload: &[u8]) -> String {
@@ -717,20 +721,6 @@ fn reply_echoes_the_client_image_number() {
 }
 
 #[test]
-fn delete_all_clears_virtual_placements_without_freeing_the_image() {
-    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
-
-    let mut terminal = kitty_terminal();
-    terminal.process_bytes(kitty_apc("a=T,U=1,i=1,p=5,f=24,s=1,v=1", one_pixel_rgb()).as_str());
-
-    delete(&mut terminal, "d=a");
-
-    assert!(virtual_placement_ids(&terminal, 1).is_empty());
-    // Lowercase `d=a` removes placements, not the stored image data.
-    assert!(terminal.image_id_to_metadata.contains_key(&1));
-}
-
-#[test]
 fn delete_by_id_clears_virtual_placements() {
     let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
 
@@ -746,37 +736,25 @@ fn delete_by_id_clears_virtual_placements() {
 }
 
 #[test]
-fn delete_by_z_index_clears_matching_virtual_placements() {
-    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
-
-    let mut terminal = kitty_terminal();
-    terminal.process_bytes(kitty_apc("a=T,U=1,i=1,p=5,z=3,f=24,s=1,v=1", one_pixel_rgb()).as_str());
-    terminal.process_bytes(kitty_apc("a=p,U=1,i=1,p=6,z=4", &[]).as_str());
-
-    delete(&mut terminal, "d=z,z=3");
-
-    assert_eq!(virtual_placement_ids(&terminal, 1), vec![6]);
-}
-
-#[test]
-fn uppercase_z_delete_evicts_every_placement_of_a_freed_image() {
+fn uppercase_z_delete_preserves_other_placements_until_the_last_reference() {
     let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
 
     let mut terminal = kitty_terminal();
     place_image(&mut terminal, "i=1,p=1,z=5");
     place_image(&mut terminal, "i=1,p=2,z=6");
 
-    // Freeing image 1 by z-index must not leave the z=6 placement behind as a
-    // blank hole.
+    // A z=5 delete must keep the unrelated z=6 placement and its data.
     delete(&mut terminal, "d=Z,z=5");
 
     assert!(!has_placement(&terminal, 1, 1));
-    assert!(!has_placement(&terminal, 1, 2));
+    assert!(has_placement(&terminal, 1, 2));
+    assert!(terminal.image_id_to_metadata.contains_key(&1));
+    delete(&mut terminal, "d=Z,z=6");
     assert!(!terminal.image_id_to_metadata.contains_key(&1));
 }
 
 #[test]
-fn uppercase_delete_by_id_with_placement_frees_the_whole_image() {
+fn uppercase_delete_by_id_with_placement_preserves_other_references() {
     let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
 
     let mut terminal = kitty_terminal();
@@ -786,5 +764,246 @@ fn uppercase_delete_by_id_with_placement_frees_the_whole_image() {
     delete(&mut terminal, "d=I,i=1,p=1");
 
     assert!(!has_placement(&terminal, 1, 1));
-    assert!(!has_placement(&terminal, 1, 2));
+    assert!(has_placement(&terminal, 1, 2));
+    assert!(terminal.image_id_to_metadata.contains_key(&1));
+    delete(&mut terminal, "d=I,i=1,p=2");
+    assert!(!terminal.image_id_to_metadata.contains_key(&1));
+}
+
+#[test]
+fn screen_relative_deletes_preserve_virtual_placements_and_their_data() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    for specifier in ["d=a", "d=A", "d=z,z=3", "d=Z,z=3", "d=c", "d=C"] {
+        let mut terminal = kitty_terminal();
+        place_image(&mut terminal, "i=1,p=1,z=3");
+        terminal.process_bytes(kitty_apc("a=p,U=1,i=1,p=5,z=3", &[]).as_str());
+        delete(&mut terminal, specifier);
+        assert_eq!(virtual_placement_ids(&terminal, 1), vec![5], "{specifier}");
+        assert!(
+            terminal.image_id_to_metadata.contains_key(&1),
+            "{specifier}"
+        );
+        assert!(!has_placement(&terminal, 1, 1), "{specifier}");
+    }
+}
+
+#[test]
+fn range_delete_removes_only_matching_virtual_placements() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let mut terminal = kitty_terminal();
+    for id in [1, 2, 3] {
+        terminal.process_bytes(
+            kitty_apc(&format!("a=T,U=1,i={id},p=5,f=24,s=1,v=1"), one_pixel_rgb()).as_str(),
+        );
+    }
+    delete(&mut terminal, "d=r,x=2,y=2");
+    assert_eq!(virtual_placement_ids(&terminal, 1), vec![5]);
+    assert!(virtual_placement_ids(&terminal, 2).is_empty());
+    assert!(terminal.image_id_to_metadata.contains_key(&2));
+    assert_eq!(virtual_placement_ids(&terminal, 3), vec![5]);
+    delete(&mut terminal, "d=R,x=1,y=2");
+    assert!(!terminal.image_id_to_metadata.contains_key(&1));
+    assert!(!terminal.image_id_to_metadata.contains_key(&2));
+    assert_eq!(virtual_placement_ids(&terminal, 3), vec![5]);
+}
+
+#[test]
+fn uppercase_alt_screen_delete_keeps_normal_screen_image_reference() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let mut terminal = kitty_terminal();
+    place_image(&mut terminal, "i=1,p=1");
+    terminal.process_bytes("\x1b[?1049h");
+    terminal.process_bytes(kitty_apc("a=p,i=1,p=2,C=1", &[]).as_str());
+    delete(&mut terminal, "d=A");
+    assert!(terminal.image_id_to_metadata.contains_key(&1));
+    terminal.process_bytes("\x1b[?1049l");
+    assert!(has_placement(&terminal, 1, 1));
+    delete(&mut terminal, "d=I,i=1,p=1");
+    assert!(!terminal.image_id_to_metadata.contains_key(&1));
+}
+
+#[test]
+fn uppercase_positional_delete_keeps_a_different_real_placement() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let mut terminal = kitty_terminal();
+    place_image(&mut terminal, "i=1,p=1");
+    terminal.process_bytes("\x1b[2C");
+    place_image(&mut terminal, "i=1,p=2");
+    delete(&mut terminal, "d=P,x=1,y=1");
+    assert!(!has_placement(&terminal, 1, 1));
+    assert!(has_placement(&terminal, 1, 2));
+    assert!(terminal.image_id_to_metadata.contains_key(&1));
+    delete(&mut terminal, "d=I,i=1,p=2");
+    assert!(!terminal.image_id_to_metadata.contains_key(&1));
+}
+
+#[test]
+fn uppercase_delete_keeps_an_image_referenced_by_an_earlier_block() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let mut terminal = kitty_terminal();
+    place_image(&mut terminal, "i=1,p=1");
+    terminal.finish_block();
+    terminal.simulate_cmd("next command");
+    assert!(!has_placement(&terminal, 1, 1));
+    place_image(&mut terminal, "i=1,p=2");
+    delete(&mut terminal, "d=I,i=1,p=2");
+    assert!(terminal.block_list().blocks().iter().any(|block| {
+        block
+            .grid_handler()
+            .get_image_placement_data(1, 1)
+            .is_some()
+    }));
+    assert!(terminal.image_id_to_metadata.contains_key(&1));
+    delete(&mut terminal, "d=I,i=1,p=1");
+    assert!(!terminal.image_id_to_metadata.contains_key(&1));
+}
+
+#[test]
+fn kitty_deletes_do_not_remove_iterm_placements() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
+    for specifier in [
+        "d=a",
+        "d=A",
+        "d=i,i=42",
+        "d=I,i=42",
+        "d=r,x=1,y=50",
+        "d=R,x=1,y=50",
+        "d=z,z=0",
+        "d=Z,z=0",
+        "d=c",
+        "d=C",
+        "d=p,x=1,y=1",
+        "d=P,x=1,y=1",
+        "d=q,x=1,y=1,z=0",
+        "d=Q,x=1,y=1,z=0",
+        "d=x,x=1",
+        "d=X,x=1",
+        "d=y,y=1",
+        "d=Y,y=1",
+    ] {
+        let mut terminal = kitty_terminal();
+        terminal.handle_completed_iterm_image(ITermImage {
+            metadata: ITermImageMetadata {
+                id: 42,
+                inline: true,
+                image_size: Vector2F::new(1.0, 1.0),
+                ..ITermImageMetadata::default()
+            },
+            data: Vec::new(),
+        });
+        let placement_id = terminal
+            .block_list()
+            .active_block()
+            .grid_handler()
+            .get_image_ids_in_range(0, 1)
+            .into_iter()
+            .find(|placement| placement.image_id == 42)
+            .unwrap()
+            .placement_id;
+        terminal.process_bytes("\r");
+        place_image(&mut terminal, "i=1,p=1,z=0");
+        assert!(has_placement(&terminal, 42, placement_id));
+        delete(&mut terminal, specifier);
+        if specifier != "d=i,i=42" && specifier != "d=I,i=42" {
+            assert!(!has_placement(&terminal, 1, 1), "{specifier}");
+        }
+        assert!(has_placement(&terminal, 42, placement_id), "{specifier}");
+        assert!(
+            matches!(
+                terminal.image_id_to_metadata.get(&42),
+                Some(StoredImageMetadata::ITerm(_))
+            ),
+            "{specifier}"
+        );
+    }
+}
+
+#[test]
+fn all_delete_keeps_previous_blocks_and_current_grid_scrollback() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    for specifier in ["d=a", "d=A"] {
+        let mut terminal = kitty_terminal();
+        place_image(&mut terminal, "i=1,p=1");
+        terminal.finish_block();
+        terminal.simulate_cmd("next command");
+        place_image(&mut terminal, "i=2,p=2");
+        terminal.process_bytes("line\r\n".repeat(20).as_str());
+        assert!(
+            terminal
+                .block_list()
+                .active_block()
+                .grid_handler()
+                .history_size()
+                > 0
+        );
+        terminal.process_bytes("\x1b[1;1H");
+        place_image(&mut terminal, "i=3,p=3");
+        delete(&mut terminal, specifier);
+        assert!(terminal.block_list().blocks().iter().any(|block| block
+            .grid_handler()
+            .get_image_placement_data(1, 1)
+            .is_some()));
+        assert!(has_placement(&terminal, 2, 2), "{specifier}");
+        assert!(!has_placement(&terminal, 3, 3), "{specifier}");
+        assert!(terminal.image_id_to_metadata.contains_key(&1));
+        assert!(terminal.image_id_to_metadata.contains_key(&2));
+        assert_eq!(
+            terminal.image_id_to_metadata.contains_key(&3),
+            specifier == "d=a"
+        );
+    }
+}
+
+#[test]
+fn positional_delete_uses_visible_coordinates_after_scrolling() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    for specifier in ["d=P,x=1,y=1", "d=Y,y=1"] {
+        let mut terminal = kitty_terminal();
+        place_image(&mut terminal, "i=1,p=1");
+        terminal.process_bytes("line\r\n".repeat(20).as_str());
+        assert!(
+            terminal
+                .block_list()
+                .active_block()
+                .grid_handler()
+                .history_size()
+                > 0
+        );
+        terminal.process_bytes("\x1b[1;1H");
+        place_image(&mut terminal, "i=2,p=2");
+        delete(&mut terminal, specifier);
+        assert!(has_placement(&terminal, 1, 1), "{specifier}");
+        assert!(!has_placement(&terminal, 2, 2), "{specifier}");
+        assert!(terminal.image_id_to_metadata.contains_key(&1));
+        assert!(!terminal.image_id_to_metadata.contains_key(&2));
+    }
+}
+
+
+#[test]
+fn image_cache_eviction_is_scoped_to_one_transmission_in_one_terminal() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let mut first = terminal_with_stored_image();
+    let mut second = terminal_with_stored_image();
+    let first_asset = first.image_id_to_metadata[&1].asset_id();
+    let second_asset = second.image_id_to_metadata[&1].asset_id();
+    assert_ne!(first_asset, second_asset);
+
+    // Global cache notifications reach every terminal, including one whose
+    // application reused the same protocol id for a different image.
+    first.remove_image_asset_metadata(&first_asset);
+    second.remove_image_asset_metadata(&first_asset);
+    assert!(!first.image_id_to_metadata.contains_key(&1));
+    assert_eq!(second.image_id_to_metadata[&1].asset_id(), second_asset);
+
+    // An eviction queued for an earlier transmission must not remove its
+    // replacement, even though the client deliberately reused the protocol id.
+    second.process_bytes(kitty_apc("a=t,i=1,f=24,s=1,v=1", &[0, 0xff, 0]).as_str());
+    let replacement_asset = second.image_id_to_metadata[&1].asset_id();
+    assert_ne!(replacement_asset, second_asset);
+    second.remove_image_asset_metadata(&second_asset);
+    assert_eq!(second.image_id_to_metadata[&1].asset_id(), replacement_asset);
+    second.remove_image_asset_metadata(&replacement_asset);
+    assert!(!second.image_id_to_metadata.contains_key(&1));
 }

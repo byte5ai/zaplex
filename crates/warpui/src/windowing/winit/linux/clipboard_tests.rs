@@ -151,39 +151,38 @@ mod clipboard_tests {
 
     #[test]
     fn test_absolute_paths_extracted() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("document.txt");
+        let second = directory.path().join("file2.pdf");
+        std::fs::write(&first, "first").unwrap();
+        std::fs::write(&second, "second").unwrap();
+        let first = first.to_str().unwrap();
+        let second = second.to_str().unwrap();
         with_test_clipboard(|clipboard| {
-            // Test single path
-            assert_paths_extracted(
+            assert_paths_extracted(clipboard, first, &[first]);
+            assert_paths_extracted(clipboard, &format!("{first}\n{second}"), &[first, second]);
+            assert_no_paths_extracted(clipboard, &format!("{first}\nSome text\n{second}"));
+            assert_no_paths_extracted(
                 clipboard,
-                "/home/user/document.txt",
-                &["/home/user/document.txt"],
-            );
-
-            // Test multiple paths
-            assert_paths_extracted(
-                clipboard,
-                "/home/user/file1.txt\n/home/user/file2.pdf",
-                &["/home/user/file1.txt", "/home/user/file2.pdf"],
+                directory.path().join("missing.txt").to_str().unwrap(),
             );
         });
     }
 
     #[test]
     fn test_file_uri_decoded() {
+        let directory = tempfile::tempdir().unwrap();
+        let plain = directory.path().join("document.txt");
+        let spaced = directory.path().join("My Documents").join("file.txt");
+        std::fs::create_dir(spaced.parent().unwrap()).unwrap();
+        std::fs::write(&plain, "plain").unwrap();
+        std::fs::write(&spaced, "spaced").unwrap();
+        let plain = plain.to_str().unwrap();
+        let spaced = spaced.to_str().unwrap();
         with_test_clipboard(|clipboard| {
-            // Test basic file:// URI
-            assert_paths_extracted(
-                clipboard,
-                "file:///home/user/document.txt",
-                &["/home/user/document.txt"],
-            );
-
-            // Test URL-encoded URI with spaces
-            assert_paths_extracted(
-                clipboard,
-                "file:///home/user/My%20Documents/file.txt",
-                &["/home/user/My Documents/file.txt"],
-            );
+            assert_paths_extracted(clipboard, &format!("file://{plain}"), &[plain]);
+            let encoded = spaced.replace(' ', "%20");
+            assert_paths_extracted(clipboard, &format!("file://{encoded}"), &[spaced]);
         });
     }
 

@@ -11,6 +11,8 @@ use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+#[cfg(unix)]
+use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::atomic::AtomicU8;
@@ -728,7 +730,18 @@ impl SafeFileWorker {
                             {
                                 continue;
                             }
-                            let response_message = server.handle(connection_id, request);
+                            let response_message = match catch_unwind(AssertUnwindSafe(|| {
+                                server.handle(connection_id, request)
+                            })) {
+                                Ok(response_message) => response_message,
+                                Err(panic) => {
+                                    // Publish failure before unwinding drops the response sender
+                                    // and wakes its receiver. The server is never reused.
+                                    worker_availability
+                                        .store(SAFE_FILE_WORKER_UNAVAILABLE, Ordering::Release);
+                                    resume_unwind(panic);
+                                }
+                            };
                             if let Some(response) = response {
                                 let _ = response.send(response_message);
                             } else if let Some(super::proto::safe_file_response::Result::Error(
@@ -4097,6 +4110,8 @@ fn now_epoch_millis() -> u64 {
 struct CollectedAgentSessions {
     sessions: Vec<super::proto::AgentSessionInfo>,
     account_routes: Option<super::agent_account::AccountRoutes>,
+    #[cfg(unix)]
+    live_agents: HashSet<AgentIdentity>,
 }
 
 fn collect_agent_sessions_for_peer(
@@ -4120,6 +4135,16 @@ fn collect_agent_sessions_for_peer(
     } else {
         log::warn!("Daemon: ListAgentSessions: no home dir; reporting empty inventory");
     }
+    // Reconcile global bindings against both exact representations from this
+    // scan, before applying the requesting peer's wire capability projection.
+    #[cfg(unix)]
+    let live_agents = live_agent_identities_for_routes(
+        &snapshots
+            .iter()
+            .map(super::agent_session::snapshot_to_proto)
+            .collect::<Vec<_>>(),
+        &scan.routes,
+    );
     let account_routes = supports_account_routing.then_some(scan.routes);
     let sessions = snapshots
         .into_iter()
@@ -4141,6 +4166,8 @@ fn collect_agent_sessions_for_peer(
     CollectedAgentSessions {
         sessions,
         account_routes,
+        #[cfg(unix)]
+        live_agents,
     }
 }
 
@@ -4598,12 +4625,18 @@ impl ServerModel {
                 let CollectedAgentSessions {
                     mut sessions,
                     account_routes,
+                    #[cfg(unix)]
+                    live_agents,
                 } = collected;
                 if let Some(routes) = account_routes {
                     me.agent_account_routes.replace(routes);
                 }
                 #[cfg(unix)]
-                me.reconcile_and_overlay_agent_bindings(conn_id_for_response, &mut sessions);
+                me.reconcile_and_overlay_agent_bindings(
+                    conn_id_for_response,
+                    &mut sessions,
+                    &live_agents,
+                );
                 me.send_server_message(
                     Some(conn_id_for_response),
                     Some(&request_id_for_response),
@@ -4711,6 +4744,32 @@ fn live_agent_identities(sessions: &[AgentSessionInfo]) -> HashSet<AgentIdentity
             account_id: (!session.account_id.is_empty()).then(|| session.account_id.clone()),
         })
         .collect()
+}
+
+#[cfg(unix)]
+fn live_agent_identities_for_routes(
+    sessions: &[AgentSessionInfo],
+    routes: &super::agent_account::AccountRoutes,
+) -> HashSet<AgentIdentity> {
+    let mut identities = live_agent_identities(sessions);
+    let opaque = identities
+        .iter()
+        .filter(|identity| identity.account_id.is_none())
+        .filter_map(|identity| {
+            let account_id = super::agent_account::session_account_id(
+                routes,
+                &identity.provider,
+                identity.config_dir.as_deref(),
+            )?;
+            Some(AgentIdentity {
+                account_id: Some(account_id),
+                config_dir: None,
+                ..identity.clone()
+            })
+        })
+        .collect::<Vec<_>>();
+    identities.extend(opaque);
+    identities
 }
 
 #[cfg(unix)]
@@ -5399,8 +5458,7 @@ impl ServerModel {
                     requested_at,
                     supports_account_routing,
                 );
-                let live_agents = live_agent_identities(&collected.sessions);
-                (live_agents, collected.account_routes)
+                (collected.live_agents, collected.account_routes)
             },
             move |me, (live_agents, account_routes), _ctx| {
                 if let Some(routes) = account_routes {
@@ -5484,9 +5542,9 @@ impl ServerModel {
         &mut self,
         conn_id: ConnectionId,
         sessions: &mut [AgentSessionInfo],
+        live_agents: &HashSet<AgentIdentity>,
     ) {
-        let live_agents = live_agent_identities(sessions);
-        self.agent_pty_bindings.reconcile_live_agents(&live_agents);
+        self.agent_pty_bindings.reconcile_live_agents(live_agents);
         if !self.client_supports_agent_pty_binding(conn_id) {
             return;
         }
@@ -5573,6 +5631,11 @@ impl ServerModel {
                 continue;
             };
             let existing = metadata.plan();
+            if existing.launch_id() != plan.launch_id()
+                && existing.launch_key() != plan.launch_key()
+            {
+                continue;
+            }
             if !existing.project_identity_is_current() {
                 return Err("project-identity-changed");
             }
@@ -6448,8 +6511,7 @@ impl ServerModel {
                     requested_at,
                     supports_account_routing,
                 );
-                let live_agents = live_agent_identities(&collected.sessions);
-                (live_agents, collected.account_routes)
+                (collected.live_agents, collected.account_routes)
             },
             move |me, (live_agents, account_routes), _ctx| {
                 if let Some(routes) = account_routes {
@@ -6652,12 +6714,11 @@ impl ServerModel {
         }))
     }
 
-    /// Freezes the session's bootstrap preamble at the boundary the opening
-    /// client just reported (T1.3). The preamble was accumulated from seq 0 by
-    /// `on_session_output`; here we truncate it to `end_seq` (the client's output
-    /// cursor at bootstrap completion) and stop capturing. Idempotent: a session
-    /// whose preamble is already frozen (or was abandoned at the cap) ignores
-    /// repeats — only the first, opening client defines the boundary.
+    /// Accepts the opening client's bootstrap boundary for compatibility. The
+    /// daemon normally freezes the complete handshake directly from PTY output;
+    /// an already frozen or abandoned preamble ignores later client reports.
+    /// For a handshake the daemon could not recognize, the client's confirmed
+    /// boundary still truncates the captured prefix without changing its bytes.
     fn handle_set_bootstrap_preamble(&mut self, msg: SetBootstrapPreamble) {
         let Some(session) = self.sessions.get_mut(&msg.session_id) else {
             log::debug!(

@@ -81,7 +81,7 @@ cockpit-session-is-reviewed = ✓ Geprüft
 cockpit-session-redirect = ↻ Umlenken
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
-cockpit-session-live-unavailable = „{ $session }“ läuft noch auf { $host }, aber das Terminal ist in Zaplex nicht verfügbar. Stoppe sie zuerst und öffne sie dann hier; es wurde keine zweite Sitzung gestartet.
+cockpit-session-live-unavailable = „{ $session }“ läuft auf { $host }. Zaplex kann das zugehörige Agent-Terminal derzeit nicht öffnen. Nutze das Terminal, in dem Du diese Session gestartet hast. Die Session läuft unverändert weiter.
 cockpit-session-no-longer-available = Diese Sitzung ist auf { $host } nicht mehr verfügbar. Es wurde nichts gestartet.
 
 # GitHub-Flows auf der freiesten Instanz
@@ -164,6 +164,7 @@ workspace-favorites-add-header = Zu Favoriten hinzufügen
 workspace-favorite-unavailable = Host existiert nicht mehr — dieser Favorit kann nicht gestartet werden
 workspace-favorite-more-actions = Weitere Aktionen für { $host }
 workspace-favorite-manage-host-missing = Dieser Host existiert nicht mehr. Entferne ihn aus den Favoriten.
+workspace-host-registry-unavailable = Verbindungen konnten nicht gelesen werden. Bitte erneut versuchen.
 workspace-favorite-manage-host-error = Die Host-Einstellungen konnten nicht geöffnet werden. Versuche es erneut.
 
 # ── SSH-Hosts (linkes Panel) ─────────────────────────────────────────────────
@@ -3467,9 +3468,11 @@ cli-agent-plugin-opencode-restart-update-note = Starte OpenCode neu, um das aktu
 ai-ask-user-questions-unavailable = Fragen nicht verfügbar
 ai-ask-user-questions-skipped-auto-approve = Fragen wegen automatischer Genehmigung übersprungen
 terminal-bootstrapping-checking = Wird geprüft…
+terminal-remote-readiness-raw = Einfacher Terminalmodus: Die Shell-Integration konnte nicht wiederhergestellt werden. Direkt im Terminal tippen; Befehlsblöcke und Autovervollständigung sind nicht verfügbar.
 terminal-remote-readiness-transport = Remote-Transport wird verbunden…
 terminal-remote-readiness-attach = Remote-PTY wird angehängt…
 terminal-remote-readiness-replay = Remote-Ausgabe wird wiedergegeben…
+terminal-remote-readiness-reconnecting = Verbindung zur Remote-Sitzung wird wiederhergestellt…
 terminal-remote-readiness-failed = Remote-Sitzung ist nicht verfügbar. Verbindung erneut versuchen oder Wiederherstellung abbrechen.
 terminal-remote-readiness-corrupt = Diese Remote-Sitzung konnte nicht wiederhergestellt werden, weil ihre gespeicherte Identität beschädigt ist. Das Pane wurde sicher beibehalten und keine lokale Shell gestartet.
 terminal-remote-readiness-cancelled = Wiederherstellung der Remote-Sitzung abgebrochen.
@@ -4020,7 +4023,6 @@ ai-footer-subscription-target-unavailable = Das ausgewählte Agent-Ziel ist nich
 
 workspace-left-panel-ssh-manager-sessions-confirm-host-key = Verbinde diesen Host und bestätige zuerst den SSH-Schlüssel für { $host }:{ $port } ({ $fingerprint }).
 
-cockpit-shell-sessions-connections = Shell-Sessions in Verbindungen öffnen
 
 ai-footer-subscription-target-changed = Das Ausführungsziel dieser Session hat sich geändert. Stelle das bisherige Ziel wieder her oder beginne eine neue Unterhaltung.
 
@@ -4046,6 +4048,8 @@ menu-a11y-action-instructions = Drücke Enter, um die Aktion des ausgewählten M
 # =============================================================================
 workspace-remote-pty-already-open = Dieses Remote-PTY ist bereits geöffnet, aber der vorhandene Tab konnte nicht fokussiert werden.
 workspace-remote-fallback-split-target-changed = Der Remote-Fallback wurde abgebrochen, weil sich das ursprüngliche Split-Ziel geändert hat.
+workspace-split-target-changed = Der Split wurde nicht geöffnet, weil sich seine Pane verschoben hat oder geschlossen wurde.
+workspace-split-host-already-connecting = { $host } wird bereits verbunden. Öffne den Split erneut, sobald die Verbindung steht.
 workspace-remote-agent-route-validation-unavailable = Der Daemon kann diese Agent-zu-PTY-Route nicht validieren.
 workspace-remote-daemon-connection-unavailable = Die Daemon-Verbindung ist nicht verfügbar; aktualisiere die Agent-Sessions.
 workspace-remote-pty-agent-changed = Der Vordergrund-Agent dieses PTYs hat sich geändert. Aktualisiere die Agent-Sessions, bevor du es erneut anhängst.
@@ -4077,7 +4081,10 @@ terminal-daemon-scrollback-truncated = Der Scrollback wurde während einer läng
 terminal-daemon-final-output-truncated = Ein Teil der letzten Session-Ausgabe wurde vor der Beendigungsbenachrichtigung gekürzt.
 terminal-daemon-reconnected = Wieder mit { $host } verbunden — Session wiederhergestellt, nichts verloren.
 terminal-daemon-reattached = Wieder an deine laufende Session auf { $host } angehängt — genau an der letzten Stelle.
+terminal-daemon-restored-truncated = Wieder mit { $host } verbunden — Session wiederhergestellt; älterer Verlauf wurde gekürzt.
 terminal-daemon-connection-failed = Verbindung fehlgeschlagen ({ $phase }): { $detail }
+terminal-daemon-connection-phase-connect = Verbindungsaufbau
+terminal-daemon-connection-phase-handshake = Handshake
 terminal-daemon-persistent-session-active = Zaplexify aktiv — dauerhafte Session auf { $host }. Verbindungsabbrüche verlieren deine Arbeit nicht.
 terminal-daemon-session-ended-with-code = Session beendet (Exit-Code { $code }).
 terminal-daemon-session-ended = Session beendet.
@@ -4114,3 +4121,10 @@ workspace-managed-launch-handshake-failed = Der Sitzungsdienst für den verwalte
 workspace-remote-account-readiness-failed = Die Remote-Kontositzung auf { $host } wurde beendet, bevor sie bereit war.
 workspace-managed-launch-readiness-failed = Der verwaltete Agent auf { $host } wurde beendet, bevor er bereit war.
 workspace-remote-routed-split-target-changed = Die Remote-Konto- oder verwaltete Sitzung konnte nicht fortgesetzt werden, weil sich ihr ursprüngliches Split-Ziel geändert hat.
+
+# Persistence initialization must succeed before the workspace can open.
+persistence-startup-error-title = Zaplex konnte die gespeicherten Daten nicht öffnen
+persistence-startup-error-detail = Der Start wurde abgebrochen, damit keine Arbeit ohne Speicherung verloren geht. Die vorhandene Datenbank und Migrationsdateien bleiben erhalten. Schließe gegebenenfalls eine andere Zaplex-Instanz, behebe den folgenden Fehler und starte Zaplex erneut.
+
+    { $error }
+persistence-startup-error-close = Zaplex schließen

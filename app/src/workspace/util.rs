@@ -167,6 +167,7 @@ impl WorkspaceState {
             || self.is_spawn_card_open
             || self.is_github_flow_dialog_open
             || self.is_attention_inbox_open
+            || self.is_agent_guardrail_dialog_open
             || self.is_tab_config_params_modal_open
             || self.is_session_config_modal_open
             || self.is_new_worktree_modal_open
@@ -207,6 +208,7 @@ impl WorkspaceState {
         self.is_spawn_card_open = false;
         self.is_github_flow_dialog_open = false;
         self.is_attention_inbox_open = false;
+        self.is_agent_guardrail_dialog_open = false;
         self.is_tab_config_params_modal_open = false;
         self.is_session_config_modal_open = false;
         self.is_new_worktree_modal_open = false;
@@ -387,3 +389,7 @@ fn get_terminal_background_opacity(window_id: WindowId, app: &AppContext) -> u8 
         background_opacity
     }
 }
+
+#[cfg(test)]
+#[path = "util_tests.rs"]
+mod tests;

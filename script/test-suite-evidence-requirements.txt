@@ -1,0 +1,10 @@
+# Binary wheels only: no parser compilation on the developer host or CI runner.
+# Linux x86_64, CPython 3.10-3.14 (supported coverage runners).
+tree-sitter==0.25.2 \
+    --hash=sha256:20b570690f87f1da424cd690e51cc56728d21d63f4abd4b326d382a30353acc7 \
+    --hash=sha256:3e65ae456ad0d210ee71a89ee112ac7e72e6c2e5aac1b95846ecc7afa68a194c \
+    --hash=sha256:b43a9e4c89d4d0839de27cd4d6902d33396de700e9ff4c5ab7631f277a85ead9 \
+    --hash=sha256:b878e296e63661c8e124177cc3084b041ba3f5936b43076d57c487822426f614 \
+    --hash=sha256:260586381b23be33b6191a07cea3d44ecbd6c01aa4c6b027a0439145fcbc3358
+tree-sitter-rust==0.24.2 \
+    --hash=sha256:e033c5a93b57c88e0a835880de39fc802909ff69f57aaff6000211c196ea5190

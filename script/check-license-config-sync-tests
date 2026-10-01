@@ -32,9 +32,13 @@ def run_check(
         )
 
 
+nonrust_case = __import__("runpy").run_path(str(Path(__file__).with_name("test-suite-nonrust-events")))["record"]
+
 matching = run_check(["Apache-2.0", "MIT"], ["MIT", "Apache-2.0"])
 if matching.returncode != 0 or "License config in sync." not in matching.stdout:
     raise SystemExit("matching license sets must pass")
+
+nonrust_case("matching-license-sets")
 
 about_only = run_check(["MIT"], ["MIT", "Zlib"])
 if (
@@ -43,8 +47,12 @@ if (
 ):
     raise SystemExit("an SPDX identifier added only to about.toml must fail")
 
+nonrust_case("license-in-about-only")
+
 deny_only = run_check(["MIT", "Zlib"], ["MIT"])
 if deny_only.returncode == 0 or "In deny.toml but not about.toml: ['Zlib']" not in deny_only.stdout:
     raise SystemExit("an SPDX identifier added only to deny.toml must fail")
+
+nonrust_case("license-in-deny-only")
 
 print("license config sync tests: ok")

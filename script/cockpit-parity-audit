@@ -56,14 +56,6 @@ EXPECTED_REFERENCES = {
     "claudeplex": ("iret77/claudeplex", "main"),
     "claudeplex-desktop": ("iret77/claudeplex-desktop", "main"),
 }
-WORKSPACE_VIEW_SIDECAR_EXCLUSIONS = (
-    "test_worktree_sidecar_hover_takes_precedence_over_selection",
-    "test_worktree_sidecar_pointer_entry_does_not_select_top_repo",
-    "test_worktree_sidecar_close_via_select_item_executes_from_workspace",
-    "test_worktree_sidecar_search_editor_enter_executes_selection",
-    "test_worktree_sidecar_search_editor_proxies_navigation_and_escape",
-    "test_worktree_sidecar_hides_linked_worktrees_from_repo_list",
-)
 SSH_MANAGER_OUT_OF_SCOPE_PREFIXES = (
     "ssh_manager::candidates::tests::",
     "ssh_manager::password_prompt::tests::",
@@ -122,12 +114,6 @@ EXPECTED_SUITE_COMMANDS = {
         "--lib",
         "--no-fail-fast",
         "workspace::view::tests::",
-        "--",
-        *[
-            argument
-            for name in WORKSPACE_VIEW_SIDECAR_EXCLUSIONS
-            for argument in ("--skip", name)
-        ],
     ],
     "ssh-manager-app": [
         "cargo",
@@ -194,7 +180,35 @@ EXPECTED_SUITE_COMMANDS = {
         "cockpit::",
     ],
 }
+# Mutate production decisions, never assertions or matrix declarations. Exact anchors
+# deliberately fail closed when the implementation moves; update them after review.
+SOURCE_MUTATIONS = (
+    {
+        "id": "provider",
+        "path": "crates/zaplex_cockpit/src/routing.rs",
+        "before": ".filter(|a| a.account.provider == provider)\n        .min_by",
+        "after": ".filter(|a| a.account.provider != provider)\n        .min_by",
+        "test": "routing::tests::filters_by_provider",
+    },
+    {
+        "id": "host",
+        "path": "crates/zaplex_cockpit/src/conductor.rs",
+        "before": 'Some(id) => format!("daemon:{id}"),',
+        "after": 'Some(id) => format!("daemon:{}", id.len()),',
+        "test": "conductor::tests::host_ident_keys_by_stable_identity_not_label",
+    },
+    {
+        "id": "status",
+        "path": "crates/zaplex_cockpit/src/codex_sessions.rs",
+        "before": "fn state_of(ended: bool) -> SessionState {\n    if ended {",
+        "after": "fn state_of(ended: bool) -> SessionState {\n    if !ended {",
+        "test": "codex_sessions::tests::completed_turn_is_waiting_with_model_effort_ctx",
+    },
+)
+
+
 EXPECTED_SELF_TEST_CASES = {
+    "source-mutation-harness",
     "provider-regression",
     "host-regression",
     "status-regression",
@@ -276,7 +290,7 @@ EXPECTED_RUNTIME_SELF_TEST_CASES = {
 EXPECTED_SELF_TEST_RESULTS = {
     case: (
         "pass-observed"
-        if case == "runtime-valid"
+        if case in {"runtime-valid", "source-mutation-harness"}
         else "not-run-observed"
         if case == "runtime-missing-is-not-run"
         else "expected-failure-observed"
@@ -489,11 +503,7 @@ DISCOVERED_SUITE_SOURCES = {
         "app/src/ssh_manager/server_view_tests.rs": "ssh_manager::server_view::tests::",
     },
 }
-DISCOVERED_SUITE_EXCLUSIONS = {
-    ("workspace-view-acceptance", "app/src/workspace/view_test.rs"): frozenset(
-        WORKSPACE_VIEW_SIDECAR_EXCLUSIONS
-    ),
-}
+DISCOVERED_SUITE_EXCLUSIONS: dict[tuple[str, str], frozenset[str]] = {}
 DISCOVERED_SUITE_PREFIXES = {
     suite_id: tuple(source_prefixes.values())
     for suite_id, source_prefixes in DISCOVERED_SUITE_SOURCES.items()
@@ -1230,7 +1240,11 @@ def run_logged_command(
     command: list[str],
     log_path: Path,
     timeout: int,
+    *,
+    env_overrides: dict[str, str] | None = None,
 ) -> tuple[int, bool]:
+    environment = os.environ.copy()
+    environment.update(env_overrides or {})
     timed_out = False
     try:
         with log_path.open("w", encoding="utf-8") as log:
@@ -1240,7 +1254,7 @@ def run_logged_command(
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 text=True,
-                env=os.environ.copy(),
+                env=environment,
                 start_new_session=True,
             )
             try:
@@ -1584,6 +1598,12 @@ def inspect_runtime_png(path: Path, errors: list[str]) -> dict[str, Any] | None:
     height: int | None = None
     saw_idat = False
     saw_iend = False
+    saw_plte = False
+    idat_parts: list[bytes] = []
+    scanline_passes: list[tuple[int, int]] = []
+    expected_image_bytes = 0
+    bit_depth = 0
+    color_type = -1
     chunk_index = 0
     allowed_chunks = {b"IHDR", b"PLTE", b"IDAT", b"IEND"}
     while offset + 12 <= len(source):
@@ -1606,12 +1626,62 @@ def inspect_runtime_png(path: Path, errors: list[str]) -> dict[str, Any] | None:
             if chunk_type != b"IHDR" or chunk_length != 13:
                 errors.append(f"{path.name} does not start with a valid IHDR chunk")
                 return None
-            width, height = struct.unpack(">II", chunk_data[:8])
+            width, height, bit_depth, color_type, compression, filtering, interlace = (
+                struct.unpack(">IIBBBBB", chunk_data)
+            )
+            legal_depths = {
+                0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8},
+                4: {8, 16}, 6: {8, 16},
+            }
+            if (
+                bit_depth not in legal_depths.get(color_type, set())
+                or compression != 0 or filtering != 0 or interlace not in {0, 1}
+            ):
+                errors.append(f"{path.name} contains invalid PNG IHDR fields")
+                return None
+            if not (
+                MIN_RUNTIME_IMAGE_WIDTH <= width <= MAX_RUNTIME_IMAGE_DIMENSION
+                and MIN_RUNTIME_IMAGE_HEIGHT <= height <= MAX_RUNTIME_IMAGE_DIMENSION
+            ):
+                errors.append(f"{path.name} has implausible dimensions {width}x{height}")
+                return None
+            bits_per_pixel = bit_depth * {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
+            # PNG Adam7 uses seven independent filtered subimages. Empty passes
+            # contain no scanlines, including no filter byte.
+            passes = (
+                [(0, 0, 1, 1)] if interlace == 0 else [
+                    (0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8),
+                    (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2),
+                ]
+            )
+            for start_x, start_y, step_x, step_y in passes:
+                columns = max(0, (width - start_x + step_x - 1) // step_x)
+                rows = max(0, (height - start_y + step_y - 1) // step_y)
+                if columns and rows:
+                    row_bytes = (columns * bits_per_pixel + 7) // 8
+                    scanline_passes.append((row_bytes, rows))
+                    expected_image_bytes += (row_bytes + 1) * rows
+            if expected_image_bytes > 128 * 1024 * 1024:
+                errors.append(f"{path.name} exceeds the decoded PNG size limit")
+                return None
         elif chunk_type == b"IHDR":
             errors.append(f"{path.name} contains more than one IHDR chunk")
             return None
+        if chunk_type == b"PLTE":
+            if (
+                saw_plte or saw_idat or color_type in {0, 4}
+                or not 3 <= chunk_length <= 768 or chunk_length % 3 != 0
+                or (color_type == 3 and chunk_length // 3 > (1 << bit_depth))
+            ):
+                errors.append(f"{path.name} contains an invalid or misplaced PNG palette")
+                return None
+            saw_plte = True
         if chunk_type == b"IDAT":
+            if color_type == 3 and not saw_plte:
+                errors.append(f"{path.name} is missing its indexed PNG palette")
+                return None
             saw_idat = True
+            idat_parts.append(chunk_data)
         if chunk_type == b"IEND":
             if chunk_length != 0 or chunk_end != len(source):
                 errors.append(f"{path.name} has an invalid IEND chunk")
@@ -1624,12 +1694,27 @@ def inspect_runtime_png(path: Path, errors: list[str]) -> dict[str, Any] | None:
     if not saw_idat or not saw_iend or width is None or height is None:
         errors.append(f"{path.name} is not a complete PNG")
         return None
-    if not (
-        MIN_RUNTIME_IMAGE_WIDTH <= width <= MAX_RUNTIME_IMAGE_DIMENSION
-        and MIN_RUNTIME_IMAGE_HEIGHT <= height <= MAX_RUNTIME_IMAGE_DIMENSION
-    ):
-        errors.append(f"{path.name} has implausible dimensions {width}x{height}")
+    # A correct chunk CRC does not prove that IDAT is a complete zlib stream.
+    # Bound output before allocation, and retain one extra byte to detect overflow.
+    decoder = zlib.decompressobj()
+    try:
+        image_data = decoder.decompress(b"".join(idat_parts), expected_image_bytes + 1)
+    except zlib.error:
+        errors.append(f"{path.name} contains invalid compressed PNG image data")
         return None
+    if (
+        len(image_data) != expected_image_bytes or not decoder.eof
+        or decoder.unconsumed_tail or decoder.unused_data
+    ):
+        errors.append(f"{path.name} has incomplete, excessive, or trailing PNG image data")
+        return None
+    row_offset = 0
+    for row_bytes, rows in scanline_passes:
+        for _ in range(rows):
+            if image_data[row_offset] > 4:
+                errors.append(f"{path.name} contains an invalid PNG scanline filter")
+                return None
+            row_offset += row_bytes + 1
     return {
         "name": path.name,
         "sha256": hashlib.sha256(source).hexdigest(),
@@ -2459,6 +2544,17 @@ fn ignored_fixture() {}
         print(f"self-test {error}", file=sys.stderr)
         return EXIT_CONTRACT
 
+    harness_command = [sys.executable, str(root / "specs/parity/test_mutation_gate.py")]
+    if os.environ.get("ZAPLEX_NONRUST_EVENTS"):
+        harness_command = [
+            sys.executable, str(root / "script/test-suite-nonrust"), "_unittest",
+            str(root / "specs/parity/test_mutation_gate.py"),
+        ]
+    harness = subprocess.run(harness_command, cwd=root, check=False, timeout=60)
+    if harness.returncode != 0:
+        return EXIT_CONTRACT
+    results.append({"id": "source-mutation-harness", "status": "pass-observed"})
+
     report = {"schema_version": 1, "status": "pass", "cases": results}
     if args.output:
         write_json(args.output, report)
@@ -2569,6 +2665,197 @@ def command_run_suites(args: argparse.Namespace) -> int:
     return EXIT_FAILED if report["status"] != "pass" else 0
 
 
+def mutation_test_evidence(output: str, test: str, *, failed: bool) -> bool:
+    """A compiler/process failure or an empty filter is never a killed mutant."""
+    output = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    outcome = "FAILED" if failed else "ok"
+    summaries = re.findall(
+        r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; "
+        r"(\d+) ignored; (\d+) measured; \d+ filtered out", output
+    )
+    expected = (outcome, "0" if failed else "1", "1" if failed else "0", "0", "0")
+    return (
+        summaries == [expected]
+        and re.search(rf"^test {re.escape(test)} \.\.\. {outcome}$", output, re.M) is not None
+        and (not failed or ("panicked at" in output and "assertion" in output))
+    )
+
+
+def mutation_command(test: str) -> list[str]:
+    return [
+        "cargo", "test", "--locked", "-p", "zaplex_cockpit", "--lib",
+        test, "--", "--exact", "--nocapture", "--color", "never",
+    ]
+
+
+def mutation_target_directory(root: Path) -> Path:
+    configured = Path(os.environ.get("CARGO_TARGET_DIR", "target"))
+    return (configured if configured.is_absolute() else root / configured).resolve()
+
+
+def execute_source_mutation(
+    root: Path,
+    mutation: dict[str, str],
+    log_dir: Path,
+    runner=run_logged_command,
+    *,
+    cargo_target_dir: Path | None = None,
+) -> dict[str, Any]:
+    source = root / mutation["path"]
+    original = source.read_bytes()
+    before = mutation["before"].encode()
+    after = mutation["after"].encode()
+    if original.count(before) != 1:
+        raise AuditError(f"{mutation['id']}: expected exactly one production mutation anchor")
+    command = mutation_command(mutation["test"])
+    environment = {"CARGO_TARGET_DIR": str(cargo_target_dir or mutation_target_directory(root))}
+    log_dir.mkdir(parents=True, exist_ok=True)
+    baseline_log = log_dir / f"mutation-{mutation['id']}-baseline.log"
+    mutant_log = log_dir / f"mutation-{mutation['id']}-mutant.log"
+    baseline_exit, baseline_timeout = runner(
+        root, command, baseline_log, 1200, env_overrides=environment,
+    )
+    baseline_passed = (
+        baseline_exit == 0 and not baseline_timeout
+        and mutation_test_evidence(baseline_log.read_text(), mutation["test"], failed=False)
+    )
+    mutant_exit, mutant_timeout, killed = None, False, False
+    if baseline_passed:
+        try:
+            source.write_bytes(original.replace(before, after))
+            mutant_exit, mutant_timeout = runner(
+                root, command, mutant_log, 1200, env_overrides=environment,
+            )
+            killed = (
+                mutant_exit == 101 and not mutant_timeout
+                and mutation_test_evidence(mutant_log.read_text(), mutation["test"], failed=True)
+            )
+        finally:
+            source.write_bytes(original)
+    return {
+        "id": mutation["id"],
+        "status": "pass" if baseline_passed and killed else "fail",
+        "test": mutation["test"],
+        "source": mutation["path"],
+        "source_sha256": hashlib.sha256(original).hexdigest(),
+        "command": command,
+        "baseline_passed": baseline_passed,
+        "baseline_exit_code": baseline_exit,
+        "baseline_timed_out": baseline_timeout,
+        "mutant_killed_by_assertion": killed,
+        "mutant_exit_code": mutant_exit,
+        "mutant_timed_out": mutant_timeout,
+        "baseline_log": f"logs/{baseline_log.name}",
+        "baseline_log_sha256": file_sha256(baseline_log),
+        "mutant_log": f"logs/{mutant_log.name}" if baseline_passed else None,
+        "mutant_log_sha256": file_sha256(mutant_log) if baseline_passed else None,
+    }
+
+
+def command_run_mutations(args: argparse.Namespace) -> int:
+    """CI-only: use a disposable checkout so production files are never dirtied."""
+    root = args.root.resolve()
+    revision = git_revision(root)
+    log_dir = args.log_dir.resolve()
+    if log_dir != args.output.resolve().parent / "logs":
+        raise AuditError("mutation logs must be archived in the report's sibling logs directory")
+    cargo_target_dir = mutation_target_directory(root)
+    results = []
+    started_at = utc_now()
+    with tempfile.TemporaryDirectory(prefix="cockpit-mutations-") as temporary:
+        checkout = Path(temporary) / "checkout"
+        run_git(["worktree", "add", "--detach", str(checkout), revision["revision"]], root)
+        try:
+            for mutation in SOURCE_MUTATIONS:
+                results.append(execute_source_mutation(
+                    checkout, mutation, log_dir, cargo_target_dir=cargo_target_dir,
+                ))
+        finally:
+            run_git(["worktree", "remove", "--force", str(checkout)], root)
+    report = {
+        "schema_version": 1,
+        "status": "pass" if all(row["status"] == "pass" for row in results) else "fail",
+        "zaplex": revision,
+        "started_at": started_at,
+        "finished_at": utc_now(),
+        "results": results,
+    }
+    write_json(args.output, report)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if report["status"] == "pass" else EXIT_FAILED
+
+
+def revision_source_hash(root: Path, revision: str, path: str) -> str:
+    blob = subprocess.run(
+        ["git", "show", f"{revision}:{path}"], cwd=root,
+        capture_output=True, check=False,
+    )
+    if blob.returncode != 0:
+        raise AuditError(f"cannot read mutation source {path} at {revision}")
+    return hashlib.sha256(blob.stdout).hexdigest()
+
+
+def source_mutation_report_passes(
+    report: dict[str, Any],
+    revision: str,
+    source_hashes: dict[str, str],
+    artifact_dir: Path,
+) -> bool:
+    rows = report.get("results", [])
+    if not isinstance(report.get("zaplex"), dict):
+        return False
+    if not isinstance(rows, list) or len(rows) != len(SOURCE_MUTATIONS):
+        return False
+    expected = {item["id"]: item for item in SOURCE_MUTATIONS}
+    if not all(isinstance(row, dict) and isinstance(row.get("id"), str) for row in rows):
+        return False
+    if {row["id"] for row in rows} != set(expected):
+        return False
+    if not (
+        report.get("schema_version") == 1 and report.get("status") == "pass"
+        and report["zaplex"].get("revision") == revision
+    ):
+        return False
+    for row in rows:
+        mutation = expected[row["id"]]
+        expected_hash = source_hashes.get(mutation["path"])
+        if not (
+            row.get("status") == "pass"
+            and row.get("test") == mutation["test"]
+            and row.get("source") == mutation["path"]
+            and row.get("command") == mutation_command(mutation["test"])
+            and isinstance(expected_hash, str)
+            and re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+            and row.get("source_sha256") == expected_hash
+            and row.get("baseline_passed") is True
+            and row.get("baseline_exit_code") == 0
+            and row.get("baseline_timed_out") is False
+            and row.get("mutant_killed_by_assertion") is True
+            and row.get("mutant_exit_code") == 101
+            and row.get("mutant_timed_out") is False
+        ):
+            return False
+        for phase, failed in (("baseline", False), ("mutant", True)):
+            relative = f"logs/mutation-{row['id']}-{phase}.log"
+            path = artifact_dir / relative
+            if row.get(f"{phase}_log") != relative or path.is_symlink():
+                return False
+            try:
+                if not path.is_file() or not 0 < path.stat().st_size <= 32 * 1024 * 1024:
+                    return False
+                content = path.read_bytes()
+            except OSError:
+                return False
+            if (
+                row.get(f"{phase}_log_sha256") != hashlib.sha256(content).hexdigest()
+                or not mutation_test_evidence(
+                    content.decode("utf-8", errors="replace"), mutation["test"], failed=failed,
+                )
+            ):
+                return False
+    return True
+
+
 def command_assemble(args: argparse.Namespace) -> int:
     root = args.root.resolve()
     validation = read_json(args.validation)
@@ -2576,6 +2863,7 @@ def command_assemble(args: argparse.Namespace) -> int:
     references = read_json(args.references)
     suites = read_json(args.suites)
     runtime = read_json(args.runtime)
+    mutations = read_json(args.mutations)
     screenshot_dir = args.screenshot_dir.resolve()
     screenshots: list[dict[str, str]] = []
     if screenshot_dir.is_dir():
@@ -2641,6 +2929,9 @@ def command_assemble(args: argparse.Namespace) -> int:
     if not references_ok:
         assembly_errors.append("reference report does not contain both required branch/SHA rows")
 
+    audited_revision = git_revision(root)["revision"]
+    suite_zaplex = suites.get("zaplex")
+    suite_revision = suite_zaplex.get("revision") if isinstance(suite_zaplex, dict) else None
     suite_results = suites.get("results")
     passing_suite_rows = [
         item
@@ -2660,9 +2951,21 @@ def command_assemble(args: argparse.Namespace) -> int:
         and passing_suite_ids == set(EXPECTED_SUITE_COMMANDS)
         and len(passing_suite_rows) == len(EXPECTED_SUITE_COMMANDS)
         and suite_commands_ok
+        and suite_revision == audited_revision
     )
     if not suites_ok:
-        assembly_errors.append("Cargo check/Cockpit/daemon suite evidence is incomplete")
+        assembly_errors.append("Cargo check/Cockpit/daemon suite evidence is incomplete or uses another revision")
+
+    # Read the pinned commit, not potentially modified working-tree source.
+    mutation_source_hashes = {
+        mutation["path"]: revision_source_hash(root, audited_revision, mutation["path"])
+        for mutation in SOURCE_MUTATIONS
+    }
+    mutations_ok = source_mutation_report_passes(
+        mutations, audited_revision, mutation_source_hashes, args.mutations.resolve().parent,
+    )
+    if not mutations_ok:
+        assembly_errors.append("production provider/host/status mutation evidence is incomplete")
 
     screenshots_ok = not missing_screenshots
     if not screenshots_ok:
@@ -2674,14 +2977,12 @@ def command_assemble(args: argparse.Namespace) -> int:
         runtime_status = "fail"
         runtime_errors.append("runtime evidence report has an invalid schema or status")
     if runtime_status == "pass":
-        suite_zaplex = suites.get("zaplex")
-        suite_revision = suite_zaplex.get("revision") if isinstance(suite_zaplex, dict) else None
         if runtime.get("errors") != []:
             runtime_status = "fail"
             runtime_errors.append("passing runtime evidence report contains errors")
-        if runtime.get("zaplex_revision") != suite_revision:
+        if runtime.get("zaplex_revision") != audited_revision:
             runtime_status = "fail"
-            runtime_errors.append("runtime evidence and automated suites use different revisions")
+            runtime_errors.append("runtime evidence uses a different revision from the audited checkout")
         runtime_screenshots = runtime.get("screenshots")
         runtime_screenshot_names = {
             item["name"]
@@ -2703,12 +3004,13 @@ def command_assemble(args: argparse.Namespace) -> int:
         "gate_self_test": "pass" if self_test_ok else "fail",
         "references": "pass" if references_ok else "fail",
         "suites": "pass" if suites_ok else "fail",
+        "source_mutations": "pass" if mutations_ok else "fail",
         "screenshots": "pass" if screenshots_ok else "fail",
         "manual_runtime": runtime_status,
     }
     automated_pass = all(
         component_status[name] == "pass"
-        for name in ("contract", "gate_self_test", "references", "suites", "screenshots")
+        for name in ("contract", "gate_self_test", "references", "suites", "source_mutations", "screenshots")
     )
     if not automated_pass:
         release_gate_status = "fail"
@@ -2752,6 +3054,7 @@ def command_assemble(args: argparse.Namespace) -> int:
             "gate_self_test": str(args.self_test),
             "references": str(args.references),
             "suites": str(args.suites),
+            "source_mutations": str(args.mutations),
             "runtime": str(args.runtime),
         },
     }
@@ -2803,6 +3106,13 @@ def build_parser() -> argparse.ArgumentParser:
     suites.add_argument("--output", type=Path, required=True)
     suites.set_defaults(handler=command_run_suites)
 
+    mutations = subparsers.add_parser(
+        "run-mutations", help="CI-only: prove real provider/host/status regressions fail tests"
+    )
+    mutations.add_argument("--log-dir", type=Path, required=True)
+    mutations.add_argument("--output", type=Path, required=True)
+    mutations.set_defaults(handler=command_run_mutations)
+
     runtime = subparsers.add_parser(
         "validate-runtime", help="validate a sanitized real two-host runtime evidence bundle"
     )
@@ -2826,6 +3136,7 @@ def build_parser() -> argparse.ArgumentParser:
     assemble.add_argument("--self-test", type=Path, required=True)
     assemble.add_argument("--references", type=Path, required=True)
     assemble.add_argument("--suites", type=Path, required=True)
+    assemble.add_argument("--mutations", type=Path, required=True)
     assemble.add_argument("--runtime", type=Path, required=True)
     assemble.add_argument("--screenshot-dir", type=Path, required=True)
     assemble.add_argument("--output", type=Path, required=True)

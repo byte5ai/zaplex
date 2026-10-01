@@ -228,6 +228,29 @@ impl Display for SettingsSection {
 }
 
 impl SettingsSection {
+    /// A locale-independent identifier for persisted navigation state.
+    pub(crate) fn persistence_key(self) -> &'static str {
+        match self {
+            Self::About => "About",
+            Self::MCPServers => "MCP Servers",
+            Self::Appearance => "Appearance",
+            Self::Features => "Features",
+            Self::Keybindings => "Keyboard shortcuts",
+            Self::ZaplexDrive => "ZaplexDrive",
+            Self::Zaplexify => "Zaplexify",
+            Self::AI => "AI",
+            Self::WarpAgent => "Zaplex Agent",
+            Self::AgentProfiles => "AgentProfiles",
+            Self::AgentMCPServers => "AgentMCPServers",
+            Self::Knowledge => "Knowledge",
+            Self::ThirdPartyCLIAgents => "ThirdPartyCLIAgents",
+            Self::Network => "Network",
+            Self::Code => "Code",
+            Self::EditorAndCodeReview => "EditorAndCodeReview",
+            Self::CloudSync => "CloudSync",
+        }
+    }
+
     /// Returns true if this section is a subpage under any umbrella.
     pub fn is_subpage(&self) -> bool {
         self.is_ai_subpage()
@@ -277,25 +300,35 @@ impl FromStr for SettingsSection {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Accept legacy display labels; new writes always use persistence_key().
+        // Both German MCP labels were identical and restore the same backing page.
         match s {
-            "About" => Ok(Self::About),
-            "AI" => Ok(Self::AI),
-            "MCP Servers" => Ok(Self::MCPServers),
-            "Appearance" => Ok(Self::Appearance),
+            "About" | "Über" => Ok(Self::About),
+            "AI" | "KI" => Ok(Self::AI),
+            "MCP Servers" | "MCP-Server" => Ok(Self::MCPServers),
+            "Appearance" | "Erscheinungsbild" => Ok(Self::Appearance),
             "Code" => Ok(Self::Code),
-            "Features" => Ok(Self::Features),
-            "Keyboard shortcuts" => Ok(Self::Keybindings),
-            "Zaplexify" => Ok(Self::Zaplexify),
-            "ZaplexDrive" | "Zaplex Drive" => Ok(Self::ZaplexDrive),
+            "Features" | "Funktionen" => Ok(Self::Features),
+            "Keyboard shortcuts" | "Tastenkürzel" => Ok(Self::Keybindings),
+            "Zaplexify" | "Warpify" => Ok(Self::Zaplexify),
+            "ZaplexDrive" | "Zaplex Drive" | "ZapDrive" | "Zap Drive" | "Warp Drive" => {
+                Ok(Self::ZaplexDrive)
+            }
             // This page was called "Oz" at one point, keep for backward compatibility.
-            "Oz" | "Zaplex Agent" => Ok(Self::WarpAgent),
-            "Profiles" | "AgentProfiles" => Ok(Self::AgentProfiles),
+            "Oz" | "Zaplex Agent" | "Zaplex-Agent" | "Zap Agent" | "Warp Agent" => {
+                Ok(Self::WarpAgent)
+            }
+            "Profiles" | "AgentProfiles" | "Profile" => Ok(Self::AgentProfiles),
             "MCP servers" | "AgentMCPServers" => Ok(Self::AgentMCPServers),
-            "Knowledge" => Ok(Self::Knowledge),
-            "Third party CLI agents" | "ThirdPartyCLIAgents" => Ok(Self::ThirdPartyCLIAgents),
-            "Editor and Code Review" | "EditorAndCodeReview" => Ok(Self::EditorAndCodeReview),
-            "Network" => Ok(Self::Network),
-            "CloudSync" | "Cloud Sync" => Ok(Self::CloudSync),
+            "Knowledge" | "Wissen" => Ok(Self::Knowledge),
+            "Third party CLI agents" | "ThirdPartyCLIAgents" | "Externe CLI-Agenten" => {
+                Ok(Self::ThirdPartyCLIAgents)
+            }
+            "Editor and Code Review" | "EditorAndCodeReview" | "Editor und Code-Review" => {
+                Ok(Self::EditorAndCodeReview)
+            }
+            "Network" | "Netzwerk" => Ok(Self::Network),
+            "CloudSync" | "Cloud Sync" | "Cloud-Sync" => Ok(Self::CloudSync),
             // Zaplex Wave 3-1: `OzCloudAPIKeys` removed with UI.
             // Zaplex Wave 7-3: `CloudEnvironments` FromStr arm removed with variant.
             _ => Err(()),

@@ -105,6 +105,7 @@ impl ZaplexifyPageView {
             if matches!(
                 event,
                 ZaplexifySettingsChangedEvent::SshExtensionInstallModeSetting { .. }
+                    | ZaplexifySettingsChangedEvent::EnableSshZaplexification { .. }
             ) {
                 me.update_dropdown(ctx);
             }
@@ -222,15 +223,22 @@ impl ZaplexifyPageView {
         ctx.notify();
     }
 
-    /// Syncs the install-mode dropdown selection with the current
-    /// `ZaplexifySettings::ssh_extension_install_mode` value (e.g. after it
-    /// was changed from the SSH remote server choice view).
+    /// Syncs dropdown enablement and selection after settings change, including
+    /// changes made outside this view.
     fn update_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
         let current_mode = *ZaplexifySettings::as_ref(ctx)
             .ssh_extension_install_mode
             .value();
+        let enabled = *ZaplexifySettings::as_ref(ctx)
+            .enable_ssh_zaplexification
+            .value();
         self.ssh_extension_install_mode_dropdown
             .update(ctx, |dropdown, ctx| {
+                if enabled {
+                    dropdown.set_enabled(ctx);
+                } else {
+                    dropdown.set_disabled(ctx);
+                }
                 dropdown.set_selected_by_action(
                     ZaplexifyPageAction::SetSshExtensionInstallMode(current_mode),
                     ctx,

@@ -1,7 +1,15 @@
+[test-groups]
+# These tests share the display server's real clipboard across test processes.
+linux-clipboard = { max-threads = 1 }
+
 [profile.default]
 # Mark a test as slow if it takes longer than 30s to execute, and terminate it
 # if it takes 2x as long as the slow timeout (i.e.: 60s total).
 slow-timeout = { period = "30s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = 'package(warpui) & test(windowing::winit::linux::clipboard::tests::clipboard_tests::)'
+test-group = 'linux-clipboard'
 
 [[profile.default.overrides]]
 filter = 'package(integration)'

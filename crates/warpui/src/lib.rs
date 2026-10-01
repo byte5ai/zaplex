@@ -84,3 +84,13 @@ pub fn is_shared_cjk_han(ch: char) -> bool {
             | 0x30000..=0x3134F // Extension G
     )
 }
+
+/// Show a fatal startup error before an application window or its models exist.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
+pub fn show_startup_error(title: &str, detail: &str) -> Result<(), native_dialog::Error> {
+    native_dialog::MessageDialog::new()
+        .set_type(native_dialog::MessageType::Error)
+        .set_title(title)
+        .set_text(detail)
+        .show_alert()
+}

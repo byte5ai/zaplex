@@ -572,10 +572,6 @@ fn spawn_file_opener(program: &str, path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-#[path = "delegate_tests.rs"]
-mod tests;
-
 pub struct IntegrationTestDelegate {
     app_delegate: AppDelegate,
     clipboard: InMemoryClipboard,

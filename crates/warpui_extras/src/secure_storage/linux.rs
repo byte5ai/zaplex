@@ -264,7 +264,7 @@ impl SecureStorage {
     fn delete_fallback_value(&self, key: &str) -> Result<(), Error> {
         let fallback_file = self.fallback_file(key)?;
         match fs::symlink_metadata(&fallback_file) {
-            Ok(_) => validate_owned_path(&fallback_file, PathKind::File, 0o600, false)?,
+            Ok(_) => validate_owned_path(&fallback_file, PathKind::File, 0o600, true)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Err(Error::NotFound)
             }

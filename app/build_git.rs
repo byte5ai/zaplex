@@ -3,17 +3,32 @@ use std::process::Command;
 
 pub fn watch_paths(manifest_dir: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(head) = git_path(manifest_dir, "HEAD") {
-        paths.push(head);
+    for name in ["HEAD", "packed-refs"] {
+        if let Some(path) = git_path(manifest_dir, name) {
+            paths.push(path);
+        }
     }
     if let Some(reference) = git_output(manifest_dir, &["symbolic-ref", "-q", "HEAD"])
-        .and_then(|reference| git_path(manifest_dir, &reference))
+        .and_then(|reference| ref_watch_path(manifest_dir, &reference))
     {
         if !paths.contains(&reference) {
             paths.push(reference);
         }
     }
     paths
+}
+
+fn ref_watch_path(manifest_dir: &Path, reference: &str) -> Option<PathBuf> {
+    let raw = git_output(manifest_dir, &["rev-parse", "--git-path", reference])?;
+    if let Some(path) = existing_path(manifest_dir, &raw) {
+        return Some(path);
+    }
+    // Packed refs have no loose file. Watch an existing parent so creating the
+    // loose ref on the next commit invalidates the embedded source SHA as well.
+    let path = manifest_dir.join(raw.trim());
+    path.parent()?
+        .ancestors()
+        .find_map(|parent| parent.canonicalize().ok().filter(|path| path.is_dir()))
 }
 
 fn git_path(manifest_dir: &Path, name: &str) -> Option<PathBuf> {

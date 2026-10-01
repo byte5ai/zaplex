@@ -7,7 +7,11 @@ fn oss_channel_keeps_runtime_and_release_flags_without_internal_tiers() {
     assert_eq!(flags.contains(&FeatureFlag::SuggestedRules), true);
     assert_eq!(RELEASE_FLAGS.iter().all(|flag| flags.contains(flag)), true);
     assert_eq!(PREVIEW_FLAGS.iter().any(|flag| flags.contains(flag)), false);
-    assert_eq!(DOGFOOD_FLAGS.iter().any(|flag| flags.contains(flag)), false);
+    // A flag may remain in Dogfood after release promotion (IME on macOS/Windows).
+    assert!(!DOGFOOD_FLAGS
+        .iter()
+        .filter(|flag| !RELEASE_FLAGS.contains(flag))
+        .any(|flag| flags.contains(flag)));
     assert_eq!(DEBUG_FLAGS.iter().any(|flag| flags.contains(flag)), false);
 }
 

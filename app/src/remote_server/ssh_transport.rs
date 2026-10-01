@@ -41,6 +41,7 @@ pub struct SshTransport {
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
     daemon_runtime: Option<DaemonRuntimeRoute>,
+    expected_current_version: Option<String>,
     /// When set (daemon sessions), `connect` first re-establishes the per-host
     /// shared ControlMaster if its socket went stale/dead — so a persistent
     /// session can reconnect after a network drop killed the master. `None` for
@@ -63,6 +64,7 @@ impl SshTransport {
             socket_path,
             auth_context,
             daemon_runtime: None,
+            expected_current_version: None,
             #[cfg(unix)]
             self_heal_server: None,
         }
@@ -70,6 +72,12 @@ impl SshTransport {
 
     pub fn with_daemon_runtime(mut self, route: DaemonRuntimeRoute) -> Self {
         self.daemon_runtime = Some(route);
+        self
+    }
+
+    /// Pins a listed current daemon without classifying it as historical.
+    pub fn with_expected_current_version(mut self, version: String) -> Self {
+        self.expected_current_version = Some(version);
         self
     }
 
@@ -888,6 +896,11 @@ impl RemoteTransport for SshTransport {
         self.daemon_runtime
             .as_ref()
             .map(|route| ServerVersionRequirement::Exact(route.server_version().to_string()))
+            .or_else(|| {
+                self.expected_current_version
+                    .clone()
+                    .map(ServerVersionRequirement::Exact)
+            })
             .unwrap_or(ServerVersionRequirement::Current)
     }
 

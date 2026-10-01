@@ -450,11 +450,17 @@ fn refresh_is_idempotent_and_preserves_unrelated_json() {
         refreshed["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
         "/usr/local/bin/user-policy"
     );
+    #[cfg(not(windows))]
+    let expected_command = format!(
+        "'/opt/Zaplex App/zaplex' cli-agent-hook --agent codex --managed-by {MANAGED_BY_MARKER}"
+    );
+    #[cfg(windows)]
+    let expected_command = format!(
+        "\"/opt/Zaplex App/zaplex\" cli-agent-hook --agent codex --managed-by {MANAGED_BY_MARKER}"
+    );
     assert_eq!(
         refreshed["hooks"]["SessionStart"][0]["hooks"][0]["command"],
-        format!(
-            "'/opt/Zaplex App/zaplex' cli-agent-hook --agent codex --managed-by {MANAGED_BY_MARKER}"
-        )
+        expected_command
     );
 
     assert_eq!(
@@ -599,22 +605,22 @@ fn antigravity_title_bridge_returns_to_the_builtin_default_when_no_user_title_ex
 fn deepseek_launch_refresh_preserves_a_user_disable() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("config.toml");
-    refresh_deepseek_hooks(&path, Path::new("/opt/zaplex-old")).unwrap();
+    refresh_deepseek_hooks(&path, Path::new("/opt/old/zaplex")).unwrap();
     let source = fs::read_to_string(&path)
         .unwrap()
         .replace("enabled = true", "enabled = false");
     fs::write(&path, source).unwrap();
 
     assert_eq!(
-        refresh_deepseek_hooks_with_activation(&path, Path::new("/opt/zaplex-current"), false)
+        refresh_deepseek_hooks_with_activation(&path, Path::new("/opt/current/zaplex"), false)
             .unwrap(),
         HookConfigChange::Changed
     );
     let source = fs::read_to_string(&path).unwrap();
     let document: toml::Value = toml::from_str(&source).unwrap();
     assert_eq!(document["hooks"]["enabled"].as_bool(), Some(false));
-    assert!(source.contains("/opt/zaplex-current"));
-    assert!(!source.contains("/opt/zaplex-old"));
+    assert!(source.contains("/opt/current/zaplex"));
+    assert!(!source.contains("/opt/old/zaplex"));
     assert!(!has_managed_deepseek_hooks(&path).unwrap());
 }
 

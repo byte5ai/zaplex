@@ -32,6 +32,10 @@ on:
         description: Require real two-host runtime evidence as well as automated parity checks
         type: boolean
         default: false
+      coverage:
+        description: Run the full suite with coverage, non-Rust evidence and the real Linux daemon acceptance
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -88,6 +92,8 @@ jobs:
   tests:
     needs: compile_checks
     uses: ./.github/workflows/test-dispatch.yml
+    with:
+      coverage: ${{ inputs.coverage }}
     secrets: inherit
 
   live_sftp:

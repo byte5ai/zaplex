@@ -179,6 +179,15 @@ fn group_key(row: &(SessionSnapshot, Option<String>, Option<String>, bool)) -> S
     host_key(*is_local, host_id.as_deref(), root)
 }
 
+/// Seed the alias editor from the selected account's current label, independently
+/// of the generic pane title and provider headline.
+fn account_alias_editor_seed(accounts: &[AccountUsage], key: &str) -> Option<String> {
+    accounts
+        .iter()
+        .find(|usage| usage.account.key == key)
+        .map(|usage| usage.account.label.clone())
+}
+
 /// The open ⋯ drive: which row, and where it was clicked (P5).
 pub struct RowMenu {
     /// `session_key(is_local, host_id, session)` — the row's complete host,
@@ -258,12 +267,12 @@ impl SortColumn {
     /// timestamp starts at the end that matters — newest, priciest, fullest.
     fn default_ascending(self) -> bool {
         match self {
-            SortColumn::Session | SortColumn::Worktree | SortColumn::Host | SortColumn::Model => {
-                true
-            }
-            SortColumn::Context | SortColumn::Today | SortColumn::Last | SortColumn::Status => {
-                false
-            }
+            SortColumn::Session
+            | SortColumn::Worktree
+            | SortColumn::Host
+            | SortColumn::Model
+            | SortColumn::Status => true,
+            SortColumn::Context | SortColumn::Today | SortColumn::Last => false,
         }
     }
 }
@@ -2837,11 +2846,11 @@ impl CockpitPaneView {
 
         match CockpitModel::as_ref(ctx).set_alias(&key, alias.as_deref()) {
             Ok(()) => {
-                // The file is watched: the snapshot reloads and the new name
-                // reaches the account card and sidebar on its own. The pane title
-                // deliberately remains the generic Cockpit title.
                 self.alias_editor = None;
                 self.alias_persistence_error = None;
+                // The home watcher is not recursive; the nested instances.json
+                // write must explicitly refresh both account surfaces.
+                CockpitModel::handle(ctx).update(ctx, |model, ctx| model.rescan(ctx));
             }
             Err(e) => {
                 log::warn!("cockpit: could not write alias for {key}: {e}");
@@ -3740,7 +3749,11 @@ impl TypedActionView for CockpitPaneView {
                 // Seed with the name as shown — which is the alias if one is set,
                 // and the discovered label otherwise. Editing starts from what the
                 // user is looking at, not from an empty box that discards it.
-                let current = Self::pane_title(Some(&key), ctx);
+                let Some(current) =
+                    account_alias_editor_seed(&CockpitModel::as_ref(ctx).snapshot().accounts, &key)
+                else {
+                    return;
+                };
                 self.alias_persistence_error = None;
                 let editor = ctx.add_typed_action_view(move |ctx| {
                     let appearance = Appearance::as_ref(ctx);

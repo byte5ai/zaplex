@@ -17,7 +17,7 @@ use crate::Builder;
 const NORMAL_WIDTH: f32 = 1180.;
 const NORMAL_HEIGHT: f32 = 640.;
 const NARROW_WIDTH: f32 = 540.;
-const NARROW_HEIGHT: f32 = 640.;
+const NARROW_HEIGHT: f32 = 670.;
 const GEOMETRY_EPSILON: f32 = 1.;
 
 pub fn test_subscription_agent_conversation_layout_evidence() -> Builder {
@@ -40,7 +40,7 @@ pub fn test_subscription_agent_conversation_layout_evidence() -> Builder {
             NARROW_WIDTH,
             NARROW_HEIGHT,
             SubscriptionAgentLayoutState::SessionEnded,
-            "subscription-agent-narrow-540x640.png",
+            "subscription-agent-narrow-540x670.png",
         ),
     ] {
         builder = builder.with_step(resize_window(width_name, width, height));

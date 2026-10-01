@@ -82,9 +82,9 @@ fn regex_right() {
     #[rustfmt::skip]
     let blockgrid = mock_blockgrid("\
         testing66\r\n\
-        Zaplex\n\
+        Warp\n\
         123\r\n\
-        Zaplex\r\n\
+        Warp\r\n\
         123\
     ");
 
@@ -107,9 +107,9 @@ fn regex_left() {
     #[rustfmt::skip]
     let blockgrid = mock_blockgrid("\
         testing66\r\n\
-        Zaplex\n\
+        Warp\n\
         123\r\n\
-        Zaplex\r\n\
+        Warp\r\n\
         123\
     ");
 
@@ -131,7 +131,7 @@ fn regex_left() {
 fn nested_regex() {
     #[rustfmt::skip]
     let blockgrid = mock_blockgrid("\
-        Wa -> Zaplex -> rp\r\n\
+        Wa -> Warp -> rp\r\n\
         rp\
     ");
 
@@ -869,14 +869,14 @@ fn test_find_url_omits_trailing_periods() {
             .grid_handler
             .url_at_point(Point { row: 0, col: 10 }),
         Some(Link {
-            range: Point { row: 0, col: 6 }..=Point { row: 0, col: 46 },
+            range: Point { row: 0, col: 6 }..=Point { row: 0, col: 44 },
             is_empty: false
         })
     );
     assert_eq!(
         blockgrid
             .grid_handler
-            .url_at_point(Point { row: 0, col: 47 }),
+            .url_at_point(Point { row: 0, col: 45 }),
         None
     );
 
@@ -887,14 +887,14 @@ fn test_find_url_omits_trailing_periods() {
             .grid_handler
             .url_at_point(Point { row: 0, col: 10 }),
         Some(Link {
-            range: Point { row: 0, col: 6 }..=Point { row: 0, col: 46 },
+            range: Point { row: 0, col: 6 }..=Point { row: 0, col: 44 },
             is_empty: false
         })
     );
     assert_eq!(
         blockgrid
             .grid_handler
-            .url_at_point(Point { row: 0, col: 48 }),
+            .url_at_point(Point { row: 0, col: 47 }),
         None
     );
 
@@ -905,7 +905,7 @@ fn test_find_url_omits_trailing_periods() {
             .grid_handler
             .url_at_point(Point { row: 0, col: 10 }),
         Some(Link {
-            range: Point { row: 0, col: 6 }..=Point { row: 0, col: 44 },
+            range: Point { row: 0, col: 6 }..=Point { row: 0, col: 46 },
             is_empty: false
         })
     );
@@ -914,7 +914,7 @@ fn test_find_url_omits_trailing_periods() {
             .grid_handler
             .url_at_point(Point { row: 0, col: 33 }),
         Some(Link {
-            range: Point { row: 0, col: 6 }..=Point { row: 0, col: 44 },
+            range: Point { row: 0, col: 6 }..=Point { row: 0, col: 46 },
             is_empty: false
         })
     );

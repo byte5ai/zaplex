@@ -621,24 +621,31 @@ pub(crate) struct ClaudeUsageCache {
 }
 
 impl ClaudeUsageCache {
-    fn parse_file(&mut self, key: ClaudeUsageCacheKey, path: &Path) -> Vec<UsageEntry> {
+    fn parse_file(
+        &mut self,
+        key: ClaudeUsageCacheKey,
+        path: &Path,
+    ) -> std::io::Result<Vec<UsageEntry>> {
         let fingerprint = match crate::transcript::file_fingerprint(path) {
             Ok(fingerprint) => fingerprint,
-            Err(_) => {
+            Err(error) => {
                 self.entries.remove(&key);
-                return Vec::new();
+                return Err(error);
             }
         };
         self.clock = self.clock.wrapping_add(1);
         if let Some(cached) = self.entries.get_mut(&key) {
             if cached.fingerprint == fingerprint {
                 cached.last_used = self.clock;
-                return cached.entries.clone();
+                return Ok(cached.entries.clone());
             }
         }
-        let Ok(content) = fs::read_to_string(path) else {
-            self.entries.remove(&key);
-            return Vec::new();
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(error) => {
+                self.entries.remove(&key);
+                return Err(error);
+            }
         };
         #[cfg(test)]
         {
@@ -658,7 +665,7 @@ impl ClaudeUsageCache {
             },
         );
         self.evict_lru();
-        entries
+        Ok(entries)
     }
 
     fn evict_lru(&mut self) {
@@ -842,13 +849,15 @@ pub(crate) fn usage_for_account_with_cache(
             continue;
         }
         // Cheap mtime prefilter: skip transcripts untouched since the cutoff.
-        if let Ok(meta) = file.metadata() {
-            if let Ok(modified) = meta.modified() {
-                let modified: DateTime<Utc> = modified.into();
-                if modified < since {
-                    continue;
-                }
+        let modified = match fs::metadata(file.path()).and_then(|meta| meta.modified()) {
+            Ok(modified) => DateTime::<Utc>::from(modified),
+            Err(_) => {
+                io_error = true;
+                continue;
             }
+        };
+        if modified < since {
+            continue;
         }
         let transcript =
             fs::canonicalize(file.path()).unwrap_or_else(|_| file.path().to_path_buf());
@@ -857,12 +866,10 @@ pub(crate) fn usage_for_account_with_cache(
             transcript,
         };
         seen.insert(key.clone());
-        entries.extend(
-            cache
-                .parse_file(key, file.path())
-                .into_iter()
-                .filter(|e| e.ts >= since),
-        );
+        match cache.parse_file(key, file.path()) {
+            Ok(parsed) => entries.extend(parsed.into_iter().filter(|entry| entry.ts >= since)),
+            Err(_) => io_error = true,
+        }
     }
     cache.retain_account(&account_root, &seen, !io_error);
     (entries, io_error)

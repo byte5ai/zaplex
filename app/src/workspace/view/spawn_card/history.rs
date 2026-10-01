@@ -103,6 +103,16 @@ impl FolderHistory {
         }
     }
 
+    /// Refresh other workspaces' successful launches and recheck file protection.
+    pub(super) fn refresh(&mut self) {
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(file) = self.file.as_deref() {
+            let (persisted, file_state) = load_history_from(file);
+            self.persisted = persisted;
+            self.file_state = file_state;
+        }
+    }
+
     pub(super) fn entries(&self, host: &FolderHistoryHost) -> &[FolderHistoryEntry] {
         self.persisted
             .hosts
@@ -130,6 +140,8 @@ impl FolderHistory {
         at: DateTime<Utc>,
     ) -> anyhow::Result<()> {
         let path = normalize_path(host, path)?;
+        // UI callbacks serialize these synchronous reads/writes within the app.
+        self.refresh();
         let previous = self.persisted.clone();
         let key = host.storage_key();
         let entries = self.persisted.hosts.entry(key).or_default();

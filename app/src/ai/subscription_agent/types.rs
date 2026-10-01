@@ -1,8 +1,35 @@
+use crate::ai::agent::ImageContext;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
 pub(crate) const LOCAL_SUBSCRIPTION_HOST_ID: &str = "local";
+
+/// The visible query and its attached context, delivered in one native CLI turn.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SubscriptionPrompt {
+    pub(crate) query: String,
+    pub(crate) context: String,
+    pub(crate) images: Vec<ImageContext>,
+    pub(crate) plan_mode: bool,
+    /// CLI text without an app-handled mode command; `query` remains the UI text.
+    pub(crate) native_query: Option<String>,
+}
+
+impl SubscriptionPrompt {
+    pub(crate) fn query_for_agent(&self) -> &str {
+        self.native_query.as_deref().unwrap_or(&self.query)
+    }
+}
+
+impl From<&str> for SubscriptionPrompt {
+    fn from(query: &str) -> Self {
+        Self {
+            query: query.to_string(),
+            ..Default::default()
+        }
+    }
+}
 
 /// An installed subscription agent supported by the in-app conversation surface.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -54,6 +81,15 @@ pub(crate) struct AccountIdentity {
     #[serde(default)]
     pub(crate) provider_account_id: Option<String>,
     pub(crate) config_dir: Option<PathBuf>,
+}
+
+impl AccountIdentity {
+    /// Display labels may change during CLI discovery without changing the selected account.
+    pub(crate) fn same_route(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.provider_account_id == other.provider_account_id
+            && self.config_dir == other.config_dir
+    }
 }
 
 /// A concrete CLI installation. The version participates in capability-cache identity.

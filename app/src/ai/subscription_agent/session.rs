@@ -1,6 +1,7 @@
 use super::{
     ApprovalDecision, ClaudeProtocol, CodexProtocol, JsonLineProcess, ProcessLaunch,
-    ProcessLocation, SessionIdentity, SubscriptionAgent, SubscriptionEvent, SubscriptionTarget,
+    ProcessLocation, SessionIdentity, SubscriptionAgent, SubscriptionEvent, SubscriptionPrompt,
+    SubscriptionTarget,
 };
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
@@ -16,6 +17,8 @@ pub(crate) struct SubscriptionSession {
     next_request_id: u64,
     pending_approvals: HashMap<String, Value>,
     queued_events: VecDeque<SubscriptionEvent>,
+    read_only: bool,
+    plan_mode: bool,
 }
 
 impl SubscriptionSession {
@@ -27,6 +30,36 @@ impl SubscriptionSession {
         let resume_id = resume.as_ref().map(session_id);
         let launch = ProcessLaunch::for_session(&target, resume_id, location);
         Self::open_with_launch(target, resume, launch).await
+    }
+
+    pub(crate) async fn open_for_prompt(
+        target: SubscriptionTarget,
+        resume: Option<SessionIdentity>,
+        location: ProcessLocation,
+        prompt: &SubscriptionPrompt,
+    ) -> Result<Self> {
+        if !prompt.plan_mode {
+            return Self::open(target, resume, location).await;
+        }
+        // Validate policy before spawning, and preserve the existing CLI session.
+        let launch =
+            ProcessLaunch::for_plan_session(&target, resume.as_ref().map(session_id), location)?;
+        let mut session = Self::open_with_launch(target, resume, launch).await?;
+        session.plan_mode = true;
+        session.read_only = true;
+        Ok(session)
+    }
+
+    /// Opens a fresh, local analysis session with no write-capable tools.
+    /// Resuming an existing session could restore a broader permission policy.
+    pub(crate) async fn open_read_only(
+        target: SubscriptionTarget,
+        location: ProcessLocation,
+    ) -> Result<Self> {
+        let launch = ProcessLaunch::for_read_only_session(&target, location)?;
+        let mut session = Self::open_with_launch(target, None, launch).await?;
+        session.read_only = true;
+        Ok(session)
     }
 
     pub(super) async fn open_with_launch(
@@ -44,6 +77,8 @@ impl SubscriptionSession {
             next_request_id: 1,
             pending_approvals: HashMap::new(),
             queued_events: VecDeque::new(),
+            read_only: false,
+            plan_mode: false,
         };
         match session.target.installation.agent {
             SubscriptionAgent::ClaudeCode => session.initialize_claude().await?,
@@ -56,7 +91,10 @@ impl SubscriptionSession {
         self.session.as_ref()
     }
 
-    pub(crate) async fn send_prompt(&mut self, prompt: &str) -> Result<()> {
+    pub(crate) async fn send_prompt(&mut self, prompt: &SubscriptionPrompt) -> Result<()> {
+        if prompt.plan_mode != self.plan_mode {
+            return Err(anyhow!("prompt mode differs from the native session permission mode"));
+        }
         match self.target.installation.agent {
             SubscriptionAgent::ClaudeCode => {
                 self.process
@@ -117,6 +155,16 @@ impl SubscriptionSession {
                 SubscriptionAgent::Codex => CodexProtocol::parse_event(&frame)?,
             };
             self.capture_session_and_approvals(&frame, &events);
+            if self.read_only {
+                for event in &events {
+                    if let SubscriptionEvent::ApprovalRequested { request_id, .. } = event {
+                        self.respond_to_approval(request_id, ApprovalDecision::Deny)
+                            .await?;
+                    }
+                }
+                events
+                    .retain(|event| !matches!(event, SubscriptionEvent::ApprovalRequested { .. }));
+            }
             if events.is_empty() {
                 continue;
             }
@@ -131,6 +179,11 @@ impl SubscriptionSession {
         request_id: &str,
         decision: ApprovalDecision,
     ) -> Result<()> {
+        let decision = if self.read_only {
+            ApprovalDecision::Deny
+        } else {
+            decision
+        };
         let raw = self
             .pending_approvals
             .remove(request_id)

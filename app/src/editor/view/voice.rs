@@ -165,10 +165,19 @@ impl EditorView {
             return;
         }
 
+        let session_id = match &self.voice_input_state {
+            VoiceInputState::Stopped => return,
+            VoiceInputState::Listening { session_id }
+            | VoiceInputState::Transcribing { session_id, .. } => *session_id,
+        };
         let voice_input = voice_input::VoiceInput::handle(ctx);
+        if !voice_input.as_ref(ctx).is_current_session(session_id) {
+            self.stop_transcribing_voice_input(ctx);
+            return;
+        }
         if cancel_transcription && voice_input.as_ref(ctx).is_active() {
             log::debug!("Cancelling active voice input");
-            voice_input.update(ctx, |voice_input, _| voice_input.abort_listening());
+            voice_input.update(ctx, |voice_input, _| voice_input.abort_session(session_id));
         } else if voice_input.as_ref(ctx).is_listening() {
             log::debug!("Stopping voice input, cancelling transcription: {cancel_transcription}");
             voice_input.update(ctx, |voice_input, ctx| {
@@ -419,10 +428,19 @@ impl EditorView {
             return;
         }
         let session_id = result.session_id();
+        if !matches!(
+            self.voice_input_state,
+            VoiceInputState::Listening { session_id: active_session_id }
+                if active_session_id == session_id
+        ) {
+            return;
+        }
         if !VoiceInput::handle(ctx)
             .as_ref(ctx)
             .is_current_session(session_id)
         {
+            self.set_voice_input_state(VoiceInputState::Stopped, ctx);
+            ctx.notify();
             return;
         }
 

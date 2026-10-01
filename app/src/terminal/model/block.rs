@@ -313,6 +313,7 @@ pub struct Block {
     bootstrap_stage: BootstrapStage,
 
     show_bootstrap_block: bool,
+    raw_terminal: bool,
     show_in_band_command_blocks: bool,
     show_memory_stats: bool,
 
@@ -986,6 +987,7 @@ impl Block {
             event_proxy,
             bootstrap_stage,
             show_bootstrap_block: show_warp_bootstrap_input,
+            raw_terminal: false,
             show_in_band_command_blocks,
             show_memory_stats,
             creation_ts: Local::now(),
@@ -1223,6 +1225,14 @@ impl Block {
         self.for_each_block_grid(|block_grid| block_grid.scan_full_grid_for_secrets())
     }
 
+    /// Keeps an unintegrated daemon PTY visible as one continuous output grid.
+    pub(super) fn enter_raw_terminal(&mut self) {
+        self.raw_terminal = true;
+        self.hidden = false;
+        self.start_background(None);
+        self.render_delay_complete.store(true, Ordering::Relaxed);
+    }
+
     /// Starts this block as a background output block, with no command.
     /// Background blocks never receive precmd metadata, so where possible they
     /// inherit the last command block's session ID.
@@ -1382,6 +1392,9 @@ impl Block {
 
     /// If true, this block is hidden and has a height of 0.
     pub fn should_hide_block(&self, agent_view_state: &AgentViewState) -> bool {
+        if self.raw_terminal {
+            return false;
+        }
         if self.hidden {
             return true;
         }

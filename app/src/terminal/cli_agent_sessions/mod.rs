@@ -752,6 +752,9 @@ impl CLIAgentSessionsModel {
             return;
         };
 
+        if event.agent != session.agent {
+            return;
+        }
         let event_type = &event.event;
         if let Some(new_status) = session.apply_event(event) {
             let agent = session.agent;

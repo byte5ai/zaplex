@@ -331,7 +331,7 @@ impl CockpitSnapshotDocument {
         fleet: &FleetTree,
         remote_account_inventories: &[RemoteAccountInventorySnapshot],
     ) -> Self {
-        let (local_status, local_detail) = local_source(&snapshot.health);
+        let (mut local_status, mut local_detail) = local_source(&snapshot.health);
         let usage_available = matches!(&snapshot.health, ScanHealth::Loaded);
         let mut accounts = snapshot
             .accounts
@@ -394,8 +394,16 @@ impl CockpitSnapshotDocument {
                                 accounts.iter().any(|account| account.id == *account_id)
                             })
                     });
-                if !host.is_local && resolved_account_id.is_none() {
-                    remote_accounts_degraded = true;
+                if resolved_account_id.is_none() {
+                    if host.is_local {
+                        local_status = SourceStatus::Degraded;
+                        local_detail.get_or_insert_with(|| {
+                            "One or more local sessions have no matching account inventory"
+                                .to_string()
+                        });
+                    } else {
+                        remote_accounts_degraded = true;
+                    }
                 }
                 let account_id = resolved_account_id.unwrap_or_else(|| {
                     synthetic_account_id(
@@ -796,8 +804,11 @@ fn matching_account<'a>(
             None => usage.account.is_default,
         });
         let match_ = by_config.next();
-        if match_.is_some() && by_config.next().is_none() {
-            return match_;
+        let ambiguous = by_config.next().is_some();
+        // An explicit coordinate must never be replaced by another account
+        // merely because its email matches. Unknown identities stay separate.
+        if session.config_dir.is_some() || ambiguous || match_.is_some() {
+            return (!ambiguous).then_some(match_).flatten();
         }
     } else {
         return None;
@@ -853,7 +864,10 @@ fn synthetic_account_id(
         label: session
             .account_email
             .clone()
-            .unwrap_or_else(|| format!("Remote {}", provider_display_name(session.provider))),
+            .unwrap_or_else(|| match remote_host_identity {
+                Some(_) => format!("Remote {}", provider_display_name(session.provider)),
+                None => provider_display_name(session.provider).to_string(),
+            }),
         email: session.account_email.clone(),
         organization: None,
         role: None,

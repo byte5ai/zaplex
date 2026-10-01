@@ -785,6 +785,7 @@ fn merge_daemon_inventory(
     daemon: SessionList,
     multiplexers: MultiplexerSessionList,
     route: Option<DaemonRuntimeRoute>,
+    initialize: &InitializeResponse,
     observed_daemons: usize,
 ) {
     let routed_sessions: Vec<RoutedDaemonSession> = daemon
@@ -794,6 +795,15 @@ fn merge_daemon_inventory(
         .map(|session| RoutedDaemonSession {
             session,
             route: route.clone(),
+            host_id: (!initialize.host_id.is_empty()).then(|| initialize.host_id.clone()),
+            daemon_runtime: DaemonRuntimeRoute::new(
+                route
+                    .as_ref()
+                    .map(|route| route.runtime_filename().to_string())
+                    .unwrap_or_else(|| remote_server::setup::daemon_runtime_filename("sock")),
+                initialize.server_version.clone(),
+            )
+            .ok(),
         })
         .collect();
     if observed_daemons == 0 {
@@ -816,6 +826,7 @@ fn single_daemon_inventory(
     daemon: SessionList,
     multiplexers: MultiplexerSessionList,
     route: Option<DaemonRuntimeRoute>,
+    initialize: &InitializeResponse,
 ) -> HostSessionInventory {
     let sessions = daemon
         .sessions
@@ -824,6 +835,15 @@ fn single_daemon_inventory(
         .map(|session| RoutedDaemonSession {
             session,
             route: route.clone(),
+            host_id: (!initialize.host_id.is_empty()).then(|| initialize.host_id.clone()),
+            daemon_runtime: DaemonRuntimeRoute::new(
+                route
+                    .as_ref()
+                    .map(|route| route.runtime_filename().to_string())
+                    .unwrap_or_else(|| remote_server::setup::daemon_runtime_filename("sock")),
+                initialize.server_version.clone(),
+            )
+            .ok(),
         })
         .collect();
     HostSessionInventory {
@@ -851,8 +871,9 @@ fn single_daemon_scan_result(
     match query {
         Ok(query) => {
             let runtime_diagnostics = vec![query.runtime_diagnostics(runtime_filename)?];
+            let initialize = query.initialize.clone();
             let inventory = query.into_recovery().map(|(daemon, multiplexers)| {
-                single_daemon_inventory(daemon, multiplexers, inventory_route)
+                single_daemon_inventory(daemon, multiplexers, inventory_route, &initialize)
             });
             Ok(DaemonInventoryScanResult {
                 inventory,
@@ -1067,6 +1088,7 @@ async fn list_daemon_sessions_inner(
             )?)
         };
         runtime_diagnostics.push(query.runtime_diagnostics(runtime_filename.clone())?);
+        let initialize = query.initialize.clone();
         let (daemon, multiplexers) = match query.into_recovery() {
             Ok(inventory) => inventory,
             Err(error) => {
@@ -1081,6 +1103,7 @@ async fn list_daemon_sessions_inner(
             daemon,
             multiplexers,
             route,
+            &initialize,
             observed_daemons,
         );
         observed_daemons += 1;

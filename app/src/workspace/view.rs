@@ -62,10 +62,10 @@ use crate::app_state::{
     bind_daemon_pty_claim_owner, claim_daemon_pty, daemon_pty_claim,
     release_daemon_pty_claim_for_connection, release_daemon_pty_claim_for_terminal_view,
     release_daemon_pty_claim_reservation, DaemonPtyClaimOutcome, DaemonPtyClaimOwner,
-    DaemonPtyIdentity, LeafContents, LeafSnapshot, LeftPanelDisplayedTab, LeftPanelSnapshot,
-    NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid, PersistedDaemonRuntime,
+    DaemonPtyIdentity, FileManagerPaneMode, LeafContents, LeafSnapshot, LeftPanelDisplayedTab,
+    LeftPanelSnapshot, NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid, PersistedDaemonRuntime,
     RemoteTerminalIdentity, RemoteTerminalTransport, RightPanelSnapshot, SettingsPaneSnapshot,
-    TabSnapshot, TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
+    TabSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
 use crate::code_review::diff_state::DiffStateModel;
 #[cfg(feature = "local_fs")]
@@ -228,12 +228,13 @@ use crate::menu::{
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
 use crate::notebooks::manager::{NotebookManager, NotebookSource};
+use crate::pane_group::pane::sftp_pane::SftpPane;
 #[cfg(feature = "local_fs")]
 use crate::pane_group::FilePane;
 use crate::pane_group::ImagePane;
 use crate::pane_group::{
-    self, AnyPaneContent, CodeDiffPane, CodePane, Direction, NewTerminalOptions, PanesLayout,
-    TabBarHoverIndex,
+    self, AnyPaneContent, CodeDiffPane, CodePane, Direction, NewTerminalOptions, PaneContent,
+    PanesLayout, TabBarHoverIndex,
 };
 use crate::remote_server::manager::RemoteServerManager;
 #[cfg(feature = "local_fs")]
@@ -1010,12 +1011,12 @@ struct TransferredTabIdentity {
 /// One remote file being edited over *classic* SSH (no daemon) via a local
 /// working copy: the editor edits the copy, and each save uploads it back to
 /// the host over SFTP. Held in [`Workspace::remote_sftp_edits`], keyed by the
-/// working copy's canonical local path. Entries and their private directories live until the
-/// workspace is dropped; closing a tab stops save events but does not prune the registry yet.
+/// working copy's canonical local path. Failed or still-pending saves retain their
+/// private directory after workspace drop; confirmed copies are removed normally.
 #[cfg(all(unix, feature = "local_tty"))]
 struct RemoteSftpEdit {
-    /// Owns and removes the private local working directory with this registry entry.
-    _working_dir: tempfile::TempDir,
+    /// Cleanup is disabled from local save until the latest upload succeeds.
+    working_dir: tempfile::TempDir,
     /// SSH node id the file lives on (used in status/error toasts).
     node_label: String,
     /// Absolute path on the remote host to upload back to.
@@ -1028,6 +1029,27 @@ struct RemoteSftpEdit {
     /// A save arrived while an upload was in flight — re-upload once it finishes,
     /// so no keystroke-run is silently dropped.
     resave_pending: bool,
+}
+
+#[cfg(all(unix, feature = "local_tty"))]
+impl RemoteSftpEdit {
+    fn saved_locally(&mut self) -> bool {
+        // Keep the only saved copy even if the workspace closes before completion.
+        self.working_dir.disable_cleanup(true);
+        if self.uploading {
+            self.resave_pending = true;
+            return false;
+        }
+        self.uploading = true;
+        true
+    }
+
+    fn upload_finished(&mut self, succeeded: bool) -> bool {
+        self.uploading = false;
+        let resave = std::mem::take(&mut self.resave_pending);
+        self.working_dir.disable_cleanup(!succeeded || resave);
+        resave
+    }
 }
 
 /// Pure inversion of the daemon↔node association: find the SSH `node_id` whose
@@ -1088,7 +1110,7 @@ fn spawn_host_scope_requires_explicit_selection(
 }
 
 /// Creates a private local directory for one classic-SSH remote-edit working copy.
-/// The owning registry entry keeps it alive until the workspace is dropped and then removes it.
+/// Confirmed copies are removed on workspace drop; unconfirmed saves disable cleanup.
 #[cfg(all(unix, feature = "local_tty"))]
 fn remote_sftp_edit_working_dir() -> std::io::Result<tempfile::TempDir> {
     tempfile::Builder::new()
@@ -1515,6 +1537,24 @@ struct RestoredDaemonPanePlan {
 }
 
 #[cfg(unix)]
+fn listed_daemon_adoption_identity(
+    host_id: Option<&str>,
+    runtime: Option<&remote_server::transport::DaemonRuntimeRoute>,
+    route: Option<&remote_server::transport::DaemonRuntimeRoute>,
+) -> Option<(String, remote_server::transport::DaemonRuntimeRoute)> {
+    let host_id = host_id.filter(|host_id| !host_id.trim().is_empty())?;
+    let runtime = runtime?;
+    if runtime.server_version().trim().is_empty() {
+        return None;
+    }
+    let route_matches = match route {
+        Some(route) => route == runtime,
+        None => runtime.runtime_filename() == remote_server::setup::daemon_runtime_filename("sock"),
+    };
+    route_matches.then(|| (host_id.to_string(), runtime.clone()))
+}
+
+#[cfg(unix)]
 fn persisted_daemon_runtime_route(
     daemon_runtime: Option<&PersistedDaemonRuntime>,
 ) -> Result<remote_server::transport::DaemonRuntimeRoute, String> {
@@ -1689,7 +1729,9 @@ enum PendingManagedSpawn {
         plan_id: spawn_card::bulk::BulkLaunchPlanId,
         target_id: spawn_card::bulk::BulkLaunchTargetId,
     },
-    Standalone,
+    Standalone {
+        generation: u64,
+    },
 }
 
 #[derive(Default)]
@@ -2105,6 +2147,8 @@ pub struct Workspace {
     /// Managed Spawn-Card attempts awaiting the daemon's authoritative
     /// SessionOpened acknowledgement, keyed by their immutable launch id.
     pending_managed_spawns: PendingManagedSpawns,
+    pending_spawn_directory_pick: Option<(uuid::Uuid, u64)>,
+    pending_agent_restarts: HashMap<EntityId, (uuid::Uuid, SessionId)>,
     /// A single scoped timer follows open live transcript documents. It stops
     /// when the final weak document handle or live route disappears.
     transcript_refresh_timer_active: bool,
@@ -2183,12 +2227,23 @@ pub struct Workspace {
     remove_tab_config_confirmation_dialog: ViewHandle<RemoveTabConfigConfirmationDialog>,
 }
 
+/// Toast copy for a host that could not be resolved from Connections. A failed
+/// registry read is not evidence that the host was removed.
+fn host_lookup_failure_message(registry_read_failed: bool) -> String {
+    if registry_read_failed {
+        crate::t!("workspace-host-registry-unavailable")
+    } else {
+        crate::t!("workspace-left-panel-ssh-manager-session-host-missing")
+    }
+}
+
 fn favorite_host_menu_item(
     favorite: &zaplex_cockpit::Favorite,
     host_nodes: &[(String, String)],
     changes_disabled: bool,
+    host_registry_unavailable: bool,
 ) -> MenuItem<WorkspaceAction> {
-    let remove_item = if changes_disabled {
+    let remove_item = if changes_disabled || host_registry_unavailable {
         MenuItemFields::new(crate::t!("cockpit-tt-favorite-remove"))
             .with_disabled(true)
             .with_icon(icons::Icon::Star)
@@ -2238,11 +2293,20 @@ fn favorite_host_menu_item(
         };
     }
 
-    let label = format!(
-        "{} · {}",
-        favorite.display_label(),
-        crate::t!("cockpit-host-removed")
-    );
+    let unavailable_message = if host_registry_unavailable {
+        crate::t!("workspace-host-registry-unavailable")
+    } else {
+        crate::t!("workspace-favorite-unavailable")
+    };
+    let label = if host_registry_unavailable {
+        favorite.display_label().to_string()
+    } else {
+        format!(
+            "{} · {}",
+            favorite.display_label(),
+            crate::t!("cockpit-host-removed")
+        )
+    };
     MenuItem::Submenu {
         fields: MenuItemFields::new_submenu(label.clone())
             .with_split_submenu_primary_disabled(true)
@@ -2253,7 +2317,7 @@ fn favorite_host_menu_item(
             .with_tooltip(label)
             .with_icon(icons::Icon::StarFilled),
         menu: SubMenu::new(vec![
-            MenuItemFields::new(crate::t!("workspace-favorite-unavailable"))
+            MenuItemFields::new(unavailable_message)
                 .with_disabled(true)
                 .with_icon(icons::Icon::AlertTriangle)
                 .into_item(),
@@ -2266,16 +2330,25 @@ fn favorite_host_menu_items(
     favorites: &[zaplex_cockpit::Favorite],
     host_nodes: &[(String, String)],
     changes_disabled: bool,
+    host_registry_unavailable: bool,
 ) -> Vec<MenuItem<WorkspaceAction>> {
     favorites
         .iter()
-        .map(|favorite| favorite_host_menu_item(favorite, host_nodes, changes_disabled))
+        .map(|favorite| {
+            favorite_host_menu_item(
+                favorite,
+                host_nodes,
+                changes_disabled,
+                host_registry_unavailable,
+            )
+        })
         .collect()
 }
 
 fn favorites_menu_items_from_sources(
     favorites_store: &crate::cockpit::favorites::FavoritesStore,
     host_nodes: Vec<(String, String)>,
+    host_registry_unavailable: bool,
 ) -> Vec<MenuItem<WorkspaceAction>> {
     let persistence_is_protected = favorites_store.persistence_is_protected();
     let favorites = favorites_store
@@ -2304,11 +2377,63 @@ fn favorites_menu_items_from_sources(
                 .into_item(),
         );
     }
+    if host_registry_unavailable {
+        items.push(
+            MenuItemFields::new(crate::t!("workspace-host-registry-unavailable"))
+                .with_disabled(true)
+                .with_icon(icons::Icon::AlertTriangle)
+                .into_item(),
+        );
+    }
+    // A registry read error is not evidence that a host was removed; keep
+    // favorites from being deleted on the strength of a failed read.
     items.extend(favorite_host_menu_items(
         &favorites,
         &host_nodes,
         persistence_is_protected,
+        host_registry_unavailable,
     ));
+    items
+}
+
+/// `None` means the registry could not be read, rather than an empty registry.
+fn split_launch_menu_items(
+    hosts: Option<Vec<(String, String)>>,
+    current_host: Option<&SplitLaunchDestination>,
+) -> Vec<MenuItem<SplitLaunchDestination>> {
+    let host_item = |name: String, destination: SplitLaunchDestination| {
+        let label = if current_host == Some(&destination) {
+            format!("{name} · {}", crate::t!("common-current"))
+        } else {
+            name
+        };
+        MenuItemFields::new(label)
+            .with_on_select_action(destination)
+            .with_icon(icons::Icon::Terminal)
+            .into_item()
+    };
+    let mut items = vec![host_item(
+        crate::t!("cockpit-spawn-card-host-local"),
+        SplitLaunchDestination::Local,
+    )];
+    match hosts {
+        Some(hosts) if !hosts.is_empty() => {
+            items.push(MenuItem::Separator);
+            items.extend(hosts.into_iter().map(|(node_id, name)| {
+                host_item(name, SplitLaunchDestination::Remote { node_id })
+            }));
+        }
+        Some(_) => {}
+        None => {
+            items.push(MenuItem::Separator);
+            items.push(
+                MenuItemFields::new(crate::t!("workspace-host-registry-unavailable"))
+                    .with_disabled(true)
+                    .with_icon(icons::Icon::AlertTriangle)
+                    .into_item(),
+            );
+        }
+    }
     items
 }
 
@@ -3820,6 +3945,12 @@ impl Workspace {
                 } else {
                     me.pending_split_launch = None;
                 }
+                // The picker took focus when it opened. A local split focuses
+                // its new pane; a cancelled picker or a remote split that is
+                // still connecting hands focus back to the active tab.
+                if menu.is_focused(ctx) {
+                    me.focus_active_tab(ctx);
+                }
                 ctx.notify();
             }
         });
@@ -4554,6 +4685,8 @@ impl Workspace {
             watched_transcripts: HashMap::new(),
             local_transcript_reads_in_flight: 0,
             pending_managed_spawns: PendingManagedSpawns::default(),
+            pending_spawn_directory_pick: None,
+            pending_agent_restarts: HashMap::new(),
             transcript_refresh_timer_active: false,
             cockpit_jump_cursor: None,
             agent_toast_stack,
@@ -4741,6 +4874,12 @@ impl Workspace {
         event: &CLIAgentSessionsModelEvent,
         ctx: &mut ViewContext<Self>,
     ) {
+        if let CLIAgentSessionsModelEvent::Started {
+            terminal_view_id, ..
+        } = event
+        {
+            self.pending_agent_restarts.remove(terminal_view_id);
+        }
         if matches!(
             event,
             CLIAgentSessionsModelEvent::Started { .. }
@@ -4921,11 +5060,10 @@ impl Workspace {
         // NewTabPlacement setting (append, or after the active tab) and then
         // activates the tab it inserted — so `self.active_tab_index` afterward is
         // that tab's real index. We use it directly rather than assuming tabs
-        // append, and record the real index of the config's active tab so a
-        // skipped tab before it doesn't shift focus onto the wrong one.
+        // append. Keep the active tab's stable identity because pinning a later
+        // tab can move it in front of an already inserted tab.
         let original_active = window.active_tab_index.unwrap_or_default();
-        let mut active_tab_index: Option<usize> = None;
-        let mut added = false;
+        let mut active_pane_group_id = None;
         for (original_index, tab_template) in window.tabs.iter().enumerate() {
             if !tab_template.layout.is_openable() {
                 log::warn!(
@@ -4940,7 +5078,6 @@ impl Workspace {
                 tab_template.title.clone(),
                 ctx,
             );
-            added = true;
             let inserted = self.active_tab_index;
             self.tabs[inserted].selected_color = tab_template
                 .color
@@ -4949,16 +5086,16 @@ impl Workspace {
                 .set_tab_pinned(inserted, tab_template.is_pinned, ctx)
                 .unwrap_or(inserted);
             if original_index == original_active {
-                active_tab_index = Some(inserted);
+                active_pane_group_id = Some(self.tabs[inserted].pane_group.id());
             }
         }
 
         // Focus the config's active tab. If it was itself skipped, leave the
         // last-added tab active (each add already activated the tab it inserted).
-        if added {
-            if let Some(index) = active_tab_index {
-                self.activate_tab_internal(index, ctx);
-            }
+        if let Some(index) = active_pane_group_id
+            .and_then(|id| self.tabs.iter().position(|tab| tab.pane_group.id() == id))
+        {
+            self.activate_tab_internal(index, ctx);
         }
     }
 
@@ -5205,6 +5342,17 @@ impl Workspace {
             }
             NewWorkspaceSource::FromTemplate { window_template } => {
                 self.open_launch_config_window(window_template, ctx);
+                // An empty or entirely invalid template must still produce a usable window.
+                if self.tabs.is_empty() {
+                    self.add_new_session_tab_with_default_mode(
+                        NewSessionSource::Window,
+                        None,
+                        None,
+                        None,
+                        false,
+                        ctx,
+                    );
+                }
                 self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::Session { options } => {
@@ -6045,8 +6193,7 @@ impl Workspace {
                         ctx,
                     )
                 } else {
-                    self.open_ssh_terminal(node_id, server, false, ctx);
-                    true
+                    self.open_ssh_terminal(node_id, server, false, ctx)
                 };
                 if opened {
                     self.bind_active_terminal_account_with_id(
@@ -6059,14 +6206,11 @@ impl Workspace {
                 }
                 opened
             }
-            _ => {
+            lookup @ (Ok(None) | Err(_)) => {
+                log::warn!("Couldn't resolve host {node_id} to run a command on");
+                let message = host_lookup_failure_message(lookup.is_err());
                 self.toast_stack.update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(format!(
-                            "Couldn't find host '{node_id}' to run the command on."
-                        )),
-                        ctx,
-                    );
+                    toast_stack.add_ephemeral_toast(DismissibleToast::error(message), ctx);
                 });
                 false
             }
@@ -6288,10 +6432,38 @@ impl Workspace {
         routes
     }
 
+    fn begin_agent_restart(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<uuid::Uuid> {
+        let terminal = Self::terminal_view_handle(terminal_view_id, ctx);
+        let shell_session = terminal.as_ref().and_then(|view| {
+            let view = view.as_ref(ctx);
+            (self.workspace_contains_terminal_view(terminal_view_id, ctx)
+                && view.can_execute_routed_agent_launch(ctx))
+            .then(|| view.active_block_session_id())
+            .flatten()
+        });
+        let Some(shell_session) = shell_session else {
+            self.show_agent_launch_error(
+                "Restart requires an open pane in this window with a known terminal shell."
+                    .to_string(),
+                ctx,
+            );
+            return None;
+        };
+        let ticket = uuid::Uuid::new_v4();
+        self.pending_agent_restarts
+            .insert(terminal_view_id, (ticket, shell_session));
+        Some(ticket)
+    }
+
     fn complete_agent_restart(
         &mut self,
         plan: crate::cockpit::session_lifecycle::RestartPlan,
         terminal_view_id: EntityId,
+        ticket: uuid::Uuid,
         signal: GuardrailSendOutcome,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -6299,6 +6471,15 @@ impl Workspace {
             ResumeInvocation, SessionAccountRoute, SessionHostRoute,
         };
 
+        let Some((current_ticket, shell_session)) =
+            self.pending_agent_restarts.get(&terminal_view_id).copied()
+        else {
+            return;
+        };
+        if current_ticket != ticket {
+            return;
+        }
+        self.pending_agent_restarts.remove(&terminal_view_id);
         match signal {
             GuardrailSendOutcome::Sent => {}
             signal => {
@@ -6326,6 +6507,18 @@ impl Workspace {
             );
             return;
         };
+        if !self.workspace_contains_terminal_view(terminal_view_id, ctx)
+            || terminal_view.as_ref(ctx).active_block_session_id() != Some(shell_session)
+            || !terminal_view
+                .as_ref(ctx)
+                .can_execute_routed_agent_launch(ctx)
+        {
+            self.show_agent_launch_error(
+                "The terminal changed while its agent was stopping; restart cancelled.".to_string(),
+                ctx,
+            );
+            return;
+        }
         let agent = crate::cockpit::agent_of(plan.route.provider);
         let launch = match &plan.resume {
             ResumeInvocation::LocalShell { launch } => launch.clone(),
@@ -6377,6 +6570,29 @@ impl Workspace {
                     return;
                 }
             };
+        // The old process may already have ended, but another conversation in
+        // this same view must never be removed by its delayed kill response.
+        let config_dir_string = config_dir.map(|path| path.to_string_lossy().into_owned());
+        if CLIAgentSessionsModel::as_ref(ctx)
+            .session(terminal_view_id)
+            .is_some()
+            && Self::terminal_view_id_for_agent_session(
+                agent,
+                &plan.route.session_id,
+                config_dir_string.as_deref(),
+                account_email,
+                account_id,
+                host,
+                matches!(&plan.route.host, SessionHostRoute::Local),
+                ctx,
+            ) != Some(terminal_view_id)
+        {
+            self.show_agent_launch_error(
+                "The agent in this pane changed while stopping; restart cancelled.".to_string(),
+                ctx,
+            );
+            return;
+        }
         crate::terminal::cli_agent_sessions::CLIAgentSessionsModel::handle(ctx)
             .update(ctx, |sessions, ctx| {
                 sessions.remove_session(terminal_view_id, ctx)
@@ -6504,12 +6720,15 @@ impl Workspace {
             return;
         };
         if is_local {
+            let Some(ticket) = self.begin_agent_restart(terminal_view_id, ctx) else {
+                return;
+            };
             let signal = send_local_guardrail_signal(
                 route.pid,
                 Some(fingerprint),
                 zaplex_cockpit::GuardrailSignal::Kill,
             );
-            self.complete_agent_restart(plan, terminal_view_id, signal, ctx);
+            self.complete_agent_restart(plan, terminal_view_id, ticket, signal, ctx);
             return;
         }
 
@@ -6534,6 +6753,9 @@ impl Workspace {
                 );
                 return;
             }
+            let Some(ticket) = self.begin_agent_restart(terminal_view_id, ctx) else {
+                return;
+            };
             let client = daemon.client;
             let session_id = route.session_id.clone();
             let fingerprint = fingerprint.to_string();
@@ -6550,7 +6772,7 @@ impl Workspace {
                     .await
                 },
                 move |workspace, signal, ctx| {
-                    workspace.complete_agent_restart(plan, terminal_view_id, signal, ctx);
+                    workspace.complete_agent_restart(plan, terminal_view_id, ticket, signal, ctx);
                 },
             );
         }
@@ -7070,6 +7292,7 @@ impl Workspace {
                                 generation,
                                 daemon_route,
                                 host_id.map(str::to_string),
+                                None,
                                 Some(expected_agent_binding),
                                 ctx,
                             );
@@ -7179,6 +7402,7 @@ impl Workspace {
                 current.generation,
                 daemon_route,
                 Some(current.host_id),
+                None,
                 Some(expected_agent_binding),
                 ctx,
             );
@@ -7611,10 +7835,22 @@ impl Workspace {
                 let branch = crate::util::git::detect_current_branch_display(&root)
                     .await
                     .unwrap_or_default();
-                let (diff, untracked) = crate::util::git::get_review_working_changes(&root).await;
-                (root_str, name, branch, diff, untracked)
+                let changes = crate::util::git::get_review_working_changes(&root).await;
+                (root_str, name, branch, changes)
             },
-            |me, (root_str, name, branch, diff, untracked), ctx| {
+            |me, (root_str, name, branch, changes), ctx| {
+                let (diff, untracked) = match changes {
+                    Ok(changes) => changes,
+                    Err(error) => {
+                        me.toast_stack.update(ctx, |toast_stack, ctx| {
+                            toast_stack.add_ephemeral_toast(
+                                DismissibleToast::error(format!("Could not open review: {error}")),
+                                ctx,
+                            );
+                        });
+                        return;
+                    }
+                };
                 let changes = zaplex_cockpit::WorkingChanges { diff, untracked };
                 // Preview the exact commit command the "commit" verb would run,
                 // with a placeholder message (github_flows ethos: show it).
@@ -8367,8 +8603,7 @@ impl Workspace {
                             ctx,
                         )
                     } else {
-                        self.open_ssh_terminal(node_id.to_string(), server, false, ctx);
-                        true
+                        self.open_ssh_terminal(node_id.to_string(), server, false, ctx)
                     };
                     if opened {
                         self.bind_active_terminal_account_with_id(
@@ -8445,7 +8680,18 @@ impl Workspace {
         validation_error: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
+        let mut attempted = false;
         for (target_id, target) in targets {
+            // A directory response may arrive after a selection change or Close.
+            // Check the exact reserved plan before any process or pane is created.
+            if !self.spawn_card.as_ref(ctx).launch_target_is_reserved(
+                plan_id,
+                &target_id,
+                &target,
+            ) {
+                continue;
+            }
+            attempted = true;
             let mut result = if let Some(error) = validation_error.as_ref() {
                 Err(error.clone())
             } else {
@@ -8518,6 +8764,9 @@ impl Workspace {
             });
         }
 
+        if !attempted {
+            return;
+        }
         if self.spawn_card.as_ref(ctx).launch_batch_succeeded(plan_id) {
             self.current_workspace_state.is_spawn_card_open = false;
             self.focus_active_tab(ctx);
@@ -8549,9 +8798,12 @@ impl Workspace {
     ) {
         match pending {
             PendingManagedSpawn::Batch { plan_id, target_id } => {
-                self.spawn_card.update(ctx, |card, ctx| {
-                    card.apply_launch_result(plan_id, &target_id, result.clone(), ctx);
+                let accepted = self.spawn_card.update(ctx, |card, ctx| {
+                    card.apply_launch_result(plan_id, &target_id, result.clone(), ctx)
                 });
+                if !accepted {
+                    return;
+                }
                 if self.spawn_card.as_ref(ctx).launch_batch_succeeded(plan_id) {
                     self.current_workspace_state.is_spawn_card_open = false;
                     self.focus_active_tab(ctx);
@@ -8560,7 +8812,10 @@ impl Workspace {
                     ctx.focus(&self.spawn_card);
                 }
             }
-            PendingManagedSpawn::Standalone => {
+            PendingManagedSpawn::Standalone { generation } => {
+                if self.spawn_card.as_ref(ctx).launch_generation() != generation {
+                    return;
+                }
                 if let Err(error) = result {
                     self.current_workspace_state.is_spawn_card_open = true;
                     self.show_agent_launch_error(error, ctx);
@@ -10153,6 +10408,8 @@ impl Workspace {
                 pty_session_id,
                 pty_generation,
                 daemon_route,
+                expected_host_id,
+                expected_daemon_runtime,
             } => {
                 #[cfg(unix)]
                 match resolve_ssh_connection(server) {
@@ -10161,7 +10418,8 @@ impl Workspace {
                         pty_session_id.clone(),
                         *pty_generation,
                         daemon_route.clone(),
-                        None,
+                        expected_host_id.clone(),
+                        expected_daemon_runtime.clone(),
                         None,
                         ctx,
                     ),
@@ -10172,7 +10430,7 @@ impl Workspace {
                 };
                 #[cfg(not(unix))]
                 {
-                    let _ = (server, pty_session_id, pty_generation, daemon_route);
+                    let _ = (server, pty_session_id, pty_generation, daemon_route, expected_host_id, expected_daemon_runtime);
                     log::warn!("AdoptDaemonSession ignored: daemon sessions are unix-only");
                 }
             }
@@ -10324,10 +10582,13 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::pane_group::pane::sftp_pane::SftpPane;
+        let pick_id = uuid::Uuid::new_v4();
+        self.pending_spawn_directory_pick =
+            Some((pick_id, self.spawn_card.as_ref(ctx).launch_generation()));
         #[cfg(all(unix, feature = "local_tty"))]
         self.ensure_sftp_safe_file_daemon(&node_id, ctx);
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            let pane = SftpPane::new_for_pick(node_id, start_path, ctx);
+            let pane = SftpPane::new_for_pick(node_id, start_path, pick_id, ctx);
             let smart_split_direction =
                 pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
             pane_group.add_pane_with_direction(
@@ -10337,6 +10598,17 @@ impl Workspace {
                 ctx,
             );
         });
+    }
+
+    fn accept_spawn_directory_pick(&mut self, pick_id: uuid::Uuid, ctx: &AppContext) -> bool {
+        let Some((pending_id, generation)) = self.pending_spawn_directory_pick else {
+            return false;
+        };
+        if pending_id != pick_id {
+            return false;
+        }
+        self.pending_spawn_directory_pick = None;
+        generation == self.spawn_card.as_ref(ctx).launch_generation()
     }
 
     /// Ensures a standalone SFTP pane has a workspace-owned safe-file daemon.
@@ -10603,7 +10875,7 @@ impl Workspace {
                         me.remote_sftp_edits.insert(
                             key,
                             RemoteSftpEdit {
-                                _working_dir: working_dir,
+                                working_dir,
                                 node_label: node_label.clone(),
                                 remote_path,
                                 backend,
@@ -10656,11 +10928,9 @@ impl Workspace {
         let Some(edit) = self.remote_sftp_edits.get_mut(&working_copy) else {
             return;
         };
-        if edit.uploading {
-            edit.resave_pending = true;
+        if !edit.saved_locally() {
             return;
         }
-        edit.uploading = true;
         let backend = edit.backend.clone();
         let remote_path = edit.remote_path.clone();
         let node_label = edit.node_label.clone();
@@ -10688,8 +10958,7 @@ impl Workspace {
                 // Clear the in-flight flag and see whether a save landed meanwhile.
                 let mut resave = false;
                 if let Some(edit) = me.remote_sftp_edits.get_mut(&working_copy) {
-                    edit.uploading = false;
-                    resave = std::mem::take(&mut edit.resave_pending);
+                    resave = edit.upload_finished(error.is_none());
                 }
                 match error {
                     None => {
@@ -10710,7 +10979,8 @@ impl Workspace {
                             view.add_persistent_toast(
                                 DismissibleToast::error(format!(
                                     "Couldn't save {display_name} to {node_label}: {error}. \
-                                     Your changes are kept locally; retry with another save."
+                                     Your changes are kept at {}; retry with another save.",
+                                    working_copy.display()
                                 )),
                                 ctx,
                             );
@@ -11013,13 +11283,13 @@ impl Workspace {
         // re-attempts the daemon path.
         force_classic: bool,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
         let attempt = if force_classic {
             None
         } else {
             let Some(attempt) = self.begin_ssh_connect(node_id.clone(), server.host.clone(), ctx)
             else {
-                return;
+                return false;
             };
             Some(attempt)
         };
@@ -11033,7 +11303,7 @@ impl Workspace {
             attempt,
             None,
             ctx,
-        );
+        )
     }
 
     fn open_ssh_terminal_for_split(
@@ -11045,6 +11315,11 @@ impl Workspace {
     ) {
         let Some(attempt) = self.begin_ssh_connect(node_id.clone(), server.host.clone(), ctx)
         else {
+            let message = crate::t!(
+                "workspace-split-host-already-connecting",
+                host = server.host
+            );
+            self.show_split_launch_error(message, ctx);
             return;
         };
         self.open_ssh_terminal_command(
@@ -11100,7 +11375,7 @@ impl Workspace {
         let Some(attempt) =
             self.begin_ssh_connect(node_id.clone(), connection.server.host.clone(), ctx)
         else {
-            return true;
+            return false;
         };
         self.open_resolved_ssh_terminal_command(
             node_id,
@@ -11112,8 +11387,7 @@ impl Workspace {
             Some(attempt),
             None,
             ctx,
-        );
-        true
+        )
     }
 
     #[cfg(not(all(unix, feature = "local_tty")))]
@@ -11195,8 +11469,7 @@ impl Workspace {
             Some(attempt),
             None,
             ctx,
-        );
-        true
+        )
     }
 
     #[cfg(not(all(unix, feature = "local_tty")))]
@@ -11251,7 +11524,7 @@ impl Workspace {
         attempt: Option<SshConnectAttempt>,
         split_launch: Option<PendingSplitLaunch>,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
         let connection = match resolve_ssh_connection(&server) {
             Ok(connection) => connection,
             Err(error) => {
@@ -11267,7 +11540,7 @@ impl Workspace {
                 if let Some(attempt) = attempt.as_ref() {
                     self.finish_ssh_connect(attempt, ctx);
                 }
-                return;
+                return false;
             }
         };
         self.open_resolved_ssh_terminal_command(
@@ -11280,7 +11553,7 @@ impl Workspace {
             attempt,
             split_launch,
             ctx,
-        );
+        )
     }
 
     fn restore_classic_ssh_terminal(
@@ -11389,12 +11662,15 @@ impl Workspace {
             terminal_view.downgrade(),
             secret,
             server.auth_type,
+            command.clone(),
             ctx,
         );
         if let Some(prepared_command) = prepared_command {
             crate::ssh_manager::secret_injector::retain_key_askpass_until_shell_ready(
                 terminal_view.read(ctx, |view, ctx| view.inactive_pty_reads_rx(ctx)),
+                terminal_view.downgrade(),
                 prepared_command,
+                command.clone(),
                 ctx,
             );
         }
@@ -11410,6 +11686,7 @@ impl Workspace {
                     terminal_view.read(ctx, |view, ctx| view.inactive_pty_reads_rx(ctx)),
                     terminal_view.downgrade(),
                     startup_command,
+                    command.clone(),
                     ctx,
                 );
             }
@@ -11623,6 +11900,38 @@ impl Workspace {
             .as_ref(ctx)
             .remote_terminal_restore_state(pane_id, ctx)
         else {
+            // A fresh daemon open can be cancelled before it returns a PTY ID.
+            // Keep the draft and retire only this local connection attempt.
+            #[cfg(unix)]
+            if let Some(view) = pane_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(pane_id, ctx)
+            {
+                let session_id = view.as_ref(ctx).remote_input_session_id();
+                if let Some(session_id) = session_id.filter(|session_id| {
+                    pane_group
+                        .as_ref(ctx)
+                        .daemon_pane_matches_connection(pane_id, *session_id, ctx)
+                        && !view.as_ref(ctx).remote_input_is_ready()
+                }) {
+                    view.update(ctx, |view, ctx| view.cancel_remote_input_readiness(ctx));
+                    self.pending_daemon_split_focus.remove(&session_id);
+                    self.pending_routed_daemon_starts.remove(&session_id);
+                    self.daemon_session_servers.remove(&session_id);
+                    self.daemon_session_hosts.remove(&session_id);
+                    #[cfg(feature = "local_tty")]
+                    {
+                        self.sftp_file_service_sessions
+                            .retain(|_, candidate| *candidate != session_id);
+                        forget_daemon_node_session(&mut self.daemon_node_sessions, session_id);
+                    }
+                    release_daemon_pty_claim_for_connection(session_id);
+                    RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+                        manager.deregister_session(session_id, false, ctx);
+                    });
+                    ctx.dispatch_global_action("workspace:save_app", ());
+                }
+            }
             return;
         };
         identity.input_draft = draft.clone();
@@ -11649,7 +11958,7 @@ impl Workspace {
         attempt: Option<SshConnectAttempt>,
         split_launch: Option<PendingSplitLaunch>,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
         use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshSecretStore};
 
         let server_for_connection = connection.server.clone();
@@ -11661,8 +11970,8 @@ impl Workspace {
         // instead of a local PTY running `ssh`. Falls through to the normal path
         // if the host isn't resilient or the auth isn't headless-capable.
         #[cfg(unix)]
-        if !force_classic
-            && self.try_open_daemon_ssh_terminal(
+        if !force_classic {
+            if let Some(opened) = self.try_open_daemon_ssh_terminal(
                 &node_id,
                 &connection,
                 DaemonLaunchRouting {
@@ -11672,9 +11981,9 @@ impl Workspace {
                 attempt.clone(),
                 split_launch.clone(),
                 ctx,
-            )
-        {
-            return;
+            ) {
+                return opened;
+            }
         }
         if agent_launch_route.is_some() || managed_launch.is_some() {
             self.toast_stack.update(ctx, |view, ctx| {
@@ -11689,7 +11998,7 @@ impl Workspace {
             if let Some(attempt) = attempt.as_ref() {
                 self.finish_ssh_connect(attempt, ctx);
             }
-            return;
+            return false;
         }
 
         let secret = match KeychainSecretStore.get(&secret_lookup_id, secret_kind) {
@@ -11726,7 +12035,7 @@ impl Workspace {
                     if let Some(attempt) = attempt.as_ref() {
                         self.finish_ssh_connect(attempt, ctx);
                     }
-                    return;
+                    return false;
                 }
             }
         } else {
@@ -11757,7 +12066,7 @@ impl Workspace {
                             if let Some(attempt) = attempt.as_ref() {
                                 self.finish_ssh_connect(attempt, ctx);
                             }
-                            return;
+                            return false;
                         }
                     }
                 }
@@ -11784,7 +12093,7 @@ impl Workspace {
                     if let Some(attempt) = attempt.as_ref() {
                         self.finish_ssh_connect(attempt, ctx);
                     }
-                    return;
+                    return false;
                 };
                 (pane_group, pane_id, terminal_view, Some(focus_guard), false)
             } else {
@@ -11810,7 +12119,7 @@ impl Workspace {
                     if let Some(attempt) = attempt.as_ref() {
                         self.finish_ssh_connect(attempt, ctx);
                     }
-                    return;
+                    return false;
                 };
                 (pane_group, pane_id, terminal_view, None, true)
             };
@@ -11862,13 +12171,16 @@ impl Workspace {
             terminal_view.downgrade(),
             secret,
             server_for_connection.auth_type,
+            cmd.clone(),
             ctx,
         );
 
         if let Some(prepared_command) = prepared_command {
             crate::ssh_manager::secret_injector::retain_key_askpass_until_shell_ready(
                 terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c)),
+                terminal_view.downgrade(),
                 prepared_command,
+                cmd.clone(),
                 ctx,
             );
         }
@@ -11884,6 +12196,7 @@ impl Workspace {
                         terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c)),
                         terminal_view.downgrade(),
                         startup_cmd,
+                        cmd.clone(),
                         ctx,
                     );
                 }
@@ -11941,6 +12254,7 @@ impl Workspace {
             view.begin_classic_ssh_readiness(ctx);
             view.execute_system_command_or_set_pending(cmd, ctx);
         });
+        true
     }
 
     #[cfg(unix)]
@@ -12005,10 +12319,10 @@ impl Workspace {
             .retain(|_, pending| pending.managed_launch_id.as_deref() != Some(launch_id));
     }
 
-    /// Native persistent remote-session path (Stage 2, Option B). Returns `true`
-    /// if the host will be opened via the daemon path (caller should stop), or
-    /// `false` to fall through to the ordinary local-PTY SSH path. v1 only takes
-    /// the daemon path for resilient hosts with headless-capable (key) auth.
+    /// Native persistent remote-session path (Stage 2, Option B). `None` permits
+    /// classic SSH fallback; `Some` reports whether the daemon path actually
+    /// created a terminal, including handled rejections. v1 only takes the daemon
+    /// path for resilient hosts with headless-capable (key) auth.
     ///
     /// The tab opens IMMEDIATELY with a visible "Connecting…" line — a click must
     /// produce a reaction now, not after the SSH handshake. The bounded preflight
@@ -12029,7 +12343,7 @@ impl Workspace {
         attempt: Option<SshConnectAttempt>,
         split_launch: Option<PendingSplitLaunch>,
         ctx: &mut ViewContext<Self>,
-    ) -> bool {
+    ) -> Option<bool> {
         use crate::remote_server::auth_context::server_api_auth_context;
         use crate::remote_server::headless_connect::{
             self, DaemonPreflight, DAEMON_BINARY_MISSING,
@@ -12056,9 +12370,9 @@ impl Workspace {
                 if let Some(attempt) = attempt.as_ref() {
                     self.finish_ssh_connect(attempt, ctx);
                 }
-                return true;
+                return Some(false);
             }
-            return false;
+            return None;
         }
         if !headless_connect::is_headless_capable(server) {
             log::info!(
@@ -12079,9 +12393,9 @@ impl Workspace {
                 if let Some(attempt) = attempt.as_ref() {
                     self.finish_ssh_connect(attempt, ctx);
                 }
-                return true;
+                return Some(false);
             }
-            return false;
+            return None;
         }
 
         let session_id = headless_connect::alloc_daemon_session_id();
@@ -12158,7 +12472,7 @@ impl Workspace {
                 if let Some(attempt) = attempt.as_ref() {
                     self.finish_ssh_connect(attempt, ctx);
                 }
-                return true;
+                return Some(false);
             };
             (pane_group, pane_id, terminal_view, Some(focus_guard), false)
         } else {
@@ -12176,7 +12490,7 @@ impl Workspace {
                 if let Some(attempt) = attempt.as_ref() {
                     self.finish_ssh_connect(attempt, ctx);
                 }
-                return true;
+                return Some(false);
             };
             let pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
             let Some(terminal_view) = pane_group
@@ -12186,7 +12500,7 @@ impl Workspace {
                 if let Some(attempt) = attempt.as_ref() {
                     self.finish_ssh_connect(attempt, ctx);
                 }
-                return true;
+                return Some(false);
             };
             (pane_group, pane_id, terminal_view, None, true)
         };
@@ -12895,7 +13209,7 @@ impl Workspace {
                 }
             },
         );
-        true
+        Some(true)
     }
 
     /// Connects a daemon-hosted session on an established ControlMaster: builds the
@@ -13055,6 +13369,14 @@ impl Workspace {
             split_launch,
             ctx,
         );
+    }
+
+    /// A split that cannot be opened must say so instead of silently doing
+    /// nothing.
+    fn show_split_launch_error(&mut self, message: String, ctx: &mut ViewContext<Self>) {
+        self.toast_stack.update(ctx, |stack, ctx| {
+            stack.add_ephemeral_toast(DismissibleToast::error(message), ctx);
+        });
     }
 
     #[cfg(unix)]
@@ -13307,6 +13629,9 @@ impl Workspace {
             );
             return;
         };
+        if terminal_view.as_ref(ctx).remote_input_has_failed() {
+            return;
+        }
         let binding_key = daemon_adoption_key(
             descriptor.host_id.as_str(),
             &descriptor.daemon_runtime,
@@ -13402,6 +13727,7 @@ impl Workspace {
         pty_generation: u64,
         daemon_route: Option<remote_server::transport::DaemonRuntimeRoute>,
         expected_host_id: Option<String>,
+        expected_daemon_runtime: Option<remote_server::transport::DaemonRuntimeRoute>,
         expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -13430,20 +13756,15 @@ impl Workspace {
                     && expected_host_id
                         .as_deref()
                         .is_none_or(|host_id| daemon.host_id.as_str() == host_id)
+                    && expected_daemon_runtime
+                        .as_ref()
+                        .is_none_or(|runtime| runtime == &daemon.daemon_runtime)
                     && daemon.registry_node_id.as_deref() == Some(server.node_id.as_str())
             });
-        let Some(expected_daemon) = matching_daemons.next() else {
-            self.toast_stack.update(ctx, |stack, ctx| {
-                stack.add_persistent_toast(
-                    DismissibleToast::error(
-                        crate::t!("workspace-remote-daemon-route-disconnected").to_string(),
-                    ),
-                    ctx,
-                );
-            });
-            return;
-        };
-        if matching_daemons.any(|daemon| daemon.host_id != expected_daemon.host_id) {
+        let connected_daemon = matching_daemons.next();
+        if connected_daemon.as_ref().is_some_and(|selected| {
+            matching_daemons.any(|daemon| daemon.host_id != selected.host_id)
+        }) {
             self.toast_stack.update(ctx, |stack, ctx| {
                 stack.add_persistent_toast(
                     DismissibleToast::error(
@@ -13454,17 +13775,41 @@ impl Workspace {
             });
             return;
         }
+        // A completed authenticated inventory is sufficient to reconnect its exact
+        // PTY even when closing the last tab removed the manager connection.
+        // Keep the host and runtime checks in the subsequent attach handshake.
+        let host_label = connected_daemon
+            .as_ref()
+            .map(|daemon| daemon.host_label.clone())
+            .unwrap_or_else(|| server.host.clone());
+        let target = connected_daemon
+            .map(|daemon| (daemon.host_id.as_str().to_string(), daemon.daemon_runtime))
+            .or_else(|| {
+                listed_daemon_adoption_identity(
+                    expected_host_id.as_deref(),
+                    expected_daemon_runtime.as_ref(),
+                    daemon_route.as_ref(),
+                )
+            });
+        let Some((daemon_host_id, daemon_runtime)) = target else {
+            self.toast_stack.update(ctx, |stack, ctx| {
+                stack.add_persistent_toast(
+                    DismissibleToast::error(
+                        crate::t!("workspace-remote-daemon-route-disconnected").to_string(),
+                    ),
+                    ctx,
+                );
+            });
+            return;
+        };
+        let is_current_runtime = daemon_route.is_none();
         let binding_key = daemon_adoption_key(
-            expected_daemon.host_id.as_str(),
-            &expected_daemon.daemon_runtime,
+            &daemon_host_id,
+            &daemon_runtime,
             &pty_session_id,
             pty_generation,
         );
-        let registry_node_id = expected_daemon
-            .registry_node_id
-            .clone()
-            .expect("the selected descriptor was matched by registry node");
-        let host_label = expected_daemon.host_label.clone();
+        let registry_node_id = server.node_id.clone();
         if self.focus_existing_adopted_daemon_session(
             &binding_key,
             expected_agent_binding.clone(),
@@ -13503,7 +13848,7 @@ impl Workspace {
             open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
             adopt_pty_session_id: Some(pty_session_id.clone()),
             adopt_pty_generation: Some(pty_generation),
-            expected_host_id: Some(expected_daemon.host_id.as_str().to_string()),
+            expected_host_id: Some(daemon_host_id.clone()),
             expected_agent_binding,
             install_progress_rx: Some(install_progress_rx),
             host_label: host_label.clone(),
@@ -13543,13 +13888,10 @@ impl Workspace {
                 registry_node_id: registry_node_id.clone(),
                 host: host_label,
                 transport: RemoteTerminalTransport::Daemon {
-                    daemon_host_id: expected_daemon.host_id.as_str().to_string(),
+                    daemon_host_id: daemon_host_id.clone(),
                     daemon_runtime: Some(PersistedDaemonRuntime {
-                        runtime_filename: expected_daemon
-                            .daemon_runtime
-                            .runtime_filename()
-                            .to_string(),
-                        server_version: expected_daemon.daemon_runtime.server_version().to_string(),
+                        runtime_filename: daemon_runtime.runtime_filename().to_string(),
+                        server_version: daemon_runtime.server_version().to_string(),
                     }),
                     pty_session_id: pty_session_id.clone(),
                     pty_generation,
@@ -13586,7 +13928,7 @@ impl Workspace {
         // like a fresh connection. Historical adoption is PTY-only: recording it
         // here could route file operations or new launches to the old daemon.
         #[cfg(feature = "local_tty")]
-        if expected_daemon.is_current_runtime {
+        if is_current_runtime {
             remember_daemon_node_session(
                 &mut self.daemon_node_sessions,
                 registry_node_id,
@@ -13594,7 +13936,13 @@ impl Workspace {
             );
         }
 
-        self.spawn_daemon_session_connect(connection, session_id, daemon_route, progress_tx, ctx);
+        self.spawn_daemon_session_connect(
+            connection,
+            session_id,
+            Some(daemon_runtime),
+            progress_tx,
+            ctx,
+        );
     }
 
     /// Establishes the headless SSH ControlMaster for a daemon session, then
@@ -13649,7 +13997,15 @@ impl Workspace {
                         );
                         let mut transport = SshTransport::new(socket_path, auth_context.clone());
                         if let Some(daemon_route) = daemon_route {
-                            transport = transport.with_daemon_runtime(daemon_route);
+                            transport = if daemon_route.runtime_filename()
+                                == remote_server::setup::daemon_runtime_filename("sock")
+                            {
+                                transport.with_expected_current_version(
+                                    daemon_route.server_version().to_string(),
+                                )
+                            } else {
+                                transport.with_daemon_runtime(daemon_route)
+                            };
                         }
                         let transport = transport.with_self_heal(server_for_transport);
                         let host_label = host.clone();
@@ -14036,11 +14392,41 @@ impl Workspace {
             }
             Ok(out)
         });
+        let host_registry_unavailable = host_nodes.is_err();
         let host_nodes: Vec<(String, String)> = host_nodes.unwrap_or_default();
 
         let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(ctx);
         let favorites_store = favorites_store.as_ref(ctx);
-        favorites_menu_items_from_sources(favorites_store, host_nodes)
+        favorites_menu_items_from_sources(favorites_store, host_nodes, host_registry_unavailable)
+    }
+
+    fn split_launch_source_host(
+        &self,
+        pane_group: &ViewHandle<PaneGroup>,
+        pane_id: PaneId,
+        ctx: &AppContext,
+    ) -> Option<SplitLaunchDestination> {
+        let group = pane_group.as_ref(ctx);
+        if let Some(pane) = group.downcast_pane_by_id::<SftpPane>(pane_id) {
+            // The visible file manager may show a different host than its covered terminal.
+            // Its own persisted identity takes precedence over terminal and legacy tab maps.
+            let LeafContents::Sftp { node_id, mode, .. } = pane.snapshot(ctx) else {
+                return None;
+            };
+            return Some(match mode {
+                FileManagerPaneMode::Local => SplitLaunchDestination::Local,
+                FileManagerPaneMode::Remote | FileManagerPaneMode::RemotePicker => {
+                    SplitLaunchDestination::Remote { node_id }
+                }
+            });
+        }
+        let source_view = group.terminal_view_from_pane_id(pane_id, ctx)?;
+        self.node_for_pane(pane_group, pane_id, Some(&source_view), ctx)
+            .map(|node_id| SplitLaunchDestination::Remote { node_id })
+            .or_else(|| {
+                (source_view.as_ref(ctx).active_session_is_local(ctx) == Some(true))
+                    .then_some(SplitLaunchDestination::Local)
+            })
     }
 
     fn open_split_launch_menu(
@@ -14054,29 +14440,15 @@ impl Workspace {
             return;
         }
 
-        let mut items = vec![
-            MenuItemFields::new(crate::t!("cockpit-spawn-card-host-local"))
-                .with_on_select_action(SplitLaunchDestination::Local)
-                .with_icon(icons::Icon::Terminal)
-                .into_item(),
-        ];
+        let current_host = self.split_launch_source_host(&pane_group, target.pane_id(), ctx);
         let hosts = warp_ssh_manager::with_conn(|conn| {
             Ok(warp_ssh_manager::SshRepository::list_nodes(conn)?
                 .into_iter()
                 .filter(|node| matches!(node.kind, warp_ssh_manager::types::NodeKind::Server))
                 .map(|node| (node.id, node.name))
                 .collect::<Vec<_>>())
-        })
-        .unwrap_or_default();
-        if !hosts.is_empty() {
-            items.push(MenuItem::Separator);
-            items.extend(hosts.into_iter().map(|(node_id, name)| {
-                MenuItemFields::new(name)
-                    .with_on_select_action(SplitLaunchDestination::Remote { node_id })
-                    .with_icon(icons::Icon::Terminal)
-                    .into_item()
-            }));
-        }
+        });
+        let items = split_launch_menu_items(hosts.ok(), current_host.as_ref());
         self.split_launch_menu
             .update(ctx, |menu, ctx| menu.set_items(items, ctx));
         self.pending_split_launch = Some(PendingSplitLaunch {
@@ -14115,6 +14487,7 @@ impl Workspace {
                 .as_ref(ctx)
                 .split_target_is_valid(pending.target)
         {
+            self.show_split_launch_error(crate::t!("workspace-split-target-changed"), ctx);
             return;
         }
 
@@ -14142,8 +14515,14 @@ impl Workspace {
                     ctx,
                 );
                 let mut pending = pending;
+                // Only a directory of the same remote host may be reused; a
+                // local path must never be sent to the remote shell.
                 pending.inherited_remote_cwd = (source_node.as_deref() == Some(node_id.as_str()))
-                    .then(|| source_view.as_ref().and_then(|view| view.as_ref(ctx).pwd()))
+                    .then(|| {
+                        source_view
+                            .as_ref()
+                            .and_then(|view| view.as_ref(ctx).pwd_if_remote(ctx))
+                    })
                     .flatten();
                 let server = warp_ssh_manager::with_conn(|conn| {
                     Ok(warp_ssh_manager::SshRepository::get_server(conn, &node_id)?)
@@ -14152,8 +14531,10 @@ impl Workspace {
                     Ok(Some(server)) => {
                         self.open_ssh_terminal_for_split(node_id, server, pending, ctx)
                     }
-                    Ok(None) | Err(_) => {
+                    lookup @ (Ok(None) | Err(_)) => {
                         log::warn!("Split destination host disappeared before launch");
+                        let message = host_lookup_failure_message(lookup.is_err());
+                        self.show_split_launch_error(message, ctx);
                     }
                 }
             }
@@ -18366,14 +18747,11 @@ impl Workspace {
             .filter(|tab| {
                 // Filter out any tab that contains a single, read-only session.
                 !matches!(
-                    tab.root,
+                    &tab.root,
                     PaneNodeSnapshot::Leaf(LeafSnapshot {
-                        contents: LeafContents::Terminal(TerminalPaneSnapshot {
-                            is_read_only: true,
-                            ..
-                        }),
+                        contents: LeafContents::Terminal(terminal),
                         ..
-                    })
+                    }) if terminal.is_read_only
                 )
             })
             .collect();
@@ -20800,6 +21178,12 @@ impl Workspace {
     }
 
     fn close_all_modals(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.current_workspace_state.is_import_modal_open {
+            self.import_modal
+                .update(ctx, |modal, ctx| modal.clear_transient(ctx));
+        }
+        self.spawn_card
+            .update(ctx, |card, _| card.cancel_pending_launches());
         if self.current_workspace_state.is_theme_creator_modal_open {
             self.theme_creator_modal
                 .update(ctx, |modal, ctx| modal.clear_transient(ctx));
@@ -25168,6 +25552,8 @@ impl Workspace {
                 }
             }
             SpawnCardEvent::Close => {
+                self.spawn_card
+                    .update(ctx, |card, _| card.cancel_pending_launches());
                 self.current_workspace_state.is_spawn_card_open = false;
                 self.focus_active_tab(ctx);
                 ctx.notify();
@@ -25179,6 +25565,8 @@ impl Workspace {
                 // Hide the card (its selections persist — it is a persistent view,
                 // not rebuilt) and open the host's SFTP browser in pick mode; the
                 // chosen dir returns via RemoteSpawnDirPicked (#105).
+                self.spawn_card
+                    .update(ctx, |card, _| card.cancel_pending_launches());
                 self.current_workspace_state.is_spawn_card_open = false;
                 self.open_sftp_pane_for_pick(node_id.clone(), start_path.clone(), ctx);
                 ctx.notify();
@@ -25196,6 +25584,8 @@ impl Workspace {
                 managed_mode,
                 managed_launch_id,
             } => {
+                self.spawn_card
+                    .update(ctx, |card, _| card.cancel_pending_launches());
                 let local_account_email = if node_id.is_none() {
                     Self::account_email_for_route(*agent, config_dir.as_deref(), &*ctx)
                 } else {
@@ -25230,8 +25620,12 @@ impl Workspace {
                             .filter(|launch_id| !launch_id.is_empty())
                         {
                             Some(launch_id) if launch_token == format!("managed:{launch_id}") => {
-                                self.pending_managed_spawns
-                                    .insert(launch_id.to_string(), PendingManagedSpawn::Standalone);
+                                self.pending_managed_spawns.insert(
+                                    launch_id.to_string(),
+                                    PendingManagedSpawn::Standalone {
+                                        generation: self.spawn_card.as_ref(ctx).launch_generation(),
+                                    },
+                                );
                             }
                             Some(launch_id) => {
                                 self.show_agent_launch_error(
@@ -28883,15 +29277,14 @@ impl TypedActionView for Workspace {
                     Ok(warp_ssh_manager::SshRepository::get_server(conn, node_id)?)
                 });
                 match server {
-                    Ok(Some(server)) => self.open_ssh_terminal(node_id.clone(), server, false, ctx),
-                    _ => {
+                    Ok(Some(server)) => {
+                        self.open_ssh_terminal(node_id.clone(), server, false, ctx);
+                    }
+                    lookup @ (Ok(None) | Err(_)) => {
+                        log::warn!("Couldn't resolve host {node_id} to open a terminal on");
+                        let message = host_lookup_failure_message(lookup.is_err());
                         self.toast_stack.update(ctx, |view, ctx| {
-                            view.add_ephemeral_toast(
-                                DismissibleToast::error(format!(
-                                    "Couldn't find host '{node_id}' to open a terminal on."
-                                )),
-                                ctx,
-                            );
+                            view.add_ephemeral_toast(DismissibleToast::error(message), ctx);
                         });
                     }
                 }
@@ -28959,7 +29352,10 @@ impl TypedActionView for Workspace {
                 // "take me to the SSH configuration" (spec v3 §1.3/S1).
                 self.toggle_left_panel_view(&LeftPanelAction::SshManager, false, ctx);
             }
-            RemoteSpawnDirPicked { path } => {
+            RemoteSpawnDirPicked { pick_id, path } => {
+                if !self.accept_spawn_directory_pick(*pick_id, ctx) {
+                    return;
+                }
                 // The SFTP picker returned a directory: fill the card's remote-dir
                 // field and re-show the (still-configured, persistent) card (#105).
                 let path = path.clone();
@@ -28969,7 +29365,10 @@ impl TypedActionView for Workspace {
                 ctx.focus(&self.spawn_card);
                 ctx.notify();
             }
-            RemoteSpawnDirPickCanceled => {
+            RemoteSpawnDirPickCanceled { pick_id } => {
+                if !self.accept_spawn_directory_pick(*pick_id, ctx) {
+                    return;
+                }
                 // The picker closed without a pick: re-show the hidden card
                 // unchanged so its selections aren't stranded (#105).
                 self.current_workspace_state.is_spawn_card_open = true;

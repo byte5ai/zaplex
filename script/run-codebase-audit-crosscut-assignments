@@ -16,6 +16,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -762,8 +763,10 @@ def load_completed_result(
     model: str,
     effort: str,
 ) -> TaskResult | None:
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return None
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise RunnerError(f"completed crosscut result must be a regular file: {path}")
     document, _raw = load_canonical_json(path, "crosscut result")
     validated = validate_result_document(
         document,
@@ -776,6 +779,23 @@ def load_completed_result(
         model,
         effort,
     )
+    if validated["attempt"] > DEFAULT_MAX_ATTEMPTS:
+        raise RunnerError("completed crosscut exceeds the retry budget")
+    logs = path.parent.parent / "logs"
+    archived = {}
+    for kind, suffix in (("stdout", "json"), ("stderr", "log")):
+        artifact = logs / f"{task.entry['crosscut_id']}.attempt-{validated['attempt']}.{kind}.{suffix}"
+        try:
+            if not stat.S_ISDIR(logs.lstat().st_mode) or not stat.S_ISREG(artifact.lstat().st_mode):
+                raise RunnerError(f"completed review log must be a regular file: {artifact}")
+            raw = artifact.read_bytes()
+        except OSError as error:
+            raise RunnerError(f"completed review log is missing: {artifact}") from error
+        if sha256_bytes(raw) != validated[f"{kind}_sha256"]:
+            raise RunnerError(f"completed review log SHA-256 mismatch: {artifact}")
+        archived[kind] = raw
+    if extract_review(archived["stdout"], task) != validated["response"]:
+        raise RunnerError("completed review response differs from archived stdout")
     return TaskResult(task.bucket_id, task.position, validated)
 
 
@@ -834,6 +854,15 @@ def execute_task(
         "Read,Glob,Grep",
         "--disallowed-tools",
         "Agent,Task,Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch",
+        "--safe-mode",
+        "--strict-mcp-config",
+        "--mcp-config",
+        '{"mcpServers":{}}',
+        "--setting-sources",
+        "",
+        "--no-chrome",
+        "--permission-prompts",
+        "none",
         "--disable-slash-commands",
         "--no-session-persistence",
         "--permission-mode",
@@ -970,7 +999,7 @@ def publish_task_inputs(
 
 def build_run_summary(
     assignments: dict[str, Any], results: list[TaskResult], provider: str,
-    model: str, effort: str
+    model: str, effort: str, tasks: list[Task]
 ) -> dict[str, Any]:
     ordered = sorted(results, key=lambda item: (item.bucket_id, item.position))
     if len(ordered) != 13:
@@ -982,6 +1011,15 @@ def build_run_summary(
         }
         for result in ordered
         for finding in result.document["response"]["findings"]
+    ]
+    remaining_review = [
+        {
+            "crosscut_id": task.entry["crosscut_id"],
+            "path": path,
+            "reason": "Sensitive path or secret-like content excluded from external review; local review remains required.",
+        }
+        for task in tasks
+        for path in task.excluded_sensitive_paths
     ]
     summary = {
         "schema_version": SCHEMA_VERSION,
@@ -1003,7 +1041,8 @@ def build_run_summary(
             for result in ordered
         ],
         "findings": findings,
-        "complete": True,
+        "remaining_review": remaining_review,
+        "complete": not remaining_review,
     }
     summary["run_sha256"] = document_hash(summary, "run_sha256")
     return summary
@@ -1121,9 +1160,11 @@ def main(argv: list[str] | None = None) -> int:
         if failures:
             raise RunnerError("; ".join(sorted(failures)))
         summary = build_run_summary(
-            assignments, results, args.provider, args.model, args.effort
+            assignments, results, args.provider, args.model, args.effort, tasks
         )
         atomic_publish(run_directory / "run.json", canonical_json(summary))
+        if not summary["complete"]:
+            raise RunnerError("crosscut review is incomplete: sensitive source exclusions require local review; see run.json remaining_review")
     except (OSError, RunnerError) as error:
         print(f"crosscut runner: {error}", file=sys.stderr)
         return 1

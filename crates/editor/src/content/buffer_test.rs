@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -6837,7 +6838,8 @@ fn test_multiline_insert_in_header_preserves_each_line_once() {
                 "<text>test<header1>line<text>second"
             );
 
-            buffer.edit_internal_first_selection(
+            let previous_selection = buffer.to_rendered_selection_set(selection.clone(), ctx);
+            let edit = buffer.edit_internal_first_selection(
                 CharOffset::from(8)..CharOffset::from(8),
                 "a\nb",
                 TextStyles::default(),
@@ -6847,10 +6849,21 @@ fn test_multiline_insert_in_header_preserves_each_line_once() {
 
             assert_eq!(
                 buffer.content.debug(),
-                "<text>test<header1>lia<text>bne\nsecond"
+                "<text>test<header1>lia<text>bne\\nsecond"
             );
-            assert_eq!(buffer.text().matches('a').count(), 1);
-            assert_eq!(buffer.text().matches('b').count(), 1);
+            assert_eq!(buffer.text().as_str().matches('a').count(), 1);
+            assert_eq!(buffer.text().as_str().matches('b').count(), 1);
+            let current_selection = buffer.to_rendered_selection_set(selection.clone(), ctx);
+            buffer.push_undo_item(
+                previous_selection,
+                current_selection,
+                edit.undo_item.expect("multiline insertion has an undo item"),
+                UndoActionType::Atomic,
+            );
+            buffer.undo(selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text>test<header1>line<text>second");
+            buffer.redo(selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text>test<header1>lia<text>bne\\nsecond");
         });
 
         selection.read(&app, |selection, _| {
@@ -6881,19 +6894,19 @@ fn test_header_text_conversion_defines_multiline_boundaries() {
         .lines
     };
 
-    assert_eq!(convert("a\nb"), vec![heading("a"), line("b")].into());
+    assert_eq!(convert("a\nb"), VecDeque::from(vec![heading("a"), line("b")]));
     assert_eq!(
         convert("\na"),
-        vec![FormattedTextLine::LineBreak, line("a")].into()
+        VecDeque::from(vec![FormattedTextLine::LineBreak, line("a")])
     );
-    assert_eq!(convert("a\n"), vec![heading("a")].into());
+    assert_eq!(convert("a\n"), VecDeque::from(vec![heading("a")]));
     assert_eq!(
         convert("a\n\nb"),
-        vec![heading("a"), FormattedTextLine::LineBreak, line("b")].into()
+        VecDeque::from(vec![heading("a"), FormattedTextLine::LineBreak, line("b")])
     );
     assert_eq!(
         convert("a\n\n"),
-        vec![heading("a"), FormattedTextLine::LineBreak].into()
+        VecDeque::from(vec![heading("a"), FormattedTextLine::LineBreak])
     );
 }
 

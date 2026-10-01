@@ -8,8 +8,7 @@ use crate::{integration_testing::step::new_step_with_default_assertions, workspa
 pub fn open_navigation_palette_step() -> TestStep {
     new_step_with_default_assertions("Open Navigation Palette")
         .with_keystrokes(&[cmd_or_ctrl_shift("p")])
-        .with_typed_characters(&["s"])
-        .with_keystrokes(&["tab"])
+        .with_typed_characters(&["sessions:"])
         .add_assertion(assert_command_palette_is_open())
         .add_assertion(assert_navigation_mode_enabled_in_command_palette())
 }

@@ -10,6 +10,7 @@ use std::io::Read;
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 #[cfg(feature = "local_fs")]
 use std::{env, fs, str};
+use uuid::Uuid;
 use warpui::image_cache::{resize_dimensions, FitType};
 use warpui::{
     assets::asset_cache::Asset,
@@ -582,8 +583,10 @@ impl TryFrom<KittyMessage> for KittyAction {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct KittyImageMetadata {
+    /// Cache identity for this transmission, independent of client-selected protocol ids.
+    pub asset_id: String,
     pub pixel_data_format: KittyPixelDataFormat,
     pub transmission_medium: KittyTransmissionMedium,
     pub image_size: Vector2F,
@@ -604,6 +607,21 @@ pub struct KittyImageMetadata {
     /// Whether this image's animation is running. Set by `a=a,s=`, and by the
     /// first `a=f`: frames are transmitted in order to be played.
     pub playing: bool,
+}
+
+impl Default for KittyImageMetadata {
+    fn default() -> Self {
+        Self {
+            asset_id: format!("kitty:{}", Uuid::new_v4()),
+            pixel_data_format: KittyPixelDataFormat::default(),
+            transmission_medium: KittyTransmissionMedium::default(),
+            image_size: Vector2F::default(),
+            image_number: None,
+            virtual_placements: HashMap::new(),
+            frames: Vec::new(),
+            playing: false,
+        }
+    }
 }
 
 /// A `U=1` placement. `rows`/`cols` stay unresolved so that a font-size change
@@ -681,9 +699,7 @@ impl From<KittyControlData> for KittyImageMetadata {
             image_size: Vector2F::new(control_data.width as f32, control_data.height as f32),
             transmission_medium: control_data.transmission_medium,
             image_number: control_data.image_number,
-            virtual_placements: HashMap::new(),
-            frames: Vec::new(),
-            playing: false,
+            ..Self::default()
         }
     }
 }

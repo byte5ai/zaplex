@@ -258,33 +258,27 @@ fn multiplexer_attach_rejects_empty_control_or_option_like_targets() {
 }
 
 #[test]
-fn test_connection_requires_password_for_password_auth() {
-    let s = server();
-    // test_connection should return Offline + error message when password is missing
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let result = rt.block_on(test_connection(&s, None));
-    assert_eq!(result.status, ConnectionStatus::Offline);
-    assert!(
-        result
-            .error_message
-            .unwrap()
-            .contains("Password not provided")
-    );
-}
+fn missing_password_rejects_password_auth_without_starting_any_process() {
+    struct NoCommandFactory;
+    impl WorkspaceCommandFactory for NoCommandFactory {
+        fn async_command(&self, _program: &str) -> command::r#async::Command {
+            panic!("missing credentials must not start a process");
+        }
 
-#[test]
-fn test_connection_requires_password_for_onekey_auth() {
-    let mut s = server();
-    s.auth_type = AuthType::OneKey;
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let result = rt.block_on(test_connection(&s, None));
-    assert_eq!(result.status, ConnectionStatus::Offline);
-    assert!(
-        result
-            .error_message
-            .unwrap()
-            .contains("Password not provided")
-    );
+        fn blocking_command(&self, _program: &str) -> command::blocking::Command {
+            panic!("missing credentials must not start a process");
+        }
+    }
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    for auth_type in [AuthType::Password, AuthType::OneKey] {
+        let mut server = server();
+        server.auth_type = auth_type;
+        let result = runtime.block_on(test_connection_with_factory(&server, None, &NoCommandFactory));
+        assert_eq!(result.status, ConnectionStatus::Offline);
+        assert_eq!(result.error_message.as_deref(), Some("Password not provided"));
+        assert_eq!(result.unknown_host_key, None);
+    }
 }
 
 #[test]
@@ -978,7 +972,7 @@ fn confirmed_host_key_reuses_ssh_transport_and_exact_fingerprint() {
     );
     assert_eq!(
         factory.programs.lock().unwrap().as_slice(),
-        ["ssh", "ssh-keygen", "ssh"]
+        ["ssh", "ssh", "ssh-keygen", "ssh"]
     );
 }
 
@@ -1120,4 +1114,53 @@ fn windows_askpass_script_is_spawnable() {
         stdout.trim() == "dummy-pw-for-spawn-test",
         "askpass output mismatch: got {stdout:?}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn revoked_host_keys_never_reach_capture_or_authentication_even_after_confirmation() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("revoked-ssh");
+    let expected = UnknownHostKey {
+        host: server().host,
+        port: server().port,
+        fingerprint: "SHA256:previously-confirmed".to_string(),
+        key: "1.2.3.4 ssh-ed25519 AAAA".to_string(),
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    for diagnostic in [
+        "WARNING: REVOKED HOST KEY DETECTED!",
+        "Host key ED25519 SHA256:revoked revoked by file /keys/revoked",
+    ] {
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' '{}' 'Host key verification failed.' >&2\nexit 255\n",
+                diagnostic
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for confirmation in [None, Some(&expected)] {
+            let factory = RecordingCommandFactory {
+                script: script.clone(),
+                programs: std::sync::Mutex::new(Vec::new()),
+            };
+            let result = runtime.block_on(test_connection_with_factory_policy(
+                &server(),
+                Some(Zeroizing::new("unused-password".to_string())),
+                confirmation,
+                &factory,
+            ));
+            assert_eq!(result.status, ConnectionStatus::Offline);
+            assert!(result.unknown_host_key.is_none());
+            assert_eq!(
+                result.error_message.as_deref(),
+                Some("SSH host key revoked; connection blocked")
+            );
+            assert_eq!(factory.programs.lock().unwrap().as_slice(), ["ssh"]);
+        }
+    }
 }

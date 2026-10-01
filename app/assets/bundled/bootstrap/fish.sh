@@ -613,6 +613,7 @@ if test "$ZAPLEX_IS_LOCAL_SHELL_SESSION" = "1"
         -t $argv \
 "
 export TERM_PROGRAM='ZaplexTerminal'
+export ZAPLEX_IS_SSH='1'
 test -n '$ZAPLEX_CLIENT_VERSION' && export ZAPLEX_CLIENT_VERSION='$ZAPLEX_CLIENT_VERSION'
 # Only forward the protocol version if it was set locally (i.e. the HOANotifications feature flag is on).
 test -n '$ZAPLEX_CLI_AGENT_PROTOCOL_VERSION' && export ZAPLEX_CLI_AGENT_PROTOCOL_VERSION='$ZAPLEX_CLI_AGENT_PROTOCOL_VERSION'

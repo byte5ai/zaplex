@@ -212,6 +212,12 @@ struct PendingDownloadFile {
     total_bytes: u64,
 }
 
+#[derive(Clone, Default)]
+struct PendingDownloadPlan {
+    files: Vec<PendingDownloadFile>,
+    directories: Vec<PathBuf>,
+}
+
 #[derive(Clone, Debug)]
 struct DownloadConflict {
     local_path: PathBuf,
@@ -2482,7 +2488,17 @@ impl ServerFileBrowserView {
         ctx.notify();
     }
 
+    fn can_clear_completed_transfers(&self) -> bool {
+        !self.upload_pipeline_claimed
+            && self.active_upload_batch_index.is_none()
+            && self.active_download_batch_index.is_none()
+    }
+
     fn clear_completed_uploads(&mut self, ctx: &mut ViewContext<Self>) {
+        // In-flight callbacks retain task/batch indices until the pipeline finishes.
+        if !self.can_clear_completed_transfers() {
+            return;
+        }
         for batch in &mut self.upload_batches {
             batch
                 .tasks
@@ -2729,10 +2745,10 @@ impl ServerFileBrowserView {
     fn start_download_after_conflict_scan(
         &mut self,
         client: Arc<RemoteServerClient>,
-        files: Vec<PendingDownloadFile>,
+        plan: PendingDownloadPlan,
         ctx: &mut ViewContext<Self>,
     ) {
-        let conflicts = match scan_local_download_conflicts(&files) {
+        let conflicts = match scan_local_download_conflicts(&plan.files) {
             Ok(conflicts) => conflicts,
             Err(error) => {
                 self.set_error(error, ctx);
@@ -2740,14 +2756,13 @@ impl ServerFileBrowserView {
             }
         };
         if conflicts.is_empty() {
-            let tasks = build_download_tasks(files, &conflicts, false);
-            self.begin_download_batch(client, tasks, ctx);
+            self.begin_download_plan(client, plan, &conflicts, false, ctx);
             return;
         }
 
         let summary = format_download_conflict_summary(&conflicts);
-        let overwrite_files = files.clone();
-        let skip_files = files;
+        let overwrite_plan = plan.clone();
+        let skip_plan = plan;
         let overwrite_conflicts = conflicts.clone();
         let skip_conflicts = conflicts;
         let overwrite_client = client.clone();
@@ -2758,16 +2773,19 @@ impl ServerFileBrowserView {
                 ModalButton::for_view(
                     crate::t!("server-file-browser-download-conflict-overwrite"),
                     move |me: &mut ServerFileBrowserView, ctx| {
-                        let tasks =
-                            build_download_tasks(overwrite_files, &overwrite_conflicts, true);
-                        me.begin_download_batch(overwrite_client, tasks, ctx);
+                        me.begin_download_plan(
+                            overwrite_client,
+                            overwrite_plan,
+                            &overwrite_conflicts,
+                            true,
+                            ctx,
+                        );
                     },
                 ),
                 ModalButton::for_view(
                     crate::t!("server-file-browser-download-conflict-skip"),
                     move |me: &mut ServerFileBrowserView, ctx| {
-                        let tasks = build_download_tasks(skip_files, &skip_conflicts, false);
-                        me.begin_download_batch(client, tasks, ctx);
+                        me.begin_download_plan(client, skip_plan, &skip_conflicts, false, ctx);
                     },
                 ),
                 ModalButton::for_view(
@@ -2780,6 +2798,28 @@ impl ServerFileBrowserView {
         ctx.show_native_platform_modal(dialog);
     }
 
+    fn begin_download_plan(
+        &mut self,
+        client: Arc<RemoteServerClient>,
+        plan: PendingDownloadPlan,
+        conflicts: &[DownloadConflict],
+        overwrite: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Enumeration and conflict prompts must not create anything locally.
+        if let Err(error) = prepare_download_directories(&plan.directories) {
+            self.set_error(error, ctx);
+            return;
+        }
+        let tasks = build_download_tasks(plan.files, conflicts, overwrite);
+        if tasks.is_empty() {
+            self.status = Some(crate::t!("server-file-browser-transfer-complete"));
+            ctx.notify();
+            return;
+        }
+        self.begin_download_batch(client, tasks, ctx);
+    }
+
     fn start_download_from_entry(
         &mut self,
         entry: ServerFileBrowserEntry,
@@ -2789,7 +2829,7 @@ impl ServerFileBrowserView {
         match entry.kind {
             FileSystemEntryKind::Directory => {
                 let root_name = remote_basename(&entry.path).unwrap_or_else(|| entry.name.clone());
-                if let Err(error) = validate_remote_entry_name(&root_name) {
+                if let Err(error) = validate_download_entry_name(&root_name) {
                     self.set_error(error, ctx);
                     return;
                 }
@@ -2812,11 +2852,10 @@ impl ServerFileBrowserView {
                                     .await
                                 },
                                 move |me, result, ctx| match result {
-                                    Ok(files) if files.is_empty() => {}
-                                    Ok(files) => {
+                                    Ok(plan) => {
                                         me.start_download_after_conflict_scan(
                                             client_for_batch,
-                                            files,
+                                            plan,
                                             ctx,
                                         );
                                     }
@@ -2847,7 +2886,14 @@ impl ServerFileBrowserView {
                                 display_name: default_filename,
                                 total_bytes,
                             };
-                            me.start_download_after_conflict_scan(client, vec![file], ctx);
+                            me.start_download_after_conflict_scan(
+                                client,
+                                PendingDownloadPlan {
+                                    files: vec![file],
+                                    directories: Vec::new(),
+                                },
+                                ctx,
+                            );
                         }
                     },
                     SaveFilePickerConfiguration::new().with_default_filename(picker_filename),
@@ -3075,7 +3121,9 @@ impl ServerFileBrowserView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(Shrinkable::new(1.0, Clipped::new(title).finish()).finish());
 
-        if self.has_completed_upload_tasks() || self.has_completed_download_tasks() {
+        if self.can_clear_completed_transfers()
+            && (self.has_completed_upload_tasks() || self.has_completed_download_tasks())
+        {
             let clear_label = crate::t!("server-file-browser-upload-clear-completed");
             header_row.add_child(
                 Hoverable::new(self.clear_completed_uploads_button.clone(), move |_| {
@@ -5204,21 +5252,21 @@ async fn collect_download_files(
     remote_path: String,
     local_directory: PathBuf,
     display_root: String,
-) -> Result<Vec<PendingDownloadFile>, String> {
+) -> Result<PendingDownloadPlan, String> {
     if let Some(parent) = local_directory.parent() {
         validate_local_transfer_directory_if_exists(parent)?;
     }
     validate_local_transfer_directory_if_exists(&local_directory)?;
-    let mut files = Vec::new();
+    let mut plan = PendingDownloadPlan::default();
     collect_download_files_into_prefixed(
         client,
         remote_path,
         local_directory,
         &display_root,
-        &mut files,
+        &mut plan,
     )
     .await?;
-    Ok(files)
+    Ok(plan)
 }
 
 async fn collect_download_files_into_prefixed(
@@ -5226,11 +5274,13 @@ async fn collect_download_files_into_prefixed(
     remote_path: String,
     local_directory: PathBuf,
     display_prefix: &str,
-    files: &mut Vec<PendingDownloadFile>,
+    plan: &mut PendingDownloadPlan,
 ) -> Result<(), String> {
+    validate_local_transfer_directory_if_exists(&local_directory)?;
+    plan.directories.push(local_directory.clone());
     let (_, entries) = list_directory(client.clone(), remote_path).await?;
     for entry in entries {
-        validate_remote_entry_name(&entry.name)?;
+        validate_download_entry_name(&entry.name)?;
         let local_path = local_directory.join(&entry.name);
         let display_name = if display_prefix.is_empty() {
             entry.name.clone()
@@ -5245,12 +5295,12 @@ async fn collect_download_files_into_prefixed(
                     entry.path,
                     local_path,
                     &display_name,
-                    files,
+                    plan,
                 ))
                 .await?;
             }
             FileSystemEntryKind::File => {
-                files.push(PendingDownloadFile {
+                plan.files.push(PendingDownloadFile {
                     remote_path: entry.path,
                     local_path,
                     display_name,
@@ -5696,6 +5746,16 @@ fn persist_download_error(destination: &Path, error: std::io::Error) -> String {
     )
 }
 
+fn prepare_download_directories(directories: &[PathBuf]) -> Result<(), String> {
+    for directory in directories {
+        validate_local_transfer_directory_if_exists(directory)?;
+    }
+    for directory in directories {
+        ensure_local_transfer_directory(directory)?;
+    }
+    Ok(())
+}
+
 fn ensure_local_transfer_directory(path: &Path) -> Result<(), String> {
     let validate = || {
         let metadata = std::fs::symlink_metadata(path).map_err(|error| {
@@ -5974,6 +6034,19 @@ fn validate_remote_entry_name(name: &str) -> Result<(), String> {
         return Err(crate::t!(
             "server-file-browser-operation-failed",
             error = format!("unsafe remote entry name: {name:?}")
+        ));
+    }
+    Ok(())
+}
+
+fn validate_download_entry_name(name: &str) -> Result<(), String> {
+    validate_remote_entry_name(name)?;
+    // Windows drive-relative paths and NTFS streams are not child filenames.
+    #[cfg(windows)]
+    if name.contains(':') {
+        return Err(crate::t!(
+            "server-file-browser-operation-failed",
+            error = format!("unsafe local download entry name: {name:?}")
         ));
     }
     Ok(())

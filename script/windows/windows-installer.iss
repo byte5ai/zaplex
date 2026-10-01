@@ -8,7 +8,7 @@
   #define MyAppName "WarpDev"
 #endif
 #ifndef MyAppVersion
-  #define MyAppVersion "1.1.0"
+  #define MyAppVersion "1.1.1"
 #endif
 #ifndef MyAppExeName
   #define MyAppExeName "dev.exe"
@@ -34,7 +34,7 @@
   ((ReleaseChannel == "integration") ? "Integration" : \
   ((ReleaseChannel == "oss") ? "Oss" : \
   "Unknown")))))
-#define AppMutexName "Local\Zap" + ChannelPascalCase + "_SingleInstance"
+#define AppMutexName "Local\Zaplex" + ChannelPascalCase + "_SingleInstance"
 
 
 [Setup]

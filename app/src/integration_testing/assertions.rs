@@ -40,8 +40,8 @@ pub fn go_online() -> TestStep {
     set_and_assert_network_status(NetworkStatusKind::Online)
 }
 
-pub fn join_a_workspace() -> TestStep {
-    TestStep::new("Join a Zaplex Drive workspace")
+pub fn load_cached_workspace() -> TestStep {
+    TestStep::new("Load cached workspace without restoring retired team surfaces")
         .with_action(move |app, _, _| {
             UserWorkspaces::handle(app).update(app, |user_workspaces, ctx| {
                 let workspace_uid = "workspace_uid123456789".to_string().into();
@@ -80,8 +80,12 @@ pub fn join_a_workspace() -> TestStep {
             });
         })
         .add_assertion(move |app, _| {
-            UserWorkspaces::handle(app).read(app, |user_workspaces, _| {
-                async_assert!(user_workspaces.has_teams(), "user is on a team")
+            UserWorkspaces::handle(app).read(app, |user_workspaces, ctx| {
+                async_assert!(
+                    user_workspaces.current_team().is_some()
+                        && user_workspaces.all_user_spaces(ctx) == vec![Space::Personal],
+                    "Cached team metadata must remain available without a Team Drive space"
+                )
             })
         })
         .add_assertion(move |app, _| {

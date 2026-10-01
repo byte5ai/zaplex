@@ -12,12 +12,15 @@ pub mod code_review;
 pub mod command_palette;
 pub mod command_search;
 pub mod context_chips;
+#[cfg(target_os = "linux")]
+pub mod daemon_terminal;
 pub mod find;
 pub mod goto_line;
 pub mod input;
 pub mod keybindings;
 pub mod launch_configs;
 pub mod navigation_palette;
+pub mod native_workspace;
 pub mod notebook;
 pub mod pane_group;
 pub mod persistence;

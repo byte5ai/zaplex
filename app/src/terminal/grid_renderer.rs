@@ -2011,7 +2011,7 @@ fn render_placeholder_run(
     let asset_cache = AssetCache::as_ref(app);
     let image = ImageCache::as_ref(app).image(
         AssetSource::Raw {
-            id: run.image_id.to_string(),
+            id: metadata.asset_id.clone(),
         },
         bounds,
         // `rows`/`cols` already define the box the image is tiled over.
@@ -2105,7 +2105,7 @@ fn render_image(
     let asset_cache = AssetCache::as_ref(app);
     let image = ImageCache::as_ref(app).image(
         AssetSource::Raw {
-            id: image_id.to_string(),
+            id: image_metadata.asset_id(),
         },
         bounds,
         if image_metadata.preserve_aspect_ratio() {

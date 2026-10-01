@@ -59,8 +59,8 @@ fn log_directory_path(namespace: &str) -> PathBuf {
 ///   [`SimpleLogger::close`], which means the writer is logically dead even if
 ///   some [`Arc`] handles still exist briefly
 ///
-/// A replacement generation is queued behind the old generation's final flush,
-/// so reopening with truncation can never race the old writer.
+/// Beginning a replacement generation flushes and closes the previous file before reopening it.
+/// A late Finish from the previous writer only acknowledges that writer's own generation.
 pub struct LogManager {
     namespaces: HashSet<String>,
     loggers: HashMap<PathBuf, ManagedLogPath>,

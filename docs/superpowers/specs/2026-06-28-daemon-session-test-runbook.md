@@ -39,8 +39,10 @@
 3. A new tab should appear and, after the connect sequence, show a working remote
    shell **with Zaplex blocks/prompt** (not a bare VT).
 4. Type a few commands; resize the window; try the mouse in a TUI (e.g. `htop`).
-5. **Drop test:** kill the network / sleep the laptop / `pkill -f "ssh .*ControlPath"`
-   briefly, then restore. The session should reconnect and replay — the shell
+5. **Drop test:** use a dedicated test connection. Identify and verify its exact
+   ControlMaster socket and process ID before terminating only that test master.
+   Do not use a name-pattern kill: it can terminate unrelated SSH connections.
+   Let the test transport reconnect. The session should reconnect and replay — the shell
    state (your scrollback/running program) survives. After a *long* drop where the
    daemon ring evicted old output, the screen resets and shows a one-line notice
    `[zaplex] scrollback truncated during a long disconnect` (instead of a garbled

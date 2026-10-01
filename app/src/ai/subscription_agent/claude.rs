@@ -1,6 +1,6 @@
 use super::{
     AgentCapability, ApprovalDecision, InstallationIdentity, ModelCapability, ModelEffort,
-    SessionIdentity, SubscriptionEvent, Usage,
+    SessionIdentity, SubscriptionEvent, SubscriptionPrompt, Usage,
 };
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Map, Value};
@@ -18,15 +18,26 @@ impl ClaudeProtocol {
         })
     }
 
-    pub(crate) fn user_message(prompt: &str, session_id: Option<&str>) -> Value {
+    pub(crate) fn user_message(prompt: &SubscriptionPrompt, session_id: Option<&str>) -> Value {
+        let mut content = vec![json!({ "type": "text", "text": prompt.query_for_agent() })];
+        if !prompt.context.is_empty() {
+            content.push(json!({ "type": "text", "text": prompt.context }));
+        }
+        content.extend(prompt.images.iter().map(|image| {
+            json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image.mime_type,
+                    "data": image.data,
+                },
+            })
+        }));
         let mut frame = json!({
             "type": "user",
             "message": {
                 "role": "user",
-                "content": [{
-                    "type": "text",
-                    "text": prompt
-                }]
+                "content": content
             },
             "parent_tool_use_id": null
         });

@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use warp_core::SessionId;
+use warp_terminal::model::BlockId;
 use zeroize::Zeroizing;
 
 fn pw_matches(input: &str) -> bool {
@@ -152,7 +153,13 @@ fn local_root_su_authorizes_exactly_one_confirmation() {
     let attempt_guard = shared_guard();
     assert!(attempt_guard
         .lock()
-        .observe_command("su - root", SessionId::from(7), true, Instant::now(),)
+        .observe_command(
+            "su - root",
+            SessionId::from(7),
+            BlockId::new(),
+            true,
+            Instant::now(),
+        )
         .is_some());
 
     let events = collect_prompt_events(
@@ -168,7 +175,7 @@ fn local_root_su_authorizes_exactly_one_confirmation() {
         events,
         vec![
             SuInjectorEvent::ShellReadyFinished(ShellReadyOutcome::Ready),
-            SuInjectorEvent::PasswordPrompt,
+            SuInjectorEvent::PasswordPrompt { generation: 0 },
         ]
     );
 }
@@ -179,14 +186,14 @@ fn non_root_remote_and_non_user_commands_do_not_arm_attempt() {
     let mut guard = SuRootAttemptGuard::default();
 
     assert!(guard
-        .observe_command("su admin", SessionId::from(1), true, now)
+        .observe_command("su admin", SessionId::from(1), BlockId::new(), true, now)
         .is_none());
-    assert!(!guard.consume(now));
+    assert!(guard.consume(now).is_none());
 
     assert!(guard
-        .observe_command("su - root", SessionId::from(1), false, now)
+        .observe_command("su - root", SessionId::from(1), BlockId::new(), false, now)
         .is_none());
-    assert!(!guard.consume(now));
+    assert!(guard.consume(now).is_none());
 }
 
 #[test]
@@ -195,22 +202,32 @@ fn timeout_later_command_and_session_change_clear_attempt() {
     let session = SessionId::from(1);
     let mut guard = SuRootAttemptGuard::default();
 
-    assert!(guard.observe_command("su", session, true, now).is_some());
-    assert!(!guard.consume(now + SU_ROOT_ATTEMPT_TIMEOUT + Duration::from_millis(1)));
-
-    let expired_generation = guard.observe_command("su", session, true, now).unwrap();
-    guard.expire(expired_generation);
-    assert!(!guard.consume(now));
-
-    assert!(guard.observe_command("su", session, true, now).is_some());
     assert!(guard
-        .observe_command("whoami", session, true, now)
+        .observe_command("su", session, BlockId::new(), true, now)
+        .is_some());
+    assert!(guard
+        .consume(now + SU_ROOT_ATTEMPT_TIMEOUT + Duration::from_millis(1))
         .is_none());
-    assert!(!guard.consume(now));
 
-    assert!(guard.observe_command("su", session, true, now).is_some());
+    let expired_generation = guard
+        .observe_command("su", session, BlockId::new(), true, now)
+        .unwrap();
+    guard.expire(expired_generation);
+    assert!(guard.consume(now).is_none());
+
+    assert!(guard
+        .observe_command("su", session, BlockId::new(), true, now)
+        .is_some());
+    assert!(guard
+        .observe_command("whoami", session, BlockId::new(), true, now)
+        .is_none());
+    assert!(guard.consume(now).is_none());
+
+    assert!(guard
+        .observe_command("su", session, BlockId::new(), true, now)
+        .is_some());
     guard.clear_if_session_changed(Some(SessionId::from(2)));
-    assert!(!guard.consume(now));
+    assert!(guard.consume(now).is_none());
 }
 
 #[test]
@@ -219,11 +236,15 @@ fn earlier_timeout_does_not_clear_newer_attempt() {
     let session = SessionId::from(1);
     let mut guard = SuRootAttemptGuard::default();
 
-    let first_generation = guard.observe_command("su", session, true, now).unwrap();
-    assert!(guard.observe_command("su", session, true, now).is_some());
+    let first_generation = guard
+        .observe_command("su", session, BlockId::new(), true, now)
+        .unwrap();
+    assert!(guard
+        .observe_command("su", session, BlockId::new(), true, now)
+        .is_some());
     guard.expire(first_generation);
 
-    assert!(guard.consume(now));
+    assert!(guard.consume(now).is_some());
 }
 
 #[test]
@@ -232,10 +253,10 @@ fn abort_or_shell_return_clear_attempt() {
     let mut guard = SuRootAttemptGuard::default();
 
     assert!(guard
-        .observe_command("su", SessionId::from(1), true, now)
+        .observe_command("su", SessionId::from(1), BlockId::new(), true, now)
         .is_some());
     guard.clear();
-    assert!(!guard.consume(now));
+    assert!(guard.consume(now).is_none());
 }
 
 #[test]
@@ -289,4 +310,62 @@ fn su_timeout_releases_onekey_suppression() {
     let (event, _) = timeout_event_under_continuous_output();
 
     assert!(event.releases_onekey_suppression());
+}
+
+#[test]
+fn queued_su_prompt_keeps_original_command_identity_and_is_consumed_once() {
+    let now = Instant::now();
+    let session = SessionId::from(7);
+    let block = BlockId::new();
+    let mut guard = SuRootAttemptGuard::default();
+    let generation = guard
+        .observe_command("su", session, block.clone(), true, now)
+        .unwrap();
+    assert_eq!(guard.consume(now), Some(generation));
+    assert_eq!(guard.take_prompt(generation, now), Some((session, block)));
+    assert!(guard.take_prompt(generation, now).is_none());
+}
+
+#[test]
+fn queued_su_prompt_is_rejected_after_cancel_expiry_or_replacement() {
+    let now = Instant::now();
+    let session = SessionId::from(7);
+    let mut guard = SuRootAttemptGuard::default();
+    for invalidate in 0..4 {
+        let generation = guard
+            .observe_command("su", session, BlockId::new(), true, now)
+            .unwrap();
+        assert_eq!(guard.consume(now), Some(generation));
+        match invalidate {
+            0 => guard.clear(),
+            1 => guard.expire(generation),
+            2 => guard.clear_if_session_changed(Some(SessionId::from(8))),
+            3 => {
+                guard.observe_command("cat", session, BlockId::new(), true, now);
+            }
+            _ => unreachable!(),
+        }
+        assert!(guard.take_prompt(generation, now).is_none());
+    }
+    let old = guard
+        .observe_command("su", session, BlockId::new(), true, now)
+        .unwrap();
+    assert_eq!(guard.consume(now), Some(old));
+    let new = guard
+        .observe_command("su", session, BlockId::new(), true, now)
+        .unwrap();
+    assert_eq!(guard.consume(now), Some(new));
+    assert!(guard.take_prompt(old, now).is_none());
+    assert!(guard.take_prompt(new, now).is_some());
+
+    let expired = guard
+        .observe_command("su", session, BlockId::new(), true, now)
+        .unwrap();
+    assert_eq!(guard.consume(now), Some(expired));
+    assert!(guard
+        .take_prompt(
+            expired,
+            now + SU_ROOT_ATTEMPT_TIMEOUT + Duration::from_millis(1)
+        )
+        .is_none());
 }

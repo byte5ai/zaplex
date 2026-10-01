@@ -26,6 +26,8 @@ pub fn run_integration_test(name: &str) -> Result<(), String> {
             k == "PATH"
                 // Propagate any Rust-related variables.
                 || k.starts_with("RUST_")
+                // Keep instrumented child processes in the same coverage run.
+                || k == "LLVM_PROFILE_FILE"
                 // Propagate any Zap-specific variables.
                 || k.starts_with("ZAPLEX_")
                 || k.starts_with("WARPUI_")
@@ -120,6 +122,8 @@ pub fn run_integration_test(name: &str) -> Result<(), String> {
             k == "PATH"
                 // Propagate any Rust-related variables.
                 || k.starts_with("RUST_")
+                // Keep instrumented child processes in the same coverage run.
+                || k == "LLVM_PROFILE_FILE"
                 // Propagate any Zap-specific variables.
                 || k.starts_with("ZAPLEX_")
                 || k.starts_with("WARPUI_")

@@ -62,7 +62,7 @@ pub(crate) use claude::ClaudeProtocol;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use codex::CodexProtocol;
 #[cfg(not(target_family = "wasm"))]
-pub(crate) use discovery::discover_capabilities;
+pub(crate) use discovery::{discover_capabilities, discover_read_only_capabilities};
 pub(crate) use presentation::{
     account_identity_label, conversation_identity_fields, host_identity_label,
     location_identity_label, model_identity_label, ComposerPolicy, ConversationAction,
@@ -85,5 +85,5 @@ pub(crate) use types::{
     AccountIdentity, AgentCapability, AgentLifecycle, ApprovalDecision, HostIdentity,
     InstallationIdentity, ModelCapability, ModelEffort, SessionIdentity, SubscriptionAgent,
     SubscriptionAuthenticationError, SubscriptionEvent, SubscriptionLocationPreference,
-    SubscriptionTarget, Usage, LOCAL_SUBSCRIPTION_HOST_ID,
+    SubscriptionPrompt, SubscriptionTarget, Usage, LOCAL_SUBSCRIPTION_HOST_ID,
 };

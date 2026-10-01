@@ -341,7 +341,7 @@
         "automatic_host_registration_never_adds_menu_favorite",
         "favorite_store_write_is_atomic",
         "corrupt_favorite_store_is_reported_and_never_overwritten",
-        "unavailable_host_registry_keeps_favorite_remove_available",
+        "missing_host_in_readable_registry_keeps_favorite_remove_available",
         "favorite_menu_migration_preserves_non_host_favorite_data",
         "removed_favorite_host_is_disabled_and_never_routed"
       ]
