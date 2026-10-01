@@ -101,7 +101,7 @@ def prepare_updates(
     )
 
     workflow_versions = {
-        ".github/workflows/test-dmg.yml": 2,
+        ".github/workflows/test-dmg.yml": 1,
         ".github/workflows/zap_release.yml": 1,
     }
     for relative_path, count in workflow_versions.items():

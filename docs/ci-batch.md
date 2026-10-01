@@ -26,19 +26,15 @@ scheitert vor den schweren Jobs.
 1. Mehrere PRs nach den leichten Checks mergen.
 2. Christian gibt genau den gewünschten Lauf frei:
    `release-approve "ci-batch.yml --ref main"`.
-3. Erst danach `gho "$(getpat)" workflow run ci-batch.yml --ref main` ausführen.
+3. Erst danach `gho workflow run ci-batch.yml --ref main` ausführen.
    Ohne weitere Inputs entstehen keine DMG-/Daemon-Build-Artefakte.
    `artifacts=test-dmg` bzw. `artifacts=remote-server` muss Teil der Freigabe sein.
 4. Bei rotem Batch erst korrigieren oder zurücknehmen, bevor weitere Änderungen
    gemergt werden. Ein Release darf nur von einem `main`-Commit mit grünem Batch
    erfolgen; die gesonderte Release-Freigabe bleibt erforderlich.
 
-## Ruleset 18082412 – Christian ändert es selbst
+## Ruleset 18082412
 
-- `cargo check (Linux x86_64)` aus den Pflicht-Checks entfernen.
-- `strict_required_status_checks_policy` auf `false` setzen.
-- `no-new-cjk` unverändert als Pflicht-Check behalten; nichts umbenennen.
-
-Die Umstellung wird einmal gebündelt gepusht, erst nach Christians Zustimmung.
-Dabei kann noch die bisherige PR-Konfiguration relevant sein; dieser Push ist
-keine Freigabe für einen anschließenden Batch-Lauf.
+Einziger Pflicht-Check für Merges nach `main` ist `no-new-cjk`;
+`strict_required_status_checks_policy` ist aus. Ein PR braucht keine
+Freigabe durch Reviews und kann gemergt werden, sobald `no-new-cjk` grün ist.
