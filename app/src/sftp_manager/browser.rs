@@ -25,7 +25,7 @@ use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
 use warp_ssh_manager::{KeychainSecretStore, SshRepository};
 use warpui::elements::{
-    Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
+    Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Element,
     EventHandler, Expanded, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
@@ -4404,15 +4404,19 @@ impl SftpBrowserView {
             appearance,
         );
 
+        // A long path must not widen the pane: the reported width stays within the
+        // parent and overflowing segments are clipped. Otherwise a narrow split pane
+        // grows past its share and leaves its neighbour no width at all.
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(2.0);
+            .with_spacing(2.0)
+            .with_constrain_horizontal_bounds_to_parent(true);
 
         for part in parts {
             row.add_child(part);
         }
 
-        Container::new(row.finish())
+        Container::new(Clipped::new(row.finish()).finish())
             .with_padding_left(4.0)
             .with_padding_right(4.0)
             .with_padding_top(4.0)
