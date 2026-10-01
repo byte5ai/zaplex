@@ -3223,8 +3223,10 @@ impl<A: Action + Clone> SubMenu<A> {
                         OffsetPositioning::offset_from_save_position_element(
                             saved_position_id,
                             vec2f(
+                                // Opening leftwards, an overlap would cover the parent row's
+                                // leading icon and label; only the trailing edge may be covered.
                                 if should_reverse_layout {
-                                    SUBMENU_OVERLAP
+                                    0.
                                 } else {
                                     -SUBMENU_OVERLAP
                                 },
