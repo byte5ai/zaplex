@@ -1,8 +1,6 @@
 name: Test (manual)
 
-# Manually-triggered full test run — keeps heavy compilation off the dev host
-# (pay-per-run). The per-PR gate (pr-check.yml) only does `cargo check`; this
-# runs the actual tests on demand.
+# Rust tests called by ci-batch.yml after the compile checks pass.
 #
 # Runner choice (see `runs_on` / `add_swap` inputs):
 # - DEFAULT: the fast larger runner `ubuntu-latest-xl` (16 vCPU / 64 GB) — more
@@ -14,19 +12,22 @@ name: Test (manual)
 #   only on explicit request, by setting `runs_on=ubuntu-22.04` + `add_swap=true`.
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       package:
         description: "Cargo package to test (-p). Default: warp (the app)."
         required: false
+        type: string
         default: "warp"
       filter:
-        description: "Optional test-name filter (cargo test <filter>). Empty = all tests of the package."
+        description: "Optional test-name filter. Empty = all tests of the package."
         required: false
+        type: string
         default: ""
       runs_on:
         description: "Runner label. Default is the fast larger runner (ubuntu-latest-xl, 16 vCPU / 64 GB). Only set ubuntu-22.04 if you explicitly want the slow standard runner."
         required: false
+        type: string
         default: "ubuntu-latest-xl"
       add_swap:
         description: "Add a 12 GB swapfile. Only needed on the 7 GB standard runner; leave off for the large runner (it has enough RAM)."

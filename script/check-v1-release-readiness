@@ -614,7 +614,7 @@ def live_sftp_commit_boundaries_have_a_real_protocol_gate(root: Path) -> None:
         "live SFTP workflow": (
             workflow,
             (
-                "pull_request:",
+                "workflow_call:",
                 "openssh-server",
                 "Subsystem sftp internal-sftp",
                 "cargo test --locked -p warp --lib live_sftp_ -- --ignored",

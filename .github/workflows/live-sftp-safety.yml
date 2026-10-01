@@ -1,15 +1,8 @@
 name: Live SFTP safety
 
+# Called only by the approved post-merge batch on main.
 on:
-  pull_request:
-    paths:
-      - "app/src/remote_server/safe_file.rs"
-      - "app/src/remote_server/safe_file_tests.rs"
-      - "app/src/sftp_manager/**"
-      - "crates/remote_server/**"
-      - "crates/zap_sftp/**"
-      - ".github/workflows/live-sftp-safety.yml"
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
