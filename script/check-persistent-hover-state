@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# A Hoverable built with a fresh mouse state reports a hover change on every
+# synthetic MouseMoved after a render, notifies, re-renders and loops forever
+# while the pointer rests on it. Hover state must live in the owning view.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+
+scan() {
+    find "$@" -name '*.rs' ! -name '*_test.rs' ! -name '*_tests.rs' -print0 |
+        xargs -0 perl -0777 -ne '
+            while (/Hoverable::new\(\s*(?:Default::default\(\)|MouseStateHandle::default\(\))/g) {
+                my $line = 1 + (substr($_, 0, $-[0]) =~ tr/\n//);
+                print "$ARGV:$line: Hoverable with a fresh mouse state\n";
+                $found = 1;
+            }
+            END { exit($found ? 1 : 0) }
+        '
+}
+
+if [ "${1:-}" = "--self-test" ]; then
+    fixture="$(mktemp -d)"
+    trap 'rm -rf "$fixture"' EXIT
+    printf 'fn ok(s: &S) { Hoverable::new(s.state.clone(), |_| e); }\n' > "$fixture/good.rs"
+    if ! scan "$fixture" >/dev/null; then
+        echo "persistent-hover self-test: persistent state was rejected" >&2
+        exit 1
+    fi
+    printf 'fn bad() {\n    Hoverable::new(\n        MouseStateHandle::default(),\n        |_| e,\n    );\n}\n' > "$fixture/bad.rs"
+    if scan "$fixture" >/dev/null; then
+        echo "persistent-hover self-test: fresh state was not detected" >&2
+        exit 1
+    fi
+    echo "persistent-hover self-test: ok"
+    exit 0
+fi
+
+cd "$repo_root"
+if ! scan app/src crates; then
+    echo "Keep the MouseStateHandle in the view and pass a clone to Hoverable::new." >&2
+    exit 1
+fi
+echo "persistent hover state: ok"

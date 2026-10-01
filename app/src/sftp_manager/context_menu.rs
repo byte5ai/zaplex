@@ -8,7 +8,7 @@ use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Flex, Hoverable,
-    MainAxisSize, ParentElement, Radius, SavePosition, Text,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition, Text,
 };
 use warpui::platform::Cursor;
 use warpui::Element;
@@ -26,12 +26,23 @@ pub struct ContextMenuState {
     pub entry: EntryReference,
     /// Menu popup position
     pub position: Vector2F,
+    /// Hover state per menu item, kept for the menu's lifetime so a re-render
+    /// does not report a fresh hover change on every synthetic mouse move.
+    item_states: Vec<MouseStateHandle>,
 }
 
 impl ContextMenuState {
     /// Create a new right-click menu state
     pub fn new(entry: EntryReference, position: Vector2F) -> Self {
-        Self { entry, position }
+        let item_states = build_file_menu_items(&entry)
+            .iter()
+            .map(|_| MouseStateHandle::default())
+            .collect();
+        Self {
+            entry,
+            position,
+            item_states,
+        }
     }
 }
 
@@ -81,6 +92,7 @@ fn render_menu_item(
     label: &str,
     action: SftpBrowserAction,
     enabled: bool,
+    mouse_state: MouseStateHandle,
     appearance: &Appearance,
     position_id: &str,
 ) -> Box<dyn Element> {
@@ -96,7 +108,7 @@ fn render_menu_item(
     let ui_font_size = appearance.ui_font_size();
     let label_owned = label.to_string();
 
-    let item_el = Hoverable::new(Default::default(), move |state| {
+    let item_el = Hoverable::new(mouse_state, move |state| {
         let bg = if enabled && (state.is_hovered() || state.is_clicked()) {
             hover_bg
         } else {
@@ -145,7 +157,7 @@ pub fn render_context_menu(
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_main_axis_size(MainAxisSize::Min);
 
-    for item in &menu_items {
+    for (item, mouse_state) in menu_items.iter().zip(&state.item_states) {
         let position_id = match &item.action {
             SftpBrowserAction::OpenEntry(_) => "sftp_ctx:open",
             SftpBrowserAction::DownloadEntry(_) => "sftp_ctx:download",
@@ -221,6 +233,7 @@ pub fn render_context_menu(
             &item.label,
             item.action.clone(),
             enabled,
+            mouse_state.clone(),
             appearance,
             position_id,
         );
