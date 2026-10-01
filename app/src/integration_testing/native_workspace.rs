@@ -486,7 +486,8 @@ pub fn file_manager_layout() -> TestStep {
                 let Some(root) = bounds(app, window_id, &fm_position(app, index, "pane-root")) else {
                 return AssertionOutcome::failure("File manager has not painted".into());
             };
-                let legend = bounds(app, window_id, &fm_position(app, index, "legend-compact"))
+                let compact = bounds(app, window_id, &fm_position(app, index, "legend-compact"));
+                let legend = compact
                     .or_else(|| bounds(app, window_id, &fm_position(app, index, "legend-full")));
                 let Some(legend) = legend else {
                 return AssertionOutcome::failure("Function legend has not painted".into());
@@ -497,7 +498,8 @@ pub fn file_manager_layout() -> TestStep {
                 return AssertionOutcome::failure(format!("Missing {key} in pane {index}"));
             };
                     if !contains(root, legend) || !contains(legend, cell) || previous.is_some_and(|prior| prior.max_x() > cell.min_x() + 1. || (prior.center().y() - cell.center().y()).abs() > 1.) {
-                        return AssertionOutcome::failure(format!("Function bar overlaps or wraps: pane={root:?}, legend={legend:?}, cell={cell:?}"));
+                        let window = app.window_bounds(&window_id);
+                        return AssertionOutcome::failure(format!("Function bar overlaps or wraps: index={index}, key={key}, compact={}, window={window:?}, pane={root:?}, legend={legend:?}, cell={cell:?}, previous={previous:?}", compact.is_some()));
                     }
                     previous = Some(cell);
                 }
