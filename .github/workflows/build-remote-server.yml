@@ -7,8 +7,7 @@
 # Der normale Release- und Test-DMG-Workflow bündelt dieses Binary inzwischen
 # offline. Dieser Einzelworkflow bleibt für gezielte Daemon-Diagnosen verfügbar.
 #
-# Aufruf:  gh workflow run build-remote-server.yml -R byte5ai/zaplex --ref <branch> \
-#            [-f dmg_tag=v0.daemontest]
+# Aufruf nach Freigabe: ci-batch.yml --ref main -f artifacts=remote-server
 # Danach:  gh run download <id> -R byte5ai/zaplex -n zaplex-remote-server-linux-x86_64
 #          → Binary nach  ~/.zaplex/remote-server/zaplex-<dmg_tag>  auf dem Ziel-Host,
 #            chmod 755.  (muss zum dmg_tag des getesteten DMG passen.)
@@ -19,12 +18,16 @@
 name: Build remote-server (Linux)
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       dmg_tag:
         description: "GIT_RELEASE_TAG — muss zum getesteten DMG passen (kosmetisch für die Binary-Version)"
         type: string
         default: v0.daemontest
+
+concurrency:
+  group: build-remote-server-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always

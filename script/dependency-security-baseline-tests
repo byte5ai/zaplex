@@ -236,8 +236,16 @@ keymap_smoke_test = job_block(pr_workflow, "keymap_smoke_test")
 if "test_svg_text_rasterizes_with_loaded_system_fonts" not in keymap_smoke_test:
     fail("the required smoke job must rasterize SVG text with the migrated font stack")
 
-scheduled = (REPO_ROOT / ".github" / "workflows" / "dependency-security.yml").read_text()
-if "schedule:" not in scheduled or DENY_ACTION not in scheduled:
-    fail("the scheduled workflow must enforce cargo-deny advisories")
+advisories = (REPO_ROOT / ".github" / "workflows" / "dependency-security.yml").read_text()
+if (
+    "schedule:" in advisories
+    or "workflow_call:" not in advisories
+    or "workflow_dispatch:" not in advisories
+    or DENY_ACTION not in advisories
+):
+    fail("cargo-deny advisories must be callable by the batch and manually, without a schedule")
+batch = (REPO_ROOT / ".github" / "workflows" / "ci-batch.yml").read_text()
+if "uses: ./.github/workflows/dependency-security.yml" not in job_block(batch, "dependency_security"):
+    fail("the batch must include the dependency advisory check")
 
 print("dependency security baseline: ok")

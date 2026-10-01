@@ -15,7 +15,7 @@ on:
   pull_request:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: no-new-cjk-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -24,15 +24,25 @@ permissions:
 jobs:
   no-new-cjk:
     name: no-new-cjk
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # Recent p90 is below one minute; five minutes leaves ample startup margin.
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - name: Check changed lines for Han characters
+      - name: Check relevant changed paths for added Han characters
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: script/check-no-new-cjk "$BASE_SHA"
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Filter inside the required job so docs-only PRs still get a status.
+          if git diff --quiet "$BASE_SHA" HEAD -- '*.rs' '*.proto' \
+            script/check-no-new-cjk .github/workflows/no-new-cjk.yml; then
+            echo "No relevant paths changed."
+            exit 0
+          fi
+          script/check-no-new-cjk "$BASE_SHA"
