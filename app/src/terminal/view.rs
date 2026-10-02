@@ -6426,9 +6426,7 @@ impl TerminalView {
 
         self.active_block_session_id().and_then(|session_id| {
             let current_session = self.sessions.as_ref(ctx).get(session_id)?;
-            // A daemon-hosted shell is local only on the daemon's host, never on
-            // this machine: its paths and files must not be resolved here.
-            Some(current_session.is_local() && !current_session.is_daemon_hosted())
+            Some(current_session.is_local())
         })
     }
 
@@ -17137,6 +17135,10 @@ impl TerminalView {
             if !FeatureFlag::SshRemoteServer.is_enabled() {
                 return None;
             }
+            let session_id = self
+                .sessions
+                .as_ref(ctx)
+                .remote_server_session_id(session_id);
             let mgr = RemoteServerManager::handle(ctx);
             mgr.as_ref(ctx).host_id_for_session(session_id).cloned()
         }
