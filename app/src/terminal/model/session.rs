@@ -972,7 +972,8 @@ pub enum SessionType {
     Local,
 
     /// The session host is a different host from where Zaplex is running.
-    /// Note that we only know this for sure when we Zaplexify a block.
+    /// Note that we only know this for sure when we Zaplexify a block, or when
+    /// the shell runs in a daemon-hosted PTY (it bootstraps as `Local` there).
     ///
     /// `host_id` is `Some` when the remote server feature flag is enabled and
     /// `RemoteServerManager` has completed the connection handshake. It is
