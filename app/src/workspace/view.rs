@@ -29445,6 +29445,9 @@ impl TypedActionView for Workspace {
                     // None as "remote" would turn a local split with no session
                     // into an error, and inside an SSH tab it would even scope it
                     // to that tab's host.
+                    log::info!(
+                        "file manager: pane {target_pane_id:?} local={pane_is_local:?}, start={start_path:?}"
+                    );
                     let target = if pane_is_local != Some(false) {
                         crate::pane_group::FileManagerTarget::Local {
                             start_path: start_path.clone(),
@@ -29456,6 +29459,7 @@ impl TypedActionView for Workspace {
                             active_view.as_ref(),
                             ctx,
                         );
+                        log::info!("file manager: remote pane resolved to node {node_id:?}");
                         match node_id {
                             Some(node_id) => crate::pane_group::FileManagerTarget::Remote {
                                 node_id,
