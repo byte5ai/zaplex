@@ -659,16 +659,15 @@ pub fn open_remote_file_manager(state: SharedState) -> TestStep {
                     .server
                     .node_id
                     .clone();
-                let registered = app.read(|ctx| {
-                    let panes = FileManagerRegistry::as_ref(ctx).panes();
-                    panes.len() == 1
-                        && panes[0].fs == FsNamespace::Remote(node)
-                        && panes[0].current_path == PathBuf::from(projects_path())
-                });
+                let panes = app.read(|ctx| FileManagerRegistry::as_ref(ctx).panes().to_vec());
+                let registered = panes.len() == 1
+                    && panes[0].fs == FsNamespace::Remote(node.clone())
+                    && panes[0].current_path == PathBuf::from(projects_path());
                 if !registered {
-                    return AssertionOutcome::failure(
-                        "Remote file-manager route is not ready".into(),
-                    );
+                    return AssertionOutcome::failure(format!(
+                        "Remote file-manager route is not ready: expected node={node}, path={}; registered={panes:?}",
+                        projects_path()
+                    ));
                 }
                 sftp::sftp_browser_view(app, window_id).read(app, |view, _| {
                     if !matches!(view.connection_state(), ConnectionState::Connected)
