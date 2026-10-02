@@ -15,6 +15,7 @@ use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
 use warp_util::path::{
@@ -98,6 +99,11 @@ pub struct Sessions {
     /// This is only intended to be used in tests, which may want to use
     /// various mock executor types in order to test and assert on behaviors.
     executor_for_all_sessions: Option<Arc<dyn CommandExecutor>>,
+
+    /// Remote-server connection of a daemon-hosted PTY. Its shell bootstraps as a
+    /// local session with its own id, so generators must be routed through this
+    /// connection explicitly or they would run on the client machine.
+    daemon_connection_session_id: Option<SessionId>,
 
     /// Select environment variables and their values.
     env_vars: HashMap<SessionId, HashMap<String, String>>,
@@ -194,11 +200,14 @@ impl Sessions {
                     client,
                     ..
                 } => {
-                    if let Some(session) = sessions.sessions.get(sid) {
+                    for session in sessions.sessions_on_connection(*sid) {
                         let new_executor =
                             Arc::new(RemoteServerCommandExecutor::new(*sid, client.clone()));
                         session.set_command_executor(new_executor);
-                        log::info!("Swapped command executor for session {sid:?} after reconnect");
+                        log::info!(
+                            "Swapped command executor for session {:?} after reconnect of {sid:?}",
+                            session.id()
+                        );
                     }
                 }
             });
@@ -212,6 +221,7 @@ impl Sessions {
             executor_command_tx,
             in_band_command_output_tx_map: Default::default(),
             executor_for_all_sessions: None,
+            daemon_connection_session_id: None,
             env_vars: Default::default(),
             remote_server_setup_states: Default::default(),
         }
@@ -237,6 +247,7 @@ impl Sessions {
             executor_command_tx,
             in_band_command_output_tx_map: Default::default(),
             executor_for_all_sessions: None,
+            daemon_connection_session_id: None,
             env_vars: Default::default(),
             remote_server_setup_states: Default::default(),
         }
@@ -246,6 +257,74 @@ impl Sessions {
     pub fn with_command_executor(mut self, executor: Arc<dyn CommandExecutor>) -> Self {
         self.executor_for_all_sessions = Some(executor);
         self
+    }
+
+    /// Routes every session of a daemon-hosted terminal through its connection.
+    pub fn set_daemon_connection_session_id(&mut self, connection_session_id: SessionId) {
+        self.daemon_connection_session_id = Some(connection_session_id);
+    }
+
+    pub fn daemon_connection_session_id(&self) -> Option<SessionId> {
+        self.daemon_connection_session_id
+    }
+
+    /// Sessions served by a remote-server connection: the session with that id,
+    /// or the daemon-hosted shells of a terminal riding on it.
+    #[cfg(feature = "local_tty")]
+    fn sessions_on_connection(&self, connection_session_id: SessionId) -> Vec<Arc<Session>> {
+        if self.daemon_connection_session_id == Some(connection_session_id) {
+            return self
+                .sessions
+                .values()
+                .filter(|session| session.is_daemon_hosted())
+                .cloned()
+                .collect();
+        }
+        self.sessions
+            .get(&connection_session_id)
+            .cloned()
+            .into_iter()
+            .collect()
+    }
+
+    /// Whether a bootstrapped shell runs directly in this terminal's daemon PTY.
+    /// A nested SSH session inside it lives on another host and keeps its own routing.
+    pub(crate) fn is_daemon_hosted_shell(&self, session_info: &SessionInfo) -> bool {
+        self.daemon_connection_session_id.is_some()
+            && matches!(session_info.session_type, BootstrapSessionType::Local)
+    }
+
+    /// The generator executor for a daemon-hosted shell, once its connection
+    /// has a live client. `None` falls back to the regular selection.
+    #[cfg(feature = "local_tty")]
+    fn daemon_command_executor(
+        &self,
+        session_info: &SessionInfo,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<Arc<dyn CommandExecutor>> {
+        if !self.is_daemon_hosted_shell(session_info) {
+            return None;
+        }
+        let connection_session_id = self.daemon_connection_session_id?;
+        let client = RemoteServerManager::handle(ctx).read(ctx, |mgr, _| {
+            mgr.client_for_session(connection_session_id).cloned()
+        })?;
+        log::info!(
+            "creating a remote server executor for daemon connection {connection_session_id:?}"
+        );
+        Some(Arc::new(RemoteServerCommandExecutor::new(
+            connection_session_id,
+            client,
+        )))
+    }
+
+    #[cfg(not(feature = "local_tty"))]
+    fn daemon_command_executor(
+        &self,
+        _session_info: &SessionInfo,
+        _ctx: &mut ModelContext<Self>,
+    ) -> Option<Arc<dyn CommandExecutor>> {
+        None
     }
 
     pub fn set_env_vars_for_session(
@@ -327,6 +406,9 @@ impl Sessions {
             // it gets consumed through the function call.
             let _ = in_band_command_output_rx;
             executor.clone()
+        } else if let Some(executor) = self.daemon_command_executor(&session_info, ctx) {
+            let _ = in_band_command_output_rx;
+            executor
         } else {
             let parent_session_info = session_info
                 .spawning_session_id
@@ -355,6 +437,9 @@ impl Sessions {
         log::debug!("Session details: {session:?}");
 
         let session = Arc::new(session);
+        if self.is_daemon_hosted_shell(&session_info) {
+            session.mark_daemon_hosted();
+        }
         self.sessions.insert(session.id(), session.clone());
 
         // For zaplexified-remote sessions, pick up the current host_id from
@@ -896,6 +981,9 @@ pub struct Session {
     /// when `RemoteServerManager` reports a connected session (to fill in the
     /// `host_id`). Interior mutability allows updating through `Arc<Session>`.
     session_type: Mutex<SessionType>,
+    /// A shell inside a daemon-hosted PTY bootstraps as `Local`, but runs on the
+    /// daemon's host: client-local resources such as the file system must not serve it.
+    daemon_hosted: AtomicBool,
 }
 
 impl Session {
@@ -918,11 +1006,21 @@ impl Session {
             load_external_commands_future: Default::default(),
             command_case_sensitivity,
             session_type: Mutex::new(session_type),
+            daemon_hosted: AtomicBool::new(false),
         }
     }
 
     pub fn id(&self) -> SessionId {
         self.info.session_id
+    }
+
+    /// Marks a shell that runs inside a daemon-hosted PTY.
+    pub fn mark_daemon_hosted(&self) {
+        self.daemon_hosted.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_daemon_hosted(&self) -> bool {
+        self.daemon_hosted.load(Ordering::Relaxed)
     }
 
     pub fn user(&self) -> &str {
@@ -1710,6 +1808,7 @@ pub mod testing {
                 load_external_commands_future: Default::default(),
                 command_case_sensitivity: TopLevelCommandCaseSensitivity::CaseSensitive,
                 session_type: Mutex::new(session_type),
+                daemon_hosted: AtomicBool::new(false),
             }
         }
 
@@ -1725,6 +1824,7 @@ pub mod testing {
                 load_external_commands_future: Default::default(),
                 command_case_sensitivity: TopLevelCommandCaseSensitivity::CaseSensitive,
                 session_type: Mutex::new(session_type),
+                daemon_hosted: AtomicBool::new(false),
             }
         }
 

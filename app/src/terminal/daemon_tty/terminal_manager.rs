@@ -151,9 +151,13 @@ impl TerminalManager {
 
         let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
 
-        // Initialize the sessions model.
-        let sessions: ModelHandle<Sessions> =
-            ctx.add_model(|ctx| Sessions::new(executor_command_tx, ctx));
+        // Initialize the sessions model. Its shells run on the daemon host, so their
+        // generators go through this connection instead of the client machine.
+        let sessions: ModelHandle<Sessions> = ctx.add_model(|ctx| {
+            let mut sessions = Sessions::new(executor_command_tx, ctx);
+            sessions.set_daemon_connection_session_id(connection_session_id);
+            sessions
+        });
 
         let model_events =
             ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
