@@ -14,7 +14,7 @@ use warp::integration_testing::{
     terminal::{
         assert_active_block_received_precmd, assert_command_executed, execute_command,
         util::{ExactLine, ExpectedExitStatus},
-        wait_until_bootstrapped_single_pane_for_tab,
+        wait_until_bootstrapped_pane, wait_until_bootstrapped_single_pane_for_tab,
     },
 };
 use warpui::integration::TestStep;
@@ -38,6 +38,9 @@ pub fn test_daemon_terminal_acceptance() -> Builder {
         .with_step(daemon::prepare_host_key(Arc::clone(&state)))
         .with_step(daemon::open(Arc::clone(&state)))
         .with_step(daemon::ready(Arc::clone(&state)))
+        // The daemon route is ready before the PTY shell bootstraps; Enter is
+        // rejected until then. A reattach below resumes an already bootstrapped shell.
+        .with_step(wait_until_bootstrapped_pane(1, 0))
         .with_step(daemon::terminal_input())
         .with_step(execute_command(
             1,
