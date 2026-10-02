@@ -168,6 +168,36 @@ pub fn build_snapshot_with_cache(
     pricing: &PricingTable,
     transcript_cache: &mut TranscriptScanCache,
 ) -> CockpitSnapshot {
+    build_snapshot_with_claude_discovery(
+        home,
+        codex_home,
+        claude_config_dir_env,
+        now,
+        budget_5h,
+        budget_week,
+        pricing,
+        transcript_cache,
+        claude::discover_accounts_with_health,
+    )
+}
+
+/// [`build_snapshot_with_cache`] with Claude account discovery injected, so tests
+/// do not depend on the processes running on the host.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the snapshot inputs plus its cache and the discovery source"
+)]
+fn build_snapshot_with_claude_discovery(
+    home: &Path,
+    codex_home: &Path,
+    claude_config_dir_env: Option<&str>,
+    now: DateTime<Utc>,
+    budget_5h: u64,
+    budget_week: u64,
+    pricing: &PricingTable,
+    transcript_cache: &mut TranscriptScanCache,
+    discover_claude_accounts: impl FnOnce(&Path, Option<&str>) -> claude::AccountDiscovery,
+) -> CockpitSnapshot {
     let since = now - window_week();
     let mut accounts = Vec::new();
     // Reasons the scan degraded (a present-but-unreadable config/dir), collected so an
@@ -175,7 +205,7 @@ pub fn build_snapshot_with_cache(
     // empty" — and excluded from freest-account routing. Messages are English
     // technical detail for logs; the UI shows its own plain message, not these strings.
     let mut degraded: Vec<String> = Vec::new();
-    let claude_discovery = claude::discover_accounts_with_health(home, claude_config_dir_env);
+    let claude_discovery = discover_claude_accounts(home, claude_config_dir_env);
     degraded.extend(claude_discovery.issues);
     for account in claude_discovery.accounts {
         // The walk reports its own I/O errors now (permission on any subdir, not just

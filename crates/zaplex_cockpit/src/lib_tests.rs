@@ -68,7 +68,9 @@ fn a_clean_empty_setup_is_loaded_not_degraded() {
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&codex_home).unwrap();
 
-    let snap = build_snapshot(
+    // Without process discovery: whatever runs on the test host must not decide
+    // whether this empty setup counts as loaded.
+    let snap = build_snapshot_with_claude_discovery(
         &home,
         &codex_home,
         None,
@@ -76,6 +78,8 @@ fn a_clean_empty_setup_is_loaded_not_degraded() {
         0,
         0,
         &PricingTable::default(),
+        &mut TranscriptScanCache::default(),
+        claude::discover_accounts_without_process_scan,
     );
     assert_eq!(
         snap.health,

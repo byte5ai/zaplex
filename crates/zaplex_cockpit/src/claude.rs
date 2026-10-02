@@ -582,6 +582,15 @@ pub fn discover_accounts_with_health(
     discover_accounts_with_process_roots(home, config_dir_env, running_claude_config_dirs())
 }
 
+/// Discovery for tests that must not depend on the processes running on the host.
+#[cfg(test)]
+pub(crate) fn discover_accounts_without_process_scan(
+    home: &Path,
+    config_dir_env: Option<&str>,
+) -> AccountDiscovery {
+    discover_accounts_with_process_roots(home, config_dir_env, ProcessAccountDiscovery::default())
+}
+
 /// Compatibility helper for callers that only need the discovered accounts.
 pub fn discover_accounts(home: &Path, config_dir_env: Option<&str>) -> Vec<Account> {
     discover_accounts_with_health(home, config_dir_env).accounts
