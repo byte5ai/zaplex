@@ -11054,6 +11054,14 @@ impl Workspace {
         {
             return Some(node_id);
         }
+        // A daemon-hosted shell bootstraps under its own session id; the daemon
+        // route is recorded under the pane's connection session.
+        if let Some(node_id) = terminal_view
+            .and_then(|view| view.as_ref(ctx).remote_input_session_id())
+            .and_then(|session_id| self.node_for_session(session_id))
+        {
+            return Some(node_id);
+        }
         let pane_group_ref = pane_group.as_ref(ctx);
         if pane_group_ref.visible_pane_ids().len() == 1
             && pane_group_ref.visible_pane_ids().first() == Some(&pane_id)
