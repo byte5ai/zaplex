@@ -341,6 +341,26 @@ impl ModelEventDispatcher {
             session_info.shell.shell_path().clone(),
         );
 
+        // A daemon-hosted shell bootstraps under its own id, but the daemon only
+        // runs generator commands for sessions registered on its connection. Register
+        // before the session starts generators; the manager re-sends on reconnect.
+        let daemon_connection_session_id = {
+            let sessions = self.sessions.as_ref(ctx);
+            sessions
+                .is_daemon_hosted_shell(&session_info)
+                .then(|| sessions.daemon_connection_session_id())
+                .flatten()
+        };
+        if let Some(connection_session_id) = daemon_connection_session_id {
+            RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
+                mgr.notify_session_bootstrapped(
+                    connection_session_id,
+                    &shell_type_name,
+                    shell_path.as_deref(),
+                );
+            });
+        }
+
         self.sessions.update(ctx, |sessions, ctx| {
             sessions.initialize_bootstrapped_session(
                 *session_info,
