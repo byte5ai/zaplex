@@ -260,8 +260,12 @@ pub fn ready(state: SharedState) -> TestStep {
                     return AssertionOutcome::failure("Waiting for the remote tab".into());
                 }
                 terminal_view(app, window_id, 1, 0).read(app, |view, ctx| {
-                    let Some(session_id) = view.active_block_session_id() else {
-                        return AssertionOutcome::failure("No active remote session".into());
+                    // The shell inside the daemon PTY bootstraps with its own session id;
+                    // the daemon route is keyed by the pane's connection session.
+                    let Some(session_id) = view.remote_input_session_id() else {
+                        return AssertionOutcome::failure(
+                            "No daemon connection on the remote pane".into(),
+                        );
                     };
                     let Some(descriptor) =
                         RemoteServerManager::as_ref(ctx).connected_session_descriptor(session_id)
