@@ -156,14 +156,14 @@ impl Sessions {
                     session_id: sid,
                     host_id,
                 } => {
-                    if let Some(session) = sessions.sessions.get(sid) {
+                    for session in sessions.sessions_on_connection(*sid) {
                         session.set_remote_host_id(Some(host_id.clone()));
                     }
                 }
                 RemoteServerManagerEvent::SessionDisconnected {
                     session_id: sid, ..
                 } => {
-                    if let Some(session) = sessions.sessions.get(sid) {
+                    for session in sessions.sessions_on_connection(*sid) {
                         session.set_remote_host_id(None);
                     }
                 }
@@ -327,6 +327,37 @@ impl Sessions {
         None
     }
 
+    /// The host behind this terminal's daemon connection, once connected.
+    #[cfg(feature = "local_tty")]
+    fn daemon_connection_host_id(&self, ctx: &ModelContext<Self>) -> Option<warp_core::HostId> {
+        let connection_session_id = self.daemon_connection_session_id?;
+        RemoteServerManager::as_ref(ctx)
+            .host_id_for_session(connection_session_id)
+            .cloned()
+    }
+
+    #[cfg(not(feature = "local_tty"))]
+    fn daemon_connection_host_id(&self, _ctx: &ModelContext<Self>) -> Option<warp_core::HostId> {
+        None
+    }
+
+    /// The session id the remote-server manager knows for `session_id`. A
+    /// daemon-hosted shell bootstraps under its own id, but its daemon route is
+    /// registered under the terminal's connection session.
+    pub fn remote_server_session_id(&self, session_id: SessionId) -> SessionId {
+        match self.daemon_connection_session_id {
+            Some(connection_session_id)
+                if self
+                    .sessions
+                    .get(&session_id)
+                    .is_some_and(|session| session.is_daemon_hosted()) =>
+            {
+                connection_session_id
+            }
+            _ => session_id,
+        }
+    }
+
     pub fn set_env_vars_for_session(
         &mut self,
         session_id: SessionId,
@@ -437,8 +468,9 @@ impl Sessions {
         log::debug!("Session details: {session:?}");
 
         let session = Arc::new(session);
+        // Before the session becomes observable: nothing may see it as local.
         if self.is_daemon_hosted_shell(&session_info) {
-            session.mark_daemon_hosted();
+            session.mark_daemon_hosted(self.daemon_connection_host_id(ctx));
         }
         self.sessions.insert(session.id(), session.clone());
 
@@ -940,7 +972,8 @@ pub enum SessionType {
     Local,
 
     /// The session host is a different host from where Zaplex is running.
-    /// Note that we only know this for sure when we Zaplexify a block.
+    /// Note that we only know this for sure when we Zaplexify a block, or when
+    /// the shell runs in a daemon-hosted PTY (it bootstraps as `Local` there).
     ///
     /// `host_id` is `Some` when the remote server feature flag is enabled and
     /// `RemoteServerManager` has completed the connection handshake. It is
@@ -982,7 +1015,8 @@ pub struct Session {
     /// `host_id`). Interior mutability allows updating through `Arc<Session>`.
     session_type: Mutex<SessionType>,
     /// A shell inside a daemon-hosted PTY bootstraps as `Local`, but runs on the
-    /// daemon's host: client-local resources such as the file system must not serve it.
+    /// daemon's host. Its `session_type` is remote; this flag keeps routing its
+    /// generators and history through the daemon connection.
     daemon_hosted: AtomicBool,
 }
 
@@ -1014,9 +1048,11 @@ impl Session {
         self.info.session_id
     }
 
-    /// Marks a shell that runs inside a daemon-hosted PTY.
-    pub fn mark_daemon_hosted(&self) {
+    /// Marks a shell that runs inside a daemon-hosted PTY. To this client it is a
+    /// remote session on the connection's host, whatever it reported at bootstrap.
+    pub fn mark_daemon_hosted(&self, host_id: Option<warp_core::HostId>) {
         self.daemon_hosted.store(true, Ordering::Relaxed);
+        *self.session_type.lock() = SessionType::ZaplexifiedRemote { host_id };
     }
 
     pub fn is_daemon_hosted(&self) -> bool {
@@ -1511,6 +1547,10 @@ impl Session {
     }
 
     pub async fn read_history(&self, is_kaspersky_running: bool) -> Vec<String> {
+        // A daemon-hosted shell's history file lives on the daemon's host.
+        if self.is_daemon_hosted() {
+            return self.read_history_for_remote_session().await;
+        }
         match self.info.session_type {
             BootstrapSessionType::Local => {
                 self.read_history_for_local_session(is_kaspersky_running)

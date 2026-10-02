@@ -464,6 +464,10 @@ impl super::TerminalView {
 
             if FeatureFlag::SshRemoteServer.is_enabled() {
                 if let Some(session_id) = session_id {
+                    let session_id = self
+                        .sessions
+                        .as_ref(ctx)
+                        .remote_server_session_id(session_id);
                     return RemoteServerManager::handle(ctx)
                         .as_ref(ctx)
                         .host_id_for_session(session_id)
@@ -513,9 +517,13 @@ impl super::TerminalView {
         }
 
         // Get the daemon client for this session.
+        let remote_server_session_id = self
+            .sessions
+            .as_ref(ctx)
+            .remote_server_session_id(session_id);
         let Some(client) = RemoteServerManager::handle(ctx)
             .as_ref(ctx)
-            .client_for_session(session_id)
+            .client_for_session(remote_server_session_id)
             .cloned()
         else {
             return LinkValidationContext::Remote(None);

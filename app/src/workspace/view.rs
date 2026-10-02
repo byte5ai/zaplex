@@ -23018,12 +23018,20 @@ impl Workspace {
                 let is_wsl_session = session.as_ref().map(|s| s.is_wsl()).unwrap_or(false);
                 let pwd = terminal.pwd();
                 let has_pending_ssh = terminal.has_pending_ssh_command();
+                // Only remote-server lookups use this id below; a daemon-hosted shell is
+                // known to the manager under its terminal's connection session.
+                let remote_server_session_id = active_session_id.map(|id| {
+                    terminal
+                        .sessions_model()
+                        .as_ref(ctx)
+                        .remote_server_session_id(id)
+                });
                 (
                     session,
                     path_if_local,
                     is_local,
                     is_wsl_session,
-                    active_session_id,
+                    remote_server_session_id,
                     pwd,
                     has_pending_ssh,
                 )

@@ -58,8 +58,7 @@ impl SessionContext {
         directory: &TypedPath<'_>,
     ) -> Vec<EngineDirEntry> {
         match self.session.session_type() {
-            // A daemon-hosted shell is `Local` on its own host, not on this machine.
-            SessionType::Local if !self.session.is_daemon_hosted() => {
+            SessionType::Local => {
                 let dir = match self.session.maybe_convert_to_native_path(directory) {
                     Ok(dir) => dir,
                     Err(err) => {
@@ -86,7 +85,7 @@ impl SessionContext {
                     .filter_map(|res| res.and_then(EngineDirEntry::try_from).ok())
                     .collect::<Vec<_>>()
             }
-            SessionType::Local | SessionType::ZaplexifiedRemote { .. } => {
+            SessionType::ZaplexifiedRemote { .. } => {
                 let env_vars = self
                     .session
                     .path()
