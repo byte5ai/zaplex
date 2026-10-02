@@ -6426,7 +6426,9 @@ impl TerminalView {
 
         self.active_block_session_id().and_then(|session_id| {
             let current_session = self.sessions.as_ref(ctx).get(session_id)?;
-            Some(current_session.is_local())
+            // A daemon-hosted shell is local only on the daemon's host, never on
+            // this machine: its paths and files must not be resolved here.
+            Some(current_session.is_local() && !current_session.is_daemon_hosted())
         })
     }
 
