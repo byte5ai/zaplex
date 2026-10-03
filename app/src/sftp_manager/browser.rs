@@ -670,6 +670,7 @@ struct PreparedSftpConnection {
     initial_path: PathBuf,
 }
 
+#[derive(Debug)]
 enum PrepareSftpConnectionError {
     Connect(sftp_ops::SftpOpsError),
     SftpChannel(sftp_ops::SftpOpsError),
@@ -1402,6 +1403,7 @@ impl SftpBrowserView {
 
                 let secret_store = KeychainSecretStore;
                 let requested_start_path = self.requested_start_path.clone();
+                let log_node_id = node_id.clone();
                 self.connect_handle = self.run_blocking(
                     ctx,
                     move || {
@@ -1432,6 +1434,13 @@ impl SftpBrowserView {
                         })
                     },
                     move |me, result, ctx| {
+                        match &result {
+                            Ok(Ok(_)) => log::info!("file manager: SFTP connected to node {log_node_id}"),
+                            Ok(Err(error)) => {
+                                log::warn!("file manager: SFTP connect to node {log_node_id} failed: {error:?}")
+                            }
+                            Err(_) => log::warn!("file manager: SFTP connect to node {log_node_id} was cancelled"),
+                        }
                         me.is_loading = false;
                         match result {
                             Ok(Ok(prepared)) => {
