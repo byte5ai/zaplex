@@ -36,6 +36,10 @@ on:
         description: Run the full suite with coverage, non-Rust evidence and the real Linux daemon acceptance
         type: boolean
         default: false
+      per_test_coverage:
+        description: With coverage, also attribute executed functions to each test (#472 suite pruning)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -94,6 +98,7 @@ jobs:
     uses: ./.github/workflows/test-dispatch.yml
     with:
       coverage: ${{ inputs.coverage }}
+      per_test_coverage: ${{ inputs.per_test_coverage }}
     secrets: inherit
 
   live_sftp:
