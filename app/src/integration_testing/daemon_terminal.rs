@@ -664,8 +664,23 @@ pub fn open_remote_file_manager(state: SharedState) -> TestStep {
                     && panes[0].fs == FsNamespace::Remote(node.clone())
                     && panes[0].current_path == PathBuf::from(projects_path());
                 if !registered {
+                    let browsers = app
+                        .views_of_type::<crate::sftp_manager::browser::SftpBrowserView>(window_id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|browser| {
+                            browser.read(app, |view, _| {
+                                format!(
+                                    "connection={:?}, loading={}, dialog={:?}",
+                                    view.connection_state(),
+                                    view.is_loading,
+                                    view.dialog()
+                                )
+                            })
+                        })
+                        .collect::<Vec<_>>();
                     return AssertionOutcome::failure(format!(
-                        "Remote file-manager route is not ready: expected node={node}, path={}; registered={panes:?}",
+                        "Remote file-manager route is not ready: expected node={node}, path={}; registered={panes:?}; browsers={browsers:?}",
                         projects_path()
                     ));
                 }
