@@ -40,6 +40,11 @@ on:
         type: boolean
         required: false
         default: false
+      per_test_coverage:
+        description: "With coverage: also attribute executed functions to each test (#472). Adds processing time."
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -206,12 +211,48 @@ jobs:
         if: ${{ inputs.coverage }}
         env:
           CARGO_LLVM_COV_TARGET_DIR: ${{ runner.temp }}/suite-coverage-target
-        run: >
-          script/run-shell-ssh-fixtures --
-          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24"
-          cargo llvm-cov nextest --locked --workspace --exclude command-signatures-v2
-          --profile ci --no-report
+          PER_TEST_COVERAGE: ${{ inputs.per_test_coverage }}
+        run: |
+          if [ "$PER_TEST_COVERAGE" = true ]; then
+            # Attribution run (#472): name each test process's profiles by test.
+            export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="$GITHUB_WORKSPACE/script/coverage-per-test-runner"
+            export PER_TEST_COVERAGE_MANIFEST="$RUNNER_TEMP/per-test-coverage-manifest.tsv"
+            : > "$PER_TEST_COVERAGE_MANIFEST"
+          fi
+          script/run-shell-ssh-fixtures -- \
+            xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            cargo llvm-cov nextest --locked --workspace --exclude command-signatures-v2 \
+            --profile ci --no-report
         shell: bash
+
+      - name: Attribute coverage per test
+        id: per_test_coverage
+        if: ${{ inputs.coverage && inputs.per_test_coverage && always() && steps.coverage_tests.outcome != 'skipped' }}
+        # The aggregate coverage evidence must never depend on this analysis.
+        continue-on-error: true
+        env:
+          CARGO_LLVM_COV_TARGET_DIR: ${{ runner.temp }}/suite-coverage-target
+        run: |
+          mkdir -p "$RUNNER_TEMP/per-test-coverage"
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          llvm_profdata="$(rustc --print sysroot)/lib/rustlib/$host/bin/llvm-profdata"
+          cp "$RUNNER_TEMP/per-test-coverage-manifest.tsv" "$RUNNER_TEMP/per-test-coverage/manifest.tsv"
+          cp "$GITHUB_WORKSPACE/target/nextest/ci/junit.xml" "$RUNNER_TEMP/per-test-coverage/junit.xml" || true
+          python3 script/test-suite-per-test-coverage \
+            --manifest "$RUNNER_TEMP/per-test-coverage-manifest.tsv" \
+            --profile-root "$CARGO_LLVM_COV_TARGET_DIR" \
+            --llvm-profdata "$llvm_profdata" \
+            --output "$RUNNER_TEMP/per-test-coverage/per-test-functions.json.gz"
+        shell: bash
+
+      - name: Upload per-test coverage attribution
+        if: ${{ inputs.coverage && inputs.per_test_coverage && always() && steps.per_test_coverage.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: per-test-coverage-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/per-test-coverage/
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Export LLVM coverage regions
         id: coverage_regions
