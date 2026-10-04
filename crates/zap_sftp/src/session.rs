@@ -147,6 +147,24 @@ impl SftpSession {
         timeout: Option<Duration>,
         confirmation: Option<&HostKeyConfirmation>,
     ) -> Result<Self, SftpError> {
+        Self::connect_trusting(host, port, username, auth, timeout, confirmation, &[])
+    }
+
+    /// Like [`Self::connect`] / [`Self::connect_confirmed`], but also trusts the
+    /// host-key pins in `additional_known_hosts` — e.g. the key a daemon
+    /// connection to the same endpoint already confirmed. Like several OpenSSH
+    /// `UserKnownHostsFile` entries, a match in any file is accepted and a
+    /// revocation in any file rejects. These files are only read; a newly
+    /// confirmed key is still written to `~/.ssh/known_hosts`.
+    pub fn connect_trusting(
+        host: &str,
+        port: u16,
+        username: &str,
+        auth: AuthMethod,
+        timeout: Option<Duration>,
+        confirmation: Option<&HostKeyConfirmation>,
+        additional_known_hosts: &[PathBuf],
+    ) -> Result<Self, SftpError> {
         let effective_timeout = timeout.unwrap_or(DEFAULT_TIMEOUT);
         let addr = format!("{host}:{port}");
 
@@ -181,7 +199,7 @@ impl SftpSession {
         session.set_timeout(effective_timeout.as_millis() as u32);
 
         let known_hosts_path = default_known_hosts_path()?;
-        let known_hosts = load_known_hosts(&known_hosts_path)?;
+        let known_hosts = load_trusted_known_hosts(&known_hosts_path, additional_known_hosts)?;
         let algorithms = preferred_host_key_algorithms(&session, &known_hosts, host, port)?;
         session.method_pref(MethodType::HostKey, &algorithms.join(","))?;
 
@@ -194,7 +212,14 @@ impl SftpSession {
         })?;
 
         authenticate_after_host_key_check(
-            verify_host_key(&session, host, port, &known_hosts_path, confirmation),
+            verify_host_key(
+                &session,
+                host,
+                port,
+                &known_hosts_path,
+                additional_known_hosts,
+                confirmation,
+            ),
             || authenticate(&session, username, &auth),
         )?;
 
@@ -287,6 +312,23 @@ fn load_known_hosts(path: &Path) -> Result<String, SftpError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(error) => Err(SftpError::Io(error)),
     }
+}
+
+/// The writable `known_hosts` followed by read-only trust stores, as one
+/// OpenSSH-format text. A missing additional file contributes nothing.
+fn load_trusted_known_hosts(path: &Path, additional: &[PathBuf]) -> Result<String, SftpError> {
+    let mut contents = load_known_hosts(path)?;
+    for additional_path in additional {
+        let extra = load_known_hosts(additional_path)?;
+        if extra.is_empty() {
+            continue;
+        }
+        if !contents.is_empty() && !contents.ends_with('\n') {
+            contents.push('\n');
+        }
+        contents.push_str(&extra);
+    }
+    Ok(contents)
 }
 
 fn check_host_endpoint(
@@ -505,6 +547,7 @@ fn verify_host_key(
     host: &str,
     port: u16,
     known_hosts_path: &Path,
+    additional_known_hosts: &[PathBuf],
     confirmation: Option<&HostKeyConfirmation>,
 ) -> Result<(), SftpError> {
     let (host_key, host_key_type) = session.host_key().ok_or_else(|| {
@@ -512,7 +555,7 @@ fn verify_host_key(
     })?;
     let fingerprint_sha256 = host_key_fingerprint_sha256(host_key);
     let key_type = host_key_type_name(host_key_type).to_string();
-    let known_hosts = load_known_hosts(known_hosts_path)?;
+    let known_hosts = load_trusted_known_hosts(known_hosts_path, additional_known_hosts)?;
 
     match enforce_host_key_policy(
         check_known_host_key(session, &known_hosts, host, port, host_key)?,

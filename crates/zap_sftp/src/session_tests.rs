@@ -9,8 +9,9 @@ use base64::Engine as _;
 
 use super::{
     authenticate_after_host_key_check, check_known_host_key, enforce_host_key_policy,
-    host_key_fingerprint_sha256, load_known_hosts, matching_known_host_keys, persist_host_key,
-    preferred_host_key_algorithms, replace_host_key, HostKeyConfirmation, HostKeyPolicyAction,
+    host_key_fingerprint_sha256, load_known_hosts, load_trusted_known_hosts,
+    matching_known_host_keys, persist_host_key, preferred_host_key_algorithms, replace_host_key,
+    HostKeyConfirmation, HostKeyPolicyAction,
 };
 use crate::SftpError;
 use ssh2::{CheckResult, HostKeyType, KnownHostFileKind, MethodType, Session};
@@ -1156,4 +1157,87 @@ fn revoked_key_matching_respects_alias_patterns_hashes_and_ports() {
         check_known_host_key(&session, &contents, "sftp.example", 22, &key).unwrap(),
         CheckResult::NotFound
     ));
+}
+
+#[test]
+fn additional_trust_store_pin_is_accepted_without_writing_it() {
+    // A daemon connection confirmed the key into its own managed file; the
+    // user's known_hosts has no entry for the endpoint.
+    let session = Session::new().unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let known_hosts_path = temp_dir.path().join("known_hosts");
+    let daemon_pin = temp_dir.path().join("zaplex-known-host-0000000000000001");
+    let key = synthetic_host_key("ssh-ed25519", 1);
+    let unrelated = known_hosts_line(
+        "other.example",
+        "ssh-ed25519",
+        &synthetic_host_key("ssh-ed25519", 9),
+    );
+    fs::write(&known_hosts_path, unrelated.trim_end()).unwrap();
+    fs::write(
+        &daemon_pin,
+        known_hosts_line("[127.0.0.1]:2222", "ssh-ed25519", &key),
+    )
+    .unwrap();
+
+    let own_only = load_trusted_known_hosts(&known_hosts_path, &[]).unwrap();
+    assert!(matches!(
+        check_known_host_key(&session, &own_only, "127.0.0.1", 2222, &key).unwrap(),
+        CheckResult::NotFound
+    ));
+
+    let trusted = load_trusted_known_hosts(&known_hosts_path, &[daemon_pin.clone()]).unwrap();
+    assert!(matches!(
+        check_known_host_key(&session, &trusted, "127.0.0.1", 2222, &key).unwrap(),
+        CheckResult::Match
+    ));
+    // A changed key is still a mismatch, and the pin does not leak to other ports.
+    assert!(matches!(
+        check_known_host_key(
+            &session,
+            &trusted,
+            "127.0.0.1",
+            2222,
+            &synthetic_host_key("ssh-ed25519", 2)
+        )
+        .unwrap(),
+        CheckResult::Mismatch
+    ));
+    assert!(matches!(
+        check_known_host_key(&session, &trusted, "127.0.0.1", 22, &key).unwrap(),
+        CheckResult::NotFound
+    ));
+    // Read-only: the user's known_hosts is unchanged.
+    assert_eq!(
+        fs::read_to_string(&known_hosts_path).unwrap(),
+        unrelated.trim_end()
+    );
+}
+
+#[test]
+fn missing_additional_trust_store_adds_nothing() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let known_hosts_path = temp_dir.path().join("known_hosts");
+    let key = synthetic_host_key("ssh-ed25519", 1);
+    let pin = known_hosts_line("sftp.example", "ssh-ed25519", &key);
+    fs::write(&known_hosts_path, &pin).unwrap();
+    assert_eq!(
+        load_trusted_known_hosts(&known_hosts_path, &[temp_dir.path().join("absent")]).unwrap(),
+        pin
+    );
+}
+
+#[test]
+fn revocation_in_known_hosts_overrides_an_additional_trust_store_pin() {
+    let session = Session::new().unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let known_hosts_path = temp_dir.path().join("known_hosts");
+    let daemon_pin = temp_dir.path().join("daemon-pin");
+    let key = synthetic_host_key("ssh-ed25519", 1);
+    let pin = known_hosts_line("sftp.example", "ssh-ed25519", &key);
+    fs::write(&known_hosts_path, format!("@revoked {pin}")).unwrap();
+    fs::write(&daemon_pin, &pin).unwrap();
+    let trusted = load_trusted_known_hosts(&known_hosts_path, &[daemon_pin]).unwrap();
+    let error = check_known_host_key(&session, &trusted, "sftp.example", 22, &key).unwrap_err();
+    assert!(error.to_string().contains("revoked"));
 }
