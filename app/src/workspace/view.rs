@@ -1544,7 +1544,11 @@ fn listed_daemon_adoption_identity(
 ) -> Option<(String, remote_server::transport::DaemonRuntimeRoute)> {
     let host_id = host_id.filter(|host_id| !host_id.trim().is_empty())?;
     let runtime = runtime?;
-    if runtime.server_version().trim().is_empty() {
+    // An empty daemon version means an untagged build. As in the initialize
+    // handshake (`version_is_compatible`), that is only a known identity when
+    // this client is untagged too (the source-build / deploy_remote_server
+    // loop); a tagged client still refuses it.
+    if runtime.server_version().trim().is_empty() && ChannelState::app_version().is_some() {
         return None;
     }
     let route_matches = match route {

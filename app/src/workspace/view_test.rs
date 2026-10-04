@@ -5951,6 +5951,25 @@ fn listed_daemon_adoption_requires_complete_matching_handshake_identity() {
 
 #[cfg(unix)]
 #[test]
+fn listed_daemon_adoption_accepts_an_untagged_daemon_only_from_an_untagged_client() {
+    let untagged = remote_server::transport::DaemonRuntimeRoute::new(
+        remote_server::setup::daemon_runtime_filename("sock"),
+        String::new(),
+    )
+    .unwrap();
+    ChannelState::set_app_version(None);
+    assert_eq!(
+        listed_daemon_adoption_identity(Some("host-a"), Some(&untagged), None),
+        Some(("host-a".to_string(), untagged.clone())),
+    );
+    ChannelState::set_app_version(Some("v1.0.30"));
+    let tagged_client = listed_daemon_adoption_identity(Some("host-a"), Some(&untagged), None);
+    ChannelState::set_app_version(None);
+    assert!(tagged_client.is_none());
+}
+
+#[cfg(unix)]
+#[test]
 fn cancelling_pending_adoption_retires_only_local_surface_and_keeps_retry_identity() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
