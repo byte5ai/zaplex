@@ -312,6 +312,15 @@ fn managed_known_hosts_path(server: &SshServerInfo) -> Result<PathBuf> {
         .join(format!("zaplex-known-host-{:016x}", stable_hash(&key))))
 }
 
+/// The managed host-key file a daemon connection to `server` confirmed its key
+/// into, if one exists. The SFTP file manager trusts it too, so a host accepted
+/// once for its daemon is not unknown to the file manager of the same pane.
+pub fn confirmed_daemon_known_hosts(server: &SshServerInfo) -> Option<PathBuf> {
+    managed_known_hosts_path(server)
+        .ok()
+        .filter(|path| path.exists())
+}
+
 pub fn confirm_host_key(
     server: &SshServerInfo,
     host_key: &warp_ssh_manager::UnknownHostKey,

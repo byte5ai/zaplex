@@ -332,23 +332,25 @@ fn connect_from_server_with_confirmation(
 ) -> Result<SftpSession, SftpOpsError> {
     let resolved_auth = resolve_sftp_auth(server)?;
     let auth = build_auth_method(server, &resolved_auth, secret_store)?;
-    let result = match confirmation {
-        Some(confirmation) => SftpSession::connect_confirmed(
-            &server.host,
-            server.port,
-            &resolved_auth.username,
-            auth,
-            Some(CONNECT_TIMEOUT),
-            confirmation,
-        ),
-        None => SftpSession::connect(
-            &server.host,
-            server.port,
-            &resolved_auth.username,
-            auth,
-            Some(CONNECT_TIMEOUT),
-        ),
-    };
+    // A daemon connection keeps its confirmed host key in its own managed file,
+    // not in ~/.ssh/known_hosts. Trust it here too; otherwise the file manager
+    // of a daemon pane asks again for a host the user already accepted.
+    #[cfg(unix)]
+    let additional_known_hosts: Vec<PathBuf> =
+        crate::remote_server::headless_connect::confirmed_daemon_known_hosts(server)
+            .into_iter()
+            .collect();
+    #[cfg(not(unix))]
+    let additional_known_hosts: Vec<PathBuf> = Vec::new();
+    let result = SftpSession::connect_trusting(
+        &server.host,
+        server.port,
+        &resolved_auth.username,
+        auth,
+        Some(CONNECT_TIMEOUT),
+        confirmation,
+        &additional_known_hosts,
+    );
     result.map_err(|error| match error {
         zap_sftp::SftpError::UnknownHostKey {
             fingerprint_sha256,
