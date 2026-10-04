@@ -4752,8 +4752,13 @@ impl PaneGroup {
             // pane like a notebook. Once it's possible to open the same notebook more than once,
             // we may revisit this so that splitting from a terminal pane starts a new session, but
             // splitting from a notebook pane reopens the notebook side-by-side.
+            // Every direction goes through the host picker, so a split of a
+            // remote pane never silently becomes a local shell (#496).
             PaneEvent::SplitLeft(chosen_shell) => {
-                self.insert_terminal_pane(Direction::Left, pane_id, chosen_shell.clone(), ctx);
+                ctx.emit(Event::SplitLaunchRequested {
+                    target: self.capture_split_target(pane_id, Direction::Left),
+                    chosen_shell: chosen_shell.clone(),
+                });
             }
             PaneEvent::SplitRight(chosen_shell) => {
                 ctx.emit(Event::SplitLaunchRequested {
@@ -4762,7 +4767,10 @@ impl PaneGroup {
                 });
             }
             PaneEvent::SplitUp(chosen_shell) => {
-                self.insert_terminal_pane(Direction::Up, pane_id, chosen_shell.clone(), ctx);
+                ctx.emit(Event::SplitLaunchRequested {
+                    target: self.capture_split_target(pane_id, Direction::Up),
+                    chosen_shell: chosen_shell.clone(),
+                });
             }
             PaneEvent::SplitDown(chosen_shell) => {
                 ctx.emit(Event::SplitLaunchRequested {
@@ -7225,18 +7233,11 @@ impl TypedActionView for PaneGroup {
                         None
                     }
                 };
-                match direction {
-                    Direction::Right | Direction::Down => {
-                        let pane_id = self.focused_pane_id(ctx);
-                        ctx.emit(Event::SplitLaunchRequested {
-                            target: self.capture_split_target(pane_id, *direction),
-                            chosen_shell,
-                        });
-                    }
-                    Direction::Left | Direction::Up => {
-                        self.add_terminal_pane(*direction, chosen_shell, ctx);
-                    }
-                }
+                let pane_id = self.focused_pane_id(ctx);
+                ctx.emit(Event::SplitLaunchRequested {
+                    target: self.capture_split_target(pane_id, *direction),
+                    chosen_shell,
+                });
             }
             Remove(view_id) => self.close_pane_with_confirmation(*view_id, ctx),
             RemoveActive => self.close_active_pane_with_confirmation(ctx),

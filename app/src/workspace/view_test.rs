@@ -3776,6 +3776,40 @@ fn closing_new_session_menu_restores_focus_only_when_the_menu_owned_it() {
 }
 
 #[test]
+fn every_split_direction_opens_the_host_picker_for_its_exact_target() {
+    for direction in [
+        Direction::Left,
+        Direction::Up,
+        Direction::Right,
+        Direction::Down,
+    ] {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let workspace = mock_workspace(&mut app);
+            let (pane_group, source_pane) = workspace.read(&app, |workspace, ctx| {
+                let pane_group = workspace.active_tab_pane_group().clone();
+                let source_pane = pane_group.as_ref(ctx).focused_pane_id(ctx);
+                (pane_group, source_pane)
+            });
+
+            pane_group.update(&mut app, |group, ctx| {
+                group.handle_action(&PaneGroupAction::Add(direction), ctx)
+            });
+
+            workspace.read(&app, |workspace, ctx| {
+                let pending = workspace
+                    .pending_split_launch
+                    .as_ref()
+                    .expect("the split waits for a host choice");
+                assert_eq!(pending.target.pane_id(), source_pane);
+                assert_eq!(pending.target.direction(), direction);
+                assert_eq!(pending.pane_group.as_ref(ctx).visible_pane_count(), 1);
+            });
+        });
+    }
+}
+
+#[test]
 fn cancelling_split_launch_menu_returns_focus_to_the_active_tab() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
