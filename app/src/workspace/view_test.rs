@@ -1438,6 +1438,7 @@ fn favorite_host_submenu() -> MenuItem<WorkspaceAction> {
         &[("node-dev".to_string(), "example-host".to_string())],
         false,
         false,
+        super::LaunchMenuTarget::NewTab,
     )
 }
 
@@ -1498,15 +1499,27 @@ fn connections_registry_drives_favorite_launch_menu() {
         });
 
         let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(&app);
-        let (menu_items, unreadable_registry_items) = favorites_store.read(&app, |store, _| {
-            assert_eq!(store.items().len(), 1);
-            assert_eq!(store.items()[0].label, "stale-display-name");
-            assert!(store.contains(zaplex_cockpit::FavoriteKind::Host, &favorite_server.id));
-            (
-                super::favorites_menu_items_from_sources(store, registered_hosts, false),
-                super::favorites_menu_items_from_sources(store, Vec::new(), true),
-            )
-        });
+        let (menu_items, unreadable_registry_items, split_items) =
+            favorites_store.read(&app, |store, _| {
+                assert_eq!(store.items().len(), 1);
+                assert_eq!(store.items()[0].label, "stale-display-name");
+                assert!(store.contains(zaplex_cockpit::FavoriteKind::Host, &favorite_server.id));
+                (
+                    super::favorites_menu_items_from_sources(
+                        store,
+                        registered_hosts.clone(),
+                        false,
+                        super::LaunchMenuTarget::NewTab,
+                    ),
+                    super::favorites_menu_items_from_sources(
+                        store,
+                        Vec::new(),
+                        true,
+                        super::LaunchMenuTarget::NewTab,
+                    ),
+                    super::split_launch_menu_items(store, registered_hosts, false, true),
+                )
+            });
 
         assert!(unreadable_registry_items.iter().any(|item| matches!(
             item,
@@ -1557,8 +1570,11 @@ fn connections_registry_drives_favorite_launch_menu() {
         let favorite_submenus = menu_items
             .iter()
             .filter_map(|item| match item {
-                MenuItem::Submenu { fields, menu } => Some((fields, menu)),
-                MenuItem::Item(_)
+                MenuItem::Submenu { fields, menu } if fields.has_split_submenu_trigger() => {
+                    Some((fields, menu))
+                }
+                MenuItem::Submenu { .. }
+                | MenuItem::Item(_)
                 | MenuItem::Separator
                 | MenuItem::ItemsRow { .. }
                 | MenuItem::Header { .. } => None,
@@ -1588,6 +1604,96 @@ fn connections_registry_drives_favorite_launch_menu() {
                 host: Some(host),
                 project: None,
             }) if node_id == &favorite_server.id && host == "renamed-remote"
+        ));
+
+        // Registered hosts that are not favorites stay reachable under
+        // "More hosts", which never repeats a favorite.
+        let more_hosts = menu_items
+            .iter()
+            .find_map(|item| match item {
+                MenuItem::Submenu { fields, menu }
+                    if fields.label() == crate::t!("workspace-launch-more-hosts") =>
+                {
+                    Some(menu)
+                }
+                MenuItem::Submenu { .. }
+                | MenuItem::Item(_)
+                | MenuItem::Separator
+                | MenuItem::ItemsRow { .. }
+                | MenuItem::Header { .. } => None,
+            })
+            .expect("non-favorite hosts are offered under More hosts");
+        assert_eq!(more_hosts.items().len(), 1);
+        let MenuItem::Item(other_host) = &more_hosts.items()[0] else {
+            panic!("a non-favorite host is a plain launch row");
+        };
+        assert_eq!(other_host.label(), "not-favorited");
+        assert!(matches!(
+            other_host.on_select_action(),
+            Some(WorkspaceAction::OpenSshTerminalByNode { node_id })
+                if node_id != &favorite_server.id
+        ));
+        assert!(!unreadable_registry_items.iter().any(|item| matches!(
+            item,
+            MenuItem::Submenu { fields, .. }
+                if fields.label() == crate::t!("workspace-launch-more-hosts")
+        )));
+
+        // The split launch menu is the same launch section, aimed at the split.
+        let split_labels = split_items
+            .iter()
+            .map(new_session_menu_label)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            split_labels,
+            vec![
+                crate::t!("workspace-new-session-terminal"),
+                crate::t!("cockpit-spawn-card-new-agent"),
+                "---".to_string(),
+                crate::t!("workspace-favorites-header"),
+                "renamed-remote".to_string(),
+                crate::t!("workspace-launch-more-hosts"),
+            ]
+        );
+        assert!(matches!(
+            split_items[0].item_on_select_action(),
+            Some(WorkspaceAction::SplitLaunchLocal)
+        ));
+        assert!(matches!(
+            split_items[1].item_on_select_action(),
+            Some(WorkspaceAction::SplitLaunchSpawnCard {
+                registry_node_id: None,
+                host: None,
+            })
+        ));
+        let MenuItem::Submenu {
+            fields: split_favorite,
+            menu: split_flyout,
+        } = &split_items[4]
+        else {
+            panic!("the split menu keeps the favorite flyout");
+        };
+        assert!(matches!(
+            split_favorite.on_select_action(),
+            Some(WorkspaceAction::SplitLaunchHost { node_id }) if node_id == &favorite_server.id
+        ));
+        assert!(matches!(
+            split_flyout.items()[0].item_on_select_action(),
+            Some(WorkspaceAction::SplitLaunchSpawnCard {
+                registry_node_id: Some(node_id),
+                host: Some(host),
+            }) if node_id == &favorite_server.id && host == "renamed-remote"
+        ));
+        let MenuItem::Submenu {
+            menu: split_more_hosts,
+            ..
+        } = &split_items[5]
+        else {
+            panic!("the split menu keeps More hosts");
+        };
+        assert!(matches!(
+            split_more_hosts.items()[0].item_on_select_action(),
+            Some(WorkspaceAction::SplitLaunchHost { node_id }) if node_id != &favorite_server.id
         ));
     });
 }
@@ -1668,8 +1774,13 @@ fn missing_host_in_readable_registry_keeps_favorite_remove_available() {
         "deleted-node",
         "old-example-host",
     );
-    let mut items =
-        super::favorite_host_menu_items(std::slice::from_ref(&favorite), &[], false, false);
+    let mut items = super::favorite_host_menu_items(
+        std::slice::from_ref(&favorite),
+        &[],
+        false,
+        false,
+        super::LaunchMenuTarget::NewTab,
+    );
     assert_eq!(items.len(), 1);
     let MenuItem::Submenu { fields, menu } = items.pop().unwrap() else {
         panic!("a stale favorite must remain visible as a submenu");
@@ -1707,9 +1818,13 @@ fn protected_favorite_store_disables_stale_removal() {
         "deleted-node",
         "old-example-host",
     );
-    let MenuItem::Submenu { menu, .. } =
-        super::favorite_host_menu_item(&favorite, &[], true, false)
-    else {
+    let MenuItem::Submenu { menu, .. } = super::favorite_host_menu_item(
+        &favorite,
+        &[],
+        true,
+        false,
+        super::LaunchMenuTarget::NewTab,
+    ) else {
         panic!("the protected stale favorite must remain visible");
     };
     let MenuItem::Item(remove) = &menu.items()[1] else {
@@ -1726,9 +1841,13 @@ fn removed_favorite_host_is_disabled_and_never_routed() {
         "removed-node",
         "removed-host",
     );
-    let MenuItem::Submenu { menu, .. } =
-        super::favorite_host_menu_item(&favorite, &[], false, false)
-    else {
+    let MenuItem::Submenu { menu, .. } = super::favorite_host_menu_item(
+        &favorite,
+        &[],
+        false,
+        false,
+        super::LaunchMenuTarget::NewTab,
+    ) else {
         panic!("a removed favorite must remain explicitly removable");
     };
     assert!(menu.items().iter().all(|item| !matches!(
@@ -1740,149 +1859,56 @@ fn removed_favorite_host_is_disabled_and_never_routed() {
 #[test]
 fn automatic_host_registration_never_adds_menu_favorite() {
     let registered_hosts = vec![("node-dev".to_string(), "example-host".to_string())];
-    assert!(super::favorite_host_menu_items(&[], &registered_hosts, false, false).is_empty());
+    assert!(super::favorite_host_menu_items(
+        &[],
+        &registered_hosts,
+        false,
+        false,
+        super::LaunchMenuTarget::NewTab
+    )
+    .is_empty());
 }
 
 #[test]
-fn split_picker_marks_only_the_current_host_and_preserves_routes() {
-    use super::SplitLaunchDestination;
-
-    crate::i18n::init(Some("en"));
-    let current = SplitLaunchDestination::Remote {
-        node_id: "second".into(),
-    };
-    let items = super::split_launch_menu_items(
-        Some(vec![
-            ("first".into(), "same-name".into()),
-            ("second".into(), "same-name".into()),
-        ]),
-        Some(&current),
-    );
-    let choices = items
-        .iter()
-        .filter_map(|item| {
-            if let MenuItem::Item(fields) = item {
-                Some(fields)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(choices.len(), 3);
-    assert_eq!(
-        choices[0].label(),
-        crate::t!("cockpit-spawn-card-host-local")
-    );
-    assert_eq!(
-        choices[0].on_select_action(),
-        Some(&SplitLaunchDestination::Local)
-    );
-    assert_eq!(choices[1].label(), "same-name");
-    assert_eq!(
-        choices[1].on_select_action(),
-        Some(&SplitLaunchDestination::Remote {
-            node_id: "first".into()
-        })
-    );
-    assert_eq!(
-        choices[2].label(),
-        format!("same-name · {}", crate::t!("common-current"))
-    );
-    assert_eq!(choices[2].on_select_action(), Some(&current));
-
-    let local =
-        super::split_launch_menu_items(Some(Vec::new()), Some(&SplitLaunchDestination::Local));
-    let MenuItem::Item(local) = &local[0] else {
-        panic!("local launch remains available");
-    };
-    assert_eq!(
-        local.label(),
-        format!(
-            "{} · {}",
-            crate::t!("cockpit-spawn-card-host-local"),
-            crate::t!("common-current")
-        )
-    );
-}
-
-#[test]
-fn split_picker_uses_the_visible_file_manager_host_instead_of_the_covered_terminal() {
+fn split_launch_menu_without_cockpit_or_registry_keeps_the_local_terminal() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
-        let directory = tempfile::tempdir().unwrap();
-        let workspace = mock_workspace(&mut app);
-        workspace.update(&mut app, |workspace, ctx| {
-            for (target, expected) in [
-                (
-                    pane_group::FileManagerTarget::Local {
-                        start_path: directory.path().to_path_buf(),
-                    },
-                    SplitLaunchDestination::Local,
-                ),
-                (
-                    pane_group::FileManagerTarget::Remote {
-                        node_id: "visible-file-host".to_string(),
-                        start_path: Some(PathBuf::from("/srv")),
-                    },
-                    SplitLaunchDestination::Remote {
-                        node_id: "visible-file-host".to_string(),
-                    },
-                ),
-            ] {
-                workspace.add_terminal_tab(false, ctx);
-                let group = workspace.active_tab_pane_group().clone();
-                let terminal = group.as_ref(ctx).focused_pane_id(ctx);
-                workspace
-                    .ssh_pane_nodes
-                    .insert(terminal, "covered-host".to_string());
-                workspace
-                    .ssh_tab_nodes
-                    .insert(group.id(), "legacy-tab-host".to_string());
-                let visible = group.update(ctx, |group, ctx| {
-                    group.open_file_manager_in_place(terminal, target, ctx);
-                    group.focused_pane_id(ctx)
-                });
-                assert_ne!(visible, terminal);
-                assert!(group
-                    .as_ref(ctx)
-                    .terminal_view_from_pane_id(visible, ctx)
-                    .is_none());
-                assert_eq!(
-                    workspace.split_launch_source_host(&group, visible, ctx),
-                    Some(expected),
-                );
-            }
+        let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(&app);
+        let (failed, empty) = favorites_store.read(&app, |store, _| {
+            (
+                super::split_launch_menu_items(store, Vec::new(), true, false),
+                super::split_launch_menu_items(store, Vec::new(), false, false),
+            )
         });
+        for items in [&failed, &empty] {
+            assert!(matches!(
+                items[0].item_on_select_action(),
+                Some(WorkspaceAction::SplitLaunchLocal)
+            ));
+            assert!(!items.iter().any(|item| matches!(
+                item.item_on_select_action(),
+                Some(WorkspaceAction::SplitLaunchSpawnCard { .. })
+            )));
+            assert!(!items.iter().any(|item| matches!(
+                item,
+                MenuItem::Submenu { fields, .. }
+                    if fields.label() == crate::t!("workspace-launch-more-hosts")
+            )));
+        }
+        let registry_error = |items: &[MenuItem<WorkspaceAction>]| {
+            items.iter().any(|item| {
+                matches!(
+                    item,
+                    MenuItem::Item(fields)
+                        if fields.label() == crate::t!("workspace-host-registry-unavailable")
+                            && fields.is_disabled()
+                            && fields.on_select_action().is_none()
+                )
+            })
+        };
+        assert!(registry_error(&failed));
+        assert!(!registry_error(&empty));
     });
-}
-
-#[test]
-fn split_picker_distinguishes_unreadable_registry_from_empty_registry() {
-    use super::SplitLaunchDestination;
-
-    crate::i18n::init(Some("en"));
-    let failed = super::split_launch_menu_items(None, None);
-    let empty = super::split_launch_menu_items(Some(Vec::new()), None);
-    assert_eq!(empty.len(), 1);
-    assert_eq!(failed.len(), 3);
-    let MenuItem::Item(local) = &failed[0] else {
-        panic!("local launch remains available");
-    };
-    assert_eq!(local.label(), crate::t!("cockpit-spawn-card-host-local"));
-    assert_eq!(
-        local.on_select_action(),
-        Some(&SplitLaunchDestination::Local)
-    );
-    let MenuItem::Item(error) = &failed[2] else {
-        panic!("registry failure must stay visible");
-    };
-    assert_eq!(
-        error.label(),
-        crate::t!("workspace-host-registry-unavailable")
-    );
-    assert!(error.is_disabled());
-    assert!(error.on_select_action().is_none());
 }
 
 #[test]
@@ -3807,6 +3833,88 @@ fn cancelling_split_launch_menu_returns_focus_to_the_active_tab() {
             assert!(!workspace.split_launch_menu.is_focused(ctx));
             assert!(workspace.pending_split_launch.is_none());
             assert!(workspace.show_split_launch_menu.is_none());
+        });
+    });
+}
+
+#[test]
+fn every_split_direction_opens_the_launch_menu_without_adding_a_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let pane_group = workspace.read(&app, |workspace, _| {
+            workspace.active_tab_pane_group().clone()
+        });
+
+        for direction in [
+            Direction::Left,
+            Direction::Up,
+            Direction::Right,
+            Direction::Down,
+        ] {
+            let panes_before = pane_group.read(&app, |group, _| group.visible_pane_ids());
+            pane_group.update(&mut app, |group, ctx| {
+                <PaneGroup as warpui::TypedActionView>::handle_action(
+                    group,
+                    &crate::pane_group::PaneGroupAction::Add(direction),
+                    ctx,
+                );
+            });
+            workspace.read(&app, |workspace, ctx| {
+                let pending = workspace
+                    .pending_split_launch
+                    .as_ref()
+                    .expect("the split waits for a launch-menu choice");
+                assert_eq!(pending.target.direction(), direction);
+                assert!(workspace.show_split_launch_menu.is_some());
+                assert_eq!(pane_group.as_ref(ctx).visible_pane_ids(), panes_before);
+            });
+            workspace.update(&mut app, |workspace, ctx| {
+                workspace.split_launch_menu.update(ctx, |_, ctx| {
+                    ctx.emit(MenuEvent::Close {
+                        via_select_item: false,
+                    });
+                });
+            });
+        }
+    });
+}
+
+#[test]
+fn split_agent_launch_recaptures_its_target_until_the_source_pane_closes() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            let source = pane_group.as_ref(ctx).focused_pane_id(ctx);
+            let target = pane_group
+                .as_ref(ctx)
+                .recapture_split_target(source, Direction::Right)
+                .expect("the focused pane is visible");
+            let split = PendingSplitLaunch {
+                pane_group: pane_group.clone(),
+                target,
+                chosen_shell: None,
+                inherited_remote_cwd: None,
+            };
+
+            // The card may stay open while another pane changes the layout.
+            pane_group.update(ctx, |group, ctx| {
+                group.add_terminal_pane(Direction::Down, None, ctx);
+            });
+            let recaptured = workspace
+                .revalidated_split_launch(split.clone(), ctx)
+                .expect("the source pane is still visible");
+            assert_eq!(recaptured.target.pane_id(), source);
+            assert_eq!(recaptured.target.direction(), Direction::Right);
+            assert!(pane_group
+                .as_ref(ctx)
+                .split_target_is_valid(recaptured.target));
+
+            pane_group.update(ctx, |group, ctx| group.close_pane(source, ctx));
+            assert!(workspace.revalidated_split_launch(split, ctx).is_none());
         });
     });
 }

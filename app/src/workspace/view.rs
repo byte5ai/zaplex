@@ -62,8 +62,8 @@ use crate::app_state::{
     bind_daemon_pty_claim_owner, claim_daemon_pty, daemon_pty_claim,
     release_daemon_pty_claim_for_connection, release_daemon_pty_claim_for_terminal_view,
     release_daemon_pty_claim_reservation, DaemonPtyClaimOutcome, DaemonPtyClaimOwner,
-    DaemonPtyIdentity, FileManagerPaneMode, LeafContents, LeafSnapshot, LeftPanelDisplayedTab,
-    LeftPanelSnapshot, NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid, PersistedDaemonRuntime,
+    DaemonPtyIdentity, LeafContents, LeafSnapshot, LeftPanelDisplayedTab, LeftPanelSnapshot,
+    NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid, PersistedDaemonRuntime,
     RemoteTerminalIdentity, RemoteTerminalTransport, RightPanelSnapshot, SettingsPaneSnapshot,
     TabSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
@@ -849,6 +849,13 @@ struct PendingSplitLaunch {
     target: pane_group::SplitLaunchTarget,
     chosen_shell: Option<crate::terminal::available_shells::AvailableShell>,
     inherited_remote_cwd: Option<String>,
+}
+
+/// A routed agent launch that opened its terminal: the token the Spawn-Karte
+/// records, and the terminal the agent runs in when it could be resolved.
+struct LaunchedAgent {
+    token: String,
+    terminal: Option<ViewHandle<TerminalView>>,
 }
 
 #[cfg(unix)]
@@ -2074,9 +2081,12 @@ pub struct Workspace {
     // Same applies to "show_new_session_dropdown_menu"
     new_session_dropdown_menu: ViewHandle<Menu<WorkspaceAction>>,
     show_new_session_dropdown_menu: Option<Vector2F>,
-    split_launch_menu: ViewHandle<Menu<SplitLaunchDestination>>,
+    split_launch_menu: ViewHandle<Menu<WorkspaceAction>>,
     show_split_launch_menu: Option<Vector2F>,
     pending_split_launch: Option<PendingSplitLaunch>,
+    /// Split target for a Spawn-Karte opened from the split launch menu; its
+    /// single launch lands there instead of a new tab.
+    spawn_card_split: Option<PendingSplitLaunch>,
     changelog_model: ModelHandle<ChangelogModel>,
     palette: ViewHandle<CommandPalette>,
     ctrl_tab_palette: ViewHandle<CommandPalette>,
@@ -2241,11 +2251,61 @@ fn host_lookup_failure_message(registry_read_failed: bool) -> String {
     }
 }
 
+/// Where a launch-menu entry opens its session: a new tab from `+`, or the pane
+/// split captured when the split launch menu opened. Both menus offer the same
+/// entries; only the dispatched action differs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LaunchMenuTarget {
+    NewTab,
+    Split,
+}
+
+impl LaunchMenuTarget {
+    fn local_terminal_action(self) -> WorkspaceAction {
+        match self {
+            Self::NewTab => WorkspaceAction::AddTerminalTab {
+                hide_homepage: false,
+            },
+            Self::Split => WorkspaceAction::SplitLaunchLocal,
+        }
+    }
+
+    fn host_terminal_action(self, node_id: &str) -> WorkspaceAction {
+        let node_id = node_id.to_string();
+        match self {
+            Self::NewTab => WorkspaceAction::OpenSshTerminalByNode { node_id },
+            Self::Split => WorkspaceAction::SplitLaunchHost { node_id },
+        }
+    }
+
+    fn new_agent_action(
+        self,
+        registry_node_id: Option<&str>,
+        host: Option<&str>,
+    ) -> WorkspaceAction {
+        let registry_node_id = registry_node_id.map(str::to_string);
+        let host = host.map(str::to_string);
+        match self {
+            Self::NewTab => WorkspaceAction::OpenSpawnCard {
+                registry_node_id,
+                host_id: None,
+                host,
+                project: None,
+            },
+            Self::Split => WorkspaceAction::SplitLaunchSpawnCard {
+                registry_node_id,
+                host,
+            },
+        }
+    }
+}
+
 fn favorite_host_menu_item(
     favorite: &zaplex_cockpit::Favorite,
     host_nodes: &[(String, String)],
     changes_disabled: bool,
     host_registry_unavailable: bool,
+    target: LaunchMenuTarget,
 ) -> MenuItem<WorkspaceAction> {
     let remove_item = if changes_disabled || host_registry_unavailable {
         MenuItemFields::new(crate::t!("cockpit-tt-favorite-remove"))
@@ -2267,9 +2327,7 @@ fn favorite_host_menu_item(
         let label = name.clone();
         return MenuItem::Submenu {
             fields: MenuItemFields::new_submenu(label.clone())
-                .with_on_select_action(WorkspaceAction::OpenSshTerminalByNode {
-                    node_id: node_id.clone(),
-                })
+                .with_on_select_action(target.host_terminal_action(node_id))
                 .with_split_submenu_trigger(crate::t!(
                     "workspace-favorite-more-actions",
                     host = name.clone()
@@ -2278,12 +2336,9 @@ fn favorite_host_menu_item(
                 .with_icon(icons::Icon::StarFilled),
             menu: SubMenu::new(vec![
                 MenuItemFields::new(crate::t!("cockpit-spawn-card-new-agent"))
-                    .with_on_select_action(WorkspaceAction::OpenSpawnCard {
-                        registry_node_id: Some(node_id.clone()),
-                        host_id: None,
-                        host: Some(name.clone()),
-                        project: None,
-                    })
+                    .with_on_select_action(
+                        target.new_agent_action(Some(node_id.as_str()), Some(name.as_str())),
+                    )
                     .with_icon(icons::Icon::LayoutAlt01)
                     .into_item(),
                 MenuItemFields::new(crate::t!("workspace-left-panel-ssh-manager-menu-edit"))
@@ -2335,6 +2390,7 @@ fn favorite_host_menu_items(
     host_nodes: &[(String, String)],
     changes_disabled: bool,
     host_registry_unavailable: bool,
+    target: LaunchMenuTarget,
 ) -> Vec<MenuItem<WorkspaceAction>> {
     favorites
         .iter()
@@ -2344,15 +2400,42 @@ fn favorite_host_menu_items(
                 host_nodes,
                 changes_disabled,
                 host_registry_unavailable,
+                target,
             )
         })
         .collect()
+}
+
+/// The "More hosts" submenu: every registered host that is not a favorite, in
+/// registry order. `None` when there is no such host.
+fn more_hosts_menu_item(
+    host_nodes: &[(String, String)],
+    is_favorite: impl Fn(&str) -> bool,
+    target: LaunchMenuTarget,
+) -> Option<MenuItem<WorkspaceAction>> {
+    let hosts = host_nodes
+        .iter()
+        .filter(|(node_id, _)| !is_favorite(node_id.as_str()))
+        .map(|(node_id, name)| {
+            MenuItemFields::new(name.clone())
+                .with_on_select_action(target.host_terminal_action(node_id))
+                .with_tooltip(name.clone())
+                .with_icon(icons::Icon::Terminal)
+                .into_item()
+        })
+        .collect::<Vec<_>>();
+    (!hosts.is_empty()).then(|| MenuItem::Submenu {
+        fields: MenuItemFields::new_submenu(crate::t!("workspace-launch-more-hosts"))
+            .with_icon(icons::Icon::DotsHorizontal),
+        menu: SubMenu::new(hosts),
+    })
 }
 
 fn favorites_menu_items_from_sources(
     favorites_store: &crate::cockpit::favorites::FavoritesStore,
     host_nodes: Vec<(String, String)>,
     host_registry_unavailable: bool,
+    target: LaunchMenuTarget,
 ) -> Vec<MenuItem<WorkspaceAction>> {
     let persistence_is_protected = favorites_store.persistence_is_protected();
     let favorites = favorites_store
@@ -2396,49 +2479,59 @@ fn favorites_menu_items_from_sources(
         &host_nodes,
         persistence_is_protected,
         host_registry_unavailable,
+        target,
+    ));
+    items.extend(more_hosts_menu_item(
+        &host_nodes,
+        |node_id| favorites_store.contains(zaplex_cockpit::FavoriteKind::Host, node_id),
+        target,
     ));
     items
 }
 
-/// `None` means the registry could not be read, rather than an empty registry.
+/// The split launch menu: the launch section of the `+` menu (local Terminal,
+/// New agent…, favorite hosts, "More hosts"), with every entry targeting the
+/// captured split instead of a new tab. Tab-only entries are not offered.
 fn split_launch_menu_items(
-    hosts: Option<Vec<(String, String)>>,
-    current_host: Option<&SplitLaunchDestination>,
-) -> Vec<MenuItem<SplitLaunchDestination>> {
-    let host_item = |name: String, destination: SplitLaunchDestination| {
-        let label = if current_host == Some(&destination) {
-            format!("{name} · {}", crate::t!("common-current"))
-        } else {
-            name
-        };
-        MenuItemFields::new(label)
-            .with_on_select_action(destination)
-            .with_icon(icons::Icon::Terminal)
-            .into_item()
-    };
-    let mut items = vec![host_item(
-        crate::t!("cockpit-spawn-card-host-local"),
-        SplitLaunchDestination::Local,
-    )];
-    match hosts {
-        Some(hosts) if !hosts.is_empty() => {
-            items.push(MenuItem::Separator);
-            items.extend(hosts.into_iter().map(|(node_id, name)| {
-                host_item(name, SplitLaunchDestination::Remote { node_id })
-            }));
-        }
-        Some(_) => {}
-        None => {
-            items.push(MenuItem::Separator);
-            items.push(
-                MenuItemFields::new(crate::t!("workspace-host-registry-unavailable"))
-                    .with_disabled(true)
-                    .with_icon(icons::Icon::AlertTriangle)
-                    .into_item(),
-            );
-        }
+    favorites_store: &crate::cockpit::favorites::FavoritesStore,
+    host_nodes: Vec<(String, String)>,
+    host_registry_unavailable: bool,
+    cockpit_enabled: bool,
+) -> Vec<MenuItem<WorkspaceAction>> {
+    let target = LaunchMenuTarget::Split;
+    let mut items = vec![
+        MenuItemFields::new(crate::t!("workspace-new-session-terminal"))
+            .with_on_select_action(target.local_terminal_action())
+            .with_icon(icons::Icon::LayoutAlt01)
+            .into_item(),
+    ];
+    if cockpit_enabled {
+        items.push(
+            MenuItemFields::new(crate::t!("cockpit-spawn-card-new-agent"))
+                .with_on_select_action(target.new_agent_action(None, None))
+                .with_icon(icons::Icon::LayoutAlt01)
+                .into_item(),
+        );
     }
+    items.extend(favorites_menu_items_from_sources(
+        favorites_store,
+        host_nodes,
+        host_registry_unavailable,
+        target,
+    ));
     items
+}
+
+/// Registered SSH hosts as `(node_id, name)`, read once from the registry.
+/// An `Err` is a failed read, which is not the same as an empty registry.
+fn registered_host_nodes() -> anyhow::Result<Vec<(String, String)>> {
+    warp_ssh_manager::with_conn(|conn| {
+        Ok(warp_ssh_manager::SshRepository::list_nodes(conn)?
+            .into_iter()
+            .filter(|node| matches!(node.kind, warp_ssh_manager::types::NodeKind::Server))
+            .map(|node| (node.id, node.name))
+            .collect::<Vec<_>>())
+    })
 }
 
 fn primary_host_navigation_views(cockpit_enabled: bool) -> Vec<ToolPanelView> {
@@ -3924,33 +4017,25 @@ impl Workspace {
         let tab_bar_overflow_menu = Self::build_tab_bar_overflow_menu(ctx);
         let (tab_right_click_menu, new_session_dropdown_menu, new_session_sidecar_menu) =
             Self::build_menus(ctx);
+        // The split launch menu dispatches the same kind of actions as the `+`
+        // menu (split variants for launches), including from nested submenus.
         let split_launch_menu = ctx.add_typed_action_view(|_| {
             Menu::new()
-                .without_item_action_dispatch()
                 .with_drop_shadow()
+                .with_safe_triangle()
+                .with_ignore_hover_when_covered()
                 .prevent_interaction_with_other_elements()
         });
         ctx.subscribe_to_view(&split_launch_menu, |me, menu, event, ctx| {
-            if let MenuEvent::Close { via_select_item } = event {
-                let destination = (*via_select_item).then(|| {
-                    menu.as_ref(ctx)
-                        .selected_item()
-                        .and_then(|item| match item {
-                            MenuItem::Item(fields) => fields.on_select_action().cloned(),
-                            MenuItem::Separator
-                            | MenuItem::ItemsRow { .. }
-                            | MenuItem::Submenu { .. }
-                            | MenuItem::Header { .. } => None,
-                        })
-                });
+            if let MenuEvent::Close { .. } = event {
+                // A selected item's action is dispatched before the menu
+                // reports Close, so a launch has already consumed the pending
+                // target. Anything left over belongs to a cancelled menu or to
+                // a non-launch entry (edit/remove favorite).
                 me.show_split_launch_menu = None;
-                if let Some(Some(destination)) = destination {
-                    me.complete_split_launch(destination, ctx);
-                } else {
-                    me.pending_split_launch = None;
-                }
-                // The picker took focus when it opened. A local split focuses
-                // its new pane; a cancelled picker or a remote split that is
+                me.pending_split_launch = None;
+                // The menu took focus when it opened. A local split focuses
+                // its new pane; a cancelled menu or a remote split that is
                 // still connecting hands focus back to the active tab.
                 if menu.is_focused(ctx) {
                     me.focus_active_tab(ctx);
@@ -4641,6 +4726,7 @@ impl Workspace {
             split_launch_menu,
             show_split_launch_menu: None,
             pending_split_launch: None,
+            spawn_card_split: None,
             changelog_model,
             welcome_tips_view_state,
             welcome_tips_view,
@@ -5963,32 +6049,6 @@ impl Workspace {
         account_id: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let config_dir = config_dir.map(|dir| dir.to_string_lossy().into_owned());
-        let account_email = account_email.map(str::to_owned);
-        let account_id = account_id.map(str::to_owned);
-        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            if let Some(terminal_view) = pane_group.active_session_view(ctx) {
-                let terminal_view_id = terminal_view.as_ref(ctx).view_id();
-                CLIAgentSessionsModel::handle(ctx).update(ctx, |model, _| {
-                    model.bind_account_identity_with_id(
-                        terminal_view_id,
-                        agent,
-                        config_dir.clone(),
-                        account_email.clone(),
-                        account_id.clone(),
-                    );
-                });
-            }
-        });
-    }
-
-    /// Attaches pre-recorded launch intent to the terminal that will execute it.
-    /// The hook bridge may complete the binding before or after this call.
-    fn attach_active_terminal_launch_intent(
-        &self,
-        launch_id: crate::cockpit::launch_registry::LaunchId,
-        ctx: &AppContext,
-    ) {
         let Some(terminal_view) = self
             .active_tab_pane_group()
             .as_ref(ctx)
@@ -5996,10 +6056,74 @@ impl Workspace {
         else {
             return;
         };
+        Self::bind_terminal_account_with_id(
+            &terminal_view,
+            agent,
+            config_dir,
+            account_email,
+            account_id,
+            ctx,
+        );
+    }
+
+    /// Binds the launch account to exactly `terminal_view`, which is not
+    /// necessarily the focused one (a split launch does not focus its pane).
+    fn bind_terminal_account_with_id(
+        terminal_view: &ViewHandle<TerminalView>,
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        account_email: Option<&str>,
+        account_id: Option<&str>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let terminal_view_id = terminal_view.as_ref(ctx).view_id();
+        let config_dir = config_dir.map(|dir| dir.to_string_lossy().into_owned());
+        let account_email = account_email.map(str::to_owned);
+        let account_id = account_id.map(str::to_owned);
+        CLIAgentSessionsModel::handle(ctx).update(ctx, |model, _| {
+            model.bind_account_identity_with_id(
+                terminal_view_id,
+                agent,
+                config_dir,
+                account_email,
+                account_id,
+            );
+        });
+    }
+
+    /// Attaches pre-recorded launch intent to the terminal that will execute it.
+    /// The hook bridge may complete the binding before or after this call.
+    fn attach_terminal_launch_intent(
+        launch_id: crate::cockpit::launch_registry::LaunchId,
+        terminal_view: &ViewHandle<TerminalView>,
+        ctx: &AppContext,
+    ) {
         crate::cockpit::launch_registry::attach_terminal(
             launch_id,
             terminal_view.as_ref(ctx).view_id(),
         );
+    }
+
+    /// The terminal a just-opened agent launch runs in: the active tab's
+    /// session for a new tab, or the one pane a split launch added to the
+    /// captured group (`split_probe` lists the panes it showed before).
+    fn launched_agent_terminal(
+        &self,
+        split_probe: Option<&(ViewHandle<PaneGroup>, Vec<PaneId>)>,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<TerminalView>> {
+        let Some((pane_group, panes_before)) = split_probe else {
+            return self
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .active_session_view(ctx);
+        };
+        let group = pane_group.as_ref(ctx);
+        group
+            .visible_pane_ids()
+            .into_iter()
+            .find(|pane_id| !panes_before.contains(pane_id))
+            .and_then(|pane_id| group.terminal_view_from_pane_id(pane_id, ctx))
     }
 
     /// Fork an agent conversation into a NEW session (fork/worktree design §2):
@@ -6194,6 +6318,7 @@ impl Workspace {
                             provider: provider.to_string(),
                             account_id: account_id.to_string(),
                         },
+                        None,
                         ctx,
                     )
                 } else {
@@ -7061,6 +7186,27 @@ impl Workspace {
                     });
                 });
             }
+        });
+    }
+
+    /// Prefills a just-launched agent's input for the human to review and send
+    /// (never auto-sent). Falls back to the active tab when the launch's own
+    /// terminal is unknown.
+    fn prefill_launched_agent_input(
+        &mut self,
+        terminal: Option<&ViewHandle<TerminalView>>,
+        text: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(terminal_view) = terminal else {
+            self.prefill_active_tab_input(text, ctx);
+            return;
+        };
+        terminal_view.update(ctx, |terminal_view, ctx| {
+            terminal_view.input().update(ctx, |input, ctx| {
+                input.replace_buffer_content(text, ctx);
+                input.focus_input_box(ctx);
+            });
         });
     }
 
@@ -8389,8 +8535,10 @@ impl Workspace {
             effort,
             spawn_card::ManagedLaunchMode::Ordinary,
             None,
+            None,
             ctx,
         )
+        .map(|launched| launched.token)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -8406,8 +8554,24 @@ impl Workspace {
         effort: Option<&str>,
         managed_mode: spawn_card::ManagedLaunchMode,
         managed_launch_id: Option<&str>,
+        split: Option<PendingSplitLaunch>,
         ctx: &mut ViewContext<Self>,
-    ) -> Result<String, String> {
+    ) -> Result<LaunchedAgent, String> {
+        let split = match split {
+            Some(split) => Some(
+                self.revalidated_split_launch(split, ctx)
+                    .ok_or_else(|| crate::t!("workspace-split-target-changed").to_string())?,
+            ),
+            None => None,
+        };
+        // A split launch adds exactly one pane to the captured group; the panes
+        // it shows now identify that terminal once the launch has opened it.
+        let split_probe = split.as_ref().map(|split| {
+            (
+                split.pane_group.clone(),
+                split.pane_group.as_ref(ctx).visible_pane_ids(),
+            )
+        });
         if managed_mode != spawn_card::ManagedLaunchMode::Ordinary {
             if config_dir.is_some() || model.is_some() || effort.is_some() {
                 return Err(
@@ -8512,19 +8676,27 @@ impl Workspace {
                 server,
                 route.clone(),
                 launch,
+                split.clone(),
                 ctx,
             ) {
                 return Err(crate::t!("workspace-managed-launch-daemon-route-failed").to_string());
             }
-            self.bind_active_terminal_account_with_id(
-                agent,
-                None,
-                account_email,
-                Some(route.account_id.as_str()),
-                ctx,
-            );
-            self.attach_active_terminal_launch_intent(launch_record, ctx);
-            return Ok(format!("managed:{launch_id}"));
+            let terminal = self.launched_agent_terminal(split_probe.as_ref(), ctx);
+            if let Some(terminal) = terminal.as_ref() {
+                Self::bind_terminal_account_with_id(
+                    terminal,
+                    agent,
+                    None,
+                    account_email,
+                    Some(route.account_id.as_str()),
+                    ctx,
+                );
+                Self::attach_terminal_launch_intent(launch_record, terminal, ctx);
+            }
+            return Ok(LaunchedAgent {
+                token: format!("managed:{launch_id}"),
+                terminal,
+            });
         }
         // Record the chosen (model, effort) against the new terminal so the
         // first native hook event can bind it to the exact provider session id.
@@ -8604,21 +8776,27 @@ impl Workspace {
                             node_id.to_string(),
                             server,
                             route.clone(),
+                            split.clone(),
                             ctx,
                         )
                     } else {
-                        self.open_ssh_terminal(node_id.to_string(), server, false, ctx)
+                        self.open_ssh_terminal_at(node_id.to_string(), server, split.clone(), ctx)
                     };
                     if opened {
-                        self.bind_active_terminal_account_with_id(
-                            agent,
-                            None,
-                            account_email,
-                            agent_launch_route.map(|route| route.account_id.as_str()),
-                            ctx,
-                        );
-                        self.attach_active_terminal_launch_intent(launch_id, ctx);
-                        return Ok(format!("remote:{}", launch_id.opaque_id()));
+                        let token = format!("remote:{}", launch_id.opaque_id());
+                        let terminal = self.launched_agent_terminal(split_probe.as_ref(), ctx);
+                        if let Some(terminal) = terminal.as_ref() {
+                            Self::bind_terminal_account_with_id(
+                                terminal,
+                                agent,
+                                None,
+                                account_email,
+                                agent_launch_route.map(|route| route.account_id.as_str()),
+                                ctx,
+                            );
+                            Self::attach_terminal_launch_intent(launch_id, terminal, ctx);
+                        }
+                        return Ok(LaunchedAgent { token, terminal });
                     }
                     return Err("The remote account route could not be opened.".to_string());
                 }
@@ -8645,27 +8823,43 @@ impl Workspace {
         if let Some(dir) = cwd {
             options = options.with_initial_directory(dir.to_path_buf());
         }
-        self.add_tab_with_pane_layout(
-            PanesLayout::SingleTerminal(Box::new(options)),
-            Arc::new(HashMap::new()),
-            None,
-            ctx,
-        );
-        self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
-        self.attach_active_terminal_launch_intent(launch_id, ctx);
-        let launched = self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            pane_group
-                .active_session_view(ctx)
-                .is_some_and(|terminal_view| {
-                    terminal_view.update(ctx, |view, ctx| {
-                        view.execute_routed_agent_launch_or_set_pending(&launch, ctx)
-                    })
+        let terminal = match split.as_ref() {
+            None => {
+                self.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(options)),
+                    Arc::new(HashMap::new()),
+                    None,
+                    ctx,
+                );
+                self.launched_agent_terminal(None, ctx)
+            }
+            Some(split) => {
+                options.shell = split.chosen_shell.clone();
+                let target = split.target;
+                split.pane_group.update(ctx, |group, ctx| {
+                    let (_, terminal_view, focus_guard) =
+                        group.insert_terminal_for_split(target, options, ctx)?;
+                    group.focus_split_result_if_current(focus_guard, ctx);
+                    Some(terminal_view)
                 })
+            }
+        };
+        let Some(terminal) = terminal else {
+            return Err("Could not determine the new terminal's shell.".to_string());
+        };
+        Self::bind_terminal_account_with_id(&terminal, agent, config_dir, account_email, None, ctx);
+        let token = format!("local:{}", launch_id.opaque_id());
+        Self::attach_terminal_launch_intent(launch_id, &terminal, ctx);
+        let launched = terminal.update(ctx, |view, ctx| {
+            view.execute_routed_agent_launch_or_set_pending(&launch, ctx)
         });
         if !launched {
             return Err("Could not determine the new terminal's shell.".to_string());
         }
-        Ok(format!("local:{}", launch_id.opaque_id()))
+        Ok(LaunchedAgent {
+            token,
+            terminal: Some(terminal),
+        })
     }
 
     fn show_agent_launch_error(&mut self, message: String, ctx: &mut ViewContext<Self>) {
@@ -8684,6 +8878,13 @@ impl Workspace {
         validation_error: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
+        // A card opened from the split launch menu places exactly one session
+        // at the captured split; a multi-account selection is refused there.
+        let split = self.spawn_card_split.clone();
+        let validation_error = validation_error.or_else(|| {
+            (split.is_some() && targets.len() > 1)
+                .then(|| crate::t!("workspace-split-agent-single-launch"))
+        });
         let mut attempted = false;
         for (target_id, target) in targets {
             // A directory response may arrive after a selection change or Close.
@@ -8696,7 +8897,7 @@ impl Workspace {
                 continue;
             }
             attempted = true;
-            let mut result = if let Some(error) = validation_error.as_ref() {
+            let launched = if let Some(error) = validation_error.as_ref() {
                 Err(error.clone())
             } else {
                 let local_account_email = if target.node_id.is_none() {
@@ -8724,14 +8925,16 @@ impl Workspace {
                     target.effort.as_deref(),
                     target.managed_mode,
                     target.managed_launch_id.as_deref(),
+                    split.clone(),
                     ctx,
                 )
             };
-            if result.is_ok() {
+            if let Ok(launched) = launched.as_ref() {
                 if let Some(prompt) = target.prompt.as_deref() {
-                    self.prefill_active_tab_input(prompt, ctx);
+                    self.prefill_launched_agent_input(launched.terminal.as_ref(), prompt, ctx);
                 }
             }
+            let mut result = launched.map(|launched| launched.token);
             if target.managed_mode != spawn_card::ManagedLaunchMode::Ordinary && result.is_ok() {
                 if let Some(launch_id) = target
                     .managed_launch_id
@@ -8772,6 +8975,7 @@ impl Workspace {
             return;
         }
         if self.spawn_card.as_ref(ctx).launch_batch_succeeded(plan_id) {
+            self.spawn_card_split = None;
             self.current_workspace_state.is_spawn_card_open = false;
             self.focus_active_tab(ctx);
         } else {
@@ -11347,12 +11551,42 @@ impl Workspace {
         );
     }
 
+    /// Opens a registered host like [`Self::open_ssh_terminal`], or at `split`
+    /// when given (a Spawn-Karte launch from the split launch menu).
+    fn open_ssh_terminal_at(
+        &mut self,
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+        split: Option<PendingSplitLaunch>,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(split) = split else {
+            return self.open_ssh_terminal(node_id, server, false, ctx);
+        };
+        let Some(attempt) = self.begin_ssh_connect(node_id.clone(), server.host.clone(), ctx)
+        else {
+            return false;
+        };
+        self.open_ssh_terminal_command(
+            node_id,
+            server,
+            false,
+            None,
+            None,
+            None,
+            Some(attempt),
+            Some(split),
+            ctx,
+        )
+    }
+
     #[cfg(all(unix, feature = "local_tty"))]
     fn open_ssh_terminal_for_agent_account(
         &mut self,
         node_id: String,
         server: warp_ssh_manager::SshServerInfo,
         route: remote_server::proto::AgentLaunchRoute,
+        split: Option<PendingSplitLaunch>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if !server.session_resilience.is_enabled() {
@@ -11397,7 +11631,7 @@ impl Workspace {
             Some(route),
             None,
             Some(attempt),
-            None,
+            split,
             ctx,
         )
     }
@@ -11408,6 +11642,7 @@ impl Workspace {
         _node_id: String,
         _server: warp_ssh_manager::SshServerInfo,
         _route: remote_server::proto::AgentLaunchRoute,
+        _split: Option<PendingSplitLaunch>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         self.toast_stack.update(ctx, |view, ctx| {
@@ -11428,6 +11663,7 @@ impl Workspace {
         server: warp_ssh_manager::SshServerInfo,
         route: remote_server::proto::AgentLaunchRoute,
         launch: remote_server::proto::ManagedLaunch,
+        split: Option<PendingSplitLaunch>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let supported = RemoteServerManager::as_ref(ctx)
@@ -11479,7 +11715,7 @@ impl Workspace {
             Some(route),
             Some(launch),
             Some(attempt),
-            None,
+            split,
             ctx,
         )
     }
@@ -11491,6 +11727,7 @@ impl Workspace {
         _server: warp_ssh_manager::SshServerInfo,
         _route: remote_server::proto::AgentLaunchRoute,
         _launch: remote_server::proto::ManagedLaunch,
+        _split: Option<PendingSplitLaunch>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         self.show_agent_launch_error(
@@ -14385,7 +14622,7 @@ impl Workspace {
     /// Builds the unified new-session menu items
     /// tab bar chevron and the vertical tab bar `+` button.
     ///
-    /// Order: Terminal → User tab configs → separator → Agent → Coding Agents → separator → Docker → Worktree config → New tab config → separator → Reopen closed session.
+    /// Order: Terminal → Agent / New agent → Coding Agents → Favorites → More hosts → separator → User tab configs → Docker → separator → Worktree config → New tab config → separator → Reopen closed session.
     /// The **Favorites** section of the "+" dropdown (design §10): only
     /// user-curated host favorites. A registered host label opens its terminal
     /// directly, while the fixed trailing action opens its management flyout.
@@ -14395,50 +14632,18 @@ impl Workspace {
     fn favorites_menu_items(&self, ctx: &mut ViewContext<Self>) -> Vec<MenuItem<WorkspaceAction>> {
         // Registered hosts (node_id -> label), read once from the SSH registry
         // to resolve favorite references without duplicating connection data.
-        let host_nodes = warp_ssh_manager::with_conn(|c| {
-            let mut out = Vec::new();
-            for node in warp_ssh_manager::SshRepository::list_nodes(c)? {
-                if matches!(node.kind, warp_ssh_manager::types::NodeKind::Server) {
-                    out.push((node.id, node.name));
-                }
-            }
-            Ok(out)
-        });
+        let host_nodes = registered_host_nodes();
         let host_registry_unavailable = host_nodes.is_err();
         let host_nodes: Vec<(String, String)> = host_nodes.unwrap_or_default();
 
         let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(ctx);
         let favorites_store = favorites_store.as_ref(ctx);
-        favorites_menu_items_from_sources(favorites_store, host_nodes, host_registry_unavailable)
-    }
-
-    fn split_launch_source_host(
-        &self,
-        pane_group: &ViewHandle<PaneGroup>,
-        pane_id: PaneId,
-        ctx: &AppContext,
-    ) -> Option<SplitLaunchDestination> {
-        let group = pane_group.as_ref(ctx);
-        if let Some(pane) = group.downcast_pane_by_id::<SftpPane>(pane_id) {
-            // The visible file manager may show a different host than its covered terminal.
-            // Its own persisted identity takes precedence over terminal and legacy tab maps.
-            let LeafContents::Sftp { node_id, mode, .. } = pane.snapshot(ctx) else {
-                return None;
-            };
-            return Some(match mode {
-                FileManagerPaneMode::Local => SplitLaunchDestination::Local,
-                FileManagerPaneMode::Remote | FileManagerPaneMode::RemotePicker => {
-                    SplitLaunchDestination::Remote { node_id }
-                }
-            });
-        }
-        let source_view = group.terminal_view_from_pane_id(pane_id, ctx)?;
-        self.node_for_pane(pane_group, pane_id, Some(&source_view), ctx)
-            .map(|node_id| SplitLaunchDestination::Remote { node_id })
-            .or_else(|| {
-                (source_view.as_ref(ctx).active_session_is_local(ctx) == Some(true))
-                    .then_some(SplitLaunchDestination::Local)
-            })
+        favorites_menu_items_from_sources(
+            favorites_store,
+            host_nodes,
+            host_registry_unavailable,
+            LaunchMenuTarget::NewTab,
+        )
     }
 
     fn open_split_launch_menu(
@@ -14452,17 +14657,21 @@ impl Workspace {
             return;
         }
 
-        let current_host = self.split_launch_source_host(&pane_group, target.pane_id(), ctx);
-        let hosts = warp_ssh_manager::with_conn(|conn| {
-            Ok(warp_ssh_manager::SshRepository::list_nodes(conn)?
-                .into_iter()
-                .filter(|node| matches!(node.kind, warp_ssh_manager::types::NodeKind::Server))
-                .map(|node| (node.id, node.name))
-                .collect::<Vec<_>>())
+        let host_nodes = registered_host_nodes();
+        let host_registry_unavailable = host_nodes.is_err();
+        let cockpit_enabled = *crate::cockpit::CockpitSettings::as_ref(ctx).enabled;
+        let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(ctx);
+        let items = split_launch_menu_items(
+            favorites_store.as_ref(ctx),
+            host_nodes.unwrap_or_default(),
+            host_registry_unavailable,
+            cockpit_enabled,
+        );
+        self.split_launch_menu.update(ctx, |menu, ctx| {
+            menu.set_width(MENU_DEFAULT_WIDTH);
+            menu.set_items(items, ctx);
+            menu.reset_selection(ctx);
         });
-        let items = split_launch_menu_items(hosts.ok(), current_host.as_ref());
-        self.split_launch_menu
-            .update(ctx, |menu, ctx| menu.set_items(items, ctx));
         self.pending_split_launch = Some(PendingSplitLaunch {
             pane_group,
             target,
@@ -14780,7 +14989,82 @@ impl Workspace {
             }
         }
 
-        // 2. User tab configs
+        // 2. Agent — the in-app (Warp) AI agent. With the cockpit on, the explicit
+        // spawn card (2b, "Neuer Agent…") is the single app-level launch grammar,
+        // so this legacy parallel entry is hidden in that (production) mode and
+        // kept only as a fallback when the cockpit is off (Codex gate: no parallel
+        // launch grammar next to the spawn card).
+        if is_any_ai_enabled && !*crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+            let mut agent_item = MenuItemFields::new(crate::t!("workspace-new-session-agent"))
+                .with_on_select_action(WorkspaceAction::AddAgentTab)
+                .with_icon(icons::Icon::LayoutAlt01);
+            if effective_default == DefaultSessionMode::Agent {
+                agent_item = agent_item.with_key_shortcut_label(shortcut_label.clone());
+            }
+            menu_items.push(agent_item.into_item());
+        }
+
+        // 2b. Spawn-Karte — the launch card that makes model + effort a visible
+        // launch attribute (unscoped: host/project default to the local context).
+        // Shown once, above the per-agent quick launches, when the cockpit is on.
+        if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+            menu_items.push(
+                MenuItemFields::new(crate::t!("cockpit-spawn-card-new-agent"))
+                    .with_on_select_action(LaunchMenuTarget::NewTab.new_agent_action(None, None))
+                    .with_icon(icons::Icon::LayoutAlt01)
+                    .into_item(),
+            );
+        }
+
+        // 3. Coding Agents — only those installed and with tab_menu enabled appear in the menu
+        {
+            let ai_settings = AISettings::as_ref(ctx);
+            let install_model = CLIAgentInstallModel::as_ref(ctx);
+            for agent in enum_iterator::all::<CLIAgent>() {
+                if !agent.is_available_for_new_launch() {
+                    continue;
+                }
+                if !install_model.is_cli_agent_installed(agent) {
+                    continue;
+                }
+                // Check the per-agent tab_menu setting
+                if !ai_settings.is_cli_agent_tab_menu_enabled(agent) {
+                    continue;
+                }
+                let icon = agent.icon().unwrap_or(icons::Icon::LayoutAlt01);
+                // Plain quick-launch is a *blind* local launch (no host/dir/account
+                // choice). With the cockpit on, app-level launches must go through the
+                // explicit spawn card above ("✧ Neuer Agent…") — concept §8, C4 §3 #1:
+                // "app-level launch has NO implicit target". Keep the plain entry only
+                // as a fallback when the cockpit is off (no spawn card is offered then).
+                if !*crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+                    let item = MenuItemFields::new(agent.display_name())
+                        .with_on_select_action(WorkspaceAction::AddSpecificAgentTab(agent))
+                        .with_icon(icon);
+                    menu_items.push(item.into_item());
+                }
+
+                // Launch-target permutations (on-freest / per-account / @host)
+                // and the GitHub instance-flows have left the fixed "+" menu: the
+                // permutations were the unreadable "wall" (host + account are
+                // chosen in the spawn card — the single app-level launch path,
+                // concept §8/C4), and the generic flows referred to no concrete
+                // repo/PR. The flows are now favoritable / command-palette actions
+                // (design §10, #102); hosts are reached via favorites (below).
+            }
+        }
+
+        // 4. Favorite hosts (design §10), replacing the old automatic host and
+        // launch wall, followed by the "More hosts" submenu with the remaining
+        // registered hosts. A favorite duplicates no connection data. Entries 1–4
+        // are the launch section the split launch menu shares.
+        menu_items.extend(self.favorites_menu_items(ctx));
+
+        // 5. Tab-only entries: a split cannot host a tab config, a Docker sandbox
+        // tab or a reopened tab, so these follow the shared launch section.
+        let mut tab_only_items = Vec::new();
+
+        // 5a. User tab configs
         if FeatureFlag::TabConfigs.is_enabled() {
             let tab_configs = WarpConfig::as_ref(ctx).tab_configs().to_vec();
 
@@ -14821,98 +15105,11 @@ impl Workspace {
                 if is_default_config {
                     item = item.with_key_shortcut_label(shortcut_label.clone());
                 }
-                menu_items.push(item.into_item());
+                tab_only_items.push(item.into_item());
             }
         }
 
-        // 3. Separator — only shown when an Agent or Coding Agent follows
-        if is_any_ai_enabled {
-            menu_items.push(MenuItem::Separator);
-        }
-
-        // 4. Agent — the in-app (Warp) AI agent. With the cockpit on, the explicit
-        // spawn card (4b, "Neuer Agent…") is the single app-level launch grammar,
-        // so this legacy parallel entry is hidden in that (production) mode and
-        // kept only as a fallback when the cockpit is off (Codex gate: no parallel
-        // launch grammar next to the spawn card).
-        if is_any_ai_enabled && !*crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
-            let mut agent_item = MenuItemFields::new(crate::t!("workspace-new-session-agent"))
-                .with_on_select_action(WorkspaceAction::AddAgentTab)
-                .with_icon(icons::Icon::LayoutAlt01);
-            if effective_default == DefaultSessionMode::Agent {
-                agent_item = agent_item.with_key_shortcut_label(shortcut_label.clone());
-            }
-            menu_items.push(agent_item.into_item());
-        }
-
-        // 4b. Spawn-Karte — the launch card that makes model + effort a visible
-        // launch attribute (unscoped: host/project default to the local context).
-        // Shown once, above the per-agent quick launches, when the cockpit is on.
-        if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
-            menu_items.push(
-                MenuItemFields::new(crate::t!("cockpit-spawn-card-new-agent"))
-                    .with_on_select_action(WorkspaceAction::OpenSpawnCard {
-                        registry_node_id: None,
-                        host_id: None,
-                        host: None,
-                        project: None,
-                    })
-                    .with_icon(icons::Icon::LayoutAlt01)
-                    .into_item(),
-            );
-        }
-
-        // 5. Coding Agents — only those installed and with tab_menu enabled appear in the menu
-        let coding_agent_count = {
-            let start_len = menu_items.len();
-            let ai_settings = AISettings::as_ref(ctx);
-            let install_model = CLIAgentInstallModel::as_ref(ctx);
-            for agent in enum_iterator::all::<CLIAgent>() {
-                if !agent.is_available_for_new_launch() {
-                    continue;
-                }
-                if !install_model.is_cli_agent_installed(agent) {
-                    continue;
-                }
-                // Check the per-agent tab_menu setting
-                if !ai_settings.is_cli_agent_tab_menu_enabled(agent) {
-                    continue;
-                }
-                let icon = agent.icon().unwrap_or(icons::Icon::LayoutAlt01);
-                // Plain quick-launch is a *blind* local launch (no host/dir/account
-                // choice). With the cockpit on, app-level launches must go through the
-                // explicit spawn card above ("✧ Neuer Agent…") — concept §8, C4 §3 #1:
-                // "app-level launch has NO implicit target". Keep the plain entry only
-                // as a fallback when the cockpit is off (no spawn card is offered then).
-                if !*crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
-                    let item = MenuItemFields::new(agent.display_name())
-                        .with_on_select_action(WorkspaceAction::AddSpecificAgentTab(agent))
-                        .with_icon(icon);
-                    menu_items.push(item.into_item());
-                }
-
-                // Launch-target permutations (on-freest / per-account / @host)
-                // and the GitHub instance-flows have left the fixed "+" menu: the
-                // permutations were the unreadable "wall" (host + account are
-                // chosen in the spawn card — the single app-level launch path,
-                // concept §8/C4), and the generic flows referred to no concrete
-                // repo/PR. The flows are now favoritable / command-palette actions
-                // (design §10, #102); hosts are reached via favorites (below).
-            }
-            menu_items.len() - start_len
-        };
-
-        // 5b. Favorite hosts (design §10), replacing the old automatic host and
-        // launch wall. A favorite duplicates no connection data.
-        menu_items.extend(self.favorites_menu_items(ctx));
-
-        // 6. Separator — only shown when there are coding agents and Docker is enabled
-        // The TabConfigs section adds its own separator in step 8, so no need to duplicate it here
-        if coding_agent_count > 0 && FeatureFlag::LocalDockerSandbox.is_enabled() {
-            menu_items.push(MenuItem::Separator);
-        }
-
-        // 7. Local Docker Sandbox
+        // 5b. Local Docker Sandbox
         if FeatureFlag::LocalDockerSandbox.is_enabled() {
             let mut docker_item =
                 MenuItemFields::new(crate::t!("workspace-new-session-local-docker-sandbox"))
@@ -14921,10 +15118,15 @@ impl Workspace {
             if effective_default == DefaultSessionMode::DockerSandbox {
                 docker_item = docker_item.with_key_shortcut_label(shortcut_label.clone());
             }
-            menu_items.push(docker_item.into_item());
+            tab_only_items.push(docker_item.into_item());
         }
 
-        // 8. Separator + worktree config entry + new tab config
+        if !tab_only_items.is_empty() {
+            menu_items.push(MenuItem::Separator);
+            menu_items.extend(tab_only_items);
+        }
+
+        // 5c. Separator + worktree config entry + new tab config
         if FeatureFlag::TabConfigs.is_enabled() {
             menu_items.push(MenuItem::Separator);
             menu_items.push(
@@ -24922,6 +25124,9 @@ impl Workspace {
         default_agent: Option<CLIAgent>,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Every open starts as a new-tab launch; only the split launch menu
+        // re-targets the card afterwards (`open_spawn_card_for_split`).
+        self.spawn_card_split = None;
         // S0 fix: install status is populated by an async startup scan cached in
         // CLIAgentInstallModel; reading that cache here raced (cache=None → false)
         // and the card never recovered, so it falsely claimed "No agent CLI
@@ -25032,6 +25237,44 @@ impl Workspace {
         self.current_workspace_state.is_spawn_card_open = true;
         ctx.focus(&self.spawn_card);
         ctx.notify();
+    }
+
+    /// "New agent…" from the split launch menu: the Spawn-Karte opens as usual,
+    /// but its single launch lands at the split target captured by the menu.
+    fn open_spawn_card_for_split(
+        &mut self,
+        registry_node_id: Option<String>,
+        host: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(split) = self.pending_split_launch.take() else {
+            return;
+        };
+        self.open_spawn_card(registry_node_id, None, host, None, None, None, ctx);
+        self.spawn_card_split = Some(split);
+    }
+
+    /// The captured split target re-read at launch time. The Spawn-Karte can
+    /// stay open while the layout changes (a remote directory pick opens a
+    /// pane), so the target is recaptured as long as its source pane is still
+    /// visible in a live tab; otherwise the launch must not happen.
+    fn revalidated_split_launch(
+        &self,
+        split: PendingSplitLaunch,
+        ctx: &AppContext,
+    ) -> Option<PendingSplitLaunch> {
+        let pane_group_is_live = self
+            .tabs
+            .iter()
+            .any(|tab| tab.pane_group.id() == split.pane_group.id());
+        if !pane_group_is_live {
+            return None;
+        }
+        let target = split
+            .pane_group
+            .as_ref(ctx)
+            .recapture_split_target(split.target.pane_id(), split.target.direction())?;
+        Some(PendingSplitLaunch { target, ..split })
     }
 
     /// Handle Spawn-Karte events: cancel closes it; confirm turns the chosen
@@ -25574,6 +25817,7 @@ impl Workspace {
             SpawnCardEvent::Close => {
                 self.spawn_card
                     .update(ctx, |card, _| card.cancel_pending_launches());
+                self.spawn_card_split = None;
                 self.current_workspace_state.is_spawn_card_open = false;
                 self.focus_active_tab(ctx);
                 ctx.notify();
@@ -25614,7 +25858,8 @@ impl Workspace {
                 let account_email = remote_account_email
                     .as_ref()
                     .or(local_account_email.as_ref());
-                let result = self.launch_routed_agent_with_mode(
+                let split = self.spawn_card_split.take();
+                let launched = self.launch_routed_agent_with_mode(
                     *agent,
                     config_dir.as_deref(),
                     account_email.map(String::as_str),
@@ -25625,8 +25870,14 @@ impl Workspace {
                     effort.as_deref(),
                     *managed_mode,
                     managed_launch_id.as_deref(),
+                    split,
                     ctx,
                 );
+                let launched_terminal = launched
+                    .as_ref()
+                    .ok()
+                    .and_then(|launched| launched.terminal.clone());
+                let result = launched.map(|launched| launched.token);
                 if *managed_mode == spawn_card::ManagedLaunchMode::Ordinary {
                     self.current_workspace_state.is_spawn_card_open = false;
                     if let Err(error) = result {
@@ -25673,17 +25924,7 @@ impl Workspace {
                 // (never auto-sent) — the same in-the-loop behavior the old direct
                 // ask_agent path had, now unified through the spawn card.
                 if let Some(prompt) = prompt {
-                    let prompt = prompt.clone();
-                    self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-                        if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
-                            terminal_view.update(ctx, |terminal_view, ctx| {
-                                terminal_view.input().update(ctx, |input, ctx| {
-                                    input.replace_buffer_content(&prompt, ctx);
-                                    input.focus_input_box(ctx);
-                                });
-                            });
-                        }
-                    });
+                    self.prefill_launched_agent_input(launched_terminal.as_ref(), prompt, ctx);
                 }
                 ctx.notify();
             }
@@ -29308,6 +29549,23 @@ impl TypedActionView for Workspace {
                         });
                     }
                 }
+            }
+            SplitLaunchLocal => {
+                self.complete_split_launch(SplitLaunchDestination::Local, ctx);
+            }
+            SplitLaunchHost { node_id } => {
+                self.complete_split_launch(
+                    SplitLaunchDestination::Remote {
+                        node_id: node_id.clone(),
+                    },
+                    ctx,
+                );
+            }
+            SplitLaunchSpawnCard {
+                registry_node_id,
+                host,
+            } => {
+                self.open_spawn_card_for_split(registry_node_id.clone(), host.clone(), ctx);
             }
             OpenSftpPaneByNode { node_id } => {
                 self.open_sftp_pane(node_id.clone(), ctx);

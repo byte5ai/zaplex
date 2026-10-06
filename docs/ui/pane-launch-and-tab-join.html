@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="ui-spec-status" content="draft-2026-10-06">
+  <meta name="ui-spec-route" content="/native/pane-launch-and-tab-join">
+  <meta name="ui-spec-viewports" content="1280x900,900x760">
+  <title>UI-Spezifikation — Startmenü für Tab und Pane, Tab als Pane</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --canvas: #0b0d12;
+      --panel: #11151f;
+      --surface: #181d28;
+      --hover: #212735;
+      --border: #2a3140;
+      --text: #e8ebf2;
+      --muted: #9aa4b5;
+      --faint: #667084;
+      --accent: #8f83ff;
+      --accent-wash: #8f83ff29;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 22px; color: var(--text); background: var(--canvas); }
+    #spec, #mockups { width: min(1180px, 100%); margin: 0 auto 22px; }
+    #spec { padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+    h1 { margin: 0 0 12px; font-size: 18px; }
+    .spec-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    h2 { margin: 0 0 6px; color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 11px; }
+    li { margin-bottom: 4px; }
+    code { color: var(--text); }
+    .source { margin-top: 12px; color: var(--faint); font-size: 10px; }
+    #mockups { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; align-items: start; }
+    .frame { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); box-shadow: 0 16px 44px #0007; }
+    .caption { padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--faint); font-size: 10px; }
+    .stage { position: relative; height: 430px; }
+    /* Menus */
+    .menu { position: absolute; width: 230px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 12px 30px #000a; }
+    .item { display: flex; align-items: center; gap: 7px; height: 26px; padding: 0 8px; border-radius: 5px; white-space: nowrap; }
+    .item.hl { background: var(--hover); }
+    .item .ico { width: 14px; color: var(--muted); text-align: center; }
+    .item .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    .item .more { width: 20px; height: 20px; display: grid; place-items: center; border-left: 1px solid var(--border); color: var(--muted); }
+    .item .chev { color: var(--muted); }
+    .item.disabled { color: var(--faint); }
+    .header { padding: 6px 8px 3px; color: var(--faint); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+    .sep { height: 1px; margin: 4px 2px; background: var(--border); }
+    .tab-only { color: var(--muted); }
+    /* Workspace */
+    .tabbar { display: flex; gap: 2px; height: 32px; padding: 4px 6px 0; border-bottom: 1px solid var(--border); background: var(--canvas); }
+    .tab { display: flex; align-items: center; gap: 6px; max-width: 170px; padding: 0 10px; border-radius: 6px 6px 0 0; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .tab.active { color: var(--text); background: var(--panel); }
+    .tab.lifted { opacity: .35; }
+    .plus { display: grid; place-items: center; width: 26px; color: var(--muted); }
+    .content { position: absolute; inset: 32px 0 0 0; display: flex; }
+    .pane { position: relative; flex: 1; border-right: 1px solid var(--border); }
+    .pane:last-child { border-right: 0; }
+    .pane-head { display: flex; align-items: center; height: 24px; padding: 0 8px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+    .pane-body { padding: 8px; color: var(--faint); font: 11px/1.5 ui-monospace, Menlo, monospace; }
+    .drop-zone { position: absolute; top: 0; bottom: 0; right: 0; width: 50%; border: 1px solid var(--accent); border-radius: 4px; background: var(--accent-wash); }
+    .ghost { position: absolute; display: flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface); box-shadow: 0 8px 20px #000a; font-size: 12px; }
+    .pointer { position: absolute; width: 10px; height: 10px; border-radius: 50%; background: var(--text); box-shadow: 0 0 0 3px #0008; }
+    .note { padding: 8px 10px; border-top: 1px solid var(--border); color: var(--faint); font-size: 10px; }
+    @media (max-width: 900px) {
+      .spec-grid, #mockups { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <section id="spec">
+    <h1>UI-Spezifikation — Startmenü für Tab und Pane, Tab als Pane</h1>
+    <div class="spec-grid">
+      <div>
+        <h2>Startmenü (Tab und Pane)</h2>
+        <ul>
+          <li><code>#spec L1</code> „+“ (neuer Tab) und jede der vier Split-Richtungen öffnen dasselbe Startmenü. Einziger Unterschied ist das Ziel: neuer Tab bzw. neues Pane in der erfassten Richtung relativ zum auslösenden Pane.</li>
+          <li><code>#spec L2</code> Erste Ebene in dieser Reihenfolge: „Terminal“ (lokal), „Neuer Agent…“ (nur bei aktivem Cockpit), Kopf „Favoriten“ mit allen Host-Favoriten, danach „Weitere Hosts ›“.</li>
+          <li><code>#spec L3</code> „Weitere Hosts“ ist ein Untermenü mit genau den registrierten Hosts, die kein Favorit sind, in Registry-Reihenfolge. Ohne solche Hosts entfällt der Eintrag. Registry-Lesefehler zeigt eine deaktivierte Fehlerzeile statt der Liste.</li>
+          <li><code>#spec L4</code> Ein Favorit verbindet per Klick auf den Namen direkt; „⋯“ öffnet seitlich „Neuer Agent auf &lt;Host&gt;“, „Bearbeiten“, „Aus Favoriten entfernen“. Im Split-Menü zielen Verbindung und Agent auf das Pane.</li>
+          <li><code>#spec L5</code> Tab-spezifische Einträge (Tab-Konfigurationen, Docker-Sandbox, Worktree-Konfiguration, geschlossene Session wieder öffnen) erscheinen nur im „+“-Menü, unterhalb eines Trenners.</li>
+          <li><code>#spec L6</code> Keine Markierung „· Aktuell“ im Menü; die Pane-Kopfzeile nennt den Host. Abbruch (Escape, Klick daneben) erzeugt nichts.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Neuer Agent ins Pane</h2>
+        <ul>
+          <li><code>#spec L7</code> „Neuer Agent…“ aus dem Split-Menü öffnet die bekannte Startkarte. Der Start erzeugt genau eine Session an der erfassten Position; eine Auswahl mehrerer Konten wird mit Hinweis abgelehnt, die Karte bleibt offen.</li>
+          <li><code>#spec L8</code> Konto, Launch-Intent und Prompt-Vorbelegung hängen am neu erzeugten Pane, nie am zufällig fokussierten.</li>
+          <li><code>#spec L9</code> Ist die erfasste Position beim Start nicht mehr gültig (Pane geschlossen, Tab entfernt), startet nichts und ein Hinweis erklärt es.</li>
+        </ul>
+        <h2 style="margin-top:14px">Tab-Benennung</h2>
+        <ul>
+          <li><code>#spec N1</code> Unverändert gemäß <code>#spec P3</code>: Tabtitel folgt dem fokussierten Pane, expliziter Tabtitel hat Vorrang; jedes Pane zeigt <code>Host · Verzeichnis</code> in seiner Kopfzeile (Industriestandard Windows Terminal, iTerm2, tmux).</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Tab als Pane (Maus)</h2>
+        <ul>
+          <li><code>#spec J1</code> Ein Klick aktiviert einen Tab beim Loslassen. Wird stattdessen gezogen, bleibt der bisher sichtbare Tab sichtbar.</li>
+          <li><code>#spec J2</code> Innerhalb der Tab-Leiste sortiert Ziehen wie bisher um. Verlässt der Zeiger die Tab-Leiste nach unten, zeigt das Pane unter dem Zeiger eine Drop-Zone über der Hälfte (links/rechts/oben/unten), in die der Tab eingefügt wird. Richtung wie beim Pane-Kopfzeilen-Drag.</li>
+          <li><code>#spec J3</code> Loslassen über einer Drop-Zone fügt alle Panes des gezogenen Tabs mit ihrem Layout als Split an dieser Kante ein; der Quelltab entfällt; Fokus liegt auf dem zuletzt fokussierten Pane des gezogenen Tabs.</li>
+          <li><code>#spec J4</code> Der sichtbare Tab ist nie Ziel seiner selbst: beim Ziehen des sichtbaren Tabs erscheint keine Drop-Zone. Loslassen ohne Drop-Zone ändert höchstens die Reihenfolge.</li>
+          <li><code>#spec J5</code> Überführen startet keine Verbindung, PTY oder Agent-Session neu; Host-Bindung, Verlauf, CWD, Entwurf und Dateimanager-Modus jedes Panes bleiben.</li>
+          <li><code>#spec J6</code> Ein Tab mit noch laufendem provisorischen Daemon-/Managed-Start kann nicht eingefügt werden (wie <code>#spec R1</code> beim Fenster-Drag).</li>
+          <li><code>#spec J7</code> Gegenrichtung bleibt: Pane-Kopfzeile auf die Tab-Leiste ziehen erzeugt einen eigenen Tab.</li>
+          <li><code>#spec J8</code> Drop-Zone nutzt ausschließlich Theme-Rollen (Akzent als Rand und transparente Fläche); keine dauerhaften Farbränder.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="source">Vorbilder: Windows Terminal (gleiches Profilmenü für Tab und Pane), VS Code und JetBrains (Tab in den Editorbereich ziehen, Drop-Rückmeldung zeigt die Zielposition), tmux <code>break-pane</code>/<code>join-pane</code>. Löst <code>#spec P2</code> (Rechts/Unten) und PRODUCT §32 ab. Farben dieses Dokuments illustrieren Theme-Rollen und sind nicht normativ.</div>
+  </section>
+
+  <section id="mockups">
+    <div class="frame">
+      <div class="caption">„+“ in der Tab-Leiste — neuer Tab · „Weitere Hosts“ geöffnet</div>
+      <div class="stage">
+        <div class="tabbar"><div class="tab active">buildnode · api</div><div class="plus">+</div></div>
+        <div class="menu" style="left:150px; top:36px">
+          <div class="item"><span class="ico">▣</span><span class="grow">Terminal</span></div>
+          <div class="item"><span class="ico">✧</span><span class="grow">Neuer Agent…</span></div>
+          <div class="sep"></div>
+          <div class="header">Favoriten</div>
+          <div class="item"><span class="ico">★</span><span class="grow">buildnode</span><span class="more">⋯</span></div>
+          <div class="item"><span class="ico">★</span><span class="grow">worknode</span><span class="more">⋯</span></div>
+          <div class="item hl"><span class="ico">⋯</span><span class="grow">Weitere Hosts</span><span class="chev">›</span></div>
+          <div class="sep"></div>
+          <div class="item tab-only"><span class="ico">⧉</span><span class="grow">Docker-Sandbox</span></div>
+          <div class="item tab-only"><span class="ico">⎇</span><span class="grow">Worktree-Konfiguration</span><span class="chev">›</span></div>
+          <div class="item tab-only"><span class="ico">＋</span><span class="grow">Neue Tab-Konfiguration</span></div>
+          <div class="sep"></div>
+          <div class="item tab-only"><span class="ico">↺</span><span class="grow">Geschlossene Session wieder öffnen</span></div>
+        </div>
+        <div class="menu" style="left:384px; top:146px; width:170px">
+          <div class="item"><span class="ico">▣</span><span class="grow">testnode</span></div>
+          <div class="item"><span class="ico">▣</span><span class="grow">stagingnode</span></div>
+        </div>
+      </div>
+      <div class="note">L1–L5: gleiche erste Ebene wie im Split-Menü; Tab-spezifische Einträge unterhalb des Trenners.</div>
+    </div>
+
+    <div class="frame">
+      <div class="caption">„Pane links teilen“ — dasselbe Menü, Ziel ist ein Pane links vom auslösenden Pane</div>
+      <div class="stage">
+        <div class="tabbar"><div class="tab active">buildnode · api</div><div class="plus">+</div></div>
+        <div class="content">
+          <div class="pane"><div class="pane-head">buildnode · api</div><div class="pane-body">$ cargo test<br>running 42 tests…</div></div>
+        </div>
+        <div class="menu" style="left:16px; top:96px">
+          <div class="item hl"><span class="ico">▣</span><span class="grow">Terminal</span></div>
+          <div class="item"><span class="ico">✧</span><span class="grow">Neuer Agent…</span></div>
+          <div class="sep"></div>
+          <div class="header">Favoriten</div>
+          <div class="item"><span class="ico">★</span><span class="grow">buildnode</span><span class="more">⋯</span></div>
+          <div class="item"><span class="ico">★</span><span class="grow">worknode</span><span class="more">⋯</span></div>
+          <div class="item"><span class="ico">⋯</span><span class="grow">Weitere Hosts</span><span class="chev">›</span></div>
+        </div>
+      </div>
+      <div class="note">L1, L6: alle vier Richtungen; kein „· Aktuell“, keine Tab-Einträge.</div>
+    </div>
+
+    <div class="frame">
+      <div class="caption">Tab „worknode · logs“ wird in den sichtbaren Tab gezogen — Drop-Zone rechte Hälfte</div>
+      <div class="stage">
+        <div class="tabbar"><div class="tab active">buildnode · api</div><div class="tab lifted">worknode · logs</div><div class="plus">+</div></div>
+        <div class="content">
+          <div class="pane"><div class="pane-head">buildnode · api</div><div class="pane-body">$ cargo test<br>running 42 tests…</div></div>
+          <div class="pane"><div class="pane-head">Lokal · zaplex</div><div class="pane-body">$ git status<br>On branch main</div><div class="drop-zone"></div></div>
+        </div>
+        <div class="ghost" style="left:440px; top:210px">▣ worknode · logs</div>
+        <div class="pointer" style="left:470px; top:200px"></div>
+      </div>
+      <div class="note">J1–J2, J8: sichtbarer Tab bleibt; Zeiger in der rechten Hälfte des rechten Panes → Drop-Zone dort.</div>
+    </div>
+
+    <div class="frame">
+      <div class="caption">Nach dem Loslassen — Quelltab entfällt, Fokus im eingefügten Pane</div>
+      <div class="stage">
+        <div class="tabbar"><div class="tab active">worknode · logs</div><div class="plus">+</div></div>
+        <div class="content">
+          <div class="pane"><div class="pane-head">buildnode · api</div><div class="pane-body">$ cargo test<br>running 42 tests…</div></div>
+          <div class="pane"><div class="pane-head">Lokal · zaplex</div><div class="pane-body">$ git status<br>On branch main</div></div>
+          <div class="pane" style="outline:1px solid var(--accent); outline-offset:-1px"><div class="pane-head">worknode · logs</div><div class="pane-body">$ tail -f app.log<br>…</div></div>
+        </div>
+      </div>
+      <div class="note">J3, J5, N1: dieselbe Session, Tabtitel folgt dem fokussierten Pane.</div>
+    </div>
+  </section>
+</body>
+</html>

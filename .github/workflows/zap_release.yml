@@ -31,7 +31,7 @@ on:
       release_tag:
         description: "Release tag; must match VERSION"
         type: string
-        default: v1.1.1
+        default: v1.2.0
         required: true
 
 # Build and metadata jobs only need repository read access. The publisher job

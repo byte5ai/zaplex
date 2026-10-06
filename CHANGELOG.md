@@ -2,7 +2,9 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
-## [1.1.1] — 2026-09-23
+## [1.2.0] — 2026-10-06
+
+- Tabs und Panes haben ein gemeinsames Startmenü: „+“ und alle vier Split-Richtungen zeigen Terminal, „Neuer Agent…“, die Favoriten und neu „Weitere Hosts“ mit allen übrigen registrierten Hosts. Aus einem Split heraus startet jeder Eintrag im neuen Pane, auch der Agent; Konto, Startabsicht und Prompt hängen an genau diesem Pane. Tab-spezifische Einträge (Tab-Konfigurationen, Docker-Sandbox, Worktree-Konfiguration, geschlossene Session) bleiben im „+“-Menü.
 
 - Die Integrationssuite (#472) initialisiert englische Texte vor dem Start und bedient beim Teilen eines Panes den echten Hostpicker. SSH-Prüfungen nutzen eigene kurzlebige Konten auf einem lokalen CI-SSH-Server; Passwortanmeldung, Shell-Bootstrap und ProxyCommand bleiben Teil der Prüfung.
 

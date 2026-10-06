@@ -264,13 +264,7 @@ pub fn split_local_right() -> TestStep {
     TestStep::new("Split the real pane through its overflow menu and choose local")
         .with_click_on_saved_position_fn(|app, window_id| overflow_id(app, window_id, 0))
         .with_click_on_saved_position_fn(|_, _| crate::t!("keybinding-desc-pane-group-split-right"))
-        .with_click_on_saved_position_fn(|_, _| {
-            format!(
-                "{} · {}",
-                crate::t!("cockpit-spawn-card-host-local"),
-                crate::t!("common-current")
-            )
-        })
+        .with_click_on_saved_position_fn(|_, _| crate::t!("workspace-new-session-terminal"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -72,9 +72,9 @@
         <h2>Tabs und Panes</h2>
         <ul>
           <li><code>#spec P1</code> Ein Tab ist Container für Terminal-, Dateimanager- und Konto-Panes verschiedener Hosts; er ist selbst kein Host. Keine neue globale Navigation.</li>
-          <li><code>#spec P2</code> Pane-Split erfasst auslösenden Tab, Pane, Rechts/Unten und stabilen Host oder Lokal. Späterer Fokuswechsel lenkt das Ziel nicht um; Abbruch erzeugt nichts.</li>
+          <li><code>#spec P2</code> Pane-Split in jeder der vier Richtungen öffnet dasselbe Startmenü wie „+“ (siehe <code>pane-launch-and-tab-join.html</code>) und erfasst auslösenden Tab, Pane, Richtung und stabilen Host oder Lokal. Späterer Fokuswechsel lenkt das Ziel nicht um; Abbruch erzeugt nichts.</li>
           <li><code>#spec P3</code> Terminalidentität ist <code>Host · Projekt/Verzeichnis</code>. Der automatische Tabtitel folgt der fokussierten Pane; ein expliziter Titel hat Vorrang.</li>
-          <li><code>#spec P4</code> Eine Pane füllt die Arbeitsfläche. Header-Drag verschiebt dieselbe Pane links/rechts/oben/unten oder in einen anderen Tab, ohne Verbindung, PTY oder Agent zu duplizieren.</li>
+          <li><code>#spec P4</code> Eine Pane füllt die Arbeitsfläche. Header-Drag verschiebt dieselbe Pane links/rechts/oben/unten oder in einen anderen Tab, ohne Verbindung, PTY oder Agent zu duplizieren. Umgekehrt fügt ein in den sichtbaren Tab gezogener Tab seine Panes dort ein.</li>
           <li><code>#spec P5</code> Fokus und Restore bewahren Pane-Geometrie, Host-/Daemon-/PTY-/Generationsidentität, Modus und Entwurf. Konto-Klick fügt die Konto-Pane hinzu oder fokussiert sie, ohne andere Panes zu ersetzen.</li>
         </ul>
       </div>
