@@ -434,14 +434,26 @@ fn non_unix_daemon_retry_branch_is_statically_fail_closed() {
     assert!(non_unix.contains("Some(request)"));
     assert!(!non_unix.contains("let _ = (pane_group, pane_id, draft)"));
 
+    // Cancel keeps a daemon pane in place on every platform: the only surface
+    // replacement left is the classic-SSH branch, which never has a daemon
+    // identity, so a cancelled daemon restore can never become a local shell.
     let cancel_start = source.find("fn cancel_remote_restore(").unwrap();
     let cancel_end = source[cancel_start..]
         .find("fn open_resolved_ssh_terminal_command(")
         .map(|offset| cancel_start + offset)
         .unwrap();
     let cancel = &source[cancel_start..cancel_end];
-    assert!(cancel.contains("fail_closed_remote_restore_request(&identity)"));
-    assert!(cancel.contains("daemon_request"));
+    assert!(cancel.contains("view.cancel_remote_input_readiness(ctx)"));
+    assert_eq!(
+        cancel.matches("replace_remote_terminal_surface(").count(),
+        1
+    );
+    let classic_branch = cancel
+        .find("if !matches!(&identity.transport, RemoteTerminalTransport::Daemon { .. })")
+        .unwrap();
+    let daemon_marked = cancel.find("daemon_restore = true").unwrap();
+    let replacement = cancel.find("replace_remote_terminal_surface(").unwrap();
+    assert!(classic_branch < replacement && replacement < daemon_marked);
 }
 
 #[test]
@@ -6036,7 +6048,12 @@ fn cancelling_pending_adoption_retires_only_local_surface_and_keeps_retry_identi
                 .as_ref(ctx)
                 .terminal_view_from_pane_id(pane, ctx)
                 .unwrap();
-            assert_ne!(current_view.id(), previous_view.id());
+            // Cancel stays in place: no replacement surface whose fresh model
+            // could fail into the shell-start banner, and no local shell.
+            assert_eq!(current_view.id(), previous_view.id());
+            assert!(group
+                .as_ref(ctx)
+                .daemon_pane_matches_connection(pane, session, ctx));
             assert!(current_view.as_ref(ctx).remote_input_has_failed());
             let (_, retained, draft) = group
                 .as_ref(ctx)
@@ -6046,6 +6063,114 @@ fn cancelling_pending_adoption_retires_only_local_surface_and_keeps_retry_identi
             assert_eq!(retained.transport, identity.transport);
             assert_eq!(retained.registry_node_id, identity.registry_node_id);
             assert_eq!(retained.input_draft, draft);
+        });
+    });
+}
+
+#[cfg(unix)]
+fn add_adopted_daemon_tab(
+    workspace: &mut Workspace,
+    session: SessionId,
+    ctx: &mut ViewContext<Workspace>,
+) -> (ViewHandle<PaneGroup>, PaneId, ViewHandle<TerminalView>) {
+    workspace.add_tab_with_pane_layout(
+        PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+            hide_homepage: true,
+            daemon_request: Some(crate::terminal::daemon_tty::DaemonSessionRequest {
+                connection_session_id: session,
+                open_params: Default::default(),
+                adopt_pty_session_id: Some("ended-pty".to_string()),
+                adopt_pty_generation: Some(3),
+                expected_host_id: Some("ended-host".to_string()),
+                expected_agent_binding: None,
+                install_progress_rx: None,
+                host_label: "ended.example.test".to_string(),
+            }),
+            ..Default::default()
+        })),
+        Arc::new(HashMap::new()),
+        None,
+        ctx,
+    );
+    let group = workspace.active_tab_pane_group().clone();
+    let pane = group.as_ref(ctx).focused_pane_id(ctx);
+    let view = group
+        .as_ref(ctx)
+        .terminal_view_from_pane_id(pane, ctx)
+        .unwrap();
+    (group, pane, view)
+}
+
+/// "Close" on a remote session that ended with a non-zero code removes the
+/// pane (and its single-pane tab); it never swaps in a local shell.
+#[cfg(unix)]
+#[test]
+fn closing_an_ended_remote_session_removes_its_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let session = SessionId::from(797u64);
+        let (tabs_before, view) = workspace.update(&mut app, |workspace, ctx| {
+            let tabs_before = workspace.tabs.len();
+            let (group, pane, view) = add_adopted_daemon_tab(workspace, session, ctx);
+            assert_eq!(workspace.tabs.len(), tabs_before + 1);
+            view.update(ctx, |view, ctx| {
+                view.show_remote_session_failure(
+                    "Session ended (exit code 1).".to_string(),
+                    None,
+                    true,
+                    Some(session),
+                    ctx,
+                );
+                view.set_remote_input_phase(
+                    crate::terminal::view::RemoteInputPhase::Failed,
+                    Some(session),
+                    ctx,
+                );
+            });
+            assert!(view.as_ref(ctx).remote_session_has_ended());
+            workspace.cancel_remote_restore(&group, pane, ctx);
+            (tabs_before, view)
+        });
+        workspace.read(&app, |workspace, ctx| {
+            assert_eq!(workspace.tabs.len(), tabs_before);
+            assert!(workspace.tabs.iter().all(|tab| {
+                tab.pane_group
+                    .as_ref(ctx)
+                    .daemon_connection_pane(session, ctx)
+                    .is_none()
+            }));
+        });
+        view.read(&app, |view, _| assert!(view.remote_session_has_ended()));
+    });
+}
+
+/// `exit` (code 0) in a remote shell closes the pane like an exited local
+/// shell, even before the pane ever bootstrapped shell integration.
+#[cfg(unix)]
+#[test]
+fn clean_remote_exit_closes_its_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let session = SessionId::from(798u64);
+        let tabs_before = workspace.update(&mut app, |workspace, ctx| {
+            let tabs_before = workspace.tabs.len();
+            let (_, _, view) = add_adopted_daemon_tab(workspace, session, ctx);
+            assert!(!view.as_ref(ctx).is_login_shell_bootstrapped());
+            view.update(ctx, |view, ctx| {
+                view.close_after_clean_remote_exit(Some(session), ctx);
+            });
+            tabs_before
+        });
+        workspace.read(&app, |workspace, ctx| {
+            assert_eq!(workspace.tabs.len(), tabs_before);
+            assert!(workspace.tabs.iter().all(|tab| {
+                tab.pane_group
+                    .as_ref(ctx)
+                    .daemon_connection_pane(session, ctx)
+                    .is_none()
+            }));
         });
     });
 }

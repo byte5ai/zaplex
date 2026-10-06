@@ -3149,6 +3149,7 @@ mod daemon_session {
         FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PTY_BINDING_V2,
         FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_LOGICAL_OPEN_ATTEMPT_V1,
         FEATURE_LOGICAL_OPEN_ID_V1, FEATURE_MANAGED_AGENT_FLEET_V1, FEATURE_MANAGED_OPEN_ATTACH_V1,
+        FEATURE_SESSION_TAKEOVER_V1,
     };
 
     /// Awaits `rx.recv()` but gives up after `dur` so a stuck test fails instead
@@ -4286,6 +4287,317 @@ mod daemon_session {
                 assert_eq!(historical.pty_session_id, session_id);
                 assert_eq!(historical.pty_generation, generation);
                 assert!(!historical.foreground);
+            });
+        });
+    }
+
+    /// Session ids named by `attach-taken-over` notices queued on `rx`.
+    fn drain_taken_over_notices(rx: &async_channel::Receiver<ServerMessage>) -> Vec<String> {
+        let mut notices = Vec::new();
+        while let Ok(message) = rx.try_recv() {
+            if let Some(server_message::Message::SessionNotice(notice)) = message.message {
+                if notice.kind == "attach-taken-over" {
+                    notices.push(notice.session_id);
+                }
+            }
+        }
+        notices
+    }
+
+    fn generation_attach(session_id: &str, generation: u64, agent: Option<&str>) -> AttachSession {
+        AttachSession {
+            session_id: session_id.to_string(),
+            last_seq: 0,
+            supports_bootstrap_preamble: true,
+            expected_generation: Some(generation),
+            expected_agent_binding: agent.map(binding_identity),
+        }
+    }
+
+    #[test]
+    fn attach_takeover_predicate_requires_capability_and_exact_generation() {
+        use super::super::attach_may_take_over;
+        assert!(attach_may_take_over(true, Some(7), 7));
+        assert!(
+            !attach_may_take_over(false, Some(7), 7),
+            "a client that cannot render the takeover notice must keep the refusal"
+        );
+        assert!(
+            !attach_may_take_over(true, None, 7),
+            "an id-only legacy attach must never take a session over"
+        );
+        assert!(!attach_may_take_over(true, Some(6), 7));
+    }
+
+    /// A transport that died without the daemon noticing (half-open SSH after
+    /// sleep) keeps its connection registered. A capability-aware reattach of
+    /// the same PTY generation must take the session over instead of being
+    /// refused until sshd's keepalive finally tears the old proxy down.
+    #[test]
+    fn takeover_capable_reattach_moves_session_from_still_registered_connection() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (first_tx, first_rx) = async_channel::unbounded::<ServerMessage>();
+            let first = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(first, first_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(first, open_session_msg(), ctx)
+            });
+            let session_id = recv_session_opened(&first_rx)
+                .await
+                .expect("session opened");
+            let generation = model.read(&app, |m, _| m.sessions[&session_id].generation);
+
+            let (second_tx, _second_rx) = async_channel::unbounded::<ServerMessage>();
+            let second = uuid::Uuid::new_v4();
+            let (probe_tx, probe_rx) =
+                async_channel::unbounded::<crate::remote_server::session_host::PtyInput>();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(second, second_tx, ctx);
+                m.sessions.get_mut(&session_id).unwrap().input_tx = probe_tx;
+                m.connection_features.insert(
+                    second,
+                    std::collections::HashSet::from([
+                        FEATURE_AGENT_PTY_BINDING_V2.to_string(),
+                        FEATURE_SESSION_TAKEOVER_V1.to_string(),
+                    ]),
+                );
+                drain_taken_over_notices(&first_rx);
+
+                let attached = m
+                    .handle_attach_session(second, generation_attach(&session_id, generation, None))
+                    .into_message();
+                let server_message::Message::SessionAttached(attached) = attached else {
+                    panic!("a takeover-capable exact-generation reattach must succeed");
+                };
+                assert_eq!(attached.session_id, session_id);
+                assert_eq!(attached.generation, generation);
+                assert_eq!(m.sessions[&session_id].attached, second);
+                assert_eq!(
+                    drain_taken_over_notices(&first_rx),
+                    vec![session_id.clone()],
+                    "the previous owner must learn exactly once that its view is detached"
+                );
+
+                assert_eq!(
+                    m.handle_session_input(
+                        first,
+                        SessionInput {
+                            session_id: session_id.clone(),
+                            bytes: b"stale".to_vec(),
+                            startup_command_id: String::new(),
+                        },
+                    ),
+                    None
+                );
+                assert!(
+                    probe_rx.try_recv().is_err(),
+                    "the displaced connection must lose PTY input authority"
+                );
+                m.handle_session_input(
+                    second,
+                    SessionInput {
+                        session_id: session_id.clone(),
+                        bytes: b"owner".to_vec(),
+                        startup_command_id: String::new(),
+                    },
+                );
+                assert_eq!(
+                    probe_rx.try_recv().map(|input| input.into_bytes()),
+                    Ok(b"owner".to_vec())
+                );
+
+                // A late detach from the displaced connection must not cut the
+                // new owner off.
+                m.handle_message(first, detach_msg(&session_id), ctx);
+                assert_eq!(m.sessions[&session_id].attached, second);
+            });
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(second, close_msg(&session_id), ctx)
+            });
+        });
+    }
+
+    #[test]
+    fn takeover_is_refused_without_capability_or_generation_proof() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (first_tx, first_rx) = async_channel::unbounded::<ServerMessage>();
+            let first = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(first, first_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(first, open_session_msg(), ctx)
+            });
+            let session_id = recv_session_opened(&first_rx)
+                .await
+                .expect("session opened");
+            let generation = model.read(&app, |m, _| m.sessions[&session_id].generation);
+
+            let (second_tx, _second_rx) = async_channel::unbounded::<ServerMessage>();
+            let second = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(second, second_tx, ctx);
+                drain_taken_over_notices(&first_rx);
+
+                m.connection_features.insert(
+                    second,
+                    std::collections::HashSet::from([FEATURE_AGENT_PTY_BINDING_V2.to_string()]),
+                );
+                let without_capability = m
+                    .handle_attach_session(second, generation_attach(&session_id, generation, None))
+                    .into_message();
+                let server_message::Message::Error(error) = without_capability else {
+                    panic!("a peer without the takeover capability must keep the refusal");
+                };
+                assert!(error.message.contains("already attached"));
+
+                m.connection_features.insert(
+                    second,
+                    std::collections::HashSet::from([FEATURE_SESSION_TAKEOVER_V1.to_string()]),
+                );
+                let id_only = m
+                    .handle_attach_session(
+                        second,
+                        AttachSession {
+                            session_id: session_id.clone(),
+                            last_seq: 0,
+                            supports_bootstrap_preamble: true,
+                            expected_generation: None,
+                            expected_agent_binding: None,
+                        },
+                    )
+                    .into_message();
+                let server_message::Message::Error(error) = id_only else {
+                    panic!("an id-only attach must not take a session over");
+                };
+                assert!(error.message.contains("already attached"));
+
+                let stale = m
+                    .handle_attach_session(
+                        second,
+                        generation_attach(&session_id, generation + 1, None),
+                    )
+                    .into_message();
+                assert!(
+                    matches!(stale, server_message::Message::Error(_)),
+                    "a stale generation must not take a session over"
+                );
+
+                assert_eq!(m.sessions[&session_id].attached, first);
+                assert!(
+                    drain_taken_over_notices(&first_rx).is_empty(),
+                    "a refused attach must not tell the owner it was displaced"
+                );
+            });
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(first, close_msg(&session_id), ctx)
+            });
+        });
+    }
+
+    /// Takeover keeps every attach safety check: a stale foreground-agent row
+    /// must fail before ownership moves or the owner is notified.
+    #[test]
+    fn takeover_keeps_foreground_agent_check_before_moving_ownership() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (first_tx, first_rx) = async_channel::unbounded::<ServerMessage>();
+            let first = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(first, first_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(first, open_session_msg(), ctx)
+            });
+            let session_id = recv_session_opened(&first_rx)
+                .await
+                .expect("session opened");
+            let generation = model.read(&app, |m, _| m.sessions[&session_id].generation);
+
+            let (second_tx, _second_rx) = async_channel::unbounded::<ServerMessage>();
+            let second = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(second, second_tx, ctx);
+                m.connection_features.insert(
+                    first,
+                    std::collections::HashSet::from([FEATURE_AGENT_PTY_BINDING_V2.to_string()]),
+                );
+                m.connection_features.insert(
+                    second,
+                    std::collections::HashSet::from([
+                        FEATURE_AGENT_PTY_BINDING_V2.to_string(),
+                        FEATURE_SESSION_TAKEOVER_V1.to_string(),
+                    ]),
+                );
+                assert_eq!(
+                    bind_status(
+                        m,
+                        first,
+                        BindAgentPty {
+                            agent: Some(binding_identity("agent-1")),
+                            pty_session_id: session_id.clone(),
+                            pty_session_generation: generation,
+                            handoff_from: None,
+                            host_id: "test-host-id".to_string(),
+                        },
+                    ),
+                    super::AgentPtyBindingStatus::Bound
+                );
+                drain_taken_over_notices(&first_rx);
+
+                let stale_row = m
+                    .handle_attach_session(
+                        second,
+                        generation_attach(&session_id, generation, Some("agent-stale")),
+                    )
+                    .into_message();
+                let server_message::Message::Error(error) = stale_row else {
+                    panic!("a stale agent row must fail even when takeover is negotiated");
+                };
+                assert!(error.message.contains("foreground agent changed"));
+                assert_eq!(m.sessions[&session_id].attached, first);
+                assert!(drain_taken_over_notices(&first_rx).is_empty());
+
+                let attached = m
+                    .handle_attach_session(
+                        second,
+                        generation_attach(&session_id, generation, Some("agent-1")),
+                    )
+                    .into_message();
+                let server_message::Message::SessionAttached(attached) = attached else {
+                    panic!("the matching agent row must take the session over");
+                };
+                assert_eq!(attached.agent_binding, Some(binding_identity("agent-1")));
+                assert_eq!(m.sessions[&session_id].attached, second);
+                assert_eq!(
+                    drain_taken_over_notices(&first_rx),
+                    vec![session_id.clone()]
+                );
+                assert_eq!(
+                    bind_status(
+                        m,
+                        first,
+                        BindAgentPty {
+                            agent: Some(binding_identity("agent-1")),
+                            pty_session_id: session_id.clone(),
+                            pty_session_generation: generation,
+                            handoff_from: None,
+                            host_id: "test-host-id".to_string(),
+                        },
+                    ),
+                    super::AgentPtyBindingStatus::ForeignConnection,
+                    "the displaced connection must lose agent-binding authority"
+                );
+            });
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(second, close_msg(&session_id), ctx)
             });
         });
     }
