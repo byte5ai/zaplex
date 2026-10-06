@@ -7222,7 +7222,10 @@ fn file_manager_directory_retains_live_draft_through_command_completion() {
         let input = terminal.read(&app, |view, _| view.input().clone());
         input.update(&mut app, |input, ctx| {
             input.user_insert("echo old-draft", ctx);
-            assert!(input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            assert_eq!(
+                input.try_execute_command_preserving_draft("cd -- /tmp", ctx),
+                AutomaticCommandOutcome::Submitted
+            );
             input.replace_buffer_content("echo newest-draft", ctx);
         });
         terminal.update(&mut app, |view, _| {
@@ -7253,10 +7256,16 @@ fn file_manager_directory_never_overwrites_pending_commands_or_unready_input() {
         input.update(&mut app, |input, ctx| {
             input.user_insert("echo keep-this-draft", ctx);
             input.set_ordinary_command_input_ready(false, ctx);
-            assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            assert_eq!(
+                input.try_execute_command_preserving_draft("cd -- /tmp", ctx),
+                AutomaticCommandOutcome::Deferred
+            );
             input.set_ordinary_command_input_ready(true, ctx);
             input.set_pending_system_command("ssh production".to_string());
-            assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            assert_eq!(
+                input.try_execute_command_preserving_draft("cd -- /tmp", ctx),
+                AutomaticCommandOutcome::Deferred
+            );
             assert_eq!(
                 input.pending_system_command.as_deref(),
                 Some("ssh production")
@@ -7280,7 +7289,10 @@ fn file_manager_directory_waits_for_running_process_without_sending_input() {
         let input = terminal.read(&app, |view, _| view.input().clone());
         input.update(&mut app, |input, ctx| {
             input.user_insert("echo keep-this-draft", ctx);
-            assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            assert_eq!(
+                input.try_execute_command_preserving_draft("cd -- /tmp", ctx),
+                AutomaticCommandOutcome::Deferred
+            );
             assert_eq!(input.buffer_text(ctx), "echo keep-this-draft");
             assert!(input.input_contents_before_prompt_chip_command.is_none());
         });
@@ -7319,7 +7331,10 @@ fn file_manager_directory_pending_preserves_live_draft_when_old_process_finishes
         input.update(&mut app, |input, ctx| {
             input.preserve_pending_file_manager_draft();
             input.replace_buffer_content("echo keep-after-sleep", ctx);
-            assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            assert_eq!(
+                input.try_execute_command_preserving_draft("cd -- /tmp", ctx),
+                AutomaticCommandOutcome::Deferred
+            );
         });
         terminal.update(&mut app, |view, _| view.model.lock().finish_block());
         // Wait for the exact completed block, independent of grid width/output wrapping.
@@ -7386,6 +7401,207 @@ fn file_manager_directory_restored_local_shell_executes_on_its_original_input() 
     });
 }
 
+/// Relays shell metadata to the TerminalView the way a precmd would.
+fn relay_block_metadata(
+    terminal: &ViewHandle<TerminalView>,
+    app: &mut App,
+    block_metadata: BlockMetadata,
+) {
+    terminal.update(app, |view, ctx| {
+        let block_index = view.model.lock().block_list().active_block().index();
+        view.model_event_dispatcher().update(ctx, |_, ctx| {
+            ctx.emit(
+                crate::terminal::model_events::ModelEvent::BlockMetadataReceived(
+                    crate::terminal::event::BlockMetadataReceivedEvent {
+                        block_metadata,
+                        block_index,
+                        is_after_in_band_command: true,
+                        is_done_bootstrapping: true,
+                    },
+                ),
+            );
+        });
+    });
+}
+
+/// Records every command this input hands to its shell, with its session.
+fn record_executed_commands(
+    input: &ViewHandle<Input>,
+    app: &mut App,
+) -> async_channel::Receiver<(String, SessionId)> {
+    let (tx, rx) = async_channel::unbounded();
+    app.update(|ctx| {
+        ctx.subscribe_to_view(input, move |_, event, _| {
+            if let Event::ExecuteCommand(event) = event {
+                let _ = tx.try_send((event.command.clone(), event.session_id));
+            }
+        });
+    });
+    rx
+}
+
+fn record_toast_texts(app: &mut App) -> Arc<std::sync::Mutex<Vec<String>>> {
+    // Toast texts carry the path only once the catalog is loaded.
+    crate::i18n::init(Some("en"));
+    let toasts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = toasts.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_model(&ToastStack::handle(ctx), move |_, event, _| {
+            if let crate::workspace::ToastStackEvent::AddEphemeralToast { toast, .. } = event {
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(toast.main_text_for_test().to_owned());
+            }
+        });
+    });
+    toasts
+}
+
+fn assert_is_cd_to(command: &str, path: &Path) {
+    assert_eq!(
+        shell_words::split(command).unwrap(),
+        ["cd", "--", path.to_str().unwrap()],
+        "{command}"
+    );
+}
+
+#[test]
+fn file_manager_directory_daemon_pane_cds_its_root_shell_not_the_connection() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let shell_session = input.read(&app, |input, _| input.active_block_session_id().unwrap());
+        // The daemon connection ID and the shell's bootstrap session ID are
+        // separate identity domains; they deliberately differ here.
+        let connection = SessionId::from((1u64 << 63) + 17);
+        assert_ne!(connection, shell_session);
+        terminal.update(&mut app, |view, ctx| {
+            // The daemon PTY's root shell: remote to this client.
+            view.sessions_model()
+                .as_ref(ctx)
+                .get(shell_session)
+                .expect("bootstrapped shell")
+                .mark_daemon_hosted(None);
+            view.set_remote_input_phase(
+                crate::terminal::view::RemoteInputPhase::Ready,
+                Some(connection),
+                ctx,
+            );
+        });
+        relay_block_metadata(
+            &terminal,
+            &mut app,
+            BlockMetadata::new(Some(shell_session), Some("/home/dev/old".to_string())),
+        );
+        let executed = record_executed_commands(&input, &mut app);
+        let toasts = record_toast_texts(&mut app);
+        let navigated = PathBuf::from("/home/dev/FM space dir");
+        terminal.update(&mut app, |view, ctx| {
+            assert_eq!(view.active_session_is_local(ctx), Some(false));
+            view.begin_file_manager_navigation(false, true, ctx);
+            view.finish_file_manager_navigation(Some(navigated.clone()), ctx);
+        });
+        let (command, session_id) = executed
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("expected the directory command to be submitted")
+            .expect("command channel closed");
+        assert_eq!(session_id, shell_session);
+        assert_is_cd_to(&command, &navigated);
+        input.read(&app, |input, _| {
+            assert!(matches!(
+                input.file_manager_directory_input,
+                Some(FileManagerDirectoryInput::Executing { .. })
+            ));
+        });
+        assert!(toasts.lock().unwrap().is_empty());
+    });
+}
+
+#[test]
+fn file_manager_directory_local_pane_cds_its_shell() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let shell_session = input.read(&app, |input, _| input.active_block_session_id().unwrap());
+        relay_block_metadata(
+            &terminal,
+            &mut app,
+            BlockMetadata::new(Some(shell_session), None),
+        );
+        let executed = record_executed_commands(&input, &mut app);
+        let navigated = PathBuf::from("/tmp/zaplex fm target");
+        terminal.update(&mut app, |view, ctx| {
+            assert_eq!(view.active_session_is_local(ctx), Some(true));
+            view.begin_file_manager_navigation(true, true, ctx);
+            view.finish_file_manager_navigation(Some(navigated.clone()), ctx);
+        });
+        let (command, session_id) = executed
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("expected the directory command to be submitted")
+            .expect("command channel closed");
+        assert_eq!(session_id, shell_session);
+        assert_is_cd_to(&command, &navigated);
+    });
+}
+
+#[test]
+fn file_manager_directory_waits_for_busy_shell_then_applies_at_next_prompt() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let shell_session = input.read(&app, |input, _| input.active_block_session_id().unwrap());
+        relay_block_metadata(
+            &terminal,
+            &mut app,
+            BlockMetadata::new(Some(shell_session), None),
+        );
+        let executed = record_executed_commands(&input, &mut app);
+        let toasts = record_toast_texts(&mut app);
+        let navigated = PathBuf::from("/tmp/zaplex fm busy target");
+        // An agent (or any process) owns the shell while the file manager closes.
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .simulate_long_running_block("agent", "agent is working");
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.begin_file_manager_navigation(true, true, ctx);
+            view.finish_file_manager_navigation(Some(navigated.clone()), ctx);
+        });
+        assert!(
+            executed.try_recv().is_err(),
+            "nothing may be written into the running process"
+        );
+        {
+            let toasts = toasts.lock().unwrap();
+            assert_eq!(toasts.len(), 1, "{toasts:?}");
+            assert!(
+                toasts[0].contains(navigated.to_str().unwrap()),
+                "{toasts:?}"
+            );
+        }
+
+        // The process ends; the next idle prompt applies the directory.
+        terminal.update(&mut app, |view, _| view.model.lock().finish_block());
+        let (command, session_id) = executed
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("expected the deferred directory command once the shell is free")
+            .expect("command channel closed");
+        assert_eq!(session_id, shell_session);
+        assert_is_cd_to(&command, &navigated);
+    });
+}
+
 #[test]
 fn file_manager_directory_pending_never_restores_an_already_executed_command() {
     App::test((), |mut app| async move {
@@ -7417,7 +7633,10 @@ fn file_manager_directory_pending_never_restores_an_already_executed_command() {
         let input = terminal.read(&app, |view, _| view.input().clone());
         input.update(&mut app, |input, ctx| {
             input.preserve_pending_file_manager_draft();
-            assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            assert_eq!(
+                input.try_execute_command_preserving_draft("cd -- /tmp", ctx),
+                AutomaticCommandOutcome::Deferred
+            );
         });
         terminal.update(&mut app, |view, _| view.model.lock().finish_block());
         // Wait for the exact completed block, independent of grid width/output wrapping.
@@ -7457,7 +7676,10 @@ fn file_manager_directory_does_not_consume_environment_selection_or_record_workf
         input.update(&mut app, |input, ctx| {
             input.replace_buffer_content("echo draft", ctx);
             input.env_var_collection_state.selected_env_vars = Some(selected);
-            assert!(input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            assert_eq!(
+                input.try_execute_command_preserving_draft("cd -- /tmp", ctx),
+                AutomaticCommandOutcome::Submitted
+            );
             assert_eq!(
                 input.env_var_collection_state.selected_env_vars,
                 Some(selected)
@@ -7476,7 +7698,10 @@ fn file_manager_directory_remote_abort_clears_execution_marker() {
         let input = terminal.read(&app, |view, _| view.input().clone());
         input.update(&mut app, |input, ctx| {
             input.replace_buffer_content("echo preserved", ctx);
-            assert!(input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            assert_eq!(
+                input.try_execute_command_preserving_draft("cd -- /tmp", ctx),
+                AutomaticCommandOutcome::Submitted
+            );
         });
         terminal.update(&mut app, |view, ctx| {
             view.cancel_remote_input_readiness(ctx)
@@ -7521,7 +7746,10 @@ fn file_manager_directory_pending_preserves_identical_retyped_draft() {
             input.preserve_pending_file_manager_draft();
             input.replace_buffer_content("", ctx);
             input.user_insert("sleep 10", ctx);
-            assert!(!input.try_execute_command_preserving_draft("cd -- /tmp", ctx));
+            assert_eq!(
+                input.try_execute_command_preserving_draft("cd -- /tmp", ctx),
+                AutomaticCommandOutcome::Deferred
+            );
         });
         terminal.update(&mut app, |view, _| view.model.lock().finish_block());
         // Wait for the exact completed block, independent of grid width/output wrapping.

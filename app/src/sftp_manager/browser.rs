@@ -879,6 +879,9 @@ pub struct SftpBrowserView {
     pub(crate) current_path: PathBuf,
     /// Only successfully listed directories may change the underlying shell.
     last_listed_path: Option<PathBuf>,
+    /// The shell handoff directory captured by `close()` before it tears the
+    /// connection down; the pane group reads it only after that teardown.
+    shell_directory_at_close: Option<PathBuf>,
     /// File entries in the current directory
     pub(crate) entries: Vec<FileEntry>,
     /// Set of selected filesystem objects. Indices are never persisted because
@@ -1149,6 +1152,7 @@ impl SftpBrowserView {
             safe_file_client: SafeFileClientSlot::default(),
             current_path: start_path.clone().unwrap_or_else(|| PathBuf::from("/")),
             last_listed_path: None,
+            shell_directory_at_close: None,
             entries: Vec::new(),
             selected: HashSet::new(),
             path_history: vec![start_path.clone().unwrap_or_else(|| PathBuf::from("/"))],
@@ -2487,6 +2491,11 @@ impl SftpBrowserView {
 
     /// Only a successfully connected browser directory may be returned to its shell.
     pub(crate) fn shell_directory_on_close(&self) -> Option<PathBuf> {
+        // The header close button tears the connection down before the pane
+        // group asks; the directory trusted at that moment still applies.
+        if let Some(directory) = &self.shell_directory_at_close {
+            return Some(directory.clone());
+        }
         if self.pick_mode.is_some() || !matches!(self.connection, ConnectionState::Connected) {
             return None;
         }
@@ -7051,6 +7060,9 @@ impl BackingView for SftpBrowserView {
 
     /// Close the view
     fn close(&mut self, ctx: &mut ViewContext<Self>) {
+        // Capture before the teardown below marks the connection disconnected:
+        // the emitted close reverts to the shell, which asks for this directory.
+        self.shell_directory_at_close = self.shell_directory_on_close();
         // Legacy, pane-owned transfers are cancelled. Global queue jobs keep
         // running and remain visible from other panes/workspaces.
         for task in &self.transfers {

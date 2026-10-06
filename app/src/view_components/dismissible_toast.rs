@@ -360,6 +360,11 @@ impl<A: Action + Clone> DismissibleToast<A> {
         self.flavor
     }
 
+    #[cfg(test)]
+    pub(crate) fn main_text_for_test(&self) -> &str {
+        &self.main_text
+    }
+
     pub fn with_link(mut self, link: ToastLink<A>) -> Self {
         self.link = Some(link);
         self

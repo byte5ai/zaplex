@@ -263,7 +263,9 @@ use crate::terminal::event::RemoteServerSetupState;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::grid_size_util::grid_cell_dimensions;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
-use crate::terminal::input::{CommandExecutionSource, InputAction, InputEmptyStateChangeReason};
+use crate::terminal::input::{
+    AutomaticCommandOutcome, CommandExecutionSource, InputAction, InputEmptyStateChangeReason,
+};
 use crate::terminal::ligature_settings::{should_use_ligature_rendering, LigatureSettings};
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty::get_shell_starter;
@@ -2537,6 +2539,10 @@ pub struct TerminalView {
     file_manager_origin: Option<FileManagerOrigin>,
     /// Applied at the next idle prompt, never written into a running process.
     pending_file_manager_directory: Option<PathBuf>,
+    /// The shell session whose bootstrap completed this pane's own classic SSH
+    /// connection (Transport -> Ready): the top-level shell on the pane's host.
+    /// Nested shells and later manual `ssh` hops never match it.
+    classic_ssh_root_session_id: Option<SessionId>,
     /// When true, enter agent view after pending setup commands complete
     /// (i.e. after `PendingCommandCompleted` is emitted). Set by
     /// `pane_tree_from_template_recursive` when a tab config has both
@@ -2909,6 +2915,15 @@ enum FileManagerOrigin {
     Restoring { is_local: bool },
     Session {
         id: SessionId,
+        directory: Option<PathBuf>,
+    },
+    /// The browsed filesystem cannot be proven to belong to this pane's shell
+    /// (another host, a nested/legacy shell, or a shell that changed while the
+    /// file manager was open). The directory is offered, never sent blindly.
+    Unproven {
+        /// The file manager browsed the host this pane's terminal is bound to.
+        same_host: bool,
+        /// The shell's directory when the file manager opened.
         directory: Option<PathBuf>,
     },
 }
@@ -4089,6 +4104,7 @@ impl TerminalView {
             awaiting_pending_command_completion: false,
             file_manager_origin: None,
             pending_file_manager_directory: None,
+            classic_ssh_root_session_id: None,
             enter_agent_view_after_pending_commands: false,
             enter_agent_view_after_ssh_bootstrap: false,
             slow_bootstrap_banner,
@@ -6562,30 +6578,47 @@ impl TerminalView {
         if is_local {
             // Subshells can use a different filesystem namespace (for example containers).
             session.subshell_info().is_none()
-        } else {
+        } else if self.remote_input_session_id.is_some() {
             // Match TerminalModel::init_shell's daemon-root classification. The
             // daemon connection ID and shell session ID are separate namespaces.
-            self.remote_input_session_id.is_some()
-                && session.subshell_info().is_none()
-                && !session.is_legacy_ssh_session()
+            session.subshell_info().is_none() && !session.is_legacy_ssh_session()
+        } else {
+            // Classic SSH: only the shell that completed this pane's own ssh
+            // connection is proven to run on the pane's host. Both sides are
+            // shell session IDs.
+            self.classic_ssh_root_session_id == Some(id)
         }
     }
 
+    /// `same_host` is false when the browsed filesystem is not the host this
+    /// pane's terminal is bound to; such a directory is never sent to the shell.
     pub(crate) fn begin_file_manager_navigation(
         &mut self,
         is_local: bool,
+        same_host: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         self.cancel_file_manager_directory(ctx);
-        if !self.file_manager_session_matches_target(is_local, ctx) {
-            return;
-        }
-        self.file_manager_origin =
-            self.active_block_session_id()
-                .map(|id| FileManagerOrigin::Session {
-                    id,
-                    directory: self.active_session_cwd(ctx),
-                });
+        let directory = self.active_session_cwd(ctx);
+        let proven = same_host && self.file_manager_session_matches_target(is_local, ctx);
+        let bound_session = self.active_block_session_id().filter(|_| proven);
+        self.file_manager_origin = Some(match bound_session {
+            Some(id) => FileManagerOrigin::Session { id, directory },
+            None => FileManagerOrigin::Unproven {
+                same_host,
+                directory,
+            },
+        });
+    }
+
+    /// A restored file manager whose host does not match this terminal's
+    /// persisted identity: closing it reports the folder instead of applying it.
+    pub(crate) fn restore_unproven_file_manager_navigation(&mut self, ctx: &mut ViewContext<Self>) {
+        self.cancel_file_manager_directory(ctx);
+        self.file_manager_origin = Some(FileManagerOrigin::Unproven {
+            same_host: false,
+            directory: None,
+        });
     }
 
     /// The caller verifies the persisted file-manager namespace against the
@@ -6613,20 +6646,122 @@ impl TerminalView {
         path: Option<PathBuf>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if path.is_none() || self.file_manager_origin.is_none() {
+        let Some(path) = path else {
+            // Nothing was listed successfully: there is no directory to hand off.
             self.cancel_file_manager_directory(ctx);
             return;
+        };
+        let unproven = match &self.file_manager_origin {
+            Some(FileManagerOrigin::Restoring { .. } | FileManagerOrigin::Session { .. }) => None,
+            Some(FileManagerOrigin::Unproven {
+                same_host,
+                directory,
+            }) => Some((*same_host, directory.clone())),
+            // No binding survived (e.g. the terminal surface was replaced).
+            None => Some((false, self.active_session_cwd(ctx))),
+        };
+        if let Some((same_host, directory)) = unproven {
+            self.cancel_file_manager_directory(ctx);
+            if directory.as_ref() != Some(&path) {
+                self.offer_file_manager_directory(&path, same_host, ctx);
+            }
+            return;
         }
-        self.pending_file_manager_directory = path;
+        self.pending_file_manager_directory = Some(path);
         self.input.update(ctx, |input, _| {
             input.preserve_pending_file_manager_draft();
         });
         self.apply_file_manager_directory(ctx);
+        if let Some(path) = self.pending_file_manager_directory.clone() {
+            // Applied once the shell is ready and idle; say so instead of
+            // leaving the user to wonder why the prompt did not move.
+            self.show_file_manager_directory_toast(
+                crate::t!(
+                    "file-manager-shell-directory-deferred",
+                    path = path.display().to_string()
+                )
+                .to_string(),
+                ctx,
+            );
+        }
+    }
+
+    /// The bound shell can no longer take the directory (it changed, exited, or
+    /// its remote connection failed). Never drop it silently: report it now, or,
+    /// while the file manager is still open, when it closes.
+    fn abandon_file_manager_directory(&mut self, ctx: &mut ViewContext<Self>) {
+        let directory = match &self.file_manager_origin {
+            Some(FileManagerOrigin::Session { directory, .. }) => directory.clone(),
+            Some(FileManagerOrigin::Restoring { .. }) => None,
+            Some(FileManagerOrigin::Unproven { .. }) | None => return,
+        };
+        let pending = self.pending_file_manager_directory.take();
+        self.cancel_file_manager_directory(ctx);
+        match pending {
+            Some(path) => self.offer_file_manager_directory(&path, true, ctx),
+            None => {
+                self.file_manager_origin = Some(FileManagerOrigin::Unproven {
+                    same_host: true,
+                    directory,
+                });
+            }
+        }
+    }
+
+    /// Never sends an unproven `cd`. An empty, idle editor of a shell on the
+    /// browsed host receives the quoted command for the user to confirm with
+    /// Enter; otherwise a notice names the folder and the draft stays untouched.
+    fn offer_file_manager_directory(
+        &mut self,
+        path: &Path,
+        same_host: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let command = if same_host {
+            self.active_session_shell_type(ctx)
+                .and_then(|shell| file_manager_directory_command(path, shell))
+        } else {
+            None
+        };
+        let editor_is_free = {
+            let input = self.input.as_ref(ctx);
+            input.ordinary_command_input_is_ready() && input.buffer_text(ctx).is_empty()
+        };
+        let shell_is_idle = {
+            let model = self.model.lock();
+            !model.is_read_only()
+                && !model
+                    .block_list()
+                    .active_block()
+                    .is_active_and_long_running()
+        };
+        let can_prefill = editor_is_free
+            && shell_is_idle
+            && !self.remote_raw_terminal
+            && !self.remote_input_has_failed();
+        match command.filter(|_| can_prefill) {
+            Some(command) => self.restore_input_draft(command, ctx),
+            None => self.show_file_manager_directory_toast(
+                crate::t!(
+                    "file-manager-shell-directory-not-applied",
+                    path = path.display().to_string()
+                )
+                .to_string(),
+                ctx,
+            ),
+        }
+    }
+
+    fn show_file_manager_directory_toast(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(DismissibleToast::default(text), window_id, ctx);
+        });
     }
 
     fn apply_file_manager_directory(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.remote_input_has_failed() {
-            self.cancel_file_manager_directory(ctx);
+        if self.remote_input_has_failed() || self.model.lock().is_read_only() {
+            self.abandon_file_manager_directory(ctx);
             return;
         }
         if let Some(FileManagerOrigin::Restoring { is_local }) = self.file_manager_origin {
@@ -6649,15 +6784,16 @@ impl TerminalView {
         let Some(FileManagerOrigin::Session { id, directory }) = &self.file_manager_origin else {
             return;
         };
+        let (id, directory) = (*id, directory.clone());
         // Once bound, subshell exits and reconnects cannot retarget the request.
-        if self.active_block_session_id() != Some(*id) {
-            self.cancel_file_manager_directory(ctx);
+        if self.active_block_session_id() != Some(id) {
+            self.abandon_file_manager_directory(ctx);
             return;
         }
-        let Some(path) = self.pending_file_manager_directory.as_ref() else {
+        let Some(path) = self.pending_file_manager_directory.clone() else {
             return;
         };
-        if directory.as_ref() == Some(path) {
+        if directory.as_ref() == Some(&path) {
             self.cancel_file_manager_directory(ctx);
             return;
         }
@@ -6665,17 +6801,34 @@ impl TerminalView {
             return;
         }
         let Some(shell) = self.active_session_shell_type(ctx) else {
+            // The bound session is no longer known to this terminal.
+            self.abandon_file_manager_directory(ctx);
             return;
         };
-        let Some(command) = file_manager_directory_command(path, shell) else {
+        let Some(command) = file_manager_directory_command(&path, shell) else {
+            // No safe single-line command exists for this path (control bytes).
             self.cancel_file_manager_directory(ctx);
+            self.show_file_manager_directory_toast(
+                crate::t!(
+                    "file-manager-shell-directory-not-applied",
+                    path = path.display().to_string()
+                )
+                .to_string(),
+                ctx,
+            );
             return;
         };
-        if self.input.update(ctx, |input, ctx| {
+        match self.input.update(ctx, |input, ctx| {
             input.try_execute_command_preserving_draft(&command, ctx)
         }) {
-            self.pending_file_manager_directory = None;
-            self.file_manager_origin = None;
+            AutomaticCommandOutcome::Submitted => {
+                self.pending_file_manager_directory = None;
+                self.file_manager_origin = None;
+            }
+            // Retried by the next idle prompt (block completion, bootstrap
+            // precmd, remote readiness).
+            AutomaticCommandOutcome::Deferred => {}
+            AutomaticCommandOutcome::Refused => self.abandon_file_manager_directory(ctx),
         }
     }
 
@@ -12280,6 +12433,12 @@ impl TerminalView {
         self.refresh_warp_prompt(ctx);
         ctx.emit(Event::SessionBootstrapped);
         if is_ssh_session {
+            if self.remote_input_phase == Some(RemoteInputPhase::Transport)
+                && self.remote_input_session_id.is_none()
+            {
+                // The first remote shell after this pane's own classic ssh command.
+                self.classic_ssh_root_session_id = Some(session_id);
+            }
             if self.remote_input_phase.is_some() && self.remote_input_session_id.is_none() {
                 self.set_remote_input_phase(RemoteInputPhase::Ready, None, ctx);
             }
