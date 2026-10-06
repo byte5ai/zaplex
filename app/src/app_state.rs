@@ -714,7 +714,10 @@ pub enum LeftPanelDisplayedTab {
     SshManager,
     ServerFileBrowser,
     SkillManager,
+    /// The „KI-Sessions" tree. A snapshot persisted before the accounts became
+    /// their own view (#504) also carries this variant and restores the tree.
     Cockpit,
+    CockpitAccounts,
 }
 
 impl From<ToolPanelView> for LeftPanelDisplayedTab {
@@ -728,6 +731,7 @@ impl From<ToolPanelView> for LeftPanelDisplayedTab {
             ToolPanelView::ServerFileBrowser => LeftPanelDisplayedTab::ServerFileBrowser,
             ToolPanelView::SkillManager => LeftPanelDisplayedTab::SkillManager,
             ToolPanelView::Cockpit => LeftPanelDisplayedTab::Cockpit,
+            ToolPanelView::CockpitAccounts => LeftPanelDisplayedTab::CockpitAccounts,
         }
     }
 }

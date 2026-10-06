@@ -37,7 +37,7 @@
     <ul>
       <li>Einheitliche Typografie und Einrückung, durchgehende optisch abgesetzte Sidebar, keine dekorativen Farbränder.</li>
       <li>5-h- und Wochenverbrauch stehen untereinander; Konto-Klick fügt Details hinzu oder fokussiert sie.</li>
-      <li>Sessionbaum und Konten bleiben zwei unabhängig scrollbare Bereiche derselben Sidebar; viele Sessions verdrängen die Kontenüberschrift nicht aus der sichtbaren Fläche.</li>
+      <li>Sessionbaum („KI-Sessions“) und Konten („KI-Konten“) sind zwei eigene, beschriftete Einträge im vorhandenen Toolbelt, jeder mit voller Sidebarhöhe und eigenem Scrollbereich (#504). Ist eine andere Ansicht aktiv und wartet ein Agent, trägt der Sessions-Eintrag die amberne Wartemarke.</li>
       <li>Keine zusätzlichen Navigationslinks, kein unbezeichneter Konto-Pfeil, kein redundantes Pane-Schließen-Menü.</li>
       <li>Theme-Rollen sind verbindlich; konkrete Browser-Demofarben und Beispieldaten sind nicht normativ.</li>
     </ul>
@@ -47,7 +47,7 @@
         <ul>
           <li><code>#spec C1</code> Verbindungen ist das eigenständige Register für alle konfigurierten Hosts und deren Favoriten.</li>
           <li><code>#spec C2</code> Das Tab-Menü projiziert ausschließlich favorisierte Hosts; der Hostname verbindet einmal direkt in einem neuen Tab, ein separates stabiles <code>⋯</code> öffnet ein echtes seitliches Flyout mit sichtbar bleibendem Parent. Es speichert keine zweite Konfiguration.</li>
-          <li><code>#spec C3</code> Es entsteht keine neue vertikale Symbolleiste. Die vorhandene Sidebar-Navigation bleibt unverändert.</li>
+          <li><code>#spec C3</code> Es entsteht keine neue vertikale Symbolleiste. Die vorhandene horizontale Sidebar-Navigation bleibt das einzige Navigationsmittel; „KI-Sessions“, „KI-Konten“ und „Verbindungen“ sind darin eigene Einträge (#504).</li>
           <li><code>#spec C4</code> Resiliente Hosts haben dauerhaft sichtbare Aufklapp- und Refresh-Aktionen in festen Slots. Refresh öffnet bei Bedarf den Recovery-Bereich. Darunter liegt die „Zaplex-Sessions“-Recovery; Shellnamen sind keine Sessionidentität. Puffer-/RAM-Diagnostik gehört nur in explizite Verbindungsdetails und wird nach der tatsächlichen Messgröße benannt.</li>
           <li><code>#spec C5</code> Recovery-Abschnitte beginnen auf der Textachse des Hosts. Zaplex- und tmux/byobu-Sessions stehen eine Einrückung (16 px) darunter; ihre Metadaten beginnen auf derselben Achse wie der Sessiontitel.</li>
         </ul>

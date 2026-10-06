@@ -67,8 +67,10 @@ bereits vorhandene Implementierung. Sie erklärt diese **nicht** nachträglich f
 Der ursprüngliche Stand von PR #465 enthielt noch den redundanten Link
 `cockpit-shell-sessions-connections`. Die Korrektur entfernt ihn aus dem Produktcode;
 Verbindungen bleiben über die vorhandene Sidebar-Navigation erreichbar. Sessionbaum und
-Konten behalten ihre beiden Bereiche und scrollen unabhängig, damit ein großes Inventar
-die Kontenübersicht nicht aus dem sichtbaren Bereich verdrängt.
+Konten sind seit #504 zwei eigene Toolbelt-Einträge („KI-Sessions“, „KI-Konten“) mit voller
+Höhe und eigenem Scrollbereich. Der Mockup zeigt beide Karten noch in einer Ansicht; für die
+Sidebar gilt an dieser Stelle die Regel aus `#spec` und PRODUCT, nicht die Darstellung des
+Mockups.
 
 Der Referenz-Commit `bea818ce95f71fc103eebe2a7a5c687d9a55c361` bleibt der Ausgangspunkt.
 Die Entfernung einzelner Abweichungen ist keine native Gesamtabnahme. Den aktuellen

@@ -1,6 +1,7 @@
-//! `CockpitPanel` — the compact Cockpit sidebar: a live
-//! `Host → Project → PTY Session → Agent` tree followed by provider-explicit
-//! account cards. The roomy full dashboard remains the main-area pane.
+//! `CockpitPanel` — the „KI-Sessions" sidebar view: the live
+//! `Host → Project → PTY Session → Agent` tree with the full sidebar height.
+//! The account cards are their own toolbelt view (`CockpitAccountsPanel`,
+//! #504); the roomy full dashboard remains the main-area pane.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -14,47 +15,41 @@ use pathfinder_geometry::{
 };
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::coloru_with_opacity;
-use warp_core::ui::theme::{color::internal_colors, Fill};
+use warp_core::ui::theme::Fill;
 use warpui::elements::{
-    Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-    Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Element, EventHandler,
-    Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds, Point, Radius,
-    Rect, ScrollbarWidth, Shrinkable, Stack, Text,
+    Border, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Point, Radius, ScrollbarWidth, Shrinkable, Stack, Text,
 };
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
 use warpui::windowing::{StateEvent, WindowManager};
 use warpui::{
-    accessibility::{AccessibilityContent, WarpA11yRole},
-    AfterLayoutContext, AppContext, BlurContext, Entity, EventContext, FocusContext, LayoutContext,
-    PaintContext, SingletonEntity, SizeConstraint, TypedActionView, View, ViewContext, ViewHandle,
-    WindowId,
+    AfterLayoutContext, AppContext, Entity, EventContext, LayoutContext, PaintContext,
+    SingletonEntity, SizeConstraint, TypedActionView, View, ViewContext, WindowId,
 };
 use zaplex_cockpit::{
-    fleet_conductor_session_count, format_cost, format_relative, group_project_sessions,
-    heat_pct_label_with_provenance, host_conductor_session_count, host_ident, session_glyph,
-    session_key, AccountUsage, AgentInventoryStatus, ConductorSession, FleetTree, HostAvailability,
-    HostNode, Provider, SessionSnapshot, SessionState, TaskState, TaskStatus, UsageProvenance,
+    fleet_conductor_session_count, format_relative, group_project_sessions,
+    host_conductor_session_count, host_ident, session_glyph, session_key, AgentInventoryStatus,
+    ConductorSession, FleetTree, HostAvailability, HostNode, Provider, SessionSnapshot,
+    SessionState, TaskState, TaskStatus,
 };
 
-use crate::cockpit::account_identity;
 use crate::cockpit::fleet_details::ManagedFleetInventory;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    attention_coloru, glyph_cell, hover_row, provider_label, status_dot_coloru, utilisation_coloru,
-    utilisation_track, zone_card, BLOCK_RADIUS, GLYPH_COL_WIDTH,
+    attention_coloru, glyph_cell, hover_row, provider_label, status_dot_coloru, zone_card,
+    GLYPH_COL_WIDTH,
 };
 use crate::settings::AccessibilitySettings;
 use crate::ui_components::icons;
 use crate::ui_components::window_focus_dimming::WindowFocusDimming;
-use crate::view_components::action_button::{ActionButton, ButtonSize, PaneHeaderTheme};
 use crate::WorkspaceAction;
 
-const CARD_PADDING: f32 = 8.0;
-const CARD_SPACING: f32 = 4.0;
+pub(super) const CARD_PADDING: f32 = 8.0;
+pub(super) const CARD_SPACING: f32 = 4.0;
 const TREE_DEPTH_INDENT: f32 = 16.0;
-const HEAT_BAR_HEIGHT: f32 = 6.0;
 const TASK_PEEK_WIDTH: f32 = 390.0;
 pub(super) const TASK_PEEK_DELAY: Duration = Duration::from_millis(350);
 const WAITING_PULSE_PERIOD: Duration = Duration::from_millis(1600);
@@ -79,7 +74,7 @@ fn container_count_presentation(
     })
 }
 
-fn account_count_presentation(
+pub(super) fn account_count_presentation(
     health: &zaplex_cockpit::ScanHealth,
     account_count: usize,
 ) -> Option<usize> {
@@ -228,130 +223,9 @@ fn host_display_label(host: &HostNode, removed_label: &str, unverified_label: &s
     }
 }
 
-/// Events the sidebar emits toward the workspace (via the left panel).
-pub enum CockpitPanelEvent {
-    /// Open the cockpit pane in the main area: `None` = the fleet dashboard
-    /// (every account), `Some(account.key)` = that account's own pane.
-    ///
-    /// The key travels with the request because the pane IS the account —
-    /// opening dedupes on it, so two accounts open two panes rather than one
-    /// dashboard that can only look at whichever was clicked last.
-    OpenCockpitPane(Option<String>),
-}
-
-enum FleetTotalButtonEvent {
-    Activated,
-}
-
-#[derive(Clone, Debug)]
-enum FleetTotalButtonAction {
-    Activate,
-}
-
-fn is_fleet_total_activation_keystroke(keystroke: &warpui::keymap::Keystroke) -> bool {
-    !keystroke.cmd
-        && !keystroke.ctrl
-        && !keystroke.alt
-        && !keystroke.shift
-        && !keystroke.meta
-        && matches!(keystroke.key.as_str(), "enter" | "numpadenter" | " ")
-}
-
-struct FleetTotalButton {
-    button: ViewHandle<ActionButton>,
-    label: String,
-    #[cfg(test)]
-    activation_count: usize,
-}
-
-impl FleetTotalButton {
-    fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("", PaneHeaderTheme)
-                .with_size(ButtonSize::XSmall)
-                .on_click(|ctx| ctx.dispatch_typed_action(FleetTotalButtonAction::Activate))
-        });
-        Self {
-            button,
-            label: String::new(),
-            #[cfg(test)]
-            activation_count: 0,
-        }
-    }
-
-    fn set_label(&mut self, label: String, ctx: &mut ViewContext<Self>) {
-        self.label.clone_from(&label);
-        self.button
-            .update(ctx, |button, ctx| button.set_label(label, ctx));
-        ctx.notify();
-    }
-}
-
-impl Entity for FleetTotalButton {
-    type Event = FleetTotalButtonEvent;
-}
-
-impl View for FleetTotalButton {
-    fn ui_name() -> &'static str {
-        "FleetTotalButton"
-    }
-
-    fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {
-        Some(AccessibilityContent::new_without_help(
-            self.label.clone(),
-            WarpA11yRole::ButtonRole,
-        ))
-    }
-
-    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
-        if focus_ctx.is_self_focused() {
-            self.button
-                .update(ctx, |button, ctx| button.set_active(true, ctx));
-        }
-    }
-
-    fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
-        if blur_ctx.is_self_blurred() {
-            self.button
-                .update(ctx, |button, ctx| button.set_active(false, ctx));
-        }
-    }
-
-    fn render(&self, _app: &AppContext) -> Box<dyn Element> {
-        EventHandler::new(ChildView::new(&self.button).finish())
-            .on_keydown(|ctx, _, keystroke| {
-                if is_fleet_total_activation_keystroke(keystroke) {
-                    ctx.dispatch_typed_action(FleetTotalButtonAction::Activate);
-                    DispatchEventResult::StopPropagation
-                } else {
-                    DispatchEventResult::PropagateToParent
-                }
-            })
-            .finish()
-    }
-}
-
-impl TypedActionView for FleetTotalButton {
-    type Action = FleetTotalButtonAction;
-
-    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
-        match action {
-            FleetTotalButtonAction::Activate => {
-                #[cfg(test)]
-                {
-                    self.activation_count += 1;
-                }
-                ctx.focus_self();
-                ctx.emit(FleetTotalButtonEvent::Activated);
-            }
-        }
-    }
-}
-
 pub struct CockpitPanel {
     window_id: WindowId,
     session_scroll_state: ClippedScrollStateHandle,
-    account_scroll_state: ClippedScrollStateHandle,
     /// Hover/click state per Conductor session row (complete host + provider +
     /// account + conversation identity), synced against the unified inventory.
     /// Clicking a row attaches the agent.
@@ -360,24 +234,14 @@ pub struct CockpitPanel {
     /// Tooltip hover state for each agent status glyph. Kept separate from the
     /// clickable row and task-peek handles so only the glyph owns this tooltip.
     conductor_row_glyph_states: HashMap<String, MouseStateHandle>,
-    /// Hover state per account card (key = account `key`). The whole card is a
-    /// click target that opens the roomy dashboard pane.
-    card_states: HashMap<String, MouseStateHandle>,
     /// Hover/click state per connected host root, keyed by stable host identity.
     conductor_host_states: HashMap<String, MouseStateHandle>,
     /// Tooltip hover state for each host summary glyph.
     conductor_host_glyph_states: HashMap<String, MouseStateHandle>,
     /// Explicit host expansion overrides. Absent means expanded.
     expanded_hosts: HashMap<String, bool>,
-    /// Semantic button for the „KI-KONTEN" header's fleet total — the cross-account
-    /// spend figure doubles as the entry point to the fleet pane (spec v3 §S1).
-    fleet_total_button: ViewHandle<FleetTotalButton>,
     /// Stable hover state for the waiting-summary glyph in the Sessions header.
     conductor_attention_state: MouseStateHandle,
-    /// Hover/click state for the account-zone "try again" retry (the loading /
-    /// scan-failed / empty placeholder). A **stable** handle: `Hoverable` tracks
-    /// mouse-down in it, so a fresh one each render would drop the click.
-    rescan_btn: MouseStateHandle,
     /// Hover/click state of each **project group header** (the collapsible
     /// Host → Projekt → Session level), keyed by `project_key`. Clicking the
     /// header folds/unfolds that project's sessions.
@@ -470,12 +334,6 @@ pub(super) fn task_activity_label(task_state: Option<&TaskState>, relative: &str
 
 impl CockpitPanel {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let fleet_total_button = ctx.add_typed_action_view(FleetTotalButton::new);
-        ctx.subscribe_to_view(&fleet_total_button, |_, _, event, ctx| match event {
-            FleetTotalButtonEvent::Activated => {
-                ctx.dispatch_typed_action(&CockpitPanelAction::OpenDashboardPane)
-            }
-        });
         // Re-render on theme change and whenever the snapshot updates.
         ctx.subscribe_to_model(&Appearance::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&AccessibilitySettings::handle(ctx), |_, _, _, ctx| {
@@ -484,7 +342,6 @@ impl CockpitPanel {
         ctx.subscribe_to_model(&CockpitModel::handle(ctx), |me, _, event, ctx| {
             if matches!(event, CockpitEvent::Updated) {
                 me.sync_conductor_states(ctx);
-                me.sync_fleet_total_button(ctx);
                 ctx.notify();
             }
         });
@@ -499,40 +356,20 @@ impl CockpitPanel {
         let mut me = Self {
             window_id: ctx.window_id(),
             session_scroll_state: ClippedScrollStateHandle::default(),
-            account_scroll_state: ClippedScrollStateHandle::default(),
             conductor_row_states: HashMap::new(),
             conductor_peek_states: HashMap::new(),
             conductor_row_glyph_states: HashMap::new(),
-            card_states: HashMap::new(),
             conductor_host_states: HashMap::new(),
             conductor_host_glyph_states: HashMap::new(),
             expanded_hosts: HashMap::new(),
-            fleet_total_button,
             conductor_attention_state: MouseStateHandle::default(),
-            rescan_btn: MouseStateHandle::default(),
             conductor_project_states: HashMap::new(),
             expanded_projects: HashMap::new(),
             conductor_session_states: HashMap::new(),
             expanded_sessions: HashMap::new(),
         };
         me.sync_conductor_states(ctx);
-        me.sync_fleet_total_button(ctx);
         me
-    }
-
-    fn sync_fleet_total_button(&self, ctx: &mut ViewContext<Self>) {
-        let fleet_today = CockpitModel::as_ref(ctx)
-            .snapshot()
-            .accounts
-            .iter()
-            .map(|account| account.today.cost_usd)
-            .sum::<f64>();
-        let label = crate::t!(
-            "cockpit-header-today-total",
-            today = format_cost(fleet_today)
-        );
-        self.fleet_total_button
-            .update(ctx, |button, ctx| button.set_label(label.to_string(), ctx));
     }
 
     /// Keep one stable row handle per live fleet session (hover needs a stable
@@ -606,18 +443,6 @@ impl CockpitPanel {
             self.conductor_peek_states.entry(key.clone()).or_default();
             self.conductor_row_glyph_states.entry(key).or_default();
         }
-        // Card hover handles, keyed by account `key` (one stable handle per card
-        // across renders); drop handles of accounts that disappeared.
-        let acct_keys: std::collections::HashSet<String> = CockpitModel::as_ref(ctx)
-            .snapshot()
-            .accounts
-            .iter()
-            .map(|a| a.account.key.clone())
-            .collect();
-        self.card_states.retain(|k, _| acct_keys.contains(k));
-        for key in acct_keys {
-            self.card_states.entry(key).or_default();
-        }
         // Connected host handles and explicit expansion overrides.
         self.conductor_host_states
             .retain(|key, _| host_keys.contains(key));
@@ -648,7 +473,7 @@ impl CockpitPanel {
         }
     }
 
-    fn text(
+    pub(super) fn text(
         s: String,
         family: warpui::fonts::FamilyId,
         size: f32,
@@ -657,7 +482,7 @@ impl CockpitPanel {
         Text::new_inline(s, family, size).with_color(color).finish()
     }
 
-    fn identity_text(
+    pub(super) fn identity_text(
         s: String,
         family: warpui::fonts::FamilyId,
         size: f32,
@@ -696,195 +521,6 @@ impl CockpitPanel {
         )
     }
 
-    /// The account-zone placeholder, disambiguated by scan health so an empty
-    /// account list no longer reads the same whether the first scan is still
-    /// running, a config/dir failed to load, or there genuinely are no accounts.
-    /// The failed and genuine-empty cases offer a retry (re-run the scan).
-    fn render_scan_placeholder(
-        &self,
-        health: &zaplex_cockpit::ScanHealth,
-        enabled: bool,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        use zaplex_cockpit::ScanHealth;
-        let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let muted = theme.sub_text_color(theme.surface_2()).into_solid();
-        let accent = theme.accent().into_solid();
-        // A deliberately-disabled cockpit is neither "empty" nor "loading" — say so,
-        // and offer no retry (re-scanning cannot help while it is off).
-        if !enabled {
-            return Self::text(
-                crate::t!("cockpit-disabled").to_string(),
-                family,
-                body,
-                muted,
-            );
-        }
-        let (msg, retry) = match health {
-            ScanHealth::Pending => (crate::t!("cockpit-loading").to_string(), false),
-            ScanHealth::Degraded(_) => (crate::t!("cockpit-scan-failed").to_string(), true),
-            ScanHealth::Loaded => (
-                crate::t!("workspace-left-panel-cockpit-empty").to_string(),
-                true,
-            ),
-        };
-        let msg_el = Self::text(msg, family, body, muted);
-        if !retry {
-            return msg_el;
-        }
-        let retry_el = Hoverable::new(self.rescan_btn.clone(), move |mouse| {
-            let c = if mouse.is_hovered() { muted } else { accent };
-            Text::new_inline(crate::t!("cockpit-retry").to_string(), family, body)
-                .with_color(c)
-                .finish()
-        })
-        .with_cursor(warpui::platform::Cursor::PointingHand)
-        .on_click(|ctx, _, _| ctx.dispatch_typed_action(CockpitPanelAction::Rescan))
-        .finish();
-        Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_spacing(8.0)
-            .with_child(msg_el)
-            .with_child(retry_el)
-            .finish()
-    }
-
-    /// A labelled heat bar: `5h [▓▓▓░░] 62%`, coloured by band. Estimate-driven
-    /// bars carry a subtle `~` on the percentage (C3b provenance); real numbers
-    /// get no extra chrome.
-    fn heat_bar(
-        &self,
-        label: &str,
-        fraction: f64,
-        provenance: UsageProvenance,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let size = appearance.ui_font_body();
-        let muted = theme.sub_text_color(theme.surface_1()).into_solid();
-        // Utilisation is not attention: one shared rule (spec v3 §1.2) — calm
-        // theme text, with the theme error role only at the "fast voll" threshold.
-        // The bar's fill carries the level; color only flags "nearly full".
-        let bar_color = utilisation_coloru(fraction, appearance);
-        let track = utilisation_track(fraction, HEAT_BAR_HEIGHT, bar_color, appearance);
-
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(6.0)
-            .with_child(Self::text(label.to_string(), family, size, muted))
-            .with_child(track)
-            .with_child(Self::text(
-                heat_pct_label_with_provenance(fraction, provenance),
-                family,
-                size,
-                bar_color,
-            ))
-            .with_main_axis_size(MainAxisSize::Max)
-            .finish()
-    }
-
-    fn render_card(
-        &self,
-        acct: &AccountUsage,
-        is_selected: bool,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let provider_size = appearance.ui_font_body_large();
-        let identity_size = appearance.ui_font_footnote();
-        let main = theme.main_text_color(theme.surface_1()).into_solid();
-        let muted = theme.sub_text_color(theme.surface_1()).into_solid();
-        let identity = account_identity(&acct.account);
-
-        // Provider is the stable headline on every account surface. The themed
-        // accent mark is supplementary; the provider name remains visible.
-        let header = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_spacing(6.0)
-            .with_child(
-                ConstrainedBox::new(
-                    Rect::new()
-                        .with_background_color(theme.accent().into_solid())
-                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                        .finish(),
-                )
-                .with_width(12.0)
-                .with_height(12.0)
-                .finish(),
-            )
-            .with_child(
-                Shrinkable::new(
-                    1.0,
-                    Self::text(identity.provider.to_string(), family, provider_size, main),
-                )
-                .finish(),
-            )
-            .finish();
-
-        let mut col = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_spacing(CARD_SPACING)
-            .with_child(header);
-        if !identity.subline.is_empty() {
-            col = col.with_child(Self::identity_text(
-                identity.subline,
-                family,
-                identity_size,
-                muted,
-            ));
-        }
-        col = col
-            .with_child(self.heat_bar(
-                &crate::t!("cockpit-meter-5h"),
-                acct.heat,
-                acct.provenance,
-                appearance,
-            ))
-            .with_child(self.heat_bar(
-                &crate::t!("cockpit-meter-week"),
-                acct.heat_week,
-                acct.provenance,
-                appearance,
-            ));
-
-        // A flat account block inside the AI-Accounts zone-card — no per-card
-        // container chrome (emphasis via content + spacing, spec §2.1). The whole
-        // block selects the account → opens the pane focused on it (WS4 S5).
-        // A selected block carries a stable fill; hover adds a subtle fill —
-        // colour only, never layout (spec §2.7).
-        let col_el = col.finish();
-        let handle = self
-            .card_states
-            .get(&acct.account.key)
-            .cloned()
-            .unwrap_or_default();
-        let key = acct.account.key.clone();
-        Hoverable::new(handle, move |mouse| {
-            let mut c = Container::new(col_el)
-                .with_uniform_padding(CARD_PADDING)
-                .with_margin_bottom(CARD_SPACING)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(BLOCK_RADIUS)));
-            if is_selected {
-                c = c.with_background(internal_colors::fg_overlay_2(theme));
-            } else if mouse.is_hovered() {
-                c = c.with_background(internal_colors::fg_overlay_1(theme));
-            }
-            c.finish()
-        })
-        .with_cursor(warpui::platform::Cursor::PointingHand)
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(CockpitPanelAction::SelectAccount(key.clone()))
-        })
-        .finish()
-    }
-
     /// The glanceable **Conductor** for the sidebar: the unified cross-host
     /// inventory as `Host → Project → Session → Agent`. Local is always present;
     /// remote roots are supplied only by live daemon connections. Every level
@@ -895,7 +531,7 @@ impl CockpitPanel {
     /// Shared quiet zone header: uppercase label, muted total, and at most one
     /// trailing aggregate or affordance. The Sessions header uses that slot for
     /// glyph + needs-attention count, never a repeated status word.
-    fn render_zone_header(
+    pub(super) fn render_zone_header(
         label: String,
         count: Option<usize>,
         trailing: Option<Box<dyn Element>>,
@@ -1599,32 +1235,6 @@ impl CockpitPanel {
         })
         .finish()
     }
-
-    /// The „KI-KONTEN" zone header: label + count like the connections zone, plus
-    /// the **fleet total** — the one cross-account number (spec v3 §S1).
-    ///
-    /// The Maximize icon is gone, but the *fleet view it opened* is not: an
-    /// account pane can only ever show its own account, so if this number and its
-    /// entry point both vanished, cross-account spend would have no home at all —
-    /// a regression, not a decluttering. The total therefore stays visible and
-    /// **is itself the affordance**: clicking it opens the fleet pane. One
-    /// element, two jobs, no extra chrome.
-    fn render_header(&self, snapshot_len: usize, appearance: &Appearance) -> Box<dyn Element> {
-        Self::render_zone_header(
-            crate::t!("cockpit-zone-accounts").to_string(),
-            Some(snapshot_len),
-            Some(ChildView::new(&self.fleet_total_button).finish()),
-            appearance.theme().surface_1(),
-            appearance,
-        )
-    }
-
-    // (No standalone Maximize icon any more — spec v3 §S1. The fleet dashboard it
-    // opened is still reachable: the KI-KONTEN header's fleet total is now the
-    // affordance, dispatching `OpenDashboardPane` → the fleet pane (no account
-    // key). A card click opens that account's own pane instead — an *additional*
-    // path, never a replacement for the fleet-wide view, which is why the total
-    // stays a target of its own.)
 }
 
 impl View for CockpitPanel {
@@ -1632,26 +1242,15 @@ impl View for CockpitPanel {
         "CockpitPanel"
     }
 
-    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
-        if focus_ctx.is_self_focused() && !CockpitModel::as_ref(ctx).snapshot().accounts.is_empty()
-        {
-            ctx.focus(&self.fleet_total_button);
-        }
-    }
-
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        // A disabled cockpit clears its snapshot to empty; the placeholder must say
-        // "disabled", not "no accounts" (spec: the empty state is only for the real one).
-        let enabled = *crate::cockpit::settings::CockpitSettings::as_ref(app).enabled;
         let reduce_motion = *AccessibilitySettings::as_ref(app).reduce_motion;
         let animate_waiting = waiting_pulse_should_animate(
             reduce_motion,
             WindowFocusDimming::is_window_focused(self.window_id, app),
         );
 
-        let snapshot = CockpitModel::as_ref(app).snapshot().clone();
         let inventory = CockpitModel::as_ref(app).inventory().clone();
         let managed_fleet = CockpitModel::as_ref(app).managed_fleet().clone();
         // The live object tree remains independent of account discovery: local
@@ -1667,74 +1266,9 @@ impl View for CockpitPanel {
             Flex::column().finish()
         };
 
-        let mut account_content = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_main_axis_size(MainAxisSize::Min);
-
-        // A degraded scan with some accounts present: the list may be missing others
-        // (e.g. a broken Codex sign-in). Warn above the accounts; the empty case shows
-        // this in its own placeholder instead.
-        if !snapshot.accounts.is_empty()
-            && matches!(snapshot.health, zaplex_cockpit::ScanHealth::Degraded(_))
-        {
-            account_content = account_content.with_child(
-                Container::new(self.render_scan_placeholder(&snapshot.health, enabled, appearance))
-                    .with_uniform_padding(CARD_PADDING)
-                    .with_margin_bottom(CARD_SPACING * 2.0)
-                    .finish(),
-            );
-        }
-
-        // ── AI-Accounts zone-card (below the hosts, spec §2.1). One flat card
-        // holding the fleet-usage header + one flat block per account. Empty
-        // accounts show a calm hint instead (a section under the hosts, not the
-        // whole panel — hosts stay visible without an account).
-        if snapshot.accounts.is_empty() {
-            // Keep the section header, but show zero only after a successful scan.
-            // Pending or degraded discovery is unknown rather than empty.
-            let empty = Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_main_axis_size(MainAxisSize::Min)
-                .with_child(
-                    Container::new(Self::render_zone_header(
-                        crate::t!("cockpit-zone-accounts").to_string(),
-                        account_count_presentation(&snapshot.health, 0),
-                        None,
-                        theme.surface_2(),
-                        appearance,
-                    ))
-                    .with_margin_bottom(CARD_SPACING * 2.0)
-                    .finish(),
-                )
-                .with_child(self.render_scan_placeholder(&snapshot.health, enabled, appearance));
-            account_content = account_content.with_child(
-                Container::new(empty.finish())
-                    .with_uniform_padding(CARD_PADDING)
-                    .finish(),
-            );
-        } else {
-            let selected = CockpitModel::as_ref(app)
-                .selected_account()
-                .map(str::to_string);
-            let mut accounts = Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_main_axis_size(MainAxisSize::Min)
-                .with_child(
-                    Container::new(self.render_header(snapshot.accounts.len(), appearance))
-                        .with_margin_bottom(CARD_SPACING * 2.0)
-                        .finish(),
-                );
-            for acct in &snapshot.accounts {
-                let is_selected = selected.as_deref() == Some(acct.account.key.as_str());
-                accounts = accounts.with_child(self.render_card(acct, is_selected, appearance));
-            }
-            account_content = account_content.with_child(
-                zone_card(accounts.finish(), appearance)
-                    .with_uniform_padding(CARD_PADDING)
-                    .finish(),
-            );
-        }
-
+        // The session tree owns the full sidebar height with one scroll state;
+        // the accounts are a separate toolbelt view and can no longer be pushed
+        // out of view by a long inventory (#504).
         let session_scroll = ClippedScrollable::vertical(
             self.session_scroll_state.clone(),
             session_content,
@@ -1745,29 +1279,8 @@ impl View for CockpitPanel {
         )
         .with_overlayed_scrollbar()
         .finish();
-        let account_scroll = ClippedScrollable::vertical(
-            self.account_scroll_state.clone(),
-            account_content.finish(),
-            ScrollbarWidth::Auto,
-            theme.disabled_text_color(theme.surface_2()).into(),
-            theme.main_text_color(theme.surface_2()).into(),
-            ElementFill::None,
-        )
-        .with_overlayed_scrollbar()
-        .finish();
 
-        // The upper and lower zones scroll independently. A long session tree
-        // receives at most three fifths of the available height, so account
-        // capacity remains visible without adding another navigation mode.
-        let body_el = Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_spacing(CARD_SPACING * 2.0)
-            .with_child(Shrinkable::new(3.0, session_scroll).finish())
-            .with_child(Shrinkable::new(2.0, account_scroll).finish())
-            .finish();
-
-        Container::new(body_el)
+        Container::new(session_scroll)
             .with_uniform_padding(CARD_PADDING)
             .with_background(theme.surface_2())
             .finish()
@@ -1775,13 +1288,12 @@ impl View for CockpitPanel {
 }
 
 impl Entity for CockpitPanel {
-    type Event = CockpitPanelEvent;
+    type Event = ();
 }
 
 /// Sidebar actions (routed back into the view by the action system).
 #[derive(Clone, Debug)]
 pub enum CockpitPanelAction {
-    OpenDashboardPane,
     /// Collapse/expand a connected host root. Absent means expanded.
     ToggleHost(String),
     /// Collapse/expand a project group in the Host → Projekt → Session tree,
@@ -1790,13 +1302,6 @@ pub enum CockpitPanelAction {
     ToggleProject(String),
     /// Collapse/expand a terminal/PTY Session container. Absent means expanded.
     ToggleSession(String),
-    /// Select an account (its `account.key`) → open (or focus) that account's
-    /// own pane and carry a stable highlight in the sidebar. A second click
-    /// focuses the pane; it does not de-select.
-    SelectAccount(String),
-    /// Re-run the account scan — the retry on the loading/scan-failed/empty
-    /// placeholder.
-    Rescan,
 }
 
 impl TypedActionView for CockpitPanel {
@@ -1804,9 +1309,6 @@ impl TypedActionView for CockpitPanel {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            CockpitPanelAction::OpenDashboardPane => {
-                ctx.emit(CockpitPanelEvent::OpenCockpitPane(None));
-            }
             CockpitPanelAction::ToggleHost(key) => {
                 let current = self.expanded_hosts.get(key).copied().unwrap_or(true);
                 self.expanded_hosts.insert(key.clone(), !current);
@@ -1822,19 +1324,6 @@ impl TypedActionView for CockpitPanel {
                 let current = self.expanded_sessions.get(key).copied().unwrap_or(true);
                 self.expanded_sessions.insert(key.clone(), !current);
                 ctx.notify();
-            }
-            CockpitPanelAction::SelectAccount(key) => {
-                // Mark it selected (the sidebar highlight follows), then open —
-                // or focus — that account's own pane. Clicking the same card
-                // again lands here too and simply focuses the pane it already
-                // has: the selection no longer toggles off underneath it.
-                let key = key.clone();
-                CockpitModel::handle(ctx)
-                    .update(ctx, |model, ctx| model.select_account(key.clone(), ctx));
-                ctx.emit(CockpitPanelEvent::OpenCockpitPane(Some(key)));
-            }
-            CockpitPanelAction::Rescan => {
-                CockpitModel::handle(ctx).update(ctx, |model, ctx| model.rescan(ctx));
             }
         }
     }

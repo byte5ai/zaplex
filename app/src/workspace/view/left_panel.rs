@@ -7,9 +7,10 @@ use warp_core::{send_telemetry_from_ctx, ui::Icon, HostId, SessionId};
 use warp_util::path::LineAndColumnArg;
 use warpui::{
     elements::{
-        resizable_state_handle, ChildView, ConstrainedBox, Container, CrossAxisAlignment,
-        DragBarSide, Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        ParentElement, Resizable, ResizableStateHandle, Shrinkable,
+        resizable_state_handle, ChildView, ConstrainedBox, Container, CornerRadius,
+        CrossAxisAlignment, DragBarSide, Element, Empty, Fill as ElementFill, Flex,
+        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable,
+        ResizableStateHandle, Shrinkable,
     },
     platform::Cursor,
     ui_components::components::{Coords, UiComponent, UiComponentStyles},
@@ -20,7 +21,10 @@ use warpui::{
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::skills::{SkillManager, SkillOpenOrigin};
-use crate::cockpit::CockpitPanel;
+use crate::cockpit::accounts_panel::CockpitAccountsPanelEvent;
+use crate::cockpit::model::{CockpitEvent, CockpitModel};
+use crate::cockpit::style::attention_coloru;
+use crate::cockpit::{CockpitAccountsPanel, CockpitPanel};
 use crate::code::editor_management::CodeSource;
 #[cfg(feature = "local_fs")]
 use crate::code::file_tree::FileTreeEvent;
@@ -65,6 +69,7 @@ use crate::{
     ui_components::{
         buttons::{icon_button, icon_button_with_color},
         icons,
+        red_notification_dot::RedNotificationDot,
     },
     util::bindings::keybinding_name_to_display_string,
     workspace::WorkspaceAction,
@@ -81,6 +86,7 @@ struct MouseStateHandles {
     server_file_browser_button: MouseStateHandle,
     skill_manager_button: MouseStateHandle,
     cockpit_button: MouseStateHandle,
+    cockpit_accounts_button: MouseStateHandle,
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +99,7 @@ pub enum LeftPanelAction {
     ServerFileBrowser,
     SkillManager,
     Cockpit,
+    CockpitAccounts,
     ReturnFromSecondaryView,
 }
 
@@ -178,6 +185,7 @@ pub enum ToolPanelView {
     ServerFileBrowser,
     SkillManager,
     Cockpit,
+    CockpitAccounts,
 }
 
 /// Encapsulates the active view state to enforce that all mutations go through
@@ -249,6 +257,7 @@ pub struct LeftPanelView {
     server_file_browser_view: ViewHandle<ServerFileBrowserView>,
     skill_manager_view: ViewHandle<SkillManagerPanel>,
     cockpit_view: ViewHandle<CockpitPanel>,
+    cockpit_accounts_view: ViewHandle<CockpitAccountsPanel>,
     active_view: active_view_state::ActiveViewState,
     available_views: Vec<ToolPanelView>,
     toolbelt_buttons: Vec<ToolbeltButtonConfig>,
@@ -287,6 +296,13 @@ fn secondary_return_target(
 
     (active_view == ToolPanelView::SshManager && cockpit_is_primary && !ssh_manager_is_primary)
         .then_some(ToolPanelView::Cockpit)
+}
+
+/// The Sessions toolbelt entry carries the amber waiting mark while another
+/// view hides the tree, so switching to the accounts never hides that an agent
+/// needs the user (#504). The tree's own header shows the count when it is open.
+fn sessions_entry_shows_attention(active_view: ToolPanelView, needs_me: usize) -> bool {
+    needs_me > 0 && active_view != ToolPanelView::Cockpit
 }
 
 fn view_remains_available(active_view: ToolPanelView, available_views: &[ToolPanelView]) -> bool {
@@ -340,9 +356,17 @@ impl LeftPanelView {
         let server_file_browser_view = ctx.add_typed_action_view(ServerFileBrowserView::new);
         let skill_manager_view = ctx.add_typed_action_view(SkillManagerPanel::new);
         let cockpit_view = ctx.add_typed_action_view(CockpitPanel::new);
-        ctx.subscribe_to_view(&cockpit_view, |_, _, event, ctx| match event {
-            crate::cockpit::panel::CockpitPanelEvent::OpenCockpitPane(account_key) => {
+        let cockpit_accounts_view = ctx.add_typed_action_view(CockpitAccountsPanel::new);
+        ctx.subscribe_to_view(&cockpit_accounts_view, |_, _, event, ctx| match event {
+            CockpitAccountsPanelEvent::OpenCockpitPane(account_key) => {
                 ctx.emit(LeftPanelEvent::OpenCockpitPane(account_key.clone()));
+            }
+        });
+        // The Sessions toolbelt entry mirrors waiting attention while another
+        // view is active, so the toolbelt re-renders with the live inventory.
+        ctx.subscribe_to_model(&CockpitModel::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, CockpitEvent::Updated) {
+                ctx.notify();
             }
         });
         ctx.subscribe_to_view(&ssh_manager_view, |_me, _, event, ctx| {
@@ -521,6 +545,7 @@ impl LeftPanelView {
             server_file_browser_view,
             skill_manager_view,
             cockpit_view,
+            cockpit_accounts_view,
             active_view: active_view_state::new(active_view),
             available_views: views,
             toolbelt_buttons,
@@ -692,6 +717,18 @@ impl LeftPanelView {
                     active_icon: None,
                     tooltip_text: crate::t!("workspace-left-panel-cockpit"),
                     action: LeftPanelAction::Cockpit,
+                    render_with_active_state: false,
+                    tooltip_keybinding: None,
+                    tooltip_keybinding_names,
+                }
+            }
+            ToolPanelView::CockpitAccounts => {
+                let tooltip_keybinding_names = Vec::new();
+                ToolbeltButtonConfig {
+                    icon: Icon::Users,
+                    active_icon: None,
+                    tooltip_text: crate::t!("workspace-left-panel-cockpit-accounts"),
+                    action: LeftPanelAction::CockpitAccounts,
                     render_with_active_state: false,
                     tooltip_keybinding: None,
                     tooltip_keybinding_names,
@@ -978,6 +1015,9 @@ impl LeftPanelView {
             ToolPanelView::Cockpit => {
                 ctx.focus(&self.cockpit_view);
             }
+            ToolPanelView::CockpitAccounts => {
+                ctx.focus(&self.cockpit_accounts_view);
+            }
         }
     }
 
@@ -1156,6 +1196,9 @@ impl LeftPanelView {
                     self.active_view.get() == ToolPanelView::SkillManager
                 }
                 LeftPanelAction::Cockpit => self.active_view.get() == ToolPanelView::Cockpit,
+                LeftPanelAction::CockpitAccounts => {
+                    self.active_view.get() == ToolPanelView::CockpitAccounts
+                }
                 LeftPanelAction::ReturnFromSecondaryView => false,
             };
         }
@@ -1225,6 +1268,20 @@ impl LeftPanelView {
         })
         .with_cursor(Cursor::PointingHand)
         .finish()
+    }
+
+    /// A small static amber dot on a toolbelt button's corner: the theme's one
+    /// attention role, no text and no change to the button's geometry.
+    fn with_attention_mark(button: Box<dyn Element>, appearance: &Appearance) -> Box<dyn Element> {
+        let diameter = 6.;
+        let styles = UiComponentStyles {
+            width: Some(diameter),
+            height: Some(diameter),
+            border_radius: Some(CornerRadius::with_all(Radius::Percentage(50.))),
+            background: Some(ElementFill::Solid(attention_coloru(appearance))),
+            ..Default::default()
+        };
+        RedNotificationDot::render_with_offset(button, &styles, (-diameter / 2., diameter / 2.))
     }
 }
 
@@ -1309,6 +1366,9 @@ impl LeftPanelView {
             }
             LeftPanelAction::Cockpit => {
                 active_view_state::set(self, ToolPanelView::Cockpit, ctx);
+            }
+            LeftPanelAction::CockpitAccounts => {
+                active_view_state::set(self, ToolPanelView::CockpitAccounts, ctx);
             }
             LeftPanelAction::ReturnFromSecondaryView => {
                 if let Some(return_target) =
@@ -1421,6 +1481,7 @@ impl View for LeftPanelView {
                 ToolPanelView::ServerFileBrowser => ctx.focus(&self.server_file_browser_view),
                 ToolPanelView::SkillManager => ctx.focus(&self.skill_manager_view),
                 ToolPanelView::Cockpit => ctx.focus(&self.cockpit_view),
+                ToolPanelView::CockpitAccounts => ctx.focus(&self.cockpit_accounts_view),
             }
         }
     }
@@ -1439,7 +1500,12 @@ impl View for LeftPanelView {
             self.mouse_state_handles.server_file_browser_button.clone(),
             self.mouse_state_handles.skill_manager_button.clone(),
             self.mouse_state_handles.cockpit_button.clone(),
+            self.mouse_state_handles.cockpit_accounts_button.clone(),
         ];
+        let sessions_attention = sessions_entry_shows_attention(
+            self.active_view.get(),
+            CockpitModel::as_ref(app).inventory().needs_me,
+        );
 
         // If there is only one button in the toolbelt row,
         // there is no need to show it as it's a bit redundant.
@@ -1450,7 +1516,15 @@ impl View for LeftPanelView {
                     .with_spacing(4.0)
                     .with_children(self.toolbelt_buttons.iter().zip(&mouse_state_handles).map(
                         |(button_config, mouse_state)| {
-                            Self::render_button(button_config, mouse_state.clone(), appearance)
+                            let button =
+                                Self::render_button(button_config, mouse_state.clone(), appearance);
+                            if sessions_attention
+                                && matches!(button_config.action, LeftPanelAction::Cockpit)
+                            {
+                                Self::with_attention_mark(button, appearance)
+                            } else {
+                                button
+                            }
                         },
                     ))
                     .with_main_axis_size(MainAxisSize::Min)
@@ -1524,6 +1598,14 @@ impl View for LeftPanelView {
             ToolPanelView::Cockpit => Shrinkable::new(
                 1.0,
                 Container::new(ChildView::new(&self.cockpit_view).finish())
+                    .with_padding_left(2.)
+                    .with_padding_right(2.)
+                    .finish(),
+            )
+            .finish(),
+            ToolPanelView::CockpitAccounts => Shrinkable::new(
+                1.0,
+                Container::new(ChildView::new(&self.cockpit_accounts_view).finish())
                     .with_padding_left(2.)
                     .with_padding_right(2.)
                     .finish(),

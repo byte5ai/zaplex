@@ -32,7 +32,8 @@ The previous static illustrations are superseded, not alternative approved layou
 
 ## Non-goals
 
-- No new app-wide icon rail or navigation system.
+- No new app-wide icon rail or navigation system. Adding the „KI-Konten“ entry to the existing
+  horizontal toolbelt (#504) is not a new navigation system.
 - No provider level between host and project.
 - No second connection registry or account-override store.
 - No runtime dependency on either reference repository.
@@ -336,8 +337,12 @@ The previous static illustrations are superseded, not alternative approved layou
     roles only; no hard-coded colors or decorative pane borders are introduced. Both usage windows
     are stacked across the account-card width, and large account panes preserve existing session
     actions and cost/token provenance without repeating provider identity.
-    The live tree and account area scroll independently inside the existing Cockpit sidebar;
-    large session inventories must not push the account section out of view.
+    The live tree („KI-Sessions“) and the account cards („KI-Konten“) are two separate,
+    labelled entries of the existing horizontal sidebar toolbelt, each with the full sidebar
+    height and its own scroll state (#504). A session inventory of any length therefore never
+    pushes the accounts out of reach. While another view is active, the Sessions entry carries
+    the amber waiting mark when an agent needs the user. This supersedes the earlier
+    three-fifths height cap inside one Cockpit view.
 
 ## Verbindliche Bedienungs- und Refresh-Korrekturen
 

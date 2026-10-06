@@ -2449,7 +2449,13 @@ fn split_launch_menu_items(
 
 fn primary_host_navigation_views(cockpit_enabled: bool) -> Vec<ToolPanelView> {
     if cockpit_enabled {
-        vec![ToolPanelView::Cockpit, ToolPanelView::SshManager]
+        // Sessions and accounts are sibling entries (#504): a long session
+        // inventory must never push the account overview out of reach.
+        vec![
+            ToolPanelView::Cockpit,
+            ToolPanelView::CockpitAccounts,
+            ToolPanelView::SshManager,
+        ]
     } else {
         vec![ToolPanelView::SshManager]
     }
@@ -5555,6 +5561,7 @@ impl Workspace {
                 LeftPanelDisplayedTab::ServerFileBrowser => ToolPanelView::ServerFileBrowser,
                 LeftPanelDisplayedTab::SkillManager => ToolPanelView::SkillManager,
                 LeftPanelDisplayedTab::Cockpit => ToolPanelView::Cockpit,
+                LeftPanelDisplayedTab::CockpitAccounts => ToolPanelView::CockpitAccounts,
             };
             lp.restore_active_view_from_snapshot(active_view, ctx);
             lp.set_active_pane_group(pane_group.clone(), &self.working_directories_model, ctx);
@@ -26369,6 +26376,9 @@ impl Workspace {
                             crate::t!("workspace-left-panel-skill-manager")
                         }
                         ToolPanelView::Cockpit => crate::t!("workspace-left-panel-cockpit"),
+                        ToolPanelView::CockpitAccounts => {
+                            crate::t!("workspace-left-panel-cockpit-accounts")
+                        }
                     }
                 } else {
                     crate::t!("workspace-tools-panel-tooltip")
@@ -26439,6 +26449,9 @@ impl Workspace {
                     crate::t!("workspace-left-panel-skill-manager")
                 }
                 ToolPanelView::Cockpit => crate::t!("workspace-left-panel-cockpit"),
+                ToolPanelView::CockpitAccounts => {
+                    crate::t!("workspace-left-panel-cockpit-accounts")
+                }
             }
         } else {
             crate::t!("workspace-tools-panel-tooltip")

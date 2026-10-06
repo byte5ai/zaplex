@@ -452,10 +452,14 @@ Sidebar account cards stack the five-hour and weekly meters so each meter receiv
 available text width. Unknown and estimated values retain their semantic state and never render as
 measured zero. The Cockpit and Connections panels share existing layout constants/components for
 section headers, hierarchy indentation, row heights, flexible identity, and fixed action slots.
-The two Cockpit sections retain independent scroll state and bounded flexible height so a large
-session tree cannot displace the account section. The session area receives at most three fifths
-of available height; unused account space does not expand this cap. This preserves the existing
-navigation.
+The session tree (`ToolPanelView::Cockpit`, `CockpitPanel`) and the account cards
+(`ToolPanelView::CockpitAccounts`, `CockpitAccountsPanel`) are two entries of the existing
+left-panel toolbelt (#504). Each view owns the full sidebar height and one scroll state; both read
+the same `CockpitModel`. A persisted `LeftPanelDisplayedTab::Cockpit` restores the tree, as before.
+While another view is active and the fleet has waiting agents, the toolbelt draws a static amber
+mark on the Sessions entry (`sessions_entry_shows_attention`). The `w`-jump binding stays scoped to
+both sidebar views and the roomy pane. This replaces the earlier three-fifths height cap inside one
+Cockpit view.
 Native colors, borders, selection, hover, focus, status, and progress resolve exclusively through
 `appearance.theme()` and existing component themes; the HTML artifact defines role relationships,
 not literal color values. No provider-colored border or other decorative pane outline is added.

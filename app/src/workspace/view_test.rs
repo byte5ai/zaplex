@@ -1904,7 +1904,11 @@ fn split_picker_distinguishes_unreadable_registry_from_empty_registry() {
 fn primary_sidebar_keeps_cockpit_and_connections_separate() {
     assert_eq!(
         super::primary_host_navigation_views(true),
-        vec![ToolPanelView::Cockpit, ToolPanelView::SshManager]
+        vec![
+            ToolPanelView::Cockpit,
+            ToolPanelView::CockpitAccounts,
+            ToolPanelView::SshManager,
+        ]
     );
 }
 
@@ -1913,7 +1917,27 @@ fn connections_remains_available_when_cockpit_is_enabled() {
     let views = super::primary_host_navigation_views(true);
     assert!(views.contains(&ToolPanelView::SshManager));
     assert!(views.contains(&ToolPanelView::Cockpit));
-    assert_eq!(views.len(), 2);
+    assert_eq!(views.len(), 3);
+}
+
+#[test]
+fn toolbelt_has_separate_sessions_and_accounts_views() {
+    // #504: the session tree and the account cards are two entries side by
+    // side, so a long inventory never pushes the accounts out of reach.
+    let views = super::primary_host_navigation_views(true);
+    let sessions = views
+        .iter()
+        .position(|view| *view == ToolPanelView::Cockpit);
+    let accounts = views
+        .iter()
+        .position(|view| *view == ToolPanelView::CockpitAccounts);
+    assert_eq!(sessions, Some(0));
+    assert_eq!(accounts, Some(1));
+    // With the Cockpit off, neither view is offered; Connections stays.
+    assert_eq!(
+        super::primary_host_navigation_views(false),
+        vec![ToolPanelView::SshManager]
+    );
 }
 
 #[test]
