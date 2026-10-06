@@ -5739,6 +5739,338 @@ fn file_manager_directory_rejects_local_subshell_namespaces() {
     });
 }
 
+/// Makes `shell` this pane's own idle root shell: local, or the daemon root
+/// shell behind `connection`. The file manager binds to exactly such a shell.
+fn bind_file_manager_shell(
+    view: &mut TerminalView,
+    shell: SessionId,
+    connection: Option<SessionId>,
+    ctx: &mut ViewContext<TerminalView>,
+) {
+    let session_type = if connection.is_some() {
+        BootstrapSessionType::ZaplexifiedRemote
+    } else {
+        BootstrapSessionType::Local
+    };
+    view.sessions.update(ctx, |sessions, _| {
+        sessions.register_session_for_test(
+            SessionInfo::new_for_test()
+                .with_id(shell)
+                .with_session_type(session_type),
+        );
+    });
+    view.is_login_shell_bootstrapped = true;
+    view.active_block_metadata = Some(BlockMetadata::new(
+        Some(shell),
+        Some("/home/dev".to_string()),
+    ));
+    if let Some(connection) = connection {
+        view.remote_input_session_id = Some(connection);
+        view.remote_input_phase = Some(RemoteInputPhase::Ready);
+    }
+    view.begin_file_manager_navigation(connection.is_none(), true, ctx);
+    assert!(matches!(
+        view.file_manager_origin,
+        Some(FileManagerOrigin::Session { id, .. }) if id == shell
+    ));
+}
+
+/// The shell process ends: the model latches the exit, then reports it.
+fn exit_shell_process(view: &mut TerminalView, ctx: &mut ViewContext<TerminalView>) {
+    let reason = crate::terminal::model::terminal_model::ExitReason::PtyDisconnected;
+    view.model.lock().exit(reason);
+    view.handle_terminal_event(&ModelEvent::Exit { reason }, ctx);
+}
+
+/// A directory deferred while its shell was busy is reported exactly once when
+/// that shell can never reach an idle prompt again: it is neither parked
+/// forever nor drafted into an editor whose shell is gone, and the teardown
+/// that follows finds nothing left to report.
+#[test]
+fn file_manager_directory_deferred_then_shell_ends_is_reported_once() {
+    #[derive(Clone, Copy, Debug)]
+    enum Ending {
+        ProcessExit,
+        /// A non-zero remote exit, or a transport lost for good.
+        RemoteFailed,
+        RemoteCorrupt,
+        RemoteCancelled,
+        RemoteRaw,
+        /// `exit` in the remote shell closes the pane.
+        RemoteCleanExit,
+    }
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let toasts = record_toasts(&mut app);
+        for (index, ending) in [
+            Ending::ProcessExit,
+            Ending::RemoteFailed,
+            Ending::RemoteCorrupt,
+            Ending::RemoteCancelled,
+            Ending::RemoteRaw,
+            Ending::RemoteCleanExit,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let shell = SessionId::from(940u64 + index as u64);
+            let remote = !matches!(ending, Ending::ProcessExit);
+            let connection = remote.then(|| SessionId::from((1u64 << 63) + 940 + index as u64));
+            let deferred = PathBuf::from(format!("/srv/fm deferred {ending:?}"));
+            let reported_before = toasts.lock().unwrap().len();
+            let terminal = add_window_with_terminal(&mut app, None);
+            terminal.update(&mut app, |view, ctx| {
+                bind_file_manager_shell(view, shell, connection, ctx);
+                // What closing the file manager leaves behind while the bound
+                // shell is busy (the input tests cover the deferral itself).
+                // The model stays idle here, so a cd wrongly drafted into the
+                // editor of a shell that is gone would show up below.
+                view.pending_file_manager_directory = Some(deferred.clone());
+                match ending {
+                    Ending::ProcessExit => exit_shell_process(view, ctx),
+                    Ending::RemoteFailed => {
+                        view.set_remote_input_phase(RemoteInputPhase::Failed, connection, ctx)
+                    }
+                    Ending::RemoteCorrupt => view.mark_corrupt_remote_restore(ctx),
+                    Ending::RemoteCancelled => view.cancel_remote_input_readiness(ctx),
+                    Ending::RemoteRaw => {
+                        view.set_remote_input_phase(RemoteInputPhase::Raw, connection, ctx)
+                    }
+                    Ending::RemoteCleanExit => view.close_after_clean_remote_exit(connection, ctx),
+                }
+                assert!(view.pending_file_manager_directory.is_none(), "{ending:?}");
+                assert!(view.file_manager_origin.is_none(), "{ending:?}");
+                assert_eq!(view.input_draft(ctx), "", "{ending:?}");
+                if remote {
+                    // A daemon pane's model exits once its connection is torn down.
+                    exit_shell_process(view, ctx);
+                }
+            });
+            let toasts = toasts.lock().unwrap().clone();
+            let reported = &toasts[reported_before..];
+            assert_eq!(reported.len(), 1, "{ending:?}: {toasts:?}");
+            assert!(
+                reported[0].contains(deferred.to_str().unwrap()),
+                "{ending:?}: {toasts:?}"
+            );
+        }
+    });
+}
+
+/// Without a deferred directory, a shell ending says nothing. A file manager
+/// still open on that shell names its folder once it closes, never as a draft.
+#[test]
+fn file_manager_directory_shell_end_without_deferred_directory_stays_quiet() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let toasts = record_toasts(&mut app);
+
+        // Nothing was ever handed off to this shell.
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.is_login_shell_bootstrapped = true;
+            exit_shell_process(view, ctx);
+            assert!(view.file_manager_origin.is_none());
+        });
+        assert!(toasts.lock().unwrap().is_empty());
+
+        // The connection fails while the file manager is still open.
+        let shell = SessionId::from(951u64);
+        let connection = SessionId::from((1u64 << 63) + 951);
+        let browsed = PathBuf::from("/srv/fm still open");
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            bind_file_manager_shell(view, shell, Some(connection), ctx);
+            view.set_remote_input_phase(RemoteInputPhase::Failed, Some(connection), ctx);
+            exit_shell_process(view, ctx);
+            assert!(view.pending_file_manager_directory.is_none());
+        });
+        assert!(
+            toasts.lock().unwrap().is_empty(),
+            "nothing was deferred, so there is nothing to report yet"
+        );
+        terminal.update(&mut app, |view, ctx| {
+            view.finish_file_manager_navigation(Some(browsed.clone()), ctx);
+            assert!(view.file_manager_origin.is_none());
+            assert!(view.pending_file_manager_directory.is_none());
+            assert_eq!(view.input_draft(ctx), "");
+        });
+        let toasts = toasts.lock().unwrap().clone();
+        assert_eq!(toasts.len(), 1, "{toasts:?}");
+        assert!(toasts[0].contains(browsed.to_str().unwrap()), "{toasts:?}");
+    });
+}
+
+/// A classic-SSH pane: its local shell ran `ssh`, and `remote` is the shell
+/// that completed that connection, active and bound by the file manager.
+fn bind_classic_ssh_file_manager_shell(
+    view: &mut TerminalView,
+    local: SessionId,
+    remote: SessionId,
+    ctx: &mut ViewContext<TerminalView>,
+) {
+    view.sessions.update(ctx, |sessions, _| {
+        sessions.register_session_for_test(
+            SessionInfo::new_for_test()
+                .with_id(local)
+                .with_session_type(BootstrapSessionType::Local),
+        );
+        sessions.register_session_for_test(
+            SessionInfo::new_for_test()
+                .with_id(remote)
+                .with_session_type(BootstrapSessionType::ZaplexifiedRemote),
+        );
+    });
+    view.is_login_shell_bootstrapped = true;
+    view.remote_input_phase = Some(RemoteInputPhase::Ready);
+    view.classic_ssh_root_session_id = Some(remote);
+    view.active_block_metadata = Some(BlockMetadata::new(
+        Some(remote),
+        Some("/srv/home".to_string()),
+    ));
+    view.begin_file_manager_navigation(false, true, ctx);
+    assert!(matches!(
+        view.file_manager_origin,
+        Some(FileManagerOrigin::Session { id, .. }) if id == remote
+    ));
+}
+
+/// Records every command the terminal's input hands to a shell.
+fn record_input_commands(
+    terminal: &ViewHandle<TerminalView>,
+    app: &mut App,
+) -> async_channel::Receiver<String> {
+    let input = terminal.read(app, |view, _| view.input().clone());
+    let (tx, rx) = async_channel::unbounded();
+    app.update(|ctx| {
+        ctx.subscribe_to_view(&input, move |_, event, _| {
+            if let InputEvent::ExecuteCommand(event) = event {
+                let _ = tx.try_send(event.command.clone());
+            }
+        });
+    });
+    rx
+}
+
+/// After the remote shell of a classic-SSH pane ends, the pane is back in its
+/// local shell: a remote directory is reported, never drafted or run there.
+#[test]
+fn file_manager_directory_classic_ssh_remote_exit_never_drafts_into_local_shell() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let toasts = record_toasts(&mut app);
+        let (local, remote) = (SessionId::from(960u64), SessionId::from(961u64));
+        let back_in_local_shell = |view: &mut TerminalView| {
+            view.active_block_metadata = Some(BlockMetadata::new(
+                Some(local),
+                Some("/Users/dev".to_string()),
+            ));
+        };
+
+        // Deferred while the remote shell was busy; then `exit` there, and the
+        // local shell's next prompt retries the directory.
+        let deferred = PathBuf::from("/srv/remote deferred");
+        let terminal = add_window_with_terminal(&mut app, None);
+        let executed = record_input_commands(&terminal, &mut app);
+        terminal.update(&mut app, |view, ctx| {
+            bind_classic_ssh_file_manager_shell(view, local, remote, ctx);
+            view.pending_file_manager_directory = Some(deferred.clone());
+            back_in_local_shell(view);
+            view.apply_file_manager_directory(ctx);
+            assert!(view.pending_file_manager_directory.is_none());
+            assert!(view.file_manager_origin.is_none());
+            assert_eq!(view.input_draft(ctx), "");
+        });
+        assert!(executed.try_recv().is_err(), "nothing may run locally");
+        {
+            let toasts = toasts.lock().unwrap();
+            assert_eq!(toasts.len(), 1, "{toasts:?}");
+            assert!(toasts[0].contains(deferred.to_str().unwrap()), "{toasts:?}");
+        }
+
+        // The remote shell ends while the file manager is still open; it closes
+        // only after the local shell is back.
+        let browsed = PathBuf::from("/srv/remote browsed");
+        let terminal = add_window_with_terminal(&mut app, None);
+        let executed = record_input_commands(&terminal, &mut app);
+        terminal.update(&mut app, |view, ctx| {
+            bind_classic_ssh_file_manager_shell(view, local, remote, ctx);
+            back_in_local_shell(view);
+            view.apply_file_manager_directory(ctx);
+            view.finish_file_manager_navigation(Some(browsed.clone()), ctx);
+            assert!(view.file_manager_origin.is_none());
+            assert!(view.pending_file_manager_directory.is_none());
+            assert_eq!(view.input_draft(ctx), "");
+        });
+        assert!(executed.try_recv().is_err(), "nothing may run locally");
+        let toasts = toasts.lock().unwrap().clone();
+        assert_eq!(toasts.len(), 2, "{toasts:?}");
+        assert!(toasts[1].contains(browsed.to_str().unwrap()), "{toasts:?}");
+    });
+}
+
+/// While the remote shell of a classic-SSH pane is alive and active, nothing
+/// changes: a deferred directory waits for its prompt, and a directory that
+/// shell cannot take is still offered there as a draft to confirm.
+#[test]
+fn file_manager_directory_classic_ssh_live_remote_shell_keeps_its_directory() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let toasts = record_toasts(&mut app);
+        let (local, remote) = (SessionId::from(962u64), SessionId::from(963u64));
+
+        let deferred = PathBuf::from("/srv/remote busy");
+        let terminal = add_window_with_terminal(&mut app, None);
+        let executed = record_input_commands(&terminal, &mut app);
+        terminal.update(&mut app, |view, ctx| {
+            bind_classic_ssh_file_manager_shell(view, local, remote, ctx);
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 600", "still running");
+            view.finish_file_manager_navigation(Some(deferred.clone()), ctx);
+            // Another readiness or prompt event while the process still runs.
+            view.apply_file_manager_directory(ctx);
+            assert_eq!(
+                view.pending_file_manager_directory.as_deref(),
+                Some(deferred.as_path())
+            );
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Session { id, .. }) if id == remote
+            ));
+            assert_eq!(view.input_draft(ctx), "");
+        });
+        assert!(
+            executed.try_recv().is_err(),
+            "the remote process owns the shell"
+        );
+        {
+            let toasts = toasts.lock().unwrap();
+            assert_eq!(
+                toasts.len(),
+                1,
+                "only the deferral is announced: {toasts:?}"
+            );
+            assert!(toasts[0].contains(deferred.to_str().unwrap()), "{toasts:?}");
+        }
+
+        let offered = PathBuf::from("/srv/remote offered");
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            bind_classic_ssh_file_manager_shell(view, local, remote, ctx);
+            view.pending_file_manager_directory = Some(offered.clone());
+            view.abandon_file_manager_directory(ctx);
+            let shell = view.active_session_shell_type(ctx).unwrap();
+            assert_eq!(
+                view.input_draft(ctx),
+                file_manager_directory_command(&offered, shell).unwrap(),
+                "the same remote shell still gets the draft to confirm"
+            );
+        });
+        assert_eq!(toasts.lock().unwrap().len(), 1);
+    });
+}
+
 #[test]
 fn cancelled_pending_attach_retains_draft_and_rejects_late_readiness() {
     App::test((), |mut app| async move {

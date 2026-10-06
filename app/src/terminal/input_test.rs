@@ -7602,6 +7602,148 @@ fn file_manager_directory_waits_for_busy_shell_then_applies_at_next_prompt() {
     });
 }
 
+/// Closes the file manager on `navigated` while a process owns the shell, so
+/// the directory is deferred to the shell's next idle prompt.
+fn defer_file_manager_directory(
+    terminal: &ViewHandle<TerminalView>,
+    app: &mut App,
+    is_local: bool,
+    navigated: &Path,
+) {
+    terminal.update(app, |view, _| {
+        view.model
+            .lock()
+            .simulate_long_running_block("agent", "agent is working");
+    });
+    terminal.update(app, |view, ctx| {
+        view.begin_file_manager_navigation(is_local, true, ctx);
+        view.finish_file_manager_navigation(Some(navigated.to_path_buf()), ctx);
+    });
+}
+
+#[test]
+fn file_manager_directory_deferred_then_shell_exit_reports_it_once() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let shell_session = input.read(&app, |input, _| input.active_block_session_id().unwrap());
+        relay_block_metadata(
+            &terminal,
+            &mut app,
+            BlockMetadata::new(Some(shell_session), None),
+        );
+        let executed = record_executed_commands(&input, &mut app);
+        let toasts = record_toast_texts(&mut app);
+        let (exited_tx, exited_rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if matches!(event, crate::terminal::view::Event::Exited) {
+                    let _ = exited_tx.try_send(());
+                }
+            });
+        });
+        let navigated = PathBuf::from("/tmp/zaplex fm exit target");
+        defer_file_manager_directory(&terminal, &mut app, true, &navigated);
+        assert_eq!(toasts.lock().unwrap().len(), 1, "the deferral is announced");
+
+        // The shell process dies before it ever returns to an idle prompt.
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .exit(crate::terminal::model::terminal_model::ExitReason::PtyDisconnected);
+        });
+        exited_rx
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("expected the shell exit to reach the terminal")
+            .expect("exit channel closed");
+        let toasts = toasts.lock().unwrap().clone();
+        assert_eq!(toasts.len(), 2, "{toasts:?}");
+        assert_ne!(
+            toasts[0], toasts[1],
+            "the second notice is the not-applied one"
+        );
+        assert!(
+            toasts[1].contains(navigated.to_str().unwrap()),
+            "{toasts:?}"
+        );
+        assert!(
+            executed.try_recv().is_err(),
+            "nothing may be written to a shell that exited"
+        );
+    });
+}
+
+#[test]
+fn file_manager_directory_deferred_survives_reconnect_to_the_same_shell() {
+    use crate::terminal::view::RemoteInputPhase;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let shell_session = input.read(&app, |input, _| input.active_block_session_id().unwrap());
+        let connection = SessionId::from((1u64 << 63) + 23);
+        terminal.update(&mut app, |view, ctx| {
+            view.sessions_model()
+                .as_ref(ctx)
+                .get(shell_session)
+                .expect("bootstrapped shell")
+                .mark_daemon_hosted(None);
+            view.set_remote_input_phase(RemoteInputPhase::Ready, Some(connection), ctx);
+        });
+        relay_block_metadata(
+            &terminal,
+            &mut app,
+            BlockMetadata::new(Some(shell_session), Some("/home/dev/old".to_string())),
+        );
+        let executed = record_executed_commands(&input, &mut app);
+        let toasts = record_toast_texts(&mut app);
+        let navigated = PathBuf::from("/home/dev/fm reconnect target");
+        defer_file_manager_directory(&terminal, &mut app, false, &navigated);
+        assert!(
+            executed.try_recv().is_err(),
+            "nothing may be written into the running process"
+        );
+        assert_eq!(toasts.lock().unwrap().len(), 1, "the deferral is announced");
+
+        // The transport drops and the daemon reattaches the same shell.
+        terminal.update(&mut app, |view, ctx| {
+            for phase in [
+                RemoteInputPhase::Transport,
+                RemoteInputPhase::Attach,
+                RemoteInputPhase::Replay,
+                RemoteInputPhase::Ready,
+            ] {
+                view.set_remote_input_phase(phase, Some(connection), ctx);
+            }
+        });
+        assert!(
+            executed.try_recv().is_err(),
+            "the reattached shell is still busy"
+        );
+
+        // The process ends; the reattached shell's next idle prompt applies it.
+        terminal.update(&mut app, |view, _| view.model.lock().finish_block());
+        let (command, session_id) = executed
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("expected the deferred directory command after the reconnect")
+            .expect("command channel closed");
+        assert_eq!(session_id, shell_session);
+        assert_is_cd_to(&command, &navigated);
+        let toasts = toasts.lock().unwrap();
+        assert_eq!(
+            toasts.len(),
+            1,
+            "a reconnect is nothing to report: {toasts:?}"
+        );
+    });
+}
+
 #[test]
 fn file_manager_directory_pending_never_restores_an_already_executed_command() {
     App::test((), |mut app| async move {
