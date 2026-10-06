@@ -2686,6 +2686,39 @@ fn file_manager_directory_close_uses_connected_current_path_only() {
     });
 }
 
+/// The pane-header close button runs `BackingView::close` (which disconnects)
+/// before the pane group reverts to the shell and asks for the directory.
+#[test]
+fn file_manager_directory_survives_header_close_teardown() {
+    use crate::pane_group::BackingView;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.current_path = PathBuf::from("/srv/navigated to");
+            view.connection = ConnectionState::Connected;
+            view.on_dir_listed(view.refresh_generation, Ok(Ok(Vec::new())), ctx);
+            BackingView::close(view, ctx);
+            assert!(matches!(view.connection, ConnectionState::Disconnected));
+            assert_eq!(
+                view.shell_directory_on_close(),
+                Some(PathBuf::from("/srv/navigated to"))
+            );
+        });
+
+        // A browser that never listed a directory has nothing to hand off,
+        // even through the same teardown.
+        let (_, unlisted) = create_view(&mut app);
+        unlisted.update(&mut app, |view, ctx| {
+            view.current_path = PathBuf::from("/never/listed");
+            view.connection = ConnectionState::Connected;
+            BackingView::close(view, ctx);
+            assert!(view.shell_directory_on_close().is_none());
+        });
+    });
+}
+
 #[test]
 fn file_manager_directory_initial_listing_failure_never_changes_shell_directory() {
     warpui::App::test((), |mut app| async move {
