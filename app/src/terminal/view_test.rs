@@ -441,6 +441,123 @@ fn remote_session_notice_failure_detail_survives_failure_and_rejects_stale_updat
     });
 }
 
+/// Teardown of a cancelled remote restore exits its terminal model. That must
+/// not show the shell-start failure banner or close the pane, while the same
+/// exit on a pane that was not cancelled still does.
+#[test]
+fn cancelled_remote_restore_teardown_shows_no_shell_failure_banner() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let session = warp_core::SessionId::from(941u64);
+        for cancelled in [false, true] {
+            let terminal = add_window_with_terminal(&mut app, None);
+            let exits = Rc::new(RefCell::new(0usize));
+            let observed = exits.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                    if matches!(event, Event::Exited) {
+                        *observed.borrow_mut() += 1;
+                    }
+                });
+            });
+            let banner_shown = terminal.update(&mut app, |view, ctx| {
+                view.is_login_shell_bootstrapped = true;
+                view.set_remote_input_phase(RemoteInputPhase::Attach, Some(session), ctx);
+                view.show_remote_session_error("connection lost".to_string(), Some(session), ctx);
+                view.set_remote_input_phase(RemoteInputPhase::Failed, Some(session), ctx);
+                if cancelled {
+                    view.cancel_remote_input_readiness(ctx);
+                }
+                view.handle_terminal_event(
+                    &ModelEvent::Exit {
+                        reason: crate::terminal::model::terminal_model::ExitReason::PtyDisconnected,
+                    },
+                    ctx,
+                );
+                if cancelled {
+                    assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Cancelled));
+                }
+                view.inline_banners_state
+                    .shell_process_terminated_banner
+                    .is_some()
+            });
+            assert_eq!(banner_shown, !cancelled, "cancelled: {cancelled}");
+            assert_eq!(
+                *exits.borrow(),
+                usize::from(!cancelled),
+                "cancelled: {cancelled}"
+            );
+        }
+    });
+}
+
+#[test]
+fn remote_notice_tone_separates_failures_from_ended_sessions() {
+    assert_eq!(
+        remote_notice_tone(RemoteInputPhase::Attach, false),
+        RemoteNoticeTone::Progress
+    );
+    assert_eq!(
+        remote_notice_tone(RemoteInputPhase::Failed, false),
+        RemoteNoticeTone::Error
+    );
+    assert_eq!(
+        remote_notice_tone(RemoteInputPhase::Failed, true),
+        RemoteNoticeTone::Neutral,
+        "a shell that ended on its own is not a connection failure"
+    );
+    assert_eq!(
+        remote_notice_tone(RemoteInputPhase::Cancelled, false),
+        RemoteNoticeTone::Neutral
+    );
+    assert!(remote_readiness_close_visible(
+        RemoteInputPhase::Failed,
+        true
+    ));
+    assert!(!remote_readiness_close_visible(
+        RemoteInputPhase::Failed,
+        false
+    ));
+}
+
+/// An ended remote session relabels its actions to New session / Close and
+/// keeps no stale reconnect progress or technical detail.
+#[test]
+fn ended_remote_session_offers_new_session_and_close() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        crate::i18n::init(Some("en"));
+        let terminal = add_window_with_terminal(&mut app, None);
+        let session = warp_core::SessionId::from(942u64);
+        terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(RemoteInputPhase::Attach, Some(session), ctx);
+            view.show_remote_session_progress(Some("attempt 2/11".to_string()), Some(session), ctx);
+            assert_eq!(view.remote_session_progress(), Some("attempt 2/11"));
+            view.show_remote_session_failure(
+                "Session ended (exit code 1).".to_string(),
+                None,
+                true,
+                Some(session),
+                ctx,
+            );
+            view.set_remote_input_phase(RemoteInputPhase::Failed, Some(session), ctx);
+        });
+        terminal.read(&app, |view, ctx| {
+            assert!(view.remote_session_has_ended());
+            assert!(view.remote_session_progress().is_none());
+            assert!(view.remote_session_error_detail().is_none());
+            assert_eq!(
+                view.remote_restore_retry_button.as_ref(ctx).label(),
+                crate::t!("terminal-remote-readiness-new-session")
+            );
+            assert_eq!(
+                view.remote_restore_cancel_button.as_ref(ctx).label(),
+                crate::t!("terminal-remote-readiness-close")
+            );
+        });
+    });
+}
+
 #[test]
 fn direct_control_hook_events_are_not_discarded_as_pty_duplicates() {
     assert!(should_apply_cli_agent_notification(
