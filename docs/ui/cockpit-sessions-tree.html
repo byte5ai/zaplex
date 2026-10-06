@@ -61,9 +61,9 @@
     <li><code>#spec V2</code> Jede Ansicht nutzt die volle Sidebarhöhe mit eigenem Scrollbereich. Die Länge der Sessionliste beeinflusst die Kontenansicht nicht.</li>
     <li><code>#spec V3</code> Ist eine andere Ansicht aktiv und wartet ein Agent auf den Nutzer, trägt der Eintrag „KI-Sessions“ eine statische amberne Marke, ohne Text und ohne Geometrieänderung.</li>
     <li><code>#spec B1</code> Das Datenmodell bleibt <code>Host → Projekt → PTY-Session → Agent</code>; die folgenden Regeln betreffen nur die Darstellung.</li>
-    <li><code>#spec B2</code> Ein Projekt mit genau einer unbenannten Session (kein Name, Branch, Worktree oder abweichendes Verzeichnis) ist eine Zeile mit ihrem Agenten.</li>
+    <li><code>#spec B2</code> Ein Projekt mit genau einer unbenannten Session ist eine Zeile mit ihrem Agenten. Unbenannt heißt: kein Name, Branch, Worktree oder abweichendes Verzeichnis, oder diese Identität wiederholt nur den Projektnamen.</li>
     <li><code>#spec B3</code> Eine PTY-Session mit einem Agenten ist eine Zeile: Titel, darunter Provider-Icon, Provider und Modell. Nur PTY-Sessions mit mehreren Agenten behalten Agentzeilen; ihre Zeile trägt kein Sammelsymbol.</li>
-    <li><code>#spec B4</code> Teilen gleichrangige Titel einen langen, an einem Trennzeichen endenden Präfix, wird er gekürzt und gedimmt; mindestens acht unterscheidende Zeichen bleiben sichtbar. Der volle Titel steht im Tooltip.</li>
+    <li><code>#spec B4</code> Teilt ein Titel mit mindestens einem gleichrangigen Titel einen langen, an einem Trennzeichen endenden Präfix, wird dieser gekürzt und gedimmt; mindestens acht unterscheidende Zeichen bleiben sichtbar. Der volle Titel steht im Tooltip.</li>
     <li><code>#spec B5</code> Jede Zeile reserviert die Chevron- und Symbolspalte; Titel einer Ebene teilen eine Textachse.</li>
     <li><code>#spec B6</code> Titel ruhender Sessions nutzen die gedämpfte Textrolle; laufende und wartende die primäre. Amber bleibt allein „wartet auf Dich“.</li>
     <li><code>#spec B7</code> Die Session der fokussierten Pane trägt eine stabile Akzent-Hinterlegung über die ganze Zeile. Hover vertieft nur die Farbe.</li>

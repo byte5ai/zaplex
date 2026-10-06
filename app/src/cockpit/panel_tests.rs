@@ -335,7 +335,9 @@ fn in_one_pty(mut agent: SessionSnapshot) -> SessionSnapshot {
 /// `(depth, kind, label, focused)` of one projected row.
 fn row_summary(row: &TreeRow<'_>) -> (usize, &'static str, String, bool) {
     match &row.kind {
-        TreeRowKind::Project { name, .. } => (row.depth, "project", name.clone(), false),
+        TreeRowKind::Project { name, focused, .. } => {
+            (row.depth, "project", name.clone(), *focused)
+        }
         TreeRowKind::SessionLeaf {
             label,
             agent,
@@ -348,11 +350,11 @@ fn row_summary(row: &TreeRow<'_>) -> (usize, &'static str, String, bool) {
                 .map_or_else(|| format!("agent:{}", agent.session_id), |l| l.full.clone()),
             *focused,
         ),
-        TreeRowKind::SessionContainer { label, .. } => (
+        TreeRowKind::SessionContainer { label, focused, .. } => (
             row.depth,
             "session",
             label.as_ref().map_or_else(String::new, |l| l.full.clone()),
-            false,
+            *focused,
         ),
         TreeRowKind::Agent { agent, focused } => {
             (row.depth, "agent", agent.session_id.clone(), *focused)
@@ -430,6 +432,14 @@ fn multiple_agents_in_one_pty_render_child_rows() {
         2,
         "a collapsed multi-agent session hides its agent rows"
     );
+
+    // A collapsed session hiding the focused agent carries the highlight
+    // itself; expanded, only the agent row does.
+    let collapsed_focused = local_project_rows("proj", &agents, false, Some("b"));
+    assert!(collapsed_focused[1].3);
+    let expanded_focused = local_project_rows("proj", &agents, true, Some("b"));
+    assert!(!expanded_focused[1].3);
+    assert_eq!(expanded_focused.iter().filter(|row| row.3).count(), 1);
 }
 
 #[test]
@@ -491,4 +501,20 @@ fn focused_session_row_has_stable_highlight() {
     assert!(local_project_rows("proj", &agents, true, None)
         .iter()
         .all(|row| !row.3));
+}
+
+#[test]
+fn prefix_dimming_ignores_unrelated_siblings() {
+    let titles = [
+        "main",
+        "vault-curator-inbox-2026-10-06-0300",
+        "vault-curator-inbox-2026-10-06-0900",
+    ];
+    let cuts = shared_prefix_cuts(&titles);
+    assert_eq!(
+        cuts[0], None,
+        "a title without a similar sibling stays whole"
+    );
+    assert_eq!(split_title(titles[1], cuts[1]).text, "10-06-0300");
+    assert_eq!(split_title(titles[2], cuts[2]).text, "10-06-0900");
 }

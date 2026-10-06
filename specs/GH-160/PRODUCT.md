@@ -77,12 +77,13 @@ The previous static illustrations are superseded, not alternative approved layou
    fallback session containers and are never merged by label alone.
 
    **Display rule „B+“ (#505).** The tree shows this model without empty levels. A project with
-   exactly one untitled session (no name, branch, worktree, or distinct directory) is a single row
-   carrying its agent. A PTY session with one agent is one row: its title, then a second line with
+   exactly one untitled session is a single row carrying its agent; a session is untitled when it
+   has no name, branch, worktree, or distinct directory, or when that identity only repeats the
+   project name. A PTY session with one agent is one row: its title, then a second line with
    provider icon, provider, and model. Only a PTY session with several agents keeps agent rows,
-   and its row carries no aggregate glyph. Sibling titles sharing a long, separator-bounded prefix
-   show it shortened and dimmed while at least eight distinguishing characters stay visible; the
-   full title is the tooltip. Every row reserves the chevron and glyph columns, so titles of one
+   and its row carries no aggregate glyph. A title sharing a long, separator-bounded prefix with
+   at least one sibling shows it shortened and dimmed while at least eight distinguishing
+   characters stay visible; the full title is the tooltip. Every row reserves the chevron and glyph columns, so titles of one
    depth share a text axis. Idle session titles use the muted text role. The session of the
    focused pane keeps a stable accent tint. Groups separate by spacing, not lines. Session rows
    are two lines; this supersedes the earlier single-line session row. Reference:

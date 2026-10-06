@@ -281,8 +281,10 @@ depend on pixels:
 - the B+ display rule (#505) is the pure projection `project_tree_rows`: it merges a project with
   exactly one untitled session into one row, renders a single-agent PTY session as one leaf whose
   second line carries provider icon, provider, and model, keeps agent rows only for multi-agent
-  PTYs, and dims a separator-bounded prefix shared by sibling titles (`shared_prefix_cut`, at
-  least `MIN_DISTINCT_TAIL_CHARS` distinguishing characters; full title as tooltip);
+  PTYs, and dims a separator-bounded prefix a title shares with at least one sibling
+  (`shared_prefix_cuts` over pairwise `shared_prefix_cut`, at least `MIN_DISTINCT_TAIL_CHARS`
+  distinguishing characters; full title as tooltip); a session title that only repeats the
+  project name counts as untitled;
 - every row reserves the chevron and glyph columns; idle titles use the muted text role
   (`title_tone`); the focused pane's session (workspace `ActiveSession::terminal_view_id` matched
   through `terminal_for_inventory_session`) keeps a stable accent tint (`style::tree_row`);

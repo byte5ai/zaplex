@@ -258,6 +258,8 @@ pub struct LeftPanelView {
     skill_manager_view: ViewHandle<SkillManagerPanel>,
     cockpit_view: ViewHandle<CockpitPanel>,
     cockpit_accounts_view: ViewHandle<CockpitAccountsPanel>,
+    /// Whether any fleet agent waits on the user (drives the toolbelt mark).
+    fleet_waiting: bool,
     active_view: active_view_state::ActiveViewState,
     available_views: Vec<ToolPanelView>,
     toolbelt_buttons: Vec<ToolbeltButtonConfig>,
@@ -301,8 +303,8 @@ fn secondary_return_target(
 /// The Sessions toolbelt entry carries the amber waiting mark while another
 /// view hides the tree, so switching to the accounts never hides that an agent
 /// needs the user (#504). The tree's own header shows the count when it is open.
-fn sessions_entry_shows_attention(active_view: ToolPanelView, needs_me: usize) -> bool {
-    needs_me > 0 && active_view != ToolPanelView::Cockpit
+fn sessions_entry_shows_attention(active_view: ToolPanelView, fleet_waiting: bool) -> bool {
+    fleet_waiting && active_view != ToolPanelView::Cockpit
 }
 
 fn view_remains_available(active_view: ToolPanelView, available_views: &[ToolPanelView]) -> bool {
@@ -363,12 +365,17 @@ impl LeftPanelView {
             }
         });
         // The Sessions toolbelt entry mirrors waiting attention while another
-        // view is active, so the toolbelt re-renders with the live inventory.
-        ctx.subscribe_to_model(&CockpitModel::handle(ctx), |_, _, event, ctx| {
+        // view is active; re-render only when that fact flips.
+        ctx.subscribe_to_model(&CockpitModel::handle(ctx), |me, model, event, ctx| {
             if matches!(event, CockpitEvent::Updated) {
-                ctx.notify();
+                let waiting = model.as_ref(ctx).inventory().needs_me > 0;
+                if waiting != me.fleet_waiting {
+                    me.fleet_waiting = waiting;
+                    ctx.notify();
+                }
             }
         });
+        let fleet_waiting = CockpitModel::as_ref(ctx).inventory().needs_me > 0;
         ctx.subscribe_to_view(&ssh_manager_view, |_me, _, event, ctx| {
             use crate::ssh_manager::SshManagerPanelEvent;
             match event {
@@ -546,6 +553,7 @@ impl LeftPanelView {
             skill_manager_view,
             cockpit_view,
             cockpit_accounts_view,
+            fleet_waiting,
             active_view: active_view_state::new(active_view),
             available_views: views,
             toolbelt_buttons,
@@ -1502,10 +1510,8 @@ impl View for LeftPanelView {
             self.mouse_state_handles.cockpit_button.clone(),
             self.mouse_state_handles.cockpit_accounts_button.clone(),
         ];
-        let sessions_attention = sessions_entry_shows_attention(
-            self.active_view.get(),
-            CockpitModel::as_ref(app).inventory().needs_me,
-        );
+        let sessions_attention =
+            sessions_entry_shows_attention(self.active_view.get(), self.fleet_waiting);
 
         // If there is only one button in the toolbelt row,
         // there is no need to show it as it's a bit redundant.

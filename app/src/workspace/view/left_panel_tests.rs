@@ -65,13 +65,19 @@ fn waiting_signal_visible_on_sessions_entry_while_accounts_active() {
     // the Sessions entry; inside the tree its own header carries the count.
     assert!(sessions_entry_shows_attention(
         ToolPanelView::CockpitAccounts,
-        1
+        true
     ));
-    assert!(sessions_entry_shows_attention(ToolPanelView::SshManager, 2));
-    assert!(!sessions_entry_shows_attention(ToolPanelView::Cockpit, 3));
+    assert!(sessions_entry_shows_attention(
+        ToolPanelView::SshManager,
+        true
+    ));
+    assert!(!sessions_entry_shows_attention(
+        ToolPanelView::Cockpit,
+        true
+    ));
     assert!(!sessions_entry_shows_attention(
         ToolPanelView::CockpitAccounts,
-        0
+        false
     ));
 }
 

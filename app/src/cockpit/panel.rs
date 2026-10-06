@@ -227,13 +227,16 @@ fn host_display_label(host: &HostNode, removed_label: &str, unverified_label: &s
 
 pub struct CockpitPanel {
     window_id: WindowId,
+    /// Terminal of this window's focused pane; its session gets the stable
+    /// highlight (#505).
+    focused_terminal: Option<EntityId>,
     session_scroll_state: ClippedScrollStateHandle,
     /// Hover/click state per Conductor session row (complete host + provider +
     /// account + conversation identity), synced against the unified inventory.
     /// Clicking a row attaches the agent.
     conductor_row_states: HashMap<String, MouseStateHandle>,
     /// Tooltip hover state for each agent status glyph. Kept separate from the
-    /// clickable row and task-peek handles so only the glyph owns this tooltip.
+    /// clickable row handle so only the glyph owns this tooltip.
     conductor_row_glyph_states: HashMap<String, MouseStateHandle>,
     /// Hover/click state per connected host root, keyed by stable host identity.
     conductor_host_states: HashMap<String, MouseStateHandle>,
@@ -394,6 +397,8 @@ enum TreeRowKind<'a> {
         expanded: bool,
         count: usize,
         has_waiting: bool,
+        /// Collapsed and hiding the focused pane's session.
+        focused: bool,
     },
     /// A PTY session shown as one row with its single agent on it. Without a
     /// title the agent identity is the row's headline.
@@ -410,6 +415,8 @@ enum TreeRowKind<'a> {
         expanded: bool,
         count: usize,
         needs_me: usize,
+        /// Collapsed and hiding the focused pane's agent.
+        focused: bool,
     },
     /// One agent of a multi-agent session.
     Agent {
@@ -467,6 +474,25 @@ fn shared_prefix_cut(titles: &[&str]) -> Option<usize> {
     (cut >= MIN_SHARED_PREFIX_BYTES).then_some(cut)
 }
 
+/// Per-title cut for [`split_title`]: each title dims the longest prefix it
+/// shares with at least one sibling (by [`shared_prefix_cut`] on that pair),
+/// so an unrelated sibling such as `main` never blocks a group of similar
+/// names from being shortened.
+fn shared_prefix_cuts(titles: &[&str]) -> Vec<Option<usize>> {
+    titles
+        .iter()
+        .enumerate()
+        .map(|(index, title)| {
+            titles
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .filter_map(|(_, sibling)| shared_prefix_cut(&[*title, *sibling]))
+                .max()
+        })
+        .collect()
+}
+
 /// The dimmed form of a shared prefix: a short one stays whole, a long one
 /// keeps its leading segments up to [`MAX_DIMMED_PREFIX_CHARS`] plus `…`.
 fn abbreviate_shared_prefix(prefix: &str) -> String {
@@ -498,7 +524,8 @@ fn split_title(title: &str, cut: Option<usize>) -> TreeLabel {
 ///   and the agents follow the project row;
 /// - a PTY session with one agent is one leaf row carrying that agent;
 /// - only a PTY session with several agents keeps child agent rows;
-/// - sibling titles sharing a long prefix dim it and keep the distinct rest.
+/// - a title sharing a long prefix with a sibling dims it and keeps the
+///   distinct rest.
 fn project_tree_rows<'a>(
     project_name: &str,
     sessions: Vec<ConductorSession<'a>>,
@@ -533,6 +560,7 @@ fn project_tree_rows<'a>(
                 expanded: project_expanded,
                 count: only.agents.len(),
                 has_waiting: only.needs_me > 0,
+                focused: !project_expanded && only.agents.iter().any(|agent| is_focused(*agent)),
             },
         });
         if project_expanded {
@@ -557,15 +585,22 @@ fn project_tree_rows<'a>(
             expanded: project_expanded,
             count: sessions.len(),
             has_waiting: sessions.iter().any(|session| session.needs_me > 0),
+            focused: !project_expanded
+                && sessions
+                    .iter()
+                    .flat_map(|session| session.agents.iter())
+                    .any(|agent| is_focused(*agent)),
         },
     });
     if !project_expanded {
         return rows;
     }
     let titled: Vec<&str> = titles.iter().flatten().map(String::as_str).collect();
-    let cut = shared_prefix_cut(&titled);
+    let mut cuts = shared_prefix_cuts(&titled).into_iter();
     for (session, title) in sessions.iter().zip(&titles) {
-        let label = title.as_deref().map(|title| split_title(title, cut));
+        let label = title
+            .as_deref()
+            .map(|title| split_title(title, cuts.next().flatten()));
         if let [agent] = session.agents.as_slice() {
             let agent: &'a SessionSnapshot = *agent;
             rows.push(TreeRow {
@@ -588,6 +623,7 @@ fn project_tree_rows<'a>(
                 expanded,
                 count: session.agents.len(),
                 needs_me: session.needs_me,
+                focused: !expanded && session.agents.iter().any(|agent| is_focused(*agent)),
             },
         });
         if expanded {
@@ -619,7 +655,15 @@ impl CockpitPanel {
             }
         });
         // The focused pane's session carries a stable highlight in the tree.
-        ctx.observe(&ActiveSession::handle(ctx), |_, _, ctx| ctx.notify());
+        // `ActiveSession` also notifies on directory changes in any window, so
+        // only a change of this window's focused terminal re-renders.
+        ctx.observe(&ActiveSession::handle(ctx), |me, active_session, ctx| {
+            let focused = active_session.as_ref(ctx).terminal_view_id(me.window_id);
+            if focused != me.focused_terminal {
+                me.focused_terminal = focused;
+                ctx.notify();
+            }
+        });
         let window_manager = WindowManager::handle(ctx);
         ctx.subscribe_to_model(&window_manager, |_, _, event, ctx| match event {
             StateEvent::ValueChanged { current, previous } => {
@@ -630,6 +674,7 @@ impl CockpitPanel {
         });
         let mut me = Self {
             window_id: ctx.window_id(),
+            focused_terminal: ActiveSession::as_ref(ctx).terminal_view_id(ctx.window_id()),
             session_scroll_state: ClippedScrollStateHandle::default(),
             conductor_row_states: HashMap::new(),
             conductor_row_glyph_states: HashMap::new(),
@@ -1147,6 +1192,7 @@ impl CockpitPanel {
         expanded: bool,
         count: usize,
         needs_me: usize,
+        focused: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -1195,7 +1241,7 @@ impl CockpitPanel {
             .unwrap_or_default();
         let key = key.to_string();
         Hoverable::new(handle, move |mouse| {
-            hover_row(row, mouse.is_hovered(), appearance)
+            tree_row(row, mouse.is_hovered(), focused, appearance)
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
@@ -1219,7 +1265,16 @@ impl CockpitPanel {
                 expanded,
                 count,
                 has_waiting,
-            } => self.render_project_header(key, name, *count, *has_waiting, *expanded, appearance),
+                focused,
+            } => self.render_project_header(
+                key,
+                name,
+                *count,
+                *has_waiting,
+                *expanded,
+                *focused,
+                appearance,
+            ),
             TreeRowKind::SessionLeaf {
                 label,
                 agent,
@@ -1240,6 +1295,7 @@ impl CockpitPanel {
                 expanded,
                 count,
                 needs_me,
+                focused,
             } => self.render_session_container(
                 key,
                 label.as_ref(),
@@ -1247,6 +1303,7 @@ impl CockpitPanel {
                 *expanded,
                 *count,
                 *needs_me,
+                *focused,
                 appearance,
             ),
             TreeRowKind::Agent { agent, focused } => self.render_agent_leaf(
@@ -1261,7 +1318,8 @@ impl CockpitPanel {
         };
         let mut container =
             Container::new(element).with_padding_left(TREE_DEPTH_INDENT * row.depth as f32);
-        if matches!(row.kind, TreeRowKind::Project { .. }) {
+        // Every project group gets the same air, merged single-row ones too.
+        if row.depth == 1 {
             container = container.with_margin_top(PROJECT_GROUP_GAP);
         }
         container.finish()
@@ -1539,6 +1597,7 @@ impl CockpitPanel {
     /// with no status dot. The count is absent while expanded and appears only
     /// when collapsed; it turns amber when it hides waiting attention. Clicking
     /// anywhere folds/unfolds.
+    #[allow(clippy::too_many_arguments)]
     fn render_project_header(
         &self,
         pkey: &str,
@@ -1546,6 +1605,7 @@ impl CockpitPanel {
         count: usize,
         has_waiting: bool,
         expanded: bool,
+        focused: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let family = appearance.ui_font_family();
@@ -1610,9 +1670,10 @@ impl CockpitPanel {
                         .finish(),
                 );
             }
-            hover_row(
+            tree_row(
                 row.with_main_axis_size(MainAxisSize::Max).finish(),
                 mouse.is_hovered(),
+                focused,
                 appearance,
             )
         })
@@ -1640,7 +1701,6 @@ impl View for CockpitPanel {
 
         let inventory = CockpitModel::as_ref(app).inventory().clone();
         let managed_fleet = CockpitModel::as_ref(app).managed_fleet().clone();
-        let focused_terminal = ActiveSession::as_ref(app).terminal_view_id(self.window_id);
         // The live object tree remains independent of account discovery: local
         // is always supplied by the model, while remote roots exist only for
         // currently open connections. One flat surface, no registry controls.
@@ -1648,7 +1708,7 @@ impl View for CockpitPanel {
             &inventory,
             &managed_fleet,
             animate_waiting,
-            focused_terminal,
+            self.focused_terminal,
             app,
             appearance,
         ) {
