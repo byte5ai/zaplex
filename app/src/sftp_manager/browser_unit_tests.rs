@@ -412,28 +412,124 @@ fn shift_f5_f6_open_the_target_picker() {
     assert!(shifted_function_key_action("f5", false).is_none());
 }
 
+/// The layout `SizeConstraintSwitch` picks for a legend `width` wide: the
+/// first breakpoint the width falls below, otherwise one row.
+fn function_legend_layout_at(width: f32, cell_min_width: f32) -> FunctionLegendLayout {
+    function_legend_breakpoints(cell_min_width)
+        .into_iter()
+        .find(|(below_width, _)| width < *below_width)
+        .map_or(FunctionLegendLayout::OneRow, |(_, layout)| layout)
+}
+
 #[test]
-fn pane_function_legend_keeps_required_actions_at_narrow_width() {
-    let full_width = FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_CAPTION_MIN_WIDTH
-        + FUNCTION_LEGEND_HORIZONTAL_PADDING;
-    assert_eq!(function_legend_mode(full_width), FunctionLegendMode::Full);
+fn function_legend_cell_fits_keycap_gap_and_caption() {
+    // 2x6 cell padding + 20 key text + 2x(4 padding + 1 border) keycap chrome
+    // + 4 gap + 50 caption + 2 rounding slack.
+    assert_eq!(function_legend_cell_min_width(20.0, 50.0), 98.0);
+    // A wider caption widens the cell one for one.
+    assert_eq!(function_legend_cell_min_width(20.0, 60.0), 108.0);
+}
+
+#[test]
+fn function_legend_wraps_rows_instead_of_hiding_captions() {
+    // 100 px cells, 4 px between cells, 2x8 px bar padding:
+    // eight in a row need 8x100 + 7x4 + 16 = 844 px,
+    // four in a row need 4x100 + 3x4 + 16 = 428 px.
     assert_eq!(
-        function_legend_mode(full_width - 1.0),
-        FunctionLegendMode::Compact
+        function_legend_breakpoints(100.0),
+        [
+            (428.0, FunctionLegendLayout::FourRows),
+            (844.0, FunctionLegendLayout::TwoRows),
+        ]
     );
-    assert_eq!(function_legend_mode(200.0), FunctionLegendMode::Compact);
-    for key in ["F3", "F4", "F5", "F6"] {
-        assert!(FunctionLegendMode::Compact.shows_caption(key));
-    }
-    for key in ["F2", "F7", "F8", "F10"] {
-        assert!(!FunctionLegendMode::Compact.shows_caption(key));
+    assert_eq!(
+        function_legend_layout_at(1200.0, 100.0),
+        FunctionLegendLayout::OneRow
+    );
+    assert_eq!(
+        function_legend_layout_at(844.0, 100.0),
+        FunctionLegendLayout::OneRow
+    );
+    assert_eq!(
+        function_legend_layout_at(843.5, 100.0),
+        FunctionLegendLayout::TwoRows
+    );
+    assert_eq!(
+        function_legend_layout_at(428.0, 100.0),
+        FunctionLegendLayout::TwoRows
+    );
+    assert_eq!(
+        function_legend_layout_at(427.5, 100.0),
+        FunctionLegendLayout::FourRows
+    );
+    // Far below the four-row minimum the legend still keeps four rows.
+    assert_eq!(
+        function_legend_layout_at(120.0, 100.0),
+        FunctionLegendLayout::FourRows
+    );
+}
+
+#[test]
+fn reported_1024px_pane_keeps_one_row_of_short_captions() {
+    // The pane that hid F2/F7/F8/F10 was about 1024 px wide; one row holds
+    // cells up to (1024 - 7x4 - 16) / 8 = 122.5 px, well above what an
+    // eight-character caption next to an "F10" keycap needs at 12 px.
+    assert_eq!(
+        function_legend_layout_at(1024.0, 122.5),
+        FunctionLegendLayout::OneRow
+    );
+    assert_eq!(
+        function_legend_layout_at(1024.0, 123.0),
+        FunctionLegendLayout::TwoRows
+    );
+}
+
+#[test]
+fn every_function_legend_layout_fills_equal_rows() {
+    assert_eq!(FUNCTION_BAR.len(), 8);
+    for (layout, cells_per_row, rows) in [
+        (FunctionLegendLayout::OneRow, 8, 1),
+        (FunctionLegendLayout::TwoRows, 4, 2),
+        (FunctionLegendLayout::FourRows, 2, 4),
+    ] {
+        assert_eq!(layout.cells_per_row(), cells_per_row, "{layout:?}");
+        assert_eq!(
+            FUNCTION_BAR.chunks(layout.cells_per_row()).count(),
+            rows,
+            "{layout:?}"
+        );
     }
 }
 
 #[test]
-fn each_pane_owns_compact_function_legend() {
-    assert_eq!(function_legend_mode(400.0), FunctionLegendMode::Compact);
-    assert_eq!(function_legend_mode(200.0), FunctionLegendMode::Compact);
+fn function_bar_captions_are_single_short_words_in_every_catalog() {
+    let caption_ids = [
+        "fm-key-rename",
+        "fm-key-view",
+        "fm-key-edit",
+        "fm-key-copy",
+        "fm-key-move",
+        "fm-key-mkdir",
+        "fm-key-delete",
+        "fm-key-terminal",
+    ];
+    for (locale, catalog) in [
+        ("en", include_str!("../../i18n/en/warp.ftl")),
+        ("de", include_str!("../../i18n/de/warp.ftl")),
+    ] {
+        for id in caption_ids {
+            let prefix = format!("{id} = ");
+            let caption = catalog
+                .lines()
+                .find_map(|line| line.strip_prefix(prefix.as_str()))
+                .unwrap_or_else(|| panic!("{locale} catalog lacks {id}"));
+            assert!(!caption.is_empty(), "{locale} {id} is empty");
+            assert!(
+                caption.chars().count() <= 8 && !caption.contains(char::is_whitespace),
+                "{locale} {id} = {caption:?} is not one short word"
+            );
+        }
+    }
 }
 
 #[test]

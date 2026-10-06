@@ -50,7 +50,7 @@ bereits vorhandene Implementierung. Sie erklärt diese **nicht** nachträglich f
 | Titel | Pane-Titel aus Host und Verzeichnis; Tabtitel folgt der fokussierten Pane, kein erfundener Gruppenname | Explizite Tabtitel, reale Verzeichniswechsel und Restore |
 | Favoriten | Hostname verbindet direkt; separates `⋯` öffnet seitlich bei sichtbar bleibendem Elternmenü | Einmaliger Verbindungsaufbau, Tastatur, Randplatzierung und Fokusrückgabe |
 | Mehrhost-Panes | Pane-Split nach rechts/unten, Zielhost/Lokal wählen; neuer Tab hat volle Höhe | Asynchrones Hostrouting, echte PTYs, Drag & Drop derselben Pane, Fensterwechsel, Neustart-Restore |
-| Dateimanager | Modus pro Session; einzeilige F3–F6, nur fokussierte Pane aktiv; `..` markiert das verlassene Verzeichnis | Reale lokale/Remote-Dateien, eindeutige Transferziele und sichere Revalidierung |
+| Dateimanager | Modus pro Session; F2–F8 und F10 immer mit Kurzbeschriftung, bei Platzmangel zwei bzw. vier Zeilen gleich breiter Zellen statt Ausblenden; nur fokussierte Pane aktiv; `..` markiert das verlassene Verzeichnis | Reale lokale/Remote-Dateien, eindeutige Transferziele und sichere Revalidierung |
 | Reconnect | Recovery-Vorschau über die Entwurfsoptionen; Eingabe bis Bereitschaft gesperrt | Dieselbe Remote-Session/Generation, echter Shell-Ready-Nachweis, Timeout, Retry und Abbruch |
 
 ## Grenzen des Artefakts

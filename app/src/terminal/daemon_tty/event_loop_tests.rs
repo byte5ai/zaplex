@@ -2,6 +2,8 @@ use super::*;
 use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use std::borrow::Cow;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 use warp_core::HostId;
 use warpui::r#async::FutureExt;
@@ -43,7 +45,10 @@ fn terminal_daemon_visible_errors_use_localized_messages() {
         "terminal-daemon-multiplexer-nested",
         "terminal-daemon-attach-generation-invalid",
         "terminal-daemon-attach-agent-routing-unsupported",
-        "terminal-daemon-attach-failed",
+        "terminal-daemon-attach-failed-summary",
+        "terminal-daemon-attach-held-exhausted",
+        "terminal-daemon-attach-retrying",
+        "terminal-daemon-attach-taken-over",
         "terminal-daemon-attach-generation-mismatch",
         "terminal-daemon-scrollback-truncated",
         "terminal-daemon-final-output-truncated",
@@ -2824,13 +2829,14 @@ fn final_replay_gap_keeps_truncation_in_persistent_exit_detail() {
         event_loop.update(&mut app, |me, ctx| {
             me.bind_terminal_view(&terminal, ctx);
             me.pending_output_overflowed = true;
-            me.finish_attach_replay(Some(Some(0)), ctx);
+            me.finish_attach_replay(Some(Some(1)), ctx);
         });
-        let ended = crate::t!("terminal-daemon-session-ended-with-code", code = 0);
+        let ended = crate::t!("terminal-daemon-session-ended-with-code", code = 1);
         let truncated = crate::t!("terminal-daemon-final-output-truncated");
         let message = format!("{ended}\n{truncated}");
         terminal.read(&app, |view, _| {
             assert!(view.remote_input_has_failed());
+            assert!(view.remote_session_has_ended());
             assert_eq!(view.remote_session_error(), Some(message.as_str()));
             assert!(view.remote_session_notice().is_none());
         });
@@ -2889,16 +2895,18 @@ fn terminal_disconnect_is_surfaced_not_frozen() {
     });
 }
 
-/// A clean shell exit suppresses the later teardown disconnect notice.
+/// A clean shell exit closes the pane and suppresses the later teardown
+/// disconnect notice.
 #[test]
 fn clean_exit_suppresses_the_trailing_disconnect_notice() {
     App::test((), |mut app| async move {
         crate::i18n::init(Some("en"));
         let conn = SessionId::from(29u64);
-        let (manager, event_loop, model, _) = start_adopted_loop(&mut app, conn);
+        let (manager, event_loop, model, wakeups) = start_adopted_loop(&mut app, conn);
         complete_adopted_attach(&event_loop, &mut app);
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
         let before = terminal_contents(&model);
-        let message = crate::t!("terminal-daemon-session-ended-with-code", code = 0);
+        let lost = crate::t!("terminal-daemon-connection-lost", host = HOST);
         manager.update(&mut app, |_, ctx| {
             ctx.emit(RemoteServerManagerEvent::SessionExited {
                 session_id: conn,
@@ -2914,9 +2922,13 @@ fn clean_exit_suppresses_the_trailing_disconnect_notice() {
         });
         event_loop.read(&app, |me, _| {
             assert!(me.terminated);
-            assert_eq!(me.published_error_notices, vec![message.clone()]);
+            assert!(
+                me.published_error_notices.is_empty(),
+                "a clean exit closes the pane instead of reporting a failure"
+            );
+            assert!(me.pending_clean_exit_close, "the close waits for the view");
         });
-        assert_eq!(terminal_message_count(&model, &message), 0);
+        assert_eq!(terminal_message_count(&model, &lost), 0);
         assert_eq!(terminal_contents(&model), before);
     });
 }
@@ -3884,4 +3896,322 @@ fn matching_pty_on_foreign_connection_cannot_change_output_exit_or_notice() {
             });
         });
     }
+}
+
+#[test]
+fn attach_retry_schedule_is_bounded_and_outlasts_sshd_keepalive() {
+    assert_eq!(attach_retry_delay(0), None);
+    assert_eq!(attach_retry_delay(1), Some(Duration::from_secs(2)));
+    let delays: Vec<Duration> = (1..).map_while(attach_retry_delay).collect();
+    assert_eq!(delays.len() as u32 + 1, attach_attempt_total());
+    assert!(
+        delays.windows(2).all(|pair| pair[0] <= pair[1]),
+        "backoff must never shrink: {delays:?}"
+    );
+    let total: Duration = delays.iter().sum();
+    // A daemon without takeover only frees the PTY once sshd drops the dead
+    // proxy (ClientAliveInterval 300 x ClientAliveCountMax 2 on devhost).
+    assert!(total >= Duration::from_secs(15 * 60), "{total:?}");
+    assert!(total <= Duration::from_secs(20 * 60), "{total:?}");
+}
+
+#[test]
+fn only_recoverable_attach_refusals_are_retried() {
+    let held = ClientError::ServerError {
+        code: ErrorCode::InvalidRequest,
+        message: "session 31ebbf1a is already attached to a live connection; detach it before \
+                  handoff"
+            .to_string(),
+    };
+    assert!(attach_error_is_transient(&held));
+    assert!(attach_error_held_by_live_connection(&held));
+    assert!(attach_error_is_transient(&ClientError::Timeout(
+        Duration::from_secs(30)
+    )));
+    for message in [
+        "stale generation for session 31ebbf1a",
+        "no such session: 31ebbf1a",
+        "foreground agent changed since inventory refresh",
+    ] {
+        let error = ClientError::ServerError {
+            code: ErrorCode::InvalidRequest,
+            message: message.to_string(),
+        };
+        assert!(!attach_error_is_transient(&error), "{message}");
+    }
+    assert!(!attach_error_is_transient(&ClientError::ServerError {
+        code: ErrorCode::Internal,
+        message: "is already attached to a live connection".to_string(),
+    }));
+    assert!(
+        !attach_error_is_transient(&ClientError::Disconnected),
+        "a dropped transport waits for SessionReconnected instead"
+    );
+}
+
+/// A reattach refused because the old, half-open connection is still
+/// registered retries on its own and shows progress; the pane only fails after
+/// the bounded budget, with a readable summary and the raw error as detail.
+#[test]
+fn held_attach_refusal_retries_automatically_then_fails_readably() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        crate::i18n::init(Some("en"));
+        let conn = SessionId::from(931u64);
+        let (_manager, event_loop, _model, _) = start_adopted_loop(&mut app, conn);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let held = || ClientError::ServerError {
+            code: ErrorCode::InvalidRequest,
+            message: format!(
+                "session {OUR_PTY} is already attached to a live connection; detach it before \
+                 handoff"
+            ),
+        };
+        event_loop.update(&mut app, |me, ctx| {
+            me.bind_terminal_view(&terminal, ctx);
+            me.set_input_phase(RemoteInputPhase::Attach, ctx);
+            me.on_attach_error(held(), ctx);
+            assert!(!me.terminated, "a held PTY is retried, not abandoned");
+            assert_eq!(me.attach_retries, 1);
+            assert!(me.attach_retry_scheduled.is_some());
+            assert!(me.published_error_notices.is_empty());
+        });
+        let total = attach_attempt_total();
+        let progress = crate::t!(
+            "terminal-daemon-attach-retrying",
+            attempt = 2u32,
+            total = total
+        );
+        terminal.read(&app, |view, _| {
+            assert!(!view.remote_input_has_failed());
+            assert_eq!(view.remote_session_progress(), Some(progress.as_str()));
+        });
+
+        // A replacement transport attaches immediately with a fresh budget and
+        // invalidates the pending timer.
+        event_loop.update(&mut app, |me, _| {
+            me.prepare_transport_reconnect();
+            assert_eq!(me.attach_retries, 0);
+            assert!(me.attach_retry_scheduled.is_none());
+        });
+
+        event_loop.update(&mut app, |me, ctx| {
+            for _ in 0..total - 1 {
+                me.on_attach_error(held(), ctx);
+            }
+            assert!(!me.terminated);
+            assert_eq!(me.attach_retries, total - 1);
+            me.on_attach_error(held(), ctx);
+            assert!(
+                me.terminated,
+                "the bounded budget ends in a visible failure"
+            );
+            assert!(me.attach_retry_scheduled.is_none());
+            assert_eq!(me.input_phase(), RemoteInputPhase::Failed);
+            assert_eq!(
+                me.published_error_notices,
+                vec![crate::t!("terminal-daemon-attach-held-exhausted")]
+            );
+        });
+        terminal.read(&app, |view, _| {
+            assert!(view.remote_input_has_failed());
+            assert_eq!(
+                view.remote_session_error(),
+                Some(crate::t!("terminal-daemon-attach-held-exhausted").as_str())
+            );
+            assert_eq!(
+                view.remote_session_error_detail(),
+                Some(held().to_string().as_str()),
+                "the raw server error is kept, but only as secondary detail"
+            );
+            assert!(view.remote_session_progress().is_none());
+        });
+    });
+}
+
+#[test]
+fn authoritative_attach_rejection_fails_immediately_with_detail() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        crate::i18n::init(Some("en"));
+        let conn = SessionId::from(932u64);
+        let (_manager, event_loop, _model, _) = start_adopted_loop(&mut app, conn);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let stale = ClientError::ServerError {
+            code: ErrorCode::InvalidRequest,
+            message: format!("stale generation for session {OUR_PTY}"),
+        };
+        let detail = stale.to_string();
+        event_loop.update(&mut app, |me, ctx| {
+            me.bind_terminal_view(&terminal, ctx);
+            me.on_attach_error(stale, ctx);
+            assert!(me.terminated);
+            assert_eq!(
+                me.attach_retries, 0,
+                "no retry for an authoritative rejection"
+            );
+        });
+        terminal.read(&app, |view, _| {
+            assert_eq!(
+                view.remote_session_error(),
+                Some(crate::t!("terminal-daemon-attach-failed-summary").as_str())
+            );
+            assert_eq!(view.remote_session_error_detail(), Some(detail.as_str()));
+        });
+    });
+}
+
+/// The displaced view of a takeover stays detached: it shows why and offers a
+/// manual reconnect, but never steals the session back on its own.
+#[test]
+fn taken_over_session_detaches_without_retrying() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        crate::i18n::init(Some("en"));
+        let conn = SessionId::from(933u64);
+        let (manager, event_loop, _model, wakeups) = start_adopted_loop(&mut app, conn);
+        complete_adopted_attach(&event_loop, &mut app);
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+        let terminal = add_window_with_terminal(&mut app, None);
+        event_loop.update(&mut app, |me, ctx| me.bind_terminal_view(&terminal, ctx));
+        let taken_over = |session_id| RemoteServerManagerEvent::SessionNotice {
+            session_id,
+            host_id: HostId::new(HOST.to_string()),
+            pty_session_id: OUR_PTY.to_string(),
+            kind: SESSION_NOTICE_ATTACH_TAKEN_OVER.to_string(),
+            detail: String::new(),
+        };
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(taken_over(SessionId::from(934u64)));
+        });
+        event_loop.read(&app, |me, _| {
+            assert!(!me.terminated, "a notice for another connection is ignored");
+        });
+        manager.update(&mut app, |_, ctx| ctx.emit(taken_over(conn)));
+        event_loop.read(&app, |me, _| {
+            assert!(me.terminated);
+            assert!(me.attach_retry_scheduled.is_none());
+            assert_eq!(me.attach_retries, 0);
+            assert_eq!(
+                me.published_error_notices,
+                vec![crate::t!("terminal-daemon-attach-taken-over")]
+            );
+        });
+        terminal.read(&app, |view, _| {
+            assert!(view.remote_input_has_failed());
+            assert!(!view.remote_session_has_ended());
+        });
+        // A later reconnect of this transport must not reattach on its own.
+        event_loop.update(&mut app, |me, ctx| {
+            me.reattach(ctx);
+            assert!(me.attach_in_flight.is_none());
+        });
+    });
+}
+
+/// `exit` in a remote shell closes the pane like a local shell instead of
+/// presenting a failure with Retry.
+#[test]
+fn clean_remote_exit_requests_pane_close_without_failure() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        crate::i18n::init(Some("en"));
+        let conn = SessionId::from(935u64);
+        let (manager, event_loop, _model, wakeups) = start_adopted_loop(&mut app, conn);
+        complete_adopted_attach(&event_loop, &mut app);
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+        let terminal = add_window_with_terminal(&mut app, None);
+        event_loop.update(&mut app, |me, ctx| me.bind_terminal_view(&terminal, ctx));
+        let exited = Rc::new(RefCell::new(0usize));
+        let observed = exited.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if matches!(event, crate::terminal::view::Event::Exited) {
+                    *observed.borrow_mut() += 1;
+                }
+            });
+        });
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(RemoteServerManagerEvent::SessionExited {
+                session_id: conn,
+                host_id: HostId::new(HOST.to_string()),
+                pty_session_id: OUR_PTY.to_string(),
+                exit_code: Some(0),
+            });
+        });
+        event_loop.read(&app, |me, _| {
+            assert!(me.terminated);
+            assert!(me.published_error_notices.is_empty());
+            assert!(!me.pending_clean_exit_close, "delivered to the bound view");
+        });
+        terminal.read(&app, |view, _| {
+            assert!(view.remote_session_closed_cleanly());
+            assert!(view.remote_session_error().is_none());
+            assert!(!view.remote_session_has_ended());
+        });
+        assert_eq!(
+            *exited.borrow(),
+            1,
+            "the pane is asked to close exactly once"
+        );
+    });
+}
+
+/// A non-zero exit is not a connection failure: the pane shows a neutral ended
+/// state whose actions start a new session or close, never Retry.
+#[test]
+fn nonzero_remote_exit_shows_neutral_ended_state() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        crate::i18n::init(Some("en"));
+        let conn = SessionId::from(936u64);
+        let (manager, event_loop, _model, wakeups) = start_adopted_loop(&mut app, conn);
+        complete_adopted_attach(&event_loop, &mut app);
+        wait_for_attach_replay(&event_loop, &app, &wakeups).await;
+        let terminal = add_window_with_terminal(&mut app, None);
+        event_loop.update(&mut app, |me, ctx| me.bind_terminal_view(&terminal, ctx));
+        manager.update(&mut app, |_, ctx| {
+            ctx.emit(RemoteServerManagerEvent::SessionExited {
+                session_id: conn,
+                host_id: HostId::new(HOST.to_string()),
+                pty_session_id: OUR_PTY.to_string(),
+                exit_code: Some(1),
+            });
+            ctx.emit(RemoteServerManagerEvent::SessionDisconnected {
+                session_id: conn,
+                host_id: HostId::new(HOST.to_string()),
+                exit_status: None,
+            });
+        });
+        let ended = crate::t!("terminal-daemon-session-ended-with-code", code = 1);
+        event_loop.read(&app, |me, _| {
+            assert!(me.terminated);
+            assert_eq!(me.input_phase(), RemoteInputPhase::Failed);
+            assert_eq!(
+                me.published_error_notices,
+                vec![ended.clone()],
+                "the later disconnect must not replace the ended state"
+            );
+        });
+        terminal.read(&app, |view, _| {
+            assert!(view.remote_session_has_ended());
+            assert!(!view.remote_session_closed_cleanly());
+            assert_eq!(view.remote_session_error(), Some(ended.as_str()));
+            assert!(view.remote_session_error_detail().is_none());
+        });
+    });
+}
+
+#[test]
+fn only_a_clean_exit_of_a_usable_pane_closes_it() {
+    assert!(remote_exit_closes_pane(Some(0), true));
+    assert!(
+        !remote_exit_closes_pane(Some(0), false),
+        "a shell that quit before the pane was usable keeps a visible ended state"
+    );
+    assert!(!remote_exit_closes_pane(Some(1), true));
+    assert!(
+        !remote_exit_closes_pane(None, true),
+        "a signal is not a clean exit"
+    );
 }

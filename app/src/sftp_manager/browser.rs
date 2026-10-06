@@ -32,6 +32,7 @@ use warpui::elements::{
     SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable,
     SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
+use warpui::fonts::{Cache as FontCache, FamilyId};
 use warpui::platform::{Cursor, FilePickerConfiguration, SaveFilePickerConfiguration};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::text_layout::ClipConfig;
@@ -102,7 +103,9 @@ fn pane_cycle_action(key: &str, shift: bool) -> Option<crate::pane_group::PaneGr
     }
 }
 
-/// Localized caption for a [`FUNCTION_BAR`] key.
+/// Localized caption for a [`FUNCTION_BAR`] key. Every key always shows its
+/// caption, so each catalog keeps these to one short word (at most eight
+/// characters). F10 reads "Terminal" because it returns the pane to its shell.
 fn function_bar_caption(key: &str) -> String {
     match key {
         "F2" => crate::t!("fm-key-rename"),
@@ -112,7 +115,7 @@ fn function_bar_caption(key: &str) -> String {
         "F6" => crate::t!("fm-key-move"),
         "F7" => crate::t!("fm-key-mkdir"),
         "F8" => crate::t!("fm-key-delete"),
-        _ => crate::t!("fm-key-quit"),
+        _ => crate::t!("fm-key-terminal"),
     }
 }
 
@@ -130,49 +133,107 @@ fn function_bar_action_enabled(
         ) || identity_bound_mutations_available)
 }
 
-/// A pane-local legend must never compete with file rows for horizontal space.
+/// How a pane-local function legend arranges its keys. Every arrangement shows
+/// every key with its caption in equal cells: a pane too narrow for one row
+/// trades rows for width instead of hiding captions or scrolling keys away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FunctionLegendMode {
-    Full,
-    Compact,
+enum FunctionLegendLayout {
+    OneRow,
+    TwoRows,
+    /// Very narrow panes only.
+    FourRows,
 }
 
-impl FunctionLegendMode {
-    fn position_suffix(self) -> &'static str {
+impl FunctionLegendLayout {
+    fn cells_per_row(self) -> usize {
         match self {
-            Self::Full => "legend-full",
-            Self::Compact => "legend-compact",
+            Self::OneRow => FUNCTION_BAR.len(),
+            Self::TwoRows => FUNCTION_BAR.len().div_ceil(2),
+            Self::FourRows => FUNCTION_BAR.len().div_ceil(4),
         }
     }
 
-    fn shows_caption(self, key: &str) -> bool {
-        self == Self::Full || matches!(key, "F3" | "F4" | "F5" | "F6")
+    fn position_suffix(self) -> &'static str {
+        match self {
+            Self::OneRow => "legend-rows-1",
+            Self::TwoRows => "legend-rows-2",
+            Self::FourRows => "legend-rows-4",
+        }
+    }
+
+    /// Narrowest legend, padding included, whose cells all fit their keycap
+    /// and caption unclipped.
+    fn min_bar_width(self, cell_min_width: f32) -> f32 {
+        let cells = self.cells_per_row() as f32;
+        cells * cell_min_width
+            + (cells - 1.0) * FUNCTION_LEGEND_CELL_SPACING
+            + FUNCTION_LEGEND_HORIZONTAL_PADDING
     }
 }
 
-// The widest localized caption is German "Verschieben". Full mode reserves
-// room for every caption; compact mode keeps the required F3-F6 captions and
-// reduces the remaining commands to their established keycaps.
-const FUNCTION_LEGEND_COMPACT_MIN_WIDTH: f32 = 280.0;
-const FUNCTION_LEGEND_CAPTION_MIN_WIDTH: f32 = 128.0;
+// Cell geometry, shared by `render_function_bar` and the minimum-width
+// computation so the wrap thresholds can never drift from what is painted.
+const FUNCTION_LEGEND_CELL_PADDING_X: f32 = 6.0;
+const FUNCTION_LEGEND_KEYCAP_PADDING_X: f32 = 4.0;
+const FUNCTION_LEGEND_KEYCAP_BORDER: f32 = 1.0;
+const FUNCTION_LEGEND_KEYCAP_GAP: f32 = 4.0;
+const FUNCTION_LEGEND_CELL_SPACING: f32 = 4.0;
+const FUNCTION_LEGEND_ROW_SPACING: f32 = 2.0;
+// Covers sub-pixel rounding and kerning differences between the summed glyph
+// advances and the laid-out caption, so a cell at exactly the threshold width
+// never ellipsizes.
+const FUNCTION_LEGEND_TEXT_SLACK: f32 = 2.0;
 const FUNCTION_LEGEND_HORIZONTAL_PADDING: f32 = PANEL_PADDING * 2.0;
 
-fn function_legend_mode(pane_width: f32) -> FunctionLegendMode {
-    let (_, full_width) = function_legend_widths();
-
-    if pane_width >= full_width {
-        FunctionLegendMode::Full
-    } else {
-        FunctionLegendMode::Compact
-    }
+/// Narrowest cell that shows the widest keycap and the widest caption side by
+/// side without clipping either.
+fn function_legend_cell_min_width(widest_key_text: f32, widest_caption_text: f32) -> f32 {
+    2.0 * FUNCTION_LEGEND_CELL_PADDING_X
+        + widest_key_text
+        + 2.0 * (FUNCTION_LEGEND_KEYCAP_PADDING_X + FUNCTION_LEGEND_KEYCAP_BORDER)
+        + FUNCTION_LEGEND_KEYCAP_GAP
+        + widest_caption_text
+        + FUNCTION_LEGEND_TEXT_SLACK
 }
 
-fn function_legend_widths() -> (f32, f32) {
-    (
-        FUNCTION_LEGEND_COMPACT_MIN_WIDTH,
-        FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_CAPTION_MIN_WIDTH
-            + FUNCTION_LEGEND_HORIZONTAL_PADDING,
-    )
+/// `(legend width below which it applies, layout)`, narrowest first, in the
+/// first-match order `SizeConstraintSwitch` expects. Wider legends use
+/// [`FunctionLegendLayout::OneRow`]. Below the four-row minimum (narrower than
+/// any practical file pane) the four-row layout stays and captions ellipsize
+/// as a last resort instead of overlapping.
+fn function_legend_breakpoints(cell_min_width: f32) -> [(f32, FunctionLegendLayout); 2] {
+    [
+        (
+            FunctionLegendLayout::TwoRows.min_bar_width(cell_min_width),
+            FunctionLegendLayout::FourRows,
+        ),
+        (
+            FunctionLegendLayout::OneRow.min_bar_width(cell_min_width),
+            FunctionLegendLayout::TwoRows,
+        ),
+    ]
+}
+
+/// Advance width of `text` in the UI font: the sum of its glyph advances, the
+/// metric text layout positions glyphs by. A glyph missing from the font
+/// counts as a full em, which never underestimates.
+fn function_legend_text_width(
+    font_cache: &FontCache,
+    family: FamilyId,
+    font_size: f32,
+    text: &str,
+) -> f32 {
+    let font = font_cache.select_font(family, Default::default());
+    text.chars()
+        .map(|ch| {
+            font_cache
+                .glyph_for_char(font, ch, false)
+                .and_then(|(glyph, glyph_font)| {
+                    font_cache.glyph_advance(glyph_font, font_size, glyph).ok()
+                })
+                .map_or(font_size, |advance| advance.x())
+        })
+        .sum()
 }
 
 fn save_layout_position(child: Box<dyn Element>, position_id: &str) -> Box<dyn Element> {
@@ -4572,22 +4633,48 @@ impl SftpBrowserView {
             .finish()
     }
 
+    /// The function legend in one, two, or four rows, chosen from the cell
+    /// width the current UI font and the localized captions actually need.
     fn render_responsive_function_bar(
         &self,
+        app: &AppContext,
         appearance: &Appearance,
         pane_actions_active: bool,
     ) -> Box<dyn Element> {
-        let (_, full_width) = function_legend_widths();
+        let captions: Vec<String> = FUNCTION_BAR
+            .iter()
+            .map(|(key, _)| function_bar_caption(key))
+            .collect();
+        let font_cache = app.font_cache();
+        let family = appearance.ui_font_family();
+        let size = appearance.ui_font_size();
+        let widest_key = FUNCTION_BAR
+            .iter()
+            .map(|(key, _)| function_legend_text_width(font_cache, family, size, key))
+            .fold(0.0, f32::max);
+        let widest_caption = captions
+            .iter()
+            .map(|caption| function_legend_text_width(font_cache, family, size, caption))
+            .fold(0.0, f32::max);
+        let cell_min_width = function_legend_cell_min_width(widest_key, widest_caption);
+
+        let narrower_layouts = function_legend_breakpoints(cell_min_width)
+            .into_iter()
+            .map(|(below_width, layout)| {
+                (
+                    SizeConstraintCondition::WidthLessThan(below_width),
+                    self.render_function_bar(appearance, layout, &captions, pane_actions_active),
+                )
+            })
+            .collect::<Vec<_>>();
         SizeConstraintSwitch::new(
-            self.render_function_bar(appearance, FunctionLegendMode::Full, pane_actions_active),
-            vec![(
-                SizeConstraintCondition::WidthLessThan(full_width),
-                self.render_function_bar(
-                    appearance,
-                    FunctionLegendMode::Compact,
-                    pane_actions_active,
-                ),
-            )],
+            self.render_function_bar(
+                appearance,
+                FunctionLegendLayout::OneRow,
+                &captions,
+                pane_actions_active,
+            ),
+            narrower_layouts,
         )
         .finish()
     }
@@ -4734,13 +4821,14 @@ impl SftpBrowserView {
             .finish()
     }
 
-    /// Render the MC-style function-key bar footer. Required F3-F6 captions
-    /// survive compact mode; the remaining established commands keep their
-    /// keycaps. Clicking dispatches only while this compatible pane is focused.
+    /// Render the MC-style function-key bar footer: every key with its short
+    /// caption, in `layout.cells_per_row()` equal cells per row. Clicking
+    /// dispatches only while this compatible pane is focused.
     fn render_function_bar(
         &self,
         appearance: &Appearance,
-        mode: FunctionLegendMode,
+        layout: FunctionLegendLayout,
+        captions: &[String],
         pane_actions_active: bool,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -4748,109 +4836,110 @@ impl SftpBrowserView {
         let size = appearance.ui_font_size();
         let key_color = theme.sub_text_color(theme.background());
         let caption_color = theme.sub_text_color(theme.background());
+        let cells_per_row = layout.cells_per_row();
 
-        let mut row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_spacing(if mode == FunctionLegendMode::Compact {
-                2.0
-            } else {
-                4.0
-            });
+        let mut rows = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(FUNCTION_LEGEND_ROW_SPACING);
 
-        for (i, (key, make_action)) in FUNCTION_BAR.iter().enumerate() {
-            let handle = self.fn_bar_handles.get(i).cloned().unwrap_or_default();
-            let key = *key;
-            let make_action = *make_action;
-            let action = make_action();
-            let enabled = function_bar_action_enabled(
-                &action,
-                pane_actions_active,
-                self.identity_bound_mutations_available(),
-            );
-            let item_key_color = if enabled {
-                key_color
-            } else {
-                theme.disabled_ui_text_color()
-            };
-            let item_caption_color = if enabled {
-                caption_color
-            } else {
-                theme.disabled_ui_text_color()
-            };
-            let cell = Hoverable::new(handle, move |mouse| {
-                // The key renders as a quiet keycap chip (surface_2, hairline
-                // border, small radius) instead of a bare accent "F3" shouting
-                // DOS at the bottom of the pane (polish audit FM.4). Muted at
-                // rest, the shared hover fill on approach; the VERBS stay
-                // captions.
-                let compact = mode == FunctionLegendMode::Compact;
-                let keycap = Container::new(
-                    Text::new_inline(key.to_string(), family, size)
-                        .with_color(item_key_color.into())
-                        .finish(),
-                )
-                .with_padding_left(if compact { 1.0 } else { 4.0 })
-                .with_padding_right(if compact { 1.0 } else { 4.0 })
-                .with_padding_top(1.0)
-                .with_padding_bottom(1.0)
-                .with_background(theme.surface_2())
-                .with_border(Border::all(1.0).with_border_fill(theme.split_pane_border_color()))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
-                .finish();
-                let mut content = Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(if compact { 2.0 } else { 4.0 })
-                    .with_child(keycap);
-                if mode.shows_caption(key) {
-                    content.add_child(
-                        Shrinkable::new(
-                            1.0,
-                            Text::new_inline(function_bar_caption(key), family, size)
-                                .with_color(item_caption_color.into())
-                                .with_clip(ClipConfig::ellipsis())
-                                .finish(),
-                        )
-                        .finish(),
-                    );
-                }
-                let mut container = Container::new(content.finish())
-                    .with_padding_left(if compact { 1.0 } else { 6.0 })
-                    .with_padding_right(if compact { 1.0 } else { 6.0 })
-                    .with_padding_top(2.0)
-                    .with_padding_bottom(2.0)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
-                if enabled && mouse.is_hovered() {
-                    container = container.with_background(internal_colors::fg_overlay_1(theme));
-                }
-                container.finish()
-            })
-            .with_cursor(if enabled {
-                Cursor::PointingHand
-            } else {
-                Cursor::NotAllowed
-            });
-            let cell = if enabled {
-                cell.on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                    .finish()
-            } else {
-                // Do not arm a click that could complete after the pane gains focus.
-                cell.disable().finish()
-            };
-            let weight = if mode == FunctionLegendMode::Compact
-                && !matches!(key, "F3" | "F4" | "F5" | "F6")
-            {
-                0.8
-            } else {
-                1.0
-            };
-            let position_id = self.layout_position_id(&format!("function-{key}"));
-            row.add_child(Expanded::new(weight, save_layout_position(cell, &position_id)).finish());
+        for (row_index, keys) in FUNCTION_BAR.chunks(cells_per_row).enumerate() {
+            let mut row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_spacing(FUNCTION_LEGEND_CELL_SPACING);
+            for (column, (key, make_action)) in keys.iter().enumerate() {
+                let i = row_index * cells_per_row + column;
+                let handle = self.fn_bar_handles.get(i).cloned().unwrap_or_default();
+                let key = *key;
+                let caption = captions.get(i).cloned().unwrap_or_default();
+                let action = make_action();
+                let enabled = function_bar_action_enabled(
+                    &action,
+                    pane_actions_active,
+                    self.identity_bound_mutations_available(),
+                );
+                let item_key_color = if enabled {
+                    key_color
+                } else {
+                    theme.disabled_ui_text_color()
+                };
+                let item_caption_color = if enabled {
+                    caption_color
+                } else {
+                    theme.disabled_ui_text_color()
+                };
+                let cell = Hoverable::new(handle, move |mouse| {
+                    // The key renders as a quiet keycap chip (surface_2,
+                    // hairline border, small radius) instead of a bare accent
+                    // "F3" shouting DOS at the bottom of the pane (polish
+                    // audit FM.4). Muted at rest, the shared hover fill on
+                    // approach; the VERBS stay captions.
+                    let keycap = Container::new(
+                        Text::new_inline(key.to_string(), family, size)
+                            .with_color(item_key_color.into())
+                            .finish(),
+                    )
+                    .with_padding_left(FUNCTION_LEGEND_KEYCAP_PADDING_X)
+                    .with_padding_right(FUNCTION_LEGEND_KEYCAP_PADDING_X)
+                    .with_padding_top(1.0)
+                    .with_padding_bottom(1.0)
+                    .with_background(theme.surface_2())
+                    .with_border(
+                        Border::all(FUNCTION_LEGEND_KEYCAP_BORDER)
+                            .with_border_fill(theme.split_pane_border_color()),
+                    )
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
+                    .finish();
+                    // The layout breakpoints keep the caption whole; the
+                    // ellipsis only engages below the four-row minimum.
+                    let content = Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(FUNCTION_LEGEND_KEYCAP_GAP)
+                        .with_child(keycap)
+                        .with_child(
+                            Shrinkable::new(
+                                1.0,
+                                Text::new_inline(caption, family, size)
+                                    .with_color(item_caption_color.into())
+                                    .with_clip(ClipConfig::ellipsis())
+                                    .finish(),
+                            )
+                            .finish(),
+                        );
+                    let mut container = Container::new(content.finish())
+                        .with_padding_left(FUNCTION_LEGEND_CELL_PADDING_X)
+                        .with_padding_right(FUNCTION_LEGEND_CELL_PADDING_X)
+                        .with_padding_top(2.0)
+                        .with_padding_bottom(2.0)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+                    if enabled && mouse.is_hovered() {
+                        container = container.with_background(internal_colors::fg_overlay_1(theme));
+                    }
+                    container.finish()
+                })
+                .with_cursor(if enabled {
+                    Cursor::PointingHand
+                } else {
+                    Cursor::NotAllowed
+                });
+                let cell = if enabled {
+                    cell.on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                        .finish()
+                } else {
+                    // Do not arm a click that could complete after the pane gains focus.
+                    cell.disable().finish()
+                };
+                let position_id = self.layout_position_id(&format!("function-{key}"));
+                row.add_child(
+                    Expanded::new(1.0, save_layout_position(cell, &position_id)).finish(),
+                );
+            }
+            rows.add_child(row.finish());
         }
 
         // A hairline seats the bar against the list above it — footer chrome,
         // not another list row.
-        let bar = Container::new(row.finish())
+        let bar = Container::new(rows.finish())
             .with_padding_left(PANEL_PADDING)
             .with_padding_right(PANEL_PADDING)
             .with_padding_top(4.0)
@@ -4858,7 +4947,7 @@ impl SftpBrowserView {
             .with_background(theme.background())
             .with_border(Border::top(1.0).with_border_fill(theme.split_pane_border_color()))
             .finish();
-        let position_id = self.layout_position_id(mode.position_suffix());
+        let position_id = self.layout_position_id(layout.position_suffix());
         save_layout_position(bar, &position_id)
     }
 
@@ -6779,9 +6868,9 @@ impl View for SftpBrowserView {
         }
 
         // 6. MC-style function-key footer. It belongs to this browser view,
-        // never to a shared pane-group container. Compact mode preserves the
-        // F3-F6 verbs and ellipsizes them before a narrow split can overlap.
-        col.add_child(self.render_responsive_function_bar(appearance, pane_actions_active));
+        // never to a shared pane-group container. Every key keeps its caption;
+        // a narrow split wraps the legend into two or four rows instead.
+        col.add_child(self.render_responsive_function_bar(app, appearance, pane_actions_active));
 
         // 7. Transfer panel (floating at the bottom)
         // Wrap the `Flex(Max)` body in a tight `Container` before it becomes the

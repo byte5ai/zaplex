@@ -137,3 +137,32 @@ fn enforce_version_check_kept_on_official_channels() {
         );
     }
 }
+
+#[test]
+fn persistent_sessions_get_a_longer_bounded_reconnect_backoff() {
+    // A daemon-hosted PTY keeps running while the client is away, so its
+    // transport keeps trying well past a short network outage.
+    assert_eq!(reconnect_attempt_limit(false), 2);
+    assert_eq!(reconnect_attempt_limit(true), 8);
+    let persistent_total: Duration = (1..=reconnect_attempt_limit(true))
+        .map(|attempt| reconnect_delay(attempt, true))
+        .sum();
+    assert!(
+        persistent_total >= Duration::from_secs(120),
+        "a wake-from-sleep outage must not exhaust the budget within seconds"
+    );
+    assert!(
+        persistent_total <= Duration::from_secs(300),
+        "the budget must stay bounded so a dead host ends in a visible failure"
+    );
+    let delays: Vec<_> = (1..=reconnect_attempt_limit(true))
+        .map(|attempt| reconnect_delay(attempt, true))
+        .collect();
+    assert!(
+        delays.windows(2).all(|pair| pair[0] <= pair[1]),
+        "backoff must never shrink: {delays:?}"
+    );
+    // Ordinary sessions keep their short fixed retry.
+    assert_eq!(reconnect_delay(1, false), Duration::from_secs(2));
+    assert_eq!(reconnect_delay(2, false), Duration::from_secs(2));
+}
