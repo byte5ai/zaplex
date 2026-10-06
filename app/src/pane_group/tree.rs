@@ -110,6 +110,60 @@ impl HiddenPane {
     }
 }
 
+/// The arrangement of a group's visible panes, detached from the group so it
+/// can be rebuilt in another one (a tab joined into another tab as a split).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PaneLayout {
+    Leaf(PaneId),
+    Split {
+        axis: SplitDirection,
+        children: Vec<PaneLayout>,
+    },
+}
+
+impl PaneLayout {
+    /// The first pane in reading order; it stands for the whole layout until
+    /// the layout's other panes are placed around it.
+    pub fn first_pane(&self) -> PaneId {
+        match self {
+            PaneLayout::Leaf(pane_id) => *pane_id,
+            PaneLayout::Split { children, .. } => children[0].first_pane(),
+        }
+    }
+
+    /// All panes in reading order (left to right, top to bottom).
+    pub fn pane_ids(&self) -> Vec<PaneId> {
+        match self {
+            PaneLayout::Leaf(pane_id) => vec![*pane_id],
+            PaneLayout::Split { children, .. } => {
+                children.iter().flat_map(PaneLayout::pane_ids).collect()
+            }
+        }
+    }
+
+    /// The layout restricted to the panes `keep` accepts; splits left with a
+    /// single child collapse into it. `None` when no pane is kept.
+    pub fn retain(&self, keep: &impl Fn(PaneId) -> bool) -> Option<PaneLayout> {
+        match self {
+            PaneLayout::Leaf(pane_id) => keep(*pane_id).then_some(PaneLayout::Leaf(*pane_id)),
+            PaneLayout::Split { axis, children } => {
+                let mut children = children
+                    .iter()
+                    .filter_map(|child| child.retain(keep))
+                    .collect::<Vec<_>>();
+                match children.len() {
+                    0 => None,
+                    1 => children.pop(),
+                    _ => Some(PaneLayout::Split {
+                        axis: *axis,
+                        children,
+                    }),
+                }
+            }
+        }
+    }
+}
+
 /// Single Node in the tree of panes
 pub enum PaneNode {
     /// A collection of panes split in a specific direction
@@ -552,6 +606,28 @@ impl PaneData {
             .any(|hidden_pane| hidden_pane.pane_id == *pane_id)
     }
 
+    /// The layout of the visible panes; `None` when no pane is visible.
+    pub fn visible_layout(&self) -> Option<PaneLayout> {
+        self.root
+            .layout()
+            .retain(&|pane_id| !self.is_pane_hidden(&pane_id))
+    }
+
+    /// Whether a hidden pane still has something running in it (a background
+    /// job or a child agent) or is in the middle of a move. Such a group cannot
+    /// hand over its visible panes and close, because the hidden pane would go
+    /// with it.
+    pub fn has_hidden_panes_in_use(&self) -> bool {
+        self.hidden_panes.iter().any(|hidden_pane| {
+            matches!(
+                hidden_pane.reason,
+                HiddenPaneReason::FromMove
+                    | HiddenPaneReason::FromJob
+                    | HiddenPaneReason::ChildAgent
+            )
+        })
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
@@ -750,6 +826,16 @@ impl PaneNode {
                     PaneNode::Branch(PaneBranch::for_leaves(*old_pane_id, new_pane_id, direction));
             }
             PaneNode::Branch(branch) => branch.insert(new_pane_id, direction),
+        }
+    }
+
+    fn layout(&self) -> PaneLayout {
+        match self {
+            PaneNode::Leaf(pane) => PaneLayout::Leaf(*pane),
+            PaneNode::Branch(branch) => PaneLayout::Split {
+                axis: branch.axis,
+                children: branch.nodes.iter().map(|(_, node)| node.layout()).collect(),
+            },
         }
     }
 

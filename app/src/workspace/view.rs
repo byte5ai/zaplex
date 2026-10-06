@@ -858,6 +858,17 @@ struct LaunchedAgent {
     terminal: Option<ViewHandle<TerminalView>>,
 }
 
+/// Where a tab dragged out of the tab bar joins the visible tab: as a split at
+/// `direction` of `pane_id`. `zone` is the highlighted half of that pane.
+#[derive(Clone, Copy, Debug)]
+struct TabJoinDropTarget {
+    source_group_id: EntityId,
+    target_group_id: EntityId,
+    pane_id: PaneId,
+    direction: Direction,
+    zone: RectF,
+}
+
 #[cfg(unix)]
 #[derive(Clone, Copy)]
 struct PendingDaemonSurface {
@@ -2087,6 +2098,9 @@ pub struct Workspace {
     /// Split target for a Spawn-Karte opened from the split launch menu; its
     /// single launch lands there instead of a new tab.
     spawn_card_split: Option<PendingSplitLaunch>,
+    /// Set while a dragged tab is over a pane of the visible tab; dropping it
+    /// there joins the dragged tab's panes as a split.
+    tab_join_drop_target: Option<TabJoinDropTarget>,
     changelog_model: ModelHandle<ChangelogModel>,
     palette: ViewHandle<CommandPalette>,
     ctrl_tab_palette: ViewHandle<CommandPalette>,
@@ -4727,6 +4741,7 @@ impl Workspace {
             show_split_launch_menu: None,
             pending_split_launch: None,
             spawn_card_split: None,
+            tab_join_drop_target: None,
             changelog_model,
             welcome_tips_view_state,
             welcome_tips_view,
@@ -30371,6 +30386,7 @@ impl TypedActionView for Workspace {
                 // If we are renaming a tab, finish the rename before dragging.
                 self.finish_tab_rename(ctx);
                 self.current_workspace_state.is_tab_being_dragged = true;
+                self.tab_join_drop_target = None;
             }
             ZaplexDrive => {
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
@@ -30727,6 +30743,10 @@ impl TypedActionView for Workspace {
                         continue;
                     }
                     tab.detached = false;
+                }
+                if let Some(target) = self.tab_join_drop_target.take() {
+                    self.join_tab_as_pane(target, ctx);
+                    ctx.notify();
                 }
                 send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTab, ctx);
                 if is_cross_window {
@@ -32078,6 +32098,27 @@ impl View for Workspace {
                     PositionedElementOffsetBounds::WindowBySize,
                     PositionedElementAnchor::BottomRight,
                     ChildAnchor::TopRight,
+                ),
+            );
+        }
+
+        if let Some(target) = self.tab_join_drop_target {
+            let theme = appearance.theme();
+            stack.add_positioned_overlay_child(
+                ConstrainedBox::new(
+                    Container::new(Empty::new().finish())
+                        .with_background(theme.accent().with_opacity(16))
+                        .with_border(Border::all(1.).with_border_fill(theme.accent()))
+                        .finish(),
+                )
+                .with_width(target.zone.width())
+                .with_height(target.zone.height())
+                .finish(),
+                OffsetPositioning::offset_from_parent(
+                    target.zone.origin(),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopLeft,
+                    ChildAnchor::TopLeft,
                 ),
             );
         }
@@ -33661,6 +33702,24 @@ impl Workspace {
             }
         }
 
+        if !FeatureFlag::DragTabsToWindows.is_enabled() {
+            // Without window tear-off, a tab dragged over the content joins the
+            // visible tab as a split pane; it never reorders from there.
+            let join_target = if is_drag_outside_tab_bar {
+                self.tab_join_drop_target_at(current_index, position, ctx)
+            } else {
+                None
+            };
+            let had_join_target = self.tab_join_drop_target.is_some();
+            self.tab_join_drop_target = join_target;
+            if had_join_target || join_target.is_some() {
+                ctx.notify();
+            }
+            if is_drag_outside_tab_bar {
+                return;
+            }
+        }
+
         let source_is_single_tab = self.tabs.len() == 1;
         if (is_drag_outside_tab_bar || source_is_single_tab)
             && FeatureFlag::DragTabsToWindows.is_enabled()
@@ -33795,6 +33854,107 @@ impl Workspace {
 
             ctx.notify();
         }
+    }
+
+    /// The visible tab's pane under a tab dragged out of the tab bar, and the
+    /// edge the dragged tab would join at. `None` for the visible tab itself, a
+    /// tab that cannot hand over its panes, or when no pane is under the drag.
+    fn tab_join_drop_target_at(
+        &self,
+        dragged_index: usize,
+        drag_position: RectF,
+        ctx: &AppContext,
+    ) -> Option<TabJoinDropTarget> {
+        if dragged_index == self.active_tab_index {
+            return None;
+        }
+        let source = &self.tabs.get(dragged_index)?.pane_group;
+        let target = &self.tabs.get(self.active_tab_index)?.pane_group;
+        if !source.as_ref(ctx).can_join_another_tab()
+            || self.tab_has_pending_cross_window_daemon_start(dragged_index, ctx)
+        {
+            return None;
+        }
+        let drag_center = drag_position.center();
+        target
+            .as_ref(ctx)
+            .visible_pane_ids()
+            .into_iter()
+            .find_map(|pane_id| {
+                let pane = ctx
+                    .element_position_by_id_at_last_frame(self.window_id, pane_id.position_id())?;
+                if !pane.contains_point(drag_center) {
+                    return None;
+                }
+                let direction =
+                    crate::pane_group::pane::view::header::calculate_pane_move_direction(
+                        pane,
+                        drag_position,
+                    )?;
+                Some(TabJoinDropTarget {
+                    source_group_id: source.id(),
+                    target_group_id: target.id(),
+                    pane_id,
+                    direction,
+                    zone: tab_join_drop_zone(pane, direction),
+                })
+            })
+    }
+
+    /// Moves every pane of the dragged tab into the visible tab as a split at
+    /// the drop target, with their layout and running sessions. The dragged
+    /// tab closes once its last pane has moved. A target that went stale
+    /// during the drag leaves both tabs untouched.
+    fn join_tab_as_pane(&mut self, target: TabJoinDropTarget, ctx: &mut ViewContext<Self>) {
+        let Some(source_index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.pane_group.id() == target.source_group_id)
+        else {
+            return;
+        };
+        let Some(target_group) = self
+            .tabs
+            .get(self.active_tab_index)
+            .map(|tab| tab.pane_group.clone())
+            .filter(|group| group.id() == target.target_group_id)
+        else {
+            return;
+        };
+        if source_index == self.active_tab_index
+            || self.tab_has_pending_cross_window_daemon_start(source_index, ctx)
+            || !target_group
+                .as_ref(ctx)
+                .visible_pane_ids()
+                .contains(&target.pane_id)
+        {
+            return;
+        }
+        let source_group = self.tabs[source_index].pane_group.clone();
+        let focused = source_group.as_ref(ctx).focused_pane_id(ctx);
+        let Some((layout, panes)) =
+            source_group.update(ctx, |group, ctx| group.take_panes_for_join(ctx))
+        else {
+            return;
+        };
+        // A single-pane tab may still carry its host only at tab level; keep
+        // that route with the pane now that the tab goes away.
+        if let Some(node_id) = self.ssh_tab_nodes.remove(&source_group.id()) {
+            if let [pane_id] = layout.pane_ids().as_slice() {
+                self.ssh_pane_nodes.entry(*pane_id).or_insert(node_id);
+            }
+        }
+        target_group.update(ctx, |group, ctx| {
+            group.insert_joined_panes(
+                target.pane_id,
+                target.direction,
+                layout,
+                panes,
+                Some(focused),
+                ctx,
+            );
+        });
+        self.focus_active_tab(ctx);
     }
 
     /// Performs the source-workspace cleanup indicated by `DropResult`.
@@ -33940,6 +34100,24 @@ impl Workspace {
         }
 
         current_index
+    }
+}
+
+/// The half of `pane` on the `direction` side: where a joined tab will land.
+fn tab_join_drop_zone(pane: RectF, direction: Direction) -> RectF {
+    let half_width = pane.width() / 2.;
+    let half_height = pane.height() / 2.;
+    match direction {
+        Direction::Left => RectF::new(pane.origin(), vec2f(half_width, pane.height())),
+        Direction::Right => RectF::new(
+            vec2f(pane.min_x() + half_width, pane.min_y()),
+            vec2f(half_width, pane.height()),
+        ),
+        Direction::Up => RectF::new(pane.origin(), vec2f(pane.width(), half_height)),
+        Direction::Down => RectF::new(
+            vec2f(pane.min_x(), pane.min_y() + half_height),
+            vec2f(pane.width(), half_height),
+        ),
     }
 }
 

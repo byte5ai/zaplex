@@ -812,7 +812,10 @@ impl<P: BackingView> View for PaneHeader<P> {
 ///
 /// The only caveat here is that the drag position needs to be greater than a given threshold to trigger a drag,
 /// otherwise this will result in a no-op. This ensures that the split is not too sensitive.
-fn calculate_pane_move_direction(target_pane: RectF, drag_position: RectF) -> Option<Direction> {
+pub(crate) fn calculate_pane_move_direction(
+    target_pane: RectF,
+    drag_position: RectF,
+) -> Option<Direction> {
     let moved_drag_center = drag_position.center() - target_pane.center();
     let normalized_drag_center = Vector2F::new(
         moved_drag_center.x() / target_pane.width(),
